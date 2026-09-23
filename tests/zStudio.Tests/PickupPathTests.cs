@@ -104,20 +104,31 @@ public sealed partial class AnimationTests
     public async Task PickupSaveRefusesUnresolvableDestinationAndRetainsEdits()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Windows filesystem aliases require Windows.");
-        await WithMissionArchiveAsync(new() { ["puppies.zrd"] = Zrd(PickupList(PickupRow())) }, async (world, resolver) => {
-            var edits = await PickupPlacementEditSession.LoadAsync(world.Path, resolver, TestContext.Current.CancellationToken);
-            string source = Assert.Single(edits.ArchivePaths);
-            byte[] original = await File.ReadAllBytesAsync(source, TestContext.Current.CancellationToken);
+        await WithMissionArchiveAsync(new() { ["puppies.zrd"] = Zrd(PickupList(PickupRow())) }, async (world, _) => {
+            string fixture = Path.GetDirectoryName(world.Path)!;
+            string physicalSource = Path.Combine(fixture, "resources.zbd");
+            byte[] original = await File.ReadAllBytesAsync(physicalSource, TestContext.Current.CancellationToken);
+            PickupPlacementEditSession edits;
             string destination;
-            using (var alias = WindowsTestPathAlias.Create(Path.GetDirectoryName(source)!, shortName: false))
+            using (var alias = WindowsTestPathAlias.Create(fixture, shortName: false))
+            {
+                var archive = await FormatRegistry.Default.OpenAsync(Path.Combine(alias.Path, "resources.zbd"), TestContext.Current.CancellationToken);
+                edits = PickupPlacementEditSession.Create([new(MissionDifficulty.Medium, archive, archive.Assets[0])]);
                 destination = Path.Combine(alias.Path, "new", "copy.zbd");
+            }
+            string source = Assert.Single(edits.ArchivePaths);
             Assert.Contains("Cannot verify the save destination", Assert.Throws<IOException>(() => PickupPlacementEditSession.IsProtectedPath(destination)).Message);
             edits.MoveTo(Assert.Single(edits.Records).Source, new(44, 55, 66));
+            await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(token: TestContext.Current.CancellationToken));
             var failure = await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(new Dictionary<string, string> { [source] = destination }, token: TestContext.Current.CancellationToken));
             Assert.Contains("Cannot verify the save destination", failure.Message);
             Assert.True(edits.IsDirty); Assert.True(edits.CanUndo);
-            Assert.Equal(original, await File.ReadAllBytesAsync(source, TestContext.Current.CancellationToken));
-            Assert.False(Directory.Exists(Path.Combine(Path.GetDirectoryName(source)!, "new")));
+            Assert.Equal(original, await File.ReadAllBytesAsync(physicalSource, TestContext.Current.CancellationToken));
+            Assert.False(Directory.Exists(Path.Combine(fixture, "new")));
+            string recovered = Path.Combine(fixture, "recovered.zbd");
+            var saved = await edits.SaveAsync(new Dictionary<string, string> { [source] = recovered }, token: TestContext.Current.CancellationToken);
+            Assert.Empty(saved.Errors); Assert.Equal(recovered, Assert.Single(saved.SavedPaths)); Assert.False(edits.IsDirty);
+            Assert.Equal(edits.EncodeArchive(source), await File.ReadAllBytesAsync(recovered, TestContext.Current.CancellationToken));
         });
     }
 
