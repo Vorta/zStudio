@@ -1,16 +1,16 @@
 # Releases and repository maintenance
 
-## Initial private review
+## Repository protections
 
-Vorta/zStudio is initially **private**. The owner alone decides when to make it public; neither scripts nor workflows change visibility. Releases, source and issue/PR discussions follow repository access. Normal development uses feature branches, maintainer review and passing CI before a squash merge.
+Vorta/zStudio is a public open-source repository. Normal development uses feature branches, maintainer review and passing CI before a squash merge.
 
-The maintainer uses the authenticated GitHub connection for issues, PR reviews and merges, and GitHub CLI for repository settings/releases. Do not put access tokens in the repository or workflow files. CI uses its short-lived GitHub token. The account's existing GitHub Actions limits apply during private review.
+The maintainer uses the authenticated GitHub connection for issues, PR reviews and merges, and GitHub CLI for repository settings/releases. Do not put access tokens in the repository or workflow files. CI uses its short-lived GitHub token.
 
-Desired branch and tag rules are checked in under `.github/rulesets/`. The main rule requires the GitHub Actions check **Windows build and tests**, current base branch, a PR and resolved conversations; it prevents deletion/force pushes. The initial approval count is zero because Vorta is the sole maintainer, including authenticated assistant work. Review remains the maintainer's responsibility. Squash is the only merge method and merged feature branches are deleted automatically.
+Active branch and tag rules are checked in under `.github/rulesets/`. The main rule requires the GitHub Actions check **Windows build and tests**, an up-to-date base branch, a PR and resolved conversations; it prevents deletion and force pushes. Rules apply without bypass actors. The approval count is zero because Vorta is the sole maintainer, including authenticated assistant work; requiring another approving account would block the owner's own PRs. Review remains the maintainer's responsibility. Squash is the only merge method and merged feature branches are deleted automatically.
 
-Private repository rulesets require an eligible GitHub plan. If GitHub rejects private enforcement, keep the desired definitions and use the same CI/review workflow manually until the owner converts the repository to public. Do not claim rules are enforced until the repository API confirms it. CODEOWNERS review requests and other private features can also depend on the account plan.
+Release tags matching `v*` cannot be deleted or force-updated. New release tags can be created after the version change passes CI and merges to main. These rules preserve the source identity of each downloadable release.
 
-Initial setup verification on 2026-09-23: Vorta has administrator access through both GitHub CLI and the connected integration; the repository is private and anonymous requests return 404. Dependency alerts/security update PRs are enabled, workflow tokens default to read-only, and workflows cannot approve PRs. GitHub rejected private branch/tag rules with an upgrade-or-make-public response, so those rules are **not currently enforced**. GitHub also rejected the public fork-contributor approval policy while the repository is private. Both are explicit public-launch follow-ups; no account upgrade or visibility change was made. CODEOWNERS has no reported parsing errors.
+Dependency alerts/security update PRs and confidential vulnerability reporting are enabled. Workflow tokens default to read-only and workflows cannot approve PRs. Fork workflows require maintainer approval for all external contributors, allowing proposed workflow changes to be checked before they run. Only the release publication job receives release-write permission.
 
 ## Cutting a release
 
@@ -21,8 +21,8 @@ Initial setup verification on 2026-09-23: Vorta has administrator access through
    ```powershell
    git switch main
    git pull --ff-only
-   git tag -a v0.2.17 -m 'zStudio 0.2.17'
-   git push origin v0.2.17
+   git tag -a v0.2.18 -m 'zStudio 0.2.18'
+   git push origin v0.2.18
    ```
 
 4. The Release workflow checks tag/version equality and main ancestry, restores locked dependencies, builds, tests and packages. A separate job with release-write permission uploads the verified ZIP and `SHA256SUMS` to GitHub Releases. Changelog text supplies the notes. Prerelease version suffixes create prereleases; ordinary versions become the latest release.
@@ -39,17 +39,16 @@ The executable remains the SDK apphost bound to `dependencies/Recoil.Zbd.Studio.
 The package verifier can be run independently:
 
 ```powershell
-./tools/verify-package.ps1 -Directory artifacts/zStudio-win-x64 -Archive artifacts/zStudio-0.2.17-win-x64.zip -ExpectedVersion 0.2.17
+./tools/verify-package.ps1 -Directory artifacts/zStudio-win-x64 -Archive artifacts/zStudio-0.2.18-win-x64.zip -ExpectedVersion 0.2.18
 ```
 
-## Owner's public-launch checklist
+## Maintenance checks
 
-- Inspect the committed source, license/notices, documentation, issue forms and first release. Verify no game data, private research sources, credentials or local reports are included.
-- Make the repository public yourself in GitHub's visibility settings when satisfied.
-- Confirm the main/tag rules are active; if private enforcement was unavailable, import the checked-in rulesets now. Confirm the required Actions check has run and is associated with GitHub Actions.
-- Enable private vulnerability reporting under repository security settings, and verify the Security policy reporting link works before inviting public reports.
+- Inspect committed source, license/notices, documentation and releases. Verify no game data, external research sources, credentials or local reports are included.
+- Confirm the main/tag rules remain active and match their checked-in definitions. Keep the required Windows check associated with GitHub Actions.
+- Keep confidential vulnerability reporting enabled and verify the Security policy reporting link works.
 - Confirm dependency alerts/updates, CODEOWNERS, fork PR checks, issue forms and release downloads work. Fork PR workflows use `pull_request` with read-only permissions and no repository secrets; do not replace this with privileged execution of fork code.
-- Set fork workflow approval to **all external contributors** after the visibility change. The setting is unavailable during private review; approval lets a maintainer check proposed workflow changes before running them.
-- Remove the temporary private-review note from the README through a PR. Verify the download and contribution links anonymously.
+- Keep fork workflow approval set to **all external contributors**.
+- Verify repository, download and contribution links anonymously.
 
-Wiki and Discussions start disabled; bugs, feature requests and compatibility proposals use Issues. No workflow automatically approves/merges PRs or changes repository visibility.
+Wiki and Discussions are disabled; bugs, feature requests and compatibility proposals use Issues. No workflow automatically approves or merges PRs or changes repository visibility.

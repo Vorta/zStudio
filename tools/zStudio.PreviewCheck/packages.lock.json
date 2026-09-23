@@ -176,14 +176,14 @@
         "resolved": "9.0.0",
         "contentHash": "hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A=="
       },
-      "recoil.zbd.core": {
+      "Recoil.Zbd.Core": {
         "type": "Project"
       },
-      "recoil.zbd.rendering": {
+      "Recoil.Zbd.Rendering": {
         "type": "Project",
         "dependencies": {
           "HelixToolkit.Wpf.SharpDX": "[3.1.2, )",
-          "Recoil.Zbd.Core": "[0.2.17, )"
+          "Recoil.Zbd.Core": "[0.2.18, )"
         }
       },
       "Recoil.Zbd.Studio": {
@@ -192,8 +192,8 @@
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "NAudio.Core": "[3.1.0, )",
           "NAudio.Wasapi": "[3.1.0, )",
-          "Recoil.Zbd.Core": "[0.2.17, )",
-          "Recoil.Zbd.Rendering": "[0.2.17, )"
+          "Recoil.Zbd.Core": "[0.2.18, )",
+          "Recoil.Zbd.Rendering": "[0.2.18, )"
         }
       },
       "CommunityToolkit.Mvvm": {
