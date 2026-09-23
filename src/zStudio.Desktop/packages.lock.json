@@ -207,7 +207,7 @@
         "type": "Project",
         "dependencies": {
           "HelixToolkit.Wpf.SharpDX": "[3.1.2, )",
-          "Recoil.Zbd.Core": "[0.2.19, )"
+          "Recoil.Zbd.Core": "[0.3.0, )"
         }
       },
       "HelixToolkit.Wpf.SharpDX": {

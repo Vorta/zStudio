@@ -2,7 +2,7 @@
 
 **Advanced viewer and editor for Zipper Interactive's ZBD files.**
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, move mission pickups, and edit supported animation programs. The current version is **0.2.19**.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, move mission pickups, and edit supported animation programs. The current version is **0.3.0**.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
@@ -19,7 +19,7 @@ The version-28 animation editor supports event and sequence editing, determinist
 
 ## Run
 
-Download `zStudio-0.2.19-win-x64.zip` from [GitHub Releases](https://github.com/Vorta/zStudio/releases), extract it, and run **zStudio.exe**. Keep the adjacent **dependencies** folder with it. Releases include a SHA-256 checksum. The self-contained Windows 11 x64 build does not require Python, Visual Studio, or a separate .NET installation. A Direct3D 11-capable graphics device is needed for 3D previews.
+Download `zStudio-0.3.0-win-x64.zip` from [GitHub Releases](https://github.com/Vorta/zStudio/releases), extract it, and run **zStudio.exe**. Keep the adjacent **dependencies** folder with it. Releases include a SHA-256 checksum. The self-contained Windows 11 x64 build does not require Python, Visual Studio, or a separate .NET installation. A Direct3D 11-capable graphics device is needed for 3D previews.
 
 ```text
 zStudio.exe

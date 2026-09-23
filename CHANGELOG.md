@@ -4,9 +4,9 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## Unreleased
 
-## 0.2.19 — 2026-09-23
+## 0.3.0 — 2026-09-24
 
-- Edit mission pickup positions from Whole world: select an instance, see its bounds, unlock world-axis arrows, or enter exact XYZ coordinates in Properties.
+- Introduce the first 3D editing workflow: move mission pickups in Whole world; select an instance, see its bounds, unlock world-axis arrows, or enter exact XYZ coordinates in Properties.
 - Enlarge pickup XYZ handles and use generous, DPI-aware screen-space click targets for their shafts and tips. Prioritize handles over scene geometry and show a hand cursor over a draggable target.
 - Keep maps locked by default; add one-action drag undo/redo, cancellation, and preserved edits/selection across difficulty and LOD changes.
 - Apply moves to uniquely matching difficulty records while retaining amounts, rotations and respawn metadata. Report ambiguous or unmatched counterparts without changing them.

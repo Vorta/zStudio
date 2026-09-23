@@ -183,7 +183,7 @@
         "type": "Project",
         "dependencies": {
           "HelixToolkit.Wpf.SharpDX": "[3.1.2, )",
-          "Recoil.Zbd.Core": "[0.2.19, )"
+          "Recoil.Zbd.Core": "[0.3.0, )"
         }
       },
       "Recoil.Zbd.Studio": {
@@ -192,8 +192,8 @@
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "NAudio.Core": "[3.1.0, )",
           "NAudio.Wasapi": "[3.1.0, )",
-          "Recoil.Zbd.Core": "[0.2.19, )",
-          "Recoil.Zbd.Rendering": "[0.2.19, )"
+          "Recoil.Zbd.Core": "[0.3.0, )",
+          "Recoil.Zbd.Rendering": "[0.3.0, )"
         }
       },
       "CommunityToolkit.Mvvm": {

@@ -1,6 +1,8 @@
 # Desktop implementation status
 
-## Whole world pickup placement editor — 0.2.19
+## Whole world pickup placement editor — 0.3.0
+
+Version 0.3.0 marks the first 3D editing workflow. The version update passes locked restore, Release build with zero warnings/errors and all 182 tests; application behavior is unchanged from the preceding pickup test build. Publication remains on hold for owner testing.
 
 Local test feedback: enlarging the handles alone did not make them reliably clickable. Picking now uses a 24-DIP-wide screen-space band along each shaft and tip, chooses the nearest projected axis before scene picking, and owns pointer capture/routing until release or cancellation. A hand cursor indicates a handle target. The larger drawings and zoom-dependent sizing remain. The previous test raised 3D events directly on a chosen mesh, bypassing part of normal click selection; the revised check uses the production point-based router for 27 shaft/tip/edge drags and additionally passes actual WPF HWND mouse routing on all three axes, 10 DIP off-center. Release build and the remaining pickup UI/corpus checks pass. GitHub publication remains on hold for owner testing.
 
