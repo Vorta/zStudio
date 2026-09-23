@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## Unreleased
 
+- Rename the solution to `zStudio.slnx` and all project folders/files to `zStudio.*`; update build, CI, packaging and documentation references while preserving assembly names, namespaces and existing settings.
+
 ## 0.2.17 — 2026-09-23
 
 First zStudio repository release, initially distributed privately for owner review. Earlier builds were developed locally as Recoil ZBD Studio; their unavailable binaries are not reconstructed as releases.

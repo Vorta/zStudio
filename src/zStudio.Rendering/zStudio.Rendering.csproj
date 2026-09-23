@@ -1,7 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Recoil.Zbd.Rendering</RootNamespace>
+    <AssemblyName>Recoil.Zbd.Rendering</AssemblyName>
+  </PropertyGroup>
   <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF></PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../Recoil.Zbd.Core/Recoil.Zbd.Core.csproj" />
+    <ProjectReference Include="../zStudio.Core/zStudio.Core.csproj" />
     <PackageReference Include="HelixToolkit.Wpf.SharpDX" />
     <EmbeddedResource Include="GroundGrid.hlsl" />
   </ItemGroup>

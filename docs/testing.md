@@ -3,28 +3,28 @@
 Use the pinned .NET 10 SDK. Put transient reports and game-derived verification exports in an OS temporary directory. Historical commands below use ignored `artifacts/`; remove their generated results before delivery, when that folder must contain only the current portable folder and ZIP.
 
 ```powershell
-dotnet build Recoil.Zbd.slnx -c Release
-dotnet test --solution Recoil.Zbd.slnx -c Release
-dotnet run --project tools/Recoil.Zbd.Verify -- zbd_1998 zbd_1999 > artifacts/corpus.json
-dotnet run --project tools/Recoil.Zbd.ExportCheck -- artifacts/export-check zbd_1998 zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- artifacts/preview-check zbd_1998 zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --overview artifacts/preview-check
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --lifecycle zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --texture-dpi zbd_1999/image.zbd
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --scene-controls zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --scene-depth zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --render-stability zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --render-stability zbd_1998
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --alpha zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --lod zbd_1999
-dotnet run --project tools/Recoil.Zbd.AnimationCheck -- zbd_1998 zbd_1999 > artifacts/animation-seek.log
-dotnet run --project tools/Recoil.Zbd.AnimationCheck -- --all zbd_1998 zbd_1999 > artifacts/animation-all.log
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --animation zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --animation zbd_1998
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --animation-layout zbd_1999
-dotnet run --project tools/Recoil.Zbd.AnimationCheck -- --camera zbd_1998 zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --camera-follow zbd_1999
-dotnet run --project tools/Recoil.Zbd.PreviewCheck -- --camera-follow zbd_1998
+dotnet build zStudio.slnx -c Release
+dotnet test --solution zStudio.slnx -c Release
+dotnet run --project tools/zStudio.Verify -- zbd_1998 zbd_1999 > artifacts/corpus.json
+dotnet run --project tools/zStudio.ExportCheck -- artifacts/export-check zbd_1998 zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- artifacts/preview-check zbd_1998 zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- --overview artifacts/preview-check
+dotnet run --project tools/zStudio.PreviewCheck -- --lifecycle zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- --texture-dpi zbd_1999/image.zbd
+dotnet run --project tools/zStudio.PreviewCheck -- --scene-controls zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- --scene-depth zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- --render-stability zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- --render-stability zbd_1998
+dotnet run --project tools/zStudio.PreviewCheck -- --alpha zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- --lod zbd_1999
+dotnet run --project tools/zStudio.AnimationCheck -- zbd_1998 zbd_1999 > artifacts/animation-seek.log
+dotnet run --project tools/zStudio.AnimationCheck -- --all zbd_1998 zbd_1999 > artifacts/animation-all.log
+dotnet run --project tools/zStudio.PreviewCheck -- --animation zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- --animation zbd_1998
+dotnet run --project tools/zStudio.PreviewCheck -- --animation-layout zbd_1999
+dotnet run --project tools/zStudio.AnimationCheck -- --camera zbd_1998 zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- --camera-follow zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -- --camera-follow zbd_1998
 ```
 
 The preview runner opens and closes its own application window. It exercises application startup, indexing, tab/document binding, all 19 world previews, and representative texture/audio/script/animation/ZRD layouts. It saves Direct3D render artifacts and WPF layout artifacts. These are integration checks, not a replacement for testing pointer gestures, file dialogs, or multi-monitor DPI changes.
@@ -72,6 +72,6 @@ To verify packaging, extract the ZIP into a different directory containing space
 
 ## Ground grid and collision
 
-`dotnet run --project tools/Recoil.Zbd.AnimationCheck -c Release -- --ground zbd_1999 zbd_1998` verifies VTOL mesh contacts frame by frame at preview heights 0, 40 and 100, impact releases and preloaded samples, finite duration, deterministic rewind, LOD invariance, disabled collision and unchanged source bytes. Add `--ground-enabled` to the regular animation corpus command to opt every representative player into ground collision.
+`dotnet run --project tools/zStudio.AnimationCheck -c Release -- --ground zbd_1999 zbd_1998` verifies VTOL mesh contacts frame by frame at preview heights 0, 40 and 100, impact releases and preloaded samples, finite duration, deterministic rewind, LOD invariance, disabled collision and unchanged source bytes. Add `--ground-enabled` to the regular animation corpus command to opt every representative player into ground collision.
 
-`dotnet run --project tools/Recoil.Zbd.PreviewCheck -c Release -- --ground zbd_1999` (and `zbd_1998`) exercises the actual editor: default line grid, paused/playing/rapid toggles, same playhead, custom range, unchanged camera and clip bounds, mission/horizon reloads including a toggle during loading, narrow layout and the presented idle back buffer. Height checks cover live typing without Enter/blur, absence of the Fluent clear button, quiet empty/incomplete/nonfinite/out-of-range text, restoring valid text on blur, superseded asynchronous values, initial pose offsets, recalculated duration, custom range and playback retention. The layout runner also checks the focused Height field across light/dark themes and narrow layouts without changing single-line editing or native Space behavior. Pixel differences against the grid-disabled frame must show grid lines in each screen quarter from above and in perspective; the top-down plane lies beyond the scene far bound. Toolbar checks require the icons, LOD and every display control in one row, accessible button names and the Map label. PNGs go to `%TEMP%/zbd-ground-*`; original app settings are restored.
+`dotnet run --project tools/zStudio.PreviewCheck -c Release -- --ground zbd_1999` (and `zbd_1998`) exercises the actual editor: default line grid, paused/playing/rapid toggles, same playhead, custom range, unchanged camera and clip bounds, mission/horizon reloads including a toggle during loading, narrow layout and the presented idle back buffer. Height checks cover live typing without Enter/blur, absence of the Fluent clear button, quiet empty/incomplete/nonfinite/out-of-range text, restoring valid text on blur, superseded asynchronous values, initial pose offsets, recalculated duration, custom range and playback retention. The layout runner also checks the focused Height field across light/dark themes and narrow layouts without changing single-line editing or native Space behavior. Pixel differences against the grid-disabled frame must show grid lines in each screen quarter from above and in perspective; the top-down plane lies beyond the scene far bound. Toolbar checks require the icons, LOD and every display control in one row, accessible button names and the Map label. PNGs go to `%TEMP%/zbd-ground-*`; original app settings are restored.

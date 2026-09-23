@@ -63,15 +63,15 @@ The **Dispatched events** graphic sits below the animation player. The right-sid
 
 ## Build and verify
 
-Open `Recoil.Zbd.slnx` in Visual Studio 2026 with the .NET desktop workload, and select `Recoil.Zbd.Desktop` as the startup project. SDK and package versions are pinned.
+Open `zStudio.slnx` in Visual Studio 2026 with the .NET desktop workload, and select `zStudio.Desktop` as the startup project. SDK and package versions are pinned.
 
 ```powershell
-dotnet build Recoil.Zbd.slnx -c Release
-dotnet test --solution Recoil.Zbd.slnx -c Release
+dotnet build zStudio.slnx -c Release
+dotnet test --solution zStudio.slnx -c Release
 ./tools/publish.ps1
 ```
 
-The solution separates binary readers/exporters (`Core`), Direct3D preview (`Rendering`), WPF/audio (`Desktop`), tests, and verification runners. The existing `Recoil.Zbd.*` project names are internal identifiers. Normal builds and unit tests require no game files or Python. Optional corpus and GPU/audio checks use your own game data. See [architecture and format evidence](docs/architecture.md), [verification commands](docs/testing.md), and [current status](docs/status.md).
+The solution separates binary readers/exporters (`zStudio.Core`), Direct3D preview (`zStudio.Rendering`), WPF/audio (`zStudio.Desktop`), tests, and verification runners. Project folders and files use `zStudio.*`; existing `Recoil.Zbd.*` assembly names and namespaces remain stable for runtime and resource compatibility. Normal builds and unit tests require no game files or Python. Optional corpus and GPU/audio checks use your own game data. See [architecture and format evidence](docs/architecture.md), [verification commands](docs/testing.md), and [current status](docs/status.md).
 
 ## Current limits
 

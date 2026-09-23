@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Recoil.Zbd.Core</RootNamespace>
+    <AssemblyName>Recoil.Zbd.Core</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup><EmbeddedResource Include="Formats/field-layouts.json" /></ItemGroup>
+</Project>

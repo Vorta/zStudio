@@ -1,9 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Recoil.Zbd.Tests</RootNamespace>
+    <AssemblyName>Recoil.Zbd.Tests</AssemblyName>
+  </PropertyGroup>
   <PropertyGroup><OutputType>Exe</OutputType><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio"><PrivateAssets>all</PrivateAssets></PackageReference>
-    <ProjectReference Include="../../src/Recoil.Zbd.Core/Recoil.Zbd.Core.csproj" />
+    <ProjectReference Include="../../src/zStudio.Core/zStudio.Core.csproj" />
   </ItemGroup>
 </Project>

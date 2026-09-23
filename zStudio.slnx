@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/zStudio.Core/zStudio.Core.csproj" />
+    <Project Path="src/zStudio.Rendering/zStudio.Rendering.csproj" />
+    <Project Path="src/zStudio.Desktop/zStudio.Desktop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/zStudio.Tests/zStudio.Tests.csproj" />
+    <Project Path="tests/zStudio.Desktop.Tests/zStudio.Desktop.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/zStudio.Verify/zStudio.Verify.csproj" />
+    <Project Path="tools/zStudio.AnimationCheck/zStudio.AnimationCheck.csproj" />
+    <Project Path="tools/zStudio.ExportCheck/zStudio.ExportCheck.csproj" />
+    <Project Path="tools/zStudio.PreviewCheck/zStudio.PreviewCheck.csproj" />
+  </Folder>
+</Solution>
