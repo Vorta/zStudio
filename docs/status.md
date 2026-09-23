@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## Workspace naming — unreleased
+
+The solution is `zStudio.slnx`. All nine application, test and verification projects now use `zStudio.*` folder and project filenames. Project references, the preview runner's manifest path, publishing, GitHub workflows and developer commands use the new paths. Explicit assembly names and root namespaces retain existing DLL names, WPF/embedded resource identities and friend-assembly access. Existing settings paths and the published 0.2.17 release remain stable.
+
+Verification: locked restore and Release build pass with zero warnings/errors; all 171 tests pass. Dependency lockfile contents are unchanged. The renamed preview runner passes the real WPF animation-layout check, including resource initialization, with settings and source data preserved. Workflow linting and publish-script parsing pass. No active source/build/documentation references use the old solution or project paths. Hosted package validation is recorded in the pull request checks.
+
 ## zStudio repository preparation — 0.2.17
 
 Implemented on 2026-09-23. The desktop application, portable executable and documentation use zStudio branding. Internal project/assembly names and existing settings remain stable; the Studio icon uses the owner's updated artwork. Vorta/zStudio starts private for owner review; only the owner will change visibility. The MIT license is retained and is now included in the portable package alongside dependency notices.

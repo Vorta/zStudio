@@ -27,7 +27,7 @@ try {
     Assert-ArtifactPath $stage
     $dependencies = Join-Path $stage 'dependencies'
     New-Item -ItemType Directory -Path $dependencies -Force | Out-Null
-    dotnet publish src/Recoil.Zbd.Desktop/Recoil.Zbd.Desktop.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PortableLayout=true -p:RestoreLockedMode=true -o $dependencies
+    dotnet publish src/zStudio.Desktop/zStudio.Desktop.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PortableLayout=true -p:RestoreLockedMode=true -o $dependencies
     if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
     Copy-Item -LiteralPath README.md, LICENSE, THIRD-PARTY-NOTICES.md, CHANGELOG.md, CONTRIBUTING.md, SECURITY.md -Destination $dependencies
     Copy-Item -LiteralPath licenses -Destination $dependencies -Recurse

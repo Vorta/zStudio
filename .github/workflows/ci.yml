@@ -30,10 +30,10 @@ jobs:
         with:
           global-json-file: global.json
       - name: Restore locked dependencies
-        run: dotnet restore Recoil.Zbd.slnx --locked-mode
+        run: dotnet restore zStudio.slnx --locked-mode
       - name: Build Release
-        run: dotnet build Recoil.Zbd.slnx -c Release --no-restore
+        run: dotnet build zStudio.slnx -c Release --no-restore
       - name: Test without game assets
-        run: dotnet test --solution Recoil.Zbd.slnx -c Release --no-build
+        run: dotnet test --solution zStudio.slnx -c Release --no-build
       - name: Validate portable packaging
         run: ./tools/publish.ps1

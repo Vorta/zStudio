@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <RootNamespace>Recoil.Zbd.Desktop</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF>
     <AssemblyName>Recoil.Zbd.Studio</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyTitle>zStudio</AssemblyTitle>
@@ -8,8 +11,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/studio.ico" />
-    <ProjectReference Include="../Recoil.Zbd.Core/Recoil.Zbd.Core.csproj" />
-    <ProjectReference Include="../Recoil.Zbd.Rendering/Recoil.Zbd.Rendering.csproj" />
+    <ProjectReference Include="../zStudio.Core/zStudio.Core.csproj" />
+    <ProjectReference Include="../zStudio.Rendering/zStudio.Rendering.csproj" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="NAudio.Core" /><PackageReference Include="NAudio.Wasapi" />
   </ItemGroup>

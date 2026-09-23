@@ -13,9 +13,9 @@ For a feature or another game's compatibility, explain the intended workflow and
 Use Windows 11 x64 and the .NET SDK specified in `global.json`. Visual Studio 2026 with the .NET desktop workload is optional.
 
 ```powershell
-dotnet restore Recoil.Zbd.slnx --locked-mode
-dotnet build Recoil.Zbd.slnx -c Release --no-restore
-dotnet test --solution Recoil.Zbd.slnx -c Release --no-build
+dotnet restore zStudio.slnx --locked-mode
+dotnet build zStudio.slnx -c Release --no-restore
+dotnet test --solution zStudio.slnx -c Release --no-build
 ```
 
 These checks use synthetic fixtures and require no game data, Python, Binary Ninja or external reconstruction project. Optional corpus, graphics and audio checks are described in [docs/testing.md](docs/testing.md); run UI checks sequentially and keep their outputs outside the source tree. Mark checks you cannot run honestly in your PR.
