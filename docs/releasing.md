@@ -10,6 +10,8 @@ Desired branch and tag rules are checked in under `.github/rulesets/`. The main 
 
 Private repository rulesets require an eligible GitHub plan. If GitHub rejects private enforcement, keep the desired definitions and use the same CI/review workflow manually until the owner converts the repository to public. Do not claim rules are enforced until the repository API confirms it. CODEOWNERS review requests and other private features can also depend on the account plan.
 
+Initial setup verification on 2026-09-23: Vorta has administrator access through both GitHub CLI and the connected integration; the repository is private and anonymous requests return 404. Dependency alerts/security update PRs are enabled, workflow tokens default to read-only, and workflows cannot approve PRs. GitHub rejected private branch/tag rules with an upgrade-or-make-public response, so those rules are **not currently enforced**. GitHub also rejected the public fork-contributor approval policy while the repository is private. Both are explicit public-launch follow-ups; no account upgrade or visibility change was made. CODEOWNERS has no reported parsing errors.
+
 ## Cutting a release
 
 1. Update the version in `Directory.Build.props` and add its dated entry to `CHANGELOG.md`. Update the README download version and applicable guides. Use `MAJOR.MINOR.PATCH`, or an explicit prerelease suffix for previews.
@@ -47,6 +49,7 @@ The package verifier can be run independently:
 - Confirm the main/tag rules are active; if private enforcement was unavailable, import the checked-in rulesets now. Confirm the required Actions check has run and is associated with GitHub Actions.
 - Enable private vulnerability reporting under repository security settings, and verify the Security policy reporting link works before inviting public reports.
 - Confirm dependency alerts/updates, CODEOWNERS, fork PR checks, issue forms and release downloads work. Fork PR workflows use `pull_request` with read-only permissions and no repository secrets; do not replace this with privileged execution of fork code.
+- Set fork workflow approval to **all external contributors** after the visibility change. The setting is unavailable during private review; approval lets a maintainer check proposed workflow changes before running them.
 - Remove the temporary private-review note from the README through a PR. Verify the download and contribution links anonymously.
 
 Wiki and Discussions start disabled; bugs, feature requests and compatibility proposals use Issues. No workflow automatically approves/merges PRs or changes repository visibility.
