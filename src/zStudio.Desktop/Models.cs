@@ -41,8 +41,32 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
 {
     public ZbdDocument Document { get; }
     public string Path => Document.Path;
-    public string Title => System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) + "/" + System.IO.Path.GetFileName(Path) + (AnimationEdits?.IsDirty == true ? " *" : "");
+    public string Title => System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) + "/" + System.IO.Path.GetFileName(Path) + (IsDirty ? " *" : "");
     public AnimationEditSession? AnimationEdits { get; }
+    public PickupPlacementEditSession? PickupEdits { get; private set; }
+    private Task<PickupPlacementEditSession>? pickupLoading;
+    public bool PickupsLocked { get; set; } = true;
+    public bool PickupDiagnosticsReported { get; set; }
+    public bool IsDirty => AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true;
+    public event Action? PickupEditsChanged;
+    public async Task<PickupPlacementEditSession> GetPickupEditsAsync(AssetResolver resolver, CancellationToken token)
+    {
+        if (PickupEdits != null)
+        {
+            if (PickupEdits.HasSourceChanges()) throw new IOException("A pickup source archive changed outside zStudio. Save pending edits as a copy, then reload the map (F5) before rebuilding its preview.");
+            return PickupEdits;
+        }
+        if (pickupLoading == null || pickupLoading.IsCanceled || pickupLoading.IsFaulted)
+            pickupLoading = PickupPlacementEditSession.LoadAsync(Path, resolver, Lifetime.Token);
+        var edits = await pickupLoading.WaitAsync(token);
+        if (PickupEdits == null)
+        {
+            PickupEdits = edits;
+            edits.Changed += () => { OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); PickupEditsChanged?.Invoke(); };
+        }
+        return edits;
+    }
+    public void InvalidateMissionContext() { contextLoading?.Cancel(); animationContext = null; MissionSceneLoader.Invalidate(Document); }
     public string? LastSavedCopy { get; set; }
     private Task<AnimationPreviewContext>? animationContext;
     private string? animationWorldPath;
@@ -122,6 +146,7 @@ public sealed record SearchHit(string File, AssetKind Kind, int Index, string Na
 }
 public sealed class StudioSettings
 {
+    public bool CreateBackupOnSave { get; set; }
     private MissionDifficulty difficulty = MissionDifficulty.Medium;
     public MissionDifficulty Difficulty { get => difficulty; set => difficulty = Enum.IsDefined(value) ? value : MissionDifficulty.Medium; }
     public double Width { get; set; } = 1560;

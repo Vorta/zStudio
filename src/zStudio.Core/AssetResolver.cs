@@ -57,5 +57,11 @@ public sealed class AssetResolver(string root) : IDisposable
         }
         return null;
     }
+    public async Task InvalidateAsync(IEnumerable<string> paths, CancellationToken token = default)
+    {
+        await gate.WaitAsync(token).ConfigureAwait(false);
+        try { foreach (string path in paths) cache.Remove(path); }
+        finally { gate.Release(); }
+    }
     public void Dispose() { cache.Clear(); gate.Dispose(); }
 }

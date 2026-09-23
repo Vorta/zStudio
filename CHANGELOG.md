@@ -4,6 +4,14 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## Unreleased
 
+## 0.2.19 — 2026-09-23
+
+- Edit mission pickup positions from Whole world: select an instance, see its bounds, unlock world-axis arrows, or enter exact XYZ coordinates in Properties.
+- Keep maps locked by default; add one-action drag undo/redo, cancellation, and preserved edits/selection across difficulty and LOD changes.
+- Apply moves to uniquely matching difficulty records while retaining amounts, rotations and respawn metadata. Report ambiguous or unmatched counterparts without changing them.
+- Save surgical coordinate patches to the owning ZBD archive, with verified Save As, external-change checks, atomic file replacement and optional backups (off by default). Preserve protected reference datasets.
+- Include pickup edits in document dirty-state, close/reload prompts, and the shared Save/Undo/Redo commands.
+
 ## 0.2.18 — 2026-09-23
 
 - Publish the open-source repository with contribution guidance, protected main/release tags, and confidential vulnerability reporting.

@@ -2,6 +2,15 @@
 
 Use the pinned .NET 10 SDK. Put transient reports and game-derived verification exports in an OS temporary directory. Historical commands below use ignored `artifacts/`; remove their generated results before delivery, when that folder must contain only the current portable folder and ZIP.
 
+Pickup placement editing has an additional Windows UI and corpus check:
+
+```powershell
+dotnet run --project tools/zStudio.PreviewCheck -c Release -- --pickup-editor zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -c Release -- --pickup-editor zbd_1998
+```
+
+It opens m1 Whole world, hit-tests the Nanite instance, synthesizes routed native gizmo input for all three axes, and checks selection bounds, Locked, undo/redo, drag cancellation, typed coordinates, pending numeric input before dragging, unchanged sibling instances/camera, difficulty/LOD retention, Save As and UI Save. It reopens the saved archive to check all three difficulty placements. Every mission then receives a no-op byte comparison and an edited-copy round trip, with hashes proving the source archives remain unchanged. Screenshots and saved copies go to `%TEMP%/zstudio-pickup-editor-*`; app settings are restored. This verifies real WPF/Helix handling with synthesized input, not physical pointer feel or acceptance by the original game. Core fixtures independently cover malformed records, duplicate/reordered difficulty lists, absent-resource fallbacks, unrelated-byte preservation, external changes, protected paths, backups, Save As, partial multi-archive saves and undo across saved baselines.
+
 ```powershell
 dotnet build zStudio.slnx -c Release
 dotnet test --solution zStudio.slnx -c Release

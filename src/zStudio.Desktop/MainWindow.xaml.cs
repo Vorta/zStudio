@@ -50,6 +50,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent(); DataContext = ViewModel;
+        PickupProperties.Content = pickupPanel;
+        pickupPanel.PositionCommitted += (source, position) => { if (pickupDocument?.PickupEdits is { } edits) CommitPickupPosition(edits, source, position); };
+        BackupOnSave.IsChecked = ViewModel.Settings.CreateBackupOnSave;
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;
@@ -72,7 +75,7 @@ public partial class MainWindow : Window
     });
     private async Task RunUi(Func<Task> work)
     {
-        try { await work(); }
+        try { pickupPanel.CommitPending(); await work(); }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
     }
@@ -120,6 +123,7 @@ public partial class MainWindow : Window
     }
     private void CancelPreview()
     {
+        DetachPickupEditor();
         selectedNode = null; isolatedNode = null;
         difficultyRefresh?.Cancel();
         pendingAnimationPlay = false;
@@ -131,6 +135,10 @@ public partial class MainWindow : Window
     private async Task ShowAsset(DocumentModel doc, AssetRecord? asset)
     {
         bool differentAsset = shownAsset?.Id != asset?.Id;
+        var previousMission = !differentAsset && asset?.Kind == AssetKind.World ? scene?.Mission : null;
+        var previousView = previousMission == null ? null : scene?.CaptureView();
+        int? previousSelection = selectedNode, previousIsolate = isolatedNode;
+        var previousPickup = selectedNode is int selected ? scene?.PickupAt(selected)?.Pickup?.Source : null;
         CancelPreview(); shownAsset = asset; var token = preview.Token;
         foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
         EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
@@ -169,9 +177,22 @@ public partial class MainWindow : Window
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
                 WorldDifficulty.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
-                if (scene == null) { scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; SceneHost.Content = scene; }
+                if (scene == null) { scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigurePickupScene(scene); SceneHost.Content = scene; }
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty) : null;
+                if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
                 await scene.ShowAsync(doc.Document, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
+                if (mission != null)
+                {
+                    AttachPickupEditor(doc);
+                    if (previousMission != null && previousView != null)
+                    {
+                        isolatedNode = previousIsolate is int oldIsolate && mission.RemapNodeFrom(previousMission, oldIsolate) is >= 0 and int mappedIsolate ? mappedIsolate : null;
+                        if (isolatedNode != null) scene.Isolate(isolatedNode);
+                        scene.RestoreView(previousView);
+                        selectedNode = RemapPickupSelection(previousPickup, mission) ?? (previousSelection is int oldSelection && mission.RemapNodeFrom(previousMission, oldSelection) is >= 0 and int mapped ? mapped : null);
+                        if (selectedNode is int node) InspectNode(node);
+                    }
+                }
                 if (mission != null) { PreviewInfo.Text = mission.Layout.Description + " · " + PreviewInfo.Text; WorldDifficulty.ToolTip = mission.Layout.Description; }
                 if (mission != null && mission.Layout.Difficulty != ViewModel.Difficulty) await RefreshWorldDifficultyAsync();
             }
@@ -327,16 +348,20 @@ public partial class MainWindow : Window
     private void SceneTreeSelected(object sender, RoutedPropertyChangedEventArgs<object> e) { if (e.NewValue is SceneTreeItem item) InspectNode(item.Node.Index); }
     private void InspectNode(int index)
     {
+        pickupPanel.CommitPending();
         if ((scene?.PreviewScene ?? ViewModel.SelectedDocument?.Document.Scene) is not { } data || index < 0 || index >= data.Nodes.Count) return;
+        var actor = scene?.PickupAt(index);
+        if (actor != null) index = actor.Root;
+        scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.PickupsLocked ?? true);
         selectedNode = index; var properties = (JsonObject)data.Nodes[index].Metadata.DeepClone();
         if (scene?.Mission is { } mission)
         {
             properties["preview_instance"] = data.Nodes[index].Name;
-            properties["preview_world_position"] = JsonData.Vector(SceneViewport.WorldTransform(data, index).Translation);
+            properties["preview_world_position"] = JsonData.Vector(actor != null ? scene!.PickupPosition(actor.Root) : SceneViewport.WorldTransform(data, index).Translation);
             properties["source_node_index"] = mission.SourceNodes[index];
             properties["preview_layout"] = mission.Layout.Description;
         }
-        SetProperties(properties); InspectorTabs.SelectedIndex = 0; ViewModel.Status = $"Selected node #{index}: {data.Nodes[index].Name}";
+        SetProperties(properties); UpdatePickupInspector(); InspectorTabs.SelectedIndex = 0; ViewModel.Status = $"Selected node #{index}: {data.Nodes[index].Name}";
     }
     private static EventRow[] EventRows(JsonObject entry)
     {
@@ -393,7 +418,7 @@ public partial class MainWindow : Window
 #pragma warning restore WPF0001
     private void ResetLayoutClick(object sender, RoutedEventArgs e) { FilesColumn.Width = new(215); AssetsColumn.Width = new(280); PropertiesColumn.Width = new(300); PropertiesSplitterColumn.Width = new(5); InspectorTabs.Visibility = Visibility.Visible; ViewModel.Settings.AnimationSidebarWidth = 360; ViewModel.Settings.AnimationSections = []; ViewModel.Settings.AnimationSectionHeights = []; animation?.ResetLayout(); }
     private void CopyPropertiesClick(object sender, RoutedEventArgs e) { if (properties != null) Clipboard.SetText(properties.ToJsonString(JsonData.Options)); }
-    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Open the root containing image.zbd and mission folders. Double-click a file to open it. Filter assets within a tab or search across the whole root.\n\nTextures open at 1:1 (one texture pixel per screen pixel). Wheel zooms; left or middle drag pans. Fit and 1:1 reset the scale. Choose channels or inspect the palette.\n3D: right drag orbits; middle drag or Shift+right drag pans. Wheel zooms toward the surface under the pointer. Frame all resets the camera. Pick a node or use the Scene tree, then Isolate. LOD 0 selects the highest detail for each object. Higher LOD numbers show lower-detail variants. Fly looks around from the camera position; the wheel moves forward/back with smaller steps near surfaces.\nAudio: Play/pause, seek using waveform or slider; double-click a cue.\nAnimation: Space plays/pauses immediately after selecting an asset. Transport icons and the seek bar share one row. The range follows the calculated duration; indefinite animations show a labeled preview range. The Dispatched events graphic sits below the player. The Details panel on the right contains collapsible options, sequences, events, Status and trace text. Drag the bottom grip to resize each section; heights are remembered. View > Reset layout restores defaults. Preview options provides custom range and Auto reset. Ctrl+wheel zooms the trace. Select events to edit their clocks, thresholds, parameters and keyframes. Use the Sequence and References property tabs for structure and targets. Reset / stop previews cleanup separately. The LOD picker applies to animation and mission context. Sprite textures cycle automatically. Map shows context; Bind chooses a root. Mute controls audio. Event trace labels approximation and unavailable game behavior.\n\nExports create a new folder outside the source tree. Ctrl+E exports selected records. Animation edits support Ctrl+Z/Ctrl+Y and Ctrl+S Save As to a new file. Source files are preserved. Other formats remain read-only. F5 reloads; Escape cancels an active export or validation; Ctrl+W closes a tab.", "Controls and formats");
+    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Open the root containing image.zbd and mission folders. Double-click a file to open it. Filter assets within a tab or search across the whole root.\n\nTextures open at 1:1 (one texture pixel per screen pixel). Wheel zooms; left or middle drag pans. Fit and 1:1 reset the scale. Choose channels or inspect the palette.\n3D: right drag orbits; middle drag or Shift+right drag pans. Wheel zooms toward the surface under the pointer. Frame all resets the camera. Pick a node or use the Scene tree, then Isolate. LOD 0 selects the highest detail for each object. Higher LOD numbers show lower-detail variants. Fly looks around from the camera position; the wheel moves forward/back with smaller steps near surfaces.\nWhole world pickups: click a pickup to select its bounds. Uncheck Locked to reveal XYZ movement arrows and editable coordinates. Drag an arrow, or type a coordinate and press Enter. Escape cancels a drag. Moves include unambiguously matching difficulty records. Ctrl+Z/Ctrl+Y undo/redo. Ctrl+S saves to the owning archive (often zrdr.zbd); Ctrl+Shift+S saves a new copy and retargets subsequent saves. Reference datasets require Save As. File > Create backup on Save is optional and off by default. Other map objects remain inspectable.\nAudio: Play/pause, seek using waveform or slider; double-click a cue.\nAnimation: Space plays/pauses immediately after selecting an asset. Transport icons and the seek bar share one row. The range follows the calculated duration; indefinite animations show a labeled preview range. The Dispatched events graphic sits below the player. The Details panel on the right contains collapsible options, sequences, events, Status and trace text. Drag the bottom grip to resize each section; heights are remembered. View > Reset layout restores defaults. Preview options provides custom range and Auto reset. Ctrl+wheel zooms the trace. Select events to edit their clocks, thresholds, parameters and keyframes. Use the Sequence and References property tabs for structure and targets. Reset / stop previews cleanup separately. The LOD picker applies to animation and mission context. Sprite textures cycle automatically. Map shows context; Bind chooses a root. Mute controls audio. Event trace labels approximation and unavailable game behavior.\n\nExports create a new folder outside the source tree. Ctrl+E exports selected records. Animation edits support Ctrl+Z/Ctrl+Y and Ctrl+S Save As to a new file. Animation Save As and exports preserve source files. Other format edits are unsupported. F5 reloads; Escape cancels an active export or validation; Ctrl+W closes a tab.", "Controls and formats");
     private void AboutClick(object sender, RoutedEventArgs e)
     {
         var assembly = typeof(MainWindow).Assembly;
@@ -403,6 +428,7 @@ public partial class MainWindow : Window
     }
     private void Keyboard(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && scene?.CancelPickupDrag() == true) { e.Handled = true; return; }
         if (e.Key == Key.Space && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None &&
             shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.AnimationEdits != null &&
             AnimationSpaceTarget(e.OriginalSource as DependencyObject))
@@ -411,7 +437,7 @@ public partial class MainWindow : Window
             if (!e.IsRepeat) { if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
             return;
         }
-        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenFolderClick(this, e); else if (ctrl && e.Key == Key.E) ExportSelectedClick(this, e); else if (ctrl && e.Key == Key.S) SaveAnimationClick(this, e); else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBox) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBox) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && operation is { IsCancellationRequested: false }) CancelClick(this, e); else return; e.Handled = true;
+        bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenFolderClick(this, e); else if (ctrl && e.Key == Key.E) ExportSelectedClick(this, e); else if (ctrl && e.Key == Key.S) { if ((System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Shift) != 0) SaveCurrentAsClick(this, e); else SaveCurrentClick(this, e); } else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && operation is { IsCancellationRequested: false }) CancelClick(this, e); else return; e.Handled = true;
     }
     private bool AnimationSpaceTarget(DependencyObject? source)
     {
@@ -427,7 +453,7 @@ public partial class MainWindow : Window
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
         System.Windows.Input.Keyboard.ClearFocus();
-        if (!allowClose && ViewModel.Documents.Any(d => d.AnimationEdits?.IsDirty == true))
+        if (!allowClose && ViewModel.Documents.Any(d => d.IsDirty))
         {
             e.Cancel = true; if (resolvingClose) return; resolvingClose = true;
             try { foreach (var document in ViewModel.Documents.ToArray()) if (!await ConfirmDocumentCloseAsync(document)) return; allowClose = true; Close(); }

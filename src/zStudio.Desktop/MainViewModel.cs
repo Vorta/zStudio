@@ -109,16 +109,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException) { return null; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { Diagnostics.Add(ex.Message); Status = "Could not open file: " + ex.Message; return null; }
     }
-    public void Close(DocumentModel document) { if (document.AnimationEdits?.IsDirty == true) throw new InvalidOperationException("Use CloseAsync to resolve unsaved animation edits."); RemoveDocument(document); }
+    public void Close(DocumentModel document) { if (document.IsDirty) throw new InvalidOperationException("Use CloseAsync to resolve unsaved edits."); RemoveDocument(document); }
     public async Task CloseAsync(DocumentModel document) { if (await CanRemoveAsync(document)) RemoveDocument(document); }
-    private Task<bool> CanRemoveAsync(DocumentModel document) => document.AnimationEdits?.IsDirty != true ? Task.FromResult(true) : ConfirmDiscardAsync?.Invoke(document) ?? Task.FromResult(false);
+    private Task<bool> CanRemoveAsync(DocumentModel document) => !document.IsDirty ? Task.FromResult(true) : ConfirmDiscardAsync?.Invoke(document) ?? Task.FromResult(false);
     private void RemoveDocument(DocumentModel document) { int i = Documents.IndexOf(document); Documents.Remove(document); document.Dispose(); if (SelectedDocument == document) SelectedDocument = Documents.Count > 0 ? Documents[Math.Clamp(i, 0, Documents.Count - 1)] : null; }
     public async Task ReloadAsync() { if (SelectedDocument is not { } doc || !await CanRemoveAsync(doc)) return; string path = doc.Path; RemoveDocument(doc); await OpenFileAsync(path); }
     public void CheckExternalChanges()
     {
         foreach (var doc in Documents)
-            try { doc.IsStale = FileStamp.Read(doc.Path) != doc.Document.Stamp; }
-            catch (IOException) { doc.IsStale = true; }
+            try { doc.IsStale = FileStamp.Read(doc.Path) != doc.Document.Stamp || doc.PickupEdits?.HasExternalChanges() == true; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { doc.IsStale = true; }
     }
     partial void OnGlobalQueryChanged(string value) => RefreshSearch();
     private void RefreshSearch()
