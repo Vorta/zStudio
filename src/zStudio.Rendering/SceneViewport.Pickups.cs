@@ -46,21 +46,20 @@ public sealed partial class SceneViewport
     }
     private void ConfigurePickupInput()
     {
-        // Run on the parent before Helix focuses/hit-tests its viewport class handler.
+        // Pick overlay handles on the parent, before Helix's viewport class handler picks the scene.
         PreviewMouseDown += (_, e) =>
         {
-            if (!IsPickupDragging && e.ChangedButton == MouseButton.Left) PickupInteractionStarting?.Invoke();
+            if (HandlePickupPointerDown(e.GetPosition(viewport), e)) e.Handled = true;
         };
-        viewport.PreviewMouseDown += (_, e) =>
+        PreviewMouseMove += (_, e) =>
         {
-            if (IsPickupDragging && e.ChangedButton != MouseButton.Left) e.Handled = true;
+            if (HandlePickupPointerMove(e.GetPosition(viewport))) e.Handled = true;
         };
-        viewport.PreviewMouseUp += (_, e) =>
+        PreviewMouseUp += (_, e) =>
         {
-            if (!IsPickupDragging || e.ChangedButton != MouseButton.Left || selectedPickup is not int root) return;
-            Vector3 position = pickupPositions[root]; IsPickupDragging = false; ResumePickupCamera(); viewport.ReleaseMouseCapture();
-            PickupMoveCommitted?.Invoke(root, position);
+            if (HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
         };
+        MouseLeave += (_, _) => { if (!IsPickupDragging) SetPickupHover(false); };
         viewport.LostMouseCapture += (_, _) => { if (IsPickupDragging) CancelPickupDrag(); };
         viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && CancelPickupDrag()) e.Handled = true; };
     }
@@ -91,20 +90,22 @@ public sealed partial class SceneViewport
     private void CreatePickupManipulator()
     {
         if (pickupOverlay == null) return;
+        SetPickupHover(false); pickupArrows.Clear();
         if (pickupManipulator != null) { pickupOverlay.Children.Remove(pickupManipulator); pickupManipulator.Dispose(); }
         pickupManipulator = new(BeginPickupDrag) { EnableTranslation = true, EnableRotation = false, EnableScaling = false,
-            EnableXRayGrid = false, Visibility = Visibility.Collapsed };
+            EnableXRayGrid = false, Visibility = Visibility.Collapsed, IsHitTestVisible = false };
         foreach (var mesh in ManipulatorMeshes(pickupManipulator))
         {
             if (mesh.Material is DiffuseMaterial material) mesh.Material = new DiffuseMaterial { DiffuseColor = material.DiffuseColor, EnableUnLit = true };
             if (mesh.IsRendering)
             {
                 // Widen the active translation arrows in their local Y/Z plane, before axis rotation.
-                // Rendering and hit testing share this transform, so the larger arrows are easier to grab.
+                // Pointer picking uses a forgiving screen-space band around each visible arrow.
                 var transform = Matrix3D.Identity;
                 transform.Scale(new Vector3D(1, 2, 2));
                 transform.Append(mesh.Transform?.Value ?? Matrix3D.Identity);
                 mesh.Transform = new MatrixTransform3D(transform);
+                pickupArrows.Add(mesh);
             }
         }
         pickupOverlay.Children.Add(pickupManipulator); pickupGizmoSize = 0;
@@ -158,6 +159,7 @@ public sealed partial class SceneViewport
         bool selected = selectedPickup is int root && pickupActors.ContainsKey(root);
         selectionBox.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
         pickupManipulator.Visibility = selected && pickupEditable && !pickupLocked ? Visibility.Visible : Visibility.Collapsed;
+        if (pickupManipulator.Visibility != Visibility.Visible) SetPickupHover(false);
         if (!selected || selectedPickup is not int id) { pickupManipulator.Target = null; return; }
         Vector3 min = new(float.PositiveInfinity), max = new(float.NegativeInfinity);
         foreach (var (mesh, items) in visiblePlacements)
@@ -214,7 +216,7 @@ public sealed partial class SceneViewport
     public bool CancelPickupDrag()
     {
         if (!IsPickupDragging) return false;
-        IsPickupDragging = false; ResumePickupCamera();
+        IsPickupDragging = false; activePickupHandle = null; ResumePickupCamera();
         if (selectedPickup is int root) pickupPositions[root] = pickupDragStart;
         viewport.ReleaseMouseCapture(); CreatePickupManipulator(); UpdatePickupInstances(); RefreshPickupSelection(); PickupMovePreviewed?.Invoke(pickupDragStart); return true;
     }
@@ -233,7 +235,7 @@ public sealed partial class SceneViewport
     }
     private void ClearPickupEditing()
     {
-        IsPickupDragging = false; ResumePickupCamera(); selectedPickup = null;
+        IsPickupDragging = false; activePickupHandle = null; SetPickupHover(false); pickupArrows.Clear(); ResumePickupCamera(); selectedPickup = null;
         if (viewport.IsMouseCaptured) viewport.ReleaseMouseCapture();
         if (pickupTarget != null) pickupTransformDescriptor?.RemoveValueChanged(pickupTarget, PickupTargetChanged);
         pickupTransformDescriptor = null; pickupManipulator?.Dispose(); selectionBox?.Dispose(); pickupOverlay?.Dispose(); pickupTarget?.Dispose();

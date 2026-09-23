@@ -15,7 +15,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length == 2 && args[0] == "--pickup-editor") return PickupEditorCheck.Run(args[1]);
+        if (args.Length == 2 && args[0] is "--pickup-editor" or "--pickup-pointer") return PickupEditorCheck.Run(args[1], args[0] == "--pickup-pointer");
         if (args.Length == 2 && args[0] == "--placements") return MissionPlacementPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--difficulty") return DifficultyPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--ground") return GroundPreviewCheck.Run(args[1]);

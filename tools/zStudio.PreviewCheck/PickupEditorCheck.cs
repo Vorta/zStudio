@@ -1,9 +1,11 @@
 using System.IO;
 using System.Numerics;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
@@ -17,7 +19,7 @@ using HitTestResult = HelixToolkit.SharpDX.HitTestResult;
 
 internal static class PickupEditorCheck
 {
-    public static int Run(string rootArg)
+    public static int Run(string rootArg, bool nativeInput = false)
     {
         string root = Path.GetFullPath(rootArg);
         string output = Path.Combine(Path.GetTempPath(), "zstudio-pickup-editor-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(output);
@@ -58,7 +60,7 @@ internal static class PickupEditorCheck
                         if (hit?.ModelHit is MeshGeometryModel3D && NearPickup(hit.PointHit, originalPosition)) { picked = hit; pickedPoint = p; }
                     }
                 Require(picked != null, "No visible Nanite surface found by hit testing");
-                MouseDown((Element3D)picked!.ModelHit!, picked, pickedPoint);
+                MouseDown(pickedPoint);
                 Require(scene.SelectedPickupRoot == actor.Root, "Click selected the wrong pickup instance");
                 var manipulator = Manipulator(); Require(manipulator.Visibility == Visibility.Collapsed, "Locked map exposed movement controls");
                 Require(((ContentControl)window.FindName("PickupProperties")).Visibility == Visibility.Visible, "Pickup coordinates are missing");
@@ -78,26 +80,69 @@ internal static class PickupEditorCheck
                 var cameraBefore = scene.CaptureView();
                 var othersBefore = scene.Mission.Actors.Where(a => a.Pickup != null && a.Root != actor.Root).ToDictionary(a => a.Root, a => scene.PickupPosition(a.Root));
                 for (int axis = 0; axis < 3; axis++)
+                    foreach (double along in new[] { .55, 1.1, 1.7 })
+                        foreach (double offset in new[] { -10d, 0d, 10d })
+                        {
+                            await Task.Delay(40, token);
+                            var before = scene.PickupPosition(actor.Root); var sample = ArrowPoint(axis, along);
+                            var click = sample.Point + sample.Perpendicular * offset;
+                            scene.HandlePickupPointerMove(click);
+                            if (Mouse.LeftButton == MouseButtonState.Released && Mouse.RightButton == MouseButtonState.Released && Mouse.MiddleButton == MouseButtonState.Released)
+                                Require(viewport.Cursor == Cursors.Hand, "Handle target has no hover feedback");
+                            MouseDown(click); Require(scene.IsPickupDragging, $"Axis {axis} did not grab at shaft/tip {along}, offset {offset} DIP");
+                            var finish = click + new System.Windows.Vector(24, -19);
+                            Require(scene.HandlePickupPointerMove(finish), "Pointer move was not routed to the captured handle");
+                            var moved = scene.PickupPosition(actor.Root);
+                            Require(Vector3.Distance(before, moved) > .001f, "Arrow did not move the pickup");
+                            for (int other = 0; other < 3; other++) if (other != axis) Require(Math.Abs(before[other] - moved[other]) < .001f, "Click selected a different axis");
+                            Require(scene.HandlePickupPointerUp(finish, LeftButton()), "Mouse release was not handled");
+                            Require(!scene.IsPickupDragging && edits.IsDirty, "Mouse release did not commit the move");
+                            edits.Undo(); Require(Vector3.Distance(before, scene.PickupPosition(actor.Root)) < .001f, "Undo did not restore the complete drag");
+                            edits.Redo(); Require(Vector3.Distance(moved, scene.PickupPosition(actor.Root)) < .001f, "Redo changed the drag result");
+                            edits.Undo();
+                        }
+                Require(!scene.HandlePickupPointerDown(new Point(1, 1), LeftButton()), "Empty space was consumed as a handle");
+                if (nativeInput)
                 {
-                    await Task.Delay(120, token);
-                    var before = scene.PickupPosition(actor.Root); var hit = FindArrow(axis); var target = (Element3D)hit.Hit.ModelHit!;
-                    MouseDown(target, hit.Hit, hit.Point); Require(scene.IsPickupDragging, "Arrow did not begin a drag");
-                    target.RaiseEvent(new MouseMove3DEventArgs(target, hit.Hit, hit.Point + new System.Windows.Vector(24, -19), viewport));
-                    var moved = scene.PickupPosition(actor.Root);
-                    Require(Vector3.Distance(before, moved) > .001f, "Arrow did not move the pickup");
-                    for (int other = 0; other < 3; other++) if (other != axis) Require(Math.Abs(before[other] - moved[other]) < .001f, "Arrow moved a second axis");
-                    viewport.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseUpEvent });
-                    Require(!scene.IsPickupDragging && edits.IsDirty, "Mouse release did not commit the move");
-                    edits.Undo(); Require(Vector3.Distance(before, scene.PickupPosition(actor.Root)) < .001f, "Undo did not restore the complete drag");
-                    edits.Redo(); Require(Vector3.Distance(moved, scene.PickupPosition(actor.Root)) < .001f, "Redo changed the drag result");
+                    NativePoint originalPointer = default; GetCursorPos(ref originalPointer);
+                    nint originalForeground = GetForegroundWindow(); double originalLeft = window.Left, originalTop = window.Top;
+                    try
+                    {
+                        window.Left = 30; window.Top = 30; window.Activate(); await Task.Delay(200, token);
+                        for (int axis = 0; axis < 3; axis++)
+                        {
+                            var sample = ArrowPoint(axis, 1.1); var click = sample.Point + sample.Perpendicular * 10;
+                            var before = scene.PickupPosition(actor.Root); Point? delivered = null;
+                            MouseButtonEventHandler observe = (_, e) => delivered = e.GetPosition(viewport);
+                            scene.AddHandler(UIElement.PreviewMouseDownEvent, observe, true);
+                            try { await NativePointer(0x0201, click); }
+                            finally { scene.RemoveHandler(UIElement.PreviewMouseDownEvent, observe); }
+                            Require(delivered is { } actual && (actual - click).Length < 2, $"Windows pointer coordinates differ: expected {click}, received {delivered}");
+                            Require(scene.IsPickupDragging, $"Windows click did not capture axis {axis}");
+                            var finish = click + new System.Windows.Vector(24, -19); await NativePointer(0x0200, finish);
+                            var moved = scene.PickupPosition(actor.Root); Require(Vector3.Distance(before, moved) > .001f, "Windows mouse move did not drag");
+                            for (int other = 0; other < 3; other++) if (other != axis) Require(Math.Abs(before[other] - moved[other]) < .001f, "Windows click selected a different axis");
+                            await NativePointer(0x0202, finish); Require(!scene.IsPickupDragging && edits.IsDirty, "Windows mouse release did not commit");
+                            edits.Undo();
+                        }
+                    }
+                    finally
+                    {
+                        scene.CancelPickupDrag();
+                        PostMessage(new WindowInteropHelper(window).Handle, 0x0202, 0, 0);
+                        window.Left = originalLeft; window.Top = originalTop;
+                        SetCursorPos(originalPointer.X, originalPointer.Y);
+                        if (originalForeground != 0) SetForegroundWindow(originalForeground);
+                    }
+                    Console.WriteLine($"PASS: Windows HWND pointer routing at {VisualTreeHelper.GetDpi(window).DpiScaleX * 100:G4}% DPI; all three axes grabbed 10 DIP off-center and committed on release.");
                 }
                 foreach (var (id, position) in othersBefore) Require(position == scene.PickupPosition(id), "Moving one instance moved a shared model");
                 Require(cameraBefore == scene.CaptureView(), "Movement changed the camera");
                 await Task.Delay(120, token);
-                var cancelHit = FindArrow(0); var cancelTarget = (Element3D)cancelHit.Hit.ModelHit!;
+                var cancelPoint = ArrowPoint(0, 1.1).Point;
                 var committed = scene.PickupPosition(actor.Root); var authored = edits.Position(pickup.Source);
-                MouseDown(cancelTarget, cancelHit.Hit, cancelHit.Point);
-                cancelTarget.RaiseEvent(new MouseMove3DEventArgs(cancelTarget, cancelHit.Hit, cancelHit.Point + new System.Windows.Vector(30, 0), viewport));
+                MouseDown(cancelPoint);
+                scene.HandlePickupPointerMove(cancelPoint + new System.Windows.Vector(30, 0));
                 Require(scene.CancelPickupDrag(), "Drag cancellation was not handled");
                 Require(scene.PickupPosition(actor.Root) == committed && edits.Position(pickup.Source) == authored, "Canceled drag became an authored edit");
                 inputs[0].Text = (committed.X + 1.125f).ToString("R", System.Globalization.CultureInfo.CurrentCulture); placementPanel.CommitPending();
@@ -107,14 +152,15 @@ internal static class PickupEditorCheck
                 Require(scene.PickupPosition(actor.Root) == committed, "Numeric edit was not one undoable action");
                 // The tunneling mouse event commits typed coordinates before the native gizmo snapshots its start.
                 await Task.Delay(120, token);
-                var pendingHit = FindArrow(0); var pendingTarget = (Element3D)pendingHit.Hit.ModelHit!;
+                var pendingPoint = ArrowPoint(0, 1.1).Point;
                 inputs[1].Text = (committed.Y + .125f).ToString("R", System.Globalization.CultureInfo.CurrentCulture);
-                MouseDown(pendingTarget, pendingHit.Hit, pendingHit.Point);
+                MouseDown(pendingPoint);
                 Require(scene.IsPickupDragging && edits.Position(pickup.Source).Y == committed.Y + .125f, "Pointer interaction lost pending numeric input");
                 scene.CancelPickupDrag();
                 Require(scene.PickupPosition(actor.Root) == edits.Position(pickup.Source), "Canceled drag reverted a preceding numeric edit");
                 edits.Undo(); Require(scene.PickupPosition(actor.Root) == committed, "Pending numeric input did not retain independent undo");
-                lockBox.IsChecked = true; Require(Manipulator().Visibility == Visibility.Collapsed, "Lock retained arrows"); lockBox.IsChecked = false;
+                lockBox.IsChecked = true; Require(Manipulator().Visibility == Visibility.Collapsed, "Lock retained arrows");
+                Require(!scene.HandlePickupPointerDown(pendingPoint, LeftButton()), "Locked handles intercepted a click"); lockBox.IsChecked = false;
                 var pose = scene.CaptureView(); var picker = (ComboBox)window.FindName("WorldDifficulty"); picker.SelectedItem = MissionDifficulty.Easy;
                 scene = await Ready(MissionDifficulty.Easy);
                 Require(scene.SelectedPickupRoot is int && scene.PickupPosition(scene.SelectedPickupRoot.Value) == committed, "Difficulty lost edited position or counterpart selection");
@@ -136,31 +182,43 @@ internal static class PickupEditorCheck
                 Require(SameBytes(original, await File.ReadAllBytesAsync(Path.Combine(root, "m1", "zrdr.zbd"), token)), "Reference pickup archive changed");
                 Require(SameBytes(worldHash, SHA256.HashData(await File.ReadAllBytesAsync(doc.Path, token))), "GameZ source changed");
                 await CorpusRoundTrips(root, output, token);
-                Console.WriteLine("PASS: actual Nanite hit selection; locked/unlocked arrows; three axis drags; one-step undo/redo; cancel; instance isolation; camera; difficulty and LOD retention; Save As and UI Save; three saved difficulty records; original source hashes.");
+                Console.WriteLine("PASS: actual Nanite hit selection; locked/unlocked arrows; 27 screen-space shaft/tip/edge drags through the production pointer router; hover feedback; locked/outside rejection; one-step undo/redo; cancel; instance isolation; camera; difficulty and LOD retention; Save As and UI Save; three saved difficulty records; original source hashes.");
                 Console.WriteLine("Screenshots and working copies: " + output);
 
                 TransformManipulator3D Manipulator() => viewport.Items.OfType<TopMostGroup3D>().Single().Children.OfType<TransformManipulator3D>().Single();
                 void Aim(Vector3 center, Vector3 offset) { camera.Position = new(center.X + offset.X, center.Y + offset.Y, center.Z + offset.Z); camera.LookDirection = new(-offset.X, -offset.Y, -offset.Z); camera.UpDirection = new(0, 1, 0); }
-                void MouseDown(Element3D target, HitTestResult hit, Point p)
+                MouseButtonEventArgs LeftButton() => new(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left);
+                async Task NativePointer(uint message, Point point)
                 {
-                    scene.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseDownEvent });
-                    target.RaiseEvent(new MouseDown3DEventArgs(target, hit, p, viewport, new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)));
+                    // Exercise WPF's actual HWND path; the caller restores the cursor and foreground window.
+                    nint handle = new WindowInteropHelper(window).Handle;
+                    var screen = viewport.PointToScreen(point); NativePoint client = new() { X = (int)Math.Round(screen.X), Y = (int)Math.Round(screen.Y) };
+                    SetCursorPos(client.X, client.Y); await Task.Delay(60, token);
+                    Require(ScreenToClient(handle, ref client), "Cannot locate test window client coordinates");
+                    nint coordinates = (nint)((client.X & 0xffff) | (client.Y << 16));
+                    if (message == 0x0201)
+                    {
+                        Require(PostMessage(handle, 0x0200, 0, coordinates), "Cannot position test pointer");
+                        await Task.Delay(100, token);
+                    }
+                    Require(PostMessage(handle, message, message == 0x0202 ? 0 : 1, coordinates), "Cannot post test pointer message");
+                    await Task.Delay(100, token);
                 }
-                (HitTestResult Hit, Point Point) FindArrow(int axis)
+                void MouseDown(Point p)
+                {
+                    var args = LeftButton();
+                    if (!scene.HandlePickupPointerDown(p, args))
+                        typeof(Viewport3DX).GetMethod("MouseDownHitTest", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(viewport, [p, args]);
+                }
+                (Point Point, System.Windows.Vector Perpendicular) ArrowPoint(int axis, double along)
                 {
                     var m = Manipulator(); var pos = scene.PickupPosition(scene.SelectedPickupRoot!.Value) + m.CenterOffset;
                     var direction = axis == 0 ? Vector3.UnitX : axis == 1 ? Vector3.UnitY : Vector3.UnitZ;
-                    for (float distance = .7f; distance <= 1.9f; distance += .08f)
-                    {
-                        var worldPoint = pos + direction * ((float)m.SizeScale * distance); var p = viewport.Project(new Point3D(worldPoint.X, worldPoint.Y, worldPoint.Z));
-                        foreach (var hit in viewport.FindHits(p))
-                            if (hit.ModelHit is MeshGeometryModel3D mesh && mesh.PostEffects == "ManipulatorXRayGrid")
-                            {
-                                var d = (mesh.Transform?.Value ?? Matrix3D.Identity).Transform(new Vector3D(1, 0, 0));
-                                if (Math.Abs(axis == 0 ? d.X : axis == 1 ? d.Y : d.Z) > .9) return (hit, p);
-                            }
-                    }
-                    throw new InvalidDataException("No hit-testable arrow for axis " + axis);
+                    var worldPoint = pos + direction * ((float)m.SizeScale * (float)along);
+                    var p = viewport.Project(new Point3D(worldPoint.X, worldPoint.Y, worldPoint.Z));
+                    var start = viewport.Project(new Point3D(pos.X, pos.Y, pos.Z));
+                    var segment = p - start; var perpendicular = new System.Windows.Vector(-segment.Y, segment.X); perpendicular.Normalize();
+                    return (p, perpendicular);
                 }
                 async Task<SceneViewport> Ready(MissionDifficulty difficulty)
                 {
@@ -216,4 +274,23 @@ internal static class PickupEditorCheck
     private static bool SameBytes(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
     private static void Require(bool value, string message) { if (!value) throw new InvalidDataException(message); }
     private static void Save(BitmapSource bitmap, string path) { PngBitmapEncoder encoder = new(); encoder.Frames.Add(BitmapFrame.Create(bitmap)); using var stream = File.Create(path); encoder.Save(stream); }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint { public int X, Y; }
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(ref NativePoint point);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(nint window);
+    [DllImport("user32.dll", EntryPoint = "PostMessageW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessage(nint window, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ScreenToClient(nint window, ref NativePoint point);
 }

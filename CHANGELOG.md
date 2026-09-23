@@ -7,7 +7,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 ## 0.2.19 — 2026-09-23
 
 - Edit mission pickup positions from Whole world: select an instance, see its bounds, unlock world-axis arrows, or enter exact XYZ coordinates in Properties.
-- Enlarge the pickup XYZ handles and their hit geometry for easier clicking while retaining consistent sizing as the camera zooms.
+- Enlarge pickup XYZ handles and use generous, DPI-aware screen-space click targets for their shafts and tips. Prioritize handles over scene geometry and show a hand cursor over a draggable target.
 - Keep maps locked by default; add one-action drag undo/redo, cancellation, and preserved edits/selection across difficulty and LOD changes.
 - Apply moves to uniquely matching difficulty records while retaining amounts, rotations and respawn metadata. Report ambiguous or unmatched counterparts without changing them.
 - Save surgical coordinate patches to the owning ZBD archive, with verified Save As, external-change checks, atomic file replacement and optional backups (off by default). Preserve protected reference datasets.
