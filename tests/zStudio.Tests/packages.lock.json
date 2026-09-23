@@ -163,7 +163,7 @@
           "xunit.v3.runner.common": "[4.0.1]"
         }
       },
-      "recoil.zbd.core": {
+      "Recoil.Zbd.Core": {
         "type": "Project"
       }
     },

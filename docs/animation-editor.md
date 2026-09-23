@@ -1,6 +1,6 @@
 # Animation editing and preview
 
-zStudio 0.2.17 edits existing entries in version-28 animation packs. It preserves original data and writes a separate, verified ZBD through **Save As**. It does not create or duplicate whole animation entries or edit other ZBD families.
+zStudio edits existing entries in version-28 animation packs. It preserves original data and writes a separate, verified ZBD through **Save As**. It does not create or duplicate whole animation entries or edit other ZBD families.
 
 ## Using the editor
 

@@ -189,7 +189,7 @@
           "SharpDX": "4.2.0"
         }
       },
-      "recoil.zbd.core": {
+      "Recoil.Zbd.Core": {
         "type": "Project"
       },
       "CommunityToolkit.Mvvm": {

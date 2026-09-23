@@ -4,11 +4,15 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## Unreleased
 
+## 0.2.18 — 2026-09-23
+
+- Publish the open-source repository with contribution guidance, protected main/release tags, and confidential vulnerability reporting.
+- Refresh repository documentation and bundled guides for public use.
 - Rename the solution to `zStudio.slnx` and all project folders/files to `zStudio.*`; update build, CI, packaging and documentation references while preserving assembly names, namespaces and existing settings.
 
 ## 0.2.17 — 2026-09-23
 
-First zStudio repository release, initially distributed privately for owner review. Earlier builds were developed locally as Recoil ZBD Studio; their unavailable binaries are not reconstructed as releases.
+First zStudio repository release. Earlier builds were developed locally as Recoil ZBD Studio; their unavailable binaries are not reconstructed as releases.
 
 - Rebrand the desktop application and portable executable to zStudio, use the updated Studio icon, and retain existing user settings.
 - Start a fresh desktop-project history and archive the previous Python CLI separately. Keep the optional independent export checker self-contained.

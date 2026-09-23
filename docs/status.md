@@ -1,6 +1,12 @@
 # Desktop implementation status
 
-## Workspace naming — unreleased
+## Public repository maintenance — 0.2.18
+
+Vorta/zStudio is public and welcomes issues, feature requests and pull requests. Main requires an up-to-date pull request, passing Windows CI and resolved conversations; deletion and force pushes are blocked. Version tags are protected against deletion and replacement. External fork workflows require maintainer approval, and security reports use the confidential advisory form. Repository guidance and bundled documentation describe the public contribution and release process.
+
+Verification on 2026-09-23: GitHub reports main as protected, both rulesets active with no bypass actors, and the contributor approval/reporting settings enabled; anonymous repository access succeeds. Local locked restore and Release build pass with zero warnings/errors, and all 171 tests pass for 0.2.18. Refreshed lockfiles change only internal project version references and their canonical casing. Hosted CI and release/package checks are recorded in pull request checks and release history.
+
+## Workspace naming — 0.2.18
 
 The solution is `zStudio.slnx`. All nine application, test and verification projects now use `zStudio.*` folder and project filenames. Project references, the preview runner's manifest path, publishing, GitHub workflows and developer commands use the new paths. Explicit assembly names and root namespaces retain existing DLL names, WPF/embedded resource identities and friend-assembly access. Existing settings paths and the published 0.2.17 release remain stable.
 
@@ -8,15 +14,15 @@ Verification: locked restore and Release build pass with zero warnings/errors; a
 
 ## zStudio repository preparation — 0.2.17
 
-Implemented on 2026-09-23. The desktop application, portable executable and documentation use zStudio branding. Internal project/assembly names and existing settings remain stable; the Studio icon uses the owner's updated artwork. Vorta/zStudio starts private for owner review; only the owner will change visibility. The MIT license is retained and is now included in the portable package alongside dependency notices.
+Implemented on 2026-09-23. The desktop application, portable executable and documentation use zStudio branding. Internal project/assembly names and existing settings remain stable; the Studio icon uses the owner's updated artwork. The MIT license is retained and is included in the portable package alongside dependency notices.
 
 The previous Python CLI, helper, table snapshot generator, legacy documentation, cache and complete Git metadata were archived outside this repository, with hashes verified and both historical commits retained. This repository starts a fresh desktop history. The optional independent export checker no longer imports the archived CLI; its little-endian RGB565 conversion matches all 65,536 reference pixel values. The checked-in field tables build without regeneration or Python.
 
-Contribution/security guidance, issue forms, PR template, code owners, dependency updates, desired branch/tag rules, Windows CI and tag-driven ZIP releases are included. Release publication validates version/tag equality, main ancestry, tests, executable/DLL versions, relative apphost binding and every ZIP file by SHA-256. Only the publication job has release-write permission. No workflow changes visibility. Private feature availability and the owner's public-launch checklist are documented in releasing.md.
+Contribution/security guidance, issue forms, PR template, code owners, dependency updates, branch/tag rule definitions, Windows CI and tag-driven ZIP releases are included. Release publication validates version/tag equality, main ancestry, tests, executable/DLL versions, relative apphost binding and every ZIP file by SHA-256. Only the publication job has release-write permission. Repository maintenance is documented in releasing.md.
 
 Verification: locked restore succeeds before and after win-x64 publication; Release builds have zero warnings/errors and **171 tests pass**, including in a fresh clone without game data or the archived CLI. The shared runtime-identifier declaration fixes the inherited build/publish lockfile mismatch. Actionlint and PowerShell/YAML validation pass. Clean-clone packaging validates **565 files**, version 0.2.17 and the executable + dependencies root, and a separate check rejects a mismatched version. Portable startup verifies the zStudio title, bundled runtime modules and normal exit 0. The real WPF layout regression passes on m1/destroy_the_gen, retaining selection/frame, native Space, saved section heights and source bytes. Test settings are restored and captures stay in the OS temporary directory. Hosted CI/release verification is recorded in repository checks and release history.
 
-The source commit was audited: 183 files include the previously ignored Windows manifest and the icon; no game/generated/legacy files or detected credential patterns were included. GitHub confirms private visibility and administrative access; anonymous access returns 404. Dependency alerts and security updates are enabled. Private branch/tag rules are unavailable on the current account tier and remain documented definitions for activation after the owner makes the repository public. Their enforcement is not claimed during private review.
+The source commit was audited: 183 files include the previously ignored Windows manifest and the icon; no game/generated/legacy files or detected credential patterns were included. Vorta has administrative access through the CLI and connected integration. Dependency alerts and security updates are enabled.
 
 The first release uses the owner's updated Studio icon, supplied on 2026-09-23, for both the executable and WPF window. The checked-in ICO preserves all six supplied 32-bit sizes (16, 32, 48, 64, 128 and 256 pixels).
 

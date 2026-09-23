@@ -1,6 +1,6 @@
 # Contributing to zStudio
 
-Bug reports, feature requests and pull requests are welcome. The repository starts private for owner review; public contributions become available when Vorta makes it public.
+Bug reports, feature requests and pull requests are welcome. Use the issue forms to report bugs, propose features or request support for another game.
 
 ## Reports and proposals
 

@@ -2,11 +2,9 @@
 
 **Advanced viewer and editor for Zipper Interactive's ZBD files.**
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, and edit supported animation programs. The current version is **0.2.17**.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, and edit supported animation programs. The current version is **0.2.18**.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
-
-The repository is initially private for owner review. Repository and release links require access until Vorta makes the repository public.
 
 ## Compatible games
 
@@ -21,7 +19,7 @@ The version-28 animation editor supports event and sequence editing, determinist
 
 ## Run
 
-Download `zStudio-0.2.17-win-x64.zip` from [GitHub Releases](https://github.com/Vorta/zStudio/releases), extract it, and run **zStudio.exe**. Keep the adjacent **dependencies** folder with it. Releases include a SHA-256 checksum. The self-contained Windows 11 x64 build does not require Python, Visual Studio, or a separate .NET installation. A Direct3D 11-capable graphics device is needed for 3D previews.
+Download `zStudio-0.2.18-win-x64.zip` from [GitHub Releases](https://github.com/Vorta/zStudio/releases), extract it, and run **zStudio.exe**. Keep the adjacent **dependencies** folder with it. Releases include a SHA-256 checksum. The self-contained Windows 11 x64 build does not require Python, Visual Studio, or a separate .NET installation. A Direct3D 11-capable graphics device is needed for 3D previews.
 
 ```text
 zStudio.exe
@@ -83,7 +81,7 @@ Unknown versions remain available for raw inspection. The snapshot reader limits
 
 Bug reports, feature requests and pull requests are welcome. Use the [issue forms](https://github.com/Vorta/zStudio/issues/new/choose), and read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing code changes. Include the game/data version, zStudio version and asset record identity in reports. Please do not upload game archives or extracted game assets.
 
-Future work includes additional Zipper Interactive games and broader content editing. A compatibility request should identify the game and format evidence; support remains unconfirmed until tested. [Release and maintenance instructions](docs/releasing.md) describe versioning, CI and the owner's public-launch checklist.
+Future work includes additional Zipper Interactive games and broader content editing. A compatibility request should identify the game and format evidence; support remains unconfirmed until tested. [Release and maintenance instructions](docs/releasing.md) describe versioning, CI and repository protections.
 
 The former Python unpacker/repacker is archived separately from this desktop repository. An optional Python utility remains for independent export checks; it is not needed to build or run zStudio.
 
