@@ -16,6 +16,7 @@ namespace Recoil.Zbd.Rendering;
 
 public sealed partial class SceneViewport
 {
+    private const double PickupGizmoPixelsPerUnit = 72;
     private readonly Dictionary<int, MissionActor> pickupActors = [];
     private readonly Dictionary<int, int> pickupRoots = [];
     private readonly Dictionary<MeshGeometryModel3D, ScenePlacement[]> pickupBasePlacements = [];
@@ -94,7 +95,18 @@ public sealed partial class SceneViewport
         pickupManipulator = new(BeginPickupDrag) { EnableTranslation = true, EnableRotation = false, EnableScaling = false,
             EnableXRayGrid = false, Visibility = Visibility.Collapsed };
         foreach (var mesh in ManipulatorMeshes(pickupManipulator))
+        {
             if (mesh.Material is DiffuseMaterial material) mesh.Material = new DiffuseMaterial { DiffuseColor = material.DiffuseColor, EnableUnLit = true };
+            if (mesh.IsRendering)
+            {
+                // Widen the active translation arrows in their local Y/Z plane, before axis rotation.
+                // Rendering and hit testing share this transform, so the larger arrows are easier to grab.
+                var transform = Matrix3D.Identity;
+                transform.Scale(new Vector3D(1, 2, 2));
+                transform.Append(mesh.Transform?.Value ?? Matrix3D.Identity);
+                mesh.Transform = new MatrixTransform3D(transform);
+            }
+        }
         pickupOverlay.Children.Add(pickupManipulator); pickupGizmoSize = 0;
     }
     private static IEnumerable<MeshGeometryModel3D> ManipulatorMeshes(Element3D element)
@@ -213,7 +225,7 @@ public sealed partial class SceneViewport
         double depth = Vector3D.DotProduct(new Point3D(p.X, p.Y, p.Z) - camera.Position, look);
         if (depth <= 0) { pickupManipulator.Visibility = Visibility.Collapsed; return; }
         pickupManipulator.Visibility = pickupEditable && !pickupLocked && selectionBox?.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
-        double size = Math.Max(.001, depth * 2 * Math.Tan(camera.FieldOfView * Math.PI / 360) * 44 / Math.Max(1, viewport.ActualWidth));
+        double size = Math.Max(.001, depth * 2 * Math.Tan(camera.FieldOfView * Math.PI / 360) * PickupGizmoPixelsPerUnit / Math.Max(1, viewport.ActualWidth));
         if (!force && Math.Abs(size - pickupGizmoSize) < size * .001) return;
         pickupGizmoSize = size; pickupManipulator.SizeScale = size;
         pickupManipulator.Target = null; pickupManipulator.Target = pickupTarget;

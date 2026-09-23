@@ -2,6 +2,8 @@
 
 ## Whole world pickup placement editor — 0.2.19
 
+Local test feedback: XYZ handles are now about 64% longer and 3.3 times wider than the initial test build, using the same enlarged geometry for rendering and picking. Camera-dependent scaling retains a consistent screen size. Release build and the real WPF/Helix pickup check pass after this adjustment, including all axis drags, undo/redo, cancellation, instance isolation, difficulty/LOD retention and verified saved copies. GitHub publication remains on hold for owner testing.
+
 Implemented on 2026-09-23. Clicking an authored pickup selects its instance and bounds. Whole world starts Locked; unlocking enables world-axis arrows and exact XYZ fields. Drags are one undoable action, Escape cancels the active drag, and pending edits survive difficulty/LOD changes without moving the camera. Difficulty counterparts are matched uniquely by original type, position and rotation, with fallback resources deduplicated and ambiguous records left unchanged. The inspector identifies the affected difficulties and owning archive.
 
 Save writes the owning pickup ZAR archive, not the displayed GameZ geometry. For m1 this is `zrdr.zbd`. The writer preserves member ordering and all bytes outside changed coordinate nodes, reparses and verifies staged files, checks for external changes, and replaces working archives atomically. Save As requires new destinations and retargets subsequent saves. Optional backups default off; `zbd_1998` and `zbd_1999` remain protected. Partial multi-archive results retain unsaved changes. Map documents participate in dirty/close/reload prompts.
