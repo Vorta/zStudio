@@ -12,6 +12,8 @@ Verification: locked restore succeeds before and after win-x64 publication; Rele
 
 The source commit was audited: 183 files include the previously ignored Windows manifest and the icon; no game/generated/legacy files or detected credential patterns were included. GitHub confirms private visibility and administrative access; anonymous access returns 404. Dependency alerts and security updates are enabled. Private branch/tag rules are unavailable on the current account tier and remain documented definitions for activation after the owner makes the repository public. Their enforcement is not claimed during private review.
 
+The first release uses the owner's updated Studio icon, supplied on 2026-09-23, for both the executable and WPF window. The checked-in ICO preserves all six supplied 32-bit sizes (16, 32, 48, 64, 128 and 256 pixels).
+
 Existing preview and original-game compatibility limitations remain applicable. No game data or external research sources are distributed. The application remains unsigned; independent clean-machine validation is still outstanding.
 
 ## Animation trace layout and resizable sections — 0.2.16
