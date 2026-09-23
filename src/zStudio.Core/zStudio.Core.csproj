@@ -2,6 +2,8 @@
   <PropertyGroup>
     <RootNamespace>Recoil.Zbd.Core</RootNamespace>
     <AssemblyName>Recoil.Zbd.Core</AssemblyName>
+    <!-- Required by source-generated Windows filesystem interop. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup><EmbeddedResource Include="Formats/field-layouts.json" /></ItemGroup>
 </Project>

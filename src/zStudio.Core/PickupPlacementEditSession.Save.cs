@@ -9,7 +9,14 @@ public sealed partial class PickupPlacementEditSession
 {
     private sealed record StagedArchive(string Source, ArchiveState Archive, string Destination, string Temporary, byte[] Bytes, bool Replace);
 
-    public static bool IsProtectedPath(string path) => Path.GetFullPath(path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+    /// <summary>Checks both the supplied and resolved destination. Throws if its location cannot be verified.</summary>
+    public static bool IsProtectedPath(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        return HasProtectedComponent(fullPath) ||
+            (OperatingSystem.IsWindows() && HasProtectedComponent(WindowsSavePath.ResolveExistingParent(fullPath)));
+    }
+    private static bool HasProtectedComponent(string path) => path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
         .Any(p => p.Equals("zbd_1998", StringComparison.OrdinalIgnoreCase) || p.Equals("zbd_1999", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Stage and verify every output first. Report each atomic replacement independently.</summary>
@@ -53,6 +60,7 @@ public sealed partial class PickupPlacementEditSession
                 try
                 {
                     token.ThrowIfCancellationRequested();
+                    ValidateDestination(output.Destination);
                     if (output.Replace)
                     {
                         await CheckBaselineAsync(output.Archive, token);

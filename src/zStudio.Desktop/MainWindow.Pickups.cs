@@ -93,22 +93,23 @@ public partial class MainWindow
         if (document.PickupEdits is not { } edits) return false;
         pickupPanel.CommitPending(); System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag();
         if (!saveAs && !edits.IsDirty) return true;
-        Dictionary<string, string>? destinations = null;
-        foreach (string source in edits.ArchivePaths)
-        {
-            if (!saveAs && !edits.IsArchiveDirty(source)) continue;
-            string target = edits.TargetPath(source);
-            if (!saveAs && !PickupPlacementEditSession.IsProtectedPath(target)) continue;
-            SaveFileDialog dialog = new() { Title = "Save pickup archive copy · " + Path.GetFileName(source), Filter = "ZBD archive|*.zbd", DefaultExt = ".zbd",
-                AddExtension = true, FileName = Path.GetFileName(source), OverwritePrompt = false,
-                InitialDirectory = PickupPlacementEditSession.IsProtectedPath(target) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Path.GetDirectoryName(target)! };
-            if (dialog.ShowDialog(this) != true) return false;
-            destinations ??= new(StringComparer.OrdinalIgnoreCase); destinations[source] = dialog.FileName;
-        }
-        IsEnabled = false;
-        ViewModel.Status = "Saving and verifying pickup placements…";
         try
         {
+            Dictionary<string, string>? destinations = null;
+            foreach (string source in edits.ArchivePaths)
+            {
+                if (!saveAs && !edits.IsArchiveDirty(source)) continue;
+                string target = edits.TargetPath(source);
+                bool protectedTarget = PickupPlacementEditSession.IsProtectedPath(target);
+                if (!saveAs && !protectedTarget) continue;
+                SaveFileDialog dialog = new() { Title = "Save pickup archive copy · " + Path.GetFileName(source), Filter = "ZBD archive|*.zbd", DefaultExt = ".zbd",
+                    AddExtension = true, FileName = Path.GetFileName(source), OverwritePrompt = false,
+                    InitialDirectory = protectedTarget ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Path.GetDirectoryName(target)! };
+                if (dialog.ShowDialog(this) != true) return false;
+                destinations ??= new(StringComparer.OrdinalIgnoreCase); destinations[source] = dialog.FileName;
+            }
+            IsEnabled = false;
+            ViewModel.Status = "Saving and verifying pickup placements…";
             var result = await edits.SaveAsync(destinations, ViewModel.Settings.CreateBackupOnSave, document.Lifetime.Token);
             if (result.SavedPaths.Count > 0)
             {

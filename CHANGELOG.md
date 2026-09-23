@@ -11,6 +11,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Keep maps locked by default; add one-action drag undo/redo, cancellation, and preserved edits/selection across difficulty and LOD changes.
 - Apply moves to uniquely matching difficulty records while retaining amounts, rotations and respawn metadata. Report ambiguous or unmatched counterparts without changing them.
 - Save surgical coordinate patches to the owning ZBD archive, with verified Save As, external-change checks, atomic file replacement and optional backups (off by default). Preserve protected reference datasets.
+- Resolve Windows destination aliases before checking protected folders, including substituted drives and new Save As directories; retain edits and report an error if the destination cannot be verified.
 - Include pickup edits in document dirty-state, close/reload prompts, and the shared Save/Undo/Redo commands.
 
 ## 0.2.18 — 2026-09-23
