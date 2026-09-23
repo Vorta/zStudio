@@ -1,0 +1,36 @@
+# Requires clang-format 23.
+BasedOnStyle: WebKit
+
+# Indentation and line width.
+UseTab: Never
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 120
+
+# WebKit braces: functions on the next line; control statements attached.
+AllowShortFunctionsOnASingleLine: Empty
+BreakBeforeBraces: WebKit
+
+# Use block-style continuation indentation.
+AlignAfterOpenBracket: false
+BreakAfterOpenBracketFunction: true
+BreakBeforeCloseBracketFunction: true
+
+# Keep short function signatures on one line.
+BreakFunctionDefinitionParameters: false
+
+# Keep argument and parameter lists on one line when they fit.
+# Otherwise, use one argument or parameter per line.
+PackArguments:
+  BinPack: OnePerLine
+
+PackParameters:
+  BinPack: OnePerLine
+
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+
+# Sort includes case-sensitively.
+SortIncludes:
+  Enabled: true
+  IgnoreCase: false

@@ -1,0 +1,25 @@
+name: Game compatibility request
+description: Request investigation of another game or format version.
+labels: [compatibility, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: Recoil is currently supported. Other Zipper Interactive titles require investigation; a shared extension does not establish format compatibility. Do not upload proprietary assets.
+  - type: input
+    id: game
+    attributes:
+      label: Game, platform and release/version
+    validations:
+      required: true
+  - type: textarea
+    id: format
+    attributes:
+      label: Archive structure and observed behavior
+      description: Relative filenames, detected type/version, file sizes and diagnostics are useful. Describe what zStudio currently does.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Available format evidence
+      description: Public documentation, original analysis or synthetic examples, with provenance. Do not attach game files or decompiled source.

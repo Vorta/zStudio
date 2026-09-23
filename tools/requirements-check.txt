@@ -1,0 +1,4 @@
+# Development-only independent export consumers; not used by the app.
+Pillow>=12.0,<13
+trimesh==5.1.0
+numpy==2.5.3

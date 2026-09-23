@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contribution guide
+    url: https://github.com/Vorta/zStudio/blob/main/CONTRIBUTING.md
+    about: Build instructions, contribution workflow and reporting guidelines.
+  - name: Security policy
+    url: https://github.com/Vorta/zStudio/blob/main/SECURITY.md
+    about: Report security vulnerabilities through the appropriate private channel.

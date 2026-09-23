@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify release
+    runs-on: windows-2025
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate tag and main ancestry
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [xml]$properties = Get-Content -LiteralPath Directory.Build.props
+          $version = [string]$properties.Project.PropertyGroup.Version
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$' -or $env:RELEASE_TAG -cne "v$version") { throw 'Tag and project version must match.' }
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Release commit must be on main.' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Restore locked dependencies
+        run: dotnet restore Recoil.Zbd.slnx --locked-mode
+      - name: Build Release
+        run: dotnet build Recoil.Zbd.slnx -c Release --no-restore
+      - name: Test without game assets
+        run: dotnet test --solution Recoil.Zbd.slnx -c Release --no-build
+      - name: Publish and verify portable archive
+        run: ./tools/publish.ps1
+      - name: Prepare checksum and release notes
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP 'zstudio-release'
+          New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+          $name = "zStudio-$env:RELEASE_VERSION-win-x64.zip"
+          Copy-Item -LiteralPath (Join-Path artifacts $name) -Destination $bundle
+          $hash = (Get-FileHash -LiteralPath (Join-Path $bundle $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content -LiteralPath (Join-Path $bundle 'SHA256SUMS') -Encoding utf8
+          $changelog = Get-Content -LiteralPath CHANGELOG.md -Raw
+          $heading = [regex]::Escape("## $env:RELEASE_VERSION")
+          $notes = [regex]::Match($changelog, "(?ms)^$heading(?: — [^\r\n]+)?\r?\n(.*?)(?=^## |\z)")
+          if (-not $notes.Success) { throw 'Missing changelog entry for release.' }
+          $body = $notes.Groups[1].Value.Trim() + "`n`nDownload the win-x64 ZIP, extract it, and run zStudio.exe beside dependencies/. SHA256SUMS verifies the download. Game files are not included."
+          $body | Set-Content -LiteralPath (Join-Path $bundle 'release-notes.md') -Encoding utf8
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-release
+          path: ${{ runner.temp }}/zstudio-release/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-release
+          path: release
+      - name: Verify checksum and publish
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          sha256sum --check SHA256SUMS
+          flags=(--latest)
+          if [[ "$RELEASE_VERSION" == *-* ]]; then flags=(--prerelease --latest=false); fi
+          gh release create "$RELEASE_TAG" "zStudio-$RELEASE_VERSION-win-x64.zip" SHA256SUMS \
+            --verify-tag --title "zStudio $RELEASE_VERSION" --notes-file release-notes.md "${flags[@]}"

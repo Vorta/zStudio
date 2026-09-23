@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Recoil.Zbd.Core/Recoil.Zbd.Core.csproj" />
+    <PackageReference Include="HelixToolkit.Wpf.SharpDX" />
+    <EmbeddedResource Include="GroundGrid.hlsl" />
+  </ItemGroup>
+</Project>

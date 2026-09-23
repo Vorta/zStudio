@@ -1,0 +1,51 @@
+name: Bug report
+description: Report unexpected behavior or a reproducible failure.
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach game archives, extracted assets or decompilation databases. Redact personal paths from diagnostic text. Use the security policy for sensitive vulnerabilities.
+  - type: input
+    id: version
+    attributes:
+      label: zStudio version
+      description: Copy the version from Help > About.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Windows and graphics environment
+      description: Windows version; for rendering issues also include GPU, driver and display scaling.
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game and data version
+      description: For example, Recoil and the release/build of your game files.
+    validations:
+      required: true
+  - type: input
+    id: asset
+    attributes:
+      label: Archive and asset identity
+      description: Relative archive path, asset name and record index; names alone may be ambiguous.
+      placeholder: m1/anim.zbd, animation name, record index
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant diagnostics and additional context
+      description: Diagnostics or animation Status/Event trace text, synthetic reproduction, and whether previous versions behaved differently.

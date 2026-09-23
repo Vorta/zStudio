@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Recoil.Zbd.Core/Recoil.Zbd.Core.csproj" />
+    <Project Path="src/Recoil.Zbd.Rendering/Recoil.Zbd.Rendering.csproj" />
+    <Project Path="src/Recoil.Zbd.Desktop/Recoil.Zbd.Desktop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Recoil.Zbd.Tests/Recoil.Zbd.Tests.csproj" />
+    <Project Path="tests/Recoil.Zbd.Desktop.Tests/Recoil.Zbd.Desktop.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Recoil.Zbd.Verify/Recoil.Zbd.Verify.csproj" />
+    <Project Path="tools/Recoil.Zbd.AnimationCheck/Recoil.Zbd.AnimationCheck.csproj" />
+    <Project Path="tools/Recoil.Zbd.ExportCheck/Recoil.Zbd.ExportCheck.csproj" />
+    <Project Path="tools/Recoil.Zbd.PreviewCheck/Recoil.Zbd.PreviewCheck.csproj" />
+  </Folder>
+</Solution>

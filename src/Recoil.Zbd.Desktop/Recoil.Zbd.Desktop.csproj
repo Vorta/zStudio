@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF>
+    <AssemblyName>Recoil.Zbd.Studio</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyTitle>zStudio</AssemblyTitle>
+    <ApplicationIcon>Assets/studio.ico</ApplicationIcon>
+    <PublishTrimmed>false</PublishTrimmed><PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets/studio.ico" />
+    <ProjectReference Include="../Recoil.Zbd.Core/Recoil.Zbd.Core.csproj" />
+    <ProjectReference Include="../Recoil.Zbd.Rendering/Recoil.Zbd.Rendering.csproj" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="NAudio.Core" /><PackageReference Include="NAudio.Wasapi" />
+  </ItemGroup>
+  <!-- Use the SDK's native host and keep the managed app and runtime together.
+       The relative DLL binding also makes hostfxr resolve inside dependencies. -->
+  <Target Name="CreatePortableLauncher" AfterTargets="Publish" Condition="'$(PortableLayout)' == 'true'">
+    <Error Condition="'$(RuntimeIdentifier)' != 'win-x64' or '$(SelfContained)' != 'true' or '$(PublishSingleFile)' == 'true'"
+           Text="PortableLayout requires a self-contained, non-single-file win-x64 publish." />
+    <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
+                   AppHostDestinationPath="$(PublishDir)../zStudio.exe"
+                   AppBinaryName="dependencies/$(AssemblyName)$(TargetExt)"
+                   IntermediateAssembly="@(IntermediateAssembly->'%(FullPath)')"
+                   WindowsGraphicalUserInterface="true"
+                   EnableMacOSCodeSign="false" />
+    <Delete Files="$(PublishDir)$(AssemblyName).exe" />
+  </Target>
+</Project>

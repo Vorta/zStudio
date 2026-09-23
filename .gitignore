@@ -1,0 +1,43 @@
+# .NET / Visual Studio / local builds
+**/bin/
+**/obj/
+.vs/
+.idea/
+artifacts/
+TestResults/
+*.user
+*.suo
+*.log
+
+# Local development state and credentials
+.agent/
+.claude/
+.devspace/
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+
+# Proprietary datasets, extraction output and reverse-engineering databases
+zbd/
+zbd_*/
+*.zbd
+*.zrd
+*.bndb
+*.bndb.*
+*.i64
+*.idb
+
+# Optional Python export checks
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# OS files
+Thumbs.db
+.DS_Store
