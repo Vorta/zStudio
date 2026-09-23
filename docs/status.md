@@ -2,7 +2,7 @@
 
 ## zStudio repository preparation — 0.2.17
 
-Implemented on 2026-09-23. The desktop application, portable executable and documentation use zStudio branding. Internal project/assembly names, icon and existing settings remain stable. Vorta/zStudio starts private for owner review; only the owner will change visibility. The MIT license is retained and is now included in the portable package alongside dependency notices.
+Implemented on 2026-09-23. The desktop application, portable executable and documentation use zStudio branding. Internal project/assembly names and existing settings remain stable; the Studio icon uses the owner's updated artwork. Vorta/zStudio starts private for owner review; only the owner will change visibility. The MIT license is retained and is now included in the portable package alongside dependency notices.
 
 The previous Python CLI, helper, table snapshot generator, legacy documentation, cache and complete Git metadata were archived outside this repository, with hashes verified and both historical commits retained. This repository starts a fresh desktop history. The optional independent export checker no longer imports the archived CLI; its little-endian RGB565 conversion matches all 65,536 reference pixel values. The checked-in field tables build without regeneration or Python.
 
@@ -11,6 +11,8 @@ Contribution/security guidance, issue forms, PR template, code owners, dependenc
 Verification: locked restore succeeds before and after win-x64 publication; Release builds have zero warnings/errors and **171 tests pass**, including in a fresh clone without game data or the archived CLI. The shared runtime-identifier declaration fixes the inherited build/publish lockfile mismatch. Actionlint and PowerShell/YAML validation pass. Clean-clone packaging validates **565 files**, version 0.2.17 and the executable + dependencies root, and a separate check rejects a mismatched version. Portable startup verifies the zStudio title, bundled runtime modules and normal exit 0. The real WPF layout regression passes on m1/destroy_the_gen, retaining selection/frame, native Space, saved section heights and source bytes. Test settings are restored and captures stay in the OS temporary directory. Hosted CI/release verification is recorded in repository checks and release history.
 
 The source commit was audited: 183 files include the previously ignored Windows manifest and the icon; no game/generated/legacy files or detected credential patterns were included. GitHub confirms private visibility and administrative access; anonymous access returns 404. Dependency alerts and security updates are enabled. Private branch/tag rules are unavailable on the current account tier and remain documented definitions for activation after the owner makes the repository public. Their enforcement is not claimed during private review.
+
+The first release uses the owner's updated Studio icon, supplied on 2026-09-23, for both the executable and WPF window. The checked-in ICO preserves all six supplied 32-bit sizes (16, 32, 48, 64, 128 and 256 pixels).
 
 Existing preview and original-game compatibility limitations remain applicable. No game data or external research sources are distributed. The application remains unsigned; independent clean-machine validation is still outstanding.
 

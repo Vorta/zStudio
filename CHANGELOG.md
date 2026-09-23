@@ -8,7 +8,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 First zStudio repository release, initially distributed privately for owner review. Earlier builds were developed locally as Recoil ZBD Studio; their unavailable binaries are not reconstructed as releases.
 
-- Rebrand the desktop application and portable executable to zStudio, retaining the icon and existing user settings.
+- Rebrand the desktop application and portable executable to zStudio, use the updated Studio icon, and retain existing user settings.
 - Start a fresh desktop-project history and archive the previous Python CLI separately. Keep the optional independent export checker self-contained.
 - Add contributor documentation, bug/feature/compatibility issue forms, PR guidance, dependency updates, Windows CI and version-tagged ZIP releases with SHA-256 checksums.
 - Include the complete existing Recoil viewer/editor: five ZBD format families; texture, audio, script and data inspection; model/whole-world previews and exports; version-28 animation editing with undo and verified Save As.
