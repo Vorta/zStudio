@@ -2,7 +2,7 @@
 
 ## zStudio repository preparation — 0.2.17
 
-Implemented on 2026-09-23. The desktop application, portable executable and documentation use zStudio branding. Internal project/assembly names, icon and existing settings remain stable. Vorta/zStudio starts private for owner review; only the owner will change visibility. The MIT license is retained and is now included in the portable package alongside dependency notices.
+Implemented on 2026-09-23. The desktop application, portable executable and documentation use zStudio branding. Internal project/assembly names and existing settings remain stable; the Studio icon uses the owner's updated artwork. Vorta/zStudio starts private for owner review; only the owner will change visibility. The MIT license is retained and is now included in the portable package alongside dependency notices.
 
 The previous Python CLI, helper, table snapshot generator, legacy documentation, cache and complete Git metadata were archived outside this repository, with hashes verified and both historical commits retained. This repository starts a fresh desktop history. The optional independent export checker no longer imports the archived CLI; its little-endian RGB565 conversion matches all 65,536 reference pixel values. The checked-in field tables build without regeneration or Python.
 
