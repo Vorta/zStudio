@@ -94,7 +94,7 @@ public partial class MainWindow
         editor.SourceSelectionChanged += UpdateDocumentCommands;
         editor.SetupRequested += () => { Layout.InspectorVisible = true; inspectorTemporary = true; InspectorTabs.SelectedItem = PreviewSetupTab; ArrangeWorkspace(); };
         editor.CommandsChanged += UpdateDocumentCommands;
-        editor.FileProblemSelected += NavigateProblem;
+        editor.FileProblemSelected += async problem => await NavigateProblemAsync(problem);
         editor.SourceNavigationRequested += (entry,sequence,ev) => NavigateAnimationSource(entry,sequence,ev);
         ReferencesTab.IsEnabled = PreviewSetupTab.IsEnabled = ProgramTab.IsEnabled = true;
         DispatchTab.IsEnabled = EventLogTab.IsEnabled = RuntimeTab.IsEnabled = true;
@@ -232,15 +232,20 @@ public partial class MainWindow
     private void AnimationDeleteClick(object sender, RoutedEventArgs e) => animation?.DeleteRecord();
     private void PreviewSetupClick(object sender, RoutedEventArgs e) { if (animation != null) { Layout.InspectorVisible = true; inspectorTemporary = true; InspectorTabs.SelectedItem = PreviewSetupTab; ArrangeWorkspace(); } }
     private void CopyEventJsonClick(object sender, RoutedEventArgs e) => animation?.CopySelectedEvent();
-    private void FileProblemDoubleClick(object sender, MouseButtonEventArgs e) { if (FileProblems.SelectedItem is StudioProblem problem) NavigateProblem(problem); }
-    private async void NavigateProblem(StudioProblem problem)
+    private async void FileProblemDoubleClick(object sender, MouseButtonEventArgs e) { if (FileProblems.SelectedItem is StudioProblem problem) await NavigateProblemAsync(problem); }
+    internal async Task NavigateProblemAsync(StudioProblem problem)
     {
         if (problem.File == null) { ViewModel.Status = problem.Details; return; }
         await RunUi(async () =>
         {
             var doc = await ViewModel.OpenFileAsync(problem.File); if (doc == null) return;
-            var matches = doc.Assets.Where(a => problem.Offset is long offset ? a.Record.Offset == offset : problem.AssetIndex is int index && a.Index == index).Take(2).ToArray();
-            if (matches.Length == 1) { doc.SelectedAsset = matches[0]; AssetGrid.ScrollIntoView(matches[0]); }
+            var target = problem.ResolveAsset(doc.Document.Assets);
+            var match = doc.Assets.FirstOrDefault(a => ReferenceEquals(a.Record, target));
+            if (match != null)
+            {
+                doc.Query = ""; doc.KindFilter = "All types";
+                doc.SelectedAsset = match; AssetGrid.ScrollIntoView(match);
+            }
             ViewModel.Status = problem.Message;
         });
     }

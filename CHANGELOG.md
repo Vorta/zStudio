@@ -17,6 +17,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Separate observed Dispatch/Event log, structured Problems, current Runtime, Related references and original-source Bytes tools. Retain source identity and distinguish stored data from preview state.
 - Fit restored window bounds to desktops smaller than the preferred minimum, avoiding a startup exception on small or scaled displays.
 - Keep pinned Properties drafts untouched while browsing the world; resolve them only for actual pickup-handle clicks, and consume rejected handle clicks without starting a drag.
+- Navigate Problems to the supplied asset identity even when the error offset is inside its record; use source-range containment for offset-only diagnostics and reveal the selected asset through filters.
+- Refresh Whole world preview notices, counts and summary after successful difficulty changes while retaining unrelated operation diagnostics.
 - Fix the reentrant window-close error when discarding changes, and retain save/discard guards for pending property drafts and edited documents.
 
 ## 0.3.0 — 2026-09-24

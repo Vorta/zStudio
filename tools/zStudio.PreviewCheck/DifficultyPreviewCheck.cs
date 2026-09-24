@@ -73,10 +73,19 @@ internal static class DifficultyPreviewCheck
                 window.Width = 1740;
                 var worldDocument = await window.ViewModel.OpenFileAsync(Path.Combine(root, "m1", "gamez.zbd")) ?? throw new InvalidDataException("Missing world");
                 var scene = await WorldReady(MissionDifficulty.Easy);
+                CheckWorldProblems(scene);
+                var initialNotices = window.ViewModel.Problems.Where(p => p.Category == "Preview").ToArray();
+                Require(initialNotices.Length > 0, "Fixture needs initial preview notices to exercise removal");
+                window.ViewModel.AddProblem("Preserve unrelated operation diagnostic", "Warning");
+                var operationNotice = window.ViewModel.Problems.Last();
                 var worldPicker = (ComboBox)window.FindName("WorldDifficulty"); Require((MissionDifficulty)worldPicker.SelectedItem == MissionDifficulty.Easy, "World picker did not inherit shared preference");
                 var worldPose = scene.CaptureView(); worldPicker.SelectedItem = MissionDifficulty.Hard; scene = await WorldReady(MissionDifficulty.Hard);
+                CheckWorldProblems(scene);
+                Require(initialNotices.All(old => !window.ViewModel.Problems.Any(p => ReferenceEquals(p, old))) && window.ViewModel.Problems.Contains(operationNotice),
+                    "Difficulty retained obsolete preview rows or removed an unrelated operation diagnostic");
                 Require(AivCount(scene) == 87 && SameView(worldPose, scene.CaptureView()), "World difficulty changed camera or kept wrong tanks");
                 worldPicker.SelectedItem = MissionDifficulty.Medium; worldPicker.SelectedItem = MissionDifficulty.Easy; scene = await WorldReady(MissionDifficulty.Easy);
+                CheckWorldProblems(scene);
                 Require(AivCount(scene) == 80, "Rapid world changes did not keep latest layout");
                 Require(StudioSettings.Load().Difficulty == MissionDifficulty.Easy, "Difficulty was not persisted");
                 using (var reopened = new MainViewModel()) Require(reopened.Difficulty == MissionDifficulty.Easy, "New application state did not load saved difficulty");
@@ -90,6 +99,17 @@ internal static class DifficultyPreviewCheck
                     while (!((Button)editor.FindName("PlayButton")).IsEnabled || ((Border)editor.FindName("LoadingPanel")).Visibility == Visibility.Visible) await Task.Delay(30, timeout.Token);
                     await Task.Delay(80, timeout.Token);
                 }
+                void CheckWorldProblems(SceneViewport live)
+                {
+                    var rows = window.ViewModel.Problems.Where(p => p.Category == "Preview").ToArray();
+                    Require(rows.Select(p => (p.Severity, p.Message)).SequenceEqual(live.PreviewDiagnostics.Select(d => (d.Severity, d.Message))),
+                        "Problems do not match the published difficulty's preview diagnostics");
+                    var notices = (Button)window.FindName("PreviewNotices");
+                    Require(Equals(notices.Content, $"{rows.Length} preview notices") && notices.Visibility == (rows.Length > 0 ? Visibility.Visible : Visibility.Collapsed),
+                        "Notice count/visibility does not match the published scene");
+                    Require(((TextBlock)window.FindName("PreviewInfo")).Text == live.Mission!.Layout.Difficulty + " · " + live.PreviewSummary,
+                        "Preview summary accumulated previous difficulty labels");
+                }
                 void CheckFollow()
                 {
                     var camera = editor.CurrentFrame!.Camera ?? throw new InvalidDataException("Missing authored camera");
@@ -100,7 +120,7 @@ internal static class DifficultyPreviewCheck
                 {
                     while (true)
                     {
-                        if (((ContentControl)window.FindName("SceneHost")).Content is SceneViewport live && live.Mission?.Layout.Difficulty == difficulty && ((TextBlock)window.FindName("EmptyPreview")).Visibility == Visibility.Collapsed) { await Task.Delay(100, timeout.Token); return live; }
+                        if (((ContentControl)window.FindName("SceneHost")).Content is SceneViewport live && live.Mission?.Layout.Difficulty == difficulty && ((ContentControl)window.FindName("SceneHost")).IsEnabled && ((TextBlock)window.FindName("EmptyPreview")).Visibility == Visibility.Collapsed) { await Task.Delay(100, timeout.Token); return live; }
                         await Task.Delay(60, timeout.Token);
                     }
                 }

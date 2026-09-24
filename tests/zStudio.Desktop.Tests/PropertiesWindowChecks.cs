@@ -23,6 +23,23 @@ internal static class PropertiesWindowChecks
         main.ViewModel.Documents.Add(first); main.ViewModel.Documents.Add(second);
         try
         {
+            var diagnosticSource = new ZbdDocument(Path.Combine(Path.GetTempPath(), "diagnostic-navigation.zbd"), new(256, DateTime.MinValue),
+                new(FormatFamily.Unknown, null, Recognition.Unknown, "Navigation fixture"), new byte[256]);
+            diagnosticSource.Add(AssetKind.Raw, 0, "first", 0, 128);
+            diagnosticSource.Add(AssetKind.Raw, 1, "affected", 128, 128);
+            var diagnosticDoc = new DocumentModel(diagnosticSource);
+            main.ViewModel.Documents.Add(diagnosticDoc);
+            diagnosticDoc.Query = "hidden by filter"; diagnosticDoc.KindFilter = "Texture";
+            await main.NavigateProblemAsync(new("Warning", "File / operation", "Interior error", diagnosticDoc.Path, 1, 140));
+            await Idle();
+            Assert.Same(diagnosticDoc, main.ViewModel.SelectedDocument);
+            Assert.Equal(1, diagnosticDoc.SelectedAsset!.Index);
+            Assert.Equal("", diagnosticDoc.Query); Assert.Equal("All types", diagnosticDoc.KindFilter);
+            Assert.Same(diagnosticDoc.SelectedAsset, ((DataGrid)main.FindName("AssetGrid")).SelectedItem);
+            await main.NavigateProblemAsync(new("Warning", "File / operation", "Offset-only error", diagnosticDoc.Path, Offset: 64));
+            Assert.Equal(0, diagnosticDoc.SelectedAsset!.Index);
+            await main.ViewModel.CloseAsync(diagnosticDoc);
+
             main.OpenAnimationProperties(first, 0, Guid.Empty, Guid.Empty);
             var popup = main.OpenPropertiesWindow!;
             var form = popup.AnimationFields!;

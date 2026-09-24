@@ -36,7 +36,7 @@ public partial class MainWindow
             selectedNode = RemapPickupSelection(selectedPickup, mission) ?? (selection is int index && mission.RemapNodeFrom(previous, index) is >= 0 and int mapped ? mapped : null);
             if (selectedNode is int node) InspectNode(node); else SetProperties(doc.Document.Metadata);
             WorldDifficulty.ToolTip = mission.Layout.Description;
-            PreviewInfo.Text = mission.Layout.Description + " · " + PreviewInfo.Text;
+            ShowStaticPreviewProblems(doc, asset);
             ViewModel.Status = mission.Layout.Description;
         }
         catch (OperationCanceledException) { }

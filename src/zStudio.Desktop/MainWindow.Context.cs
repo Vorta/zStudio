@@ -22,6 +22,7 @@ public partial class MainWindow
     private void ShowStaticPreviewProblems(DocumentModel document, AssetRecord asset)
     {
         if (scene == null) return;
+        ClearStaticPreviewProblems();
         foreach (var note in scene.PreviewDiagnostics)
         {
             // Asset scope is known; these renderer notes do not supply per-actor source identities.

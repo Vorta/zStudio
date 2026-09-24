@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #6 diagnostic navigation and difficulty notices (2026-09-24)
+
+Both review findings are valid and corrected. Problem navigation prefers a supplied asset index over an interior/error offset, uses overflow-safe half-open source-range containment for offset-only diagnostics, and refuses ambiguous matches. Successful navigation clears asset filters so the affected record is visible. The awaitable navigation path is shared by file and animation Problems.
+
+Whole world difficulty replacement now republishes static preview Problems, notice count/visibility and summary only after successful scene loading. Republishing clears only the previous preview-owned rows and keeps unrelated operation diagnostics. Normal and superseded difficulty changes are covered, including removal of old row instances and exact agreement with renderer diagnostics.
+
+Validation: Release build zero warnings/errors; all 223 tests pass, including eight source-resolution cases and real-window filtered navigation. Difficulty UI check PASS (`%TEMP%/zbd-difficulty-ui-20260924-215633`) for updated notices plus existing camera/playhead/audio/LOD/Height/source-preservation behavior. PR remains unmerged; v0.4.7 tagging/publication still await owner authorization to merge.
+
 ## PR #6 draft-handling review (2026-09-24)
 
 Review finding 4097658085 was valid: the viewport asked to resolve Properties drafts before testing for a pickup handle. The handle hit test now runs first. If draft resolution rejects that handle action, the click is consumed so Helix cannot bypass the guard and begin dragging. Empty-space/ordinary scene browsing no longer resolves pinned input. The pickup integration check covers valid/invalid pending input on empty clicks, rejected-handle consumption and the existing permitted-drag numeric baseline behavior.

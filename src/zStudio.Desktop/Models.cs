@@ -173,6 +173,19 @@ public sealed record SearchHit(string File, AssetKind Kind, int Index, string Na
 }
 public sealed record StudioProblem(string Severity, string Category, string Message, string? File = null, int? AssetIndex = null, long? Offset = null)
 {
+    internal AssetRecord? ResolveAsset(IEnumerable<AssetRecord> assets)
+    {
+        if (AssetIndex is int index)
+        {
+            var indexed = assets.Where(a => a.Index == index).ToArray();
+            if (indexed.Length == 1) return indexed[0];
+            assets = indexed; // An offset may disambiguate an index shared by different asset kinds.
+        }
+        if (Offset is not long offset || offset < 0) return null;
+        // Half-open ranges, without adding Offset + Length (which may overflow).
+        var matches = assets.Where(a => a.Offset >= 0 && offset >= a.Offset && offset - a.Offset < a.Length).Take(2).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
     public string Scope => File == null ? "Workspace" : System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(File)) + "/" + System.IO.Path.GetFileName(File);
     public string Details => (File ?? "No file identity supplied") + (AssetIndex is int index ? $" · asset #{index}" : "") + (Offset is long offset ? $" · source 0x{offset:X}" : "");
 }
