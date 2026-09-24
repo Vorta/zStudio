@@ -16,6 +16,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Support live signed preview Height from −999 to 999 in a compact field, with preserved playhead/playback and partial input during layout changes. Explain collision relative to authored coordinates as Y=−Height.
 - Separate observed Dispatch/Event log, structured Problems, current Runtime, Related references and original-source Bytes tools. Retain source identity and distinguish stored data from preview state.
 - Fit restored window bounds to desktops smaller than the preferred minimum, avoiding a startup exception on small or scaled displays.
+- Keep pinned Properties drafts untouched while browsing the world; resolve them only for actual pickup-handle clicks, and consume rejected handle clicks without starting a drag.
 - Fix the reentrant window-close error when discarding changes, and retain save/discard guards for pending property drafts and edited documents.
 
 ## 0.3.0 — 2026-09-24

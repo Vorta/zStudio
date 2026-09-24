@@ -84,6 +84,36 @@ internal static class PropertiesWindowChecks
             Assert.Equal(700, finalPopup.Width); Assert.Equal(600, finalPopup.Height);
             await main.ViewModel.CloseAsync(first); await Idle();
             Assert.True(first.IsDisposed); Assert.Null(main.OpenPropertiesWindow); Assert.False(finalPopup.IsVisible);
+
+            // Root replacement uses the document close guard even when the pinned
+            // document is clean/inactive and only the modeless window has a draft.
+            string nextRoot = Directory.CreateTempSubdirectory("zstudio-root-draft-").FullName;
+            try
+            {
+                var pinned = Document("root-draft"); main.ViewModel.Documents.Add(pinned);
+                main.ViewModel.SelectedDocument = second;
+                main.OpenAnimationProperties(pinned, 0, Guid.Empty, Guid.Empty); await Idle();
+                var pinnedPopup = main.OpenPropertiesWindow!;
+                var input = Descendants(pinnedPopup.AnimationFields!).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Reset delay (s)");
+                string oldRoot = main.ViewModel.RootPath;
+                input.Text = "-";
+                using (Answer(app, "Keep editing")) await main.ViewModel.OpenRootAsync(nextRoot);
+                Assert.Equal(oldRoot, main.ViewModel.RootPath); Assert.False(pinned.IsDisposed);
+                Assert.Same(pinnedPopup, main.OpenPropertiesWindow); Assert.Equal("-", input.Text);
+                Assert.False(pinned.IsDirty); Assert.True(pinnedPopup.HasPendingDrafts);
+
+                input.Text = "4.5";
+                using (Answer(app, "Cancel", "Unsaved changes")) await main.ViewModel.OpenRootAsync(nextRoot);
+                Assert.Equal(oldRoot, main.ViewModel.RootPath); Assert.False(pinned.IsDisposed);
+                Assert.True(pinned.IsDirty); Assert.Equal(4.5f, pinned.AnimationEdits!.Package.Entries[0].F32(164));
+                pinned.AnimationEdits.Undo(); await Idle(); Assert.False(pinned.IsDirty);
+
+                input.Text = "-";
+                using (Answer(app, "Discard draft")) await main.ViewModel.OpenRootAsync(nextRoot);
+                Assert.Equal(nextRoot, main.ViewModel.RootPath); Assert.True(pinned.IsDisposed);
+                Assert.True(second.IsDisposed); Assert.Null(main.OpenPropertiesWindow);
+            }
+            finally { Directory.Delete(nextRoot); }
         }
         finally
         {
@@ -108,15 +138,15 @@ internal static class PropertiesWindowChecks
         yield return root;
         for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) foreach (var child in Descendants(VisualTreeHelper.GetChild(root, i))) yield return child;
     }
-    private static IDisposable Answer(Application app, string answer) => new PromptAnswer(app, answer);
+    private static IDisposable Answer(Application app, string answer, string title = "Resolve property input") => new PromptAnswer(app, answer, title);
     private sealed class PromptAnswer : IDisposable
     {
         private readonly DispatcherTimer timer = new(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(10) };
-        public PromptAnswer(Application app, string answer)
+        public PromptAnswer(Application app, string answer, string title)
         {
             timer.Tick += (_, _) =>
             {
-                if (app.Windows.Cast<Window>().FirstOrDefault(w => w.Title == "Resolve property input") is not { } dialog) return;
+                if (app.Windows.Cast<Window>().FirstOrDefault(w => w.Title == title) is not { } dialog) return;
                 var button = ((StackPanel)dialog.Content).Children.OfType<WrapPanel>().Single().Children.OfType<Button>().Single(b => Equals(b.Content, answer));
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             };

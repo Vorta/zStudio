@@ -197,6 +197,24 @@ internal static class PickupEditorCheck
                 inputs[1].Text = "NaN"; SendPropertyKey(inputs[1], Key.Enter); Require(edits.Position(pickup.Source).Y == committed.Y, "Nonfinite input changed authored position");
                 SendPropertyKey(inputs[1], Key.Escape); edits.Undo();
                 Require(scene.PickupPosition(actor.Root) == committed, "Numeric edit was not one undoable action");
+                // Browsing must not resolve pinned Properties drafts; only a handle does.
+                var draftGate = scene.CanStartPickupEdit; int draftGateCalls = 0;
+                scene.CanStartPickupEdit = () => { draftGateCalls++; return false; };
+                try
+                {
+                    foreach (string draft in new[] { "-", (committed.Y + .125f).ToString("R", System.Globalization.CultureInfo.CurrentCulture) })
+                    {
+                        inputs[1].Text = draft;
+                        Require(!scene.HandlePickupPointerDown(new Point(1, 1), LeftButton()), "Empty click was consumed");
+                        Require(draftGateCalls == 0 && inputs[1].Text == draft && placementPanel.HasPendingDrafts && !edits.IsDirty,
+                            "An ordinary viewport click resolved pinned property input");
+                    }
+                    var blockedPoint = ArrowPoint(0, 1.1).Point;
+                    Require(scene.HandlePickupPointerDown(blockedPoint, LeftButton()) && draftGateCalls == 1 && !scene.IsPickupDragging,
+                        "Rejected handle click bypassed draft resolution or fell through to native picking");
+                    Require(placementPanel.HasPendingDrafts && !edits.IsDirty, "Rejected drag changed property input");
+                }
+                finally { scene.CanStartPickupEdit = draftGate; SendPropertyKey(inputs[1], Key.Escape); }
                 // The tunneling mouse event commits typed coordinates before the native gizmo snapshots its start.
                 await Task.Delay(120, token);
                 var pendingPoint = ArrowPoint(0, 1.1).Point;

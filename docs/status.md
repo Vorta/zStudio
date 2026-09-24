@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #6 draft-handling review (2026-09-24)
+
+Review finding 4097658085 was valid: the viewport asked to resolve Properties drafts before testing for a pickup handle. The handle hit test now runs first. If draft resolution rejects that handle action, the click is consumed so Helix cannot bypass the guard and begin dragging. Empty-space/ordinary scene browsing no longer resolves pinned input. The pickup integration check covers valid/invalid pending input on empty clicks, rejected-handle consumption and the existing permitted-drag numeric baseline behavior.
+
+Finding 4097658069 was not reproducible in the reviewed commit: OpenRootAsync already calls CanRemoveAsync for every document, including clean/inactive ones, and ConfirmDocumentCloseAsync resolves the owning Properties drafts before disposal. Added real-window coverage proving Keep editing retains the original root/document/popup/draft, a valid draft commits before unsaved-changes Cancel, and Discard draft permits replacement and closes the popup. No broad RunUi guard was added because it would also commit pinned input during ordinary file/asset browsing.
+
+Validation: Release build zero warnings/errors, all 215 tests passed with expanded lifecycle coverage. Pickup editor/corpus check PASS (`%TEMP%/zstudio-pickup-editor-a1ed76722e9a4d93bbbf47dcb3d1e1f9`), including 27 handle drags and 13 maps / 1,225 pickup records with unchanged source hashes. Merge/tag/release still await owner instruction.
+
 ## v0.4.7 CI small-desktop correction (2026-09-24)
 
 The first PR CI run exposed a startup exception when the virtual desktop width (1024) was smaller than the preferred minimum (1080). Restored window sizing now lowers the minimum to the available dimension before clamping saved bounds, for both width and height. The existing real-window close regression additionally exercises a 1024×600 desktop on every local run. Release build has zero warnings/errors and all 215 tests pass. Tag v0.4.7 and its GitHub Release (ZIP/checksum/changelog) are required after the owner authorizes merge; PR #6 remains open with auto-merge off.
