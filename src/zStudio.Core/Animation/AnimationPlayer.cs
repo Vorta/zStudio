@@ -16,11 +16,19 @@ public sealed record AnimationCamera(Vector3 Position, Vector3 Target, float Fie
     public string Name { get; init; } = "";
 }
 public sealed record AnimationFog(bool Enabled, Vector3 Color, float Start, float End);
-public sealed record AnimationTrace(long Instance, Guid Sequence, Guid Event, string Name, double Start, double? End, string Status);
+public sealed record AnimationTrace(long Instance, Guid Sequence, Guid Event, string Name, double Start, double? End, string Status)
+{
+    public long Occurrence { get; init; }
+    public int Entry { get; init; } = -1;
+}
 public sealed record AnimationSequenceStatus(long Instance, Guid Sequence, string Name, int EventIndex, string State, int Iteration);
 public sealed record AnimationFrame(double Time, IReadOnlyList<AnimationNodePose> Nodes, IReadOnlyList<AnimationLight> Lights,
     IReadOnlyList<AnimationSoundCue> Sounds, IReadOnlyList<AnimationSoundCue> ActiveSounds, AnimationCamera? Camera, AnimationFog? Fog,
-    Vector4 ScreenColor, Vector4 ScreenWave, IReadOnlyList<AnimationTrace> Trace, IReadOnlyList<AnimationSequenceStatus> Sequences, IReadOnlyList<string> Diagnostics);
+    Vector4 ScreenColor, Vector4 ScreenWave, IReadOnlyList<AnimationTrace> Trace, IReadOnlyList<AnimationSequenceStatus> Sequences, IReadOnlyList<string> Diagnostics)
+{
+    public IReadOnlyList<AnimationPreviewDiagnostic> Issues { get; init; } = [];
+    public long TraceDropped { get; init; }
+}
 
 /// <summary>Retail event-clock semantics on a deterministic, device-independent 60 Hz clock.</summary>
 public sealed partial class AnimationPlayer
@@ -41,7 +49,7 @@ public sealed partial class AnimationPlayer
     private Dictionary<long, AnimationSoundCue> activeSounds = [];
     private readonly List<AnimationSoundCue> cues = [];
     private readonly SortedDictionary<long, Checkpoint> checkpoints = [];
-    private long ticks, nextId;
+    private long ticks, nextId, traceOrdinal, traceDropped;
     private uint randomState;
     private int randomIndex;
     private readonly float[] randomTable = new float[200];
@@ -62,8 +70,8 @@ public sealed partial class AnimationPlayer
         get => previewHeight;
         init
         {
-            if (!float.IsFinite(value) || value is < 0 or > 100000)
-                throw new ArgumentOutOfRangeException(nameof(value), "Preview height must be between 0 and 100000 game units.");
+            if (!float.IsFinite(value) || value is < -999 or > 999)
+                throw new ArgumentOutOfRangeException(nameof(value), "Preview height must be between -999 and 999 game units.");
             previewHeight = value;
         }
     }
@@ -76,9 +84,9 @@ public sealed partial class AnimationPlayer
     }
     public void Reset()
     {
-        ticks = nextId = 0; measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
+        ticks = nextId = traceOrdinal = traceDropped = 0; previewIssues.Clear(); diagnosticContext = new(entryIndex); measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
-        instances = []; sharedNodes = []; effects = []; trace = []; notes = [.. context.Diagnostics]; lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
+        instances = []; sharedNodes = []; effects = []; trace = []; notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
         AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase);
         checkpoints[0] = CaptureCheckpoint();
@@ -141,6 +149,7 @@ public sealed partial class AnimationPlayer
     }
     private void Run(Instance instance, Sequence state, float step = (float)StepSeconds)
     {
+        using var diagnosticScope = PushDiagnostic(new(instance.Entry.Index, instance.Id, state.Data.Id));
         float remaining = step;
         if (state.State == 1 || state.Cursor > 0) { state.Elapsed += remaining; state.EventElapsed += remaining; }
         while (state.State is 0 or 1)
@@ -148,6 +157,7 @@ public sealed partial class AnimationPlayer
             if (--dispatchBudget <= 0) { Block(state, "Event dispatch limit reached; check zero-time loops."); return; }
             if (state.Cursor >= state.Data.Events.Count) { state.State = state.Data.IsEditable ? 2 : 4; unavailableDuration |= state.State == 4; return; }
             var ev = state.Data.Events[state.Cursor];
+            diagnosticContext = diagnosticContext with { Event = ev.Id };
             if (ev.Spec == null || ev.Bytes.Length < ev.Spec.Size || ev.StartMode is < 1 or > 3 || !float.IsFinite(ev.Threshold))
             { Block(state, $"{ev.Name}: unverified or malformed event; this sequence is paused."); return; }
             bool starting = state.State == 0;
@@ -157,9 +167,9 @@ public sealed partial class AnimationPlayer
                 if (clock < ev.Threshold) return;
                 state.EventElapsed = remaining; if (state.Cursor == 0) state.Elapsed = remaining;
                 state.Work = ev.Clone(); state.Child = -1; state.KeyOffset = 0; state.KeyTime = 0;
-                if (trace.Count >= 20000) trace.RemoveRange(0, 10000);
-                trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support));
-                if (ev.Spec.Support != "Engine-based") notes.Add(ev.Spec.Support);
+                if (trace.Count >= 20000) { trace.RemoveRange(0, 10000); traceDropped += 10000; }
+                trace.Add(new(instance.Id, state.Data.Id, ev.Id, ev.Name, Math.Max(0, Time - remaining), null, ev.Spec.Support) { Occurrence = ++traceOrdinal, Entry = instance.Entry.Index });
+                if (ev.Spec.Support != "Engine-based") AddNote(ev.Spec.Support, "Support", "Information");
             }
             int result;
             try { result = Execute(instance, state, state.Work!, starting, ref remaining); }
@@ -176,16 +186,16 @@ public sealed partial class AnimationPlayer
             else if (state.Data.ResetMode == 3) { state.Reset(); return; }
         }
     }
-    private void Block(Sequence sequence, string message) { sequence.State = 4; unavailableDuration = true; notes.Add(sequence.Data.Name + ": " + message); }
+    private void Block(Sequence sequence, string message) { sequence.State = 4; unavailableDuration = true; AddNote(sequence.Data.Name + ": " + message); }
     private float RandomUnit() { float result = randomTable[randomIndex]; randomIndex = (randomIndex + 1) % randomTable.Length; return result; }
 
     private Instance? AddInstance(AnimationEntry entry, Vector3? position, int? boundRoot, bool primary = false)
     {
-        if (instances.Count + effects.Count >= MaximumInstances) { notes.Add("Preview instance limit reached (256). A looping emitter may be producing too many children."); return null; }
+        if (instances.Count + effects.Count >= MaximumInstances) { AddNote("Preview instance limit reached (256). A looping emitter may be producing too many children."); return null; }
         int root = boundRoot ?? context.ResolveRoot(entry);
-        if (root < 0) { unavailableDuration = true; notes.Add($"Unresolved animation root: {entry.RootName}"); return null; }
+        if (root < 0) { unavailableDuration = true; AddNote($"Unresolved animation root: {entry.RootName}"); return null; }
         if (initializingScene && !primary && entry.References[6].Count > 0)
-        { notes.Add($"{entry.Name}: initialization activation prerequisites are unavailable."); return null; }
+        { AddNote($"{entry.Name}: initialization activation prerequisites are unavailable."); return null; }
         bool shared = IsWorldNode(root) && ((entry.U32(148) & 0x8000) == 0 || boundRoot.HasValue);
         if (!initializingScene && shared && instances.Any(i => i.Entry.Index == entry.Index && i.Root == root && !i.Finished)) return null;
         Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Cleanup = primary, Shared = shared };
@@ -218,13 +228,13 @@ public sealed partial class AnimationPlayer
             // needs a local preview. World controllers never enable dormant actors.
             if (!initializingScene && instance.Id == 1 && rootNode.PendingPlacement && !entry.Sequences.SelectMany(s => s.Events).Any(e =>
                 e.Spec != null && e.Bytes.Length >= e.Spec.Size && (e.Type == 12 && context.ResolveNode(entry,e.I32(12),root) == root || e.Type == 7 && context.ResolveNode(entry,e.I16(28),root) == root)))
-            { rootNode.PendingPlacement = false; notes.Add("The selected actor has no recovered starting position; this individual preview uses its stored pose."); }
+            { rootNode.PendingPlacement = false; AddNote("The selected actor has no recovered starting position; this individual preview uses its stored pose.", "Support", "Information"); }
             if (position is Vector3 p) { Position(rootNode, p); rootNode.Parent = -1; }
         }
         instance.SavedNodes = instance.Nodes.ToDictionary(p => p.Key, p => p.Value.Clone());
         instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s)).ToList();
         instances.Add(instance);
-        if (!initializingScene && entry.References[6].Count > 0) notes.Add("Manual preview activation bypasses game activation prerequisites.");
+        if (!initializingScene && entry.References[6].Count > 0) AddNote("Manual preview activation bypasses game activation prerequisites.", "Support", "Information");
         return instance;
     }
     private Node? NodeRef(Instance instance, int reference)
@@ -237,7 +247,7 @@ public sealed partial class AnimationPlayer
             int local = name == instance.Entry.RootName ? instance.Root : context.FindBelow(instance.Root, name); if (local >= 0) index = local;
         }
         if (instance.Nodes.TryGetValue(index, out var node)) return node;
-        notes.Add($"{instance.Entry.Name}: unresolved node reference {reference}."); return null;
+        AddNote($"{instance.Entry.Name}: unresolved node reference {reference}."); return null;
     }
     private Matrix4x4 World(Instance instance, Node node)
     {
@@ -307,7 +317,7 @@ public sealed partial class AnimationPlayer
                 var forward = Vector3.TransformNormal(-Vector3.UnitZ, transform);
                 if (float.IsFinite(forward.LengthSquared()) && forward.LengthSquared() > 1e-12f && float.IsFinite(node.Fov))
                     camera = new(transform.Translation, transform.Translation + Vector3.Normalize(forward), node.Fov * (180 / MathF.PI)) { SourceNode = index, Name = source.Name };
-                else notes.Add($"Camera {source.Name} #{index}: invalid transform or field of view; follow pose is unavailable.");
+                else AddNote($"Camera {source.Name} #{index}: invalid transform or field of view; follow pose is unavailable.");
             }
         }
         foreach (var effect in effects)
@@ -345,7 +355,7 @@ public sealed partial class AnimationPlayer
         }
         return new(Time, poses, lights.Values.Select(l => l with { Position = l.Position + origin }).ToArray(),
             cues.Select(c => c with { Position = c.Position + origin }).ToArray(), activeSounds.Values.Select(c => c with { Position = c.Position + origin }).ToArray(), camera, fog, screenColor, screenWave, trace.ToArray(),
-            instances.SelectMany(i => i.Sequences.Select(s => new AnimationSequenceStatus(i.Id, s.Data.Id, s.Data.Name, s.Cursor, s.State switch { 0 => "Waiting for threshold", 1 => "Running", 2 => "Complete", 3 => "Waiting for release", _ => "Unavailable" }, s.Iteration))).ToArray(), notes.Order(StringComparer.Ordinal).ToArray());
+            instances.SelectMany(i => i.Sequences.Select(s => new AnimationSequenceStatus(i.Id, s.Data.Id, s.Data.Name, s.Cursor, s.State switch { 0 => "Waiting for threshold", 1 => "Running", 2 => "Complete", 3 => "Waiting for release", _ => "Unavailable" }, s.Iteration))).ToArray(), notes.Order(StringComparer.Ordinal).ToArray()) { Issues = previewIssues.Values.ToArray(), TraceDropped = traceDropped };
     }
     private static Vector3 Vec(JsonNode? value, Vector3 fallback = default) => value == null ? fallback : new(value.Float("x", fallback.X), value.Float("y", fallback.Y), value.Float("z", fallback.Z));
     private sealed class Node
@@ -397,19 +407,19 @@ public sealed partial class AnimationPlayer
         public Effect Clone() => (Effect)MemberwiseClone();
     }
     private sealed record Checkpoint(long Ticks, long NextId, int RandomIndex, List<Instance> Instances, Dictionary<int, Node> SharedNodes, List<Effect> Effects, List<AnimationTrace> Trace,
-        HashSet<string> Notes, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog);
+        HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog);
     private Checkpoint CaptureCheckpoint()
     {
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
-        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], new(lights), new(activeSounds), screenColor, screenWave, fog);
+        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog);
     }
     private void Restore(Checkpoint c)
     {
         Dictionary<Node, Node> copies = [];
         Node Copy(Node n) { if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
         ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = c.Instances.Select(i => i.Clone(Copy)).ToList(); sharedNodes = c.SharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)); effects = c.Effects.Select(e => e.Clone()).ToList();
-        trace = [.. c.Trace]; notes = [.. c.Notes]; lights = new(c.Lights); activeSounds = new(c.Sounds); screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
+        trace = [.. c.Trace]; notes = [.. c.Notes]; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = new(c.Issues); lights = new(c.Lights); activeSounds = new(c.Sounds); screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
     }
 }
 

@@ -11,7 +11,8 @@ namespace Recoil.Zbd.Desktop;
 public sealed class PickupPlacementPanel : UserControl
 {
     private readonly TextBlock title = new() { FontWeight = FontWeights.SemiBold, FontSize = 14, TextWrapping = TextWrapping.Wrap };
-    private readonly TextBlock detail = new() { FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new(0, 8, 0, 0), Opacity = .8 };
+    private readonly TextBox identity = ReadOnlyDetails();
+    private readonly TextBox detail = ReadOnlyDetails();
     private readonly TextBlock validation = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new(0, 5, 0, 0) };
     private readonly ValueTextBox[] coordinates = [new(), new(), new()];
     private MissionPickupSource? source;
@@ -23,6 +24,7 @@ public sealed class PickupPlacementPanel : UserControl
         StackPanel panel = new() { Margin = new(10) };
         panel.Children.Add(new TextBlock { Text = "Pickup placement", FontWeight = FontWeights.SemiBold, Margin = new(0, 0, 0, 6) });
         panel.Children.Add(title);
+        panel.Children.Add(identity);
         Grid fields = new() { Margin = new(0, 8, 0, 0) }; panel.Children.Add(fields);
         for (int i = 0; i < coordinates.Length; i++)
         {
@@ -41,15 +43,21 @@ public sealed class PickupPlacementPanel : UserControl
         panel.Children.Add(validation); panel.Children.Add(detail);
         Content = new ScrollViewer { Content = panel, MaxHeight = 310, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
     }
-    public void Show(PickupPlacementRecord record, Vector3 value, PickupPlacementScope scope, string target, bool locked)
+    public void Show(PickupPlacementRecord record, Vector3 value, PickupPlacementScope scope, string target, bool locked, string worldNode)
     {
         if (source != record.Source) CommitPending();
-        source = record.Source; position = value; title.Text = record.Type + " · #" + record.Source.RecordIndex;
-        detail.Text = scope.Description + "\n" + System.IO.Path.GetFileName(record.Source.ArchivePath) + " → " + record.Source.ResourceName.ToLowerInvariant()
-            + "\nSave target: " + target + (locked ? "\nUnlock the map to move this pickup." : "\nDrag an arrow or enter exact coordinates.");
+        source = record.Source; position = value; title.Text = record.Type + " · placement #" + record.Source.RecordIndex;
+        identity.Text = "World node: " + worldNode + "\nResource: " + record.Source.ResourceName + " · record #" + record.Source.RecordIndex + "\n" + scope.Description;
+        string destination;
+        try { destination = PickupPlacementEditSession.IsProtectedPath(target) ? "Output: not chosen. Save As is required outside the reference dataset." : "Save output: " + target; }
+        catch (System.IO.IOException) { destination = "Output: location unavailable. Choose a new destination with Save As."; }
+        detail.Text = "Source archive: " + record.Source.ArchivePath + "\n" + destination
+            + $"\n{scope.Sources.Count} unambiguously matched placement record(s) move together; shared resources can serve multiple difficulties."
+            + (locked ? "\nTurn off the lock icon to edit this pickup." : "\nDrag an arrow or enter exact coordinates.");
         foreach (var box in coordinates) box.IsReadOnly = locked;
         RefreshCoordinates(); validation.Text = "";
     }
+    private static TextBox ReadOnlyDetails() => new() { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, BorderThickness = new(0), Background = System.Windows.Media.Brushes.Transparent, Padding = new(0), Margin = new(0,6,0,0), FontSize = 12 };
     public void Preview(Vector3 value) { position = value; RefreshCoordinates(); }
     public void Clear() { source = null; validation.Text = ""; }
     public void CommitPending()

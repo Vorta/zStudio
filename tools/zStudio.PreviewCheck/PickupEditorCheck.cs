@@ -1,3 +1,4 @@
+using System.Windows.Threading;
 using System.IO;
 using System.Numerics;
 using System.Security.Cryptography;
@@ -43,7 +44,7 @@ internal static class PickupEditorCheck
                 byte[] worldHash = SHA256.HashData(doc.Document.Bytes.Span);
                 var actor = scene.Mission!.Actors.Single(a => a.Pickup?.Source.RecordIndex == 49);
                 var pickup = actor.Pickup!; Vector3 originalPosition = pickup.Position;
-                var lockBox = (CheckBox)window.FindName("PickupLocked"); Require(lockBox.IsChecked == true, "Map did not start locked");
+                var lockBox = (System.Windows.Controls.Primitives.ToggleButton)window.FindName("PickupLocked"); Require(lockBox.IsChecked == true, "Map did not start locked");
                 viewport.IsInertiaEnabled = false;
                 var pickupPoints = SceneBuilder.Assemble(scene.Mission.Scene).Placements.Where(p => scene.PickupAt(p.NodeIndex)?.Root == actor.Root)
                     .SelectMany(p => scene.Mission.Scene.Models[p.ModelIndex].Vertices.Select(v => Vector3.Transform(v, p.Transform))).ToArray();
@@ -63,18 +64,18 @@ internal static class PickupEditorCheck
                 MouseDown(pickedPoint);
                 Require(scene.SelectedPickupRoot == actor.Root, "Click selected the wrong pickup instance");
                 var manipulator = Manipulator(); Require(manipulator.Visibility == Visibility.Collapsed, "Locked map exposed movement controls");
-                Require(((ContentControl)window.FindName("PickupProperties")).Visibility == Visibility.Visible, "Pickup coordinates are missing");
+                window.OpenCurrentProperties(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                Require(window.OpenPropertiesWindow?.PickupFields != null, "Pickup coordinates are missing");
                 await Capture("locked");
                 lockBox.IsChecked = false; await Task.Delay(150, token); manipulator = Manipulator();
                 Require(manipulator.Visibility == Visibility.Visible, "Unlock did not reveal arrows");
                 await Capture("unlocked");
-                var placementPanel = (PickupPlacementPanel)((ContentControl)window.FindName("PickupProperties")).Content;
+                var placementPanel = window.OpenPropertiesWindow!.PickupFields!;
                 var inputs = VisualChildren(placementPanel).OfType<ValueTextBox>().ToArray(); Require(inputs.Length == 3, "Missing XYZ inputs");
                 var confirmClose = window.ViewModel.ConfirmDiscardAsync; bool prompted = false;
-                window.ViewModel.ConfirmDiscardAsync = _ => { prompted = true; return Task.FromResult(false); };
+                window.ViewModel.ConfirmDiscardAsync = closing => { window.ResolvePropertiesDrafts(closing); prompted = true; return Task.FromResult(false); };
                 inputs[0].Text = (originalPosition.X + .125f).ToString("R", System.Globalization.CultureInfo.CurrentCulture);
-                var fileMenu = ((DockPanel)window.Content).Children.OfType<Menu>().Single().Items.OfType<MenuItem>().Single(m => Equals(m.Header, "_File"));
-                fileMenu.Items.OfType<MenuItem>().Single(m => Equals(m.Header, "_Close tab")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                ((MenuItem)window.FindName("CloseDocumentMenu")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                 Require(prompted && doc.IsDirty && window.ViewModel.Documents.Contains(doc), "Close bypassed pending coordinate edits");
                 window.ViewModel.ConfirmDiscardAsync = confirmClose; edits.Undo(); Require(!edits.IsDirty, "Pending close input did not undo cleanly");
                 var cameraBefore = scene.CaptureView();
@@ -190,10 +191,11 @@ internal static class PickupEditorCheck
                 }
                 Point[] OutsidePoints() => [new(-1, viewport.ActualHeight / 2), new(viewport.ActualWidth + 1, viewport.ActualHeight / 2), new(viewport.ActualWidth / 2, -1), new(viewport.ActualWidth / 2, viewport.ActualHeight + 1)];
 
-                inputs[0].Text = (committed.X + 1.125f).ToString("R", System.Globalization.CultureInfo.CurrentCulture); placementPanel.CommitPending();
+                void SendPropertyKey(UIElement element, Key key) => element.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(element), Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+                inputs[0].Text = (committed.X + 1.125f).ToString("R", System.Globalization.CultureInfo.CurrentCulture); SendPropertyKey(inputs[0], Key.Enter);
                 Require(edits.Position(pickup.Source).X == committed.X + 1.125f, "Numeric input did not update placement");
-                inputs[1].Text = "NaN"; placementPanel.CommitPending(); Require(edits.Position(pickup.Source).Y == committed.Y, "Nonfinite input changed authored position");
-                placementPanel.Preview(edits.Position(pickup.Source)); edits.Undo();
+                inputs[1].Text = "NaN"; SendPropertyKey(inputs[1], Key.Enter); Require(edits.Position(pickup.Source).Y == committed.Y, "Nonfinite input changed authored position");
+                SendPropertyKey(inputs[1], Key.Escape); edits.Undo();
                 Require(scene.PickupPosition(actor.Root) == committed, "Numeric edit was not one undoable action");
                 // The tunneling mouse event commits typed coordinates before the native gizmo snapshots its start.
                 await Task.Delay(120, token);
@@ -218,7 +220,7 @@ internal static class PickupEditorCheck
                 var saved = await edits.SaveAsync(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [sourcePath] = copy }, token: token);
                 Require(saved.Errors.Count == 0, "Save As failed");
                 edits.MoveTo(pickup.Source, committed + Vector3.UnitY);
-                ((Button)window.FindName("PickupSave")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                ((Button)window.FindName("DocumentSave")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 while (edits.IsDirty || !window.IsEnabled) await Task.Delay(30, token);
                 using var verifyResolver = new AssetResolver(Path.GetDirectoryName(copy)!);
                 var reopened = await PickupPlacementEditSession.LoadAsync(Path.Combine(Path.GetDirectoryName(copy)!, "gamez.zbd"), verifyResolver, token);

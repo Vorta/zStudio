@@ -11,23 +11,21 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     private DocumentModel? pickupDocument;
-    private readonly PickupPlacementPanel pickupPanel = new();
     private void ConfigurePickupScene(SceneViewport viewport)
     {
-        viewport.PickupInteractionStarting += pickupPanel.CommitPending;
+        viewport.CanStartPickupEdit = () => ResolvePropertiesDrafts(pickupDocument);
         viewport.PickupMoveCommitted += (root, position) =>
         {
             if (pickupDocument?.PickupEdits is { } edits && viewport.PickupAt(root)?.Pickup is { } pickup)
                 CommitPickupPosition(edits, pickup.Source, position);
         };
-        viewport.PickupMovePreviewed += pickupPanel.Preview;
     }
     private void DetachPickupEditor()
     {
-        pickupPanel.CommitPending(); scene?.CancelPickupDrag();
+        scene?.CancelPickupDrag();
         if (pickupDocument != null) pickupDocument.PickupEditsChanged -= PickupEditsChanged;
-        pickupDocument = null; pickupPanel.Clear(); PickupProperties.Visibility = PickupTools.Visibility = Visibility.Collapsed;
-        PickupTools.IsEnabled = SceneHost.IsEnabled = PickupProperties.IsEnabled = true;
+        pickupDocument = null; PickupTools.Visibility = Visibility.Collapsed;
+        PickupTools.IsEnabled = SceneHost.IsEnabled = true;
     }
     private void AttachPickupEditor(DocumentModel document)
     {
@@ -36,7 +34,7 @@ public partial class MainWindow
         PickupTools.Visibility = Visibility.Visible; PickupEditsChanged();
         if (!document.PickupDiagnosticsReported && document.PickupEdits is { } edits)
         {
-            foreach (string note in edits.Diagnostics) ViewModel.Diagnostics.Add("Pickup editor: " + note);
+            foreach (string note in edits.Diagnostics) ViewModel.AddProblem("Pickup editor: " + note,"Warning",document.Path);
             document.PickupDiagnosticsReported = true;
         }
     }
@@ -44,29 +42,19 @@ public partial class MainWindow
     {
         if (pickupDocument?.PickupEdits is not { } edits || scene?.Mission is not { } mission) return;
         scene.SetPickupPositions(edits.PreviewPositions(mission));
-        PickupUndo.IsEnabled = edits.CanUndo; PickupRedo.IsEnabled = edits.CanRedo; PickupSave.IsEnabled = edits.IsDirty;
-        PickupSaveAs.IsEnabled = edits.Records.Count > 0;
-        UpdatePickupInspector();
+        UpdateDocumentCommands();
         if (selectedNode is int node && scene.PickupAt(node) != null && properties != null)
         {
             properties["preview_world_position"] = JsonData.Vector(scene.PickupPosition(scene.PickupAt(node)!.Root));
             SetProperties(properties);
         }
     }
-    private void UpdatePickupInspector()
-    {
-        if (pickupDocument?.PickupEdits is { } edits && scene?.SelectedPickupRoot is int root && scene.PickupAt(root)?.Pickup is { } pickup && edits.Find(pickup.Source) is { } record)
-        {
-            pickupPanel.Show(record, edits.Position(record.Source), edits.Scope(record.Source), edits.TargetPath(record.Source.ArchivePath), pickupDocument.PickupsLocked);
-            PickupProperties.Visibility = Visibility.Visible;
-        }
-        else { pickupPanel.Clear(); PickupProperties.Visibility = Visibility.Collapsed; }
-    }
     private void PickupLockedChanged(object sender, RoutedEventArgs e)
     {
         if (!ready || updating || pickupDocument == null) return;
-        pickupPanel.CommitPending(); pickupDocument.PickupsLocked = PickupLocked.IsChecked == true;
-        scene?.SetPickupLocked(pickupDocument.PickupsLocked); UpdatePickupInspector();
+        if (!ResolvePropertiesDrafts(pickupDocument)) { updating = true; PickupLocked.IsChecked = pickupDocument.PickupsLocked; updating = false; return; }
+        pickupDocument.PickupsLocked = PickupLocked.IsChecked == true;
+        scene?.SetPickupLocked(pickupDocument.PickupsLocked);
     }
     private void CommitPickupPosition(PickupPlacementEditSession edits, MissionPickupSource source, Vector3 position)
     {
@@ -90,8 +78,8 @@ public partial class MainWindow
     }
     private async Task<bool> SavePickupsAsync(DocumentModel document, bool saveAs)
     {
-        if (document.PickupEdits is not { } edits) return false;
-        pickupPanel.CommitPending(); System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag();
+        if (document.PickupEdits is not { } edits || !ResolvePropertiesDrafts(document)) return false;
+        System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag();
         if (!saveAs && !edits.IsDirty) return true;
         try
         {
@@ -112,7 +100,7 @@ public partial class MainWindow
                 if (dialog.ShowDialog(this) != true) return false;
                 destinations ??= new(StringComparer.OrdinalIgnoreCase); destinations[source] = dialog.FileName;
             }
-            IsEnabled = false;
+            IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
             ViewModel.Status = "Saving and verifying pickup placements…";
             var result = await edits.SaveAsync(destinations, ViewModel.Settings.CreateBackupOnSave, document.Lifetime.Token);
             if (result.SavedPaths.Count > 0)
@@ -125,13 +113,13 @@ public partial class MainWindow
             if (result.Errors.Count > 0)
             {
                 string message = "Saved: " + (result.SavedPaths.Count == 0 ? "none" : string.Join("; ", result.SavedPaths)) + "\n" + string.Join("\n", result.Errors) + "\nRemaining changes are unsaved.";
-                ViewModel.Diagnostics.Add(message); MessageBox.Show(this, message, "Pickup save", MessageBoxButton.OK, MessageBoxImage.Information); return false;
+                ViewModel.AddProblem(message); MessageBox.Show(this, message, "Pickup save", MessageBoxButton.OK, MessageBoxImage.Information); return false;
             }
             return !edits.IsDirty;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         { Report(ex); MessageBox.Show(this, ex.Message, "Pickup save", MessageBoxButton.OK, MessageBoxImage.Information); return false; }
-        finally { IsEnabled = true; PickupEditsChanged(); }
+        finally { IsEnabled = true; if (propertiesWindow != null) propertiesWindow.IsEnabled = true; PickupEditsChanged(); }
     }
     private int? RemapPickupSelection(MissionPickupSource? source, MissionSceneContext mission)
     {

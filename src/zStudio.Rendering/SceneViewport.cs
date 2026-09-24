@@ -36,6 +36,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private int generation;
     public event Action<int>? NodeSelected;
     public event Action<string>? Information;
+    public IReadOnlyList<Diagnostic> PreviewDiagnostics { get; private set; } = [];
+    public string PreviewSummary { get; private set; } = "";
     public SceneViewport()
     {
         viewport = new FrameViewport(PrepareCameraFrame)
@@ -166,7 +168,9 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         if (asset.Kind == AssetKind.World) ConfigurePickups();
         FrameAll();
         RefreshHorizon();
-        Information?.Invoke($"{packet.View.Placements.Count:N0} instances · {meshes.Count:N0} mesh batches · {packet.Notes.Count} preview notes" + (packet.Notes.Count > 0 ? "\n" + string.Join('\n', packet.Notes.Select(d => d.Message).Distinct().Take(30)) : ""));
+        PreviewDiagnostics = packet.Notes.ToArray();
+        PreviewSummary = $"{packet.View.Placements.Count:N0} instance{(packet.View.Placements.Count == 1 ? "" : "s")} · {meshes.Count:N0} mesh batch{(meshes.Count == 1 ? "" : "es")}";
+        Information?.Invoke(PreviewSummary + $" · {packet.Notes.Count} preview notes" + (packet.Notes.Count > 0 ? "\n" + string.Join('\n', packet.Notes.Select(d => d.Message).Distinct().Take(30)) : ""));
     }
     private static void JsonMaterial(GameScene scene, int index, out Color4 color, out int texture)
     {

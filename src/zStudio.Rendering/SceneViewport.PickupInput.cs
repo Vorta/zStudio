@@ -50,6 +50,7 @@ public sealed partial class SceneViewport
         if (IsPickupDragging) return true;
         SetPickupHover(false);
         if (e.ChangedButton != MouseButton.Left) return false;
+        if (CanStartPickupEdit?.Invoke() == false) return false;
         PickupInteractionStarting?.Invoke();
         if (PickPickupHandle(point) is not { ModelHit: MeshGeometryModel3D arrow } hit) return false;
         // Use the native axis constraint, but own routing/capture for the whole drag. Do not let

@@ -4,6 +4,19 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## Unreleased
 
+## 0.4.7 — 2026-09-24
+
+- Redesign the Windows 11 Fluent workspace with resizable navigation, preview, Inspector and bottom tool panes, saved layouts, workspace presets, and Compact/Comfortable density.
+- Keep a single title/menu row with full-height window controls and centered document name plus Undo/Redo/Save icons. Preserve native caption dragging, resizing and the maximize/Snap target.
+- Hide empty workspace controls before opening a folder. Use Files for open-document navigation, dirty markers and per-file close buttons; place search in Search and show Assets/Document scene only when applicable. Render recent-folder paths literally, including underscores.
+- Organize animation tools as Sequences, Settings and References. Open Sequences initially and retain the selected tab when switching animations. Describe event operands, referenced animations and scheduling thresholds in the sequence tree.
+- Open Properties in one reusable, resizable window pinned to its owning document and record. Keep icon Undo/Redo beside its breadcrumb, preserve unfinished drafts with inline validation and Escape restoration, and retain document-scoped save/history commands.
+- Display numeric property values in plain decimal notation without losing float precision; continue accepting exponent input.
+- Consolidate animation and 3D preview options into accessible icon toggles with accent-filled active states and tooltips. Put LOD, difficulty and Frame first; remove duplicate Settings controls and group Grid, Height and independent ground collision together in overflow.
+- Support live signed preview Height from −999 to 999 in a compact field, with preserved playhead/playback and partial input during layout changes. Explain collision relative to authored coordinates as Y=−Height.
+- Separate observed Dispatch/Event log, structured Problems, current Runtime, Related references and original-source Bytes tools. Retain source identity and distinguish stored data from preview state.
+- Fix the reentrant window-close error when discarding changes, and retain save/discard guards for pending property drafts and edited documents.
+
 ## 0.3.0 — 2026-09-24
 
 - Introduce the first 3D editing workflow: move mission pickups in Whole world; select an instance, see its bounds, unlock world-axis arrows, or enter exact XYZ coordinates in Properties.

@@ -50,8 +50,6 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent(); DataContext = ViewModel;
-        PickupProperties.Content = pickupPanel;
-        pickupPanel.PositionCommitted += (source, position) => { if (pickupDocument?.PickupEdits is { } edits) CommitPickupPosition(edits, source, position); };
         BackupOnSave.IsChecked = ViewModel.Settings.CreateBackupOnSave;
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
@@ -59,7 +57,7 @@ public partial class MainWindow : Window
         var s = ViewModel.Settings;
         Width = Math.Clamp(s.Width, MinWidth, SystemParameters.VirtualScreenWidth);
         Height = Math.Clamp(s.Height, MinHeight, SystemParameters.VirtualScreenHeight);
-        FilesColumn.Width = new(Math.Clamp(s.FilesWidth, 130, 500)); AssetsColumn.Width = new(Math.Clamp(s.AssetsWidth, 190, 600)); PropertiesColumn.Width = new(Math.Clamp(s.PropertiesWidth, 0, 650));
+        InitializeWorkspace();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard;
         diskTimer.Tick += (_, _) => ViewModel.CheckExternalChanges(); diskTimer.Start();
@@ -75,11 +73,11 @@ public partial class MainWindow : Window
     });
     private async Task RunUi(Func<Task> work)
     {
-        try { pickupPanel.CommitPending(); await work(); }
+        try { if (animation?.ResolvePendingDrafts() == false) return; await work(); }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
     }
-    private void Report(Exception ex) { ViewModel.Status = ex.Message; ViewModel.Diagnostics.Add(ex.Message); DiagnosticsExpander.IsExpanded = true; }
+    private void Report(Exception ex) { ViewModel.Status = ex.Message; ViewModel.AddProblem(ex.Message); Layout.ToolsVisible = true; ToolTabs.SelectedIndex = 2; ArrangeWorkspace(); }
     private async void OpenFolderClick(object sender, RoutedEventArgs e)
     {
         OpenFolderDialog dialog = new() { Title = "Choose the root of the ZBD folder", InitialDirectory = Directory.Exists(ViewModel.Settings.LastRoot) ? ViewModel.Settings.LastRoot : "" };
@@ -93,48 +91,65 @@ public partial class MainWindow : Window
     private void UpdateRecent()
     {
         RecentMenu.Items.Clear();
-        foreach (string path in ViewModel.Settings.RecentRoots) { MenuItem item = new() { Header = path }; item.Click += async (_, _) => await RunUi(async () => { await ViewModel.OpenRootAsync(path); UpdateRecent(); }); RecentMenu.Items.Add(item); }
+        foreach (string path in ViewModel.Settings.RecentRoots)
+        {
+            // Folder names are literal text, not menu access-key labels.
+            MenuItem item = new() { Header = new TextBlock { Text = path } };
+            System.Windows.Automation.AutomationProperties.SetName(item,path);
+            item.Click += async (_, _) => await RunUi(async () => { await ViewModel.OpenRootAsync(path); UpdateRecent(); });
+            RecentMenu.Items.Add(item);
+        }
+        RecentMenu.IsEnabled = RecentMenu.HasItems;
     }
     private async void OnDrop(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths) return;
         await RunUi(async () => { if (Directory.Exists(paths[0])) { await ViewModel.OpenRootAsync(paths[0]); UpdateRecent(); } else { if (!ViewModel.HasRoot) await ViewModel.OpenRootAsync(Path.GetDirectoryName(paths[0])!); foreach (string path in paths) await ViewModel.OpenFileAsync(path); } });
     }
-    private async void FileDoubleClick(object sender, MouseButtonEventArgs e) { if (FileTree.SelectedItem is FolderNode { File: { } file }) await RunUi(() => ViewModel.OpenFileAsync(file.Path)); }
-    private async void FileTreeKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter && FileTree.SelectedItem is FolderNode { File: { } file }) { e.Handled = true; await RunUi(() => ViewModel.OpenFileAsync(file.Path)); } }
+    private async void FileDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        for (var source = e.OriginalSource as DependencyObject; source != null; source = source is Visual ? VisualTreeHelper.GetParent(source) : null) if (source is ButtonBase) return;
+        if (FileTree.SelectedItem is FolderNode { File: { } file }) { e.Handled = true; await OpenBrowserFile(file.Path); }
+    }
+    private async void FileTreeKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter && e.OriginalSource is not Button && FileTree.SelectedItem is FolderNode { File: { } file }) { e.Handled = true; await OpenBrowserFile(file.Path); } }
+    private Task OpenBrowserFile(string path) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(path); if (doc != null && ViewModel.SelectedDocument == doc) NavigationTabs.SelectedItem = AssetsTab; });
     private async void SearchDoubleClick(object sender, MouseButtonEventArgs e) { if (SearchList.SelectedItem is SearchHit hit) await Navigate(hit); }
     private async void RelatedDoubleClick(object sender, MouseButtonEventArgs e) { if (RelatedList.SelectedItem is SearchHit hit) await Navigate(hit); }
     private Task Navigate(SearchHit hit) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(hit.File); if (doc == null) return; doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Kind == hit.Kind && a.Index == hit.Index); AssetGrid.ScrollIntoView(doc.SelectedAsset); });
-    private void GlobalSearchChanged(object sender, TextChangedEventArgs e) { if (ready && GlobalSearch.Text.Length >= 2) NavigationTabs.SelectedIndex = 1; }
-    private async void DocumentChanged(object sender, SelectionChangedEventArgs e)
+    private async void DocumentChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (!ready || e.Source != DocumentTabs) return;
+        if (!ready || e.PropertyName != nameof(MainViewModel.SelectedDocument)) return;
         var doc = ViewModel.SelectedDocument; if (doc == shownDocument) return;
+        if (animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
         shownDocument = doc; Workspace.Visibility = doc == null ? Visibility.Collapsed : Visibility.Visible; Welcome.Visibility = doc == null ? Visibility.Visible : Visibility.Collapsed;
         updating = true;
         TexturePackCombo.ItemsSource = doc?.Document.Scene != null ? ViewModel.Resolver?.TexturePacks(doc.Path).Select(p => new PackChoice(Path.GetFileName(p), p)).Prepend(new("Automatic texture variant", null)).ToArray() : null;
         TexturePackCombo.DisplayMemberPath = nameof(PackChoice.Name); TexturePackCombo.SelectedIndex = 0; updating = false;
         if (doc != null) { doc.SelectedAsset ??= doc.Assets.FirstOrDefault(a => a.Record.Content is Recoil.Zbd.Core.Animation.AnimationEntry { RootName.Length: > 0 }) ?? doc.Assets.FirstOrDefault(); await ShowAsset(doc, doc.SelectedAsset?.Record); }
-        else { CancelPreview(); shownAsset = null; }
+        else { CancelPreview(); shownAsset = null; ViewModel.Status = ViewModel.HasRoot ? $"{ViewModel.Files.Count:N0} files · choose a file to inspect" : "Ready"; }
     }
     private async void AssetSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (ready && ViewModel.SelectedDocument is { } doc && AssetGrid.SelectedItem is AssetItem item && doc.Assets.Contains(item)) await ShowAsset(doc, item.Record);
+        if (ready && ViewModel.SelectedDocument is { } doc && AssetGrid.SelectedItem is AssetItem item && doc.Assets.Contains(item) && !(doc == shownDocument && shownAsset?.Id == item.Record.Id && animation != null)) await ShowAsset(doc, item.Record);
     }
     private void CancelPreview()
     {
+        ClearStaticPreviewProblems();
         DetachPickupEditor();
-        selectedNode = null; isolatedNode = null;
+        selectedNode = null; isolatedNode = null; inspectedSceneSource = null;
         difficultyRefresh?.Cancel();
         pendingAnimationPlay = false;
         EndImagePan();
-        animation?.Dispose(); animation = null; AnimationHost.Content = null; AnimationProperties.Content = null;
-        AnimationProperties.Visibility = Visibility.Collapsed; PropertiesTree.Visibility = Visibility.Visible;
+        animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
         preview.Cancel(); preview.Dispose(); preview = new(); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
     }
     private async Task ShowAsset(DocumentModel doc, AssetRecord? asset)
     {
+        if (animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         bool differentAsset = shownAsset?.Id != asset?.Id;
+        // Entering the animation viewer starts at Sequences. Consecutive animation
+        // selections (including asynchronous replacement) retain the chosen page.
+        if (asset?.Kind == AssetKind.Animation && shownAsset?.Kind != AssetKind.Animation) Layout.InspectorTab = 0;
         var previousMission = !differentAsset && asset?.Kind == AssetKind.World ? scene?.Mission : null;
         var previousView = previousMission == null ? null : scene?.CaptureView();
         int? previousSelection = selectedNode, previousIsolate = isolatedNode;
@@ -143,10 +158,11 @@ public partial class MainWindow : Window
         foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
         EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
         PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
+        ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
         try
         {
             properties = asset == null ? (JsonObject)doc.Document.Metadata.DeepClone() : await Task.Run(() => ExportService.AssetJson(doc.Document, asset, token), token);
-            token.ThrowIfCancellationRequested(); SetProperties(properties); CentralTree.ItemsSource = PropertiesTree.ItemsSource;
+            token.ThrowIfCancellationRequested(); SetProperties(properties); CentralTree.ItemsSource = asset?.Kind == AssetKind.Zrd && properties["tree"] is JsonNode hierarchy ? ZrdTree(doc,asset,hierarchy) : properties.Select(p => new InspectorNode(p.Key,p.Value)).ToArray();
             ContentText.Text = asset?.Content is ScriptContent script ? script.Text : LimitedJson(properties);
             var bytes = asset == null ? doc.Document.Bytes : doc.Document.Slice(asset.Offset, asset.Length);
             RawText.Text = Hex(bytes.Span[..Math.Min(bytes.Length, 4096)], asset?.Offset ?? 0) + (bytes.Length > 4096 ? "\n… first 4,096 bytes shown. Export for complete data." : "");
@@ -166,7 +182,7 @@ public partial class MainWindow : Window
             {
                 var info = await Task.Run(() => WaveDecoder.Read(bytes), token); var peaks = await Task.Run(() => WaveDecoder.Peaks(bytes, info), token); token.ThrowIfCancellationRequested();
                 waveInfo = info; wave = new(new MemoryStream(bytes.ToArray(), false)); AudioPanel.Visibility = Visibility.Visible;
-                AudioDetails.Text = $"{info.SampleRate:N0} Hz · {info.Channels} channels · {info.BitsPerSample}-bit · encoding {info.Encoding}\n{info.Duration:F3} seconds · {info.DataLength:N0} audio bytes";
+                AudioDetails.Text = $"{info.SampleRate:N0} Hz · {info.Channels} {(info.Channels == 1 ? "channel" : "channels")} · {info.BitsPerSample}-bit · encoding {info.Encoding}\n{info.Duration:F3} seconds · {info.DataLength:N0} audio bytes";
                 Waveform.Set(peaks, info.Duration); AudioSeek.Maximum = info.Duration; AudioCues.ItemsSource = info.Cues.Select(c => new CueChoice(c.Id, c.SampleOffset, (double)c.SampleOffset / info.SampleRate)).ToArray(); UpdateAudioPosition();
             }
             else if (asset != null && (asset.Kind is AssetKind.Model or AssetKind.World || asset.Content is GameNode { Class: "object3d" or "lod" }) && doc.Document.Scene != null && ViewModel.Resolver != null)
@@ -176,7 +192,7 @@ public partial class MainWindow : Window
                 int count = new SceneLods(doc.Document.Scene).Count(asset.Kind == AssetKind.World ? null : root is int r ? [r] : []);
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
-                WorldDifficulty.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
+                WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
                 if (scene == null) { scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigurePickupScene(scene); SceneHost.Content = scene; }
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty) : null;
                 if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
@@ -193,7 +209,8 @@ public partial class MainWindow : Window
                         if (selectedNode is int node) InspectNode(node);
                     }
                 }
-                if (mission != null) { PreviewInfo.Text = mission.Layout.Description + " · " + PreviewInfo.Text; WorldDifficulty.ToolTip = mission.Layout.Description; }
+                ShowStaticPreviewProblems(doc, asset);
+                if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
                 if (mission != null && mission.Layout.Difficulty != ViewModel.Difficulty) await RefreshWorldDifficultyAsync();
             }
             else if (asset?.Kind == AssetKind.Animation && doc.AnimationEdits != null && ViewModel.Resolver != null)
@@ -201,10 +218,10 @@ public partial class MainWindow : Window
                 var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, token, ViewModel); animation = editor;
                 if (pendingAnimationPlay) { pendingAnimationPlay = false; editor.TogglePlayback(); }
                 editor.StatusChanged += text => { if (!token.IsCancellationRequested) ViewModel.Status = text; };
-                editor.InspectionChanged += (json, data) => { if (token.IsCancellationRequested) return; properties = json; RawText.Text = Hex(data.AsSpan(0, Math.Min(data.Length, 4096)), 0); };
+                editor.InspectionChanged += (json, data) => { if (token.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
                 editor.SaveRequested += async () => { await SaveAnimationAsync(doc); };
-                AnimationHost.Content = editor; AnimationProperties.Content = editor.PropertiesView;
-                PropertiesTree.Visibility = Visibility.Collapsed; AnimationProperties.Visibility = AnimationHost.Visibility = Visibility.Visible;
+                AnimationHost.Content = editor; AttachAnimationWorkspace(editor);
+                AnimationHost.Visibility = Visibility.Visible;
                 await editor.InitializeAsync();
             }
             else
@@ -233,11 +250,17 @@ public partial class MainWindow : Window
         else if (node is JsonObject obj) { foreach (var p in obj) foreach (string s in Strings(p.Value)) yield return s; }
         else if (node is JsonArray array) { foreach (var p in array) foreach (string s in Strings(p)) yield return s; }
     }
-    private void SetProperties(JsonObject value) { properties = value; PropertiesTree.ItemsSource = value.Select(p => new InspectorNode(p.Key, p.Value)).ToArray(); }
+    private void SetProperties(JsonObject value) { properties = value; }
     private static string LimitedJson(JsonObject value) { string text = value.ToJsonString(JsonData.Options); return text.Length > 500_000 ? text[..500_000] + "\n… export JSON for the complete document." : text; }
     private static string Hex(ReadOnlySpan<byte> bytes, long offset)
     {
-        StringBuilder result = new(); for (int i = 0; i < bytes.Length; i += 16) { var row = bytes.Slice(i, Math.Min(16, bytes.Length - i)); result.Append($"{offset + i:X8}  ").Append(Convert.ToHexString(row)).AppendLine(); }
+        StringBuilder result = new();
+        for (int i = 0; i < bytes.Length; i += 16)
+        {
+            var row = bytes.Slice(i, Math.Min(16, bytes.Length - i)); result.Append($"{offset + i:X8}  ");
+            foreach (byte value in row) result.Append(value.ToString("X2")).Append(' ');
+            result.AppendLine();
+        }
         return result.ToString();
     }
     private async void AssetLoadingRow(object sender, DataGridRowEventArgs e)
@@ -267,7 +290,7 @@ public partial class MainWindow : Window
         // WPF sizes are device-independent units; zoom is measured in physical pixels.
         TextureImage.Width = decoded.Width * ZoomSlider.Value / dpi.DpiScaleX;
         TextureImage.Height = decoded.Height * ZoomSlider.Value / dpi.DpiScaleY;
-        PreviewInfo.Text = $"{decoded.Width} × {decoded.Height} · {ZoomSlider.Value:P0}";
+        TextureZoomLabel.Text = $"{ZoomSlider.Value:P0}"; PreviewInfo.Text = $"{decoded.Width} × {decoded.Height} · {ZoomSlider.Value:P0}";
     }
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
     {
@@ -345,10 +368,10 @@ public partial class MainWindow : Window
     private void FrameSceneClick(object sender, RoutedEventArgs e) => scene?.FrameAll();
     private void IsolateClick(object sender, RoutedEventArgs e) { if (selectedNode != null) { isolatedNode = selectedNode; scene?.Isolate(selectedNode); } else ViewModel.Status = "Select a node in the scene or scene tree first"; }
     private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); }
-    private void SceneTreeSelected(object sender, RoutedPropertyChangedEventArgs<object> e) { if (e.NewValue is SceneTreeItem item) InspectNode(item.Node.Index); }
+    private void SceneTreeSelected(object sender, RoutedPropertyChangedEventArgs<object> e) { if (e.NewValue is SceneTreeItem item) { InspectNode(item.Node.Index); inspectedSceneSource = item; } }
     private void InspectNode(int index)
     {
-        pickupPanel.CommitPending();
+        inspectedSceneSource = null;
         if ((scene?.PreviewScene ?? ViewModel.SelectedDocument?.Document.Scene) is not { } data || index < 0 || index >= data.Nodes.Count) return;
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
@@ -361,7 +384,7 @@ public partial class MainWindow : Window
             properties["source_node_index"] = mission.SourceNodes[index];
             properties["preview_layout"] = mission.Layout.Description;
         }
-        SetProperties(properties); UpdatePickupInspector(); InspectorTabs.SelectedIndex = 0; ViewModel.Status = $"Selected node #{index}: {data.Nodes[index].Name}";
+        SetProperties(properties); ViewModel.Status = $"Selected node #{index}: {data.Nodes[index].Name}";
     }
     private static EventRow[] EventRows(JsonObject entry)
     {
@@ -375,7 +398,7 @@ public partial class MainWindow : Window
     }
     private void StopAudioClick(object sender, RoutedEventArgs e) { player?.Stop(); if (wave != null) wave.Position = 0; UpdateAudioPosition(); }
     private void StopAudio() { player?.Dispose(); player = null; wave?.Dispose(); wave = null; waveInfo = null; }
-    private void UpdateAudioPosition() { if (wave == null) return; seeking = true; AudioSeek.Value = wave.CurrentTime.TotalSeconds; AudioTime.Text = $@"{wave.CurrentTime:mm\:ss\.fff} / {wave.TotalTime:mm\:ss\.fff}"; seeking = false; }
+    private void UpdateAudioPosition() { bool playing = player?.PlaybackState == PlaybackState.Playing; AudioPlayButton.Content = playing ? "Pause" : "Play"; System.Windows.Automation.AutomationProperties.SetName(AudioPlayButton, playing ? "Pause audio" : "Play audio"); if (wave == null) return; seeking = true; AudioSeek.Value = wave.CurrentTime.TotalSeconds; AudioTime.Text = $@"{wave.CurrentTime:mm\:ss\.fff} / {wave.TotalTime:mm\:ss\.fff}"; seeking = false; }
     private void SeekAudio(double seconds) { if (wave != null) wave.CurrentTime = TimeSpan.FromSeconds(Math.Clamp(seconds, 0, wave.TotalTime.TotalSeconds)); }
     private void AudioSeekChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (ready && !seeking) SeekAudio(e.NewValue); }
     private void CueDoubleClick(object sender, MouseButtonEventArgs e) { if (AudioCues.SelectedItem is CueChoice cue) SeekAudio(cue.Seconds); }
@@ -390,14 +413,36 @@ public partial class MainWindow : Window
         if (assets.Length == 0) { ViewModel.Status = "Select an asset to export"; return; }
         OpenFolderDialog dialog = new() { Title = "Choose an export destination outside the source folder" }; if (dialog.ShowDialog(this) != true) return;
         using var cancellation = new CancellationTokenSource(); operation = cancellation; CancelOperationItem.IsEnabled = true;
-        try { string? pack = PreferredPack; int lod = LodCombo.SelectedIndex; var progress = new Progress<ExportProgress>(p => ViewModel.Status = $"Exporting {p.Completed}/{p.Total}: {p.Name}"); var result = await Task.Run(() => new ExportService(resolver).ExportAsync(doc.Document, assets, dialog.FolderName, json, pack, lod, progress, cancellation.Token)); foreach (string error in result.Errors) ViewModel.Diagnostics.Add(error); ViewModel.Status = $"Exported {result.Completed}/{assets.Length} assets to {result.Directory}"; MessageBox.Show(this, ViewModel.Status + (result.Errors.Count > 0 ? $"\n{result.Errors.Count} failures; see Diagnostics and export-report.json." : ""), "Export complete", MessageBoxButton.OK, result.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information); }
+        try { string? pack = PreferredPack; int lod = LodCombo.SelectedIndex; var progress = new Progress<ExportProgress>(p => ViewModel.Status = $"Exporting {p.Completed}/{p.Total}: {p.Name}"); var result = await Task.Run(() => new ExportService(resolver).ExportAsync(doc.Document, assets, dialog.FolderName, json, pack, lod, progress, cancellation.Token)); foreach (string error in result.Errors) ViewModel.AddProblem(error, "Error", doc.Path); ViewModel.Status = $"Exported {result.Completed}/{assets.Length} assets to {result.Directory}"; MessageBox.Show(this, ViewModel.Status + (result.Errors.Count > 0 ? $"\n{result.Errors.Count} failures; see Diagnostics and export-report.json." : ""), "Export complete", MessageBoxButton.OK, result.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information); }
         finally { operation = null; CancelOperationItem.IsEnabled = false; }
     });
     private async void ValidateClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
     {
         if (ViewModel.SelectedDocument is not { } selected || operation != null) return;
         using var cancellation = new CancellationTokenSource(); operation = cancellation; CancelOperationItem.IsEnabled = true;
-        try { ViewModel.Status = "Validating current file…"; var diagnostics = await Task.Run(async () => { var doc = await FormatRegistry.Default.OpenAsync(selected.Path, cancellation.Token); List<string> notes = doc.Diagnostics.Select(d => d.Message).ToList(); foreach (var asset in doc.Assets) { cancellation.Token.ThrowIfCancellationRequested(); try { if (asset.Kind == AssetKind.Texture) TextureDecoder.Decode(doc, asset, cancellation.Token); else if (asset.Kind == AssetKind.Zrd) ZrdDecoder.Decode(doc.Slice(asset.Offset, asset.Length), cancellation.Token); else if (asset.Kind == AssetKind.Sound) WaveDecoder.Read(doc.Slice(asset.Offset, asset.Length)); } catch (InvalidDataException ex) { notes.Add(asset.Name + ": " + ex.Message); } } return notes; }, cancellation.Token); foreach (string note in diagnostics) ViewModel.Diagnostics.Add(note); ViewModel.Status = $"Validation finished: {diagnostics.Count} diagnostics"; if (diagnostics.Count > 0) DiagnosticsExpander.IsExpanded = true; }
+        try
+        {
+            ViewModel.Status = "Validating source file on disk…";
+            var diagnostics = await Task.Run(async () =>
+            {
+                var doc = await FormatRegistry.Default.OpenAsync(selected.Path,cancellation.Token);
+                var notes = doc.Diagnostics.Select(d => new StudioProblem(d.Severity,"File / operation",d.Message,selected.Path,d.AssetIndex,d.Offset)).ToList();
+                foreach (var asset in doc.Assets)
+                {
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        if (asset.Kind == AssetKind.Texture) TextureDecoder.Decode(doc,asset,cancellation.Token);
+                        else if (asset.Kind == AssetKind.Zrd) ZrdDecoder.Decode(doc.Slice(asset.Offset,asset.Length),cancellation.Token);
+                        else if (asset.Kind == AssetKind.Sound) WaveDecoder.Read(doc.Slice(asset.Offset,asset.Length));
+                    }
+                    catch (InvalidDataException ex) { notes.Add(new("Error","File / operation",asset.Name + ": " + ex.Message,selected.Path,asset.Index,asset.Offset)); }
+                }
+                return notes;
+            },cancellation.Token);
+            foreach (var note in diagnostics) ViewModel.AddProblem(note.Message,note.Severity,note.File,note.AssetIndex,note.Offset);
+            ViewModel.Status = $"Source-file validation finished: {diagnostics.Count} diagnostics";
+        }
         finally { operation = null; CancelOperationItem.IsEnabled = false; }
     });
     private async void ReloadClick(object sender, RoutedEventArgs e) => await RunUi(() => ViewModel.ReloadAsync());
@@ -406,19 +451,41 @@ public partial class MainWindow : Window
         if (operation is not { IsCancellationRequested: false }) return;
         operation.Cancel(); CancelOperationItem.IsEnabled = false; ViewModel.Status = "Canceling current operation…";
     }
-    private async void CloseTabClick(object sender, RoutedEventArgs e) { if ((sender as Button)?.Tag is DocumentModel doc) await RunUi(() => ViewModel.CloseAsync(doc)); }
+    private async void CloseFileClick(object sender, RoutedEventArgs e) { e.Handled = true; if ((sender as Button)?.Tag is DocumentModel doc) await RunUi(() => ViewModel.CloseAsync(doc)); }
     private async void CloseCurrentClick(object sender, RoutedEventArgs e) { if (ViewModel.SelectedDocument is { } doc) await RunUi(() => ViewModel.CloseAsync(doc)); }
     private void ExitClick(object sender, RoutedEventArgs e) => Close();
-    private void PropertiesClick(object sender, RoutedEventArgs e) { bool show = ((MenuItem)sender).IsChecked; PropertiesColumn.Width = new(show ? 300 : 0); PropertiesSplitterColumn.Width = new(show ? 5 : 0); InspectorTabs.Visibility = show ? Visibility.Visible : Visibility.Collapsed; }
-    private void DiagnosticsClick(object sender, RoutedEventArgs e) => DiagnosticsExpander.IsExpanded = ((MenuItem)sender).IsChecked;
+    private void InspectorVisibilityClick(object sender, RoutedEventArgs e) { Layout.InspectorVisible = ((MenuItem)sender).IsChecked; inspectorTemporary = true; ArrangeWorkspace(); }
+    private void DiagnosticsClick(object sender, RoutedEventArgs e) { Layout.ToolsVisible = ((MenuItem)sender).IsChecked; ToolTabs.SelectedIndex = 2; ArrangeWorkspace(); }
     private void ThemeClick(object sender, RoutedEventArgs e) => ApplyTheme(((MenuItem)sender).Header.ToString()!);
     // .NET 10 still marks runtime Fluent theme switching as experimental.
 #pragma warning disable WPF0001
-    private void ApplyTheme(string theme) { Application.Current.ThemeMode = theme switch { "Dark" => ThemeMode.Dark, "Light" => ThemeMode.Light, _ => ThemeMode.System }; ViewModel.Settings.Theme = theme; }
+    private void ApplyTheme(string theme)
+    {
+        var offsets = WorkspaceScrollers(Shell).Select(s => (Owner: s.TemplatedParent is ItemsControl items ? (DependencyObject)items : s, s.HorizontalOffset, s.VerticalOffset)).ToArray();
+        Application.Current.ThemeMode = theme switch { "Dark" => ThemeMode.Dark, "Light" => ThemeMode.Light, _ => ThemeMode.System }; ViewModel.Settings.Theme = theme;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            UpdateLayout();
+            foreach (var (owner,horizontal,vertical) in offsets)
+            {
+                var scroller = owner as ScrollViewer ?? WorkspaceScrollers(owner).FirstOrDefault();
+                scroller?.ScrollToHorizontalOffset(horizontal); scroller?.ScrollToVerticalOffset(vertical);
+            }
+        });
+    }
+    private static IEnumerable<ScrollViewer> WorkspaceScrollers(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root,i);
+            if (child is ScrollViewer scroller) yield return scroller;
+            foreach (var descendant in WorkspaceScrollers(child)) yield return descendant;
+        }
+    }
 #pragma warning restore WPF0001
-    private void ResetLayoutClick(object sender, RoutedEventArgs e) { FilesColumn.Width = new(215); AssetsColumn.Width = new(280); PropertiesColumn.Width = new(300); PropertiesSplitterColumn.Width = new(5); InspectorTabs.Visibility = Visibility.Visible; ViewModel.Settings.AnimationSidebarWidth = 360; ViewModel.Settings.AnimationSections = []; ViewModel.Settings.AnimationSectionHeights = []; animation?.ResetLayout(); }
-    private void CopyPropertiesClick(object sender, RoutedEventArgs e) { if (properties != null) Clipboard.SetText(properties.ToJsonString(JsonData.Options)); }
-    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Open the root containing image.zbd and mission folders. Double-click a file to open it. Filter assets within a tab or search across the whole root.\n\nTextures open at 1:1 (one texture pixel per screen pixel). Wheel zooms; left or middle drag pans. Fit and 1:1 reset the scale. Choose channels or inspect the palette.\n3D: right drag orbits; middle drag or Shift+right drag pans. Wheel zooms toward the surface under the pointer. Frame all resets the camera. Pick a node or use the Scene tree, then Isolate. LOD 0 selects the highest detail for each object. Higher LOD numbers show lower-detail variants. Fly looks around from the camera position; the wheel moves forward/back with smaller steps near surfaces.\nWhole world pickups: click a pickup to select its bounds. Uncheck Locked to reveal XYZ movement arrows and editable coordinates. Drag an arrow, or type a coordinate and press Enter. Escape cancels a drag. Moves include unambiguously matching difficulty records. Ctrl+Z/Ctrl+Y undo/redo. Ctrl+S saves to the owning archive (often zrdr.zbd); Ctrl+Shift+S saves a new copy and retargets subsequent saves. Reference datasets require Save As. File > Create backup on Save is optional and off by default. Other map objects remain inspectable.\nAudio: Play/pause, seek using waveform or slider; double-click a cue.\nAnimation: Space plays/pauses immediately after selecting an asset. Transport icons and the seek bar share one row. The range follows the calculated duration; indefinite animations show a labeled preview range. The Dispatched events graphic sits below the player. The Details panel on the right contains collapsible options, sequences, events, Status and trace text. Drag the bottom grip to resize each section; heights are remembered. View > Reset layout restores defaults. Preview options provides custom range and Auto reset. Ctrl+wheel zooms the trace. Select events to edit their clocks, thresholds, parameters and keyframes. Use the Sequence and References property tabs for structure and targets. Reset / stop previews cleanup separately. The LOD picker applies to animation and mission context. Sprite textures cycle automatically. Map shows context; Bind chooses a root. Mute controls audio. Event trace labels approximation and unavailable game behavior.\n\nExports create a new folder outside the source tree. Ctrl+E exports selected records. Animation edits support Ctrl+Z/Ctrl+Y and Ctrl+S Save As to a new file. Animation Save As and exports preserve source files. Other format edits are unsupported. F5 reloads; Escape cancels an active export or validation; Ctrl+W closes a tab.", "Controls and formats");
+    private void ResetLayoutClick(object sender, RoutedEventArgs e) { ViewModel.Settings.Workspace = new(); navigatorTemporary = inspectorTemporary = toolsMaximized = false; ApplyDensity(); animation?.ResetLayout(); ArrangeWorkspace(); }
+    private void CopyPropertiesClick(object sender, RoutedEventArgs e) { if (animation?.ResolvePendingDrafts() == false) return; if (properties != null) Clipboard.SetText(properties.ToJsonString(JsonData.Options)); }
+    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Open the root containing image.zbd and mission folders. Double-click a file to open it. Filter assets within a tab or search across the whole root.\n\nTextures open at 1:1 (one texture pixel per screen pixel). Wheel zooms; left or middle drag pans. Fit and 1:1 reset the scale. Choose channels or inspect the palette.\n3D: right drag orbits; middle drag or Shift+right drag pans. Wheel zooms toward the surface under the pointer. Frame all resets the camera. Pick a node or use the Scene tree, then Isolate. LOD 0 selects the highest detail for each object. Higher LOD numbers show lower-detail variants. Fly looks around from the camera position; the wheel moves forward/back with smaller steps near surfaces.\nWhole world pickups: click a pickup to select its bounds. Turn off the lock icon to reveal XYZ movement arrows and editable coordinates. Drag an arrow, or open View > Properties (Alt+Enter), type a coordinate and press Enter. Escape cancels a drag. Moves include unambiguously matching difficulty records. Ctrl+Z/Ctrl+Y undo/redo. Ctrl+S saves to the owning archive (often zrdr.zbd); Ctrl+Shift+S saves a new copy and retargets subsequent saves. Reference datasets require Save As. File > Create backup on Save is optional and off by default. Other map objects remain inspectable.\nAudio: Play/pause, seek using waveform or slider; double-click a cue.\nAnimation: Space plays/pauses immediately after selecting an asset. Transport icons and the seek bar share one row. The range follows the calculated duration; indefinite animations show a labeled preview range. The Dispatched events graphic sits below the player. The Sequences tab on the right selects entries, sequences and events. The right tabs are Sequences, Settings and References. Sequences opens first; switching animations retains the selected tab. Right-click an entry, sequence or event and choose Properties, or press Alt+Enter. Properties opens in a separate resizable window and stays on that item while you browse. The same window inspects assets and scene objects. Accepted edits enter the document undo history; Close keeps them and Save writes them to disk. Draft fields validate inline; Escape restores a value. View offers workspace presets, density and Reset layout. Bottom tools contain Dispatch, Event log, Problems, Runtime, Related and original source Bytes. Ctrl+wheel zooms Dispatch. Reset / stop previews cleanup separately. The LOD picker applies to animation and mission context. Sprite textures cycle automatically. Map shows context; Bind chooses a root. Show grid and Flat-ground collision are independent, both enabled by default. Height offsets the animation above or below the plane (−999 to 999). Mute controls audio. Problems and Event log distinguish approximation and unavailable game behavior.\n\nExports create a new folder outside the source tree. Ctrl+E exports selected records. Animation edits support Ctrl+Z/Ctrl+Y and Ctrl+S Save As to a new file. Animation Save As and exports preserve source files. Other format edits are unsupported. F5 reloads; Escape cancels an active export or validation; Ctrl+W closes a file.", "Controls and formats");
     private void AboutClick(object sender, RoutedEventArgs e)
     {
         var assembly = typeof(MainWindow).Assembly;
@@ -428,6 +495,7 @@ public partial class MainWindow : Window
     }
     private void Keyboard(object sender, KeyEventArgs e)
     {
+        if ((e.Key == Key.Enter || e.SystemKey == Key.Enter) && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.Alt) { e.Handled = true; OpenCurrentProperties(); return; }
         if (e.Key == Key.Escape && scene?.CancelPickupDrag() == true) { e.Handled = true; return; }
         if (e.Key == Key.Space && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None &&
             shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.AnimationEdits != null &&
@@ -445,24 +513,37 @@ public partial class MainWindow : Window
         {
             // Let text entry and controls with their own Space action keep normal keyboard behavior.
             if (current is TextBoxBase or PasswordBox or ComboBox or ButtonBase or MenuItem or Slider or Thumb) return false;
-            if (current == AssetGrid || current == AnimationHost || current == AnimationProperties) return true;
+            if (current == AssetGrid || current == AnimationHost || current == ProgramHost) return true;
         }
         return false;
     }
     private static bool KeyboardModifiers() => (System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Control) != 0;
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
+        if (resolvingClose) { e.Cancel = true; return; }
         System.Windows.Input.Keyboard.ClearFocus();
-        if (!allowClose && ViewModel.Documents.Any(d => d.IsDirty))
+        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
-            e.Cancel = true; if (resolvingClose) return; resolvingClose = true;
-            try { foreach (var document in ViewModel.Documents.ToArray()) if (!await ConfirmDocumentCloseAsync(document)) return; allowClose = true; Close(); }
+            e.Cancel = true; resolvingClose = true;
+            try
+            {
+                // Discard (and a canceled Save As) can finish synchronously. Leave the
+                // original WPF Closing event before showing prompts or calling Close again.
+                await Dispatcher.Yield(DispatcherPriority.Normal);
+                if (animation?.ResolvePendingDrafts() == false || !ResolvePropertiesDrafts()) return;
+                foreach (var document in ViewModel.Documents.ToArray())
+                    if (!await ConfirmDocumentCloseAsync(document)) return;
+                allowClose = true;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); return; }
             finally { resolvingClose = false; }
+            Close();
             return;
         }
+        propertiesWindow?.CloseResolved();
         operation?.Cancel(); preview.Cancel(); difficultyRefresh?.Cancel(); difficultyRefresh?.Dispose(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); scene?.Dispose(); ViewModel.Dispose();
         var s = ViewModel.Settings; if (WindowState == WindowState.Normal) { s.Width = ActualWidth; s.Height = ActualHeight; }
-        s.FilesWidth = FilesColumn.ActualWidth; s.AssetsWidth = AssetsColumn.ActualWidth; s.PropertiesWidth = PropertiesColumn.ActualWidth;
+        SaveWorkspacePreferences();
         try { s.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* Settings cannot prevent shutdown. */ }
     }
     private sealed record PackChoice(string Name, string? Path);

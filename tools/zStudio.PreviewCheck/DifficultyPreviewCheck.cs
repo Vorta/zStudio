@@ -34,10 +34,10 @@ internal static class DifficultyPreviewCheck
                     if (((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor current && current.EntryIndex == asset.Index && current.CurrentFrame != null && ((Border)current.FindName("LoadingPanel")).Visibility == Visibility.Collapsed) { editor = current; break; }
                     await Task.Delay(60, timeout.Token);
                 }
-                var picker = (ComboBox)editor.FindName("Difficulty"); var map = (CheckBox)editor.FindName("ShowLevel");
-                var follow = (CheckBox)editor.FindName("FollowCamera"); var height = (TextBox)editor.FindName("PreviewHeight");
-                var row = (StackPanel)editor.FindName("ViewOptionsRow");
-                Require(row.Children.IndexOf(picker) == row.Children.IndexOf(map) + 1, "Difficulty must immediately follow Map");
+                var picker = (ComboBox)editor.FindName("Difficulty"); var map = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel");
+                var follow = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("FollowCamera"); var height = (TextBox)editor.FindName("PreviewHeight");
+                var row = (ToolBar)editor.FindName("ViewOptionsRow");
+                Require(row.Items.IndexOf(picker) == row.Items.IndexOf(editor.FindName("Lod")) + 1, "Difficulty must immediately follow LOD");
                 Require((MissionDifficulty)picker.SelectedItem == MissionDifficulty.Medium, "Initial difficulty is not Medium");
                 Require(((CheckBox)editor.FindName("Mute")).IsChecked == false, "Mute default changed");
                 ((Slider)editor.FindName("Volume")).Value = 0;
@@ -46,13 +46,13 @@ internal static class DifficultyPreviewCheck
                 var lod = (ComboBox)editor.FindName("Lod"); lod.SelectedIndex = Math.Min(1, lod.Items.Count - 1); await Ready(); int originalLod = lod.SelectedIndex;
                 ((TextBox)editor.FindName("EndTime")).Text = "200";
                 ((TextBox)editor.FindName("EndTime")).RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent)); await Ready();
-                await editor.SeekAsync(2); var pose = editor.Viewport.CaptureView(); var selectedEvent = ((DataGrid)editor.FindName("Events")).SelectedItem;
+                await editor.SeekAsync(2); var pose = editor.Viewport.CaptureView(); var selectedEvent = ((TreeView)editor.FindName("ProgramTree")).SelectedItem;
                 picker.SelectedItem = MissionDifficulty.Easy; await Ready();
                 Require(editor.Viewport.Mission!.Layout.Difficulty == MissionDifficulty.Easy && AivCount(editor.Viewport) == 80, "Easy layout was not applied");
                 Require(Math.Abs(editor.CurrentFrame!.Time - 2) < .001 && !editor.IsPlaying, "Paused playhead changed");
                 Require(SameView(pose, editor.Viewport.CaptureView()), "Difficulty reframed camera");
                 Require(lod.SelectedIndex == originalLod && height.Text == "100" && ((Slider)editor.FindName("SeekSlider")).Maximum == 200, "Difficulty reset preview controls");
-                Require(ReferenceEquals(selectedEvent, ((DataGrid)editor.FindName("Events")).SelectedItem), "Difficulty reset event selection");
+                Require(ReferenceEquals(selectedEvent, ((TreeView)editor.FindName("ProgramTree")).SelectedItem), "Difficulty reset event selection");
                 Require(!document.AnimationEdits!.IsDirty, "Difficulty created an authored edit");
                 follow.IsChecked = true; await editor.SeekAsync(3); await Task.Delay(80, timeout.Token); CheckFollow();
                 picker.SelectedItem = MissionDifficulty.Hard; await Ready(); CheckFollow();
@@ -66,7 +66,7 @@ internal static class DifficultyPreviewCheck
                 Require(editor.Audio.IsPrepared && editor.Audio.OutputInitializations == outputCount, "Difficulty reinitialized audio output");
                 map.IsChecked = false; await Ready(); picker.SelectedItem = MissionDifficulty.Easy; await Ready();
                 Require(picker.IsEnabled && editor.Viewport.Mission!.Layout.Difficulty == MissionDifficulty.Easy, "Hidden map retained wrong binding context");
-                ((Expander)editor.FindName("PreviewOptionsSection")).IsExpanded = true;
+                ((TabControl)window.FindName("InspectorTabs")).SelectedItem = window.FindName("PreviewSetupTab");
                 picker.BringIntoView(); await Capture("animation-easy");
                 window.Width = 1000; await Capture("animation-narrow");
                 Require(((Button)editor.FindName("PlayButton")).IsVisible && ((Slider)editor.FindName("SeekSlider")).ActualWidth >= 80, "Narrow toolbar displaced transport");

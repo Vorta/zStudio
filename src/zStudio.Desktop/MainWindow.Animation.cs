@@ -10,16 +10,17 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     private async void SaveAnimationClick(object sender, RoutedEventArgs e) { if (ViewModel.SelectedDocument is { } doc) await SaveAnimationAsync(doc); }
-    private void UndoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument?.PickupEdits is { } edits) edits.Undo(); else animation?.Undo(); }
-    private void RedoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument?.PickupEdits is { } edits) edits.Redo(); else animation?.Redo(); }
+    private void UndoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, false); }
+    private void RedoAnimationClick(object sender, RoutedEventArgs e) { scene?.CancelPickupDrag(); if (ViewModel.SelectedDocument is { } doc) UndoDocument(doc, true); }
     private async Task<bool> SaveAnimationAsync(DocumentModel doc)
     {
         if (doc.AnimationEdits is not { } edits) { ViewModel.Status = "Saving is available for animation packs and editable mission pickups."; return false; }
-        System.Windows.Input.Keyboard.ClearFocus(); animation?.Pause();
+        if (!ResolvePropertiesDrafts(doc) || shownDocument == doc && animation?.ResolvePendingDrafts() == false) return false;
+        System.Windows.Input.Keyboard.ClearFocus(); if (shownDocument == doc) animation?.Pause();
         SaveFileDialog dialog = new() { Title = "Save a new animation pack outside the source dataset", Filter = "Animation pack|*.zbd", DefaultExt = ".zbd", AddExtension = true, FileName = "anim-edited.zbd", OverwritePrompt = false,
             InitialDirectory = doc.LastSavedCopy == null ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Path.GetDirectoryName(doc.LastSavedCopy)! };
         if (dialog.ShowDialog(this) != true) return false;
-        IsEnabled = false;
+        IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
         try
         {
             await AnimationWriter.SaveAsAsync(edits.Package, dialog.FileName, doc.Path, ViewModel.Resolver?.Root ?? Path.GetDirectoryName(doc.Path)!, doc.Lifetime.Token);
@@ -27,10 +28,11 @@ public partial class MainWindow
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); MessageBox.Show(this, ex.Message, "Animation Save As", MessageBoxButton.OK, MessageBoxImage.Information); return false; }
-        finally { IsEnabled = true; }
+        finally { IsEnabled = true; if (propertiesWindow != null) propertiesWindow.IsEnabled = true; }
     }
     private async Task<bool> ConfirmDocumentCloseAsync(DocumentModel document)
     {
+        if (!ResolvePropertiesDrafts(document) || shownDocument == document && animation?.ResolvePendingDrafts() == false) return false;
         System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag(); if (!document.IsDirty) return true;
         bool pickup = document.PickupEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
         animation?.Pause(); string choice = "Cancel";
