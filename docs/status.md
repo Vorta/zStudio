@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #6 history controls and Reset layout (2026-09-24)
+
+Both new findings are corrected. Main title/menu history controls now subscribe to the active document's animation and pickup edit changes independently of renderer lifetime; subscriptions move with document selection and detach on shutdown. Pinned edits to an inactive document do not drive the active document's controls. This fixes stale Undo/Redo state while inspecting a raw/non-animation asset.
+
+Reset layout applies default selections to the live controls while suppressing preference-write callbacks, resets the previous preset, and then saves the resulting selections. Animation views reset to Files/Sequences/Dispatch. Static views select Files/Related with the unavailable Inspector unselected. Layout changes retain unfinished Properties drafts and do not replace the preview.
+
+Validation: Release build zero warnings/errors, all 223 tests pass with expanded real-window checks for modeless history states and static Reset layout. Full animation layout check PASS (`%TEMP%/zstudio-fluent-20260924-220725`), now invoking the actual Reset layout menu from Search/References/Bytes and verifying live selections, persisted/reloaded indices, unchanged draft, player and camera. Existing editing/transport/theme/density/layout/source-preservation checks also pass. Merge, tag and release remain pending owner instruction.
+
 ## PR #6 diagnostic navigation and difficulty notices (2026-09-24)
 
 Both review findings are valid and corrected. Problem navigation prefers a supplied asset index over an interior/error offset, uses overflow-safe half-open source-range containment for offset-only diagnostics, and refuses ambiguous matches. Successful navigation clears asset filters so the affected record is visible. The awaitable navigation path is shared by file and animation Problems.

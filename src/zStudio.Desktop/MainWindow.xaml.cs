@@ -491,7 +491,23 @@ public partial class MainWindow : Window
         }
     }
 #pragma warning restore WPF0001
-    private void ResetLayoutClick(object sender, RoutedEventArgs e) { ViewModel.Settings.Workspace = new(); navigatorTemporary = inspectorTemporary = toolsMaximized = false; ApplyDensity(); animation?.ResetLayout(); ArrangeWorkspace(); }
+    private void ResetLayoutClick(object sender, RoutedEventArgs e)
+    {
+        IsChangingLayout = detachingWorkspace = true;
+        try
+        {
+            var defaults = new WorkspaceLayout(); ViewModel.Settings.Workspace = defaults;
+            previousPreset = defaults.Preset;
+            navigatorTemporary = inspectorTemporary = toolsMaximized = false;
+            NavigationTabs.SelectedIndex = defaults.BrowserTab;
+            InspectorTabs.SelectedIndex = animation != null ? defaults.InspectorTab : -1;
+            // Static viewers have no Dispatch page; use their normal Related fallback.
+            ToolTabs.SelectedIndex = animation != null ? defaults.ToolTab : 4;
+            ApplyDensity(); animation?.ResetLayout(); ArrangeWorkspace();
+        }
+        finally { detachingWorkspace = false; }
+        SaveWorkspacePreferences();
+    }
     private void CopyPropertiesClick(object sender, RoutedEventArgs e) { if (animation?.ResolvePendingDrafts() == false) return; if (properties != null) Clipboard.SetText(properties.ToJsonString(JsonData.Options)); }
     private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Open the root containing image.zbd and mission folders. Double-click a file to open it. Filter assets within a tab or search across the whole root.\n\nTextures open at 1:1 (one texture pixel per screen pixel). Wheel zooms; left or middle drag pans. Fit and 1:1 reset the scale. Choose channels or inspect the palette.\n3D: right drag orbits; middle drag or Shift+right drag pans. Wheel zooms toward the surface under the pointer. Frame all resets the camera. Pick a node or use the Scene tree, then Isolate. LOD 0 selects the highest detail for each object. Higher LOD numbers show lower-detail variants. Fly looks around from the camera position; the wheel moves forward/back with smaller steps near surfaces.\nWhole world pickups: click a pickup to select its bounds. Turn off the lock icon to reveal XYZ movement arrows and editable coordinates. Drag an arrow, or open View > Properties (Alt+Enter), type a coordinate and press Enter. Escape cancels a drag. Moves include unambiguously matching difficulty records. Ctrl+Z/Ctrl+Y undo/redo. Ctrl+S saves to the owning archive (often zrdr.zbd); Ctrl+Shift+S saves a new copy and retargets subsequent saves. Reference datasets require Save As. File > Create backup on Save is optional and off by default. Other map objects remain inspectable.\nAudio: Play/pause, seek using waveform or slider; double-click a cue.\nAnimation: Space plays/pauses immediately after selecting an asset. Transport icons and the seek bar share one row. The range follows the calculated duration; indefinite animations show a labeled preview range. The Dispatched events graphic sits below the player. The Sequences tab on the right selects entries, sequences and events. The right tabs are Sequences, Settings and References. Sequences opens first; switching animations retains the selected tab. Right-click an entry, sequence or event and choose Properties, or press Alt+Enter. Properties opens in a separate resizable window and stays on that item while you browse. The same window inspects assets and scene objects. Accepted edits enter the document undo history; Close keeps them and Save writes them to disk. Draft fields validate inline; Escape restores a value. View offers workspace presets, density and Reset layout. Bottom tools contain Dispatch, Event log, Problems, Runtime, Related and original source Bytes. Ctrl+wheel zooms Dispatch. Reset / stop previews cleanup separately. The LOD picker applies to animation and mission context. Sprite textures cycle automatically. Map shows context; Bind chooses a root. Show grid and Flat-ground collision are independent, both enabled by default. Height offsets the animation above or below the plane (−999 to 999). Mute controls audio. Problems and Event log distinguish approximation and unavailable game behavior.\n\nExports create a new folder outside the source tree. Ctrl+E exports selected records. Animation edits support Ctrl+Z/Ctrl+Y and Ctrl+S Save As to a new file. Animation Save As and exports preserve source files. Other format edits are unsupported. F5 reloads; Escape cancels an active export or validation; Ctrl+W closes a file.", "Controls and formats");
     private void AboutClick(object sender, RoutedEventArgs e)
@@ -549,6 +565,7 @@ public partial class MainWindow : Window
             return;
         }
         propertiesWindow?.CloseResolved();
+        ObserveDocumentCommands(null);
         operation?.Cancel(); preview.Cancel(); difficultyRefresh?.Cancel(); difficultyRefresh?.Dispose(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); scene?.Dispose(); ViewModel.Dispose();
         var s = ViewModel.Settings; if (WindowState == WindowState.Normal) { s.Width = ActualWidth; s.Height = ActualHeight; }
         SaveWorkspacePreferences();

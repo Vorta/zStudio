@@ -54,10 +54,40 @@ internal static class PropertiesWindowChecks
             Assert.True(form.HasPendingDrafts); Assert.False(first.IsDirty);
             popup.Width = 700; popup.Height = 600; await Idle();
             Assert.Equal("-", delay.Text); Assert.Same(delay, Descendants(form).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Reset delay (s)"));
+            var navigation = (TabControl)main.FindName("NavigationTabs"); var tools = (TabControl)main.FindName("ToolTabs");
+            navigation.SelectedIndex = 2; tools.SelectedIndex = 5;
+            var viewMenu = ((Menu)main.FindName("AppMenu")).Items.OfType<MenuItem>().Single(m => Equals(m.Header, "_View"));
+            viewMenu.Items.OfType<MenuItem>().Single(m => Equals(m.Header, "Reset layout")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await Idle();
+            Assert.Equal(0, navigation.SelectedIndex); Assert.Equal(4, tools.SelectedIndex);
+            Assert.Equal(-1, ((TabControl)main.FindName("InspectorTabs")).SelectedIndex);
+            Assert.Equal(0, main.ViewModel.Settings.GetWorkspace().BrowserTab);
+            Assert.Equal(4, main.ViewModel.Settings.GetWorkspace().ToolTab);
+            Assert.True(form.HasPendingDrafts); Assert.Equal("-", delay.Text);
             delay.Text = "3.25"; Send(delay, Key.Enter); await Idle();
             Assert.Equal(3.25f, first.AnimationEdits!.Package.Entries[0].F32(164)); Assert.False(second.IsDirty);
+            Assert.False(((Button)main.FindName("DocumentUndo")).IsEnabled); // Pinned edits do not target the other active document.
+            main.ViewModel.SelectedDocument = first; await Idle();
+            Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
             Descendants(popup).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Undo").RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Idle();
             Assert.False(first.IsDirty); Assert.Equal("0", delay.Text);
+            CheckHistory(false, true);
+            delay.Text = "5"; Send(delay, Key.Enter); await Idle();
+            CheckHistory(true, false);
+            ((Button)main.FindName("DocumentUndo")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Idle();
+            CheckHistory(false, true); Assert.Equal("0", delay.Text);
+            ((Button)main.FindName("DocumentRedo")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Idle();
+            CheckHistory(true, false); Assert.Equal("5", delay.Text);
+            ((Button)main.FindName("DocumentUndo")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Idle();
+            main.ViewModel.SelectedDocument = second; await Idle(); CheckHistory(false, false);
+
+            void CheckHistory(bool canUndo, bool canRedo)
+            {
+                Assert.Equal(canUndo, ((Button)main.FindName("DocumentUndo")).IsEnabled);
+                Assert.Equal(canRedo, ((Button)main.FindName("DocumentRedo")).IsEnabled);
+                Assert.Equal(canUndo, ((MenuItem)main.FindName("UndoMenu")).IsEnabled);
+                Assert.Equal(canRedo, ((MenuItem)main.FindName("RedoMenu")).IsEnabled);
+            }
             DocumentModel? savedDocument = null;
             popup.SaveRequested = (document, _) => { savedDocument = document; return Task.FromResult(true); };
             // Exercise the retained keyboard command without changing physical keyboard state.
@@ -146,7 +176,9 @@ internal static class PropertiesWindowChecks
         var sequence = new AnimationSequence(new byte[64]) { Name = "sequence" };
         sequence.Events.Add(AnimationCatalog.Create(10)); sequence.Events.Add(AnimationCatalog.Create(10));
         entry.Sequences.Add(sequence); package.Entries.Add(entry);
-        return new(new ZbdDocument(Path.Combine(Path.GetTempPath(), name + ".zbd"), new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "Properties fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
+        var document = new ZbdDocument(Path.Combine(Path.GetTempPath(), name + ".zbd"), new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "Properties fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        document.Add(AssetKind.Raw, 0, "Non-animation preview", 0, 0);
+        return new(document);
     }
     private static async Task Idle() { await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); await Task.Delay(30); }
     private static void Send(UIElement target, Key key) => target.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(target), Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });

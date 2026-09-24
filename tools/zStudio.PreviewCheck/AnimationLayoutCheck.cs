@@ -160,7 +160,19 @@ internal static class AnimationLayoutCheck
                 };
                 draftDialogTimer.Start(); try { window.OpenAnimationProperties(document, asset.Index, entry.Primary.Id, Guid.Empty); } finally { draftDialogTimer.Stop(); }
                 Require(resolvedDraft && editor.SelectedSourceOffset == ev.SourceOffset && threshold.Text == "not a number","Invalid draft navigation lost source or draft");
-                editor.ResetLayout(); Require(propertyEditor.HasPendingDrafts && threshold.Text == "not a number","Reset layout lost the draft");
+                var navigation = (TabControl)window.FindName("NavigationTabs");
+                navigation.SelectedIndex = 2; inspector.SelectedIndex = 2; tools.SelectedIndex = 5;
+                var resetViewMenu = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().Single(m => Equals(m.Header, "_View"));
+                resetViewMenu.Items.OfType<MenuItem>().Single(m => Equals(m.Header, "Reset layout")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                Require(navigation.SelectedIndex == 0 && inspector.SelectedIndex == 0 && tools.SelectedIndex == 0, "Reset layout did not apply live tab defaults");
+                var resetPreferences = window.ViewModel.Settings.GetWorkspace();
+                Require(resetPreferences.BrowserTab == 0 && resetPreferences.InspectorTab == 0 && resetPreferences.ToolTab == 0, "Tab events overwrote reset defaults");
+                window.ViewModel.Settings.Save();
+                var restoredTabs = StudioSettings.Load().GetWorkspace();
+                Require(restoredTabs.BrowserTab == 0 && restoredTabs.InspectorTab == 0 && restoredTabs.ToolTab == 0, "Reset tabs were not persisted");
+                Require(ReferenceEquals(frame,editor.CurrentFrame) && Equals(view,editor.Viewport.CaptureView()), "Reset layout changed player or camera");
+                Require(propertyEditor.HasPendingDrafts && threshold.Text == "not a number","Reset layout lost the draft");
                 var layout = window.ViewModel.Settings.GetWorkspace();
                 layout.InspectorVisible = false; window.Width = 1599; await Task.Delay(80,timeout.Token);
                 layout.InspectorVisible = true; window.Width = 1600; await Task.Delay(80,timeout.Token);

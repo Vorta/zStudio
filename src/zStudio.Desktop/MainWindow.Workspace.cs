@@ -12,6 +12,7 @@ public partial class MainWindow
     private bool detachingWorkspace;
     private bool arrangingWorkspace, navigatorCollapsed, navigatorTemporary, inspectorTemporary, toolsMaximized;
     private string previousPreset = "Edit";
+    private DocumentModel? commandDocument;
     internal bool IsChangingLayout { get; private set; }
     private void InitializeWorkspace()
     {
@@ -48,6 +49,7 @@ public partial class MainWindow
     private void UpdateDocumentCommands()
     {
         var doc = ViewModel.SelectedDocument;
+        ObserveDocumentCommands(doc);
         bool hasDocument = doc != null;
         bool hasScene = doc?.SceneRoots.Count > 0;
         // Move off an unavailable page before collapsing its tab. Preserve Files
@@ -79,6 +81,21 @@ public partial class MainWindow
         UndoMenu.IsEnabled = DocumentUndo.IsEnabled; RedoMenu.IsEnabled = DocumentRedo.IsEnabled;
         DocumentUndo.ToolTip = doc?.AnimationEdits?.UndoDescription is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
         DocumentRedo.ToolTip = doc?.AnimationEdits?.RedoDescription is string redo ? "Redo: " + redo + " (Ctrl+Y)" : "Redo (Ctrl+Y)";
+    }
+    private void ObserveDocumentCommands(DocumentModel? document)
+    {
+        if (commandDocument == document) return;
+        if (commandDocument is { } previous)
+        {
+            if (previous.AnimationEdits is { } edits) edits.Changed -= UpdateDocumentCommands;
+            previous.PickupEditsChanged -= UpdateDocumentCommands;
+        }
+        commandDocument = document;
+        if (document != null)
+        {
+            if (document.AnimationEdits is { } edits) edits.Changed += UpdateDocumentCommands;
+            document.PickupEditsChanged += UpdateDocumentCommands;
+        }
     }
     private void AttachAnimationWorkspace(AnimationEditor editor)
     {
