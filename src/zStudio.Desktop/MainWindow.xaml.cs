@@ -55,14 +55,22 @@ public partial class MainWindow : Window
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;
         var s = ViewModel.Settings;
-        Width = Math.Clamp(s.Width, MinWidth, SystemParameters.VirtualScreenWidth);
-        Height = Math.Clamp(s.Height, MinHeight, SystemParameters.VirtualScreenHeight);
+        RestoreWindowSize(new(SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight));
         InitializeWorkspace();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard;
         diskTimer.Tick += (_, _) => ViewModel.CheckExternalChanges(); diskTimer.Start();
         audioTimer.Tick += (_, _) => UpdateAudioPosition(); audioTimer.Start();
         Waveform.SeekRequested += SeekAudio;
+    }
+    internal void RestoreWindowSize(Size available)
+    {
+        // Small or scaled desktops can be below the preferred minimum. Relax it
+        // before clamping saved bounds so startup cannot create an inverted range.
+        MinWidth = Math.Min(MinWidth, available.Width);
+        MinHeight = Math.Min(MinHeight, available.Height);
+        Width = Math.Clamp(ViewModel.Settings.Width, MinWidth, available.Width);
+        Height = Math.Clamp(ViewModel.Settings.Height, MinHeight, available.Height);
     }
     public async void OpenStartupPath(string path) => await RunUi(async () =>
     {

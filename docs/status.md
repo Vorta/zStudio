@@ -1,5 +1,9 @@
 # Desktop implementation status
 
+## v0.4.7 CI small-desktop correction (2026-09-24)
+
+The first PR CI run exposed a startup exception when the virtual desktop width (1024) was smaller than the preferred minimum (1080). Restored window sizing now lowers the minimum to the available dimension before clamping saved bounds, for both width and height. The existing real-window close regression additionally exercises a 1024×600 desktop on every local run. Release build has zero warnings/errors and all 215 tests pass. Tag v0.4.7 and its GitHub Release (ZIP/checksum/changelog) are required after the owner authorizes merge; PR #6 remains open with auto-merge off.
+
 ## v0.4.7 PR preparation (2026-09-24)
 
 Owner accepted the current GUI and requested v0.4.7 as a reviewable PR; merge and release remain pending explicit instructions. This version includes the accumulated Fluent workspace, native caption controls, Files-based document navigation, contextual tabs, pinned Properties window and draft lifecycle, detailed Sequences/diagnostics, decimal numeric display, consolidated toolbar, signed compact Height and discard-close fix. Version metadata, changelog, README and release examples are updated.

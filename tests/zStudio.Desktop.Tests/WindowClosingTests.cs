@@ -59,6 +59,12 @@ public sealed class WindowClosingTests
                 async Task Check(string[] answers, int documentCount, bool closes, bool repeatClose = false)
                 {
                     var window = new MainWindow { Left = -12000, ShowInTaskbar = false };
+                    // Reproduce small CI/remote desktops even on a large local display.
+                    window.RestoreWindowSize(new Size(1024, 600));
+                    Assert.InRange(window.Width, 1, 1024);
+                    Assert.InRange(window.Height, 1, 600);
+                    Assert.True(window.MinWidth <= window.Width);
+                    Assert.True(window.MinHeight <= window.Height);
                     window.Show();
                     var documents = Enumerable.Range(0, documentCount).Select(DirtyDocument).ToArray();
                     var lifetimes = documents.Select(d => d.Lifetime.Token).ToArray();
