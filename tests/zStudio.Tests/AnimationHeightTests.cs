@@ -7,10 +7,10 @@ namespace Recoil.Zbd.Tests;
 public sealed partial class AnimationTests
 {
     [Theory]
-    [InlineData(-1)]
+    [InlineData(-1000)]
     [InlineData(float.NaN)]
     [InlineData(float.PositiveInfinity)]
-    [InlineData(100001)]
+    [InlineData(1000)]
     public void PreviewHeightRejectsInvalidRanges(float height)
     {
         var context = Context(Fixture());
@@ -35,8 +35,12 @@ public sealed partial class AnimationTests
         Assert.Equal(source, Pack(context.Package));
     }
 
-    [Fact]
-    public void HeightIsAddedOnceAfterAuthoredTransformsEffectsAndNestedLaunches()
+    [Theory]
+    [InlineData(30)]
+    [InlineData(-30)]
+    [InlineData(999)]
+    [InlineData(-999)]
+    public void HeightIsAddedOnceAfterAuthoredTransformsEffectsAndNestedLaunches(float height)
     {
         var package = Fixture(); var context = Context(package); var parent = package.Entries[0];
         var child = new AnimationEntry((byte[])parent.Bytes.Clone(), 1, -1); child.SetText(0, "child");
@@ -51,19 +55,21 @@ public sealed partial class AnimationTests
         parent.Sequences[0].Events.AddRange([launch, effect, light, move.Duplicate()]);
         byte[] source = Pack(package);
         var baseline = new AnimationPlayer(context, 0).EvaluateForTest(.5);
-        var raised = new AnimationPlayer(context, 0) { PreviewHeight = 30 }.EvaluateForTest(.5);
+        var raised = new AnimationPlayer(context, 0) { PreviewHeight = height }.EvaluateForTest(.5);
         Assert.True(baseline.Nodes.Count >= 3); Assert.NotEmpty(baseline.Lights);
         foreach (var pose in baseline.Nodes)
         {
-            var expected = pose.Transform; expected.Translation += new Vector3(0, 30, 0);
+            var expected = pose.Transform; expected.Translation += new Vector3(0, height, 0);
             Assert.Equal(expected, raised.Nodes.Single(n => n.Id == pose.Id).Transform);
         }
-        Near(baseline.Lights[0].Position + new Vector3(0, 30, 0), raised.Lights[0].Position);
+        Near(baseline.Lights[0].Position + new Vector3(0, height, 0), raised.Lights[0].Position);
         Assert.Equal(baseline.Trace, raised.Trace); Assert.Equal(source, Pack(package));
     }
 
-    [Fact]
-    public void PreviewHeightMovesCameraEyeAndTargetTogether()
+    [Theory]
+    [InlineData(25)]
+    [InlineData(-25)]
+    public void PreviewHeightMovesCameraEyeAndTargetTogether(float height)
     {
         var package = Fixture(); var context = CameraContext(package);
         var keyEvent = AnimationCatalog.Create(12); keyEvent.SetInt(12, 1);
@@ -72,9 +78,29 @@ public sealed partial class AnimationTests
         key.SetVector(key.ChannelOffset(0) + 16, new(2, -1, 3));
         package.Entries[0].Sequences[0].Events.Add(keyEvent.WithKeyframes([key]));
         var baseline = new AnimationPlayer(context, 0).EvaluateForTest(1).Camera!;
-        var raised = new AnimationPlayer(context, 0) { PreviewHeight = 25 }.EvaluateForTest(1).Camera!;
-        Near(baseline.Position + new Vector3(0, 25, 0), raised.Position);
-        Near(baseline.Target + new Vector3(0, 25, 0), raised.Target);
+        var raised = new AnimationPlayer(context, 0) { PreviewHeight = height }.EvaluateForTest(1).Camera!;
+        Near(baseline.Position + new Vector3(0, height, 0), raised.Position);
+        Near(baseline.Target + new Vector3(0, height, 0), raised.Target);
         Assert.Equal(baseline.FieldOfView, raised.FieldOfView);
+    }
+
+    [Theory]
+    [InlineData(-2)]
+    [InlineData(-20)]
+    public void NegativeHeightKeepsGroundAtZeroAndSeekingDeterministic(float height)
+    {
+        var (context, _) = GroundFixture(); var source = Pack(context.Package);
+        var baseline = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true };
+        var lowered = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true, PreviewHeight = height };
+        Assert.Equal(height, lowered.Frame().Nodes[0].Transform.M42 - baseline.Frame().Nodes[0].Transform.M42);
+        var duration = lowered.MeasureDuration(TestContext.Current.CancellationToken);
+        Assert.True(duration.IsFinite); Assert.True(duration.Seconds < baseline.MeasureDuration(TestContext.Current.CancellationToken).Seconds);
+        Assert.Equal(0,lowered.Time);
+        for (int i = 0; i < 180; i++) AssertGrounded(context,lowered.Step(TestContext.Current.CancellationToken));
+        var end = lowered.Frame(); Assert.InRange(end.Nodes[0].Transform.M42,.999f,1.001f);
+        lowered.EvaluateForTest(.5,true); Assert.Equal(end.Nodes,lowered.EvaluateForTest(3,true).Nodes);
+        var ungrounded = new AnimationPlayer(context,0) { PreviewHeight = height }.EvaluateForTest(3);
+        Assert.True(ungrounded.Nodes[0].Transform.M42 < 0);
+        Assert.Equal(source,Pack(context.Package));
     }
 }

@@ -17,11 +17,11 @@ public partial class MainWindow
         difficultyRefresh?.Cancel(); difficultyRefresh?.Dispose();
         difficultyRefresh = CancellationTokenSource.CreateLinkedTokenSource(preview.Token, doc.Lifetime.Token);
         var token = difficultyRefresh.Token; var current = scene; var asset = shownAsset;
-        pickupPanel.CommitPending(); current.CancelPickupDrag();
+        current.CancelPickupDrag();
         var previous = current.Mission; var view = current.CaptureView(); int? selection = selectedNode, isolate = isolatedNode;
         var selectedPickup = selection is int s ? current.PickupAt(s)?.Pickup?.Source : null;
         var difficulty = ViewModel.Difficulty;
-        PickupTools.IsEnabled = SceneHost.IsEnabled = PickupProperties.IsEnabled = false;
+        PickupTools.IsEnabled = SceneHost.IsEnabled = false;
         ViewModel.Status = $"Loading {difficulty} mission layout…";
         try
         {
@@ -36,7 +36,7 @@ public partial class MainWindow
             selectedNode = RemapPickupSelection(selectedPickup, mission) ?? (selection is int index && mission.RemapNodeFrom(previous, index) is >= 0 and int mapped ? mapped : null);
             if (selectedNode is int node) InspectNode(node); else SetProperties(doc.Document.Metadata);
             WorldDifficulty.ToolTip = mission.Layout.Description;
-            PreviewInfo.Text = mission.Layout.Description + " · " + PreviewInfo.Text;
+            ShowStaticPreviewProblems(doc, asset);
             ViewModel.Status = mission.Layout.Description;
         }
         catch (OperationCanceledException) { }
@@ -45,12 +45,12 @@ public partial class MainWindow
             if (!token.IsCancellationRequested)
             {
                 ViewModel.Status = $"Preview was not updated; retaining {previous.Layout.Label}. {ex.Message}";
-                ViewModel.Diagnostics.Add(ViewModel.Status);
+                ViewModel.AddProblem(ViewModel.Status);
             }
         }
         finally
         {
-            if (difficultyRefresh?.Token == token) PickupTools.IsEnabled = SceneHost.IsEnabled = PickupProperties.IsEnabled = true;
+            if (difficultyRefresh?.Token == token) PickupTools.IsEnabled = SceneHost.IsEnabled = true;
         }
     }
 }

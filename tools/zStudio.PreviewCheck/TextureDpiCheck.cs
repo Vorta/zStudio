@@ -51,7 +51,7 @@ internal static class TextureDpiCheck
                 await WaitForPreview();
                 CheckScreenSize(1);
 
-                string output = Path.GetFullPath("artifacts/texture-dpi-preview.png");
+                string output = Path.Combine(Path.GetTempPath(),"zstudio-texture-dpi-" + Guid.NewGuid().ToString("N") + ".png");
                 var dpi = VisualTreeHelper.GetDpi(window);
                 RenderTargetBitmap rendered = new((int)Math.Ceiling(window.ActualWidth * dpi.DpiScaleX),
                     (int)Math.Ceiling(window.ActualHeight * dpi.DpiScaleY), dpi.PixelsPerInchX, dpi.PixelsPerInchY, PixelFormats.Pbgra32);

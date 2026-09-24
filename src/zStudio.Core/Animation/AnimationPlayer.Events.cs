@@ -26,9 +26,9 @@ public sealed partial class AnimationPlayer
                 if (context.Effects.TryGetValue(effectName, out var template) && template.RootNode >= 0)
                 {
                     if (effects.Count + instances.Count < MaximumInstances) effects.Add(new() { Id = ++nextId, Template = template, Position = OffsetPosition(instance, ev.I16(14), ev.Vector(16)) });
-                    else notes.Add("Effect instance limit reached (256).");
+                    else AddNote("Effect instance limit reached (256).");
                 }
-                else notes.Add($"Unresolved effect template: {effectName}");
+                else AddNote($"Unresolved effect template: {effectName}");
                 return 2;
             case 4:
                 SetLight(instance, ev); return 2;
@@ -106,7 +106,7 @@ public sealed partial class AnimationPlayer
             case 22:
             case 23:
                 int slot = ev.I32(44); var target = slot >= 0 && slot < instance.Sequences.Count ? instance.Sequences[slot] : instance.Sequences.FirstOrDefault(s => s.Data.Name == ev.Text(12));
-                if (target == null) notes.Add($"Unresolved sequence: {ev.Text(12)}");
+                if (target == null) AddNote($"Unresolved sequence: {ev.Text(12)}");
                 else if (ev.Type == 23) target.State = 2;
                 else if (target.State == 3) target.State = 0;
                 return 2;
@@ -147,14 +147,14 @@ public sealed partial class AnimationPlayer
                 if (sequence.Cursor >= sequence.Data.Events.Count) throw new InvalidDataException("Conditional branch has no End if.");
                 return 2;
             case 34: case 39: case 40: return 2;
-            case 35: notes.Add($"Game callback {ev.I32(12)} is a trace marker; game code is not executed."); return 2;
+            case 35: AddNote($"Game callback {ev.I32(12)} is a trace marker; game code is not executed.", "Support", "Information"); return 2;
             case 36:
                 float duration = ev.F32(60); screenColor = new(Curve(ev, 12, sequence.EventElapsed, duration), Curve(ev, 24, sequence.EventElapsed, duration), Curve(ev, 48, sequence.EventElapsed, duration), Curve(ev, 36, sequence.EventElapsed, duration));
                 return Timed(sequence, duration, ref remaining);
             case 37:
                 float endTime = ev.F32(108); screenWave = new(Curve(ev, 28, sequence.EventElapsed, endTime), Curve(ev, 40, sequence.EventElapsed, endTime), Curve(ev, 60, sequence.EventElapsed, endTime), Curve(ev, 72, sequence.EventElapsed, endTime));
                 return Timed(sequence, endTime, ref remaining);
-            case 38: notes.Add($"Game text message ID {ev.I32(12)}; text lookup is unavailable in the preview."); return 2;
+            case 38: AddNote($"Game text message ID {ev.I32(12)}; text lookup is unavailable in the preview.", "Support", "Information"); return 2;
             default: throw new InvalidDataException("No verified event handler.");
         }
     }
@@ -187,7 +187,7 @@ public sealed partial class AnimationPlayer
     {
         long key = (instance.Id << 32) | (uint)(slot > 0 ? slot : StableHash(name));
         if (stop) { activeSounds.Remove(key); cues.Add(new(key, name, true, persistent, Time, position)); return; }
-        if (!context.Sounds.ContainsKey(name)) { unavailableDuration = true; notes.Add($"Unresolved sound: {name}"); return; }
+        if (!context.Sounds.ContainsKey(name)) { unavailableDuration = true; AddNote($"Unresolved sound: {name}"); return; }
         persistent |= context.Sounds[name].Loop;
         if (!persistent) key = (++nextId << 32) | 0xffff;
         var cue = new AnimationSoundCue(key, name, false, persistent, Math.Max(0, Time - StepSeconds), position) { Gain = gain };
@@ -200,7 +200,7 @@ public sealed partial class AnimationPlayer
         uint mask = ev.U32(12);
         if ((mask & 1) != 0) return RandomUnit() <= ev.F32(20);
         if ((mask & 2) != 0) return ReferencePosition is Vector3 p && NodeRef(instance, -100) is Node root && Vector3.DistanceSquared(p, World(instance, root).Translation) <= ev.F32(20);
-        if ((mask & 0x18) != 0) { notes.Add("Collision conditions are not matched by default; choose a condition override to inspect that branch."); return false; }
+        if ((mask & 0x18) != 0) { AddNote("Collision conditions are not matched by default; choose a condition override to inspect that branch.", "Support", "Information"); return false; }
         return (mask & 4) != 0 && EffectLevel >= ev.I32(20);
     }
     private int Launch(Instance parent, Sequence sequence, AnimationEvent ev, bool starting)
@@ -210,7 +210,7 @@ public sealed partial class AnimationPlayer
         {
             string name = ev.Type == 19 ? ev.Text(16) : ev.Text(12, 20);
             var target = AnimationAudioDependencies.ResolveChild(context.Package, ev);
-            if (target == null) { unavailableDuration = true; notes.Add($"Unresolved child animation: {name}"); return 2; }
+            if (target == null) { unavailableDuration = true; AddNote($"Unresolved child animation: {name}"); return 2; }
             Vector3? position = null; int? bound = null;
             if (ev.Type == 19) position = OffsetPosition(parent, ev.I16(52), ev.Vector(56));
             else
@@ -225,7 +225,7 @@ public sealed partial class AnimationPlayer
                 sequence.Child = child.Id; if (slot >= 0) parent.Children[slot] = child.Id;
                 if (ev.Type == 24 && (ev.I16(46) & 4) != 0 && child.Nodes.TryGetValue(child.Root, out var root)) Rotation(root, ev.Vector(68));
             }
-            notes.Add("Nested animation activation uses deterministic preview ordering; gameplay velocity and activation references may differ.");
+            AddNote("Nested animation activation uses deterministic preview ordering; gameplay velocity and activation references may differ.", "Support", "Information");
         }
         if (ev.Type == 24 && (ev.I16(46) & 16) != 0 && instances.Any(i => i.Id == sequence.Child && !i.Finished)) return 1;
         return 2;
@@ -282,10 +282,10 @@ public sealed partial class AnimationPlayer
                     gravity = Vector3.TransformNormal(gravity, Matrix4x4.Transpose(World(instance, node)));
                 ev.SetVector(100, ev.Vector(100) + gravity);
             }
-            if ((flags & 1) != 0) notes.Add(GroundPlaneEnabled
+            if ((flags & 1) != 0) AddNote(GroundPlaneEnabled
                 ? "Flat-ground preview collision at Y=0 uses mesh-based contact and retail impact responses; mission terrain is not sampled."
-                : "Ground collision is disabled; gravity and launch motion are simulated.");
-            if ((flags & 2) != 0) notes.Add("Inherited gameplay launch velocity is unavailable.");
+                : "Ground collision is disabled; gravity and launch motion are simulated.", "Support", "Information");
+            if ((flags & 2) != 0) AddNote("Inherited gameplay launch velocity is unavailable.", "Support", "Information");
         }
         float dt = (flags & 0x400) != 0 ? Math.Clamp(ev.F32(248) - (state.EventElapsed - remaining), 0, remaining) : remaining;
         bool ground = GroundPlaneEnabled && (flags & 1) != 0 && (flags & 12) != 0 && dt > 0;
@@ -316,7 +316,7 @@ public sealed partial class AnimationPlayer
         else if ((flags & 6) != 0 && (flags & 0x10) == 0) a += origin;
         if ((flags & 0x20) != 0 && NodeRef(instance, ev.I16(20)) is Node bn) b = Vector3.Transform(b, World(instance, bn));
         else if ((flags & 0xc0) != 0 && (flags & 0x200) == 0) b += target;
-        if ((flags & 0x2d6) != 0) notes.Add("Beam activation points use the Preview settings (default: root to 10 units along Z).");
+        if ((flags & 0x2d6) != 0) AddNote("Beam activation points use the Preview settings (default: root to 10 units along Z).", "Support", "Information");
         float start = (flags & 0x400) != 0 ? ev.F32(48) : (flags & 0x800) != 0 ? ev.F32(48) + ev.F32(56) * time : 0;
         float end = (flags & 0x1000) != 0 ? ev.F32(64) : (flags & 0x2000) != 0 ? ev.F32(64) + ev.F32(72) * time : 1;
         if (state.EventElapsed > ev.F32(80)) { if ((flags & 0x800) != 0) start = ev.F32(52); if ((flags & 0x2000) != 0) end = ev.F32(68); }

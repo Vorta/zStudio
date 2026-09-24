@@ -76,6 +76,8 @@ public sealed class AnimationEditSession(AnimationPackage package)
     public bool IsDirty => revision != savedRevision;
     public bool CanUndo => undo.Count > 0;
     public bool CanRedo => redo.Count > 0;
+    public string? UndoDescription => undo.TryPeek(out var edit) ? edit.Description : null;
+    public string? RedoDescription => redo.TryPeek(out var edit) ? edit.Description : null;
     public event Action? Changed;
     public void Apply(int index, string description, Action<AnimationEntry> change)
     {
@@ -88,20 +90,25 @@ public sealed class AnimationEditSession(AnimationPackage package)
     public void Undo() { if (!undo.TryPop(out var e)) return; Package.Entries[e.Index] = e.Before; revision = e.BeforeRevision; redo.Push(e); Changed?.Invoke(); }
     public void Redo() { if (!redo.TryPop(out var e)) return; Package.Entries[e.Index] = e.After; revision = e.AfterRevision; undo.Push(e); Changed?.Invoke(); }
     public void MarkSaved() { savedRevision = revision; Changed?.Invoke(); }
-    public void EditField(int entry, Guid sequence, Guid ev, AnimationField field, string value) => Apply(entry, "Edit " + field.Name, e =>
+    public void EditField(int entry, Guid sequence, Guid ev, AnimationField field, string value) => EditFields(entry, sequence, ev, "Edit " + field.Name, [(field, value)]);
+    public void EditFields(int entry, Guid sequence, Guid ev, string description, IReadOnlyList<(AnimationField Field, string Value)> values) => Apply(entry, description, e =>
     {
-        var s = FindSequence(e, sequence); EnsureEditable(s); var record = s.Events.Single(v => v.Id == ev); field.Write(record, value);
-        if (record.Spec?.DurationOffset == field.Offset && record.F32(field.Offset) < 0) throw new InvalidDataException("Event duration cannot be negative.");
-        if (record.Type == 13 && field.Offset == 16 || record.Type == 14 && field.Offset is 20 or 24)
-            if (record.F32(field.Offset) is < 0 or > 1) throw new InvalidDataException("Opacity must be between zero and one.");
-        if (field.ReferenceTable >= 0)
+        var s = FindSequence(e, sequence); EnsureEditable(s); var record = s.Events.Single(v => v.Id == ev);
+        foreach (var (field, value) in values)
         {
-            int index = field.Kind == AnimationFieldKind.Short ? record.I16(field.Offset) : record.I32(field.Offset);
-            if (index >= e.References[field.ReferenceTable].Count && index > 0) throw new InvalidDataException("The selected reference is outside this animation's table.");
+            field.Write(record, value);
+            if (record.Spec?.DurationOffset == field.Offset && record.F32(field.Offset) < 0) throw new InvalidDataException("Event duration cannot be negative.");
+            if (record.Type == 13 && field.Offset == 16 || record.Type == 14 && field.Offset is 20 or 24)
+                if (record.F32(field.Offset) is < 0 or > 1) throw new InvalidDataException("Opacity must be between zero and one.");
+            if (field.ReferenceTable >= 0)
+            {
+                int index = field.Kind == AnimationFieldKind.Short ? record.I16(field.Offset) : record.I32(field.Offset);
+                if (index >= e.References[field.ReferenceTable].Count && index > 0) throw new InvalidDataException("The selected reference is outside this animation's table.");
+            }
+            if (field.Kind == AnimationFieldKind.Text && record.Type is 22 or 23 or 25 or 26 or 27) record.SetInt(44, -1);
+            if (field.Kind == AnimationFieldKind.Text && record.Type is 19 or 24) record.SetShort(48, -1);
+            if (field.Kind == AnimationFieldKind.Text && record.Type == 10 && field.Offset == 208) record.SetShort(240, -1);
         }
-        if (field.Kind == AnimationFieldKind.Text && record.Type is 22 or 23 or 25 or 26 or 27) record.SetInt(44, -1);
-        if (field.Kind == AnimationFieldKind.Text && record.Type is 19 or 24) record.SetShort(48, -1);
-        if (field.Kind == AnimationFieldKind.Text && record.Type == 10 && field.Offset == 208) record.SetShort(240, -1);
     });
     public static AnimationSequence FindSequence(AnimationEntry entry, Guid id) => entry.AllSequences.Single(s => s.Id == id);
     public static void EnsureEditable(AnimationSequence sequence) { if (!sequence.IsEditable) throw new InvalidDataException("Malformed sequence bytes are preserved. This sequence is read-only."); }

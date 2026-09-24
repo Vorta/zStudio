@@ -39,7 +39,8 @@ internal static class GroundPreviewCheck
                     if (((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor current && current.EntryIndex == asset.Index && current.CurrentFrame != null && ((Border)current.FindName("LoadingPanel")).Visibility == Visibility.Collapsed) { editor = current; break; }
                     await Task.Delay(100, timeout.Token);
                 }
-                var grid = (CheckBox)editor.FindName("ShowGrid");
+                var grid = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("GroundCollision");
+                ((TabControl)window.FindName("InspectorTabs")).SelectedItem = window.FindName("PreviewSetupTab");
                 Require(grid.IsChecked == true, "Grid must default checked");
                 ((CheckBox)editor.FindName("Mute")).IsChecked = true;
                 var viewport = (Viewport3DX)editor.Viewport.Content;
@@ -54,7 +55,7 @@ internal static class GroundPreviewCheck
                 var eye = camera.Position; var look = camera.LookDirection; double near = camera.NearPlaneDistance, far = camera.FarPlaneDistance;
                 grid.IsChecked = false; await Ready();
                 Require(Math.Abs(editor.CurrentFrame!.Time - 8) < .001, "Paused grid toggle moved playhead");
-                Require(!editor.IsPlaying && plane.Visibility == Visibility.Collapsed, "Paused grid toggle state wrong");
+                Require(!editor.IsPlaying && plane.Visibility == Visibility.Visible, "Collision toggle incorrectly hid the visual grid");
                 Require(editor.CurrentFrame.Nodes.Any(n => n.Transform.M42 < -5), "Grid off still constrains debris");
                 grid.IsChecked = true; await Ready();
                 Require(Math.Abs(editor.CurrentFrame.Time - 8) < .001 && editor.Duration!.IsFinite, "Grid enable failed to reconstruct playhead/duration");
@@ -74,17 +75,18 @@ internal static class GroundPreviewCheck
                 Require(editor.IsPlaying, "Rapid grid toggles lost playback state");
                 await Task.Delay(350, timeout.Token); editor.Pause();
                 Require(editor.CurrentFrame.Time > before, "Grid toggle did not resume playback");
-                ((CheckBox)editor.FindName("ShowLevel")).IsChecked = true; await Ready();
+                ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = true; await Ready();
                 Require(viewport.Items.OfType<AxisPlaneGridModel3D>().Single().Visibility == Visibility.Visible, "Mission refresh lost grid");
-                ((CheckBox)editor.FindName("ShowHorizon")).IsChecked = false; grid.IsChecked = false; await Ready();
-                Require(((TextBox)editor.FindName("Diagnostics")).Text.Contains("grid and collision disabled", StringComparison.Ordinal), "Grid change during scene reload was lost");
+                ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowHorizon")).IsChecked = false; grid.IsChecked = false; await Ready();
+                Require(((TextBox)editor.FindName("Diagnostics")).Text.Contains("collision disabled", StringComparison.Ordinal), "Grid change during scene reload was lost");
                 grid.IsChecked = true; await Ready();
                 Require(viewport.Items.OfType<AxisPlaneGridModel3D>().Count() == 1, "Horizon refresh duplicated grid");
-                ((CheckBox)editor.FindName("ShowLevel")).IsChecked = false; await Ready();
+                ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = false; await Ready();
                 await editor.SeekAsync(5); editor.Viewport.FrameAnimation(editor.CurrentFrame!);
                 viewport.AddZoomForce(-.12); await Task.Delay(2600, timeout.Token);
-                var idle = RenderStabilityCheck.Capture(viewport); await Task.Delay(2500, timeout.Token);
+                var idle = RenderStabilityCheck.Capture(viewport); Console.WriteLine($"Idle camera: {camera.Position} {camera.LookDirection} clips {camera.NearPlaneDistance:R}/{camera.FarPlaneDistance:R}; viewport {viewport.ActualWidth}/{viewport.ActualHeight}"); await Task.Delay(2500, timeout.Token);
                 var later = RenderStabilityCheck.Capture(viewport);
+                Save(idle,"idle-before.png"); Save(later,"idle-after.png"); Console.WriteLine($"Later camera: {camera.Position} {camera.LookDirection} clips {camera.NearPlaneDistance:R}/{camera.FarPlaneDistance:R}; viewport {viewport.ActualWidth}/{viewport.ActualHeight}; changed channels {Pixels(idle).Zip(Pixels(later)).Count(p => p.First != p.Second)}; {output}");
                 Require(Pixels(idle).SequenceEqual(Pixels(later)), "Ground grid changed while idle"); Save(later, "vtol-idle.png");
                 var height = (TextBox)editor.FindName("PreviewHeight");
                 Require(height.Text == "0", "Height must default to zero");
@@ -96,7 +98,7 @@ internal static class GroundPreviewCheck
                 foreach (var pose in originalPose.Nodes)
                     Require(Math.Abs(editor.CurrentFrame!.Nodes.Single(n => n.Id == pose.Id).Transform.M42 - pose.Transform.M42 - 4) < .001, "Typing alone did not update height");
                 var acceptedFrame = editor.CurrentFrame;
-                foreach (string text in new[] { "", ".", "1e", "NaN", "-1", "100001" })
+                foreach (string text in new[] { "", ".", "1e", "NaN", "-", "-1000", "1000" })
                 {
                     height.Text = text; await Ready();
                     Require(height.Text == text && ReferenceEquals(acceptedFrame, editor.CurrentFrame), "Incomplete/invalid text changed the preview or interrupted editing");
@@ -112,7 +114,7 @@ internal static class GroundPreviewCheck
                     Require(Math.Abs(editor.CurrentFrame.Nodes.Single(n => n.Id == pose.Id).Transform.M42 - pose.Transform.M42 - 100) < .001, "Height did not raise initial pose");
                 Require(((Slider)editor.FindName("SeekSlider")).Maximum == 35, "Height lost custom range");
                 Require(height.Text == "100", "Live height changed the edit text");
-                height.Text = "NaN"; height.RaiseEvent(new RoutedEventArgs(UIElement.LostFocusEvent)); await Ready();
+                height.Text = "NaN"; height.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, PresentationSource.FromVisual(window), Environment.TickCount, System.Windows.Input.Key.Enter) { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent }); await Ready();
                 Require(height.Text == "100", "Invalid height was accepted");
                 Require(!heightMessages.Any(m => m.Contains("Height must", StringComparison.Ordinal)), "Typing or leaving an incomplete height raised an error");
                 await editor.SeekAsync(.1);
@@ -141,17 +143,13 @@ internal static class GroundPreviewCheck
                 await editor.SeekAsync(1); play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(150, timeout.Token);
                 before = editor.CurrentFrame!.Time; height.Text = "4"; height.Text = "40"; await Ready();
                 Require(editor.IsPlaying && editor.CurrentFrame.Time >= before, "Height did not preserve playback"); editor.Pause();
-                var row = (StackPanel)editor.FindName("ViewOptionsRow");
-                foreach (string name in new[] { "UndoButton", "RedoButton", "SaveAsButton", "Lod", "ShowGrid", "PreviewHeight", "ShowLevel", "ShowHorizon", "FollowCamera", "Lighting" })
-                    Require(row.Children.Contains((UIElement)editor.FindName(name)), name + " is outside the single toolbar row");
-                foreach (string name in new[] { "UndoButton", "RedoButton", "SaveAsButton" })
-                {
-                    var button = (Button)editor.FindName(name);
-                    Require(button.Content is System.Windows.Shapes.Path && !string.IsNullOrWhiteSpace(AutomationProperties.GetName(button)), name + " lacks an accessible icon");
-                }
-                Require((string)((CheckBox)editor.FindName("ShowLevel")).Content == "Map", "Map label was not shortened");
-                window.Width = 1000; await Task.Delay(250, timeout.Token);
-                Require(grid.IsVisible && ((StackPanel)editor.FindName("ViewOptionsRow")).Children.Contains(grid), "Grid is outside options row");
+                var row = (ToolBar)editor.FindName("ViewOptionsRow");
+                Require(row.Items.Contains(editor.FindName("Lod")),"LOD is not directly available in toolbar");
+                foreach (string name in new[] { "DocumentUndo","DocumentRedo" })
+                    Require(!string.IsNullOrWhiteSpace(AutomationProperties.GetName((Button)window.FindName(name))),name + " lacks accessible name");
+                Require(AutomationProperties.GetName((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")) == "Map","Map accessible name changed");
+                window.Width = 1080; await Task.Delay(250,timeout.Token);
+                Require(((Button)editor.FindName("PlayButton")).IsVisible,"Narrow layout hid transport");
                 Require(!((TextBox)editor.FindName("Diagnostics")).Text.Contains("3D preview unavailable", StringComparison.Ordinal), "Render failure");
                 Console.WriteLine("PASS: live height without Enter/blur, no clear button, quiet incomplete/invalid input, latest-value cancellation, pause/play preservation; grid visibility/contact, same playhead, finite duration, custom range, camera/clips, mission/horizon reload, narrow layout and idle framebuffer stability.");
                 Console.WriteLine("Screenshots: " + output);

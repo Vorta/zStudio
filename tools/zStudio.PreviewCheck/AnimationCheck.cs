@@ -18,7 +18,7 @@ internal static class AnimationCheck
     public static int Run(string root)
     {
         root = Path.GetFullPath(root); int exit = 0;
-        string output = Path.GetFullPath(Path.Combine("artifacts", "animation-preview",Path.GetFileName(root).Replace("zbd_",""))); Directory.CreateDirectory(output);
+        string output = Path.Combine(Path.GetTempPath(),"zstudio-animation-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(output);
         string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"RecoilZbdStudio","settings.json");
         byte[]? originalSettings = File.Exists(settings) ? File.ReadAllBytes(settings) : null;
         var app = new App { ShutdownMode = ShutdownMode.OnExplicitShutdown, ProcessCommandLine = false }; app.InitializeComponent();
@@ -78,7 +78,7 @@ internal static class AnimationCheck
                         if (before.Time != lower.Time || before.Nodes.Where(n => n.Visible).SequenceEqual(lower.Nodes.Where(n => n.Visible))) throw new InvalidDataException("Animation LOD picker did not select a different variant at the same time.");
                         lod.SelectedIndex = 0;
                         if (!before.Nodes.SequenceEqual(editor.CurrentFrame!.Nodes)) throw new InvalidDataException("Restoring highest LOD changed animation state.");
-                        var level = (CheckBox)editor.FindName("ShowLevel"); level.IsChecked = true; await WaitEditor(window, item.Index);
+                        var level = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel"); level.IsChecked = true; await WaitEditor(window, item.Index);
                         lod.SelectedIndex = 1; await WaitEditor(window, item.Index);
                         if (!lower.Nodes.SequenceEqual(editor.CurrentFrame!.Nodes)) throw new InvalidDataException("Mission context changed the animation's selected LOD pose.");
                         level.IsChecked = false; await WaitEditor(window, item.Index); lod.SelectedIndex = 0;

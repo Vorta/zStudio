@@ -17,13 +17,26 @@ public sealed record FileEntry(string Path, string RelativePath, FormatProbe Pro
     public string Name => System.IO.Path.GetFileName(Path);
     public string Detail => Probe.Description;
 }
-public sealed class FolderNode(string name, string path, FileEntry? file = null)
+public sealed partial class FolderNode(string name, string path, FileEntry? file = null) : ObservableObject
 {
     public string Name { get; } = name;
     public string Path { get; } = path;
     public FileEntry? File { get; } = file;
     public string FileIcon => File?.Probe.Recognition == Recognition.Malformed ? "!" : "▧";
-    public string ToolTip => File?.Detail ?? Path;
+    public string ToolTip => Path + (File == null ? "" : "\n" + File.Detail) + (IsOpen ? "\nOpen" + (IsActive ? " · active" : "") + (Document?.IsDirty == true ? " · unsaved changes" : "") : "");
+    public string DisplayName => Name + (Document?.IsDirty == true ? " *" : "");
+    public bool IsOpen => Document != null;
+    [ObservableProperty] private bool isActive;
+    [ObservableProperty] private DocumentModel? document;
+    partial void OnIsActiveChanged(bool value) => OnPropertyChanged(nameof(ToolTip));
+    partial void OnDocumentChanging(DocumentModel? value) { if (Document != null) Document.PropertyChanged -= DocumentChanged; }
+    partial void OnDocumentChanged(DocumentModel? value)
+    {
+        if (value != null) value.PropertyChanged += DocumentChanged;
+        OnPropertyChanged(nameof(IsOpen)); RefreshDocumentLabel();
+    }
+    private void DocumentChanged(object? sender, PropertyChangedEventArgs e) { if (e.PropertyName is nameof(DocumentModel.Title) or nameof(DocumentModel.IsDirty)) RefreshDocumentLabel(); }
+    private void RefreshDocumentLabel() { OnPropertyChanged(nameof(DisplayName)); OnPropertyChanged(nameof(ToolTip)); }
     public ObservableCollection<FolderNode> Children { get; } = [];
 }
 public sealed partial class AssetItem(AssetRecord record) : ObservableObject
@@ -34,6 +47,7 @@ public sealed partial class AssetItem(AssetRecord record) : ObservableObject
     public string Summary => Record.Summary.Length > 0 ? Record.Summary : $"{Record.Length:N0} bytes";
     public int Index => Record.Index;
     public string Identity => $"{Record.Kind} #{Record.Index}";
+    public string SequenceCount => Record.Content is AnimationEntry entry ? entry.Sequences.Count.ToString() : "";
     [ObservableProperty] private BitmapSource? thumbnail;
     internal bool ThumbnailRequested { get; set; }
 }
@@ -45,8 +59,12 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public AnimationEditSession? AnimationEdits { get; }
     public PickupPlacementEditSession? PickupEdits { get; private set; }
     private Task<PickupPlacementEditSession>? pickupLoading;
-    public bool PickupsLocked { get; set; } = true;
+    private bool pickupsLocked = true;
+    public bool PickupsLocked { get => pickupsLocked; set => SetProperty(ref pickupsLocked, value); }
+    public bool IsDisposed { get; private set; }
+    public event Action? Disposing;
     public bool PickupDiagnosticsReported { get; set; }
+    internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
     public bool IsDirty => AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true;
     public event Action? PickupEditsChanged;
     public async Task<PickupPlacementEditSession> GetPickupEditsAsync(AssetResolver resolver, CancellationToken token)
@@ -109,25 +127,33 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     private bool Matches(object o) => o is AssetItem a && (KindFilter == "All types" || KindFilter == a.Kind) && (Query.Length == 0 || a.Name.Contains(Query, StringComparison.OrdinalIgnoreCase) || a.Identity.Contains(Query, StringComparison.OrdinalIgnoreCase));
     partial void OnQueryChanged(string value) => FilteredAssets.Refresh();
     partial void OnKindFilterChanged(string value) => FilteredAssets.Refresh();
-    public void Dispose() { Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
+    public void Dispose() { if (IsDisposed) return; IsDisposed = true; Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
 }
-public sealed class InspectorNode
+public sealed partial class InspectorNode : ObservableObject
 {
     private readonly JsonNode? node;
+    private readonly IDictionary<string,bool>? expansion;
+    private readonly string path;
+    private readonly int initialDepth;
+    [ObservableProperty] private bool isExpanded;
+    partial void OnIsExpandedChanged(bool value) { if (expansion != null) expansion[path] = value; }
     private IReadOnlyList<InspectorNode>? children;
     public string Name { get; }
     public string Value { get; }
     public string Label => string.IsNullOrEmpty(Value) ? Name : Name + ": " + Value;
     public IReadOnlyList<InspectorNode> Children => children ??= node switch
     {
-        JsonObject obj => obj.Select(p => new InspectorNode(p.Key, p.Value)).ToArray(),
-        JsonArray array => array.Select((v, i) => new InspectorNode($"[{i}]", v)).ToArray(),
+        JsonObject obj => obj.Select((p,i) => new InspectorNode(p.Key, p.Value,expansion,path + "/" + i,Math.Max(0,initialDepth - 1))).ToArray(),
+        JsonArray array => array.Select((v, i) => new InspectorNode($"[{i}]", v,expansion,path + "/" + i,Math.Max(0,initialDepth - 1))).ToArray(),
         _ => []
     };
-    public InspectorNode(string name, JsonNode? value)
+    public InspectorNode(string name, JsonNode? value,IDictionary<string,bool>? expansion = null,string path = "",int initialDepth = 0)
     {
         Name = name; node = value;
-        Value = value switch { JsonObject o when o.ContainsKey("text") => o.Text(), JsonObject o => $"{{{o.Count} fields}}", JsonArray a => $"[{a.Count} items]", null => "null", _ => value.ToString() };
+        this.expansion = expansion; this.path = path; this.initialDepth = initialDepth;
+        int count = value is JsonObject obj ? obj.Count : value is JsonArray array ? array.Count : 0;
+        isExpanded = expansion?.TryGetValue(path,out bool saved) == true ? saved : initialDepth > 0 && count is > 0 and <= 32;
+        Value = value switch { JsonObject o when o.ContainsKey("text") => o.Text(), JsonObject o when o["type"]?.ToString() is "array" or "string" or "int" or "float" && o.ContainsKey("offset") => $"{o["type"]} · {o["offset"]}" + (o.ContainsKey("value") ? " · " + o["value"] : ""), JsonObject o => $"{{{o.Count} field{(o.Count == 1 ? "" : "s")}}}", JsonArray a => $"[{a.Count} item{(a.Count == 1 ? "" : "s")}]", null => "null", _ => value.ToString() };
         if (Value.Length > 240) Value = Value[..240] + "…";
     }
     public string FullText => node?.ToJsonString(JsonData.Options) ?? "null";
@@ -141,11 +167,37 @@ public sealed class SceneTreeItem(GameScene scene, int index, HashSet<int> ances
 }
 public sealed record SearchHit(string File, AssetKind Kind, int Index, string Name)
 {
-    public string Display => $"{Name} · {Kind}";
+    public string Identity => $"{Kind} #{Index}";
+    public string Display => $"{Name} · {Kind} #{Index}";
     public string Location => System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(File)) + "/" + System.IO.Path.GetFileName(File);
+}
+public sealed record StudioProblem(string Severity, string Category, string Message, string? File = null, int? AssetIndex = null, long? Offset = null)
+{
+    internal AssetRecord? ResolveAsset(IEnumerable<AssetRecord> assets)
+    {
+        if (AssetIndex is int index)
+        {
+            var indexed = assets.Where(a => a.Index == index).ToArray();
+            if (indexed.Length == 1) return indexed[0];
+            assets = indexed; // An offset may disambiguate an index shared by different asset kinds.
+        }
+        if (Offset is not long offset || offset < 0) return null;
+        // Half-open ranges, without adding Offset + Length (which may overflow).
+        var matches = assets.Where(a => a.Offset >= 0 && offset >= a.Offset && offset - a.Offset < a.Length).Take(2).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+    public string Scope => File == null ? "Workspace" : System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(File)) + "/" + System.IO.Path.GetFileName(File);
+    public string Details => (File ?? "No file identity supplied") + (AssetIndex is int index ? $" · asset #{index}" : "") + (Offset is long offset ? $" · source 0x{offset:X}" : "");
 }
 public sealed class StudioSettings
 {
+    public WorkspaceLayout? Workspace { get; set; }
+    public WorkspaceLayout GetWorkspace()
+    {
+        // Old expander heights described a different layout and deliberately do not migrate.
+        Workspace ??= new() { InspectorWidth = double.IsFinite(PropertiesWidth) && PropertiesWidth >= 320 ? PropertiesWidth : 352 };
+        Workspace.Normalize(); return Workspace;
+    }
     public bool CreateBackupOnSave { get; set; }
     private MissionDifficulty difficulty = MissionDifficulty.Medium;
     public MissionDifficulty Difficulty { get => difficulty; set => difficulty = Enum.IsDefined(value) ? value : MissionDifficulty.Medium; }

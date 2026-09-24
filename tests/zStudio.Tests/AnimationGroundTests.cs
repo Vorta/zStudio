@@ -97,6 +97,7 @@ public sealed partial class AnimationTests
     [Theory]
     [InlineData(0)]
     [InlineData(20)]
+    [InlineData(-20)]
     public void TransformedParentKeepsContactInWorldCoordinates(float height)
     {
         var (context, motion) = GroundFixture(0); var scene = context.Scene;

@@ -38,6 +38,7 @@ public sealed partial class SceneViewport
     public event Action<int, Vector3>? PickupMoveCommitted;
     public event Action<Vector3>? PickupMovePreviewed;
     public event Action? PickupInteractionStarting;
+    public Func<bool>? CanStartPickupEdit { get; set; }
     public MissionActor? PickupAt(int node) => pickupRoots.TryGetValue(node, out int root) ? pickupActors[root] : null;
 
     private sealed class PickupManipulator(Func<MouseDown3DEventArgs?, bool> begin) : TransformManipulator3D

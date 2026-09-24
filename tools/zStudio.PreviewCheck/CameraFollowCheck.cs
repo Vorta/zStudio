@@ -31,13 +31,13 @@ internal static class CameraFollowCheck
                     await Task.Delay(100, timeout.Token);
                 }
                 ((CheckBox)editor.FindName("Mute")).IsChecked = true;
-                var follow = (CheckBox)editor.FindName("FollowCamera");
+                var follow = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("FollowCamera");
                 var camera = (HCamera)((Viewport3DX)editor.Viewport.Content).Camera!;
                 await editor.SeekAsync(.1);
                 follow.IsChecked = true; await Task.Delay(150);
                 CheckPose(editor.CurrentFrame!.Camera!);
                 Require(((TextBox)editor.FindName("Diagnostics")).Text.Contains("camera1 #2", StringComparison.Ordinal), "Preview status lacks camera identity");
-                ((CheckBox)editor.FindName("ShowLevel")).IsChecked = true;
+                ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = true;
                 while (((Border)editor.FindName("LoadingPanel")).Visibility == Visibility.Visible) await Task.Delay(100, timeout.Token);
                 foreach (double time in new double[] { .1, 5, 10, 15, 20 })
                 {

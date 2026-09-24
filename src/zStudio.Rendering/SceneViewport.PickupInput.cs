@@ -50,8 +50,10 @@ public sealed partial class SceneViewport
         if (IsPickupDragging) return true;
         SetPickupHover(false);
         if (e.ChangedButton != MouseButton.Left) return false;
-        PickupInteractionStarting?.Invoke();
         if (PickPickupHandle(point) is not { ModelHit: MeshGeometryModel3D arrow } hit) return false;
+        // A rejected handle click must not fall through to Helix and start a drag.
+        if (CanStartPickupEdit?.Invoke() == false) return true;
+        PickupInteractionStarting?.Invoke();
         // Use the native axis constraint, but own routing/capture for the whole drag. Do not let
         // scene depth or another triangle choose a different target after this screen-space pick.
         arrow.RaiseEvent(new MouseDown3DEventArgs(arrow, hit, point, viewport, e));

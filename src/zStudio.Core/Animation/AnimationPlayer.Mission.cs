@@ -71,7 +71,7 @@ public sealed partial class AnimationPlayer
                         if (sequence.State is 0 or 1 && visited.Add(sequence))
                         {
                             token.ThrowIfCancellationRequested(); player.Run(instance, sequence, 0); progress = true;
-                            if (sequence.ObservedInfiniteLoop) player.notes.Add($"{entry.Name}: zero-time initialization loop was bounded.");
+                            if (sequence.ObservedInfiniteLoop) player.AddNote($"{entry.Name}: zero-time initialization loop was bounded.");
                         }
             } while (progress && player.dispatchBudget > 0);
             foreach (var instance in player.instances.Where(i => i.Shared || (i.Entry.U32(148) & 0x8000) == 0))
@@ -83,7 +83,7 @@ public sealed partial class AnimationPlayer
                     if (node.Changed && source.Class == "object3d")
                     {
                         try { MissionSceneLoader.SetPose(context.Scene, node.Source, node.Local); }
-                        catch (InvalidDataException ex) { player.notes.Add($"{source.Name}: invalid initialization pose was ignored: {ex.Message}"); continue; }
+                        catch (InvalidDataException ex) { player.AddNote($"{source.Name}: invalid initialization pose was ignored: {ex.Message}"); continue; }
                     }
                     if (source.Class == "object3d")
                     {

@@ -17,7 +17,7 @@ using Recoil.Zbd.Rendering;
 
 namespace Recoil.Zbd.Desktop;
 
-public partial class AnimationEditor : UserControl, IDisposable
+public partial class AnimationEditor : FieldEditor, IDisposable
 {
     private readonly DocumentModel document;
     private readonly int entryIndex;
@@ -45,7 +45,7 @@ public partial class AnimationEditor : UserControl, IDisposable
     private AnimationPlayer? player;
     private AnimationFrame? frame;
     private double lastClock, playbackTarget;
-    private bool ready, changing, disposed, playing;
+    private bool ready, changing, playing;
     private bool pendingPlay, customRange;
     private AnimationDuration? duration;
     private int contextGeneration;
@@ -53,8 +53,7 @@ public partial class AnimationEditor : UserControl, IDisposable
     private int appliedSeed = 1;
     private float appliedHeight;
     private Guid selectedSequence, selectedEvent;
-    private readonly TabControl fields = new() { Background = Brushes.Transparent };
-    public FrameworkElement PropertiesView => fields;
+    public AnimationPreviewOptions Options { get; } = new();
     public SceneViewport Viewport => viewport;
     public AnimationFrame? CurrentFrame => frame;
     public bool IsPlaying => playing;
@@ -72,11 +71,9 @@ public partial class AnimationEditor : UserControl, IDisposable
         this.preferences = preferences;
         this.document = document; this.entryIndex = entryIndex; this.resolver = resolver; edits = document.AnimationEdits!;
         lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token);
-        InitializeComponent(); ViewportHost.Content = viewport;
+        InitializeComponent(); ViewportHost.Content = viewport; InitializeWorkspaceViews();
         Difficulty.ItemsSource = MainViewModel.DifficultyChoices; Difficulty.SelectedItem = preferences?.Difficulty ?? MissionDifficulty.Medium;
         if (preferences != null) preferences.PropertyChanged += PreferencesChanged;
-        Loaded += (_, _) => InitializeLayoutPreferences();
-        Unloaded += (_, _) => SaveLayoutPreferences();
         viewport.Information += Note;
         audio.Diagnostic += message =>
         {
@@ -86,8 +83,7 @@ public partial class AnimationEditor : UserControl, IDisposable
             Note(message);
         };
         viewport.NodeSelected += index => Note($"Scene node #{index}: {context?.Scene.Nodes[index].Name}");
-        NewEventType.ItemsSource = AnimationCatalog.Events; NewEventType.SelectedIndex = 0;
-        Timeline.SeekRequested += time => _ = SeekAsync(time);
+        Timeline.SeekRequested += time => { if (ResolvePendingDrafts()) _ = SeekAsync(time); };
         timer.Tick += Tick; edits.Changed += EditsChanged;
         Seed.KeyDown += (_, e) => { if (e.Key == Key.Enter) { SeedChanged(Seed, e); e.Handled = true; } };
         EndTime.KeyDown += (_, e) => { if (e.Key == Key.Enter) { RangeChanged(EndTime, e); e.Handled = true; } };
@@ -120,10 +116,10 @@ public partial class AnimationEditor : UserControl, IDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
-        { if (generation == contextGeneration && !disposed) { pendingPlay = false; LoadingText.Text = ex.Message + "\nUse GameZ… to choose the mission scene. Event editing is still available."; Note(ex.Message); } }
+        { if (generation == contextGeneration && !disposed) { pendingPlay = false; LoadingText.Text = ex.Message + "\nUse Scene → Choose GameZ… to choose the mission scene. Event editing is still available."; RecordPreviewError(ex.Message); } }
     }
     private AnimationPlayer CreatePlayer(AnimationPreviewContext? source = null) => new(source ?? context!, entryIndex, int.TryParse(Seed.Text, out int seed) ? seed : 1, Phase.SelectedIndex == 1)
-    { ConditionOverride = Condition.SelectedIndex switch { 1 => true, 2 => false, _ => null }, ActivationStart = activationStart, ReferencePosition = activationTarget, LodLevel = Math.Max(0, Lod.SelectedIndex), GroundPlaneEnabled = ShowGrid.IsChecked == true, PreviewHeight = appliedHeight };
+    { ConditionOverride = Condition.SelectedIndex switch { 1 => true, 2 => false, _ => null }, ActivationStart = activationStart, ReferencePosition = activationTarget, LodLevel = Math.Max(0, Lod.SelectedIndex), GroundPlaneEnabled = GroundCollision.IsChecked == true, PreviewHeight = appliedHeight };
     private void SetPlaying(bool value)
     {
         playing = value;
@@ -142,14 +138,14 @@ public partial class AnimationEditor : UserControl, IDisposable
             if (time > SeekSlider.Maximum)
             {
                 if (Loop.IsChecked == true) { player.Reset(); time = 0; audio.Stop(); }
-                else { SetPlaying(false); time = Math.Min(time, SeekSlider.Maximum); if (customRange || duration?.IsFinite != true) Note("Preview limit reached. Extend the range in Preview options to continue."); }
+                else { SetPlaying(false); time = Math.Min(time, SeekSlider.Maximum); if (customRange || duration?.IsFinite != true) Note("Preview limit reached. Extend the range in Settings to continue."); }
             }
             playbackTarget = time; frame = player.AdvanceTo(time, token: lifetime.Token); Render();
             long audioStart = Stopwatch.GetTimestamp();
             audio.Update(frame, context, playing);
             AudioUpdated?.Invoke(now, Stopwatch.GetElapsedTime(audioStart).TotalMilliseconds);
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { SetPlaying(false); Note(ex.Message); }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { SetPlaying(false); RecordPreviewError(ex.Message); }
     }
     public async Task SeekAsync(double seconds, bool preservePlayhead = false)
     {
@@ -206,10 +202,20 @@ public partial class AnimationEditor : UserControl, IDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { contextRefreshView = null; Note($"Preview was not updated; retaining {context?.Mission?.Layout.Label}. {ex.Message}"); }
         finally { if (!token.IsCancellationRequested && !disposed) { PlayButton.IsEnabled = true; StartPendingPlayback(); } }
     }
-    private void PresentationChanged(object sender, RoutedEventArgs e) => Render();
+    private void PresentationChanged(object sender, RoutedEventArgs e) { if (ready) Render(); }
+    private void GridChanged(object sender, RoutedEventArgs e) { if (ready) viewport.SetGroundGrid(ShowGrid.IsChecked == true); }
     private void HeightKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key is Key.Enter or Key.Escape) { HeightEditingFinished(sender, e); e.Handled = true; }
+    }
+    private void HeightLostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        // Overflow reparenting, window deactivation and workspace layout are not input commits.
+        if (Window.GetWindow(this) is MainWindow { IsChangingLayout: true } || e.NewFocus is not DependencyObject target ||
+            Window.GetWindow(target) != Window.GetWindow(this) ||
+            PropertyContext.FindAncestor<System.Windows.Controls.Primitives.Thumb>(target) != null ||
+            PropertyContext.FindAncestor<System.Windows.Controls.Primitives.MenuBase>(target) != null) return;
+        HeightEditingFinished(sender, e);
     }
     private void HeightEditingFinished(object sender, RoutedEventArgs e)
     {
@@ -221,7 +227,7 @@ public partial class AnimationEditor : UserControl, IDisposable
         if (!ready || changing || disposed) return;
         // Empty and incomplete text is normal while replacing a number. Keep the
         // most recent valid height without interrupting typing or moving the caret.
-        if (!float.TryParse(PreviewHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float height) || !float.IsFinite(height) || height is < 0 or > 100000)
+        if (!float.TryParse(PreviewHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float height) || !float.IsFinite(height) || height is < -999 or > 999)
             return;
         if (height == appliedHeight) return;
         appliedHeight = height; resetSimulation = true; pendingPlay |= playing;
@@ -240,11 +246,15 @@ public partial class AnimationEditor : UserControl, IDisposable
         if (frame == null || disposed) return;
         MissionLayoutLabel.Text = context?.Mission?.Layout.Label ?? "Mission start";
         MissionLayoutLabel.ToolTip = context?.Mission?.Layout.Description;
+        int root = context?.ResolveRoot(Entry) ?? -1;
+        RootBindingLabel.Text = root >= 0 && root < context!.Scene.Nodes.Count
+            ? $"Bound root: {context.Scene.Nodes[root].Name} · node #{root}" : $"Bound root: unresolved ({Entry.RootName})";
         viewport.SetGroundGrid(ShowGrid.IsChecked == true);
         viewport.UpdateAnimationFrame(frame, FollowCamera.IsChecked == true, Lighting.IsChecked == true);
         changing = true; SeekSlider.Value = Math.Min(SeekSlider.Maximum, frame.Time); changing = false;
         TimeLabel.Text = $"{Math.Round(frame.Time * 60):0} / {Math.Round(SeekSlider.Maximum * 60):0} f";
         TimeLabel.ToolTip = $"{frame.Time:0.000} / {SeekSlider.Maximum:0.000} seconds · 60 fps";
+        AutomationProperties.SetName(TimeLabel, TimeLabel.ToolTip.ToString());
         Timeline.Frame = frame; Timeline.SelectedSequence = selectedSequence; Timeline.InvalidateVisual();
         var c = frame.ScreenColor;
         ScreenOverlay.Background = Lighting.IsChecked == true ? new SolidColorBrush(Color.FromScRgb(Math.Clamp(c.W, 0, 1), Math.Clamp(c.X, 0, 1), Math.Clamp(c.Y, 0, 1), Math.Clamp(c.Z, 0, 1))) : Brushes.Transparent;
@@ -257,43 +267,54 @@ public partial class AnimationEditor : UserControl, IDisposable
         }
         if (frame.Time == 0 || Math.Round(frame.Time * 60) % 6 == 0 || !playing)
         {
-            string state = string.Join("\n", frame.Sequences.Where(s => s.Instance == 1).Select(s => $"{s.Name}: {s.State} · event {s.EventIndex} · loop {s.Iteration}"));
             string camera = frame.Camera is { } currentCamera ? $"Camera: {currentCamera.Name} #{currentCamera.SourceNode} · {currentCamera.FieldOfView:0.#}° horizontal FOV" : "Camera: no animated camera pose at this time";
-            string ground = ShowGrid.IsChecked == true ? "Ground: Y=0 · mesh-based flat-ground preview collision" : "Ground: grid and collision disabled";
-            Diagnostics.Text = context?.Mission?.Layout.Description + "\n" + camera + "\n" + ground + $" · preview height {appliedHeight:0.###}" + "\n\n" + state + "\n\n" + string.Join("\n", frame.Diagnostics.Concat(audioDiagnostics));
-            TraceText.Text = frame.Trace.Count == 0 ? "No dispatched events yet. Play or seek to inspect the trace." : string.Join("\n", frame.Trace.TakeLast(18).Select(t => $"{t.Start:0.000}s  {t.Name}  [{t.Status}]"));
+            string ground = GroundCollision.IsChecked == true ? "Ground: Y=0 · mesh-based flat-ground collision" : "Ground: collision disabled (authored gravity retained)";
+            FollowCamera.Tag = "Follow the authored animation camera when available. " + camera;
+            Diagnostics.Text = context?.Mission?.Layout.Description + "\n" + RootBindingLabel.Text + "\n" + camera + "\n" + ground + $" · preview height offset {appliedHeight:0.###} game units" + "\n\n" + string.Join("\n", frame.Diagnostics.Concat(audioDiagnostics));
+            List<string> overrides = [];
+            if (Condition.SelectedIndex != 0) overrides.Add(Condition.SelectedIndex == 1 ? "conditions forced true" : "conditions forced false");
+            if (context?.RootOverrides.ContainsKey(entryIndex) == true) overrides.Add("root binding overridden");
+            if (activationStart != null || activationTarget != null) overrides.Add("activation points overridden");
+            if (appliedHeight != 0) overrides.Add($"height offset {appliedHeight:0.###} game units");
+            OverrideBadge.Text = overrides.Count == 0 ? "" : "Preview overrides: " + string.Join(" · ",overrides);
+            OverrideBadge.Visibility = overrides.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            UpdateRuntimeTools();
         }
     }
     private void RefreshLists()
     {
-        changing = true; int at = Sequences.SelectedIndex;
-        var items = Entry.AllSequences.Select(s => new SequenceChoice(s.Id, (s == Entry.Primary ? "Reset / stop" : s.Name) + $" · {s.Events.Count}")).ToArray();
-        Sequences.ItemsSource = items; Sequences.SelectedItem = items.FirstOrDefault(i => i.Id == selectedSequence) ?? items.ElementAtOrDefault(at >= 0 ? Math.Min(at, items.Length - 1) : Math.Min(1, items.Length - 1));
-        selectedSequence = (Sequences.SelectedItem as SequenceChoice)?.Id ?? Guid.Empty;
-        var rows = Sequence?.Events.Select((ev, i) => new EventChoice(ev.Id, i, ev.Name, AnimationCatalog.ModeName(ev.StartMode), ev.Threshold.ToString("0.###", CultureInfo.InvariantCulture))).ToArray() ?? [];
-        int eventAt = Events.SelectedIndex; Events.ItemsSource = rows;
-        Events.SelectedItem = rows.FirstOrDefault(r => r.Id == selectedEvent) ?? rows.ElementAtOrDefault(Math.Clamp(eventAt, 0, Math.Max(0, rows.Length - 1)));
-        selectedEvent = (Events.SelectedItem as EventChoice)?.Id ?? Guid.Empty;
-        EventsContext.Text = Sequence == null ? "Select a sequence" : $"{(Sequence == Entry.Primary ? "Reset / stop" : Sequence.Name + " · #" + Sequences.SelectedIndex)} · {rows.Length} events";
-        UndoButton.IsEnabled = edits.CanUndo; RedoButton.IsEnabled = edits.CanRedo; changing = false;
-        RefreshProperties();
+        RefreshProgram(); RefreshProperties(); CommandsChanged?.Invoke();
     }
-    private void EditsChanged() { if (disposed) return; double time = frame?.Time ?? 0; contextDirty = true; resetSimulation = true; audioDirty = true; ++audioRevision; RefreshLists(); _ = SeekAsync(time); }
-    private void SequenceSelected(object sender, SelectionChangedEventArgs e) { if (changing || !ready) return; selectedSequence = (Sequences.SelectedItem as SequenceChoice)?.Id ?? Guid.Empty; selectedEvent = Guid.Empty; RefreshLists(); }
-    private void EventSelected(object sender, SelectionChangedEventArgs e) { if (changing || !ready) return; selectedEvent = (Events.SelectedItem as EventChoice)?.Id ?? Guid.Empty; RefreshProperties(); }
-    private void TryEdit(Action action) { try { SetPlaying(false); action(); } catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException or ArgumentException or InvalidOperationException) { Note(ex.Message); MessageBox.Show(Window.GetWindow(this), ex.Message, "Animation edit", MessageBoxButton.OK, MessageBoxImage.Information); } }
-    private void ChangeEvents(string description, Action<List<AnimationEvent>> change) => TryEdit(() => edits.Apply(entryIndex, description, e => { var s = AnimationEditSession.FindSequence(e, selectedSequence); AnimationEditSession.EnsureEditable(s); change(s.Events); }));
-    private void AddEventClick(object sender, RoutedEventArgs e)
+    private void EditsChanged()
     {
-        if (Sequence == null || NewEventType.SelectedItem is not AnimationEventSpec spec) return;
-        int at = Events.SelectedIndex + 1; var ev = AnimationCatalog.Create(spec.Type); selectedEvent = ev.Id;
-        foreach (var field in spec.Fields.Where(f => f.ReferenceTable >= 0 && Entry.References[f.ReferenceTable].Count > 1 && (f.Name == "Target node" || f.ReferenceTable is 4 or 5)))
-            field.Write(ev,"1");
-        ChangeEvents("Insert event", list => list.Insert(Math.Clamp(at, 0, list.Count), ev));
+        if (disposed) return;
+        double time = frame?.Time ?? 0; contextDirty = true; resetSimulation = true; audioDirty = true; ++audioRevision;
+        RefreshLists(); _ = SeekAsync(time);
     }
-    private void CopyEventClick(object sender, RoutedEventArgs e) { if (Event == null) return; var copy = Event.Duplicate(); int at = Events.SelectedIndex + 1; selectedEvent = copy.Id; ChangeEvents("Duplicate event", list => list.Insert(at, copy)); }
+    private void TryEdit(Action action)
+    {
+        if (!committingDraft && (!ResolvePendingDrafts() || ResolvePropertyDrafts?.Invoke() == false)) return;
+        try { SetPlaying(false); action(); }
+        catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException or ArgumentException or InvalidOperationException)
+        {
+            if (committingDraft) throw;
+            RecordPreviewError(ex.Message); MessageBox.Show(Window.GetWindow(this), ex.Message, "Animation edit", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+    }
+    private void ChangeEvents(string description, Action<List<AnimationEvent>> change) => TryEdit(() => edits.Apply(entryIndex, description, e => { var s = AnimationEditSession.FindSequence(e, selectedSequence); AnimationEditSession.EnsureEditable(s); change(s.Events); }));
+    private int SelectedEventIndex => Sequence?.Events.FindIndex(e => e.Id == selectedEvent) ?? -1;
+    private void InsertEvent(AnimationEventSpec spec)
+    {
+        if (Sequence == null || !ResolvePendingDrafts()) return;
+        int at = selectedEvent == Guid.Empty ? Sequence.Events.Count : SelectedEventIndex + 1;
+        var ev = AnimationCatalog.Create(spec.Type);
+        foreach (var field in spec.Fields.Where(f => f.ReferenceTable >= 0 && Entry.References[f.ReferenceTable].Count > 1 && (f.Name == "Target node" || f.ReferenceTable is 4 or 5))) field.Write(ev, "1");
+        ChangeEvents("Insert event", list => list.Insert(Math.Clamp(at, 0, list.Count), ev));
+        SelectSource(selectedSequence, ev.Id);
+    }
+    private void CopyEventClick(object sender, RoutedEventArgs e) { if (!ResolvePendingDrafts() || Event == null) return; var copy = Event.Duplicate(); int at = SelectedEventIndex + 1; ChangeEvents("Duplicate event", list => list.Insert(at, copy)); SelectSource(selectedSequence, copy.Id); }
     private void DeleteEventClick(object sender, RoutedEventArgs e) { Guid id = selectedEvent; ChangeEvents("Delete event", list => list.RemoveAll(ev => ev.Id == id)); }
-    private void MoveEvent(int direction) { int at = Events.SelectedIndex, to = at + direction; if (Sequence == null || at < 0 || to < 0 || to >= Sequence.Events.Count) return; ChangeEvents("Reorder event", list => (list[at], list[to]) = (list[to], list[at])); }
+    private void MoveEvent(int direction) { int at = SelectedEventIndex, to = at + direction; if (Sequence == null || at < 0 || to < 0 || to >= Sequence.Events.Count) return; ChangeEvents("Reorder event", list => (list[at], list[to]) = (list[to], list[at])); }
     private void MoveEventUpClick(object sender, RoutedEventArgs e) => MoveEvent(-1);
     private void MoveEventDownClick(object sender, RoutedEventArgs e) => MoveEvent(1);
     private void AddSequenceClick(object sender, RoutedEventArgs e) => TryEdit(() => edits.AddSequence(entryIndex));
@@ -306,17 +327,22 @@ public partial class AnimationEditor : UserControl, IDisposable
     private async void SaveClick(object sender, RoutedEventArgs e) { SetPlaying(false); if (SaveRequested != null) await SaveRequested(); }
     public void TogglePlayback()
     {
-        if (disposed) return;
+        if (disposed || !ResolvePendingDrafts()) return;
         if (player == null || LoadingPanel.Visibility == Visibility.Visible || !PlayButton.IsEnabled) { pendingPlay = !pendingPlay; return; }
         if (!playing && player.Time >= SeekSlider.Maximum) { player.Reset(); frame = player.Frame(); Render(); }
         seeking?.Cancel(); SetPlaying(!playing);
     }
     private void StartPendingPlayback() { if (pendingPlay && !disposed && LoadingPanel.Visibility != Visibility.Visible && PlayButton.IsEnabled) { pendingPlay = false; TogglePlayback(); } }
     private void PlayClick(object sender, RoutedEventArgs e) => TogglePlayback();
-    private async void StopClick(object sender, RoutedEventArgs e) { pendingPlay = false; await SeekAsync(0); }
-    private async void PreviousFrameClick(object sender, RoutedEventArgs e) => await SeekAsync(Math.Max(0, (frame?.Time ?? 0) - AnimationPlayer.StepSeconds));
-    private async void NextFrameClick(object sender, RoutedEventArgs e) => await SeekAsync((frame?.Time ?? 0) + AnimationPlayer.StepSeconds);
-    private async void SeekChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (ready && !changing) await SeekAsync(e.NewValue); }
+    private void StopClick(object sender, RoutedEventArgs e) => Stop();
+    private void PreviousFrameClick(object sender, RoutedEventArgs e) => Step(-1);
+    private void NextFrameClick(object sender, RoutedEventArgs e) => Step(1);
+    private async void SeekChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!ready || changing) return;
+        if (ResolvePendingDrafts()) await SeekAsync(e.NewValue);
+        else { changing = true; SeekSlider.Value = frame?.Time ?? 0; changing = false; }
+    }
     private async void PreviewOptionChanged(object sender, SelectionChangedEventArgs e) { if (ready && !changing) { resetSimulation = true; await SeekAsync(0); } }
     private async void SeedChanged(object sender, RoutedEventArgs e) { if (!ready) return; if (!int.TryParse(Seed.Text, out int seed)) { Note("Seed must be a 32-bit integer."); Seed.Text = "1"; seed = 1; } if (appliedSeed == seed) return; appliedSeed = seed; resetSimulation = true; await SeekAsync(0); }
     private void RangeChanged(object sender, RoutedEventArgs e)
@@ -382,7 +408,7 @@ public partial class AnimationEditor : UserControl, IDisposable
         {
             try { await PrepareAudioAsync(lifetime.Token); }
             catch (OperationCanceledException) { }
-            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Note(ex.Message); }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { RecordPreviewError(ex.Message); }
         }
     }
     private async void LevelChanged(object sender, RoutedEventArgs e)
@@ -398,7 +424,7 @@ public partial class AnimationEditor : UserControl, IDisposable
             token.ThrowIfCancellationRequested(); Render(); if (resume) SetPlaying(true);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Note(ex.Message); }
+        catch (Exception ex) { RecordPreviewError(ex.Message); }
         finally { if (!token.IsCancellationRequested && !disposed) LoadingPanel.Visibility = Visibility.Collapsed; }
         if (resetSimulation && !token.IsCancellationRequested && !disposed)
         {
@@ -437,7 +463,7 @@ public partial class AnimationEditor : UserControl, IDisposable
     public void Pause() { pendingPlay = false; SetPlaying(false); }
     public void Dispose()
     {
-        if (disposed) return; disposed = true; ready = false; pendingPlay = false; SetPlaying(false); lifetime.Cancel(); initializing?.Cancel(); initializing?.Dispose(); seeking?.Cancel(); seeking?.Dispose(); edits.Changed -= EditsChanged; if (preferences != null) preferences.PropertyChanged -= PreferencesChanged; audio.Dispose(); viewport.Dispose(); lifetime.Dispose(); GC.SuppressFinalize(this);
+        if (disposed) return; if (operationDiagnostics != null) operationDiagnostics.CollectionChanged -= OperationDiagnosticsChanged; disposed = true; ready = false; pendingPlay = false; SetPlaying(false); lifetime.Cancel(); initializing?.Cancel(); initializing?.Dispose(); seeking?.Cancel(); seeking?.Dispose(); edits.Changed -= EditsChanged; if (preferences != null) preferences.PropertyChanged -= PreferencesChanged; audio.Dispose(); viewport.Dispose(); lifetime.Dispose(); GC.SuppressFinalize(this);
     }
     private sealed record SequenceChoice(Guid Id, string Label);
     private sealed record EventChoice(Guid Id, int Index, string Name, string Mode, string Threshold);

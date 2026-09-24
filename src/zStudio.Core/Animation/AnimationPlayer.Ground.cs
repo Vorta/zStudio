@@ -39,14 +39,14 @@ public sealed partial class AnimationPlayer
             int index = ev.I16(240);
             var target = index >= 0 && index < instance.Sequences.Count ? instance.Sequences[index]
                 : instance.Sequences.FirstOrDefault(s => s.Data.Name == ev.Text(208));
-            if (target == null) { unavailableDuration = true; notes.Add($"Ground impact: unresolved release sequence '{ev.Text(208)}' (index {index})."); }
+            if (target == null) { unavailableDuration = true; AddNote($"Ground impact: unresolved release sequence '{ev.Text(208)}' (index {index})."); }
             else if (target.State == 3) target.State = 0;
         }
         if ((flags & 0x1000) != 0 && ev.I16(242) > 0)
         {
             int sample = ev.I16(242);
             if (sample >= instance.Entry.References[4].Count)
-            { unavailableDuration = true; notes.Add($"Ground impact: unresolved sample reference {sample}."); }
+            { unavailableDuration = true; AddNote($"Ground impact: unresolved sample reference {sample}."); }
             else
             {
                 float threshold = ev.F32(244) < 0 ? ev.F32(24) * 10 : ev.F32(244);
@@ -71,7 +71,7 @@ public sealed partial class AnimationPlayer
                 catch (InvalidDataException ex)
                 {
                     node.GroundSupported = false; unavailableDuration = true;
-                    notes.Add($"Ground support for node #{node.Source}: {ex.Message}");
+                    AddNote($"Ground support for node #{node.Source}: {ex.Message}");
                 }
             }
     }
@@ -112,7 +112,7 @@ public sealed partial class AnimationPlayer
             {
                 // Use referenced vertices only; unused storage must not enlarge contact.
                 if (model.Polygons.Any(p => p.Vertices.Any(v => v < 0 || v >= model.Vertices.Length)))
-                    notes.Add($"Ground contact: model #{modelIndex} has invalid polygon indices; valid geometry is used.");
+                    AddNote($"Ground contact: model #{modelIndex} has invalid polygon indices; valid geometry is used.");
                 groundVertices[modelIndex] = vertices = model.Polygons.Where(p => p.Vertices.Length >= 3 && p.Vertices.All(v => v >= 0 && v < model.Vertices.Length))
                     .SelectMany(p => p.Vertices).Distinct().Order().ToArray();
             }
@@ -128,7 +128,7 @@ public sealed partial class AnimationPlayer
         }
         if (float.IsPositiveInfinity(bottom))
         {
-            notes.Add($"Ground contact: node #{node.Source} has no usable mesh; its origin is used.");
+            AddNote($"Ground contact: node #{node.Source} has no usable mesh; its origin is used.");
             bottom = World(instance, node).Translation.Y;
         }
         if (!float.IsFinite(bottom)) throw new InvalidDataException($"Ground contact: node #{node.Source} has a nonfinite world position.");

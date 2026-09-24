@@ -164,6 +164,7 @@ public sealed partial class AnimationTests
     [Theory]
     [InlineData(0)]
     [InlineData(40)]
+    [InlineData(-40)]
     public void OneShotSoundRemainsActiveForUnmuteResumeAndSeekUntilItEnds(float height)
     {
         var package = Fixture(); var entry = package.Entries[0];
