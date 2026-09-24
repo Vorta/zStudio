@@ -72,13 +72,16 @@ public sealed class MissionSceneContext
 public static partial class MissionSceneLoader
 {
     private static readonly ConditionalWeakTable<ZbdDocument, ConcurrentDictionary<string, MissionSceneContext>> Cache = new();
+    internal static string[] ResourceFiles(string worldPath, AssetResolver resolver) => resolver.ResourceDirectories(worldPath)
+        .SelectMany(d => Directory.EnumerateFiles(d, "*.zbd").Order(StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    public static void Invalidate(ZbdDocument world) => Cache.Remove(world);
 
     public static async Task<MissionSceneContext> LoadAsync(ZbdDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium)
     {
         token.ThrowIfCancellationRequested();
         var requested = MissionLayoutSelection.For(difficulty);
         string directory = Path.GetDirectoryName(world.Path)!;
-        var files = resolver.ResourceDirectories(world.Path).SelectMany(d => Directory.EnumerateFiles(d, "*.zbd").Order(StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var files = ResourceFiles(world.Path, resolver);
         string key = difficulty + "|" + string.Join('|', files.Select(p => p + FileStamp.Read(p))) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package))));
         var cache = Cache.GetOrCreateValue(world);
         if (cache.TryGetValue(key, out var cached)) return cached;

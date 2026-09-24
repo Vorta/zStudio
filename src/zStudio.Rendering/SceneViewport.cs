@@ -52,9 +52,9 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         viewport.OITRenderMode = OITRenderType.None;
         viewport.EnableRenderOrder = true;
         viewport.InputBindings.Add(new MouseBinding(ViewportCommands.Pan, new MouseGesture(MouseAction.MiddleClick)));
-        viewport.PreviewMouseWheel += (_, e) => { ZoomAt(e.GetPosition(viewport), e.Delta); e.Handled = true; };
+        viewport.PreviewMouseWheel += (_, e) => { if (!IsPickupDragging) ZoomAt(e.GetPosition(viewport), e.Delta); e.Handled = true; };
         viewport.CameraChanged += (_, _) => CameraChanged();
-        ConfigureUprightRotation();
+        ConfigurePickupInput(); ConfigureUprightRotation();
         viewport.RenderExceptionOccurred += (_, e) => { Information?.Invoke("3D preview unavailable: " + e.Exception.Message); e.Handled = true; };
         Content = viewport;
     }
@@ -136,7 +136,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     };
                     mesh.MouseDown3D += (_, e) =>
                     {
-                        if (e is MouseDown3DEventArgs args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
+                        if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
                         {
                             int at = hit.Tag is int instance ? instance : 0;
                             if (at >= 0 && at < found.Length && found[at].NodeIndex >= 0) NodeSelected?.Invoke(found[at].NodeIndex);
@@ -160,9 +160,10 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 Vector3[] corners = [new(min.X, min.Y, min.Z), new(max.X, min.Y, min.Z), new(max.X, max.Y, min.Z), new(min.X, max.Y, min.Z), new(min.X, min.Y, max.Z), new(max.X, min.Y, max.Z), new(max.X, max.Y, max.Z), new(min.X, max.Y, max.Z)];
                 foreach (var instance in instances) foreach (var corner in corners) { var world = Vector3.Transform(corner, instance.Transform); sceneMin = Vector3.Min(sceneMin, world); sceneMax = Vector3.Max(sceneMax, world); }
                 LineGeometryModel3D box = new() { Geometry = new LineGeometry3D { Positions = new Vector3Collection(corners), Indices = new IntCollection([0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]) }, Color = Colors.Gold, Thickness = 1, Instances = instances.Select(i => i.Transform).ToList(), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
-                bounds.Add(box); viewport.Items.Add(box);
+                bounds.Add(box); boundsPlacements[box] = instances; viewport.Items.Add(box);
             }
         }
+        if (asset.Kind == AssetKind.World) ConfigurePickups();
         FrameAll();
         RefreshHorizon();
         Information?.Invoke($"{packet.View.Placements.Count:N0} instances · {meshes.Count:N0} mesh batches · {packet.Notes.Count} preview notes" + (packet.Notes.Count > 0 ? "\n" + string.Join('\n', packet.Notes.Select(d => d.Message).Distinct().Take(30)) : ""));
@@ -236,7 +237,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     {
         foreach (var element in elements)
         {
-            if (element.Visibility != Visibility.Visible || !element.IsRendering) continue;
+            if (element.Visibility != Visibility.Visible || !element.IsRendering || element is TopMostGroup3D or TransformManipulator3D) continue;
             if (element is MeshGeometryModel3D mesh && mesh.IsDepthClipEnabled) yield return mesh;
             else if (element is GroupModel3D group) foreach (var child in DepthMeshes(group.Children)) yield return child;
         }
@@ -276,18 +277,22 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     public void SetBounds(bool enabled) { foreach (var box in bounds) box.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed; }
     public void Isolate(int? node)
     {
-        foreach (var mesh in meshes) { var shown = placements[mesh].Where(p => node == null || p.NodeIndex == node).ToArray(); visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToList(); mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible; }
+        foreach (var mesh in meshes) { var shown = placements[mesh].Where(p => node == null || p.NodeIndex == node || pickupRoots.GetValueOrDefault(p.NodeIndex, -1) == node).ToArray(); visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToList(); mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible; }
         foreach (var box in bounds) box.Visibility = Visibility.Collapsed;
+        RecalculateSceneBounds(); RefreshPickupSelection(); FrameAll();
+    }
+    private void RecalculateSceneBounds()
+    {
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
         foreach (var mesh in meshes.Where(m => m.Visibility == Visibility.Visible && !placements[m].Any(p => IsHorizon(p.NodeIndex))))
         {
             if (mesh.Geometry?.Positions is not { Count: > 0 } positions) continue; Vector3 min = positions.Aggregate(Vector3.Min), max = positions.Aggregate(Vector3.Max);
             foreach (var placement in visiblePlacements[mesh]) for (int corner = 0; corner < 8; corner++) { var p = Vector3.Transform(new((corner & 1) == 0 ? min.X : max.X, (corner & 2) == 0 ? min.Y : max.Y, (corner & 4) == 0 ? min.Z : max.Z), placement.Transform); sceneMin = Vector3.Min(sceneMin, p); sceneMax = Vector3.Max(sceneMax, p); }
         }
-        FrameAll();
     }
     private void ClearMeshes()
     {
+        ClearPickupEditing();
         groundGrid?.Dispose(); groundGrid = null;
         rotationVelocity = default; rotationPoint = null; cameraPoseDirty = true; authoredCameraPose = false;
         ClearAnimationResources();

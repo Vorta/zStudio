@@ -13,5 +13,5 @@ public sealed record MissionLayoutSelection(MissionDifficulty Difficulty, string
         _ => throw new ArgumentOutOfRangeException(nameof(difficulty))
     };
     public string Label => $"Mission start · {Difficulty}";
-    public string Description => $"{Label} · {AivResource} · {VehicleResource} · {PickupResource} (read-only preview; all authored pickups)";
+    public string Description => $"{Label} · {AivResource} · {VehicleResource} · {PickupResource} (all authored pickups)";
 }

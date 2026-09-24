@@ -2,6 +2,8 @@
   <PropertyGroup>
     <RootNamespace>Recoil.Zbd.Tests</RootNamespace>
     <AssemblyName>Recoil.Zbd.Tests</AssemblyName>
+    <!-- Required by source-generated interop for temporary filesystem-alias fixtures. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup><OutputType>Exe</OutputType><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup>

@@ -45,6 +45,7 @@ public sealed partial class SceneViewport
         preparingCamera = true;
         try
         {
+            if (IsPickupDragging && pickupCameraPose != null) RestoreView(pickupCameraPose);
             double seconds = Math.Clamp((timeStamp - previousFrameTime).TotalSeconds, 0, .05); previousFrameTime = timeStamp;
             if (rotationPoint == null && rotationVelocity.LengthSquared > 1 && viewport.IsInertiaEnabled)
             {
@@ -59,7 +60,7 @@ public sealed partial class SceneViewport
                 RefreshHorizon();
                 cameraPoseDirty = false; authoredCameraPose = false;
             }
-            UpdateClipPlanes();
+            UpdatePickupGizmoSize(); UpdateClipPlanes();
         }
         finally { preparingCamera = false; }
     }
@@ -104,6 +105,7 @@ public sealed partial class SceneViewport
     {
         viewport.PreviewMouseDown += (_, e) =>
         {
+            if (IsPickupDragging) { e.Handled = true; return; }
             rotationVelocity = default;
             if (e.ChangedButton != MouseButton.Right || Keyboard.Modifiers != ModifierKeys.None || !viewport.IsRotationEnabled) return;
             viewport.StopSpin();
