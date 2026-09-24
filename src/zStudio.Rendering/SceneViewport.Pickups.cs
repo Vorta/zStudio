@@ -59,7 +59,7 @@ public sealed partial class SceneViewport
         {
             if (HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
         };
-        MouseLeave += (_, _) => { if (!IsPickupDragging) SetPickupHover(false); };
+        MouseLeave += (_, _) => { CancelPickupDrag(); SetPickupHover(false); };
         viewport.LostMouseCapture += (_, _) => { if (IsPickupDragging) CancelPickupDrag(); };
         viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && CancelPickupDrag()) e.Handled = true; };
     }

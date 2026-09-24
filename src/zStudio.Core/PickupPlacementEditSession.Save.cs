@@ -39,9 +39,12 @@ public sealed partial class PickupPlacementEditSession
                 string destination = Path.GetFullPath(explicitDestination ? destinations![source] : archive.Target);
                 ValidateDestination(destination);
                 if (!targets.Add(destination)) throw new IOException("Two pickup archives cannot be saved to the same file.");
-                bool replace = destination.Equals(Path.GetFullPath(archive.Target), StringComparison.OrdinalIgnoreCase);
+                // Explicit destinations are Save As, including copies requested by protected-source Save.
+                // Only ordinary Save may replace the active target.
+                bool replace = !explicitDestination;
                 if (replace) await CheckBaselineAsync(archive, token);
-                else if (File.Exists(destination)) throw new IOException($"Save As requires a new file: {destination}");
+                else if (destination.Equals(Path.GetFullPath(archive.Target), StringComparison.OrdinalIgnoreCase) || File.Exists(destination))
+                    throw new IOException($"Save As requires a new file: {destination}");
                 byte[] bytes = await Task.Run(() => EncodeArchive(source), token);
                 await Task.Run(() => Verify(source, bytes, token), token);
                 string directory = Path.GetDirectoryName(destination)!;

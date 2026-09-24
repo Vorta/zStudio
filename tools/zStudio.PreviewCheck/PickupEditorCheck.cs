@@ -125,6 +125,20 @@ internal static class PickupEditorCheck
                             await NativePointer(0x0202, finish); Require(!scene.IsPickupDragging && edits.IsDirty, "Windows mouse release did not commit");
                             edits.Undo();
                         }
+                        foreach (var outside in OutsidePoints())
+                        {
+                            var start = ArrowPoint(0, 1.1).Point; var before = scene.PickupPosition(actor.Root);
+                            bool undoBefore = edits.CanUndo, redoBefore = edits.CanRedo;
+                            await NativePointer(0x0201, start);
+                            Require(scene.IsPickupDragging, "Windows boundary drag did not begin");
+                            await NativePointer(0x0200, start + new System.Windows.Vector(24, -19));
+                            Require(Vector3.Distance(before, scene.PickupPosition(actor.Root)) > .001f, "Windows boundary drag did not preview movement");
+                            await NativePointer(0x0200, outside);
+                            Require(!scene.IsPickupDragging && !viewport.IsMouseCaptured, "Windows boundary crossing retained capture/drag");
+                            await NativePointer(0x0202, outside);
+                            Require(scene.PickupPosition(actor.Root) == before && !edits.IsDirty && edits.CanUndo == undoBefore && edits.CanRedo == redoBefore,
+                                "Windows outside release changed placement or undo history");
+                        }
                     }
                     finally
                     {
@@ -134,7 +148,7 @@ internal static class PickupEditorCheck
                         SetCursorPos(originalPointer.X, originalPointer.Y);
                         if (originalForeground != 0) SetForegroundWindow(originalForeground);
                     }
-                    Console.WriteLine($"PASS: Windows HWND pointer routing at {VisualTreeHelper.GetDpi(window).DpiScaleX * 100:G4}% DPI; all three axes grabbed 10 DIP off-center and committed on release.");
+                    Console.WriteLine($"PASS: Windows HWND pointer routing at {VisualTreeHelper.GetDpi(window).DpiScaleX * 100:G4}% DPI; all three axes grabbed 10 DIP off-center and committed on release; leaving any of the four viewport edges canceled the drag and released capture.");
                 }
                 foreach (var (id, position) in othersBefore) Require(position == scene.PickupPosition(id), "Moving one instance moved a shared model");
                 Require(cameraBefore == scene.CaptureView(), "Movement changed the camera");
@@ -145,6 +159,37 @@ internal static class PickupEditorCheck
                 scene.HandlePickupPointerMove(cancelPoint + new System.Windows.Vector(30, 0));
                 Require(scene.CancelPickupDrag(), "Drag cancellation was not handled");
                 Require(scene.PickupPosition(actor.Root) == committed && edits.Position(pickup.Source) == authored, "Canceled drag became an authored edit");
+                int boundaryCommits = 0;
+                void BoundaryCommitted(int _, Vector3 __) => boundaryCommits++;
+                scene.PickupMoveCommitted += BoundaryCommitted;
+                try
+                {
+                    await CheckBoundaryCancel("MouseLeave", () => scene.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount) { RoutedEvent = UIElement.MouseLeaveEvent }));
+                    foreach (var outside in OutsidePoints())
+                    {
+                        await CheckBoundaryCancel("captured move outside " + outside, () => Require(scene.HandlePickupPointerMove(outside), "Outside move was not consumed"));
+                        await CheckBoundaryCancel("captured release outside " + outside, () => Require(scene.HandlePickupPointerUp(outside, LeftButton()), "Outside release was not consumed"));
+                    }
+                }
+                finally { scene.PickupMoveCommitted -= BoundaryCommitted; }
+
+                async Task CheckBoundaryCancel(string name, Action leave)
+                {
+                    await Task.Delay(40, token);
+                    var start = ArrowPoint(0, 1.1).Point; var viewBefore = scene.CaptureView();
+                    bool undoBefore = edits.CanUndo, redoBefore = edits.CanRedo, dirtyBefore = edits.IsDirty;
+                    MouseDown(start); Require(scene.IsPickupDragging, name + ": drag did not start");
+                    scene.HandlePickupPointerMove(start + new System.Windows.Vector(24, -19));
+                    Require(Vector3.Distance(committed, scene.PickupPosition(actor.Root)) > .001f, name + ": drag did not preview movement");
+                    leave();
+                    Require(!scene.IsPickupDragging && !viewport.IsMouseCaptured, name + ": drag/capture remained active");
+                    Require(scene.PickupPosition(actor.Root) == committed && edits.Position(pickup.Source) == authored, name + ": placement was not restored");
+                    Require(!scene.HandlePickupPointerUp(start, LeftButton()), name + ": re-entry release committed a canceled drag");
+                    Require(boundaryCommits == 0 && edits.IsDirty == dirtyBefore && edits.CanUndo == undoBefore && edits.CanRedo == redoBefore, name + ": cancellation changed authored history");
+                    Require(scene.CaptureView() == viewBefore && viewport.Cursor != Cursors.Hand, name + ": cancellation retained hover or changed the camera");
+                }
+                Point[] OutsidePoints() => [new(-1, viewport.ActualHeight / 2), new(viewport.ActualWidth + 1, viewport.ActualHeight / 2), new(viewport.ActualWidth / 2, -1), new(viewport.ActualWidth / 2, viewport.ActualHeight + 1)];
+
                 inputs[0].Text = (committed.X + 1.125f).ToString("R", System.Globalization.CultureInfo.CurrentCulture); placementPanel.CommitPending();
                 Require(edits.Position(pickup.Source).X == committed.X + 1.125f, "Numeric input did not update placement");
                 inputs[1].Text = "NaN"; placementPanel.CommitPending(); Require(edits.Position(pickup.Source).Y == committed.Y, "Nonfinite input changed authored position");
@@ -182,7 +227,7 @@ internal static class PickupEditorCheck
                 Require(SameBytes(original, await File.ReadAllBytesAsync(Path.Combine(root, "m1", "zrdr.zbd"), token)), "Reference pickup archive changed");
                 Require(SameBytes(worldHash, SHA256.HashData(await File.ReadAllBytesAsync(doc.Path, token))), "GameZ source changed");
                 await CorpusRoundTrips(root, output, token);
-                Console.WriteLine("PASS: actual Nanite hit selection; locked/unlocked arrows; 27 screen-space shaft/tip/edge drags through the production pointer router; hover feedback; locked/outside rejection; one-step undo/redo; cancel; instance isolation; camera; difficulty and LOD retention; Save As and UI Save; three saved difficulty records; original source hashes.");
+                Console.WriteLine("PASS: actual Nanite hit selection; locked/unlocked arrows; 27 screen-space shaft/tip/edge drags through the production pointer router; hover feedback; locked/outside rejection; MouseLeave and all four outside move/release boundaries cancel without edits; one-step undo/redo; cancel; instance isolation; camera; difficulty and LOD retention; Save As and UI Save; three saved difficulty records; original source hashes.");
                 Console.WriteLine("Screenshots and working copies: " + output);
 
                 TransformManipulator3D Manipulator() => viewport.Items.OfType<TopMostGroup3D>().Single().Children.OfType<TransformManipulator3D>().Single();

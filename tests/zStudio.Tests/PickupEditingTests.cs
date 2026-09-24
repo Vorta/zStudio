@@ -138,6 +138,39 @@ public sealed partial class AnimationTests
             await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [path] = path }, token: TestContext.Current.CancellationToken));
         });
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PickupSaveAsRejectsCurrentTargetWithoutChangingBytesOrSavedState(bool retargeted)
+    {
+        await WithMissionArchiveAsync(new() { ["puppies.zrd"] = Zrd(PickupList(PickupRow())) }, async (world, resolver) => {
+            var edits = await PickupPlacementEditSession.LoadAsync(world.Path, resolver, TestContext.Current.CancellationToken);
+            string source = Assert.Single(edits.ArchivePaths);
+            var record = Assert.Single(edits.Records);
+            if (retargeted)
+            {
+                edits.MoveTo(record.Source, new(11, 22, 33));
+                await edits.SaveAsync(new Dictionary<string, string> { [source] = Path.Combine(Path.GetDirectoryName(source)!, "copy.zbd") }, token: TestContext.Current.CancellationToken);
+            }
+            string target = edits.TargetPath(source);
+            byte[] before = await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken);
+            edits.MoveTo(record.Source, new(44, 55, 66));
+            foreach (string destination in new[] { target, Path.Combine(Path.GetDirectoryName(target)!, ".", Path.GetFileName(target)) })
+            {
+                var error = await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(new Dictionary<string, string> { [source] = destination }, createBackup: true, token: TestContext.Current.CancellationToken));
+                Assert.Contains("Save As requires a new file", error.Message);
+                Assert.Equal(before, await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken));
+                Assert.Equal(target, edits.TargetPath(source)); Assert.True(edits.IsDirty); Assert.True(edits.CanUndo);
+                Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(target)!, ".zstudio-pickups-*.tmp"));
+                Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(target)!, "*.bak"));
+            }
+            // Ordinary Save must still replace the active target after the refused Save As.
+            var saved = await edits.SaveAsync(token: TestContext.Current.CancellationToken);
+            Assert.Empty(saved.Errors); Assert.Equal(target, Assert.Single(saved.SavedPaths)); Assert.False(edits.IsDirty);
+            Assert.Equal(edits.EncodeArchive(source), await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken));
+        });
+    }
+
     [Fact]
     public async Task ExternalChangesAndProtectedDestinationsRetainUnsavedPickupEdits()
     {

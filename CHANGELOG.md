@@ -9,9 +9,11 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Introduce the first 3D editing workflow: move mission pickups in Whole world; select an instance, see its bounds, unlock world-axis arrows, or enter exact XYZ coordinates in Properties.
 - Enlarge pickup XYZ handles and use generous, DPI-aware screen-space click targets for their shafts and tips. Prioritize handles over scene geometry and show a hand cursor over a draggable target.
 - Keep maps locked by default; add one-action drag undo/redo, cancellation, and preserved edits/selection across difficulty and LOD changes.
+- Cancel pickup drags when the pointer leaves the viewport, including captured movement or release outside its bounds, restoring the starting position without an undo entry.
 - Apply moves to uniquely matching difficulty records while retaining amounts, rotations and respawn metadata. Report ambiguous or unmatched counterparts without changing them.
 - Save surgical coordinate patches to the owning ZBD archive, with verified Save As, external-change checks, atomic file replacement and optional backups (off by default). Preserve protected reference datasets.
 - Resolve Windows destination aliases before checking protected folders, including substituted drives and new Save As directories; retain edits and report an error if the destination cannot be verified.
+- Reject the current save target during pickup Save As; only ordinary Save may replace it.
 - Include pickup edits in document dirty-state, close/reload prompts, and the shared Save/Undo/Redo commands.
 
 ## 0.2.18 — 2026-09-23

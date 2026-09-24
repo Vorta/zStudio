@@ -17,11 +17,14 @@ public sealed partial class SceneViewport
     private bool pickupHover;
     private Cursor? pickupPreviousCursor;
 
+    private bool IsInsidePickupViewport(Point point) => point.X >= 0 && point.Y >= 0 &&
+        point.X <= viewport.ActualWidth && point.Y <= viewport.ActualHeight;
+
     private HitTestResult? PickPickupHandle(Point point)
     {
         if (pickupLocked || !pickupEditable || selectedPickup is not int root ||
             pickupManipulator?.Visibility != Visibility.Visible || viewport.Camera is not HelixToolkit.Wpf.SharpDX.PerspectiveCamera camera ||
-            point.X < 0 || point.Y < 0 || point.X > viewport.ActualWidth || point.Y > viewport.ActualHeight) return null;
+            !IsInsidePickupViewport(point)) return null;
         var origin = pickupPositions[root] + pickupManipulator.CenterOffset;
         var start = viewport.Project(new Point3D(origin.X, origin.Y, origin.Z));
         double nearest = PickupHandleHitRadius * PickupHandleHitRadius;
@@ -60,6 +63,9 @@ public sealed partial class SceneViewport
     {
         if (IsPickupDragging && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
         {
+            // Captured input can arrive outside without MouseLeave. Check after the handle
+            // starts; CaptureMouse can synchronously resend an earlier pointer position.
+            if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
             arrow.RaiseEvent(new MouseMove3DEventArgs(arrow, activePickupHandle, point, viewport));
             return true;
         }
@@ -71,6 +77,7 @@ public sealed partial class SceneViewport
     internal bool HandlePickupPointerUp(Point point, MouseButtonEventArgs e)
     {
         if (!IsPickupDragging || e.ChangedButton != MouseButton.Left || selectedPickup is not int root) return false;
+        if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
         if (activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
             arrow.RaiseEvent(new MouseUp3DEventArgs(arrow, activePickupHandle, point, viewport, e));
         Vector3 position = pickupPositions[root]; activePickupHandle = null; IsPickupDragging = false;
