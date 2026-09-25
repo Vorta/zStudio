@@ -2,7 +2,7 @@
 
 **Advanced viewer and editor for Zipper Interactive's ZBD files.**
 
-![zStudio displaying Recoil's snowy m5 Whole world preview, with tanks, a flying vehicle and the asset browser](docs/images/zstudio-whole-world.png)
+![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
 zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, move mission pickups, and edit supported animation programs. This source tree targets **v0.4.8**.
 
