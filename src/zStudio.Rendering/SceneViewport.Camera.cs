@@ -32,6 +32,7 @@ public sealed partial class SceneViewport
     private sealed class FrameViewport(Action<TimeSpan> prepare) : Viewport3DX, IViewport3DX
     {
         void IViewport3DX.Update(TimeSpan timeStamp) { base.Update(timeStamp); prepare(timeStamp); }
+        public void DrainNavigation(TimeSpan timestamp) => base.Update(timestamp);
     }
     private void CameraChanged()
     {
@@ -45,6 +46,7 @@ public sealed partial class SceneViewport
         preparingCamera = true;
         try
         {
+            PrepareFlyFrame(timeStamp);
             if (IsPickupDragging && pickupCameraPose != null) RestoreView(pickupCameraPose);
             double seconds = Math.Clamp((timeStamp - previousFrameTime).TotalSeconds, 0, .05); previousFrameTime = timeStamp;
             if (rotationPoint == null && rotationVelocity.LengthSquared > 1 && viewport.IsInertiaEnabled)
@@ -91,6 +93,7 @@ public sealed partial class SceneViewport
     /// <summary>Rotate in screen pixels with an upright camera and a bounded pitch.</summary>
     public void RotateBy(double horizontal, double vertical)
     {
+        if (IsFlyActive) { LookFlyBy(horizontal, vertical); return; }
         if (viewport.Camera is not HCamera camera || !viewport.IsRotationEnabled || camera.LookDirection.LengthSquared < 1e-12) return;
         var look = camera.LookDirection; double length = look.Length; look.Normalize();
         double speed = (viewport.CameraMode == CameraMode.Inspect ? -.5 : .1) * Math.PI / 180 * viewport.RotationSensitivity;

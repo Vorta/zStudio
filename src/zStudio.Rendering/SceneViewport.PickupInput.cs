@@ -47,6 +47,7 @@ public sealed partial class SceneViewport
 
     internal bool HandlePickupPointerDown(Point point, MouseButtonEventArgs e)
     {
+        if (IsFlyActive) return true;
         if (IsPickupDragging) return true;
         SetPickupHover(false);
         if (e.ChangedButton != MouseButton.Left) return false;
@@ -63,6 +64,7 @@ public sealed partial class SceneViewport
 
     internal bool HandlePickupPointerMove(Point point)
     {
+        if (IsFlyActive) return true;
         if (IsPickupDragging && activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)
         {
             // Captured input can arrive outside without MouseLeave. Check after the handle
@@ -78,6 +80,7 @@ public sealed partial class SceneViewport
 
     internal bool HandlePickupPointerUp(Point point, MouseButtonEventArgs e)
     {
+        if (IsFlyActive) return true;
         if (!IsPickupDragging || e.ChangedButton != MouseButton.Left || selectedPickup is not int root) return false;
         if (!IsInsidePickupViewport(point)) { CancelPickupDrag(); return true; }
         if (activePickupHandle?.ModelHit is MeshGeometryModel3D arrow)

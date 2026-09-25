@@ -193,7 +193,7 @@ public sealed partial class SceneViewport
     }
     private bool BeginPickupDrag(MouseDown3DEventArgs? e)
     {
-        if (pickupLocked || !pickupEditable || selectedPickup is not int root || IsPickupDragging ||
+        if (IsFlyActive || pickupLocked || !pickupEditable || selectedPickup is not int root || IsPickupDragging ||
             e?.OriginalInputEventArgs is not MouseButtonEventArgs { ChangedButton: MouseButton.Left } || viewport.Camera is not HCamera camera) return false;
         if (e.HitTestResult?.ModelHit is MeshGeometryModel3D axisMesh)
         {

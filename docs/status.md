@@ -1,5 +1,21 @@
 # Desktop implementation status
 
+## v0.4.8 PR preparation (2026-09-25)
+
+The owner tested the captured freecam and confirmed it works. Version metadata, the README source version, release examples and changelog now target 0.4.8. The README includes a freecam control table and the owner-supplied Whole world screenshot at `docs/images/zstudio-whole-world.png`, displayed near the top of the repository landing page.
+
+Locked restore and Release build pass with zero warnings/errors; all 237 asset-independent tests pass. The freecam, render stability, orbit controls, pickup editing/corpus and animation layout checks below passed for this implementation before the version/documentation update. Hardware feel is now owner-accepted; remote/absolute devices and mixed-monitor DPI transitions remain unverified. Prepare a PR for review; merging, tagging and publishing v0.4.8 await later owner instruction.
+
+## Captured model/world freecam (2026-09-25)
+
+Implemented on `feature/freecam-controls`, without a commit, PR or release. The existing model/Whole world Fly button captures the viewer: WASD follows the camera basis, Space/C follows world Y, mouse movement looks around, wheel adjusts speed and Escape restores ordinary controls at the current pose. Combined axes are normalized; elapsed-time movement has no inertia or surface-distance scaling. Initial speed is one tenth of the loaded scene bounds diagonal (1–1,000 units/s; 100 fallback), wheel multiplies/divides by 1.25 per notch with 0.1–100,000 limits. Speed survives exit/re-entry until preview replacement. Pitch remains bounded to ±89° and there is no terrain collision.
+
+Desktop owns foreground raw mouse registration, physical cursor clipping and explicit capture lifetime. A recentered legacy-pointer fallback supports absolute/remote/injected input without relative raw packets. Capture ends on Escape, deactivation, focus/capture loss, hidden/disabled/replaced viewers and close/disposal. Pending activation from toolbar overflow is guarded; normal presentation updates cannot enable Fly. Captured input suppresses native navigation and picking/editing. Escape does not also cancel exports/validation. The active icon and noninteractive speed/control hint follow actual state; the hint sits at the upper left to avoid the lower-left axis indicator. Animation navigation is unchanged.
+
+Verification: Release build zero warnings/errors; 237 tests pass, including 14 new navigation-math cases. The live freecam check passes for models/world, native confinement and injected pointer movement, relative-packet/fallback exclusion, six movement keys, key release/opposition, wheel speed-only, exact pose retention, Escape with an unrelated operation, deactivation/capture loss/disabled/replaced/closed viewers, overflow activation, resized physical bounds and re-entry. Orbit zoom/pan and source texture color checks pass. Render stability passes for opaque depth/order, idle buffers, upright Orbit/Fly and animations/world/models. Pickup UI/corpus checks pass for 27 drags and 13 maps / 1,225 records, including save verification and unchanged source hashes. Full animation layout/drafts/Space/transport/persistence checks pass. Reports/screenshots remain in OS temporary storage.
+
+The local test build retains version 0.4.7; the published v0.4.7 release is unchanged. Physical hardware mouse feel, direct hardware WM_INPUT delivery, absolute/remote devices and mixed-monitor DPI transitions remain user/manual checks; native injected input on this machine exercised the fallback.
+
 ## PR #6 history controls and Reset layout (2026-09-24)
 
 Both new findings are corrected. Main title/menu history controls now subscribe to the active document's animation and pickup edit changes independently of renderer lifetime; subscriptions move with document selection and detach on shutdown. Pinned edits to an inactive document do not drive the active document's controls. This fixes stale Undo/Redo state while inspecting a raw/non-animation asset.
