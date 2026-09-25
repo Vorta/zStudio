@@ -8,6 +8,7 @@
     <AssemblyTitle>zStudio</AssemblyTitle>
     <ApplicationIcon>Assets/studio.ico</ApplicationIcon>
     <PublishTrimmed>false</PublishTrimmed><PublishReadyToRun>true</PublishReadyToRun>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets/studio.ico" />

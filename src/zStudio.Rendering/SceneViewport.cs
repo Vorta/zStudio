@@ -138,7 +138,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     };
                     mesh.MouseDown3D += (_, e) =>
                     {
-                        if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
+                        if (!IsFlyActive && !IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
                         {
                             int at = hit.Tag is int instance ? instance : 0;
                             if (at >= 0 && at < found.Length && found[at].NodeIndex >= 0) NodeSelected?.Invoke(found[at].NodeIndex);
@@ -246,10 +246,10 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             else if (element is GroupModel3D group) foreach (var child in DepthMeshes(group.Children)) yield return child;
         }
     }
-    /// <summary>Zooms or flies at a viewport position using standard mouse-wheel deltas.</summary>
+    /// <summary>Orbit zoom using standard mouse-wheel deltas. Captured Fly uses speed adjustment instead.</summary>
     public void ZoomAt(Point position, int wheelDelta)
     {
-        if (wheelDelta == 0 || !viewport.IsZoomEnabled || viewport.Camera is not HCamera camera) return;
+        if (IsFlyActive || wheelDelta == 0 || !viewport.IsZoomEnabled || viewport.Camera is not HCamera camera) return;
         var direction = camera.LookDirection;
         double distance = direction.Length;
         if (distance <= 0 || !double.IsFinite(distance)) return;
@@ -262,7 +262,6 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             distance = (origin - camera.Position).Length;
         }
         // Refresh the focus distance so an old orbit target above the map cannot stall zoom.
-        // WalkAround also uses this length for movement: nearby surfaces need smaller steps.
         distance = Math.Max(distance, minimumClipDistance * 4);
         camera.LookDirection = direction * distance;
         if (!hasSurface) origin = camera.Position + camera.LookDirection;
@@ -277,7 +276,6 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             material.EnableUnLit = enabled;
         }
     }
-    public void SetFly(bool enabled) => viewport.CameraMode = enabled ? CameraMode.WalkAround : CameraMode.Inspect;
     public void SetBounds(bool enabled) { foreach (var box in bounds) box.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed; }
     public void Isolate(int? node)
     {
@@ -296,6 +294,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private void ClearMeshes()
     {
+        SetFly(false); flySpeedInitialized = false;
         ClearPickupEditing();
         groundGrid?.Dispose(); groundGrid = null;
         rotationVelocity = default; rotationPoint = null; cameraPoseDirty = true; authoredCameraPose = false;

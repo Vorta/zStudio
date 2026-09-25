@@ -4,6 +4,11 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## Unreleased
 
+## 0.4.8 — 2026-09-25
+
+- Replace model/Whole world Fly camera with captured freecam: WASD movement, Space/C vertical movement, mouse-look, wheel speed adjustment and Escape to release controls. Movement is time-based and independent of surface distance; diagonal input is normalized and the camera stays upright.
+- Release freecam input on focus/capture loss, hidden or replaced previews and shutdown. Show current speed and controls in the viewer, support toolbar overflow, and retain normal orbit/pickup controls after exit. Animation navigation is unchanged.
+
 ## 0.4.7 — 2026-09-24
 
 - Redesign the Windows 11 Fluent workspace with resizable navigation, preview, Inspector and bottom tool panes, saved layouts, workspace presets, and Compact/Comfortable density.

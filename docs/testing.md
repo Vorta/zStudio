@@ -4,6 +4,14 @@ Use the pinned .NET 10 SDK. Put transient reports and game-derived verification 
 
 The desktop test suite includes a real WPF close-lifecycle regression on an STA dispatcher. It clicks the actual unsaved-changes dialog buttons for single/multiple dirty documents, Discard, Cancel and retry, and repeated close requests. It checks retained dirty state and document lifetime cancellation, using synthetic in-memory documents and restoring application settings afterward. This exercises `Window.Close()` itself, not a direct invocation of the Closing handler; the latter would miss WPF's reentrant-close guard. Native Save As dialogs are outside this fixture.
 
+Freecam math tests cover travel at 30/60/144 frames per second, all six movement directions, normalized diagonals, vertical movement independent of pitch, mouse-look signs/pitch limits, fractional wheel speed adjustment, and bounded stalls. Run the live model/Whole world check separately:
+
+```powershell
+dotnet run --project tools/zStudio.PreviewCheck -c Release -- --freecam zbd_1999
+```
+
+This check briefly owns foreground input in its test window. It exercises the Fly button, native capture/cursor clipping, injected pointer movement and relative-packet forwarding, routed key movement/release, wheel speed without movement, Escape without unrelated operation cancellation, deactivation/capture loss, disabled/replaced viewers, re-entry, overflow transfer, resize and close cleanup. It verifies unchanged source hashes and restores settings. Screenshots go to `%TEMP%/zstudio-freecam-*`. Windows may provide injected input only as legacy pointer movement; this exercises the recentered fallback, not proof of physical-device WM_INPUT delivery. Physical mouse feel, absolute/remote devices and mixed-monitor DPI transitions still need manual coverage. Animation Fly capture is deliberately not added; existing Space/transport and camera-follow checks remain applicable.
+
 Pickup placement editing has an additional Windows UI and corpus check:
 
 ```powershell

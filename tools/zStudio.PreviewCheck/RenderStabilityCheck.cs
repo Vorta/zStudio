@@ -75,7 +75,9 @@ internal static class RenderStabilityCheck
                         Require(((fly ? cam.Position : cam.Position + cam.LookDirection) - anchor).Length < 1e-8, "Rotation moved the orbit target or Fly position.");
                     }
                     cam.UpDirection = new(0, -1, 0); await Task.Delay(100); Require(cam.UpDirection.Y > 0, "External camera roll was not removed.");
+                    var stopped = preview.CaptureView();
                     view.AddRotateForce(0, 1000); await Task.Delay(1800); Require(cam.UpDirection.Y > 0, "Native rotation inertia inverted the camera.");
+                    if (fly) Require(preview.CaptureView() == stopped, "Native rotation changed captured freecam.");
                 }
                 Console.WriteLine("PASS: upright Orbit/Fly, large drags, pole limits, no roll, fixed orbit target/Fly position and native rotation inertia.");
                 preview.SetFly(false);

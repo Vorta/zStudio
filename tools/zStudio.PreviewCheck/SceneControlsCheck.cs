@@ -68,22 +68,19 @@ internal static class SceneControlsCheck
                 if (!found) throw new InvalidOperationException("Could not find a map surface for navigation checks.");
                 double height = Math.Max(1, camera.LookDirection.Length * 0.01);
                 Point center = new(viewport.ActualWidth / 2, viewport.ActualHeight / 2);
-                foreach (bool fly in new[] { false, true })
+                scene.SetFly(false);
+                camera.Position = new(surface.X, surface.Y + height, surface.Z);
+                camera.LookDirection = new(0, -height * 0.1, 0); // Stale target still far above the terrain.
+                camera.UpDirection = new(0, 0, -1);
+                for (int step = 0; step < 25; step++)
                 {
-                    scene.SetFly(fly);
-                    camera.Position = new(surface.X, surface.Y + height, surface.Z);
-                    camera.LookDirection = new(0, -height * 0.1, 0); // Stale target still far above the terrain.
-                    camera.UpDirection = new(0, 0, -1);
-                    for (int step = 0; step < 25; step++)
-                    {
-                        await Task.Delay(25, timeout.Token);
-                        scene.ZoomAt(center, 120);
-                    }
-                    double remaining = camera.Position.Y - surface.Y;
-                    if (remaining <= camera.NearPlaneDistance || remaining >= height * 0.1)
-                        throw new InvalidOperationException($"{(fly ? "Fly" : "Orbit")} zoom failed: {height} → {remaining} above the map.");
-                    Console.WriteLine($"{(fly ? "Fly" : "Orbit")} zoom: {height:F3} → {remaining:F3} above the map, near clip {camera.NearPlaneDistance:F4}");
+                    await Task.Delay(25, timeout.Token);
+                    scene.ZoomAt(center, 120);
                 }
+                double remaining = camera.Position.Y - surface.Y;
+                if (remaining <= camera.NearPlaneDistance || remaining >= height * 0.1)
+                    throw new InvalidOperationException($"Orbit zoom failed: {height} → {remaining} above the map.");
+                Console.WriteLine($"Orbit zoom: {height:F3} → {remaining:F3} above the map, near clip {camera.NearPlaneDistance:F4}");
                 await Task.Delay(100, timeout.Token);
                 Save(scene.RenderImage(960, 640), Path.Combine(Path.GetTempPath(), "zbd-scene-controls-close.png"));
                 Point3D beforePan = camera.Position;
@@ -119,7 +116,7 @@ internal static class SceneControlsCheck
                 if (Math.Abs(pixel[2] - 40) > 1 || Math.Abs(pixel[1] - 80) > 1 || Math.Abs(pixel[0] - 120) > 1)
                     throw new InvalidOperationException($"Original RGB (40,80,120) rendered as ({pixel[2]},{pixel[1]},{pixel[0]}).");
                 Save(rendered, Path.Combine(Path.GetTempPath(), "zbd-scene-color-check.png"));
-                Console.WriteLine($"PASS: RGB (40,80,120) renders as ({pixel[2]},{pixel[1]},{pixel[0]}); texture toggle, orbit/fly close zoom, pan translation, and middle/Shift-right/right gesture bindings.");
+                Console.WriteLine($"PASS: RGB (40,80,120) renders as ({pixel[2]},{pixel[1]},{pixel[0]}); texture toggle, orbit close zoom, pan translation, and middle/Shift-right/right gesture bindings. Captured freecam is checked separately.");
                 viewport.Items.Remove(patch);
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
