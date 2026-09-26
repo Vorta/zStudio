@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR #8 static preview refresh cancellation (2026-09-26)
+
+Review finding 4111197082 is valid and corrected. Same-asset model/Whole world option refreshes now build a separate replacement viewport, keeping the published scene visible and interactive throughout asynchronous preparation and mesh creation. Only a current, completed request replaces it. Cancellation or failure disposes the incomplete replacement and restores published LOD/horizon/texture-pack controls; camera, selection, preview identity and loaded scene remain intact. Successful publication retains camera/selection and pickup edits, reconnects renderer interactions, assigns a new preview UUID and disposes the former viewport. New navigation and superseding requests cancel pending replacements.
+
+Release build has zero warnings/errors; all 246 asset-independent tests pass, including command catalog parity. Expanded corpus MCP checks cancel all three option types through StopMcpAsync for both Whole world and model previews, verify retained scene/data object identity, camera, option values, hidden loading overlay and successful capture using the original preview UUID, then verify successful replacement and capture without reselection. Existing animation/audio/texture/pickup/save/export checks also pass (TEMP/zstudio-mcp-88fb52a07177431a95b2de39281f64c8). Portable artifacts remain unchanged; merge/tag/release await owner instruction.
+
 ## PR #8 cancellation recovery and malformed keyframe parity (2026-09-26)
 
 The second review's three findings are valid and corrected. A canceled level-render refresh clears its loading overlay only if it remains the current request, without hiding a newer request's overlay. Audio retries after unmuting now link the scoped MCP operation token with editor lifetime. Default segment inspection tolerates malformed keyframe payloads, retaining scheduling/catalog fields and a generated read-only Keyframe diagnostic; unavailable segment indices return invalid_argument. Scheduling edits preserve the malformed payload bytes.

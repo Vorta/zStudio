@@ -129,6 +129,60 @@ internal static class McpPreviewCheck
                 Console.WriteLine("MCP sound initialization/play/pause/seek/stop passed.");
                 var gamezPath = Path.Combine(root, "m1", "gamez.zbd");
                 var (world, worldPreview) = await Select(gamezPath, "World", "Whole world");
+                async Task CheckCanceledStaticRefresh()
+                {
+                    var state = await Call("state", new { });
+                    string retainedPreview = state["preview"]!.GetValue<string>();
+                    var sceneHost = (System.Windows.Controls.ContentControl)window.FindName("SceneHost");
+                    var retainedScene = (Recoil.Zbd.Rendering.SceneViewport)sceneHost.Content;
+                    var retainedData = retainedScene.PreviewScene;
+                    var retainedView = retainedScene.CaptureView();
+                    var before = await Call("preview_state", new { preview = retainedPreview });
+                    var lod = (System.Windows.Controls.ComboBox)window.FindName("LodCombo");
+                    var pack = (System.Windows.Controls.ComboBox)window.FindName("TexturePackCombo");
+                    int retainedPack = pack.SelectedIndex;
+                    foreach (var changes in new object[]
+                    {
+                        new { lod = lod.Items.Count > 1 ? (lod.SelectedIndex + 1) % lod.Items.Count : lod.SelectedIndex },
+                        new { horizon = !before["horizon"]!.GetValue<bool>() },
+                        new { texturePack = before["texturePacks"]!.AsArray().Last()!["Path"]?.GetValue<string>() ?? "" }
+                    })
+                    {
+                        Task? shutdown = null;
+                        System.ComponentModel.PropertyChangedEventHandler cancel = async (_, e) =>
+                        {
+                            if (e.PropertyName != nameof(MainViewModel.Status) || window.ViewModel.Status != "Updating preview…") return;
+                            // Let replacement preparation start, then stop the actual
+                            // operation through the same shutdown path as the GUI.
+                            await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+                            shutdown = window.StopMcpAsync();
+                        };
+                        window.ViewModel.PropertyChanged += cancel;
+                        bool canceled = false;
+                        try { await Call("scene_options", new { preview = retainedPreview, changes }); }
+                        catch (InvalidDataException ex) when (ex.Message.Contains("canceled", StringComparison.Ordinal)) { canceled = true; }
+                        finally { window.ViewModel.PropertyChanged -= cancel; }
+                        if (shutdown != null) await shutdown;
+                        if (!canceled || !ReferenceEquals(sceneHost.Content, retainedScene) || !ReferenceEquals(retainedScene.PreviewScene, retainedData) || retainedScene.CaptureView() != retainedView)
+                            throw new InvalidDataException("Canceled static refresh replaced the retained scene or camera.");
+                        if (((FrameworkElement)window.FindName("EmptyPreview")).Visibility != Visibility.Collapsed || pack.SelectedIndex != retainedPack)
+                            throw new InvalidDataException("Canceled static refresh left an overlay or changed the texture picker.");
+                        var after = await Call("preview_state", new { preview = retainedPreview });
+                        if (!JsonNode.DeepEquals(before["lod"], after["lod"]) || !JsonNode.DeepEquals(before["horizon"], after["horizon"]))
+                            throw new InvalidDataException("Canceled static refresh retained uncommitted option values.");
+                        await Call("capture", new { target = "preview", preview = retainedPreview, width = 800, height = 600 });
+                    }
+                    await Call("scene_options", new { preview = retainedPreview, changes = new { horizon = !before["horizon"]!.GetValue<bool>() } });
+                    var published = await Call("state", new { });
+                    if (published["preview"]!.GetValue<string>() == retainedPreview || ReferenceEquals(sceneHost.Content, retainedScene))
+                        throw new InvalidDataException("Successful static refresh did not publish its replacement.");
+                    await Call("capture", new { target = "preview", preview = published["preview"]!.GetValue<string>(), width = 800, height = 600 });
+                }
+                await CheckCanceledStaticRefresh();
+                var modelRecord = window.ViewModel.SelectedDocument!.Document.Assets.First(a => a.Kind == Recoil.Zbd.Core.AssetKind.Model);
+                await Call("select_asset", new { document = world, kind = "Model", index = modelRecord.Index });
+                await CheckCanceledStaticRefresh();
+                (_, worldPreview) = await Select(gamezPath, "World", "Whole world");
                 foreach (double vertical in new[] { 1.0, -1.0 })
                 {
                     var upright = await Call("camera", new { preview = worldPreview, action = "set", position = new[] { 2000, 300, 2000 }, look = new[] { 0.0, vertical, 0.0 } });

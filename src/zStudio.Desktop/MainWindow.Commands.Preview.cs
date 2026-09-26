@@ -112,12 +112,13 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic).", [PreviewParameter,SceneChanges], false, async (a, _) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic).", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null) throw new StudioCommandException("unsupported","Use animation_options.");
             TargetViewport(a); var doc = shownDocument!; var asset = shownAsset!;
             foreach (var (name,value) in (JsonObject)a["changes"]!)
             {
+                token.ThrowIfCancellationRequested();
                 if (shownDocument != doc || shownAsset != asset) throw new StudioCommandException("context_changed", "The user selected another preview.");
                 switch(name)
                 {

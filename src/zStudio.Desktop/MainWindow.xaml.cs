@@ -145,6 +145,7 @@ public partial class MainWindow : Window
     }
     private void CancelPreview()
     {
+        staticRefresh?.Cancel(); publishedStaticOptions = null;
         previewId = Guid.NewGuid();
         flyRequest++; flyCamera?.End(); SynchronizeFly();
         ClearStaticPreviewProblems();
@@ -161,6 +162,9 @@ public partial class MainWindow : Window
     {
         if (animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         bool differentAsset = shownAsset?.Id != asset?.Id;
+        if (!differentAsset && asset != null && shownDocument == doc && scene?.PreviewScene != null &&
+            animation == null && SceneHost.Visibility == Visibility.Visible && publishedStaticOptions != null && ViewModel.Resolver != null)
+        { await RefreshStaticSceneAsync(doc, asset); return; }
         // Entering the animation viewer starts at Sequences. Consecutive animation
         // selections (including asynchronous replacement) retain the chosen page.
         if (asset?.Kind == AssetKind.Animation && shownAsset?.Kind != AssetKind.Animation) Layout.InspectorTab = 0;
@@ -213,6 +217,7 @@ public partial class MainWindow : Window
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty) : null;
                 if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
                 await scene.ShowAsync(doc.Document, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
+                publishedStaticOptions = ReadStaticSceneOptions();
                 if (mission != null)
                 {
                     AttachPickupEditor(doc);

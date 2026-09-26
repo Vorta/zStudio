@@ -15,6 +15,7 @@ public partial class MainWindow
         if (!ready || SceneHost.Visibility != Visibility.Visible || scene?.Mission == null ||
             ViewModel.SelectedDocument is not { } doc || ViewModel.Resolver is not { } resolver || shownAsset?.Kind != AssetKind.World) return;
         difficultyRefresh?.Cancel(); difficultyRefresh?.Dispose();
+        staticRefresh?.Cancel();
         using var request = PreviewOperation.Link(preview.Token);
         difficultyRefresh = CancellationTokenSource.CreateLinkedTokenSource(request.Token, doc.Lifetime.Token);
         var token = difficultyRefresh.Token; var current = scene; var asset = shownAsset;
