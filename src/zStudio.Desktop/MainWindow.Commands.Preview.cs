@@ -101,22 +101,28 @@ public partial class MainWindow
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null) throw new StudioCommandException("unsupported","Use animation_options.");
             TargetViewport(a); var doc = shownDocument!; var asset = shownAsset!;
-            if (((JsonObject)a["changes"]!).ContainsKey("highlight") && asset.Kind != AssetKind.World)
+            var changes = (JsonObject)a["changes"]!;
+            if (changes.ContainsKey("highlight") && asset.Kind != AssetKind.World)
                 throw new StudioCommandException("unsupported", "Surface highlighting is available only in Whole world.");
-            foreach (var (name,value) in (JsonObject)a["changes"]!)
+            // Schema validation covers types/enums. Validate current-view constraints
+            // for the entire batch before any control, preference or renderer changes.
+            int? requestedLod = changes.ContainsKey("lod") ? Int(changes, "lod") : null;
+            if (requestedLod is int rank && (rank < 0 || rank >= LodCombo.Items.Count))
+                throw new StudioCommandException("invalid_argument", "LOD outside available range.");
+            PackChoice? requestedPack = null;
+            if (changes.ContainsKey("texturePack"))
+                requestedPack = TexturePackCombo.Items.Cast<PackChoice>().FirstOrDefault(p => (p.Path ?? "").Equals(Text(changes, "texturePack"), StringComparison.OrdinalIgnoreCase))
+                    ?? throw new StudioCommandException("invalid_argument", "Choose an available texture variant.");
+            long highlightGeneration = worldHighlightGeneration;
+            foreach (var (name,value) in changes)
             {
                 token.ThrowIfCancellationRequested();
                 if (shownDocument != doc || shownAsset != asset) throw new StudioCommandException("context_changed", "The user selected another preview.");
                 Task<Guid?>? refresh = null;
                 switch(name)
                 {
-                    case "highlight": SetWorldHighlightMode(value!.GetValue<string>() switch
-                    {
-                        "nonDefaultSoils" => WorldHighlightMode.NonDefaultSoils,
-                        "canModify" => WorldHighlightMode.CanModify,
-                        "clipTo" => WorldHighlightMode.ClipTo,
-                        _ => WorldHighlightMode.None
-                    }); break;
+                    // Publish the highlight only after every requested refresh succeeds.
+                    case "highlight": break;
                     case "textures": TexturesEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "wireframe": Wireframe.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "bounds": BoundsEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
@@ -133,9 +139,9 @@ public partial class MainWindow
                         if (asset.Kind == AssetKind.World && (changedDifficulty || staticRefresh != null))
                         { refresh = staticRefreshWork; await previewWork; }
                         break;
-                    case "lod": int lod = value!.GetValue<int>(); if (lod < 0 || lod >= LodCombo.Items.Count) throw new StudioCommandException("invalid_argument","LOD outside available range."); updating = true; LodCombo.SelectedIndex = lod; updating = false; refresh = RefreshStaticSceneAsync(doc,asset); await (previewWork = refresh); break;
+                    case "lod": updating = true; LodCombo.SelectedIndex = requestedLod!.Value; updating = false; refresh = RefreshStaticSceneAsync(doc,asset); await (previewWork = refresh); break;
                     case "horizon": updating = true; BackdropEnabled.IsChecked = value!.GetValue<bool>(); updating = false; refresh = RefreshStaticSceneAsync(doc,asset); await (previewWork = refresh); break;
-                    case "texturePack": string pack = value!.GetValue<string>(); var choice = TexturePackCombo.Items.Cast<PackChoice>().FirstOrDefault(p => (p.Path ?? "").Equals(pack,StringComparison.OrdinalIgnoreCase)) ?? throw new StudioCommandException("invalid_argument","Choose an available texture variant."); updating = true; TexturePackCombo.SelectedItem = choice; updating = false; refresh = RefreshStaticSceneAsync(doc,asset); await (previewWork = refresh); break;
+                    case "texturePack": updating = true; TexturePackCombo.SelectedItem = requestedPack; updating = false; refresh = RefreshStaticSceneAsync(doc,asset); await (previewWork = refresh); break;
                     default: throw new StudioCommandException("unknown_option",name);
                 }
                 token.ThrowIfCancellationRequested();
@@ -147,6 +153,18 @@ public partial class MainWindow
                     if (published == null) throw new StudioCommandException("preview_unavailable", "The requested scene was not published. " + ViewModel.Status);
                     if (previewId != published) throw new StudioCommandException("context_changed", "The published preview was replaced. Read zstudio_state before retrying.");
                 }
+            }
+            if (changes.ContainsKey("highlight"))
+            {
+                if (worldHighlightGeneration != highlightGeneration)
+                    throw new StudioCommandException("context_changed", "The user changed the highlight during this request. Read zstudio_state before retrying.");
+                SetWorldHighlightMode(Text(changes, "highlight") switch
+                {
+                    "nonDefaultSoils" => WorldHighlightMode.NonDefaultSoils,
+                    "canModify" => WorldHighlightMode.CanModify,
+                    "clipTo" => WorldHighlightMode.ClipTo,
+                    _ => WorldHighlightMode.None
+                });
             }
             return Result(new { preview = previewId, ViewModel.Status });
         });

@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR #9 scene-option batch validation (2026-09-26)
+
+Addressed review comment 4112628880. Static scene-option requests now validate the complete batch's current-view LOD and texture-pack constraints before mutating controls, preferences or rendering. The typed LOD schema also rejects negative/overflowing ranks. Requested highlights are deferred until every requested refresh succeeds; failure, cancellation or supersession retains the existing mode. A highlight generation check preserves newer GUI choices even when they do not start another geometry refresh. Shared GUI setters, source identities and document revisions remain unchanged. Updated MCP contract/capability documentation and regenerated the embedded catalog.
+
+The new named-pipe regression first reproduced the original failure, then passed for both JSON key orders, invalid/overflowing LOD, unavailable texture pack, invalid difficulty, unchanged controls/preview/camera/revision, and valid requests that fail to load. Release build has zero warnings/errors; all 281 tests pass. The expanded real-file MCP check passes canceled highlight+LOD/horizon/texture-pack/difficulty batches, successful publication, newer GUI highlights with and without replacement refreshes, and existing animation/edit/verified Save As, texture/export, audio and pickup workflows (`%TEMP%/zstudio-mcp-57301c04b17841c598087e7071cb356f`). Source datasets and local artifacts remain untouched. PR CI will validate the pushed revision before the review thread is resolved.
+
 ## v0.5.2 PR preparation (2026-09-26)
 
 PR #9 is open: https://github.com/Vorta/zStudio/pull/9. Initial hosted CI passed build but exposed the responsive fixture's dependence on a native window exceeding the runner desktop width. The fixture now sizes the actual WPF content explicitly within a deliberately constrained 800-DIP window, retaining all breakpoint, GUI/MCP, focus, scroll, splitter and draft assertions. All 281 Release tests pass locally with the constrained window; hosted CI is being rerun. Application behavior and repository protections are unchanged.

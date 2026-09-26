@@ -59,6 +59,34 @@ internal static class WorldHighlightMcpChecks
             Assert.Equal("none", (await State())["highlight"]!.GetValue<string>());
             await Options(new() { ["highlight"] = "CANMODIFY" }, "invalid_argument");
             await Options(new() { ["highlight"] = true }, "invalid_argument");
+            // Dynamic constraints must reject the whole batch in either JSON order.
+            await Options(new() { ["highlight"] = "canModify" });
+            foreach (var invalid in new JsonObject[] { new() { ["lod"] = 999 }, new() { ["lod"] = long.MaxValue },
+                new() { ["texturePack"] = "unavailable-texture-pack" }, new() { ["difficulty"] = "Impossible" } })
+            foreach (bool highlightFirst in new[] { true, false })
+            {
+                var before = await State();
+                var changes = new JsonObject();
+                if (highlightFirst) changes["highlight"] = "clipTo";
+                changes["wireframe"] = true;
+                foreach (var (name, value) in invalid) changes[name] = value!.DeepClone();
+                if (!highlightFirst) changes["highlight"] = "clipTo";
+                await Options(changes, "invalid_argument");
+                Assert.True(JsonNode.DeepEquals(before, await State()));
+                Assert.Equal(WorldHighlightMode.CanModify, viewport.HighlightMode);
+                Assert.True(buttons[1].IsChecked); Assert.False(buttons[0].IsChecked); Assert.False(buttons[2].IsChecked);
+                Assert.False(((ToggleButton)main.FindName("Wireframe")).IsChecked);
+                Assert.Equal(pose, viewport.CaptureView()); Assert.Equal(0, doc.Revision);
+            }
+            // A valid option can still fail during refresh. Keep the existing
+            // highlight and native toggles when this synthetic document cannot load.
+            Set("publishedStaticOptions", typeof(MainWindow).GetMethod("ReadStaticSceneOptions", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, null));
+            var beforeFailure = await State();
+            await Options(new() { ["highlight"] = "clipTo", ["horizon"] = !beforeFailure["horizon"]!.GetValue<bool>() }, "preview_unavailable");
+            Assert.True(JsonNode.DeepEquals(beforeFailure, await State()));
+            Assert.Equal(WorldHighlightMode.CanModify, viewport.HighlightMode);
+            Assert.True(buttons[1].IsChecked); Assert.False(buttons[2].IsChecked);
+            await Options(new() { ["highlight"] = "none" });
             await Call("scene_options", new() { ["preview"] = Guid.NewGuid().ToString(), ["changes"] = new JsonObject { ["highlight"] = "clipTo" } }, "stale_preview");
             foreach (var kind in new[] { AssetKind.Model, AssetKind.Node, AssetKind.Animation, AssetKind.Texture })
             {

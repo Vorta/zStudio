@@ -26,3 +26,5 @@ MCP uses the same controls through `zstudio_scene_options`:
 ```
 
 Valid values are `none`, `nonDefaultSoils`, `canModify` and `clipTo`. `zstudio_preview_state.highlight` reports the active mode, or `null` outside Whole world. Mode-only changes retain the preview UUID; other options that replace the scene still follow their existing preview-lifetime rules. See [MCP contract](mcp.md).
+
+Invalid options in the same request are rejected before changing the highlight or other controls. When combined with a scene refresh, the requested highlight waits for successful publication. Failed or canceled refreshes retain the existing mode, and newer GUI highlight choices take precedence over the pending request.

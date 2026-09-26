@@ -1048,7 +1048,7 @@
       {
         "Name": "changes",
         "Type": "object",
-        "Description": "Static model/world options.",
+        "Description": "Static model/world options. Validate the entire batch before applying changes; publish highlights only after requested refreshes succeed.",
         "Required": true,
         "Choices": null,
         "Properties": [
@@ -1100,11 +1100,11 @@
           {
             "Name": "lod",
             "Type": "integer",
-            "Description": "Authored LOD rank.",
+            "Description": "Authored LOD rank within the active viewer\u0027s available range.",
             "Required": false,
             "Choices": null,
             "Properties": null,
-            "Minimum": -2147483648,
+            "Minimum": 0,
             "Maximum": 2147483647
           },
           {

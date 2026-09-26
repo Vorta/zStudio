@@ -15,11 +15,11 @@ public partial class MainWindow
         P("worldPath","string","GameZ archive path."), P("root","integer","Scene root node index."),
         P("activationOrigin","string","Comma-separated XYZ, or blank for default."), P("activationTarget","string","Comma-separated XYZ, or blank for default.")
     ]);
-    private static StudioParameter SceneChanges => new("changes", "object", "Static model/world options.", true, Properties:
+    private static StudioParameter SceneChanges => new("changes", "object", "Static model/world options. Validate the entire batch before applying changes; publish highlights only after requested refreshes succeed.", true, Properties:
     [
         .. new[] { "textures", "wireframe", "bounds", "horizon" }.Select(n => P(n,"boolean",n)),
         P("highlight", "string", "Whole world only: solid yellow non-default soils, green CanModify or red ClipTo; none restores normal appearance.", false, "none", "nonDefaultSoils", "canModify", "clipTo"),
-        P("lod","integer","Authored LOD rank."), P("difficulty","string","Mission layout.",false,"Easy","Medium","Hard"), P("texturePack","string","Available texture pack path, or empty for automatic.")
+        new("lod","integer","Authored LOD rank within the active viewer's available range.", Minimum: 0, Maximum: int.MaxValue), P("difficulty","string","Mission layout.",false,"Easy","Medium","Hard"), P("texturePack","string","Available texture pack path, or empty for automatic.")
     ]);
     private static StudioParameter WorkspaceChanges => new("changes", "object", "Optional presentation preferences.", Properties:
     [

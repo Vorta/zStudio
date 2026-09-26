@@ -6,6 +6,7 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     private WorldHighlightMode worldHighlightMode;
+    private long worldHighlightGeneration;
     private bool synchronizingWorldHighlight;
 
     private static string WorldHighlightName(WorldHighlightMode mode) => mode switch
@@ -26,6 +27,7 @@ public partial class MainWindow
 
     private void SetWorldHighlightMode(WorldHighlightMode mode)
     {
+        ++worldHighlightGeneration;
         worldHighlightMode = mode;
         synchronizingWorldHighlight = true;
         try

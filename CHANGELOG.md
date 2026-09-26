@@ -7,6 +7,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Add Blender-style navigation to model, Whole world and animation previews: middle-mouse orbit, Shift+middle pan, Ctrl+middle centered zoom, Ctrl+Shift+middle dolly, and numpad view/projection/framing shortcuts with retained smooth inertia.
 - Add exact orthographic axis views, a game-axis-aligned view cube and View > 3D Navigation actions. Retain explicitly selected orthographic projection while orbiting, preserve camera state through preview refreshes, and exit animation Follow camera on manual navigation.
 - Highlight Whole world non-default soils in yellow, CanModify regions in green or ClipTo regions in red, preserving texture transparency and source data.
+- Validate complete MCP scene-option batches before applying changes, and preserve the current highlight on failed/canceled refreshes or newer GUI input.
 - Place Files in its own resizable column to the left of Assets, Search and Document scene when the window is wide enough; retain the Files tab at narrower widths and preserve navigation, focus and saved layout preferences.
 - Restore native Windows 11 rounded window corners while retaining standard maximized/Snap behavior.
 - Expose navigation, highlighting and responsive layout through shared MCP commands, typed schemas, discovery metadata and GUI/protocol regression checks.
