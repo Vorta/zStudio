@@ -144,7 +144,7 @@ public partial class MainWindow : Window
     }
     private void CancelPreview()
     {
-        staticRefresh?.Cancel(); staticRefreshWork = null; publishedStaticOptions = null;
+        ++staticRefreshGeneration; staticRefresh?.Cancel(); staticRefreshWork = null; publishedStaticOptions = null;
         previewId = Guid.NewGuid();
         flyRequest++; flyCamera?.End(); SynchronizeFly();
         ClearStaticPreviewProblems();
@@ -198,7 +198,7 @@ public partial class MainWindow : Window
             }
             else if (asset?.Kind == AssetKind.Sound)
             {
-                var info = await Task.Run(() => WaveDecoder.Read(bytes), token); var peaks = await Task.Run(() => WaveDecoder.Peaks(bytes, info), token); token.ThrowIfCancellationRequested();
+                var info = await Task.Run(() => WaveDecoder.Read(bytes, token), token); var peaks = await Task.Run(() => WaveDecoder.Peaks(bytes, info), token); token.ThrowIfCancellationRequested();
                 waveInfo = info; wave = new(new MemoryStream(bytes.ToArray(), false)); AudioPanel.Visibility = Visibility.Visible;
                 AudioDetails.Text = $"{info.SampleRate:N0} Hz · {info.Channels} {(info.Channels == 1 ? "channel" : "channels")} · {info.BitsPerSample}-bit · encoding {info.Encoding}\n{info.Duration:F3} seconds · {info.DataLength:N0} audio bytes";
                 Waveform.Set(peaks, info.Duration); AudioSeek.Maximum = info.Duration; AudioCues.ItemsSource = info.Cues.Select(c => new CueChoice(c.Id, c.SampleOffset, (double)c.SampleOffset / info.SampleRate)).ToArray(); UpdateAudioPosition();
@@ -551,6 +551,12 @@ public partial class MainWindow : Window
     {
         flyRequest++; flyCamera?.End();
         if (resolvingClose) { e.Cancel = true; return; }
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        {
+            automationCloseRequested = false; e.Cancel = true;
+            ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
+            return;
+        }
         System.Windows.Input.Keyboard.ClearFocus();
         if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {

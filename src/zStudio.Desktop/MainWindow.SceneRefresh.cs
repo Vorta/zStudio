@@ -11,6 +11,7 @@ public partial class MainWindow
     private StaticSceneOptions? publishedStaticOptions;
     private CancellationTokenSource? staticRefresh;
     private Task<Guid?>? staticRefreshWork;
+    private long staticRefreshGeneration;
     private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty);
     private void RestoreStaticSceneOptions(StaticSceneOptions options)
     {
@@ -23,7 +24,15 @@ public partial class MainWindow
         finally { updating = wasUpdating; restoringStaticOptions = false; }
     }
 
-    private Task<Guid?> RefreshStaticSceneAsync(DocumentModel doc, AssetRecord asset) => staticRefreshWork = RefreshStaticSceneCoreAsync(doc, asset);
+    private Task<Guid?> RefreshStaticSceneAsync(DocumentModel doc, AssetRecord asset)
+    {
+        long generation = ++staticRefreshGeneration;
+        var work = RefreshStaticSceneCoreAsync(doc, asset);
+        // A synchronous status/binding callback may already have started a newer
+        // refresh before the async core reaches its first await.
+        if (generation == staticRefreshGeneration) staticRefreshWork = work;
+        return work;
+    }
 
     private async Task<Guid?> RefreshStaticSceneCoreAsync(DocumentModel doc, AssetRecord asset)
     {

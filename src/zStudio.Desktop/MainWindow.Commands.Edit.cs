@@ -90,7 +90,12 @@ public partial class MainWindow
             var d = TargetDocument(a, true); d.PickupsLocked = Flag(a, "locked"); if (pickupDocument == d) { updating = true; PickupLocked.IsChecked = d.PickupsLocked; updating = false; scene?.SetPickupLocked(d.PickupsLocked); } return Result(DocumentState(d));
         });
         Register(r, "pickup_move", "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements.", true,
-            [DocumentParameter, RevisionParameter, P("source", "object", "Exact source identity returned by pickups.", true), P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)], a =>
+            [DocumentParameter, RevisionParameter, new("source", "object", "Exact source identity returned by pickups; field names are case-sensitive.", true, Properties:
+                [P("ArchivePath", "string", "Owning archive path returned by pickups.", true),
+                 new("AssetIndex", "integer", "Resource asset index returned by pickups.", true, Minimum: 0, Maximum: int.MaxValue),
+                 P("ResourceName", "string", "Resource name returned by pickups.", true),
+                 new("RecordIndex", "integer", "Placement record index returned by pickups.", true, Minimum: 0, Maximum: int.MaxValue)]),
+             P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)], a =>
         {
             var d = TargetDocument(a, true); if (d.PickupsLocked) throw new StudioCommandException("locked", "Unlock pickup editing first.");
             var source = System.Text.Json.JsonSerializer.Deserialize<MissionPickupSource>(a["source"]!.ToJsonString()) ?? throw new StudioCommandException("invalid_argument", "Missing pickup identity.");

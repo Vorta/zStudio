@@ -4,14 +4,16 @@ namespace Recoil.Zbd.Core.Formats;
 
 public static class WaveDecoder
 {
-    public static WaveInfo Read(ReadOnlyMemory<byte> bytes)
+    public static WaveInfo Read(ReadOnlyMemory<byte> bytes, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         BinaryCursor c = new(bytes); if (c.String(4) != "RIFF") throw new InvalidDataException("Missing RIFF marker.");
         uint riffSize = c.U32(); if (c.String(4) != "WAVE") throw new InvalidDataException("Missing WAVE marker.");
         BinaryCursor.CheckRange(bytes.Length, 8, riffSize); int end = checked((int)riffSize + 8);
         ushort encoding = 0, channels = 0, bits = 0, align = 0; uint rate = 0; int dataOffset = -1, dataLength = 0; List<WaveCue> cues = [];
         while (c.Position + 8 <= end)
         {
+            token.ThrowIfCancellationRequested();
             string type = Encoding.ASCII.GetString(c.Take(4).Span); uint size = c.U32(); BinaryCursor.CheckRange(end, c.Position, size);
             int start = c.Position; BinaryCursor chunk = new(c.Take((int)size), start);
             if (type == "fmt ") { encoding = chunk.U16(); channels = chunk.U16(); rate = chunk.U32(); chunk.Skip(4); align = chunk.U16(); bits = chunk.U16(); }
@@ -19,7 +21,11 @@ public static class WaveDecoder
             else if (type == "cue ")
             {
                 int count = chunk.Count(chunk.U32(), 24);
-                for (int i = 0; i < count; i++) { uint id = chunk.U32(); chunk.Skip(16); cues.Add(new(id, chunk.U32())); }
+                for (int i = 0; i < count; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    uint id = chunk.U32(); chunk.Skip(16); cues.Add(new(id, chunk.U32()));
+                }
             }
             if ((size & 1) != 0 && c.Position < end) c.Skip(1);
         }

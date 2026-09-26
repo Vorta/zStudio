@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Export;
+using Recoil.Zbd.Automation;
 
 namespace Recoil.Zbd.Desktop;
 
@@ -28,6 +29,8 @@ public partial class MainWindow
     private DocumentModel? assetContextDocument, sceneContextDocument;
     private bool assetPointerContext, scenePointerContext;
     private long propertyRequest;
+    internal Func<ZbdDocument, AssetRecord, CancellationToken, Task<JsonObject>> LoadAssetPropertiesAsync { get; set; } =
+        static (doc, asset, token) => Task.Run(() => ExportService.AssetJson(doc, asset, token), token);
     internal PropertiesWindow? OpenPropertiesWindow => propertiesWindow;
 
     private PropertiesWindow GetPropertiesWindow()
@@ -58,26 +61,35 @@ public partial class MainWindow
         else if (doc.AnimationEdits is { } edits) { if (redo) edits.Redo(); else edits.Undo(); }
         UpdateDocumentCommands();
     }
-    internal void OpenAnimationProperties(DocumentModel doc, int entry, Guid sequence, Guid ev)
+    internal PropertiesWindow? OpenAnimationProperties(DocumentModel doc, int entry, Guid sequence, Guid ev)
     {
         ++propertyRequest;
-        if (doc.IsDisposed) return;
-        var window = GetPropertiesWindow(); PresentProperties(window, window.SetAnimation(doc, entry, sequence, ev));
+        if (doc.IsDisposed) return null;
+        var window = GetPropertiesWindow(); bool accepted = window.SetAnimation(doc, entry, sequence, ev);
+        PresentProperties(window, accepted); return accepted ? window : null;
     }
-    internal async Task OpenAssetPropertiesAsync(DocumentModel doc, AssetRecord asset)
+    internal async Task<PropertiesWindow?> OpenAssetPropertiesAsync(DocumentModel doc, AssetRecord asset, CancellationToken cancellationToken = default, bool automation = false)
     {
         long request = ++propertyRequest;
-        if (doc.IsDisposed) return;
-        if (asset.Kind == AssetKind.Animation && doc.AnimationEdits != null) { OpenAnimationProperties(doc, asset.Index, Guid.Empty, Guid.Empty); return; }
+        if (doc.IsDisposed) return null;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (asset.Kind == AssetKind.Animation && doc.AnimationEdits != null) return OpenAnimationProperties(doc, asset.Index, Guid.Empty, Guid.Empty);
         try
         {
-            var token = doc.Lifetime.Token;
-            var json = await Task.Run(() => ExportService.AssetJson(doc.Document, asset, token), token);
-            if (doc.IsDisposed || request != propertyRequest) return;
-            var window = GetPropertiesWindow(); PresentProperties(window, window.SetReadOnly(doc, $"{asset.Name} · {asset.Kind} #{asset.Index}", json));
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, doc.Lifetime.Token);
+            var json = await LoadAssetPropertiesAsync(doc.Document, asset, cancellation.Token);
+            if (doc.IsDisposed || request != propertyRequest) return null;
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (automation && propertiesWindow?.HasPendingDrafts == true)
+                throw new StudioCommandException("pending_drafts", "Properties input changed while loading. Resolve drafts before retargeting.");
+            var window = GetPropertiesWindow(); bool accepted = window.SetReadOnly(doc, $"{asset.Name} · {asset.Kind} #{asset.Index}", json);
+            PresentProperties(window, accepted);
+            return accepted && request == propertyRequest && propertiesWindow == window && window.Document == doc ? window : null;
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException) { Report(ex); }
+        catch (OperationCanceledException) when (doc.IsDisposed || request != propertyRequest) { return null; }
+        catch (OperationCanceledException) when (!automation) { }
+        catch (Exception ex) when (!automation && ex is IOException or InvalidDataException or ArgumentException) { Report(ex); }
+        return null;
     }
     private void PropertiesClick(object sender, RoutedEventArgs e) => OpenCurrentProperties();
     internal async void OpenCurrentProperties()

@@ -7,6 +7,7 @@ namespace Recoil.Zbd.Desktop;
 
 public partial class MainWindow
 {
+    private bool automationCloseRequested;
     private void RegisterWorkspacePresentation(StudioCommands r)
     {
         Register(r,"workspace_view","Read or set presentation preferences. Supports theme, density, preset, navigator/inspector/tools visibility, pane dimensions and tab indices. Does not commit drafts.",true,
@@ -57,18 +58,29 @@ public partial class MainWindow
             return Result(new { state=WindowState.ToString(),Width,Height,closing=action=="close" });
         });
         Register(r,"properties_open","Open the reusable Properties window for an explicit asset or animation sequence/event; current pending drafts must be resolved first.",true,
-            [..AssetParameters,P("sequence","string","Animation sequence GUID."),P("event","string","Animation event GUID.")],async (a,_)=>
+            [..AssetParameters,P("sequence","string","Animation sequence GUID."),P("event","string","Animation event GUID.")],async (a,token)=>
         {
             if(propertiesWindow?.HasPendingDrafts==true) throw new StudioCommandException("pending_drafts","Resolve Properties drafts before retargeting.");
             var doc=TargetDocument(a); var asset=TargetAsset(doc,a);
-            if(asset.Kind==Core.AssetKind.Animation) OpenAnimationProperties(doc,asset.Index,GuidArg(a,"sequence"),GuidArg(a,"event"));
-            else await OpenAssetPropertiesAsync(doc,asset);
-            return Result(new { document=doc.SessionId,title=propertiesWindow?.Title,properties=propertiesWindow?.CurrentJson });
+            PropertiesWindow? opened;
+            if(asset.Kind==Core.AssetKind.Animation)
+            {
+                Guid sequence = GuidArg(a,"sequence"), ev = GuidArg(a,"event");
+                var entry = doc.AnimationEdits?.Package.Entries.ElementAtOrDefault(asset.Index) ?? throw new StudioCommandException("unsupported", "Animation properties are unavailable.");
+                if (sequence == Guid.Empty && ev != Guid.Empty || sequence != Guid.Empty && !entry.AllSequences.Any(s => s.Id == sequence && (ev == Guid.Empty || s.Events.Any(e => e.Id == ev))))
+                    throw new StudioCommandException("stale_record", "Animation sequence/event is unavailable.");
+                opened = OpenAnimationProperties(doc,asset.Index,sequence,ev);
+            }
+            else opened = await OpenAssetPropertiesAsync(doc,asset,token,automation: true);
+            token.ThrowIfCancellationRequested();
+            if (opened == null || propertiesWindow != opened || opened.Document != doc || !opened.IsVisible)
+                throw new StudioCommandException("context_changed", "The requested Properties target was not published.");
+            return Result(new { document=doc.SessionId,asset=asset.Id,title=opened.Title,properties=opened.CurrentJson });
         });
         Register(r,"properties_close","Close the Properties window after drafts have been explicitly resolved.",true,[],_=>
         {
             if(propertiesWindow?.HasPendingDrafts==true) throw new StudioCommandException("pending_drafts","Resolve Properties drafts first.");
-            propertiesWindow?.CloseResolved(); return Result(new { closed=true });
+            ++propertyRequest; propertiesWindow?.CloseResolved(); return Result(new { closed=true });
         });
         Register(r,"properties_state","Read the pinned Properties window identity, content and current editable fields.",false,[],_ =>
             Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.AnimationFields ?? propertiesWindow?.PickupFields)?.DescribeAutomationFields() }));
@@ -79,7 +91,7 @@ public partial class MainWindow
             if(data == null || node<0 || node>=data.Nodes.Count) throw new StudioCommandException("stale_record","Scene node unavailable.");
             if(Flag(a,"open"))
             {
-                RequireNoDrafts(); var w=GetPropertiesWindow(); var actor=viewport.PickupAt(node);
+                RequireNoDrafts(); ++propertyRequest; var w=GetPropertiesWindow(); var actor=viewport.PickupAt(node);
                 bool opened=actor?.Pickup is { } pickup && shownDocument!.PickupEdits?.Find(pickup.Source) != null
                     ? w.SetPickup(shownDocument!,pickup.Source,data.Nodes[node].Name,data.Nodes[node].Metadata)
                     : w.SetReadOnly(shownDocument!,data.Nodes[node].Name,data.Nodes[node].Metadata);
@@ -97,5 +109,5 @@ public partial class MainWindow
     {
         if(index<0 || index>=tabs.Items.Count || tabs.Items[index] is not TabItem { Visibility:Visibility.Visible,IsEnabled:true }) throw new StudioCommandException("unavailable_tab","This tab is unavailable in the current workspace.");
     }
-    private async Task CloseAfterResponseAsync() { await Task.Delay(250); Close(); }
+    private async Task CloseAfterResponseAsync() { await Task.Delay(250); if (!IsLoaded) return; automationCloseRequested = true; Close(); }
 }

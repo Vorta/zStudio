@@ -48,12 +48,14 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
     public string Name => Spec?.Name ?? $"Unknown event 0x{Type:X2}";
     public AnimationEvent Clone() => new((byte[])Bytes.Clone(), SourceOffset) { Id = Id };
     public AnimationEvent Duplicate() => new((byte[])Bytes.Clone());
-    public IReadOnlyList<AnimationKeyframe> Keyframes()
+    public IReadOnlyList<AnimationKeyframe> Keyframes(CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         if (Type != 12) return [];
         List<AnimationKeyframe> frames = []; int offset = 32;
         while (offset < Bytes.Length)
         {
+            token.ThrowIfCancellationRequested();
             BinaryCursor.CheckRange(Bytes.Length, offset, 12);
             int flags = I32(offset), length = 12 + 28 * System.Numerics.BitOperations.PopCount((uint)flags & 7);
             BinaryCursor.CheckRange(Bytes.Length, offset, length);
@@ -68,13 +70,14 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
         foreach (var frame in frames) { frame.Validate(); output.Write(frame.Bytes); }
         var result = new AnimationEvent(output.ToArray(), SourceOffset) { Id = Id }; result.SetInt(4, result.Bytes.Length); return result;
     }
-    public JsonObject ToJson()
+    public JsonObject ToJson(CancellationToken token = default)
     {
-        JsonObject value = new() { ["event"] = Name, ["type_id"] = (int)Type, ["start_mode"] = AnimationCatalog.ModeName(StartMode), ["start_threshold"] = JsonData.Number(Threshold), ["record_size"] = Bytes.Length, ["source_offset"] = SourceOffset, ["preview"] = Spec?.Support ?? "Unavailable: unknown event", ["raw_hex"] = Convert.ToHexStringLower(Bytes) };
+        token.ThrowIfCancellationRequested();
+        JsonObject value = new() { ["event"] = Name, ["type_id"] = (int)Type, ["start_mode"] = AnimationCatalog.ModeName(StartMode), ["start_threshold"] = JsonData.Number(Threshold), ["record_size"] = Bytes.Length, ["source_offset"] = SourceOffset, ["preview"] = Spec?.Support ?? "Unavailable: unknown event", ["raw_hex"] = JsonData.Hex(Bytes, token) };
         if (Spec != null) foreach (var field in Spec.Fields.Where(f => f.Offset + f.Size <= Bytes.Length)) value[field.Name] = field.Read(this);
         if (Type == 12)
         {
-            try { value["keyframes"] = new JsonArray(Keyframes().Select(f => (JsonNode?)f.ToJson()).ToArray()); }
+            try { value["keyframes"] = JsonData.Array(Keyframes(token), f => f.ToJson(), token); }
             catch (InvalidDataException ex) { value["keyframe_diagnostic"] = ex.Message; }
         }
         return value;
@@ -146,14 +149,18 @@ public sealed class AnimationEntry(byte[] header, int index, long offset) : Anim
         for (int i = 0; i < 8; i++) copy.References[i].AddRange(References[i].Select(r => new AnimationRecord((byte[])r.Bytes.Clone())));
         copy.Sequences.AddRange(Sequences.Select(s => s.Clone())); return copy;
     }
-    public JsonObject ToJson() => new()
+    public JsonObject ToJson(CancellationToken token = default)
     {
-        ["name"] = Name, ["root"] = RootName, ["attachment"] = AttachName, ["index"] = Index,
-        ["source_offset"] = SourceOffset, ["source_length"] = SourceLength, ["header_hex"] = Convert.ToHexStringLower(Bytes),
-        ["references"] = new JsonArray(References.Select(table => (JsonNode?)new JsonArray(table.Select(r => (JsonNode?)JsonValue.Create(Convert.ToHexStringLower(r.Bytes))).ToArray())).ToArray()),
-        ["sequences"] = new JsonArray(AllSequences.Select(s => (JsonNode?)new JsonObject { ["name"] = s.Name, ["phase"] = s == Primary ? "reset_stop" : "runtime", ["reset_state"] = s.ResetMode,
-            ["header_hex"] = Convert.ToHexStringLower(s.Bytes), ["events"] = new JsonArray(s.Events.Select(e => (JsonNode?)e.ToJson()).ToArray()), ["opaque_tail_hex"] = Convert.ToHexStringLower(s.OpaqueTail) }).ToArray())
-    };
+        token.ThrowIfCancellationRequested();
+        return new()
+        {
+            ["name"] = Name, ["root"] = RootName, ["attachment"] = AttachName, ["index"] = Index,
+            ["source_offset"] = SourceOffset, ["source_length"] = SourceLength, ["header_hex"] = Convert.ToHexStringLower(Bytes),
+            ["references"] = JsonData.Array(References, table => JsonData.Array(table, r => JsonValue.Create(JsonData.Hex(r.Bytes, token)), token), token),
+            ["sequences"] = JsonData.Array(AllSequences, s => new JsonObject { ["name"] = s.Name, ["phase"] = s == Primary ? "reset_stop" : "runtime", ["reset_state"] = s.ResetMode,
+                ["header_hex"] = Convert.ToHexStringLower(s.Bytes), ["events"] = JsonData.Array(s.Events, e => e.ToJson(token), token), ["opaque_tail_hex"] = JsonData.Hex(s.OpaqueTail, token) }, token)
+        };
+    }
 }
 
 public sealed class AnimationPackage

@@ -57,6 +57,59 @@ public sealed class McpLazyConnectorTests
     }
 
     [Fact]
+    public async Task InvalidPickupIdentitiesMapsAndOverflowAreRejectedBeforeConnecting()
+    {
+        int connections = 0;
+        await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => true, async client =>
+        {
+            var tools = await client.ListToolsAsync();
+            var sourceSchema = tools.Single(t => t.Name == "zstudio_pickup_move").ProtocolTool.InputSchema
+                .GetProperty("properties").GetProperty("source");
+            Assert.False(sourceSchema.GetProperty("additionalProperties").GetBoolean());
+            Assert.Equal(4, sourceSchema.GetProperty("required").GetArrayLength());
+            JsonObject validSource = new() { ["ArchivePath"] = @"C:\working\zrdr.zbd", ["AssetIndex"] = 0, ["ResourceName"] = "PUPPIES", ["RecordIndex"] = 0 };
+            List<JsonObject> malformed = [new()];
+            foreach (string field in new[] { "ArchivePath", "AssetIndex", "ResourceName", "RecordIndex" })
+            {
+                var missing = validSource.DeepClone().AsObject(); missing.Remove(field); malformed.Add(missing);
+                var nullValue = validSource.DeepClone().AsObject(); nullValue[field] = null; malformed.Add(nullValue);
+            }
+            foreach (var (field, value) in new (string, JsonNode)[]
+            {
+                ("ArchivePath", JsonValue.Create(0)!), ("ResourceName", new JsonObject()),
+                ("AssetIndex", JsonValue.Create("0")!), ("RecordIndex", JsonValue.Create(0.5)!),
+                ("AssetIndex", JsonValue.Create((long)int.MaxValue + 1)!), ("RecordIndex", JsonValue.Create(-1)!),
+                ("extra", JsonValue.Create(true)!), ("archivePath", JsonValue.Create("wrong-case")!)
+            })
+            { var source = validSource.DeepClone().AsObject(); source[field] = value; malformed.Add(source); }
+            foreach (var source in malformed)
+            {
+                var result = await client.CallToolAsync("zstudio_pickup_move", new Dictionary<string, object?>
+                {
+                    ["document"] = Guid.NewGuid().ToString(), ["revision"] = 0, ["source"] = source,
+                    ["x"] = 0, ["y"] = 0, ["z"] = 0
+                });
+                Assert.True(result.IsError);
+                Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());
+            }
+            foreach (JsonNode? value in new JsonNode?[] { null, JsonValue.Create(1), JsonValue.Create(false), new JsonObject(), new JsonArray() })
+            {
+                var result = await client.CallToolAsync("zstudio_save_document", new Dictionary<string, object?>
+                {
+                    ["document"] = Guid.NewGuid().ToString(), ["revision"] = 0,
+                    ["destinations"] = new JsonObject { ["source.zbd"] = value }
+                });
+                Assert.True(result.IsError);
+                Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());
+            }
+            var overflow = await client.CallToolAsync("zstudio_files", new Dictionary<string, object?> { ["offset"] = (long)int.MaxValue + 1 });
+            Assert.True(overflow.IsError);
+            Assert.Equal("invalid_argument", overflow.StructuredContent!.Value.GetProperty("code").GetString());
+            Assert.Equal(0, connections);
+        });
+    }
+
+    [Fact]
     public async Task ConcurrentFirstCallsConnectOnceAndPreserveResultsAndErrors()
     {
         int connections = 0;

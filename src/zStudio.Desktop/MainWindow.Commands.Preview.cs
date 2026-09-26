@@ -129,7 +129,13 @@ public partial class MainWindow
                     case "difficulty":
                         if (!Enum.TryParse<MissionDifficulty>(value!.GetValue<string>(),out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument","Use Easy, Medium or Hard.");
                         bool changedDifficulty = ViewModel.Difficulty != difficulty;
+                        long expectedRefreshGeneration = staticRefreshGeneration + (changedDifficulty && asset.Kind == AssetKind.World ? 1 : 0);
                         ViewModel.Difficulty = difficulty;
+                        token.ThrowIfCancellationRequested();
+                        // Binding/status callbacks can start another refresh before
+                        // the setter returns. Never adopt that request's task as ours.
+                        if (staticRefreshGeneration != expectedRefreshGeneration || ViewModel.Difficulty != difficulty)
+                            throw new StudioCommandException("context_changed", "The requested difficulty was superseded. Read zstudio_state before retrying.");
                         if (asset.Kind == AssetKind.World && (changedDifficulty || staticRefresh != null))
                         { refresh = staticRefreshWork; await previewWork; }
                         break;

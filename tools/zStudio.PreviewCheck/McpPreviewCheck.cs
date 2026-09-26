@@ -103,6 +103,22 @@ internal static class McpPreviewCheck
                 await Call("animation_transport", new { preview, action = "seek", seconds = .5 });
                 var captured = await Call("capture", new { target = "preview", preview, width = 800, height = 600 });
                 var loadingPanel = (FrameworkElement)editor.FindName("LoadingPanel");
+                var loadingVisibility = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(UIElement.VisibilityProperty, loadingPanel.GetType());
+                Task? bindingShutdown = null; bool bindingCanceled = false;
+                EventHandler cancelBinding = (_, _) =>
+                {
+                    if (loadingPanel.Visibility == Visibility.Visible && !bindingCanceled)
+                    { bindingCanceled = true; bindingShutdown = window.StopMcpAsync(); }
+                };
+                loadingVisibility.AddValueChanged(loadingPanel, cancelBinding);
+                bool rejectedBinding = false;
+                try { await Call("animation_options", new { preview, changes = new { worldPath = Path.Combine(root, "m1", "gamez.zbd") } }); }
+                catch (InvalidDataException ex) when (ex.Message.Contains("canceled", StringComparison.Ordinal)) { rejectedBinding = true; }
+                finally { loadingVisibility.RemoveValueChanged(loadingPanel, cancelBinding); }
+                if (bindingShutdown != null) await bindingShutdown;
+                if (!bindingCanceled || !rejectedBinding || loadingPanel.Visibility != Visibility.Collapsed || editor.CurrentFrame == null)
+                    throw new InvalidDataException("Canceled world binding did not recover the selected animation.");
+                await Call("animation_transport", new { preview, action = "seek", seconds = .5 });
                 var showLevel = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel");
                 bool originalMap = showLevel.IsChecked == true;
                 using (var canceledRefresh = new CancellationTokenSource())
@@ -118,10 +134,12 @@ internal static class McpPreviewCheck
                     finally { visibility.RemoveValueChanged(loadingPanel, cancelRefresh); }
                 }
                 // A second rendering option and transport must work without reselecting the asset.
+                await AnimationRefreshRecoveryCheck.Run(editor);
                 await Call("animation_options", new { preview, changes = new { map = originalMap } });
                 await Call("animation_transport", new { preview, action = "seek", seconds = .5 });
                 await Call("animation_transport", new { preview, action = "play" });
                 await Call("animation_transport", new { preview, action = "pause" });
+                captured = await Call("capture", new { target = "preview", preview, width = 800, height = 600 });
                 double viewportAspect = editor.Viewport.ActualWidth / editor.Viewport.ActualHeight;
                 double imageAspect = captured["PixelWidth"]!.GetValue<double>() / captured["PixelHeight"]!.GetValue<double>();
                 if (Math.Abs(imageAspect / viewportAspect - 1) > .02) throw new InvalidDataException("MCP capture distorted the viewport aspect ratio.");
@@ -157,6 +175,10 @@ internal static class McpPreviewCheck
                     var sceneHost = (System.Windows.Controls.ContentControl)window.FindName("SceneHost");
                     var retainedScene = (Recoil.Zbd.Rendering.SceneViewport)sceneHost.Content;
                     var retainedData = retainedScene.PreviewScene;
+                    // FrameAll starts with world-up; the next presented frame
+                    // orthogonalizes it. Start from an explicit upright pose so
+                    // this check isolates refresh cancellation from that update.
+                    retainedScene.RestoreView(Recoil.Zbd.Rendering.SceneViewport.UprightPose(retainedScene.CaptureView()));
                     var retainedView = retainedScene.CaptureView();
                     var before = await Call("preview_state", new { preview = retainedPreview });
                     var lod = (System.Windows.Controls.ComboBox)window.FindName("LodCombo");
@@ -173,12 +195,12 @@ internal static class McpPreviewCheck
                     foreach (var changes in optionChanges)
                     {
                         Task? shutdown = null;
-                        System.ComponentModel.PropertyChangedEventHandler cancel = async (_, e) =>
+                        System.ComponentModel.PropertyChangedEventHandler cancel = (_, e) =>
                         {
                             if (e.PropertyName != nameof(MainViewModel.Status) || window.ViewModel.Status != "Updating preview…") return;
-                            // Let replacement preparation start, then stop the actual
-                            // operation through the same shutdown path as the GUI.
-                            await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+                            // The refresh has installed its cancellation scope. Stop
+                            // it here: a small cached model may finish before a queued
+                            // Background callback, making a later cancel meaningless.
                             shutdown = window.StopMcpAsync();
                         };
                         window.ViewModel.PropertyChanged += cancel;
@@ -188,7 +210,7 @@ internal static class McpPreviewCheck
                         finally { window.ViewModel.PropertyChanged -= cancel; }
                         if (shutdown != null) await shutdown;
                         if (!canceled || !ReferenceEquals(sceneHost.Content, retainedScene) || !ReferenceEquals(retainedScene.PreviewScene, retainedData) || retainedScene.CaptureView() != retainedView)
-                            throw new InvalidDataException("Canceled static refresh replaced the retained scene or camera.");
+                            throw new InvalidDataException($"Canceled static refresh replaced the retained scene or camera: canceled={canceled}, sameScene={ReferenceEquals(sceneHost.Content, retainedScene)}, sameData={ReferenceEquals(retainedScene.PreviewScene, retainedData)}, before={retainedView}, after={retainedScene.CaptureView()}, changes={System.Text.Json.JsonSerializer.Serialize(changes)}.");
                         if (((FrameworkElement)window.FindName("EmptyPreview")).Visibility != Visibility.Collapsed || pack.SelectedIndex != retainedPack)
                             throw new InvalidDataException("Canceled static refresh left an overlay or changed the texture picker.");
                         var after = await Call("preview_state", new { preview = retainedPreview });
@@ -207,15 +229,47 @@ internal static class McpPreviewCheck
                         throw new InvalidDataException("Successful static refresh did not publish its replacement.");
                     await Call("capture", new { target = "preview", preview = published["preview"]!.GetValue<string>(), width = 800, height = 600 });
 
+                    if (((Recoil.Zbd.Rendering.SceneViewport)sceneHost.Content).Mission != null)
+                    {
+                        // Reenter the difficulty setter before its MCP caller can
+                        // capture the refresh task. Only the newer GUI request owns it.
+                        var guiDifficulty = window.ViewModel.Difficulty;
+                        string requestedDifficulty = guiDifficulty == Recoil.Zbd.Core.MissionDifficulty.Hard ? "Easy" : "Hard";
+                        bool difficultySuperseded = false;
+                        System.ComponentModel.PropertyChangedEventHandler replaceDifficulty = (_, e) =>
+                        {
+                            if (difficultySuperseded || e.PropertyName != nameof(MainViewModel.Status) || window.ViewModel.Status != "Updating preview…") return;
+                            difficultySuperseded = true;
+                            using var gui = PreviewOperation.Begin(CancellationToken.None);
+                            window.ViewModel.Difficulty = guiDifficulty;
+                        };
+                        window.ViewModel.PropertyChanged += replaceDifficulty;
+                        bool difficultyRejected = false;
+                        try { await Call("scene_options", new { preview = published["preview"]!.GetValue<string>(), changes = new { difficulty = requestedDifficulty } }); }
+                        catch (InvalidDataException ex) when (ex.Message.Contains("context_changed", StringComparison.Ordinal)) { difficultyRejected = true; }
+                        finally { window.ViewModel.PropertyChanged -= replaceDifficulty; }
+                        if (!difficultySuperseded || !difficultyRejected)
+                            throw new InvalidDataException("Synchronously superseded MCP difficulty adopted the GUI refresh as its own.");
+                        using var difficultyTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                        while (window.ViewModel.Status == "Updating preview…") await Task.Delay(20, difficultyTimeout.Token);
+                        var guiPublished = await Call("state", new { });
+                        var guiScene = (Recoil.Zbd.Rendering.SceneViewport)sceneHost.Content;
+                        if (guiPublished["preview"]!.GetValue<string>() == published["preview"]!.GetValue<string>() ||
+                            guiScene.Mission?.Layout.Difficulty != guiDifficulty || window.ViewModel.Difficulty != guiDifficulty ||
+                            window.ViewModel.Settings.Difficulty != guiDifficulty)
+                            throw new InvalidDataException("The synchronously superseding GUI difficulty was not retained and published.");
+                        published = guiPublished;
+                        await Call("capture", new { target = "preview", preview = published["preview"]!.GetValue<string>(), width = 800, height = 600 });
+                    }
+
                     // A GUI option change supersedes the MCP request while it is
                     // awaiting scene construction. Only the GUI result may publish.
                     bool superseded = false;
                     var horizon = (System.Windows.Controls.Primitives.ToggleButton)window.FindName("BackdropEnabled");
-                    System.ComponentModel.PropertyChangedEventHandler supersede = async (_, e) =>
+                    System.ComponentModel.PropertyChangedEventHandler supersede = (_, e) =>
                     {
                         if (superseded || e.PropertyName != nameof(MainViewModel.Status) || window.ViewModel.Status != "Updating preview…") return;
                         superseded = true;
-                        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
                         using var gui = PreviewOperation.Begin(CancellationToken.None);
                         horizon.IsChecked = !horizon.IsChecked;
                     };

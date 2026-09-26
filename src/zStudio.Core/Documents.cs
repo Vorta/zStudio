@@ -100,6 +100,47 @@ public static class JsonData
     public static string Text(this JsonNode? node, string key) => node?[key].Text() ?? "";
     public static JsonNode Number(float value) => float.IsFinite(value) ? JsonValue.Create((double)value)! : JsonValue.Create($"0x{BitConverter.SingleToUInt32Bits(value):X8}")!;
     public static JsonObject Vector(Vector3 v) => new() { ["x"] = Number(v.X), ["y"] = Number(v.Y), ["z"] = Number(v.Z) };
-    public static JsonArray Integers(IEnumerable<int> values) => new(values.Select(v => (JsonNode?)JsonValue.Create((long)v)).ToArray());
-    public static JsonArray Vectors(IEnumerable<Vector3> values) => new(values.Select(v => (JsonNode?)Vector(v)).ToArray());
+    public static JsonArray Integers(IEnumerable<int> values, CancellationToken token = default) => Array(values, v => JsonValue.Create((long)v), token);
+    public static JsonArray Vectors(IEnumerable<Vector3> values, CancellationToken token = default) => Array(values, v => Vector(v), token);
+    public static JsonArray Array<T>(IEnumerable<T> values, Func<T, JsonNode?> convert, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        JsonArray result = [];
+        foreach (T value in values)
+        {
+            token.ThrowIfCancellationRequested();
+            result.Add(convert(value));
+        }
+        token.ThrowIfCancellationRequested();
+        return result;
+    }
+    public static JsonNode? Clone(JsonNode? node, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        if (node is JsonObject source)
+        {
+            JsonObject result = new(source.Options);
+            foreach (var (key, value) in source) result.Add(key, Clone(value, token));
+            return result;
+        }
+        if (node is JsonArray array)
+        {
+            JsonArray result = new(array.Options);
+            foreach (var value in array) result.Add(Clone(value, token));
+            return result;
+        }
+        return node?.DeepClone();
+    }
+    public static string Hex(byte[] bytes, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        System.Text.StringBuilder result = new(checked(bytes.Length * 2));
+        for (int offset = 0; offset < bytes.Length; offset += 4096)
+        {
+            token.ThrowIfCancellationRequested();
+            result.Append(Convert.ToHexStringLower(bytes.AsSpan(offset, Math.Min(4096, bytes.Length - offset))));
+        }
+        token.ThrowIfCancellationRequested();
+        return result.ToString();
+    }
 }

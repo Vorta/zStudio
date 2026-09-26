@@ -1,11 +1,70 @@
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Automation;
+using Recoil.Zbd.Mcp;
 using Xunit;
 
 namespace Recoil.Zbd.Desktop.Tests;
 
 public sealed class McpContractTests
 {
+    [Fact]
+    public void PickupIdentitySchemaDescribesRequiredCaseSensitiveFieldsAndAcceptsReturnedShape()
+    {
+        var command = McpCommandCatalog.Create((_, _, _) => throw new Exception("Must not execute"))
+            .All.Single(c => c.Name == "zstudio_pickup_move");
+        var source = command.InputSchema["properties"]!["source"]!;
+        Assert.False(source["additionalProperties"]!.GetValue<bool>());
+        Assert.Equal(new[] { "ArchivePath", "AssetIndex", "ResourceName", "RecordIndex" },
+            source["required"]!.AsArray().Select(p => p!.GetValue<string>()));
+        var properties = source["properties"]!;
+        Assert.Equal("string", properties["ArchivePath"]!["type"]!.GetValue<string>());
+        Assert.Equal("string", properties["ResourceName"]!["type"]!.GetValue<string>());
+        Assert.Equal("integer", properties["AssetIndex"]!["type"]!.GetValue<string>());
+        Assert.Equal("integer", properties["RecordIndex"]!["type"]!.GetValue<string>());
+        command.Validate(new()
+        {
+            ["document"] = Guid.NewGuid().ToString(), ["revision"] = 0L,
+            ["source"] = new JsonObject { ["ArchivePath"] = @"C:\working\zrdr.zbd", ["AssetIndex"] = 0, ["ResourceName"] = "PUPPIES", ["RecordIndex"] = 0 },
+            ["x"] = 0, ["y"] = 1, ["z"] = -2
+        });
+    }
+
+    [Fact]
+    public async Task TypedMapsValidateEachValueBeforeExecutingAndDescribeOpenKeys()
+    {
+        int calls = 0;
+        var command = new StudioCommand("test", "test", false,
+            [new("paths", "object", "destination map", true, AdditionalProperties: new("", "string", "new path"))],
+            (_, _) => { calls++; return Task.FromResult(new StudioResult(new JsonObject())); });
+        var registry = new StudioCommands(); registry.Add(command);
+        foreach (string value in new[] { "1", "null", "true", "{}", "[]" })
+        {
+            var error = await Assert.ThrowsAsync<StudioCommandException>(() => registry.ExecuteAsync("test",
+                new() { ["paths"] = new JsonObject { ["source.zbd"] = JsonNode.Parse(value) } }, TestContext.Current.CancellationToken));
+            Assert.Equal("invalid_argument", error.Code);
+            Assert.Contains("paths.source.zbd", error.Message);
+        }
+        Assert.Equal(0, calls);
+        await registry.ExecuteAsync("test", new() { ["paths"] = new JsonObject { ["source.zbd"] = "copy.zbd" } }, TestContext.Current.CancellationToken);
+        Assert.Equal(1, calls);
+        Assert.Equal("string", command.InputSchema["properties"]!["paths"]!["additionalProperties"]!["type"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void IntegerBoundsRejectOverflowBeforeExecutionButRetainLongOffsetsAndRevisions()
+    {
+        var commands = McpCommandCatalog.Create((_, _, _) => throw new Exception("Must not execute"));
+        var files = commands.All.Single(c => c.Name == "zstudio_files");
+        foreach (long value in new[] { (long)int.MinValue - 1, (long)int.MaxValue + 1 })
+            Assert.Equal("invalid_argument", Assert.Throws<StudioCommandException>(() => files.Validate(new() { ["offset"] = value })).Code);
+        Assert.Equal(int.MinValue, files.InputSchema["properties"]!["offset"]!["minimum"]!.GetValue<long>());
+        Assert.Equal(int.MaxValue, files.InputSchema["properties"]!["offset"]!["maximum"]!.GetValue<long>());
+        commands.All.Single(c => c.Name == "zstudio_source_bytes").Validate(new()
+            { ["document"] = Guid.NewGuid().ToString(), ["offset"] = (long)int.MaxValue + 1, ["length"] = 1 });
+        commands.All.Single(c => c.Name == "zstudio_undo_redo").Validate(new()
+            { ["document"] = Guid.NewGuid().ToString(), ["revision"] = (long)int.MaxValue + 1, ["action"] = "undo" });
+    }
+
     [Fact]
     public async Task ArraySchemasValidateItemsAndLengthsRecursivelyBeforeExecuting()
     {

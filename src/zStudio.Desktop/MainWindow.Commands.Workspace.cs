@@ -76,7 +76,7 @@ public partial class MainWindow
             return Result(new { document = doc.SessionId, doc.Revision, source, edited = asset.Kind == AssetKind.Animation ? doc.AnimationEdits?.Package.Entries[asset.Index].ToJson() : null });
         });
         Register(r, "source_bytes", "Read at most 4096 original source bytes; these are not pending edits or runtime memory.", false,
-            [DocumentParameter, P("offset", "integer", "Absolute byte offset.", true), P("length", "integer", "Byte count, 0–4096.", true)], a =>
+            [DocumentParameter, new("offset", "integer", "Absolute byte offset.", true, Minimum: 0, Maximum: long.MaxValue), P("length", "integer", "Byte count, 0–4096.", true)], a =>
         {
             var d = TargetDocument(a); long offset = a["offset"]!.GetValue<long>(); int length = Int(a, "length");
             if (length is < 0 or > 4096) throw new StudioCommandException("invalid_argument", "Length must be 0–4096.");
@@ -91,15 +91,18 @@ public partial class MainWindow
         RegisterJob(r, "reload_document", "Reload a clean document from disk; dirty documents must first be saved or explicitly closed.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
             var doc = TargetDocument(a, true); if (doc.IsDirty) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
-            string path = doc.Path; ViewModel.CloseResolved(doc); var next = await ViewModel.OpenFileAsync(path, token); await previewWork;
-            return Result(next == null ? new { error = ViewModel.Status } : DocumentState(next));
+            string path = doc.Path; ViewModel.CloseResolved(doc);
+            var next = await ViewModel.OpenFileAsync(path, token) ?? throw new StudioCommandException("open_failed", ViewModel.Status);
+            await previewWork; token.ThrowIfCancellationRequested();
+            if (next.IsDisposed || ViewModel.SelectedDocument != next) throw new StudioCommandException("context_changed", "The active document changed while reloading.");
+            return Result(DocumentState(next));
         });
         Register(r, "undo_redo", "Undo or redo one accepted edit in the specified document.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], a =>
         {
             var d = TargetDocument(a, true); UndoDocument(d, Text(a, "action") == "redo"); return Result(DocumentState(d));
         });
         RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations.",
-            [DocumentParameter, RevisionParameter, P("destination", "string", "New animation archive path."), P("destinations", "object", "Pickup source archive path to new Save As path map."), P("backup", "boolean", "Pickup backup preference; defaults to app setting.")], false, async (a, token) =>
+            [DocumentParameter, RevisionParameter, P("destination", "string", "New animation archive path."), new("destinations", "object", "Pickup source archive path to new Save As path map.", AdditionalProperties: new("", "string", "New Save As path for this source archive.")), P("backup", "boolean", "Pickup backup preference; defaults to app setting.")], false, async (a, token) =>
         {
             var d = TargetDocument(a, true);
             IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;

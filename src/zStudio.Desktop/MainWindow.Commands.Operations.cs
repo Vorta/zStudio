@@ -122,7 +122,7 @@ public partial class MainWindow
                     {
                         if (asset.Kind == AssetKind.Texture) TextureDecoder.Decode(doc, asset, cancellation.Token);
                         else if (asset.Kind == AssetKind.Zrd) ZrdDecoder.Decode(doc.Slice(asset.Offset, asset.Length), cancellation.Token);
-                        else if (asset.Kind == AssetKind.Sound) WaveDecoder.Read(doc.Slice(asset.Offset, asset.Length));
+                        else if (asset.Kind == AssetKind.Sound) WaveDecoder.Read(doc.Slice(asset.Offset, asset.Length), cancellation.Token);
                     }
                     catch (InvalidDataException ex) { diagnostics.Add(new("Error", "File / operation", asset.Name + ": " + ex.Message, selected.Path, asset.Index, asset.Offset)); }
                 }

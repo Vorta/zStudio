@@ -61,19 +61,40 @@ public sealed class ExportService(AssetResolver resolver) : IAssetExporter
     }
     public static JsonObject AssetJson(ZbdDocument doc, AssetRecord a, CancellationToken token = default)
     {
-        JsonObject result = new() { ["name"] = a.Name, ["kind"] = a.Kind.ToString(), ["index"] = a.Index, ["source_offset"] = a.Offset, ["source_length"] = a.Length, ["properties"] = a.Metadata.DeepClone() };
+        token.ThrowIfCancellationRequested();
+        JsonObject result = new() { ["name"] = a.Name, ["kind"] = a.Kind.ToString(), ["index"] = a.Index, ["source_offset"] = a.Offset, ["source_length"] = a.Length, ["properties"] = JsonData.Clone(a.Metadata, token) };
         if (a.Content is GameModel model)
         {
-            result["vertices"] = JsonData.Vectors(model.Vertices); result["normals"] = JsonData.Vectors(model.Normals); result["morphs"] = JsonData.Vectors(model.Morphs);
-            JsonArray polygons = []; foreach (var p in model.Polygons) { JsonObject j = (JsonObject)p.Metadata.DeepClone(); j["vertex_indices"] = JsonData.Integers(p.Vertices); j["normal_indices"] = JsonData.Integers(p.Normals); j["uvs"] = new JsonArray(p.Uvs.Select(v => (JsonNode?)new JsonObject { ["u"] = JsonData.Number(v.X), ["v"] = JsonData.Number(v.Y) }).ToArray()); polygons.Add(j); }
-            result["polygons"] = polygons;
+            result["vertices"] = JsonData.Vectors(model.Vertices, token);
+            result["normals"] = JsonData.Vectors(model.Normals, token);
+            result["morphs"] = JsonData.Vectors(model.Morphs, token);
+            result["polygons"] = JsonData.Array(model.Polygons, p =>
+            {
+                JsonObject j = (JsonObject)JsonData.Clone(p.Metadata, token)!;
+                j["vertex_indices"] = JsonData.Integers(p.Vertices, token);
+                j["normal_indices"] = JsonData.Integers(p.Normals, token);
+                j["uvs"] = JsonData.Array(p.Uvs, v => new JsonObject { ["u"] = JsonData.Number(v.X), ["v"] = JsonData.Number(v.Y) }, token);
+                return j;
+            }, token);
         }
-        else if (a.Content is ScriptContent script) result["instructions"] = JsonSerializer.SerializeToNode(script.Instructions);
-        else if (a.Kind == AssetKind.Animation && doc.Animations is { } animations) result["properties"] = animations.Entries[a.Index].ToJson();
+        else if (a.Content is ScriptContent script)
+            result["instructions"] = JsonData.Array(script.Instructions, instruction =>
+                JsonData.Array(instruction, word => JsonValue.Create(word), token), token);
+        else if (a.Kind == AssetKind.Animation && doc.Animations is { } animations) result["properties"] = animations.Entries[a.Index].ToJson(token);
         else if (a.Kind == AssetKind.Zrd) result["tree"] = ZrdDecoder.Decode(doc.Slice(a.Offset, a.Length), token);
-        else if (a.Kind == AssetKind.Sound) result["wave"] = JsonSerializer.SerializeToNode(WaveDecoder.Read(doc.Slice(a.Offset, a.Length)));
+        else if (a.Kind == AssetKind.Sound)
+        {
+            var info = WaveDecoder.Read(doc.Slice(a.Offset, a.Length), token);
+            var wave = JsonSerializer.SerializeToNode(info with { Cues = [] })!;
+            wave["Cues"] = JsonData.Array(info.Cues, cue => JsonSerializer.SerializeToNode(cue), token);
+            result["wave"] = wave;
+        }
         else if (a.Kind == AssetKind.World && doc.Scene is GameScene scene)
-        { result["nodes"] = new JsonArray(scene.Nodes.Select(n => n.Metadata.DeepClone()).ToArray()); result["materials"] = new JsonArray(scene.Materials.Select(m => m.DeepClone()).ToArray()); }
+        {
+            result["nodes"] = JsonData.Array(scene.Nodes, n => JsonData.Clone(n.Metadata, token), token);
+            result["materials"] = JsonData.Array(scene.Materials, m => JsonData.Clone(m, token), token);
+        }
+        token.ThrowIfCancellationRequested();
         return result;
     }
     private async Task ExportObj(ZbdDocument doc, AssetRecord asset, string target, string name, string? preferred, int lod, CancellationToken token)

@@ -1,7 +1,9 @@
 using System.IO;
 using System.Reflection;
 using System.Text.Json.Nodes;
+using System.Windows.Controls;
 using NAudio.Wave;
+using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Desktop;
@@ -58,6 +60,20 @@ internal static class AnimationMcpCancellationChecks
             await editor.SetPreviewOptionAsync("mute", JsonValue.Create(false)!);
             Assert.True(audio.IsPrepared);
             Assert.Equal(1, audio.OutputInitializations);
+
+            // Explicit scene rebinding must report a failed preview, rather than
+            // returning a successful MCP result for the retained loading overlay.
+            string missing = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "gamez.zbd");
+            var failure = await Assert.ThrowsAsync<StudioCommandException>(() => editor.SetPreviewOptionAsync("worldPath", JsonValue.Create(missing)!));
+            Assert.Equal("preview_unavailable", failure.Code);
+            using var canceledBind = new CancellationTokenSource();
+            canceledBind.Cancel();
+            using (PreviewOperation.Begin(canceledBind.Token))
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => editor.SetPreviewOptionAsync("worldPath", JsonValue.Create(missing)!));
+            // Recovery reached a terminal actionable error with a fresh token;
+            // it did not leave an indefinitely spinning canceled loading request.
+            Assert.DoesNotContain("Loading animation", ((TextBlock)editor.FindName("LoadingText")).Text);
+            Assert.False(editorLifetime.IsCancellationRequested);
         }
         finally { release.Set(); await audio.DisposeAsync(); }
     }

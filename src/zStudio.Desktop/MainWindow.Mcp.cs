@@ -64,9 +64,11 @@ public partial class MainWindow
         JsonNode data = value as JsonNode ?? JsonSerializer.SerializeToNode(value, options)!;
         return new(data is JsonObject ? data : new JsonObject { ["items"] = data });
     }
-    private static StudioParameter P(string name, string type, string description, bool required = false, params string[] choices) => new(name, type, description, required, choices.Length == 0 ? null : choices);
+    private static StudioParameter P(string name, string type, string description, bool required = false, params string[] choices)
+        => new(name, type, description, required, choices.Length == 0 ? null : choices,
+            Minimum: type == "integer" ? int.MinValue : null, Maximum: type == "integer" ? int.MaxValue : null);
     private static StudioParameter DocumentParameter => P("document", "string", "Document lifetime ID from zstudio_state.", true);
-    private static StudioParameter RevisionParameter => P("revision", "integer", "Expected current document revision. Read before editing.", true);
+    private static StudioParameter RevisionParameter => new("revision", "integer", "Expected current document revision. Read before editing.", true, Minimum: 0, Maximum: long.MaxValue);
     private static string Text(JsonObject a, string key, string fallback = "") => a[key]?.GetValue<string>() ?? fallback;
     private static int Int(JsonObject a, string key, int fallback = 0) => a[key]?.GetValue<int>() ?? fallback;
     private static double Number(JsonObject a, string key, double fallback = 0) => a[key]?.GetValue<double>() ?? fallback;
@@ -90,7 +92,15 @@ public partial class MainWindow
         registry.Add(new("zstudio_" + name, description, mutates, parameters, async (args, token) =>
         {
             if (mutates) await automationGate.WaitAsync(token);
-            try { return await Dispatcher.InvokeAsync(() => action(args, token)).Task.Unwrap(); }
+            try
+            {
+                return await Dispatcher.InvokeAsync(async () =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    using var scope = PreviewOperation.Begin(token);
+                    return await action(args, token);
+                }, System.Windows.Threading.DispatcherPriority.Normal, token).Task.Unwrap();
+            }
             finally { if (mutates) automationGate.Release(); }
         }));
     }

@@ -4,6 +4,10 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.5.0 — Unreleased
 
+- Verify Properties publication and preserve input entered during decoding; propagate request cancellation through queued UI work and large property/JSON expansions.
+- Define pickup identity and destination-map schemas, enforce integer bounds, report failed/superseded document reloads explicitly, and preserve new edits/input during a deferred MCP close.
+- Recover animation scene bindings and late renderer refreshes after MCP cancellation, retaining usable playback and reporting unavailable or superseded work. Keep LOD/map geometry consistent across concurrent changes, apply the latest Map/Horizon choices and preserve playback or explicit Pause through refreshes.
+
 - Recover the still-selected preview after MCP cancels asset/document loading, and reject superseded scene-option jobs instead of returning an unpublished preview identity.
 
 - Describe and validate MCP array items recursively, including three-number camera vectors and export asset identities; reject malformed input before workspace connection.

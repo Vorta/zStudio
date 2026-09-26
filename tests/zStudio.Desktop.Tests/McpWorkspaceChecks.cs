@@ -152,7 +152,18 @@ internal static class McpWorkspaceChecks
                 await CancelPreviewJob("open_document", new() { ["path"] = recoveryPath }, "Raw #0: recovery.zbd");
                 Assert.Equal(recoveryPath, main.ViewModel.SelectedDocument!.Path);
                 Assert.Equal(Visibility.Collapsed, ((TextBlock)main.FindName("EmptyPreview")).Visibility);
-                main.ViewModel.CloseResolved(main.ViewModel.SelectedDocument);
+                var reloading = main.ViewModel.SelectedDocument;
+                File.Delete(recoveryPath);
+                var reload = await Call("reload_document", new() { ["document"] = reloading.SessionId.ToString(), ["revision"] = reloading.Revision });
+                while (reload["State"]!.GetValue<string>() is "queued" or "running")
+                {
+                    await Task.Delay(10, deadline.Token);
+                    reload = await Call("operation", new() { ["id"] = reload["id"]!.GetValue<string>() });
+                }
+                Assert.Equal("failed", reload["State"]!.GetValue<string>());
+                Assert.Equal("open_failed", reload["result"]!["code"]!.GetValue<string>());
+                Assert.Null(main.ViewModel.SelectedDocument);
+                File.WriteAllBytes(recoveryPath, [255,255,255,255,255,255,255,255]);
                 await CancelPreviewJob("open_document", new() { ["path"] = recoveryPath }, "Raw #0: recovery.zbd", close: true);
                 Assert.Null(main.ViewModel.SelectedDocument);
             }

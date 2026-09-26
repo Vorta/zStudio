@@ -14,7 +14,10 @@ public sealed record StudioParameter(string Name, string Type, string Descriptio
     StudioParameter[]? Properties = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] StudioParameter? Items = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MinItems = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MaxItems = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MaxItems = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] StudioParameter? AdditionalProperties = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Minimum = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Maximum = null);
 public sealed record StudioCommand(string Name, string Description, bool Mutates, IReadOnlyList<StudioParameter> Parameters,
     Func<JsonObject, CancellationToken, Task<StudioResult>> Execute)
 {
@@ -26,11 +29,11 @@ public sealed record StudioCommand(string Name, string Description, bool Mutates
     };
     public void Validate(JsonObject args) => ValidateObject(args, Parameters, "");
 
-    private static void ValidateObject(JsonObject args, IReadOnlyList<StudioParameter> parameters, string path)
+    private static void ValidateObject(JsonObject args, IReadOnlyList<StudioParameter> parameters, string path, StudioParameter? additionalProperties = null)
     {
         foreach (var (name, value) in args)
         {
-            var p = parameters.FirstOrDefault(p => p.Name == name) ?? throw new StudioCommandException("invalid_argument", "Unknown argument: " + path + name);
+            var p = parameters.FirstOrDefault(p => p.Name == name) ?? additionalProperties ?? throw new StudioCommandException("invalid_argument", "Unknown argument: " + path + name);
             ValidateValue(value, p, path + name);
         }
         foreach (var p in parameters.Where(p => p.Required))
@@ -50,7 +53,10 @@ public sealed record StudioCommand(string Name, string Description, bool Mutates
         };
         if (!valid || p.Choices != null && !p.Choices.Contains(value!.GetValue<string>()))
             throw new StudioCommandException("invalid_argument", "Invalid " + p.Type + " argument: " + path);
-        if (p.Properties != null && value is JsonObject nested) ValidateObject(nested, p.Properties, path + ".");
+        if (p.Type == "integer" && (scalar.GetInt64() < p.Minimum || scalar.GetInt64() > p.Maximum))
+            throw new StudioCommandException("invalid_argument", "Integer argument is out of range: " + path);
+        if (value is JsonObject nested && (p.Properties != null || p.AdditionalProperties != null))
+            ValidateObject(nested, p.Properties ?? [], path + ".", p.AdditionalProperties);
         if (value is JsonArray array)
         {
             if (array.Count < p.MinItems || array.Count > p.MaxItems)
@@ -70,6 +76,9 @@ internal static class StudioSchema
         if (parameter.Items != null) schema["items"] = parameter.Items.ToSchema();
         if (parameter.MinItems != null) schema["minItems"] = parameter.MinItems.Value;
         if (parameter.MaxItems != null) schema["maxItems"] = parameter.MaxItems.Value;
+        if (parameter.AdditionalProperties != null) schema["additionalProperties"] = parameter.AdditionalProperties.ToSchema();
+        if (parameter.Minimum != null) schema["minimum"] = parameter.Minimum.Value;
+        if (parameter.Maximum != null) schema["maximum"] = parameter.Maximum.Value;
         return schema;
     }
     internal static JsonObject WithProperties(this JsonObject schema, StudioParameter[]? properties)

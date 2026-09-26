@@ -5,6 +5,7 @@ namespace Recoil.Zbd.Desktop;
 internal static class PreviewOperation
 {
     private static readonly AsyncLocal<CancellationToken> current = new();
+    internal static CancellationToken Current => current.Value;
     internal static CancellationTokenSource Link(CancellationToken lifetime) =>
         CancellationTokenSource.CreateLinkedTokenSource(lifetime, current.Value);
     internal static IDisposable Begin(CancellationToken token) => new Scope(token);

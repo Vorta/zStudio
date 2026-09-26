@@ -11,6 +11,7 @@ namespace Recoil.Zbd.Desktop;
 public partial class AnimationEditor
 {
     private Task optionWork = Task.CompletedTask;
+    private string? previewOperationFailure;
     internal int PreviewLod => Lod.SelectedIndex;
     internal object PreviewState() => new
     {
@@ -41,6 +42,10 @@ public partial class AnimationEditor
     {
         if (HasPendingDrafts) throw new StudioCommandException("pending_drafts", "Resolve preview drafts first.");
         optionWork = Task.CompletedTask;
+        previewOperationFailure = null;
+        long initialSeek = seekGeneration;
+        long initialLod = lodGeneration, initialLevel = levelGeneration;
+        var operationToken = PreviewOperation.Current;
         double Numeric(double min, double max) { double n = value.GetValue<double>(); if (!double.IsFinite(n) || n < min || n > max) throw new StudioCommandException("invalid_argument", $"Value must be {min}–{max}."); return n; }
         int Integer(int min, int max) { int n = value.GetValue<int>(); if (n < min || n > max) throw new StudioCommandException("invalid_argument", "Integer is outside the supported range."); return n; }
         switch (name)
@@ -67,7 +72,12 @@ public partial class AnimationEditor
             case "fitTrace": if (value.GetValue<bool>()) FitTraceClick(this,new()); break;
             case "followLog": FollowLatest.IsChecked = value.GetValue<bool>(); break;
             case "problemFilter": ProblemFilter.SelectedIndex = Integer(0,4); break;
-            case "worldPath": await InitializeAsync(value.GetValue<string>()); break;
+            case "worldPath":
+                int generation = contextGeneration + 1;
+                await InitializeAsync(value.GetValue<string>(), recoverCanceledRequest: true);
+                if (disposed || contextGeneration != generation) throw new StudioCommandException("context_changed", "The requested animation scene was superseded.");
+                if (player == null || LoadingPanel.Visibility == Visibility.Visible) throw new StudioCommandException("preview_unavailable", LoadingText.Text);
+                break;
             case "root": if (context == null) throw new StudioCommandException("not_ready", "No scene is loaded."); context.RootOverrides[entryIndex] = Integer(0,context.Scene.Nodes.Count - 1); resetSimulation = true; await SeekAsync(0); break;
             case "activationOrigin": case "activationTarget":
                 SetActivation(value.GetValue<string>(), name == "activationOrigin"); break;
@@ -75,21 +85,42 @@ public partial class AnimationEditor
         }
         Task previous;
         do { previous = optionWork; await previous; } while (previous != optionWork);
+        // The job wrapper reports originating cancellation after GUI recovery.
+        // It must take precedence over recovery's replacement seek identity.
+        if (operationToken.IsCancellationRequested) return;
         if (disposed) throw new StudioCommandException("context_changed", "Animation preview was replaced.");
+        if (previewOperationFailure != null) throw new StudioCommandException("preview_unavailable", previewOperationFailure);
+        if (seekGeneration != initialSeek && (seekOperationToken != operationToken || publishedSeekGeneration != seekGeneration))
+            throw new StudioCommandException("context_changed", "The requested animation update was superseded by another seek.");
+        if (lodGeneration != initialLod && (lodOperationToken != operationToken || publishedLodGeneration != lodGeneration) ||
+            levelGeneration != initialLevel && (levelOperationToken != operationToken || publishedLevelGeneration != levelGeneration))
+            throw new StudioCommandException("context_changed", "The requested animation scene options were superseded.");
     }
     internal async Task TransportAsync(string action, double seconds = 0)
     {
         if (HasPendingDrafts) throw new StudioCommandException("pending_drafts", "Resolve unfinished preview input first.");
         if (player == null || LoadingPanel.Visibility == Visibility.Visible) throw new StudioCommandException("not_ready", LoadingText.Text);
+        previewOperationFailure = null;
         switch (action)
         {
             case "play": if (!playing) TogglePlayback(); break;
             case "pause": Pause(); break;
-            case "stop": pendingPlay = false; await SeekAsync(0); break;
-            case "previous": await SeekAsync(Math.Max(0,(frame?.Time ?? 0) - AnimationPlayer.StepSeconds)); break;
-            case "next": await SeekAsync(Math.Min(SeekSlider.Maximum,(frame?.Time ?? 0) + AnimationPlayer.StepSeconds)); break;
-            case "seek": if (!double.IsFinite(seconds) || seconds < 0 || seconds > SeekSlider.Maximum) throw new StudioCommandException("invalid_argument", "Seek position must be within the preview range."); await SeekAsync(seconds); break;
+            case "stop": pendingPlay = false; await SeekTransportAsync(0); break;
+            case "previous": await SeekTransportAsync(Math.Max(0,(frame?.Time ?? 0) - AnimationPlayer.StepSeconds)); break;
+            case "next": await SeekTransportAsync(Math.Min(SeekSlider.Maximum,(frame?.Time ?? 0) + AnimationPlayer.StepSeconds)); break;
+            case "seek": if (!double.IsFinite(seconds) || seconds < 0 || seconds > SeekSlider.Maximum) throw new StudioCommandException("invalid_argument", "Seek position must be within the preview range."); await SeekTransportAsync(seconds); break;
             default: throw new StudioCommandException("invalid_argument", "Unknown transport action.");
         }
+        if (disposed) throw new StudioCommandException("context_changed", "Animation preview was replaced during transport.");
+        if (previewOperationFailure != null) throw new StudioCommandException("preview_unavailable", previewOperationFailure);
+    }
+    private async Task SeekTransportAsync(double seconds)
+    {
+        long requested = seekGeneration + 1;
+        await SeekAsync(seconds);
+        PreviewOperation.Current.ThrowIfCancellationRequested();
+        if (previewOperationFailure != null) throw new StudioCommandException("preview_unavailable", previewOperationFailure);
+        if (disposed || seekGeneration != requested || publishedSeekGeneration != requested)
+            throw new StudioCommandException("context_changed", "The requested animation seek was superseded.");
     }
 }
