@@ -45,7 +45,10 @@ public partial class MainWindow
         try
         {
             await automationGate.WaitAsync(job.Cancellation.Token); acquired = true; job.State = "running";
-            job.Data = (await execute(arguments, job.Cancellation.Token)).Data; job.State = "completed";
+            using var scope = PreviewOperation.Begin(job.Cancellation.Token);
+            job.Cancellation.Token.ThrowIfCancellationRequested();
+            job.Data = (await execute(arguments, job.Cancellation.Token)).Data;
+            job.Cancellation.Token.ThrowIfCancellationRequested(); job.State = "completed";
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -64,17 +67,19 @@ public partial class MainWindow
                 return Result(job.Snapshot());
             }, System.Windows.Threading.DispatcherPriority.Normal, token)));
     }
-    private async Task SaveAnimationToPathAsync(DocumentModel doc, string destination)
+    private async Task SaveAnimationToPathAsync(DocumentModel doc, string destination, CancellationToken token = default)
     {
         var edits = doc.AnimationEdits ?? throw new InvalidOperationException("Not an editable animation pack.");
         if (shownDocument == doc) animation?.Pause();
-        await AnimationWriter.SaveAsAsync(edits.Package, destination, doc.Path, ViewModel.Resolver?.Root ?? Path.GetDirectoryName(doc.Path)!, doc.Lifetime.Token);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
+        await AnimationWriter.SaveAsAsync(edits.Package, destination, doc.Path, ViewModel.Resolver?.Root ?? Path.GetDirectoryName(doc.Path)!, cancellation.Token);
         doc.LastSavedCopy = destination; edits.MarkSaved(); ViewModel.Status = "Saved and verified " + destination + " · preview keeps the original mission context";
     }
-    private async Task<PickupPlacementSaveResult> SavePickupDestinationsAsync(DocumentModel doc, IReadOnlyDictionary<string, string>? destinations, bool backup)
+    private async Task<PickupPlacementSaveResult> SavePickupDestinationsAsync(DocumentModel doc, IReadOnlyDictionary<string, string>? destinations, bool backup, CancellationToken token = default)
     {
         var edits = doc.PickupEdits ?? throw new InvalidOperationException("No editable pickup placements loaded.");
-        var result = await edits.SaveAsync(destinations, backup, doc.Lifetime.Token);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
+        var result = await edits.SaveAsync(destinations, backup, cancellation.Token);
         if (result.SavedPaths.Count > 0)
         {
             if (ViewModel.Resolver is { } resolver) await resolver.InvalidateAsync(result.SavedPaths, doc.Lifetime.Token);

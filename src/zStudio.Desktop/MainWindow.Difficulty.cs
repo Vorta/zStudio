@@ -15,7 +15,8 @@ public partial class MainWindow
         if (!ready || SceneHost.Visibility != Visibility.Visible || scene?.Mission == null ||
             ViewModel.SelectedDocument is not { } doc || ViewModel.Resolver is not { } resolver || shownAsset?.Kind != AssetKind.World) return;
         difficultyRefresh?.Cancel(); difficultyRefresh?.Dispose();
-        difficultyRefresh = CancellationTokenSource.CreateLinkedTokenSource(preview.Token, doc.Lifetime.Token);
+        using var request = PreviewOperation.Link(preview.Token);
+        difficultyRefresh = CancellationTokenSource.CreateLinkedTokenSource(request.Token, doc.Lifetime.Token);
         var token = difficultyRefresh.Token; var current = scene; var asset = shownAsset;
         current.CancelPickupDrag();
         var previous = current.Mission; var view = current.CaptureView(); int? selection = selectedNode, isolate = isolatedNode;

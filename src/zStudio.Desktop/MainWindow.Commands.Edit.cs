@@ -80,9 +80,9 @@ public partial class MainWindow
             if (table is < 1 or > 5 || index <= 0 || index >= e.References[table].Count) throw new StudioCommandException("read_only", "Reference is reserved, unavailable or unverified.");
             d.AnimationEdits!.RetargetReference(e.Index, table, index, Text(a, "name")); return Result(DocumentState(d));
         });
-        RegisterJob(r, "pickups", "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts.", [DocumentParameter, .. PageParameters], false, async (a, _) =>
+        RegisterJob(r, "pickups", "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts.", [DocumentParameter, .. PageParameters], false, async (a, token) =>
         {
-            var d = TargetDocument(a); var edits = await d.GetPickupEditsAsync(ViewModel.Resolver ?? throw new StudioCommandException("no_workspace", "Open a root first."), d.Lifetime.Token);
+            var d = TargetDocument(a); using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, d.Lifetime.Token); var edits = await d.GetPickupEditsAsync(ViewModel.Resolver ?? throw new StudioCommandException("no_workspace", "Open a root first."), cancellation.Token);
             return Page(edits.Records.Select(p => new { source = p.Source, p.Type, position = edits.Position(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) }), a, p => p.Type + " " + p.source.ResourceName + " " + p.target);
         });
         Register(r, "pickup_lock", "Set this document's pickup editing lock; new documents are locked by default.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether placements are locked.", true)], a =>

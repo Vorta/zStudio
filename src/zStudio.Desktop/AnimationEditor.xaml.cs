@@ -92,7 +92,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     public async Task InitializeAsync(string? worldPath = null)
     {
         contextRefreshView = null;
-        initializing?.Cancel(); initializing?.Dispose(); initializing = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        initializing?.Cancel(); initializing?.Dispose(); initializing = PreviewOperation.Link(lifetime.Token);
         var token = initializing.Token;
         int generation = ++contextGeneration; seeking?.Cancel(); SetPlaying(false); LoadingPanel.Visibility = Visibility.Visible;
         context = null; player = null; audioDirty = true; ++audioRevision;
@@ -150,7 +150,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     public async Task SeekAsync(double seconds, bool preservePlayhead = false)
     {
         if (context == null || disposed || LoadingPanel.Visibility == Visibility.Visible) return;
-        SetPlaying(false); seeking?.Cancel(); seeking?.Dispose(); seeking = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        SetPlaying(false); seeking?.Cancel(); seeking?.Dispose(); seeking = PreviewOperation.Link(lifetime.Token);
         var token = seeking.Token; PlayButton.IsEnabled = false;
         try
         {
@@ -200,7 +200,14 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { contextRefreshView = null; Note($"Preview was not updated; retaining {context?.Mission?.Layout.Label}. {ex.Message}"); }
-        finally { if (!token.IsCancellationRequested && !disposed) { PlayButton.IsEnabled = true; StartPendingPlayback(); } }
+        finally
+        {
+            if (!disposed && seeking?.Token == token)
+            {
+                PlayButton.IsEnabled = true;
+                if (!token.IsCancellationRequested) StartPendingPlayback();
+            }
+        }
     }
     private void PresentationChanged(object sender, RoutedEventArgs e) { if (ready) Render(); }
     private void GridChanged(object sender, RoutedEventArgs e) { if (ready) viewport.SetGroundGrid(ShowGrid.IsChecked == true); }
@@ -418,7 +425,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (ready && !PlayButton.IsEnabled) { contextDirty = true; resetSimulation = true; pendingPlay |= playing; _ = SeekAsync(frame?.Time ?? 0, preservePlayhead: true); return; }
         if (!ready || changing || context == null || frame == null || LoadingPanel.Visibility == Visibility.Visible) return;
         bool resume = playing; SetPlaying(false);
-        initializing?.Cancel(); initializing?.Dispose(); initializing = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        initializing?.Cancel(); initializing?.Dispose(); initializing = PreviewOperation.Link(lifetime.Token);
         var token = initializing.Token; LoadingPanel.Visibility = Visibility.Visible;
         try
         {

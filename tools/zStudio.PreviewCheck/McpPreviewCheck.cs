@@ -69,7 +69,19 @@ internal static class McpPreviewCheck
                 var draft = await Call("drafts", new { target = "preview" });
                 await Call("resolve_drafts", new { document = animation, target = "preview", token = draft["drafts"]!["token"]!.GetValue<string>(), action = "discard" });
                 await Call("animation_transport", new { preview, action = "seek", seconds = .5 });
-                var captured = await Call("capture", new { target = "preview", width = 800, height = 600 });
+                // Cancel an in-flight seek at its actual UI boundary, before any
+                // render callback; the retained player must remain usable afterward.
+                var playButton = (System.Windows.Controls.Button)editor.FindName("PlayButton");
+                using (var canceledSeek = new CancellationTokenSource())
+                {
+                    DependencyPropertyChangedEventHandler cancelSeek = (_, _) => { if (!playButton.IsEnabled) canceledSeek.Cancel(); };
+                    playButton.IsEnabledChanged += cancelSeek;
+                    try { using (PreviewOperation.Begin(canceledSeek.Token)) await editor.SeekAsync(.25); }
+                    finally { playButton.IsEnabledChanged -= cancelSeek; }
+                    if (!canceledSeek.IsCancellationRequested || !playButton.IsEnabled) throw new InvalidDataException("Canceled MCP seek left playback disabled.");
+                }
+                await Call("animation_transport", new { preview, action = "seek", seconds = .5 });
+                var captured = await Call("capture", new { target = "preview", preview, width = 800, height = 600 });
                 double viewportAspect = editor.Viewport.ActualWidth / editor.Viewport.ActualHeight;
                 double imageAspect = captured["PixelWidth"]!.GetValue<double>() / captured["PixelHeight"]!.GetValue<double>();
                 if (Math.Abs(imageAspect / viewportAspect - 1) > .02) throw new InvalidDataException("MCP capture distorted the viewport aspect ratio.");
@@ -85,7 +97,7 @@ internal static class McpPreviewCheck
                 var textureFile = window.ViewModel.Files.First(f => f.RelativePath.EndsWith("image.zbd", StringComparison.OrdinalIgnoreCase));
                 var (texture, texturePreview) = await Select(textureFile.Path, "Texture", "");
                 await Call("texture_view", new { preview = texturePreview, zoom = 1, channel = 2, x = 0, y = 0 });
-                await Call("capture", new { target = "preview" });
+                await Call("capture", new { target = "preview", preview = texturePreview });
                 await Call("export", new { document = texture, destination = Path.Combine(output, "texture"), assets = new[] { new { kind = "Texture", index = 0 } } });
                 Console.WriteLine("MCP texture controls, capture and export passed.");
                 var (sound, soundPreview) = await Select(Path.Combine(root,"soundsh.zbd"), "Sound", "");
@@ -97,8 +109,16 @@ internal static class McpPreviewCheck
                 Console.WriteLine("MCP sound initialization/play/pause/seek/stop passed.");
                 var gamezPath = Path.Combine(root, "m1", "gamez.zbd");
                 var (world, worldPreview) = await Select(gamezPath, "World", "Whole world");
+                foreach (double vertical in new[] { 1.0, -1.0 })
+                {
+                    var upright = await Call("camera", new { preview = worldPreview, action = "set", position = new[] { 2000, 300, 2000 }, look = new[] { 0.0, vertical, 0.0 } });
+                    double y = upright["LookDirection"]!["Y"]!.GetValue<double>();
+                    if (Math.Abs(y) >= 1) throw new InvalidDataException("Vertical MCP camera was not clamped before returning.");
+                    await Call("camera", new { preview = worldPreview, action = "move", right = 10 });
+                }
                 await Call("camera", new { preview = worldPreview, action = "move", forward = 10, up = 10 });
-                await Call("capture", new { target = "preview", width = 800, height = 600 });
+                var worldCapture = await Call("capture", new { target = "preview", preview = worldPreview, width = 800, height = 600 });
+                if (worldCapture["preview"]!.GetValue<string>() != worldPreview || worldCapture["asset"]!["Kind"]!.GetValue<string>() != "World") throw new InvalidDataException("Capture identity differs from the selected preview.");
                 var placements = await Call("pickups", new { document = world });
                 var pickup = placements["items"]![0]!;
                 var state2 = await Call("state", new { });

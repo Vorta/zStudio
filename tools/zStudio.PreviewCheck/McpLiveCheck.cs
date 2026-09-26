@@ -59,7 +59,7 @@ internal static class McpLiveCheck
             Equal(true, rejected.IsError == true, "invalid layout rejection");
             Equal(true, JsonNode.DeepEquals(layout, await Call("workspace_view", new { })), "rejected layout remains unchanged");
             await Call("camera", new { preview, action = "frame" });
-            await Call("capture", new { target = "preview", width = 800, height = 600 });
+            await Call("capture", new { target = "preview", preview, width = 800, height = 600 });
             var fields = await Call("property_fields", new { document, entry });
             string field = fields["fields"]!["fields"]![0]!["Id"]!.GetValue<string>();
             var changed = await Call("property_edit", new { document, entry, revision = fields["Revision"]!.GetValue<long>(), field, value = "2.5" });

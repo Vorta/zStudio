@@ -27,7 +27,7 @@ public partial class MainWindow
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ViewModel.AddProblem("MCP: " + ex.Message); }
     }
-    private async Task StopMcpAsync()
+    internal async Task StopMcpAsync()
     {
         stoppingAutomation = true;
         var host = mcpHost; mcpHost = null;

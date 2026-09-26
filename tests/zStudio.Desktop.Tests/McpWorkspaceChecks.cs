@@ -44,6 +44,12 @@ internal static class McpWorkspaceChecks
             Assert.Equal(imageBytes,imageResult.Content.OfType<ImageContentBlock>().Single().DecodedData.ToArray());
             var resources = await client.ListResourcesAsync(); Assert.Equal(2,resources.Count);
             var state=await Call("state",new()); Assert.Equal(doc.SessionId.ToString(),state["documents"]![0]!["id"]!.GetValue<string>());
+            string originalPreview = state["preview"]!.GetValue<string>();
+            await Call("capture", new() { ["target"] = "preview" }, "stale_preview");
+            await Call("capture", new() { ["target"] = "preview", ["preview"] = Guid.NewGuid().ToString() }, "stale_preview");
+            main.WindowState = WindowState.Minimized;
+            await Call("capture", new() { ["target"] = "window" }, "not_visible");
+            main.WindowState = WindowState.Normal;
             var layoutBefore = await Call("workspace_view", new());
             string otherTheme = layoutBefore["theme"]!.GetValue<string>() == "Light" ? "Dark" : "Light";
             await Call("workspace_view", new() { ["changes"] = new JsonObject { ["theme"] = otherTheme, ["toolsTab"] = 999 } }, "unavailable_tab");
@@ -88,7 +94,36 @@ internal static class McpWorkspaceChecks
             await Call("state",new() { ["unexpected"]=true },"invalid_argument");
             await Call("close_document",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["discard"]=true });
             await Call("assets",new() { ["document"]=doc.SessionId.ToString() },"stale_document");
+            await Call("capture", new() { ["target"] = "preview", ["preview"] = originalPreview }, "stale_preview");
             Assert.DoesNotContain(app.Windows.Cast<Window>(),w=>w.Title=="Resolve property input");
+
+            // Cancel the real MCP operation during indexing, then prove that the
+            // retained workspace can still open files after access is stopped.
+            string root = Path.Combine(Path.GetTempPath(), "zstudio-mcp-cancel-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            Task? shutdown = null;
+            int indexed = 0;
+            System.ComponentModel.PropertyChangedEventHandler changed = (_, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.Status) && main.ViewModel.Status.StartsWith("Indexed ", StringComparison.Ordinal))
+                { indexed++; shutdown ??= main.StopMcpAsync(); }
+            };
+            try
+            {
+                for (int i = 0; i < 3; i++) File.WriteAllBytes(Path.Combine(root, i + ".zbd"), [1, 0, 0, 0, 0, 0, 0, 0]);
+                main.ViewModel.PropertyChanged += changed;
+                var job = await Call("open_root", new() { ["path"] = root });
+                string id = job["id"]!.GetValue<string>();
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                while (shutdown == null) await Task.Delay(10, deadline.Token);
+                await shutdown.WaitAsync(deadline.Token);
+                job = await Call("operation", new() { ["id"] = id });
+                Assert.Equal("canceled", job["State"]!.GetValue<string>());
+                Assert.Equal(1, indexed); Assert.False(main.ViewModel.IsBusy);
+                var reopened = await main.ViewModel.OpenFileAsync(Path.Combine(root, "0.zbd"));
+                Assert.NotNull(reopened); main.ViewModel.CloseResolved(reopened);
+            }
+            finally { main.ViewModel.PropertyChanged -= changed; Directory.Delete(root, true); }
 
             async Task<JsonNode> Call(string name,JsonObject arguments,string? error=null)
             {

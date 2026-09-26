@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR #8 review corrections (2026-09-26)
+
+All three review findings are valid and corrected. Preview capture requires the current preview UUID and returns preview/asset identity; window captures remain independent. Explicit camera poses are clamped upright before application, and movement normalizes a safe basis immediately. Root indexing and document opening now link operation cancellation with workspace lifetime; potentially blocking filesystem discovery/read waits stay off the UI thread and cannot publish after cancellation. Save and pickup-load jobs forward cancellation. A scoped preview-operation token reaches GUI-binding-triggered loading/seeking without becoming the retained renderer/player lifetime. Canceled seeks restore their Play control.
+
+Release build passes with zero warnings/errors; all 246 tests pass, including real MCP indexing shutdown/recovery, missing/stale capture identities, window-capture independence, vertical camera movement and completed-request lifetime isolation. The generated discovery catalog, capability inventory and MCP documentation are updated. The corpus MCP check passes animation seek/capture/edit/verified Save As, texture capture/export, audio and Whole world camera/pickup/validation; reports remain in OS temporary storage. Portable artifacts remain the owner-tested pre-review build. Merge/tag/release remain pending owner instruction.
+
 ## v0.5.0 PR preparation and owner-accepted MCP usage test (2026-09-26)
 
 The owner accepted the live MCP usage test and requested a PR for the accumulated MCP implementation. Using the visible M1 Whole world workspace, the agent inspected pickup identities and source placements, selected the misplaced NANO-CANISTER, positioned the camera, captured top-down/oblique views and opened its pinned Properties. The pickup was identified outside map geometry without unlocking placements, editing or saving source files. Document revision remained zero and the workspace stayed open for owner inspection.

@@ -4,6 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.5.0 — Unreleased
 
+- Guard preview captures with their lifetime identity, clamp explicit camera poses before movement, and propagate MCP shutdown cancellation through pending workspace/preview/save work without canceling retained preview lifetimes.
 - Correct active-view MCP state after viewer changes, apply list queries before paging, reject invalid layout batches before changing preferences, report stale structural targets explicitly, and preserve 3D capture proportions. Add packaged stdio corpus regressions.
 
 - Add opt-in local MCP access to the visible zStudio workspace through a stdio connector and same-user named pipe, including on-demand visible startup (handshake and discovery stay windowless), connection controls and activity history.

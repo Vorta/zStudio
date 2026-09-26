@@ -90,6 +90,17 @@ public sealed partial class SceneViewport
         pitch = Math.Clamp(pitch, -89 * Math.PI / 180, 89 * Math.PI / 180);
         return new(Math.Sin(yaw) * Math.Cos(pitch), Math.Sin(pitch), -Math.Cos(yaw) * Math.Cos(pitch));
     }
+    /// <summary>Clamp an explicit camera pose before immediate navigation, preserving its eye and look length.</summary>
+    public static ViewPose UprightPose(ViewPose pose)
+    {
+        var look = pose.LookDirection;
+        double length = look.Length;
+        if (!double.IsFinite(length) || length < 1e-6) throw new ArgumentException("A finite nonzero look direction is required.", nameof(pose));
+        look /= length;
+        var forward = UprightDirection(Math.Atan2(look.X, -look.Z), Math.Asin(Math.Clamp(look.Y, -1, 1)));
+        var right = Vector3D.CrossProduct(forward, new(0, 1, 0)); right.Normalize();
+        return pose with { LookDirection = forward * length, UpDirection = Vector3D.CrossProduct(right, forward) };
+    }
     /// <summary>Rotate in screen pixels with an upright camera and a bounded pitch.</summary>
     public void RotateBy(double horizontal, double vertical)
     {

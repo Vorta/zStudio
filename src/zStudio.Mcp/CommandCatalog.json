@@ -1396,6 +1396,14 @@
         "Properties": null
       },
       {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state; required for target=preview.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
         "Name": "width",
         "Type": "integer",
         "Description": "Maximum 3D image width, 1\u20134096; default 1280.",

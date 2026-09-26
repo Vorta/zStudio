@@ -168,7 +168,9 @@ public partial class MainWindow : Window
         var previousView = previousMission == null ? null : scene?.CaptureView();
         int? previousSelection = selectedNode, previousIsolate = isolatedNode;
         var previousPickup = selectedNode is int selected ? scene?.PickupAt(selected)?.Pickup?.Source : null;
-        CancelPreview(); shownAsset = asset; var token = preview.Token;
+        CancelPreview(); shownAsset = asset; var previewLifetime = preview.Token;
+        using var loading = PreviewOperation.Link(previewLifetime);
+        var token = loading.Token;
         foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
         EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
         PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
@@ -229,10 +231,10 @@ public partial class MainWindow : Window
             }
             else if (asset?.Kind == AssetKind.Animation && doc.AnimationEdits != null && ViewModel.Resolver != null)
             {
-                var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, token, ViewModel); animation = editor;
+                var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, previewLifetime, ViewModel); animation = editor;
                 if (pendingAnimationPlay) { pendingAnimationPlay = false; editor.TogglePlayback(); }
-                editor.StatusChanged += text => { if (!token.IsCancellationRequested) ViewModel.Status = text; };
-                editor.InspectionChanged += (json, data) => { if (token.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
+                editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
+                editor.InspectionChanged += (json, data) => { if (previewLifetime.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
                 editor.SaveRequested += async () => { await SaveAnimationAsync(doc); };
                 AnimationHost.Content = editor; AttachAnimationWorkspace(editor);
                 AnimationHost.Visibility = Visibility.Visible;

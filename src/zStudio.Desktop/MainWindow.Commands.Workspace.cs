@@ -27,11 +27,11 @@ public partial class MainWindow
 
     private void RegisterWorkspaceCommands(StudioCommands r)
     {
-        RegisterJob(r, "open_root", "Open and index a ZBD root in the visible workspace. Dirty documents must be explicitly saved or closed first.", [P("path", "string", "Absolute ZBD root directory.", true)], false, async (a, _) =>
+        RegisterJob(r, "open_root", "Open and index a ZBD root in the visible workspace. Dirty documents must be explicitly saved or closed first.", [P("path", "string", "Absolute ZBD root directory.", true)], false, async (a, token) =>
         {
             RequireNoDrafts(); if (ViewModel.Documents.Any(d => d.IsDirty)) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard dirty documents before changing roots.");
             string path = Path.GetFullPath(Text(a,"path"));
-            await ViewModel.OpenRootAsync(path);
+            await ViewModel.OpenRootAsync(path, token);
             if (!ViewModel.RootPath.Equals(path,StringComparison.OrdinalIgnoreCase)) throw new StudioCommandException("context_changed","Workspace was replaced during indexing.");
             UpdateRecent(); return Result(new { ViewModel.RootPath, ViewModel.Status, files = ViewModel.Files.Count });
         });
@@ -47,11 +47,11 @@ public partial class MainWindow
             if (a.ContainsKey("query")) d.Query = Text(a, "query");
             return Result(new { d.Query, d.KindFilter });
         });
-        RegisterJob(r, "open_document", "Open or activate an archive and its visible preview.", [P("path", "string", "Absolute archive path.", true)], false, async (a, _) =>
+        RegisterJob(r, "open_document", "Open or activate an archive and its visible preview.", [P("path", "string", "Absolute archive path.", true)], false, async (a, token) =>
         {
             RequireNoDrafts(); string path = Path.GetFullPath(Text(a, "path"));
-            if (!ViewModel.HasRoot) await ViewModel.OpenRootAsync(Path.GetDirectoryName(path)!);
-            var doc = await ViewModel.OpenFileAsync(path) ?? throw new StudioCommandException("open_failed", ViewModel.Status);
+            if (!ViewModel.HasRoot) await ViewModel.OpenRootAsync(Path.GetDirectoryName(path)!, token);
+            var doc = await ViewModel.OpenFileAsync(path, token) ?? throw new StudioCommandException("open_failed", ViewModel.Status);
             NavigationTabs.SelectedItem = AssetsTab; await previewWork;
             if (doc.IsDisposed || ViewModel.SelectedDocument != doc) throw new StudioCommandException("context_changed","The active document changed while opening.");
             return Result(DocumentState(doc));
@@ -60,7 +60,7 @@ public partial class MainWindow
         {
             var doc = TargetDocument(a); return Page(doc.Document.Assets.Where(x => x.Name.Contains(Text(a, "query"), StringComparison.OrdinalIgnoreCase)).Select(x => new { x.Kind, x.Index, x.Name, x.Offset, x.Length, x.Summary }), a);
         });
-        RegisterJob(r, "select_asset", "Select an asset in the GUI and await its preview; does not retarget Properties.", AssetParameters, false, async (a, _) =>
+        RegisterJob(r, "select_asset", "Select an asset in the GUI and await its preview; does not retarget Properties.", AssetParameters, false, async (a, token) =>
         {
             RequireNoDrafts(); var doc = TargetDocument(a); var asset = TargetAsset(doc, a); ViewModel.SelectedDocument = doc;
             doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.Single(x => x.Record == asset); NavigationTabs.SelectedItem = AssetsTab;
@@ -88,10 +88,10 @@ public partial class MainWindow
             var doc = TargetDocument(a, true); if (doc.IsDirty && !Flag(a, "discard")) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });
         });
-        RegisterJob(r, "reload_document", "Reload a clean document from disk; dirty documents must first be saved or explicitly closed.", [DocumentParameter, RevisionParameter], false, async (a, _) =>
+        RegisterJob(r, "reload_document", "Reload a clean document from disk; dirty documents must first be saved or explicitly closed.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
             var doc = TargetDocument(a, true); if (doc.IsDirty) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
-            string path = doc.Path; ViewModel.CloseResolved(doc); var next = await ViewModel.OpenFileAsync(path); await previewWork;
+            string path = doc.Path; ViewModel.CloseResolved(doc); var next = await ViewModel.OpenFileAsync(path, token); await previewWork;
             return Result(next == null ? new { error = ViewModel.Status } : DocumentState(next));
         });
         Register(r, "undo_redo", "Undo or redo one accepted edit in the specified document.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], a =>
@@ -99,7 +99,7 @@ public partial class MainWindow
             var d = TargetDocument(a, true); UndoDocument(d, Text(a, "action") == "redo"); return Result(DocumentState(d));
         });
         RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations.",
-            [DocumentParameter, RevisionParameter, P("destination", "string", "New animation archive path."), P("destinations", "object", "Pickup source archive path to new Save As path map."), P("backup", "boolean", "Pickup backup preference; defaults to app setting.")], false, async (a, _) =>
+            [DocumentParameter, RevisionParameter, P("destination", "string", "New animation archive path."), P("destinations", "object", "Pickup source archive path to new Save As path map."), P("backup", "boolean", "Pickup backup preference; defaults to app setting.")], false, async (a, token) =>
         {
             var d = TargetDocument(a, true);
             IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
@@ -108,11 +108,11 @@ public partial class MainWindow
                 if (d.AnimationEdits != null)
                 {
                     if (Text(a, "destination").Length == 0) throw new StudioCommandException("destination_required", "Animation Save As requires a new output path.");
-                    await SaveAnimationToPathAsync(d, Text(a, "destination")); return Result(DocumentState(d));
+                    await SaveAnimationToPathAsync(d, Text(a, "destination"), token); return Result(DocumentState(d));
                 }
                 if (d.PickupEdits is not { } edits) throw new StudioCommandException("unsupported", "This document does not support saving edits.");
                 var destinations = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value?.GetValue<string>() ?? "", StringComparer.OrdinalIgnoreCase);
-                var saved = await SavePickupDestinationsAsync(d, destinations, Flag(a, "backup", ViewModel.Settings.CreateBackupOnSave));
+                var saved = await SavePickupDestinationsAsync(d, destinations, Flag(a, "backup", ViewModel.Settings.CreateBackupOnSave), token);
                 return Result(new { document = DocumentState(d), result = saved });
             }
             finally { IsEnabled = true; if (propertiesWindow != null) propertiesWindow.IsEnabled = true; }

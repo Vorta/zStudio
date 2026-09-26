@@ -78,11 +78,12 @@ public partial class MainWindow
                 {
                     var p = Triple(a,"position"); var l = Triple(a,"look"); double fov = Number(a,"fov",pose.FieldOfView);
                     if (new Vector3D(l[0],l[1],l[2]).LengthSquared < 1e-12 || fov is <= 1 or >= 179) throw new StudioCommandException("invalid_argument", "Use a nonzero look direction and FOV between 1 and 179 degrees.");
-                    viewport.RestoreView(new(new(p[0],p[1],p[2]), new(l[0],l[1],l[2]), new(0,1,0), fov));
+                    viewport.RestoreView(SceneViewport.UprightPose(new(new(p[0],p[1],p[2]), new(l[0],l[1],l[2]), new(0,1,0), fov)));
                 }
                 else if (action == "move")
                 {
                     foreach (string key in new[] { "forward", "right", "up" }) if (Math.Abs(Number(a,key)) > 1e9) throw new StudioCommandException("invalid_argument","Displacements must be within ±1e9 game units.");
+                    pose = SceneViewport.UprightPose(pose);
                     var look = pose.LookDirection; look.Normalize(); var right = Vector3D.CrossProduct(look,new(0,1,0)); right.Normalize();
                     viewport.RestoreView(pose with { Position = pose.Position + look * Number(a,"forward") + right * Number(a,"right") + new Vector3D(0,Number(a,"up"),0) });
                 }
@@ -171,14 +172,15 @@ public partial class MainWindow
             UpdateAudioPosition(); return Result(new { seconds=wave.CurrentTime.TotalSeconds,duration=wave.TotalTime.TotalSeconds,state=(player?.PlaybackState ?? PlaybackState.Stopped).ToString(),waveInfo });
         });
         Register(r, "capture", "Capture the current preview or a zStudio-owned window as PNG; never captures other applications. 3D images fit within width/height without distortion or resizing the viewport. Texture/window captures keep native dimensions.", false,
-            [P("target","string","Capture target.",true,"preview","window","properties"),P("width","integer","Maximum 3D image width, 1–4096; default 1280."),P("height","integer","Maximum 3D image height, 1–4096; default 720.")], a =>
+            [P("target","string","Capture target.",true,"preview","window","properties"),P("preview","string","Current preview lifetime ID from zstudio_state; required for target=preview."),P("width","integer","Maximum 3D image width, 1–4096; default 1280."),P("height","integer","Maximum 3D image height, 1–4096; default 720.")], a =>
         {
             string target=Text(a,"target"); BitmapSource image;
+            if (target == "preview") RequirePreview(a);
             if(target=="window" || target=="properties") image=StudioCapture.Window(target=="window" ? this : propertiesWindow ?? throw new StudioCommandException("not_ready","Properties is closed."));
             else if(decoded!=null) image=MakeBitmap(decoded,ChannelCombo.SelectedIndex);
             else { int w=Int(a,"width",1280),h=Int(a,"height",720); if(w is <1 or >4096 || h is <1 or >4096) throw new StudioCommandException("invalid_argument","Capture dimensions must be 1–4096."); image=(animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("not_ready","No image/3D preview is loaded. Use target=window for other viewers.")).RenderImage(w,h,preserveAspect:true); }
             using MemoryStream bytes=new(); PngBitmapEncoder encoder=new(); encoder.Frames.Add(BitmapFrame.Create(image)); encoder.Save(bytes);
-            return new(Result(new { image.PixelWidth,image.PixelHeight,mimeType="image/png" }).Data,bytes.ToArray());
+            return new(Result(new { image.PixelWidth,image.PixelHeight,mimeType="image/png", preview = target == "preview" ? (Guid?)previewId : null, asset = target == "preview" ? shownAsset?.Id : null }).Data,bytes.ToArray());
         });
         RegisterWorkspacePresentation(r);
     }

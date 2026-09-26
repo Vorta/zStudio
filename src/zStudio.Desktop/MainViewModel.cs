@@ -69,11 +69,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string globalQuery = "";
     [ObservableProperty] private bool hasRoot;
     [ObservableProperty] private bool searchIsLimited;
-    public async Task OpenRootAsync(string root)
+    public async Task OpenRootAsync(string root, CancellationToken cancellationToken = default)
     {
-        root = Path.GetFullPath(root); if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
+        cancellationToken.ThrowIfCancellationRequested();
+        root = Path.GetFullPath(root);
+        // Directory checks can block on unavailable network shares. Keep that work off
+        // the dispatcher and abandon the wait on shutdown; it has no workspace effects.
+        if (!await Task.Run(() => Directory.Exists(root), cancellationToken).WaitAsync(cancellationToken)) throw new DirectoryNotFoundException(root);
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var document in Documents.ToArray()) if (!await CanRemoveAsync(document)) return;
-        workspace.Cancel(); workspace.Dispose(); workspace = new(); var token = workspace.Token;
+        cancellationToken.ThrowIfCancellationRequested();
+        workspace.Cancel(); workspace.Dispose(); workspace = new(); var workspaceToken = workspace.Token;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(workspaceToken, cancellationToken);
+        var token = cancellation.Token;
         foreach (var doc in Documents) doc.Dispose(); Documents.Clear(); SelectedDocument = null;
         // A previous asynchronous operation may still hold its resolver; its
         // canceled task owns that short remaining lifetime, not the new workspace.
@@ -90,7 +98,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 { token.ThrowIfCancellationRequested(); entries.Add(new(file, Path.GetRelativePath(root, file), FormatRegistry.Probe(file))); }
                 return entries.OrderBy(f => f.RelativePath, DisplayPathComparer)
                     .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
-            }, token);
+            }, token).WaitAsync(token);
             token.ThrowIfCancellationRequested(); Files = found;
             FolderNode rootNode = new(Path.GetFileName(root), root); Dictionary<string, FolderNode> directories = new(StringComparer.OrdinalIgnoreCase) { [root] = rootNode };
             foreach (var file in found)
@@ -106,8 +114,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 node = new(Path.GetFileName(path), path); directories[path] = node; EnsureDirectory(Path.GetDirectoryName(path)!).Children.Add(node); return node;
             }
         }
-        catch (OperationCanceledException) { if (!token.IsCancellationRequested || workspace.Token == token) Status = "Scan canceled"; }
-        finally { if (workspace.Token == token) IsBusy = false; }
+        catch (OperationCanceledException) { if (workspace.Token == workspaceToken) Status = "Scan canceled"; cancellationToken.ThrowIfCancellationRequested(); }
+        finally { if (workspace.Token == workspaceToken) IsBusy = false; }
     }
     private async Task IndexAsync(List<FileEntry> files, CancellationToken token)
     {
@@ -117,7 +125,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             token.ThrowIfCancellationRequested();
             try
             {
-                var doc = await FormatRegistry.Default.OpenAsync(file.Path, token);
+                var doc = await Task.Run(() => FormatRegistry.Default.OpenAsync(file.Path, token), token).WaitAsync(token);
                 token.ThrowIfCancellationRequested(); index.AddRange(doc.Assets.Select(a => new SearchHit(file.Path, a.Kind, a.Index, a.Name)));
                 foreach (var diagnostic in doc.Diagnostics) { warnings++; if (Diagnostics.Count < 500) AddProblem(diagnostic.Message, diagnostic.Severity, file.Path, diagnostic.AssetIndex, diagnostic.Offset); }
                 Status = $"Indexed {++completed} containers · {index.Count:N0} assets";
@@ -126,22 +134,24 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics";
     }
-    public async Task<DocumentModel?> OpenFileAsync(string path)
+    public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         path = Path.GetFullPath(path);
         var existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
         if (existing != null) { SelectedDocument = existing; return existing; }
-        var token = workspace.Token; Status = "Opening " + Path.GetFileName(path) + "…";
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken);
+        var token = cancellation.Token; Status = "Opening " + Path.GetFileName(path) + "…";
         try
         {
-            var doc = await FormatRegistry.Default.OpenAsync(path, token); token.ThrowIfCancellationRequested();
+            var doc = await Task.Run(() => FormatRegistry.Default.OpenAsync(path, token), token).WaitAsync(token); token.ThrowIfCancellationRequested();
             existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
             if (existing != null) { SelectedDocument = existing; return existing; }
             DocumentModel model = new(doc); Documents.Add(model); SelectedDocument = model;
             foreach (var diagnostic in doc.Diagnostics) AddProblem(diagnostic.Message, diagnostic.Severity, path, diagnostic.AssetIndex, diagnostic.Offset);
             Status = model.Description; return model;
         }
-        catch (OperationCanceledException) { return null; }
+        catch (OperationCanceledException) { cancellationToken.ThrowIfCancellationRequested(); return null; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { AddProblem(ex.Message, "Error", path); Status = "Could not open file: " + ex.Message; return null; }
     }
     public void Close(DocumentModel document) { if (document.IsDirty) throw new InvalidOperationException("Use CloseAsync to resolve unsaved edits."); RemoveDocument(document); }
