@@ -82,6 +82,26 @@ internal static class McpPreviewCheck
                 }
                 await Call("animation_transport", new { preview, action = "seek", seconds = .5 });
                 var captured = await Call("capture", new { target = "preview", preview, width = 800, height = 600 });
+                var loadingPanel = (FrameworkElement)editor.FindName("LoadingPanel");
+                var showLevel = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel");
+                bool originalMap = showLevel.IsChecked == true;
+                using (var canceledRefresh = new CancellationTokenSource())
+                {
+                    var visibility = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(UIElement.VisibilityProperty, loadingPanel.GetType());
+                    EventHandler cancelRefresh = (_, _) => { if (loadingPanel.Visibility == Visibility.Visible) canceledRefresh.Cancel(); };
+                    visibility.AddValueChanged(loadingPanel, cancelRefresh);
+                    try
+                    {
+                        using (PreviewOperation.Begin(canceledRefresh.Token)) await editor.SetPreviewOptionAsync("map", JsonValue.Create(!originalMap)!);
+                        if (!canceledRefresh.IsCancellationRequested || loadingPanel.Visibility != Visibility.Collapsed) throw new InvalidDataException("Canceled MCP level refresh retained the loading overlay.");
+                    }
+                    finally { visibility.RemoveValueChanged(loadingPanel, cancelRefresh); }
+                }
+                // A second rendering option and transport must work without reselecting the asset.
+                await Call("animation_options", new { preview, changes = new { map = originalMap } });
+                await Call("animation_transport", new { preview, action = "seek", seconds = .5 });
+                await Call("animation_transport", new { preview, action = "play" });
+                await Call("animation_transport", new { preview, action = "pause" });
                 double viewportAspect = editor.Viewport.ActualWidth / editor.Viewport.ActualHeight;
                 double imageAspect = captured["PixelWidth"]!.GetValue<double>() / captured["PixelHeight"]!.GetValue<double>();
                 if (Math.Abs(imageAspect / viewportAspect - 1) > .02) throw new InvalidDataException("MCP capture distorted the viewport aspect ratio.");

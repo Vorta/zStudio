@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "discovery": "Initialize, tools/list, resources/list and capabilities inspection are windowless. The first valid workspace request attaches or launches the opted-in GUI. Embedded command metadata is generated from the live registry and parity-tested.",
-  "inspection": "List queries filter case-insensitively before pagination and retain record identities. Preview state describes the active viewer; unavailable 3D options are null. Invalid workspace tab requests leave presentation preferences unchanged. Missing structural edit targets return stale_record. Preview capture requires the preview lifetime UUID and returns preview/asset identity; window captures are independent. 3D capture preserves aspect ratio. Explicit camera poses are clamped upright before subsequent movement. MCP shutdown cancels pending jobs without owning retained preview lifetimes.",
+  "inspection": "List queries filter case-insensitively before pagination and retain record identities. Preview state describes the active viewer; unavailable 3D options are null. Invalid workspace tab requests leave presentation preferences unchanged. Missing structural edit targets return stale_record. Preview capture requires the preview lifetime UUID and returns preview/asset identity; window captures are independent. 3D capture preserves aspect ratio. Explicit camera poses are clamped upright before subsequent movement. MCP shutdown cancels pending jobs and audio retries without owning retained preview lifetimes; canceled level refreshes release their loading overlay. Malformed keyframe payloads retain available property fields and a read-only diagnostic at segment 0.",
   "handlers": [
     {
       "gui": "AnimationEditor.xaml:AddSequenceClick",

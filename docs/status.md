@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR #8 cancellation recovery and malformed keyframe parity (2026-09-26)
+
+The second review's three findings are valid and corrected. A canceled level-render refresh clears its loading overlay only if it remains the current request, without hiding a newer request's overlay. Audio retries after unmuting now link the scoped MCP operation token with editor lifetime. Default segment inspection tolerates malformed keyframe payloads, retaining scheduling/catalog fields and a generated read-only Keyframe diagnostic; unavailable segment indices return invalid_argument. Scheduling edits preserve the malformed payload bytes.
+
+Release build has zero warnings/errors and all 246 tests pass, with expanded WPF/protocol coverage for malformed inspection/editing/segment rejection and blocked audio-decode cancellation plus successful retry using a synthetic output. The real-corpus MCP check passes canceled level refresh recovery, subsequent scene-option changes and seek/play/pause without reselection, as well as prior animation/texture/audio/world/pickup/save/export checks (TEMP/zstudio-mcp-a3b94b02ba7f4dad99ba70e434b5a8ee). No command schema changed; full discovery catalog parity still passes. Portable artifacts remain the owner-tested pre-review build. Merge/tag/release await owner instruction.
+
 ## PR #8 review corrections (2026-09-26)
 
 All three review findings are valid and corrected. Preview capture requires the current preview UUID and returns preview/asset identity; window captures remain independent. Explicit camera poses are clamped upright before application, and movement normalizes a safe basis immediately. Root indexing and document opening now link operation cancellation with workspace lifetime; potentially blocking filesystem discovery/read waits stay off the UI thread and cannot publish after cancellation. Save and pickup-load jobs forward cancellation. A scoped preview-operation token reaches GUI-binding-triggered loading/seeking without becoming the retained renderer/player lifetime. Canceled seeks restore their Play control.

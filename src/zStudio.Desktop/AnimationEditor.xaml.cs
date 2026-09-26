@@ -35,7 +35,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private readonly DispatcherTimer timer = new(DispatcherPriority.Render) { Interval = TimeSpan.FromSeconds(1.0 / 30) };
     private readonly Stopwatch clock = new();
     private readonly SceneViewport viewport = new();
-    private readonly AnimationAudio audio = new();
+    private readonly AnimationAudio audio;
     private readonly List<string> audioDiagnostics = [];
     private bool audioDirty = true;
     private int audioRevision, audioPreparing;
@@ -67,7 +67,10 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private AnimationEvent? Event => Sequence?.Events.FirstOrDefault(e => e.Id == selectedEvent);
 
     public AnimationEditor(DocumentModel document, int entryIndex, AssetResolver resolver, CancellationToken token, MainViewModel? preferences = null)
+        : this(document, entryIndex, resolver, token, preferences, new AnimationAudio()) { }
+    internal AnimationEditor(DocumentModel document, int entryIndex, AssetResolver resolver, CancellationToken token, MainViewModel? preferences, AnimationAudio audio)
     {
+        this.audio = audio;
         this.preferences = preferences;
         this.document = document; this.entryIndex = entryIndex; this.resolver = resolver; edits = document.AnimationEdits!;
         lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token);
@@ -414,7 +417,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (audio.Muted) audio.Stop();
         else if (wasMuted && !audio.IsPrepared && context != null && audioPreparing == 0)
         {
-            try { await PrepareAudioAsync(lifetime.Token); }
+            using var request = PreviewOperation.Link(lifetime.Token);
+            try { await PrepareAudioAsync(request.Token); }
             catch (OperationCanceledException) { }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { RecordPreviewError(ex.Message); }
         }
@@ -434,7 +438,12 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { RecordPreviewError(ex.Message); }
-        finally { if (!token.IsCancellationRequested && !disposed) LoadingPanel.Visibility = Visibility.Collapsed; }
+        finally
+        {
+            // A canceled MCP request leaves this editor alive. Only the current
+            // refresh owns its overlay; an older request cannot hide a newer one.
+            if (!disposed && initializing?.Token == token) LoadingPanel.Visibility = Visibility.Collapsed;
+        }
         if (resetSimulation && !token.IsCancellationRequested && !disposed)
         {
             pendingPlay |= resume;

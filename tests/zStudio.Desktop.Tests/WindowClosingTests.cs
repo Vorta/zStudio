@@ -44,6 +44,7 @@ public sealed class WindowClosingTests
                     await Check([], 0, closes: true);
                     await PropertiesWindowChecks.Run(app);
                     await McpWorkspaceChecks.Run(app);
+                    await AnimationMcpCancellationChecks.Run();
                 }
                 catch (Exception ex) { failure ??= ex; }
                 finally

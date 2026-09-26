@@ -121,7 +121,7 @@ public sealed partial class AnimationPropertiesEditor : FieldEditor, IDisposable
                     if (ev.Type == 12 && editable)
                     {
                         try { Keyframes(Group(panel, "Keyframe segments"), ev.Keyframes()); }
-                        catch (InvalidDataException ex) { Label(panel, ex.Message + " Keyframe payload remains read-only."); }
+                        catch (InvalidDataException ex) { Input(panel, "Keyframe diagnostic", ex.Message + " Keyframe payload remains read-only.", _ => { }, readOnly: true); }
                     }
                 }
                 var provenance = Group(panel, "Record identity / provenance", false);

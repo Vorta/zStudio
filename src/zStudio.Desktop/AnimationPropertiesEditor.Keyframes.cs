@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO;
 using System.Windows.Controls;
+using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core.Animation;
 namespace Recoil.Zbd.Desktop;
 public sealed partial class AnimationPropertiesEditor
@@ -8,7 +9,13 @@ public sealed partial class AnimationPropertiesEditor
     private int selectedSegment;
     internal void SelectAutomationSegment(int index)
     {
-        if (index < 0 || index >= Math.Max(1, Event?.Keyframes().Count ?? 0)) throw new ArgumentOutOfRangeException(nameof(index));
+        int count = 0;
+        if (Event?.Type == 12)
+        {
+            try { count = Event.Keyframes().Count; }
+            catch (InvalidDataException) { /* Scheduling/catalog fields remain inspectable, as in RefreshProperties. */ }
+        }
+        if (index < 0 || index >= Math.Max(1, count)) throw new StudioCommandException("invalid_argument", "Keyframe segment is unavailable; use segment 0 to inspect the record's available fields.");
         selectedSegment = index; fieldsShape = ""; RefreshProperties();
     }
     private string KeyframeShape()

@@ -4,6 +4,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.5.0 — Unreleased
 
+- Recover animation controls after canceled level refreshes, cancel pending audio retries when MCP stops, and retain MCP inspection/editing of valid fields on malformed keyframe events with a read-only payload diagnostic.
 - Guard preview captures with their lifetime identity, clamp explicit camera poses before movement, and propagate MCP shutdown cancellation through pending workspace/preview/save work without canceling retained preview lifetimes.
 - Correct active-view MCP state after viewer changes, apply list queries before paging, reject invalid layout batches before changing preferences, report stale structural targets explicitly, and preserve 3D capture proportions. Add packaged stdio corpus regressions.
 
