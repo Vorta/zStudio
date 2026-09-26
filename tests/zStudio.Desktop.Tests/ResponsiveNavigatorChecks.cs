@@ -26,7 +26,12 @@ internal static class ResponsiveNavigatorChecks
         string root = Path.Combine(Path.GetTempPath(),"zstudio-responsive-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         for (int i = 0; i < 65; i++) File.WriteAllBytes(Path.Combine(root,$"file{i:D2}.zbd"),[1,0,0,0,0,0,0,0]);
-        var main = new MainWindow { Left = -12000, ShowInTaskbar = false, Width = 1080, Height = 750 };
+        // Hosted Windows runners can cap native window width below the split
+        // breakpoint. Lay out the real content at explicit DIP widths inside a
+        // deliberately smaller HWND so every runner exercises both modes.
+        var main = new MainWindow { Left = -12000, ShowInTaskbar = false, MinWidth = 0, MaxWidth = 800, Width = 800, Height = 750 };
+        var content = (FrameworkElement)main.Content;
+        content.Width = 1080; content.Height = 750;
         main.ViewModel.Settings.Workspace = new();
         main.Show(); await Idle();
         try
@@ -161,7 +166,9 @@ internal static class ResponsiveNavigatorChecks
 
             async Task Resize(double width,string mode)
             {
-                main.Width = width; await Idle();
+                content.Width = width; await Idle();
+                Assert.Equal(width,content.ActualWidth,1);
+                Assert.True(main.ActualWidth <= 800);
                 Assert.Equal(mode,main.NavigatorMode);
                 Assert.Equal(mode,(await Changes(null))["navigatorMode"]!.GetValue<string>());
                 if (mode == "split")

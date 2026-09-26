@@ -2,6 +2,8 @@
 
 ## v0.5.2 PR preparation (2026-09-26)
 
+PR #9 is open: https://github.com/Vorta/zStudio/pull/9. Initial hosted CI passed build but exposed the responsive fixture's dependence on a native window exceeding the runner desktop width. The fixture now sizes the actual WPF content explicitly within a deliberately constrained 800-DIP window, retaining all breakpoint, GUI/MCP, focus, scroll, splitter and draft assertions. All 281 Release tests pass locally with the constrained window; hosted CI is being rerun. Application behavior and repository protections are unchanged.
+
 Bumped the shared version to 0.5.2 and added release notes for Blender-style navigation, Whole world surface highlights, native Windows 11 corners and responsive Files navigation. README identifies the source version while linking to published releases; release examples use 0.5.2. Reviewed the pending source, dynamic controls, shared MCP paths, generated catalog, tests and documentation. The branch is based on current main; active main/release-tag protections remain unchanged, and no related open issue exists.
 
 Fresh locked dependency restore, Release build (zero warnings/errors) and all 281 Release tests pass with version 0.5.2; executable product metadata confirms 0.5.2. The feature-specific real-data/UI/rendering results recorded below remain applicable because this preparation changes only version metadata and documentation. No game data, generated build output, local reports or credentials are included. Portable packaging will also be checked by PR CI; local artifacts still contain the earlier 0.5.0 test build. Prepared for a PR on feature/world-surface-highlights; merge, tag and public release remain separate actions.
