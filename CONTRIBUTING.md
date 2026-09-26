@@ -30,6 +30,8 @@ These checks use synthetic fixtures and require no game data, Python, Binary Nin
 
 Never commit game data, build output, credentials, local settings, corpus reports or external reconstruction/decompilation sources. Keep dependency lockfiles in sync with intentional package changes. The optional Python export checker must stay independent of the archived CLI.
 
+Every new user-facing feature must also work over MCP. Use shared command/editing services and the same validation, identities, undo and save protections as the GUI. Update typed tool schemas, [the capability inventory](docs/mcp-capabilities.json), [MCP documentation](docs/mcp.md), and protocol tests. CI checks XAML action-handler coverage against the independent inventory; review must additionally cover bound and dynamically constructed controls. A label in the inventory alone is not evidence of working parity. Property fields/actions created through FieldEditor are exposed automatically. MCP must return explicit draft/conflict errors rather than opening a modal dialog or discarding input.
+
 Treat contributors respectfully, discuss the work rather than the person, and avoid harassment or disclosure of private information. Vorta maintains the repository and may moderate discussions to keep them constructive.
 
 Contributions are provided under the project's existing [MIT license](LICENSE). Include attribution and compatible notices for third-party code. See [SECURITY.md](SECURITY.md) for vulnerability reports and [docs/releasing.md](docs/releasing.md) for release procedures.

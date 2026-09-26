@@ -16,6 +16,6 @@
     <Description>Advanced viewer and editor for Zipper Interactive's ZBD files</Description>
     <RepositoryUrl>https://github.com/Vorta/zStudio</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <Version>0.4.8</Version>
+    <Version>0.5.0</Version>
   </PropertyGroup>
 </Project>

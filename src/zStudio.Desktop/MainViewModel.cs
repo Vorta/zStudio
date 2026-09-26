@@ -164,5 +164,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var hit in matches.Take(500)) SearchResults.Add(hit);
     }
     public IEnumerable<SearchHit> Related(string name, string context) => index.Where(h => !h.File.Equals(context, StringComparison.OrdinalIgnoreCase) && Path.GetFileNameWithoutExtension(h.Name).Equals(Path.GetFileNameWithoutExtension(name), StringComparison.OrdinalIgnoreCase)).Take(100);
+    internal IEnumerable<SearchHit> SearchIndex(string query) => index.Where(h => h.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || h.Location.Contains(query, StringComparison.OrdinalIgnoreCase));
+    internal void CloseResolved(DocumentModel doc) => RemoveDocument(doc);
     public void Dispose() { workspace.Cancel(); foreach (var doc in Documents) doc.Dispose(); workspace.Dispose(); GC.SuppressFinalize(this); }
 }

@@ -53,6 +53,8 @@ public sealed partial class AssetItem(AssetRecord record) : ObservableObject
 }
 public sealed partial class DocumentModel : ObservableObject, IDisposable
 {
+    public Guid SessionId { get; } = Guid.NewGuid();
+    public long Revision { get; private set; }
     public ZbdDocument Document { get; }
     public string Path => Document.Path;
     public string Title => System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) + "/" + System.IO.Path.GetFileName(Path) + (IsDirty ? " *" : "");
@@ -80,7 +82,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (PickupEdits == null)
         {
             PickupEdits = edits;
-            edits.Changed += () => { OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); PickupEditsChanged?.Invoke(); };
+            edits.Changed += () => { Revision++; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); PickupEditsChanged?.Invoke(); };
         }
         return edits;
     }
@@ -117,7 +119,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public DocumentModel(ZbdDocument doc)
     {
         Document = doc;
-        if (doc.Animations != null) { AnimationEdits = new(doc.Animations); AnimationEdits.Changed += () => { contextLoading?.Cancel(); animationContext = null; OnPropertyChanged(nameof(Title)); }; }
+        if (doc.Animations != null) { AnimationEdits = new(doc.Animations); AnimationEdits.Changed += () => { Revision++; contextLoading?.Cancel(); animationContext = null; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); }; }
         Assets = new(doc.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).Select(a => new AssetItem(a)));
         Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()];
         FilteredAssets = CollectionViewSource.GetDefaultView(Assets); FilteredAssets.Filter = Matches;
@@ -191,6 +193,7 @@ public sealed record StudioProblem(string Severity, string Category, string Mess
 }
 public sealed class StudioSettings
 {
+    public bool McpEnabled { get; set; }
     public WorkspaceLayout? Workspace { get; set; }
     public WorkspaceLayout GetWorkspace()
     {

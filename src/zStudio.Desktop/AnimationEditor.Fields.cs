@@ -45,7 +45,7 @@ public partial class AnimationEditor
     {
         Vector3? point = null;
         if (text.Replace(",", "").Trim().Length != 0) { AnimationRecord record = new(new byte[12]); new AnimationField("",0,AnimationFieldKind.Vector).Write(record,text); point = record.Vector(0); }
-        if (start) activationStart = point; else activationTarget = point; resetSimulation = true; _ = SeekAsync(frame?.Time ?? 0);
+        if (start) activationStart = point; else activationTarget = point; resetSimulation = true; optionWork = SeekAsync(frame?.Time ?? 0);
     }
     private void RefreshReferences()
     {
@@ -68,11 +68,11 @@ public partial class AnimationEditor
         {
             if (syncing || list.SelectedItem is not ChoiceValue selected) return;
             if (!ResolvePendingDrafts()) { syncing = true; list.SelectedItem = list.Items.OfType<ChoiceValue>().FirstOrDefault(v => v.Value == selectedIndex); syncing = false; return; }
-            draftInputs.RemoveAll(d => d.Scope == "references"); referenceRefresh.Clear(); referenceRefresh.Add(RefreshLabels); edit.Children.Clear(); int t = table,index = selected.Value; selectedIndex = index;
+            draftInputs.RemoveAll(d => d.Scope == "references"); ClearAutomationFields("references"); referenceRefresh.Clear(); referenceRefresh.Add(RefreshLabels); edit.Children.Clear(); int t = table,index = selected.Value; selectedIndex = index;
             if (index >= Entry.References[t].Count) return;
             inputScope = "references";
             string Read() => Entry.References[t][index].Text(0,Math.Min(32,Entry.References[t][index].Bytes.Length));
-            Input(edit,$"[{index}] name",Read(),text => TryEdit(() => edits.Apply(entryIndex,"Retarget reference",e => e.References[t][index].SetText(0,text))),t is 0 or 6 or 7 || index == 0,getter:Read);
+            Input(edit,$"[{index}] name",Read(),text => TryEdit(() => edits.RetargetReference(entryIndex,t,index,text)),t is 0 or 6 or 7 || index == 0,getter:Read);
             inputScope = "properties";
         };
         category.SelectionChanged += (_,_) => { if (category.SelectedIndex == table) return; if (!ResolvePendingDrafts()) { category.SelectedIndex = table; return; } table = category.SelectedIndex; LoadTable(); };

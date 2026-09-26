@@ -16,8 +16,10 @@ zStudio uses the following NuGet dependencies. Package versions are pinned in lo
 | Microsoft.CodeAnalysis.Analyzers | 3.3.4 | [MIT](licenses/Microsoft.CodeAnalysis.Analyzers.txt) |
 | Microsoft.CodeAnalysis.Common | 4.11.0 | [MIT](licenses/Microsoft.CodeAnalysis.Common.txt) |
 | Microsoft.CodeAnalysis.CSharp | 4.11.0 | [MIT](licenses/Microsoft.CodeAnalysis.CSharp.txt) |
-| Microsoft.Extensions.DependencyInjection.Abstractions | 8.0.2 | [MIT](licenses/Microsoft.Extensions.DependencyInjection.Abstractions.txt) |
-| Microsoft.Extensions.Logging.Abstractions | 8.0.2 | [MIT](licenses/Microsoft.Extensions.Logging.Abstractions.txt) |
+| Microsoft.Extensions.AI.Abstractions | 10.8.3 | [MIT](licenses/Microsoft.Extensions.AI.Abstractions.txt) |
+| Microsoft.Extensions.DependencyInjection.Abstractions | 10.0.10 | [MIT](licenses/Microsoft.Extensions.DependencyInjection.Abstractions.txt) |
+| Microsoft.Extensions.Logging.Abstractions | 10.0.10 | [MIT](licenses/Microsoft.Extensions.Logging.Abstractions.txt) |
+| ModelContextProtocol.Core | 2.2.0 | [Apache-2.0, with retained MIT contributions; upstream license transition notice included](licenses/ModelContextProtocol.Core.txt) |
 | Microsoft.NETCore.Platforms | 1.1.0 | [MIT](licenses/Microsoft.NETCore.Platforms.txt) |
 | NAudio.Core | 3.1.0 | [MIT](licenses/NAudio.Core.txt) |
 | NAudio.Wasapi | 3.1.0 | [MIT](licenses/NAudio.Wasapi.txt) |

@@ -6,6 +6,11 @@ namespace Recoil.Zbd.Desktop;
 public sealed partial class AnimationPropertiesEditor
 {
     private int selectedSegment;
+    internal void SelectAutomationSegment(int index)
+    {
+        if (index < 0 || index >= Math.Max(1, Event?.Keyframes().Count ?? 0)) throw new ArgumentOutOfRangeException(nameof(index));
+        selectedSegment = index; fieldsShape = ""; RefreshProperties();
+    }
     private string KeyframeShape()
     {
         if (Event?.Type != 12) return "";

@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><AssemblyName>Recoil.Zbd.Application</AssemblyName><RootNamespace>Recoil.Zbd.Automation</RootNamespace></PropertyGroup>
+</Project>

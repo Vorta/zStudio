@@ -222,7 +222,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (!ready || disposed) return;
         PreviewHeight.Text = appliedHeight.ToString(CultureInfo.InvariantCulture);
     }
-    private async void HeightChanged(object sender, TextChangedEventArgs e)
+    private async void HeightChanged(object sender, TextChangedEventArgs e) => await (optionWork = HeightChangedAsync(sender, e));
+    private async Task HeightChangedAsync(object sender, TextChangedEventArgs e)
     {
         if (!ready || changing || disposed) return;
         // Empty and incomplete text is normal while replacing a number. Keep the
@@ -233,7 +234,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         appliedHeight = height; resetSimulation = true; pendingPlay |= playing;
         await SeekAsync(frame?.Time ?? 0, preservePlayhead: true);
     }
-    private async void GroundChanged(object sender, RoutedEventArgs e)
+    private async void GroundChanged(object sender, RoutedEventArgs e) => await (optionWork = GroundChangedAsync(sender, e));
+    private async Task GroundChangedAsync(object sender, RoutedEventArgs e)
     {
         if (!ready || changing || disposed) return;
         viewport.SetGroundGrid(ShowGrid.IsChecked == true);
@@ -301,20 +303,15 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             RecordPreviewError(ex.Message); MessageBox.Show(Window.GetWindow(this), ex.Message, "Animation edit", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
-    private void ChangeEvents(string description, Action<List<AnimationEvent>> change) => TryEdit(() => edits.Apply(entryIndex, description, e => { var s = AnimationEditSession.FindSequence(e, selectedSequence); AnimationEditSession.EnsureEditable(s); change(s.Events); }));
     private int SelectedEventIndex => Sequence?.Events.FindIndex(e => e.Id == selectedEvent) ?? -1;
     private void InsertEvent(AnimationEventSpec spec)
     {
         if (Sequence == null || !ResolvePendingDrafts()) return;
-        int at = selectedEvent == Guid.Empty ? Sequence.Events.Count : SelectedEventIndex + 1;
-        var ev = AnimationCatalog.Create(spec.Type);
-        foreach (var field in spec.Fields.Where(f => f.ReferenceTable >= 0 && Entry.References[f.ReferenceTable].Count > 1 && (f.Name == "Target node" || f.ReferenceTable is 4 or 5))) field.Write(ev, "1");
-        ChangeEvents("Insert event", list => list.Insert(Math.Clamp(at, 0, list.Count), ev));
-        SelectSource(selectedSequence, ev.Id);
+        TryEdit(() => { var id = edits.InsertEvent(entryIndex, selectedSequence, spec.Type, selectedEvent); SelectSource(selectedSequence, id); });
     }
-    private void CopyEventClick(object sender, RoutedEventArgs e) { if (!ResolvePendingDrafts() || Event == null) return; var copy = Event.Duplicate(); int at = SelectedEventIndex + 1; ChangeEvents("Duplicate event", list => list.Insert(at, copy)); SelectSource(selectedSequence, copy.Id); }
-    private void DeleteEventClick(object sender, RoutedEventArgs e) { Guid id = selectedEvent; ChangeEvents("Delete event", list => list.RemoveAll(ev => ev.Id == id)); }
-    private void MoveEvent(int direction) { int at = SelectedEventIndex, to = at + direction; if (Sequence == null || at < 0 || to < 0 || to >= Sequence.Events.Count) return; ChangeEvents("Reorder event", list => (list[at], list[to]) = (list[to], list[at])); }
+    private void CopyEventClick(object sender, RoutedEventArgs e) { if (Event == null) return; TryEdit(() => { var id = edits.ChangeEventStructure(entryIndex, selectedSequence, selectedEvent, "duplicate"); SelectSource(selectedSequence, id); }); }
+    private void DeleteEventClick(object sender, RoutedEventArgs e) { if (Event != null) TryEdit(() => edits.ChangeEventStructure(entryIndex, selectedSequence, selectedEvent, "delete")); }
+    private void MoveEvent(int direction) { int at = SelectedEventIndex, to = at + direction; if (Sequence == null || at < 0 || to < 0 || to >= Sequence.Events.Count) return; TryEdit(() => edits.ChangeEventStructure(entryIndex, selectedSequence, selectedEvent, direction < 0 ? "up" : "down")); }
     private void MoveEventUpClick(object sender, RoutedEventArgs e) => MoveEvent(-1);
     private void MoveEventDownClick(object sender, RoutedEventArgs e) => MoveEvent(1);
     private void AddSequenceClick(object sender, RoutedEventArgs e) => TryEdit(() => edits.AddSequence(entryIndex));
@@ -343,8 +340,10 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (ResolvePendingDrafts()) await SeekAsync(e.NewValue);
         else { changing = true; SeekSlider.Value = frame?.Time ?? 0; changing = false; }
     }
-    private async void PreviewOptionChanged(object sender, SelectionChangedEventArgs e) { if (ready && !changing) { resetSimulation = true; await SeekAsync(0); } }
-    private async void SeedChanged(object sender, RoutedEventArgs e) { if (!ready) return; if (!int.TryParse(Seed.Text, out int seed)) { Note("Seed must be a 32-bit integer."); Seed.Text = "1"; seed = 1; } if (appliedSeed == seed) return; appliedSeed = seed; resetSimulation = true; await SeekAsync(0); }
+    private async void PreviewOptionChanged(object sender, SelectionChangedEventArgs e) => await (optionWork = PreviewOptionChangedAsync(sender, e));
+    private async Task PreviewOptionChangedAsync(object sender, SelectionChangedEventArgs e) { if (ready && !changing) { resetSimulation = true; await SeekAsync(0); } }
+    private async void SeedChanged(object sender, RoutedEventArgs e) => await (optionWork = SeedChangedAsync(sender, e));
+    private async Task SeedChangedAsync(object sender, RoutedEventArgs e) { if (!ready) return; if (!int.TryParse(Seed.Text, out int seed)) { Note("Seed must be a 32-bit integer."); Seed.Text = "1"; seed = 1; } if (appliedSeed == seed) return; appliedSeed = seed; resetSimulation = true; await SeekAsync(0); }
     private void RangeChanged(object sender, RoutedEventArgs e)
     {
         if (!ready) return;
@@ -360,7 +359,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         TimeLabel.HorizontalAlignment = HorizontalAlignment.Right;
     }
     private void FitTraceClick(object sender, RoutedEventArgs e) { Timeline.Duration = SeekSlider.Maximum; Timeline.InvalidateVisual(); }
-    private async void AutoRangeClick(object sender, RoutedEventArgs e) { customRange = false; if (duration != null) ApplyRange(duration.Seconds); await SeekAsync(frame?.Time ?? 0); }
+    private async void AutoRangeClick(object sender, RoutedEventArgs e) => await (optionWork = AutoRangeClickAsync(sender, e));
+    private async Task AutoRangeClickAsync(object sender, RoutedEventArgs e) { customRange = false; if (duration != null) ApplyRange(duration.Seconds); await SeekAsync(frame?.Time ?? 0); }
     private async Task UpdateDurationAsync(CancellationToken token)
     {
         if (context == null) return;
@@ -398,7 +398,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         }
         finally { audioPreparing--; }
     }
-    private async void AudioChanged(object sender, RoutedEventArgs e)
+    private async void AudioChanged(object sender, RoutedEventArgs e) => await (optionWork = AudioChangedAsync(sender, e));
+    private async Task AudioChangedAsync(object sender, RoutedEventArgs e)
     {
         if (!ready) return;
         bool wasMuted = audio.Muted;
@@ -411,7 +412,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { RecordPreviewError(ex.Message); }
         }
     }
-    private async void LevelChanged(object sender, RoutedEventArgs e)
+    private async void LevelChanged(object sender, RoutedEventArgs e) => await (optionWork = LevelChangedAsync(sender, e));
+    private async Task LevelChangedAsync(object sender, RoutedEventArgs e)
     {
         if (ready && !PlayButton.IsEnabled) { contextDirty = true; resetSimulation = true; pendingPlay |= playing; _ = SeekAsync(frame?.Time ?? 0, preservePlayhead: true); return; }
         if (!ready || changing || context == null || frame == null || LoadingPanel.Visibility == Visibility.Visible) return;
@@ -432,7 +434,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             await SeekAsync(frame?.Time ?? 0, preservePlayhead: true);
         }
     }
-    private async void LodChanged(object sender, SelectionChangedEventArgs e)
+    private async void LodChanged(object sender, SelectionChangedEventArgs e) => await (optionWork = LodChangedAsync(sender, e));
+    private async Task LodChangedAsync(object sender, SelectionChangedEventArgs e)
     {
         if (!ready || changing || player == null) return;
         try

@@ -1,0 +1,107 @@
+using System.IO;
+using System.IO.Pipes;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Media;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Animation;
+using Recoil.Zbd.Desktop;
+using Recoil.Zbd.Mcp;
+using Xunit;
+
+namespace Recoil.Zbd.Desktop.Tests;
+
+internal static class McpWorkspaceChecks
+{
+    internal static async Task Run(Application app)
+    {
+        var main = new MainWindow { Left=-12000,ShowInTaskbar=false }; main.Show();
+        var package = new AnimationPackage { Prefix=new byte[72],Tail=[] };
+        var entry = new AnimationEntry(new byte[308],0,0); entry.SetText(0,"mcp fixture");
+        var sequence = new AnimationSequence(new byte[64]) { Name="sequence" }; sequence.Events.Add(AnimationCatalog.Create(10)); entry.Sequences.Add(sequence); package.Entries.Add(entry);
+        var source = new ZbdDocument(Path.Combine(Path.GetTempPath(),"mcp-fixture.zbd"),new(0,DateTime.MinValue),new(FormatFamily.Animation,28,Recognition.Supported,"MCP fixture"),ReadOnlyMemory<byte>.Empty) { Animations=package };
+        source.Add(AssetKind.Raw,0,"Metadata",0,0); var doc = new DocumentModel(source);
+        main.ViewModel.Documents.Add(doc); main.ViewModel.SelectedDocument=doc;
+        try
+        {
+            McpParityChecks.Run(main.Commands);
+            byte[] imageBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
+            main.Commands.Add(new("zstudio_test_image", "Synthetic protocol image", false, [], (_,_)=>Task.FromResult(new Recoil.Zbd.Automation.StudioResult(new JsonObject { ["image"]="fixture" },imageBytes))));
+            await using var host = new LocalMcpHost(main.Commands,"test");
+            await using var pipe = new NamedPipeClientStream(".",host.Instance.Pipe,PipeDirection.InOut,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);
+            await pipe.ConnectAsync(5000);
+            await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe,pipe));
+            var tools = await client.ListToolsAsync(); Assert.True(tools.Count>25);
+            Assert.Contains(tools,t=>t.Name=="zstudio_property_edit");
+            foreach(var tool in tools) Assert.Equal("object",tool.ProtocolTool.InputSchema.GetProperty("type").GetString());
+            var imageResult = await client.CallToolAsync("zstudio_test_image");
+            Assert.False(imageResult.IsError == true);
+            Assert.Equal(imageBytes,imageResult.Content.OfType<ImageContentBlock>().Single().DecodedData.ToArray());
+            var resources = await client.ListResourcesAsync(); Assert.Equal(2,resources.Count);
+            var state=await Call("state",new()); Assert.Equal(doc.SessionId.ToString(),state["documents"]![0]!["id"]!.GetValue<string>());
+            var layoutBefore = await Call("workspace_view", new());
+            string otherTheme = layoutBefore["theme"]!.GetValue<string>() == "Light" ? "Dark" : "Light";
+            await Call("workspace_view", new() { ["changes"] = new JsonObject { ["theme"] = otherTheme, ["toolsTab"] = 999 } }, "unavailable_tab");
+            Assert.True(JsonNode.DeepEquals(layoutBefore, await Call("workspace_view", new())));
+            var filtered = await Call("animation_records", new() { ["document"] = doc.SessionId.ToString(), ["entry"] = 0, ["query"] = "SEQUENCE", ["limit"] = 1 });
+            Assert.Equal(sequence.Id.ToString(), filtered["sequences"]!["items"]![0]!["id"]!.GetValue<string>());
+            filtered = await Call("animation_records", new() { ["document"] = doc.SessionId.ToString(), ["entry"] = 0, ["query"] = "missing-sequence" });
+            Assert.Equal(0, filtered["sequences"]!["total"]!.GetValue<int>());
+            await Call("animation_structure", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["entry"] = 0, ["sequence"] = Guid.NewGuid().ToString(), ["action"] = "duplicate" }, "stale_record");
+            Assert.Equal(0, doc.Revision);
+            main.ViewModel.AddProblem("MCP search fixture", file: "fixture.zbd");
+            filtered = await Call("problems", new() { ["query"] = "SEARCH FIXTURE" });
+            Assert.Equal(1, filtered["total"]!.GetValue<int>());
+            filtered = await Call("problems", new() { ["query"] = "missing-problem" });
+            Assert.Equal(0, filtered["total"]!.GetValue<int>());
+            var fields=await Call("property_fields",new() { ["document"]=doc.SessionId.ToString(),["entry"]=0 });
+            string field=fields["fields"]!["fields"]!.AsArray().Single(x=>x!["Label"]!.GetValue<string>()=="Reset delay (s)")!["Id"]!.GetValue<string>();
+            await Call("property_edit",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["entry"]=0,["field"]=field,["value"]="2.5" });
+            Assert.Equal(2.5f,doc.AnimationEdits!.Package.Entries[0].F32(164)); Assert.True(doc.IsDirty);
+            await Call("property_edit",new() { ["document"]=doc.SessionId.ToString(),["revision"]=0,["entry"]=0,["field"]=field,["value"]="3" },"revision_conflict");
+            await Call("undo_redo",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["action"]="undo" });
+            Assert.Equal(0,doc.AnimationEdits.Package.Entries[0].F32(164));
+            main.OpenAnimationProperties(doc,0,Guid.Empty,Guid.Empty);
+            var form=main.OpenPropertiesWindow!.AnimationFields!;
+            var input=Descendants(form).OfType<TextBox>().Single(t=>AutomationProperties.GetName(t)=="Reset delay (s)"); input.Text="-";
+            await Call("property_edit",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["entry"]=0,["field"]=field,["value"]="3" },"pending_drafts");
+            Assert.Equal("-",input.Text);
+            var drafts=await Call("drafts",new() { ["target"]="properties" }); string token=drafts["drafts"]!["token"]!.GetValue<string>();
+            await Call("resolve_drafts",new() { ["document"]=doc.SessionId.ToString(),["target"]="properties",["token"]=token,["action"]="apply" },"invalid_draft");
+            Assert.True(form.HasPendingDrafts);
+            await Call("resolve_drafts",new() { ["document"]=doc.SessionId.ToString(),["target"]="properties",["token"]=token,["action"]="discard" }); Assert.False(form.HasPendingDrafts);
+            await Call("animation_structure",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["entry"]=0,["sequence"]=sequence.Id.ToString(),["action"]="add_event",["eventType"]=12 });
+            Assert.Equal(2,doc.AnimationEdits.Package.Entries[0].Sequences[0].Events.Count);
+            var keyframe = doc.AnimationEdits.Package.Entries[0].Sequences[0].Events[1];
+            var keyFields = await Call("property_fields",new() { ["document"]=doc.SessionId.ToString(),["entry"]=0,["sequence"]=sequence.Id.ToString(),["event"]=keyframe.Id.ToString() });
+            string addSegment = keyFields["fields"]!["actions"]!.AsArray().Single(x=>x!["Label"]!.GetValue<string>()=="+ segment")!["Id"]!.GetValue<string>();
+            int originalSegments=keyframe.Keyframes().Count;
+            await Call("property_action",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["entry"]=0,["sequence"]=sequence.Id.ToString(),["event"]=keyframe.Id.ToString(),["action"]=addSegment });
+            Assert.Equal(originalSegments+1,doc.AnimationEdits.Package.Entries[0].Sequences[0].Events[1].Keyframes().Count);
+            await Call("close_document",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision },"unsaved_changes");
+            await Call("source_bytes",new() { ["document"]=doc.SessionId.ToString(),["offset"]=0,["length"]=4097 },"invalid_argument");
+            await Call("state",new() { ["unexpected"]=true },"invalid_argument");
+            await Call("close_document",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision,["discard"]=true });
+            await Call("assets",new() { ["document"]=doc.SessionId.ToString() },"stale_document");
+            Assert.DoesNotContain(app.Windows.Cast<Window>(),w=>w.Title=="Resolve property input");
+
+            async Task<JsonNode> Call(string name,JsonObject arguments,string? error=null)
+            {
+                using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                var args=arguments.ToDictionary(p=>p.Key,p=>(object?)JsonSerializer.SerializeToElement(p.Value));
+                var result=await client.CallToolAsync("zstudio_"+name,args,cancellationToken:timeout.Token);
+                var json=JsonNode.Parse(result.Content.OfType<TextContentBlock>().First().Text)!;
+                if(error==null) Assert.False(result.IsError == true,json.ToJsonString()); else { Assert.True(result.IsError); Assert.Equal(error,json["code"]!.GetValue<string>()); }
+                return json;
+            }
+        }
+        finally { main.OpenPropertiesWindow?.CloseResolved(); doc.AnimationEdits?.MarkSaved(); main.Close(); }
+    }
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    { yield return root; for(int i=0;i<VisualTreeHelper.GetChildrenCount(root);i++) foreach(var child in Descendants(VisualTreeHelper.GetChild(root,i))) yield return child; }
+}

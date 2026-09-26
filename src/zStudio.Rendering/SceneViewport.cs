@@ -305,14 +305,16 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         viewport.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); textureMaps.Clear();
     }
     public void Clear() { generation++; ClearMeshes(); }
-    public System.Windows.Media.Imaging.BitmapSource RenderImage(int width, int height)
+    public System.Windows.Media.Imaging.BitmapSource RenderImage(int width, int height, bool preserveAspect = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width); ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
         // Helix's sized capture restores physical dimensions as logical pixels,
         // growing the back buffer on every call at non-100% DPI. Capture the live
         // size, then scale the image without changing the viewport or projection.
         var image = viewport.RenderBitmap() ?? throw new InvalidOperationException("The graphics device did not produce a frame.");
-        var scaled = new System.Windows.Media.Imaging.TransformedBitmap(image, new ScaleTransform((double)width / image.PixelWidth, (double)height / image.PixelHeight));
+        double scaleX = (double)width / image.PixelWidth, scaleY = (double)height / image.PixelHeight;
+        if (preserveAspect) scaleX = scaleY = Math.Min(scaleX, scaleY);
+        var scaled = new System.Windows.Media.Imaging.TransformedBitmap(image, new ScaleTransform(scaleX, scaleY));
         scaled.Freeze(); return scaled;
     }
     public void Dispose() { Clear(); viewport.Dispose(); effects?.Dispose(); effects = null; GC.SuppressFinalize(this); }

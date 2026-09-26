@@ -13,7 +13,7 @@ using Recoil.Zbd.Core.Animation;
 
 namespace Recoil.Zbd.Desktop;
 
-public class FieldEditor : UserControl
+public partial class FieldEditor : UserControl
 {
     protected bool refreshingFields, committingDraft, resolvingDrafts, disposed;
     private protected readonly List<DraftInput> draftInputs = [];
@@ -27,6 +27,7 @@ public class FieldEditor : UserControl
     protected static void ReadOnlyText(StackPanel panel,string text) => panel.Children.Add(new TextBox { Text = text,IsReadOnly = true,TextWrapping = TextWrapping.Wrap,BorderThickness = new(0),Background = Brushes.Transparent,Margin = new(0,3,0,6) });
     protected void Input(StackPanel panel,string label,string value,Action<string> commit,bool readOnly = false,string? hint = null,Func<string>? getter = null,string[]? components = null,string separator = ", ",int? componentColumns = null)
     {
+        AddAutomationField(label, components == null ? "text" : "components", () => getter?.Invoke() ?? value, readOnly ? null : commit, components, hint);
         // A vector's components share one draft and one commit boundary.
         Grid row = new() { Margin = new(0,2,0,5) };
         row.ColumnDefinitions.Add(new() { Width = new(112) }); row.ColumnDefinitions.Add(new());
@@ -144,6 +145,12 @@ public class FieldEditor : UserControl
     {
         var items = values.ToArray();
         if (readOnly) { Input(panel,label,items.FirstOrDefault(c => c.Value == value)?.Label ?? value.ToString(CultureInfo.InvariantCulture),_ => { },true); return; }
+        AddAutomationField(label, "choice", () => (getter?.Invoke() ?? value).ToString(CultureInfo.InvariantCulture), text =>
+        {
+            int selected = int.Parse(text, CultureInfo.InvariantCulture);
+            if (!items.Any(i => i.Value == selected)) throw new InvalidDataException("Unknown choice value.");
+            commit(selected);
+        }, choices: items.Select(i => new AutomationChoice(i.Value, i.Label)).ToArray());
         ComboBox choice = new() { ItemsSource = items,DisplayMemberPath = nameof(ChoiceValue.Label),SelectedItem = items.FirstOrDefault(c => c.Value == value),IsEnabled = !readOnly,IsEditable = searchable,IsReadOnly = !searchable,IsTextSearchEnabled = true,Margin = new(0,0,0,5),MaxDropDownHeight = 300 };
         AutomationProperties.SetName(choice,label);
         Grid row = new() { Margin = new(0,2,0,5) }; row.ColumnDefinitions.Add(new() { Width = new(112) }); row.ColumnDefinitions.Add(new());
@@ -180,6 +187,6 @@ public class FieldEditor : UserControl
         ComboBox picker = new() { ItemsSource = suggestions,IsEditable = true,Text = "Choose a name…",MaxDropDownHeight = 220,Margin = new(0,0,0,4) }; AutomationProperties.SetName(picker,label + " suggestions"); panel.Children.Add(picker);
         picker.SelectionChanged += (_,_) => { if (!refreshingFields && picker.SelectedItem is string text && ResolvePendingDrafts()) { commit(text); RefreshProperties(); } };
     }
-    protected static void Button(Panel panel,string text,Action action) { Button button = new() { Content = text,Margin = new(2),Padding = new(6,3,6,3) }; button.Click += (_,_) => action(); panel.Children.Add(button); }
+    protected void Button(Panel panel,string text,Action action) { AddAutomationAction(text, action); Button button = new() { Content = text,Margin = new(2),Padding = new(6,3,6,3) }; button.Click += (_,_) => action(); panel.Children.Add(button); }
     protected sealed record ChoiceValue(int Value,string Label);
 }

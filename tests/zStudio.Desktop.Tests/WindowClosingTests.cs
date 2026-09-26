@@ -43,6 +43,7 @@ public sealed class WindowClosingTests
                     await Check(["Discard"], 1, closes: true, repeatClose: true);
                     await Check([], 0, closes: true);
                     await PropertiesWindowChecks.Run(app);
+                    await McpWorkspaceChecks.Run(app);
                 }
                 catch (Exception ex) { failure ??= ex; }
                 finally

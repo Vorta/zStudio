@@ -2,7 +2,13 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## Unreleased
+## 0.5.0 — Unreleased
+
+- Correct active-view MCP state after viewer changes, apply list queries before paging, reject invalid layout batches before changing preferences, report stale structural targets explicitly, and preserve 3D capture proportions. Add packaged stdio corpus regressions.
+
+- Add opt-in local MCP access to the visible zStudio workspace through a stdio connector and same-user named pipe, including on-demand visible startup (handshake and discovery stay windowless), connection controls and activity history.
+- Expose browsing/inspection, animation properties and structure, preview and camera controls, texture/audio inspection, pickup editing, undo/redo, verified saves, exports, diagnostics and captures. Retain document revisions, explicit draft/unsaved decisions and asynchronous operation tracking.
+- Require MCP parity for future GUI features; add an independent action inventory, schema/protocol tests and real-file/portable-connector verification tools.
 
 ## 0.4.8 — 2026-09-25
 

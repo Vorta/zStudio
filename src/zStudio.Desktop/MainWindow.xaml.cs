@@ -46,6 +46,8 @@ public partial class MainWindow : Window
     private Point scrollStart;
     private DocumentModel? shownDocument;
     private AssetRecord? shownAsset;
+    private Task previewWork = Task.CompletedTask;
+    private Guid previewId = Guid.NewGuid();
 
     public MainWindow()
     {
@@ -143,6 +145,7 @@ public partial class MainWindow : Window
     }
     private void CancelPreview()
     {
+        previewId = Guid.NewGuid();
         flyRequest++; flyCamera?.End(); SynchronizeFly();
         ClearStaticPreviewProblems();
         DetachPickupEditor();
@@ -153,7 +156,8 @@ public partial class MainWindow : Window
         animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
         preview.Cancel(); preview.Dispose(); preview = new(); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
     }
-    private async Task ShowAsset(DocumentModel doc, AssetRecord? asset)
+    private Task ShowAsset(DocumentModel doc, AssetRecord? asset) => previewWork = ShowAssetCore(doc, asset);
+    private async Task ShowAssetCore(DocumentModel doc, AssetRecord? asset)
     {
         if (animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         bool differentAsset = shownAsset?.Id != asset?.Id;
@@ -404,7 +408,14 @@ public partial class MainWindow : Window
     private void EventSelected(object sender, SelectionChangedEventArgs e) { if (EventGrid.SelectedItem is EventRow row) SetProperties(row.Data); }
     private void PlayAudioClick(object sender, RoutedEventArgs e)
     {
-        try { if (wave == null) return; if (player == null) { player = new WasapiPlayerBuilder().Build(); player.Init(wave); } if (player.PlaybackState == PlaybackState.Playing) player.Pause(); else { if (wave.Position >= wave.Length) wave.Position = 0; player.Play(); } } catch (Exception ex) { Report(ex); player?.Dispose(); player = null; }
+        try { if (player?.PlaybackState == PlaybackState.Playing) player.Pause(); else PlaySound(); } catch (Exception ex) { Report(ex); player?.Dispose(); player = null; }
+    }
+    private void PlaySound()
+    {
+        if (wave == null) return;
+        if (player == null) { player = new WasapiPlayerBuilder().Build(); player.Init(wave); }
+        if (wave.Position >= wave.Length) wave.Position = 0;
+        player.Play();
     }
     private void StopAudioClick(object sender, RoutedEventArgs e) { player?.Stop(); if (wave != null) wave.Position = 0; UpdateAudioPosition(); }
     private void StopAudio() { player?.Dispose(); player = null; wave?.Dispose(); wave = null; waveInfo = null; }
@@ -422,38 +433,12 @@ public partial class MainWindow : Window
         AssetRecord[] assets = all ? doc.Document.Assets.ToArray() : AssetGrid.SelectedItems.Cast<AssetItem>().Select(a => a.Record).ToArray();
         if (assets.Length == 0) { ViewModel.Status = "Select an asset to export"; return; }
         OpenFolderDialog dialog = new() { Title = "Choose an export destination outside the source folder" }; if (dialog.ShowDialog(this) != true) return;
-        using var cancellation = new CancellationTokenSource(); operation = cancellation; CancelOperationItem.IsEnabled = true;
-        try { string? pack = PreferredPack; int lod = LodCombo.SelectedIndex; var progress = new Progress<ExportProgress>(p => ViewModel.Status = $"Exporting {p.Completed}/{p.Total}: {p.Name}"); var result = await Task.Run(() => new ExportService(resolver).ExportAsync(doc.Document, assets, dialog.FolderName, json, pack, lod, progress, cancellation.Token)); foreach (string error in result.Errors) ViewModel.AddProblem(error, "Error", doc.Path); ViewModel.Status = $"Exported {result.Completed}/{assets.Length} assets to {result.Directory}"; MessageBox.Show(this, ViewModel.Status + (result.Errors.Count > 0 ? $"\n{result.Errors.Count} failures; see Diagnostics and export-report.json." : ""), "Export complete", MessageBoxButton.OK, result.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information); }
-        finally { operation = null; CancelOperationItem.IsEnabled = false; }
+        var result = await ExportAssetsAsync(doc, assets, dialog.FolderName, json, PreferredPack, Math.Max(0,LodCombo.SelectedIndex), CancellationToken.None);
+        MessageBox.Show(this, ViewModel.Status + (result.Errors.Count > 0 ? $"\n{result.Errors.Count} failures; see Problems and export-report.json." : ""), "Export complete", MessageBoxButton.OK, result.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
     });
     private async void ValidateClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
     {
-        if (ViewModel.SelectedDocument is not { } selected || operation != null) return;
-        using var cancellation = new CancellationTokenSource(); operation = cancellation; CancelOperationItem.IsEnabled = true;
-        try
-        {
-            ViewModel.Status = "Validating source file on disk…";
-            var diagnostics = await Task.Run(async () =>
-            {
-                var doc = await FormatRegistry.Default.OpenAsync(selected.Path,cancellation.Token);
-                var notes = doc.Diagnostics.Select(d => new StudioProblem(d.Severity,"File / operation",d.Message,selected.Path,d.AssetIndex,d.Offset)).ToList();
-                foreach (var asset in doc.Assets)
-                {
-                    cancellation.Token.ThrowIfCancellationRequested();
-                    try
-                    {
-                        if (asset.Kind == AssetKind.Texture) TextureDecoder.Decode(doc,asset,cancellation.Token);
-                        else if (asset.Kind == AssetKind.Zrd) ZrdDecoder.Decode(doc.Slice(asset.Offset,asset.Length),cancellation.Token);
-                        else if (asset.Kind == AssetKind.Sound) WaveDecoder.Read(doc.Slice(asset.Offset,asset.Length));
-                    }
-                    catch (InvalidDataException ex) { notes.Add(new("Error","File / operation",asset.Name + ": " + ex.Message,selected.Path,asset.Index,asset.Offset)); }
-                }
-                return notes;
-            },cancellation.Token);
-            foreach (var note in diagnostics) ViewModel.AddProblem(note.Message,note.Severity,note.File,note.AssetIndex,note.Offset);
-            ViewModel.Status = $"Source-file validation finished: {diagnostics.Count} diagnostics";
-        }
-        finally { operation = null; CancelOperationItem.IsEnabled = false; }
+        if (ViewModel.SelectedDocument is { } doc) await ValidateDocumentSourceAsync(doc, CancellationToken.None);
     });
     private async void ReloadClick(object sender, RoutedEventArgs e) => await RunUi(() => ViewModel.ReloadAsync());
     private void CancelClick(object sender, RoutedEventArgs e)
@@ -567,6 +552,14 @@ public partial class MainWindow : Window
             finally { resolvingClose = false; }
             Close();
             return;
+        }
+        if (mcpHost != null || automationOperations.Values.Any(j => !j.Work.IsCompleted))
+        {
+            e.Cancel = true; resolvingClose = true;
+            await Dispatcher.Yield(DispatcherPriority.Normal);
+            try { await StopMcpAsync(); }
+            finally { resolvingClose = false; }
+            Close(); return;
         }
         propertiesWindow?.CloseResolved();
         flyCamera?.Dispose();

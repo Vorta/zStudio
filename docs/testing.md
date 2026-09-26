@@ -1,5 +1,19 @@
 # Verification
 
+MCP contract checks run in the normal asset-independent suite. They test argument schemas and a real named-pipe SDK client against the shared WPF workspace: discovery, editable property definitions, accepted edits/undo, stale revisions, pending drafts, explicit resolution and unsaved-close guards. The independent `docs/mcp-capabilities.json` inventory is compared with actual XAML action handlers and registered tools. Additional bound/dynamic controls require review; schema presence alone does not prove behavior.
+
+Run optional real-file and connector checks sequentially on Windows:
+
+```powershell
+dotnet run --project tools/zStudio.PreviewCheck -c Release -- --mcp zbd_1999
+dotnet run --project tools/zStudio.PreviewCheck -c Release -- --mcp-stdio artifacts/zStudio-win-x64/zStudio.exe
+dotnet run --project tools/zStudio.PreviewCheck -c Release -- --mcp-stdio artifacts/zStudio-win-x64/zStudio.exe zbd_1999
+```
+
+The corpus check opens its own visible workspace, exercises animation/property edits and verified Save As, unfinished height drafts, texture capture/export, audio, world camera and pickup move/undo, then validates source data. Output is under `%TEMP%/zstudio-mcp-*`; source animation hashes are checked. The stdio check requires the user to have enabled access already and never changes that setting. It verifies windowless handshake/discovery/capability reads, concurrent first-use launch of exactly one GUI, reconnect, simultaneous clients and clean shutdown. Synthetic tests separately cover disabled access, malformed requests, lazy connection serialization and image/error forwarding. It refuses to run against an already registered instance of that installation. The corpus check restores saved settings; the stdio check does not rewrite them. Close other zStudio instances before running to avoid concurrent settings writes. Physical UI interaction and third-party agent configuration remain manual acceptance checks.
+
+Supplying the corpus root to the stdio check exercises the packaged executable's real visible workspace. It checks model-to-animation preview-state transitions, filtered sequence/event/reference/pickup/runtime results and stable identities, rejected layout batches, PNG forwarding, verified animation Save As and inspection/export across all five format families. It writes its report and exports under `%TEMP%/zstudio-live-regression-*`, verifies the m1 animation/GameZ/pickup archive hashes, and closes its test documents explicitly. This complements the synthetic draft/edit/undo tests; it does not claim coverage of every possible argument combination or engine behavior.
+
 Use the pinned .NET 10 SDK. Put transient reports and game-derived verification exports in an OS temporary directory. Historical commands below use ignored `artifacts/`; remove their generated results before delivery, when that folder must contain only the current portable folder and ZIP.
 
 The desktop test suite includes a real WPF close-lifecycle regression on an STA dispatcher. It clicks the actual unsaved-changes dialog buttons for single/multiple dirty documents, Discard, Cancel and retry, and repeated close requests. It checks retained dirty state and document lifetime cancellation, using synthetic in-memory documents and restoring application settings afterward. This exercises `Window.Close()` itself, not a direct invocation of the Closing handler; the latter would miss WPF's reentrant-close guard. Native Save As dialogs are outside this fixture.

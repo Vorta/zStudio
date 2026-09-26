@@ -49,7 +49,7 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
         if (document.PickupEdits is not { } edits || edits.Find(source) is not { } record) return;
         if (locked != document.PickupsLocked)
         {
-            locked = document.PickupsLocked; draftInputs.Clear(); valueRefresh.Clear();
+            locked = document.PickupsLocked; draftInputs.Clear(); ClearAutomationFields("properties"); valueRefresh.Clear();
             if (details.Parent is Panel previous) previous.Children.Remove(details);
             DockPanel panel = new(); Content = panel;
             StackPanel form = new() { Margin = new(12) }; DockPanel.SetDock(form, Dock.Top); panel.Children.Add(form);

@@ -8,7 +8,7 @@ public partial class MainWindow
 {
     private async void DifficultyPreferenceChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.Difficulty)) await RefreshWorldDifficultyAsync();
+        if (e.PropertyName == nameof(MainViewModel.Difficulty)) await (previewWork = RefreshWorldDifficultyAsync());
     }
     private async Task RefreshWorldDifficultyAsync()
     {
