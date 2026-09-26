@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace Recoil.Zbd.Automation;
 
@@ -9,44 +10,68 @@ public sealed class StudioCommandException(string code, string message) : Except
 }
 
 public sealed record StudioResult(JsonNode Data, byte[]? Image = null);
-public sealed record StudioParameter(string Name, string Type, string Description, bool Required = false, string[]? Choices = null, StudioParameter[]? Properties = null);
+public sealed record StudioParameter(string Name, string Type, string Description, bool Required = false, string[]? Choices = null,
+    StudioParameter[]? Properties = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] StudioParameter? Items = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MinItems = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MaxItems = null);
 public sealed record StudioCommand(string Name, string Description, bool Mutates, IReadOnlyList<StudioParameter> Parameters,
     Func<JsonObject, CancellationToken, Task<StudioResult>> Execute)
 {
     public JsonObject InputSchema => new()
     {
         ["type"] = "object", ["additionalProperties"] = false,
-        ["properties"] = new JsonObject(Parameters.Select(p => KeyValuePair.Create<string, JsonNode?>(p.Name, new JsonObject
-        {
-            ["type"] = p.Type, ["description"] = p.Description
-        }.WithChoices(p.Choices).WithProperties(p.Properties)))),
+        ["properties"] = new JsonObject(Parameters.Select(p => KeyValuePair.Create<string, JsonNode?>(p.Name, p.ToSchema()))),
         ["required"] = new JsonArray(Parameters.Where(p => p.Required).Select(p => (JsonNode?)JsonValue.Create(p.Name)).ToArray())
     };
-    public void Validate(JsonObject args)
+    public void Validate(JsonObject args) => ValidateObject(args, Parameters, "");
+
+    private static void ValidateObject(JsonObject args, IReadOnlyList<StudioParameter> parameters, string path)
     {
         foreach (var (name, value) in args)
         {
-            var p = Parameters.FirstOrDefault(p => p.Name == name) ?? throw new StudioCommandException("invalid_argument", "Unknown argument: " + name);
-            var scalar = JsonSerializer.SerializeToElement(value);
-            bool valid = p.Type switch
-            {
-                "string" => value is JsonValue s && s.TryGetValue<string>(out _),
-                "boolean" => value is JsonValue b && b.TryGetValue<bool>(out _),
-                "integer" => scalar.ValueKind == JsonValueKind.Number && scalar.TryGetInt64(out _),
-                "number" => scalar.ValueKind == JsonValueKind.Number && scalar.TryGetDouble(out var d) && double.IsFinite(d),
-                "object" => value is JsonObject, "array" => value is JsonArray, _ => false
-            };
-            if (!valid || p.Choices != null && !p.Choices.Contains(value!.GetValue<string>()))
-                throw new StudioCommandException("invalid_argument", "Invalid " + p.Type + " argument: " + name);
-            if (p.Properties != null && value is JsonObject nested) new StudioCommand(name, "", false, p.Properties, (_, _) => throw new NotSupportedException()).Validate(nested);
+            var p = parameters.FirstOrDefault(p => p.Name == name) ?? throw new StudioCommandException("invalid_argument", "Unknown argument: " + path + name);
+            ValidateValue(value, p, path + name);
         }
-        foreach (var p in Parameters.Where(p => p.Required))
-            if (!args.ContainsKey(p.Name)) throw new StudioCommandException("invalid_argument", "Required argument: " + p.Name);
+        foreach (var p in parameters.Where(p => p.Required))
+            if (!args.ContainsKey(p.Name)) throw new StudioCommandException("invalid_argument", "Required argument: " + path + p.Name);
+    }
+
+    private static void ValidateValue(JsonNode? value, StudioParameter p, string path)
+    {
+        var scalar = JsonSerializer.SerializeToElement(value);
+        bool valid = p.Type switch
+        {
+            "string" => value is JsonValue s && s.TryGetValue<string>(out _),
+            "boolean" => value is JsonValue b && b.TryGetValue<bool>(out _),
+            "integer" => scalar.ValueKind == JsonValueKind.Number && scalar.TryGetInt64(out _),
+            "number" => scalar.ValueKind == JsonValueKind.Number && scalar.TryGetDouble(out var d) && double.IsFinite(d),
+            "object" => value is JsonObject, "array" => value is JsonArray, _ => false
+        };
+        if (!valid || p.Choices != null && !p.Choices.Contains(value!.GetValue<string>()))
+            throw new StudioCommandException("invalid_argument", "Invalid " + p.Type + " argument: " + path);
+        if (p.Properties != null && value is JsonObject nested) ValidateObject(nested, p.Properties, path + ".");
+        if (value is JsonArray array)
+        {
+            if (array.Count < p.MinItems || array.Count > p.MaxItems)
+                throw new StudioCommandException("invalid_argument", "Invalid array length: " + path);
+            if (p.Items != null)
+                for (int i = 0; i < array.Count; i++) ValidateValue(array[i], p.Items, $"{path}[{i}]");
+        }
     }
 }
 
 internal static class StudioSchema
 {
+    internal static JsonObject ToSchema(this StudioParameter parameter)
+    {
+        var schema = new JsonObject { ["type"] = parameter.Type, ["description"] = parameter.Description }
+            .WithChoices(parameter.Choices).WithProperties(parameter.Properties);
+        if (parameter.Items != null) schema["items"] = parameter.Items.ToSchema();
+        if (parameter.MinItems != null) schema["minItems"] = parameter.MinItems.Value;
+        if (parameter.MaxItems != null) schema["maxItems"] = parameter.MaxItems.Value;
+        return schema;
+    }
     internal static JsonObject WithProperties(this JsonObject schema, StudioParameter[]? properties)
     {
         if (properties == null) return schema;

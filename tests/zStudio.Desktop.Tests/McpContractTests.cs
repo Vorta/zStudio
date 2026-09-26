@@ -7,6 +7,33 @@ namespace Recoil.Zbd.Desktop.Tests;
 public sealed class McpContractTests
 {
     [Fact]
+    public async Task ArraySchemasValidateItemsAndLengthsRecursivelyBeforeExecuting()
+    {
+        int calls = 0;
+        var command = new StudioCommand("test", "test", false,
+            [new("vectors", "array", "vectors", true, Items: new("", "object", "vector", Properties:
+                [new("xyz", "array", "coordinates", true, Items: new("", "number", "component"), MinItems: 3, MaxItems: 3)]))],
+            (_, _) => { calls++; return Task.FromResult(new StudioResult(new JsonObject())); });
+        var registry = new StudioCommands(); registry.Add(command);
+        foreach (string value in new[] { "[{}]", "[{\"xyz\":[0,\"bad\",0]}]", "[{\"xyz\":[0,null,0]}]", "[{\"xyz\":[0,0]}]", "[{\"xyz\":[0,0,0,0]}]", "[{\"xyz\":[0,0,0],\"extra\":0}]" })
+        {
+            var error = await Assert.ThrowsAsync<StudioCommandException>(() => registry.ExecuteAsync("test", new() { ["vectors"] = JsonNode.Parse(value) }, TestContext.Current.CancellationToken));
+            Assert.Equal("invalid_argument", error.Code);
+            Assert.Contains("vectors[0]", error.Message);
+        }
+        Assert.Equal(0, calls);
+        await registry.ExecuteAsync("test", JsonNode.Parse("{\"vectors\":[{\"xyz\":[0,-2.5,1e-7]}]}")!.AsObject(), TestContext.Current.CancellationToken);
+        Assert.Equal(1, calls);
+        var item = command.InputSchema["properties"]!["vectors"]!["items"]!;
+        Assert.False(item["additionalProperties"]!.GetValue<bool>());
+        Assert.Equal("xyz", item["required"]![0]!.GetValue<string>());
+        var vector = item["properties"]!["xyz"]!;
+        Assert.Equal(3, vector["minItems"]!.GetValue<int>());
+        Assert.Equal(3, vector["maxItems"]!.GetValue<int>());
+        Assert.Equal("number", vector["items"]!["type"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void UnknownMissingAndWronglyTypedArgumentsCannotReachHandlers()
     {
         var command=new StudioCommand("test","test",false,[new("value","integer","value",true)],(_,_)=>throw new Exception("Must not execute"));

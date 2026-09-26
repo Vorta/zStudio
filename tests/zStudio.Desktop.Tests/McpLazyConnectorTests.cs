@@ -28,6 +28,35 @@ public sealed class McpLazyConnectorTests
     }
 
     [Fact]
+    public async Task InvalidArrayItemsAreRejectedBeforeConnectingToAnEnabledWorkspace()
+    {
+        int connections = 0;
+        await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => true, async client =>
+        {
+            foreach (string vector in new[] { "[0,\"bad\",0]", "[0,null,0]", "[0,0]", "[0,0,0,0]", "[0,{},0]" })
+            {
+                var result = await client.CallToolAsync("zstudio_camera", new Dictionary<string, object?>
+                {
+                    ["preview"] = Guid.NewGuid().ToString(), ["action"] = "set",
+                    ["position"] = JsonNode.Parse(vector), ["look"] = new[] { 0, 0, -1 }
+                });
+                Assert.True(result.IsError);
+                Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());
+            }
+            foreach (string assets in new[] { "[1]", "[null]", "[{}]", "[{\"kind\":\"Model\",\"index\":\"0\"}]", "[{\"kind\":\"Unknown\",\"index\":0}]", "[{\"kind\":\"Model\",\"index\":0,\"extra\":true}]" })
+            {
+                var result = await client.CallToolAsync("zstudio_export", new Dictionary<string, object?>
+                {
+                    ["document"] = Guid.NewGuid().ToString(), ["destination"] = "unused", ["assets"] = JsonNode.Parse(assets)
+                });
+                Assert.True(result.IsError);
+                Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());
+            }
+            Assert.Equal(0, connections);
+        });
+    }
+
+    [Fact]
     public async Task ConcurrentFirstCallsConnectOnceAndPreserveResultsAndErrors()
     {
         int connections = 0;

@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #8 difficulty cancellation and array schemas (2026-09-26)
+
+Review findings 4111226046 and 4111226049 are valid and corrected. Whole world difficulty changes now share the staged static-preview replacement path, keeping the published viewport untouched through asynchronous scene and mesh construction. Only the newest completed request publishes. Cancellation/failure restores the published difficulty and its saved preference without starting a recursive refresh; superseded requests cannot roll back newer choices. Camera, selection remapping and pickup editing continue through the existing publication path.
+
+StudioParameter now describes array items and length constraints, with recursive validation and indexed error paths. Camera vectors require exactly three numbers; export selections require valid kind/integer-index objects with no extra fields. Regenerated the embedded discovery catalog and updated MCP documentation/inventory. Malformed items fail as invalid_argument before handlers or connection to an enabled workspace.
+
+Release build passes with zero warnings/errors; all 248 tests pass, including nested array validation, lazy protocol rejection without connecting and full discovery-catalog parity. The real-corpus MCP check passes difficulty cancellation/restored preference/retained viewport and capture alongside existing model, animation, sound, texture, pickup, save and export checks (TEMP/zstudio-mcp-b7ca27f40c39407cbfad8812a1a26f85). The GUI difficulty corpus check also passes authored Easy/Medium/Hard layouts, rapid supersession, shared/persisted preference, camera/follow/playhead/LOD/height/range/selection preservation, warm audio and source-byte preservation (TEMP/zbd-difficulty-ui-20260926-133237). Portable artifacts remain unchanged; merge/tag/release await owner instruction.
+
 ## PR #8 static preview refresh cancellation (2026-09-26)
 
 Review finding 4111197082 is valid and corrected. Same-asset model/Whole world option refreshes now build a separate replacement viewport, keeping the published scene visible and interactive throughout asynchronous preparation and mesh creation. Only a current, completed request replaces it. Cancellation or failure disposes the incomplete replacement and restores published LOD/horizon/texture-pack controls; camera, selection, preview identity and loaded scene remain intact. Successful publication retains camera/selection and pickup edits, reconnects renderer interactions, assigns a new preview UUID and disposes the former viewport. New navigation and superseding requests cancel pending replacements.

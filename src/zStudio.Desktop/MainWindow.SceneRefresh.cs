@@ -6,15 +6,20 @@ namespace Recoil.Zbd.Desktop;
 
 public partial class MainWindow
 {
-    private sealed record StaticSceneOptions(int Lod, bool Horizon, PackChoice? Pack);
+    private sealed record StaticSceneOptions(int Lod, bool Horizon, PackChoice? Pack, MissionDifficulty Difficulty);
+    private bool restoringStaticOptions;
     private StaticSceneOptions? publishedStaticOptions;
     private CancellationTokenSource? staticRefresh;
-    private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice);
+    private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty);
     private void RestoreStaticSceneOptions(StaticSceneOptions options)
     {
-        bool wasUpdating = updating; updating = true;
-        try { LodCombo.SelectedIndex = options.Lod; BackdropEnabled.IsChecked = options.Horizon; TexturePackCombo.SelectedItem = options.Pack; }
-        finally { updating = wasUpdating; }
+        bool wasUpdating = updating; updating = true; restoringStaticOptions = true;
+        try
+        {
+            LodCombo.SelectedIndex = options.Lod; BackdropEnabled.IsChecked = options.Horizon; TexturePackCombo.SelectedItem = options.Pack;
+            if (scene?.Mission != null) ViewModel.Difficulty = options.Difficulty;
+        }
+        finally { updating = wasUpdating; restoringStaticOptions = false; }
     }
 
     private async Task RefreshStaticSceneAsync(DocumentModel doc, AssetRecord asset)
@@ -23,7 +28,7 @@ public partial class MainWindow
         var retainedOptions = publishedStaticOptions!;
         var requested = ReadStaticSceneOptions();
         var resolver = ViewModel.Resolver!;
-        staticRefresh?.Cancel(); difficultyRefresh?.Cancel();
+        staticRefresh?.Cancel();
         using var request = PreviewOperation.Link(preview.Token);
         staticRefresh = request;
         var token = request.Token;
@@ -33,7 +38,7 @@ public partial class MainWindow
         try
         {
             token.ThrowIfCancellationRequested();
-            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: ViewModel.Difficulty) : null;
+            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: requested.Difficulty) : null;
             if (mission != null) await doc.GetPickupEditsAsync(resolver, token);
             token.ThrowIfCancellationRequested();
             // Keep all partially built meshes off the displayed viewport. ShowAsync
@@ -62,7 +67,7 @@ public partial class MainWindow
             selectedNode = mission != null && previous.Mission != null
                 ? RemapPickupSelection(pickup, mission) ?? (selection is int oldSelection && mission.RemapNodeFrom(previous.Mission, oldSelection) is >= 0 and int mappedSelection ? mappedSelection : null)
                 : selection;
-            if (selectedNode is int node) InspectNode(node);
+            if (selectedNode is int node) InspectNode(node); else SetProperties(doc.Document.Metadata);
             publishedStaticOptions = requested; previewId = Guid.NewGuid();
             PreviewInfo.Text = scene.PreviewSummary; PreviewInfo.ToolTip = scene.PreviewSummary;
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;

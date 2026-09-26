@@ -141,12 +141,15 @@ internal static class McpPreviewCheck
                     var lod = (System.Windows.Controls.ComboBox)window.FindName("LodCombo");
                     var pack = (System.Windows.Controls.ComboBox)window.FindName("TexturePackCombo");
                     int retainedPack = pack.SelectedIndex;
-                    foreach (var changes in new object[]
+                    List<object> optionChanges = new()
                     {
                         new { lod = lod.Items.Count > 1 ? (lod.SelectedIndex + 1) % lod.Items.Count : lod.SelectedIndex },
                         new { horizon = !before["horizon"]!.GetValue<bool>() },
                         new { texturePack = before["texturePacks"]!.AsArray().Last()!["Path"]?.GetValue<string>() ?? "" }
-                    })
+                    };
+                    if (retainedScene.Mission != null)
+                        optionChanges.Add(new { difficulty = before["difficulty"]!.GetValue<string>() == "Hard" ? "Easy" : "Hard" });
+                    foreach (var changes in optionChanges)
                     {
                         Task? shutdown = null;
                         System.ComponentModel.PropertyChangedEventHandler cancel = async (_, e) =>
@@ -168,7 +171,9 @@ internal static class McpPreviewCheck
                         if (((FrameworkElement)window.FindName("EmptyPreview")).Visibility != Visibility.Collapsed || pack.SelectedIndex != retainedPack)
                             throw new InvalidDataException("Canceled static refresh left an overlay or changed the texture picker.");
                         var after = await Call("preview_state", new { preview = retainedPreview });
-                        if (!JsonNode.DeepEquals(before["lod"], after["lod"]) || !JsonNode.DeepEquals(before["horizon"], after["horizon"]))
+                        if (!JsonNode.DeepEquals(before["lod"], after["lod"]) || !JsonNode.DeepEquals(before["horizon"], after["horizon"]) ||
+                            !JsonNode.DeepEquals(before["difficulty"], after["difficulty"]) ||
+                            window.ViewModel.Settings.Difficulty != window.ViewModel.Difficulty)
                             throw new InvalidDataException("Canceled static refresh retained uncommitted option values.");
                         await Call("capture", new { target = "preview", preview = retainedPreview, width = 800, height = 600 });
                     }

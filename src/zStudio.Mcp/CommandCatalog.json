@@ -483,7 +483,44 @@
         "Description": "Optional list of {kind,index}; omitted exports all.",
         "Required": false,
         "Choices": null,
-        "Properties": null
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Asset identity.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "kind",
+              "Type": "string",
+              "Description": "Asset kind.",
+              "Required": true,
+              "Choices": [
+                "Raw",
+                "Texture",
+                "Sound",
+                "Zrd",
+                "Script",
+                "Animation",
+                "Model",
+                "World",
+                "Node",
+                "Material",
+                "TextureReference"
+              ],
+              "Properties": null
+            },
+            {
+              "Name": "index",
+              "Type": "integer",
+              "Description": "Authored record index.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            }
+          ]
+        }
       },
       {
         "Name": "jsonOnly",
@@ -683,7 +720,17 @@
         "Description": "Absolute XYZ for set.",
         "Required": false,
         "Choices": null,
-        "Properties": null
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Coordinate.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 3,
+        "MaxItems": 3
       },
       {
         "Name": "look",
@@ -691,7 +738,17 @@
         "Description": "Look direction XYZ for set.",
         "Required": false,
         "Choices": null,
-        "Properties": null
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Direction component.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 3,
+        "MaxItems": 3
       },
       {
         "Name": "fov",
