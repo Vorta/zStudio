@@ -86,6 +86,37 @@ internal static class BlenderNavigationChecks
         Assert.True(scene.TryFrame("all")); Assert.True((scene.CaptureView().Position + scene.CaptureView().LookDirection).X > 40);
         var prior = scene.CaptureView(); Assert.False(scene.TryFrame("selected", 99)); Assert.Equal(prior, scene.CaptureView());
         await CheckProtocol(scene, initial);
+        CheckInertiaHorizon();
+    }
+    private static void CheckInertiaHorizon()
+    {
+        using var scene = new SceneViewport();
+        scene.Measure(new(900, 600)); scene.Arrange(new(0, 0, 900, 600));
+        InstallGeometry(scene);
+        var data = scene.PreviewScene!;
+        data.Nodes[0] = data.Nodes[0] with { Name = "horizon", Class = "object3d",
+            Data = new() { ["transform"] = new JsonArray(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0) } };
+        Assert.Single(MissionSceneContext.FindHorizons(data));
+        typeof(SceneViewport).GetMethod("ConfigureHorizon", Fields)!.Invoke(scene, [data]);
+        var mesh = ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", Fields)!.GetValue(scene)!).Single();
+        var prepare = typeof(SceneViewport).GetMethod("PrepareCameraFrame", Fields)!;
+        foreach (string projection in new[] { "perspective", "orthographic" })
+        foreach (var gesture in new[] { SceneViewport.NavigationGesture.Pan, SceneViewport.NavigationGesture.Zoom, SceneViewport.NavigationGesture.Dolly })
+        {
+            scene.RestoreView(new(new(0, 0, 20), new(0, 0, -20), new(0, 1, 0), 60, projection, projection == "orthographic" ? 40 : null));
+            prepare.Invoke(scene, [TimeSpan.FromSeconds(1)]);
+            Assert.Equal(new Vector3(10, 0, 20), mesh.Instances![0].Translation);
+            typeof(SceneViewport).GetField("navigationGesture", Fields)!.SetValue(scene, gesture);
+            typeof(SceneViewport).GetField("navigationVelocity", Fields)!.SetValue(scene, new System.Windows.Vector(300, 200));
+            for (int i = 1; i <= 3; i++)
+            {
+                prepare.Invoke(scene, [TimeSpan.FromSeconds(1 + i * .02)]);
+                var eye = scene.CaptureView().Position;
+                var expected = new Vector3(10 + (float)eye.X, (float)eye.Y, (float)eye.Z);
+                Assert.True(Vector3.Distance(expected, mesh.Instances![0].Translation) < 1e-5, $"{projection} {gesture}: horizon did not follow inertial camera movement");
+            }
+            scene.StopCameraMotion();
+        }
     }
     private static void CheckKeys()
     {

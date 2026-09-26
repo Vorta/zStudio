@@ -16,7 +16,7 @@
     {
       "gui": "SceneViewport.Navigation:ConfigureNavigation",
       "tools": ["zstudio_camera"],
-      "note": "Middle orbit, Shift-middle screen pan, Ctrl-middle centered zoom and Ctrl-Shift-middle dolly use camera rotate/pan/zoom/dolly. Camera reads expose projection and exact axis state; automation never captures physical input."
+      "note": "Middle orbit, Shift-middle screen pan, Ctrl-middle centered zoom and Ctrl-Shift-middle dolly use camera rotate/pan/zoom/dolly. Camera reads expose projection and exact axis state; automation never captures physical input. Camera-dependent horizons and animation effects refresh after inertial motion at the frame boundary."
     },
     {
       "gui": "SceneViewport.NavigationCube:NavigateCubeAt",

@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #9 navigation help and proactive P1/P2 review (2026-09-26)
+
+Addressed review comment 4112679136: built-in Help now describes the shared Blender-style model/Whole world/animation controls, centered zoom, projection/axis shortcuts, framing and Follow camera behavior. Removed obsolete right-drag and unchanged-animation guidance from the current README, pickup guide and testing instructions.
+
+The proactive review found another P2 in the new pan/zoom/dolly inertia: camera notifications are suppressed during frame preparation, so those movements could leave the horizon and camera-facing effects at the previous camera pose. Inertial motion now explicitly invalidates camera-dependent poses at that same frame boundary. A regression reproduced the stale horizon before the fix and now verifies successive frames for all three gestures in perspective and orthographic projections. GUI and MCP retain their shared camera path; no commands or schemas changed, and the capability inventory documents the frame-boundary behavior.
+
+Reviewed the PR's navigation/input and Follow/Fly transitions, projection/framing/depth/rendering, highlight material/instance handling, responsive Files reparenting and saved layout, native window chrome, asynchronous preview replacement, and shared MCP validation/discovery/draft paths. No further concrete P1/P2 finding remains from this review. Release build passes with zero warnings/errors; all 281 tests pass, including protocol/catalog parity. The real-data GPU render-stability suite passes depth/instance draw orders, inertia/upright cameras, repeated DPI captures, and 2/10-second idle presented-buffer captures for model, Whole world and animation previews (`%TEMP%/zbd-render-stability-20260926-223759`). Physical gesture feel and mixed-monitor DPI remain manual acceptance limits. Source datasets and portable artifacts are unchanged. Required CI will check the pushed revision before the review thread is resolved.
+
 ## PR #9 scene-option batch validation (2026-09-26)
 
 Addressed review comment 4112628880. Static scene-option requests now validate the complete batch's current-view LOD and texture-pack constraints before mutating controls, preferences or rendering. The typed LOD schema also rejects negative/overflowing ranks. Requested highlights are deferred until every requested refresh succeeds; failure, cancellation or supersession retains the existing mode. A highlight generation check preserves newer GUI choices even when they do not start another geometry refresh. Shared GUI setters, source identities and document revisions remain unchanged. Updated MCP contract/capability documentation and regenerated the embedded catalog.

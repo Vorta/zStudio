@@ -135,6 +135,9 @@ public sealed partial class SceneViewport
     {
         if (rotationPoint != null || !viewport.IsInertiaEnabled || navigationVelocity.LengthSquared <= 1) return;
         ApplyNavigationDelta(navigationGesture, navigationVelocity * seconds);
+        // CameraChanged is deliberately suppressed during frame preparation.
+        // Refresh camera-dependent horizons/billboards for inertial motion too.
+        cameraPoseDirty = true;
         navigationVelocity *= Math.Pow(Math.Clamp(viewport.CameraInertiaFactor, .01, .99), seconds / .02);
         viewport.InvalidateRender();
     }
