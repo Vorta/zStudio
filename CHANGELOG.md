@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.5.0 — Unreleased
+## 0.5.0 — 2026-09-26
 
 - Cancel retained preview lifetimes before draining MCP on accepted application close, while preserving canceled-close and MCP-only recovery behavior; serialize overlapping MCP teardown.
 - Restrict isolation to GUI-supported model/Whole world previews, isolate complete pickups when child meshes are selected, and protect active pickup drags from MCP scene/camera changes.

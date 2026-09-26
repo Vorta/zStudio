@@ -4,7 +4,7 @@
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, move mission pickups, and edit supported animation programs. This source tree targets **v0.5.0**.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, move mission pickups, and edit supported animation programs. The current release is **[v0.5.0](https://github.com/Vorta/zStudio/releases/tag/v0.5.0)**.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
@@ -30,7 +30,7 @@ dependencies/
 
 The dependencies folder contains the application libraries, bundled .NET runtime, documentation, and license notices. The executable and app window use the supplied Studio icon.
 
-The current development build also supports **local MCP access for AI agents**. Enable **Tools → MCP integration…**, copy the displayed configuration into your agent, and connect through `zStudio.exe --mcp`. Connecting and discovering tools stays in the background; the first workspace request opens or attaches to zStudio. Agents share the visible workspace and can browse, inspect, preview, edit, undo, export and save through the same protections as the GUI. See [MCP setup and tool guide](docs/mcp.md). This feature is unreleased; the published v0.4.8 package does not include it.
+zStudio v0.5.0 includes **local MCP access for AI agents**. Enable **Tools → MCP integration…**, copy the displayed configuration into your agent, and connect through `zStudio.exe --mcp`. Connecting and discovering tools stays in the background; the first workspace request opens or attaches to zStudio. Agents share the visible workspace and can browse, inspect, preview, edit, undo, export and save through the same protections as the GUI. See [MCP setup and tool guide](docs/mcp.md).
 
 Choose **File → Open folder** and select the folder containing `image.zbd` and the mission directories, such as `zbd_1999`. Double-click a file in Files to open it and switch to Assets. Open files are marked in Files and have a close button. Filter assets on the left, or use the Search tab across the selected root. Folder scanning includes unknown files, which can be inspected as raw bytes.
 
