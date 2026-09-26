@@ -120,16 +120,32 @@ public partial class MainWindow
             {
                 token.ThrowIfCancellationRequested();
                 if (shownDocument != doc || shownAsset != asset) throw new StudioCommandException("context_changed", "The user selected another preview.");
+                Task<Guid?>? refresh = null;
                 switch(name)
                 {
                     case "textures": TexturesEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "wireframe": Wireframe.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "bounds": BoundsEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
-                    case "difficulty": if (!Enum.TryParse<MissionDifficulty>(value!.GetValue<string>(),out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument","Use Easy, Medium or Hard."); ViewModel.Difficulty = difficulty; await previewWork; break;
-                    case "lod": int lod = value!.GetValue<int>(); if (lod < 0 || lod >= LodCombo.Items.Count) throw new StudioCommandException("invalid_argument","LOD outside available range."); updating = true; LodCombo.SelectedIndex = lod; updating = false; await ShowAsset(doc,asset); break;
-                    case "horizon": updating = true; BackdropEnabled.IsChecked = value!.GetValue<bool>(); updating = false; await ShowAsset(doc,asset); break;
-                    case "texturePack": string pack = value!.GetValue<string>(); var choice = TexturePackCombo.Items.Cast<PackChoice>().FirstOrDefault(p => (p.Path ?? "").Equals(pack,StringComparison.OrdinalIgnoreCase)) ?? throw new StudioCommandException("invalid_argument","Choose an available texture variant."); updating = true; TexturePackCombo.SelectedItem = choice; updating = false; await ShowAsset(doc,asset); break;
+                    case "difficulty":
+                        if (!Enum.TryParse<MissionDifficulty>(value!.GetValue<string>(),out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument","Use Easy, Medium or Hard.");
+                        bool changedDifficulty = ViewModel.Difficulty != difficulty;
+                        ViewModel.Difficulty = difficulty;
+                        if (asset.Kind == AssetKind.World && (changedDifficulty || staticRefresh != null))
+                        { refresh = staticRefreshWork; await previewWork; }
+                        break;
+                    case "lod": int lod = value!.GetValue<int>(); if (lod < 0 || lod >= LodCombo.Items.Count) throw new StudioCommandException("invalid_argument","LOD outside available range."); updating = true; LodCombo.SelectedIndex = lod; updating = false; refresh = RefreshStaticSceneAsync(doc,asset); await (previewWork = refresh); break;
+                    case "horizon": updating = true; BackdropEnabled.IsChecked = value!.GetValue<bool>(); updating = false; refresh = RefreshStaticSceneAsync(doc,asset); await (previewWork = refresh); break;
+                    case "texturePack": string pack = value!.GetValue<string>(); var choice = TexturePackCombo.Items.Cast<PackChoice>().FirstOrDefault(p => (p.Path ?? "").Equals(pack,StringComparison.OrdinalIgnoreCase)) ?? throw new StudioCommandException("invalid_argument","Choose an available texture variant."); updating = true; TexturePackCombo.SelectedItem = choice; updating = false; refresh = RefreshStaticSceneAsync(doc,asset); await (previewWork = refresh); break;
                     default: throw new StudioCommandException("unknown_option",name);
+                }
+                token.ThrowIfCancellationRequested();
+                if (shownDocument != doc || shownAsset != asset || refresh != null && staticRefreshWork != refresh)
+                    throw new StudioCommandException("context_changed", "The scene refresh was superseded. Read zstudio_state before retrying.");
+                if (refresh != null)
+                {
+                    var published = await refresh;
+                    if (published == null) throw new StudioCommandException("preview_unavailable", "The requested scene was not published. " + ViewModel.Status);
+                    if (previewId != published) throw new StudioCommandException("context_changed", "The published preview was replaced. Read zstudio_state before retrying.");
                 }
             }
             return Result(new { preview = previewId, ViewModel.Status });

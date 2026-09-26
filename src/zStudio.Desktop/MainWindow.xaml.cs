@@ -144,7 +144,7 @@ public partial class MainWindow : Window
     }
     private void CancelPreview()
     {
-        staticRefresh?.Cancel(); publishedStaticOptions = null;
+        staticRefresh?.Cancel(); staticRefreshWork = null; publishedStaticOptions = null;
         previewId = Guid.NewGuid();
         flyRequest++; flyCamera?.End(); SynchronizeFly();
         ClearStaticPreviewProblems();
@@ -251,7 +251,19 @@ public partial class MainWindow : Window
             }
             token.ThrowIfCancellationRequested(); EmptyPreview.Visibility = Visibility.Collapsed;
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // MCP shutdown cancels the request, not the selection retained by the
+            // GUI. Rebuild that selection outside its canceled operation scope.
+            // Navigation, document disposal and shutdown cancel the lifetime and
+            // must never resurrect an obsolete preview.
+            if (loading.IsCancellationRequested && !previewLifetime.IsCancellationRequested && !doc.IsDisposed && shownDocument == doc &&
+                ViewModel.SelectedDocument == doc && shownAsset?.Id == asset?.Id)
+            {
+                using var recovery = PreviewOperation.Begin(CancellationToken.None);
+                await ShowAsset(doc, asset);
+            }
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { if (!token.IsCancellationRequested) { EmptyPreview.Text = "Preview unavailable: " + ex.Message; Report(ex); } }
     }
     private IEnumerable<SearchHit> FindRelated(AssetRecord asset, DocumentModel doc)

@@ -10,6 +10,7 @@ public partial class MainWindow
     private bool restoringStaticOptions;
     private StaticSceneOptions? publishedStaticOptions;
     private CancellationTokenSource? staticRefresh;
+    private Task<Guid?>? staticRefreshWork;
     private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty);
     private void RestoreStaticSceneOptions(StaticSceneOptions options)
     {
@@ -22,7 +23,9 @@ public partial class MainWindow
         finally { updating = wasUpdating; restoringStaticOptions = false; }
     }
 
-    private async Task RefreshStaticSceneAsync(DocumentModel doc, AssetRecord asset)
+    private Task<Guid?> RefreshStaticSceneAsync(DocumentModel doc, AssetRecord asset) => staticRefreshWork = RefreshStaticSceneCoreAsync(doc, asset);
+
+    private async Task<Guid?> RefreshStaticSceneCoreAsync(DocumentModel doc, AssetRecord asset)
     {
         var previous = scene!;
         var retainedOptions = publishedStaticOptions!;
@@ -46,7 +49,7 @@ public partial class MainWindow
             replacement = new SceneViewport();
             await replacement.ShowAsync(doc.Document, asset, resolver, requested.Pack?.Path, requested.Lod, token, requested.Horizon, mission);
             token.ThrowIfCancellationRequested();
-            if (!OwnsRequest()) return;
+            if (!OwnsRequest()) return null;
 
             var view = previous.CaptureView();
             int? selection = selectedNode, isolate = isolatedNode;
@@ -75,6 +78,7 @@ public partial class MainWindow
             EmptyPreview.Visibility = Visibility.Collapsed;
             previous.Dispose(); SynchronizeFly();
             ViewModel.Status = mission?.Layout.Description ?? scene.PreviewSummary;
+            return previewId;
         }
         catch (OperationCanceledException)
         {
@@ -89,5 +93,6 @@ public partial class MainWindow
             replacement?.Dispose();
             if (staticRefresh == request) staticRefresh = null;
         }
+        return null;
     }
 }

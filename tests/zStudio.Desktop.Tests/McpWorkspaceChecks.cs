@@ -25,7 +25,7 @@ internal static class McpWorkspaceChecks
         var entry = new AnimationEntry(new byte[308],0,0); entry.SetText(0,"mcp fixture");
         var sequence = new AnimationSequence(new byte[64]) { Name="sequence" }; sequence.Events.Add(AnimationCatalog.Create(10)); entry.Sequences.Add(sequence); package.Entries.Add(entry);
         var source = new ZbdDocument(Path.Combine(Path.GetTempPath(),"mcp-fixture.zbd"),new(0,DateTime.MinValue),new(FormatFamily.Animation,28,Recognition.Supported,"MCP fixture"),ReadOnlyMemory<byte>.Empty) { Animations=package };
-        source.Add(AssetKind.Raw,0,"Metadata",0,0); var doc = new DocumentModel(source);
+        source.Add(AssetKind.Raw,0,"Metadata",0,0); source.Add(AssetKind.Raw,1,"Recovery fixture",0,0); var doc = new DocumentModel(source);
         main.ViewModel.Documents.Add(doc); main.ViewModel.SelectedDocument=doc;
         try
         {
@@ -45,6 +45,11 @@ internal static class McpWorkspaceChecks
             var resources = await client.ListResourcesAsync(); Assert.Equal(2,resources.Count);
             var state=await Call("state",new()); Assert.Equal(doc.SessionId.ToString(),state["documents"]![0]!["id"]!.GetValue<string>());
             string originalPreview = state["preview"]!.GetValue<string>();
+            await CancelPreviewJob("select_asset", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Raw", ["index"] = 1 }, "Raw #1:");
+            Assert.Equal(1, doc.SelectedAsset!.Index);
+            Assert.Equal(Visibility.Collapsed, ((TextBlock)main.FindName("EmptyPreview")).Visibility);
+            Assert.Equal(Visibility.Visible, ((TabControl)main.FindName("StructuredPanel")).Visibility);
+            await Call("inspect_asset", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Raw", ["index"] = 1 });
             await Call("capture", new() { ["target"] = "preview" }, "stale_preview");
             await Call("capture", new() { ["target"] = "preview", ["preview"] = Guid.NewGuid().ToString() }, "stale_preview");
             main.WindowState = WindowState.Minimized;
@@ -142,8 +147,44 @@ internal static class McpWorkspaceChecks
                 Assert.Equal(1, indexed); Assert.False(main.ViewModel.IsBusy);
                 var reopened = await main.ViewModel.OpenFileAsync(Path.Combine(root, "0.zbd"));
                 Assert.NotNull(reopened); main.ViewModel.CloseResolved(reopened);
+                main.ViewModel.PropertyChanged -= changed;
+                string recoveryPath = Path.Combine(root, "recovery.zbd"); File.WriteAllBytes(recoveryPath, [255,255,255,255,255,255,255,255]);
+                await CancelPreviewJob("open_document", new() { ["path"] = recoveryPath }, "Raw #0: recovery.zbd");
+                Assert.Equal(recoveryPath, main.ViewModel.SelectedDocument!.Path);
+                Assert.Equal(Visibility.Collapsed, ((TextBlock)main.FindName("EmptyPreview")).Visibility);
+                main.ViewModel.CloseResolved(main.ViewModel.SelectedDocument);
+                await CancelPreviewJob("open_document", new() { ["path"] = recoveryPath }, "Raw #0: recovery.zbd", close: true);
+                Assert.Null(main.ViewModel.SelectedDocument);
             }
             finally { main.ViewModel.PropertyChanged -= changed; Directory.Delete(root, true); }
+
+            async Task CancelPreviewJob(string name, JsonObject args, string statusPrefix, bool close = false)
+            {
+                Task? stopped = null; bool canceled = false;
+                System.ComponentModel.PropertyChangedEventHandler cancel = (_, e) =>
+                {
+                    if (canceled || e.PropertyName != nameof(MainViewModel.Status) || !main.ViewModel.Status.StartsWith(statusPrefix, StringComparison.Ordinal)) return;
+                    canceled = true;
+                    stopped = main.StopMcpAsync();
+                    if (close) main.ViewModel.CloseResolved(main.ViewModel.SelectedDocument!);
+                };
+                main.ViewModel.PropertyChanged += cancel;
+                try
+                {
+                    var job = await Call(name, args);
+                    using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    do
+                    {
+                        await Task.Delay(10, deadline.Token);
+                        job = await Call("operation", new() { ["id"] = job["id"]!.GetValue<string>() });
+                    } while (job["State"]!.GetValue<string>() is "queued" or "running");
+                    Assert.True(canceled, name + ": " + job.ToJsonString());
+                    await stopped!;
+                    Assert.Equal(close ? "failed" : "canceled", job["State"]!.GetValue<string>());
+                    if (close) Assert.Equal("context_changed", job["result"]!["code"]!.GetValue<string>());
+                }
+                finally { main.ViewModel.PropertyChanged -= cancel; }
+            }
 
             async Task<JsonNode> Call(string name,JsonObject arguments,string? error=null)
             {

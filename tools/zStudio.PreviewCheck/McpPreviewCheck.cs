@@ -48,6 +48,25 @@ internal static class McpPreviewCheck
                     return data;
                 }
                 await Call("open_root", new { path = root });
+                async Task CancelNavigation(string name, object arguments, string kind)
+                {
+                    Task? shutdown = null; bool triggered = false;
+                    System.ComponentModel.PropertyChangedEventHandler cancel = (_, e) =>
+                    {
+                        if (triggered || e.PropertyName != nameof(MainViewModel.Status) || !window.ViewModel.Status.StartsWith(kind + " #", StringComparison.Ordinal)) return;
+                        triggered = true; shutdown = window.StopMcpAsync();
+                    };
+                    window.ViewModel.PropertyChanged += cancel;
+                    bool canceled = false;
+                    try { await Call(name, arguments); }
+                    catch (InvalidDataException ex) when (ex.Message.Contains("canceled", StringComparison.Ordinal)) { canceled = true; }
+                    finally { window.ViewModel.PropertyChanged -= cancel; }
+                    if (shutdown != null) await shutdown;
+                    if (!triggered || !canceled || ((FrameworkElement)window.FindName("EmptyPreview")).Visibility != Visibility.Collapsed)
+                        throw new InvalidDataException("Canceled navigation did not recover the selected preview.");
+                    var state = await Call("state", new { });
+                    await Call("capture", new { target = "preview", preview = state["preview"]!.GetValue<string>(), width = 800, height = 600 });
+                }
                 async Task<(string Document, string Preview)> Select(string path, string kind, string query)
                 {
                     var d = await Call("open_document", new { path }); string document = d["id"]!.GetValue<string>();
@@ -58,6 +77,7 @@ internal static class McpPreviewCheck
                     return (document, state["preview"]!.GetValue<string>());
                 }
                 var animPath = Path.Combine(root, "m1", "anim.zbd"); byte[] animHash = SHA256.HashData(File.ReadAllBytes(animPath));
+                await CancelNavigation("open_document", new { path = animPath }, "Animation");
                 var (animation, preview) = await Select(animPath, "Animation", "vtol_destruction1");
                 await Call("animation_options", new { preview, changes = new { mute = true, height = 50, grid = true, collision = true } });
                 var editor = (AnimationEditor)((System.Windows.Controls.ContentControl)window.FindName("AnimationHost")).Content;
@@ -128,6 +148,7 @@ internal static class McpPreviewCheck
                 await Call("sound_transport", new { preview = soundPreview, action = "stop" });
                 Console.WriteLine("MCP sound initialization/play/pause/seek/stop passed.");
                 var gamezPath = Path.Combine(root, "m1", "gamez.zbd");
+                await CancelNavigation("open_document", new { path = gamezPath }, "World");
                 var (world, worldPreview) = await Select(gamezPath, "World", "Whole world");
                 async Task CheckCanceledStaticRefresh()
                 {
@@ -177,15 +198,43 @@ internal static class McpPreviewCheck
                             throw new InvalidDataException("Canceled static refresh retained uncommitted option values.");
                         await Call("capture", new { target = "preview", preview = retainedPreview, width = 800, height = 600 });
                     }
+                    // Reapplying the retained difficulty is a no-op, not a retry
+                    // of the last canceled refresh's unpublished result.
+                    await Call("scene_options", new { preview = retainedPreview, changes = new { difficulty = before["difficulty"]!.GetValue<string>() } });
                     await Call("scene_options", new { preview = retainedPreview, changes = new { horizon = !before["horizon"]!.GetValue<bool>() } });
                     var published = await Call("state", new { });
                     if (published["preview"]!.GetValue<string>() == retainedPreview || ReferenceEquals(sceneHost.Content, retainedScene))
                         throw new InvalidDataException("Successful static refresh did not publish its replacement.");
                     await Call("capture", new { target = "preview", preview = published["preview"]!.GetValue<string>(), width = 800, height = 600 });
+
+                    // A GUI option change supersedes the MCP request while it is
+                    // awaiting scene construction. Only the GUI result may publish.
+                    bool superseded = false;
+                    var horizon = (System.Windows.Controls.Primitives.ToggleButton)window.FindName("BackdropEnabled");
+                    System.ComponentModel.PropertyChangedEventHandler supersede = async (_, e) =>
+                    {
+                        if (superseded || e.PropertyName != nameof(MainViewModel.Status) || window.ViewModel.Status != "Updating preview…") return;
+                        superseded = true;
+                        await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+                        using var gui = PreviewOperation.Begin(CancellationToken.None);
+                        horizon.IsChecked = !horizon.IsChecked;
+                    };
+                    window.ViewModel.PropertyChanged += supersede;
+                    bool rejected = false;
+                    try { await Call("scene_options", new { preview = published["preview"]!.GetValue<string>(), changes = new { lod = lod.SelectedIndex } }); }
+                    catch (InvalidDataException ex) when (ex.Message.Contains("context_changed", StringComparison.Ordinal)) { rejected = true; }
+                    finally { window.ViewModel.PropertyChanged -= supersede; }
+                    if (!superseded || !rejected) throw new InvalidDataException("Superseded MCP refresh was not rejected as context_changed.");
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                    while (window.ViewModel.Status == "Updating preview…") await Task.Delay(20, timeout.Token);
+                    var current = await Call("state", new { });
+                    if (current["preview"]!.GetValue<string>() == published["preview"]!.GetValue<string>())
+                        throw new InvalidDataException("The superseding GUI scene did not publish.");
+                    await Call("capture", new { target = "preview", preview = current["preview"]!.GetValue<string>(), width = 800, height = 600 });
                 }
                 await CheckCanceledStaticRefresh();
                 var modelRecord = window.ViewModel.SelectedDocument!.Document.Assets.First(a => a.Kind == Recoil.Zbd.Core.AssetKind.Model);
-                await Call("select_asset", new { document = world, kind = "Model", index = modelRecord.Index });
+                await CancelNavigation("select_asset", new { document = world, kind = "Model", index = modelRecord.Index }, "Model");
                 await CheckCanceledStaticRefresh();
                 (_, worldPreview) = await Select(gamezPath, "World", "Whole world");
                 foreach (double vertical in new[] { 1.0, -1.0 })

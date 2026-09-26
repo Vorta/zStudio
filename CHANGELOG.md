@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.5.0 — Unreleased
 
+- Recover the still-selected preview after MCP cancels asset/document loading, and reject superseded scene-option jobs instead of returning an unpublished preview identity.
+
 - Describe and validate MCP array items recursively, including three-number camera vectors and export asset identities; reject malformed input before workspace connection.
 - Retain loaded model/Whole world scenes during LOD, horizon, texture-pack and difficulty refreshes; publish only completed replacements and restore option controls after cancellation or load failure.
 - Recover animation controls after canceled level refreshes, cancel pending audio retries when MCP stops, and retain MCP inspection/editing of valid fields on malformed keyframe events with a read-only payload diagnostic.

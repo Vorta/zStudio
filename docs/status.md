@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR #8 canceled navigation recovery and refresh ownership (2026-09-26)
+
+Review findings 4111260247 and 4111260249 are valid and corrected. Operation-only cancellation of asset/document preview loading retries the still-current selection outside the canceled MCP scope. The original operation remains canceled while the visible workspace recovers; navigation, document disposal and shutdown invalidate the lifetime and prevent obsolete recovery. Static refresh tasks now return their published preview UUID. MCP scene-option jobs verify task ownership and publication after awaiting work, reporting context_changed when a GUI refresh supersedes them and preview_unavailable on failed preparation. Reapplying a retained difficulty after cancellation remains a successful no-op.
+
+Release build passes with zero warnings/errors; all 248 tests pass, including added real-window/protocol scenarios for canceled select_asset/open_document recovery and document closure suppressing recovery. Full catalog parity passes with no schema change. Expanded real-file MCP checks pass animation/Whole world opening and model selection cancellation followed by capture without reselection, GUI supersession of model/Whole world MCP refreshes, no-op difficulty after cancellation and the existing preview/edit/save/export checks (TEMP/zstudio-mcp-ad32c482b338459eaa639d646de55b6a). Portable artifacts remain unchanged; merge/tag/release await owner instruction.
+
 ## PR #8 difficulty cancellation and array schemas (2026-09-26)
 
 Review findings 4111226046 and 4111226049 are valid and corrected. Whole world difficulty changes now share the staged static-preview replacement path, keeping the published viewport untouched through asynchronous scene and mesh construction. Only the newest completed request publishes. Cancellation/failure restores the published difficulty and its saved preference without starting a recursive refresh; superseded requests cannot roll back newer choices. Camera, selection remapping and pickup editing continue through the existing publication path.
