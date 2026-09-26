@@ -46,11 +46,11 @@ internal static class SceneControlsCheck
                 var camera = viewport.Camera as HCamera ?? throw new InvalidOperationException("No perspective camera attached.");
                 Point3D sceneCenter = camera.Position + camera.LookDirection;
                 viewport.IsInertiaEnabled = false;
-                var bindings = viewport.InputBindings.OfType<MouseBinding>().ToArray();
-                bool Bound(MouseAction action, ModifierKeys modifiers, ICommand command) => bindings.Any(b => b.Gesture is MouseGesture g && g.MouseAction == action && g.Modifiers == modifiers && b.Command == command);
-                if (!Bound(MouseAction.MiddleClick, ModifierKeys.None, ViewportCommands.Pan)
-                    || !Bound(MouseAction.RightClick, ModifierKeys.Shift, ViewportCommands.Pan)
-                    || !Bound(MouseAction.RightClick, ModifierKeys.None, ViewportCommands.Rotate))
+                if (viewport.UseDefaultGestures || viewport.InputBindings.Count != 0
+                    || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.None) != SceneViewport.NavigationGesture.Orbit
+                    || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.Shift) != SceneViewport.NavigationGesture.Pan
+                    || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.Control) != SceneViewport.NavigationGesture.Zoom
+                    || SceneViewport.Gesture(MouseButton.Middle, ModifierKeys.Control | ModifierKeys.Shift) != SceneViewport.NavigationGesture.Dolly)
                     throw new InvalidOperationException("Pan/rotate gesture mapping is incorrect.");
 
                 var textured = viewport.Items.OfType<MeshGeometryModel3D>().Select(m => m.Material).OfType<DiffuseMaterial>().Distinct().Where(m => m.DiffuseMap != null).ToArray();
@@ -70,7 +70,7 @@ internal static class SceneControlsCheck
                 Point center = new(viewport.ActualWidth / 2, viewport.ActualHeight / 2);
                 scene.SetFly(false);
                 camera.Position = new(surface.X, surface.Y + height, surface.Z);
-                camera.LookDirection = new(0, -height * 0.1, 0); // Stale target still far above the terrain.
+                camera.LookDirection = new(0, -height, 0); // Centered zoom intentionally retains this terrain target.
                 camera.UpDirection = new(0, 0, -1);
                 for (int step = 0; step < 25; step++)
                 {
@@ -78,6 +78,8 @@ internal static class SceneControlsCheck
                     scene.ZoomAt(center, 120);
                 }
                 double remaining = camera.Position.Y - surface.Y;
+                if ((camera.Position + camera.LookDirection - new Point3D(surface.X, surface.Y, surface.Z)).Length > .001)
+                    throw new InvalidOperationException("Centered zoom changed its target.");
                 if (remaining <= camera.NearPlaneDistance || remaining >= height * 0.1)
                     throw new InvalidOperationException($"Orbit zoom failed: {height} → {remaining} above the map.");
                 Console.WriteLine($"Orbit zoom: {height:F3} → {remaining:F3} above the map, near clip {camera.NearPlaneDistance:F4}");
@@ -85,7 +87,7 @@ internal static class SceneControlsCheck
                 Save(scene.RenderImage(960, 640), Path.Combine(Path.GetTempPath(), "zbd-scene-controls-close.png"));
                 Point3D beforePan = camera.Position;
                 Vector3D beforeDirection = camera.LookDirection;
-                viewport.AddPanForce(12, 8);
+                scene.PanBy(12, 8);
                 if (camera.Position == beforePan || camera.LookDirection != beforeDirection) throw new InvalidOperationException("Pan did not translate the camera without rotating.");
 
                 // Render a constant-color patch through a real scene material and verify its pixel values.
@@ -116,7 +118,7 @@ internal static class SceneControlsCheck
                 if (Math.Abs(pixel[2] - 40) > 1 || Math.Abs(pixel[1] - 80) > 1 || Math.Abs(pixel[0] - 120) > 1)
                     throw new InvalidOperationException($"Original RGB (40,80,120) rendered as ({pixel[2]},{pixel[1]},{pixel[0]}).");
                 Save(rendered, Path.Combine(Path.GetTempPath(), "zbd-scene-color-check.png"));
-                Console.WriteLine($"PASS: RGB (40,80,120) renders as ({pixel[2]},{pixel[1]},{pixel[0]}); texture toggle, orbit close zoom, pan translation, and middle/Shift-right/right gesture bindings. Captured freecam is checked separately.");
+                Console.WriteLine($"PASS: RGB (40,80,120) renders as ({pixel[2]},{pixel[1]},{pixel[0]}); texture toggle, centered close zoom, screen pan, and Blender middle/Shift-middle/Ctrl-middle/Ctrl-Shift-middle gestures. Captured freecam is checked separately.");
                 viewport.Items.Remove(patch);
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }

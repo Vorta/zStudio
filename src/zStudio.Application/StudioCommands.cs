@@ -17,7 +17,9 @@ public sealed record StudioParameter(string Name, string Type, string Descriptio
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MaxItems = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] StudioParameter? AdditionalProperties = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Minimum = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Maximum = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Maximum = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? NumberMinimum = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? NumberMaximum = null);
 public sealed record StudioCommand(string Name, string Description, bool Mutates, IReadOnlyList<StudioParameter> Parameters,
     Func<JsonObject, CancellationToken, Task<StudioResult>> Execute)
 {
@@ -55,6 +57,8 @@ public sealed record StudioCommand(string Name, string Description, bool Mutates
             throw new StudioCommandException("invalid_argument", "Invalid " + p.Type + " argument: " + path);
         if (p.Type == "integer" && (scalar.GetInt64() < p.Minimum || scalar.GetInt64() > p.Maximum))
             throw new StudioCommandException("invalid_argument", "Integer argument is out of range: " + path);
+        if (p.Type == "number" && (scalar.GetDouble() < p.NumberMinimum || scalar.GetDouble() > p.NumberMaximum))
+            throw new StudioCommandException("invalid_argument", "Number argument is out of range: " + path);
         if (value is JsonObject nested && (p.Properties != null || p.AdditionalProperties != null))
             ValidateObject(nested, p.Properties ?? [], path + ".", p.AdditionalProperties);
         if (value is JsonArray array)
@@ -79,6 +83,8 @@ internal static class StudioSchema
         if (parameter.AdditionalProperties != null) schema["additionalProperties"] = parameter.AdditionalProperties.ToSchema();
         if (parameter.Minimum != null) schema["minimum"] = parameter.Minimum.Value;
         if (parameter.Maximum != null) schema["maximum"] = parameter.Maximum.Value;
+        if (parameter.NumberMinimum != null) schema["minimum"] = parameter.NumberMinimum.Value;
+        if (parameter.NumberMaximum != null) schema["maximum"] = parameter.NumberMaximum.Value;
         return schema;
     }
     internal static JsonObject WithProperties(this JsonObject schema, StudioParameter[]? properties)

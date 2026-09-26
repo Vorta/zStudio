@@ -1,0 +1,42 @@
+using System.Windows;
+using Recoil.Zbd.Core;
+
+namespace Recoil.Zbd.Desktop;
+
+public partial class MainWindow
+{
+    private WorldHighlightMode worldHighlightMode;
+    private bool synchronizingWorldHighlight;
+
+    private static string WorldHighlightName(WorldHighlightMode mode) => mode switch
+    {
+        WorldHighlightMode.NonDefaultSoils => "nonDefaultSoils",
+        WorldHighlightMode.CanModify => "canModify",
+        WorldHighlightMode.ClipTo => "clipTo",
+        _ => "none"
+    };
+
+    private void WorldHighlightChanged(object sender, RoutedEventArgs e)
+    {
+        if (!ready || synchronizingWorldHighlight) return;
+        var mode = sender == HighlightSoils ? WorldHighlightMode.NonDefaultSoils :
+            sender == HighlightCanModify ? WorldHighlightMode.CanModify : WorldHighlightMode.ClipTo;
+        SetWorldHighlightMode(((System.Windows.Controls.Primitives.ToggleButton)sender).IsChecked == true ? mode : WorldHighlightMode.None);
+    }
+
+    private void SetWorldHighlightMode(WorldHighlightMode mode)
+    {
+        worldHighlightMode = mode;
+        synchronizingWorldHighlight = true;
+        try
+        {
+            HighlightSoils.IsChecked = mode == WorldHighlightMode.NonDefaultSoils;
+            HighlightCanModify.IsChecked = mode == WorldHighlightMode.CanModify;
+            HighlightClipTo.IsChecked = mode == WorldHighlightMode.ClipTo;
+        }
+        finally { synchronizingWorldHighlight = false; }
+        ApplyWorldHighlight();
+    }
+
+    private void ApplyWorldHighlight() => scene?.SetWorldHighlightMode(shownAsset?.Kind == AssetKind.World ? worldHighlightMode : WorldHighlightMode.None);
+}

@@ -58,45 +58,17 @@ public partial class MainWindow
         {
             RequirePreview(a); return Result(new { preview = previewId, asset = shownAsset?.Id, animation = animation?.PreviewState(),
                 camera = animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? scene?.CaptureView() : null),
+                framingSelection = animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 lod = animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = ViewModel.Difficulty.ToString(), texturePacks = animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>().ToArray() : [],
                 textured = animation != null ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
                 wireframe = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
                 bounds = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? BoundsEnabled.IsChecked : null,
+                highlight = animation == null && shownAsset?.Kind == AssetKind.World && SceneHost.Visibility == Visibility.Visible && scene != null ? WorldHighlightName(scene.HighlightMode) : null,
                 horizon = animation?.Options.Horizon ?? (SceneHost.Visibility == Visibility.Visible ? BackdropEnabled.IsChecked : null),
                 texture = decoded == null ? null : new { decoded.Width, decoded.Height, zoom = ZoomSlider.Value, channel = ChannelCombo.SelectedIndex, smooth = SmoothImage.IsChecked },
                 sound = wave == null ? null : new { seconds = wave.CurrentTime.TotalSeconds, duration = wave.TotalTime.TotalSeconds, playing = player?.PlaybackState == PlaybackState.Playing } });
         });
-        Register(r, "camera", "Read or set an upright camera pose, move relative to its viewing basis, rotate, or frame the active scene. Never captures the user's mouse.", true,
-            [PreviewParameter, P("action", "string", "Camera operation.", true, "read", "set", "move", "rotate", "frame"), new("position", "array", "Absolute XYZ for set.", Items: new("", "number", "Coordinate."), MinItems: 3, MaxItems: 3), new("look", "array", "Look direction XYZ for set.", Items: new("", "number", "Direction component."), MinItems: 3, MaxItems: 3), P("fov", "number", "Horizontal field of view in degrees."), P("right", "number", "Right displacement in game units."), P("up", "number", "World-Y displacement in game units."), P("forward", "number", "Forward displacement in game units."), P("horizontal", "number", "Horizontal mouse-equivalent delta."), P("vertical", "number", "Vertical mouse-equivalent delta.")], a =>
-        {
-            var viewport = TargetViewport(a); string action = Text(a,"action"); var pose = viewport.CaptureView();
-            if (action != "read" && viewport.IsPickupDragging)
-                throw new StudioCommandException("busy", "A pickup drag is in progress. Finish or cancel the drag before changing the camera.");
-            if (action == "frame") { if (animation?.CurrentFrame is { } frame) viewport.FrameAnimation(frame); else viewport.FrameAll(); }
-            else if (action != "read")
-            {
-                flyCamera?.End();
-                if (action == "set")
-                {
-                    var p = Triple(a,"position"); var l = Triple(a,"look"); double fov = Number(a,"fov",pose.FieldOfView);
-                    if (new Vector3D(l[0],l[1],l[2]).LengthSquared < 1e-12 || fov is <= 1 or >= 179) throw new StudioCommandException("invalid_argument", "Use a nonzero look direction and FOV between 1 and 179 degrees.");
-                    viewport.RestoreView(SceneViewport.UprightPose(new(new(p[0],p[1],p[2]), new(l[0],l[1],l[2]), new(0,1,0), fov)));
-                }
-                else if (action == "move")
-                {
-                    foreach (string key in new[] { "forward", "right", "up" }) if (Math.Abs(Number(a,key)) > 1e9) throw new StudioCommandException("invalid_argument","Displacements must be within ±1e9 game units.");
-                    pose = SceneViewport.UprightPose(pose);
-                    var look = pose.LookDirection; look.Normalize(); var right = Vector3D.CrossProduct(look,new(0,1,0)); right.Normalize();
-                    viewport.RestoreView(pose with { Position = pose.Position + look * Number(a,"forward") + right * Number(a,"right") + new Vector3D(0,Number(a,"up"),0) });
-                }
-                else
-                {
-                    if (Math.Abs(Number(a,"horizontal")) > 36000 || Math.Abs(Number(a,"vertical")) > 36000) throw new StudioCommandException("invalid_argument","Rotation deltas must be within ±36000.");
-                    viewport.RotateBy(Number(a,"horizontal"), Number(a,"vertical"));
-                }
-            }
-            return Result(viewport.CaptureView());
-        });
+        RegisterCameraCommand(r);
         Register(r, "scene_nodes", "List active assembled scene nodes by index, including instance metadata.", false, [PreviewParameter, .. PageParameters], a =>
         {
             var viewport = TargetViewport(a); return Page((viewport.PreviewScene?.Nodes ?? []).Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)).Select(n => new { n.Index,n.Name,n.Class,n.Metadata }), a);
@@ -119,15 +91,18 @@ public partial class MainWindow
                     node = viewport.PickupAt(node)?.Root ?? node;
                     InspectNode(node);
                 }
+                viewport.SelectFramingNode(node);
                 if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; }
                 return Result(viewport.PreviewScene!.Nodes[node].Metadata);
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic).", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo; Whole world only).", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null) throw new StudioCommandException("unsupported","Use animation_options.");
             TargetViewport(a); var doc = shownDocument!; var asset = shownAsset!;
+            if (((JsonObject)a["changes"]!).ContainsKey("highlight") && asset.Kind != AssetKind.World)
+                throw new StudioCommandException("unsupported", "Surface highlighting is available only in Whole world.");
             foreach (var (name,value) in (JsonObject)a["changes"]!)
             {
                 token.ThrowIfCancellationRequested();
@@ -135,6 +110,13 @@ public partial class MainWindow
                 Task<Guid?>? refresh = null;
                 switch(name)
                 {
+                    case "highlight": SetWorldHighlightMode(value!.GetValue<string>() switch
+                    {
+                        "nonDefaultSoils" => WorldHighlightMode.NonDefaultSoils,
+                        "canModify" => WorldHighlightMode.CanModify,
+                        "clipTo" => WorldHighlightMode.ClipTo,
+                        _ => WorldHighlightMode.None
+                    }); break;
                     case "textures": TexturesEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "wireframe": Wireframe.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "bounds": BoundsEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;

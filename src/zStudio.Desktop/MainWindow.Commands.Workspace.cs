@@ -53,7 +53,7 @@ public partial class MainWindow
             RequireNoDrafts(); string path = Path.GetFullPath(Text(a, "path"));
             await ViewModel.EnsureRootForFileAsync(path, cancellationToken: token, beforePublish: RequireRootPublication);
             var doc = await ViewModel.OpenFileAsync(path, token, () => { RequireAutomationMutationAvailable(); RequireNoDrafts(); }) ?? throw new StudioCommandException("open_failed", ViewModel.Status);
-            NavigationTabs.SelectedItem = AssetsTab; await previewWork;
+            SelectNavigatorSection(1); await previewWork;
             if (doc.IsDisposed || ViewModel.SelectedDocument != doc) throw new StudioCommandException("context_changed","The active document changed while opening.");
             return Result(DocumentState(doc));
         });
@@ -64,7 +64,7 @@ public partial class MainWindow
         RegisterJob(r, "select_asset", "Select an asset in the GUI and await its preview; does not retarget Properties.", AssetParameters, false, async (a, token) =>
         {
             RequireNoDrafts(); var doc = TargetDocument(a); var asset = TargetAsset(doc, a); ViewModel.SelectedDocument = doc;
-            doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.Single(x => x.Record == asset); NavigationTabs.SelectedItem = AssetsTab;
+            doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.Single(x => x.Record == asset); SelectNavigatorSection(1);
             await previewWork;
             if (shownDocument != doc || shownAsset?.Id != asset.Id) throw new StudioCommandException("context_changed", "The user selected another preview.");
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);

@@ -6,8 +6,9 @@ namespace Recoil.Zbd.Desktop;
 /// <summary>Presentation preferences only. Automatic collapse never overwrites preferred dimensions.</summary>
 public sealed class WorkspaceLayout
 {
-    public int Version { get; set; } = 3;
+    public int Version { get; set; } = 4;
     public double NavigatorWidth { get; set; } = 294;
+    public double FilesWidth { get; set; } = 240;
     public double InspectorWidth { get; set; } = 352;
     public double ToolsHeight { get; set; } = 180;
     public PropertyWindowBounds PropertiesWindow { get; set; } = new();
@@ -17,6 +18,7 @@ public sealed class WorkspaceLayout
     public string Preset { get; set; } = "Edit";
     public string Density { get; set; } = "Compact";
     public int BrowserTab { get; set; }
+    public int ContentBrowserTab { get; set; } = -1;
     public int InspectorTab { get; set; }
     public int ToolTab { get; set; }
     public Dictionary<string, bool> Groups { get; set; } = [];
@@ -25,12 +27,15 @@ public sealed class WorkspaceLayout
         if (Version < 2) BrowserTab = BrowserTab switch { 0 => 1, 1 => 0, _ => BrowserTab };
         if (Version < 3) InspectorTab = InspectorTab switch { 1 => 2, 2 => 1, _ => 0 };
         NavigatorWidth = Bound(NavigatorWidth, 294, 240, 650);
+        FilesWidth = Bound(FilesWidth, 240, 200, 650);
         InspectorWidth = Bound(InspectorWidth, 352, 320, 650);
         ToolsHeight = Bound(ToolsHeight, 180, 100, 700);
         BrowserTab = Math.Clamp(BrowserTab, 0, 3); InspectorTab = Math.Clamp(InspectorTab, 0, 2); ToolTab = Math.Clamp(ToolTab, 0, 5);
+        if (Version < 4 || ContentBrowserTab < 1) ContentBrowserTab = BrowserTab > 0 ? BrowserTab : 1;
+        ContentBrowserTab = Math.Clamp(ContentBrowserTab, 1, 3);
         if (Preset is not ("Inspect" or "Edit" or "Debug" or "Focus preview")) Preset = "Edit";
         if (Density is not ("Compact" or "Comfortable")) Density = "Compact";
-        Groups ??= []; Version = 3;
+        Groups ??= []; Version = 4;
         PropertiesWindow ??= new(); PropertiesWindow.Normalize();
     }
     private static double Bound(double value, double fallback, double min, double max) => double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;

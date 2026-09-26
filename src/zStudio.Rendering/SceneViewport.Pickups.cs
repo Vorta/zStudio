@@ -9,7 +9,7 @@ using HelixToolkit.Maths;
 using HelixToolkit.SharpDX;
 using HelixToolkit.Wpf.SharpDX;
 using Recoil.Zbd.Core;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
+using HCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
 using DiffuseMaterial = HelixToolkit.Wpf.SharpDX.DiffuseMaterial;
 
 namespace Recoil.Zbd.Rendering;
@@ -202,7 +202,7 @@ public sealed partial class SceneViewport
             if (Vector3D.CrossProduct(axis, look).LengthSquared < .0076)
             { Information?.Invoke("Rotate the view to drag this axis, or enter its coordinate in Pickup placement."); return false; }
         }
-        viewport.StopSpin(); rotationVelocity = default;
+        StopNavigationMotion();
         pickupCameraPose = CaptureView(); pickupCameraInertia = viewport.IsInertiaEnabled; viewport.IsInertiaEnabled = false;
         pickupDragStart = pickupPositions[root]; IsPickupDragging = true;
         viewport.CaptureMouse(); viewport.Focus(); return true;
@@ -228,7 +228,9 @@ public sealed partial class SceneViewport
         double depth = Vector3D.DotProduct(new Point3D(p.X, p.Y, p.Z) - camera.Position, look);
         if (depth <= 0) { pickupManipulator.Visibility = Visibility.Collapsed; return; }
         pickupManipulator.Visibility = pickupEditable && !pickupLocked && selectionBox?.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
-        double size = Math.Max(.001, depth * 2 * Math.Tan(camera.FieldOfView * Math.PI / 360) * PickupGizmoPixelsPerUnit / Math.Max(1, viewport.ActualWidth));
+        double worldWidth = camera is OrthographicCamera orthographic ? orthographic.Width
+            : depth * 2 * Math.Tan(CaptureView().FieldOfView * Math.PI / 360) * Aspect;
+        double size = Math.Max(.001, worldWidth * PickupGizmoPixelsPerUnit / Math.Max(1, viewport.ActualWidth));
         if (!force && Math.Abs(size - pickupGizmoSize) < size * .001) return;
         pickupGizmoSize = size; pickupManipulator.SizeScale = size;
         pickupManipulator.Target = null; pickupManipulator.Target = pickupTarget;

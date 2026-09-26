@@ -2,7 +2,7 @@ using System.Numerics;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
 using Recoil.Zbd.Core;
-using HCamera = HelixToolkit.Wpf.SharpDX.PerspectiveCamera;
+using HCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
 
 namespace Recoil.Zbd.Rendering;
 

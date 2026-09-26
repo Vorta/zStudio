@@ -2,6 +2,15 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.5.2 — 2026-09-26
+
+- Add Blender-style navigation to model, Whole world and animation previews: middle-mouse orbit, Shift+middle pan, Ctrl+middle centered zoom, Ctrl+Shift+middle dolly, and numpad view/projection/framing shortcuts with retained smooth inertia.
+- Add exact orthographic axis views, a game-axis-aligned view cube and View > 3D Navigation actions. Retain explicitly selected orthographic projection while orbiting, preserve camera state through preview refreshes, and exit animation Follow camera on manual navigation.
+- Highlight Whole world non-default soils in yellow, CanModify regions in green or ClipTo regions in red, preserving texture transparency and source data.
+- Place Files in its own resizable column to the left of Assets, Search and Document scene when the window is wide enough; retain the Files tab at narrower widths and preserve navigation, focus and saved layout preferences.
+- Restore native Windows 11 rounded window corners while retaining standard maximized/Snap behavior.
+- Expose navigation, highlighting and responsive layout through shared MCP commands, typed schemas, discovery metadata and GUI/protocol regression checks.
+
 ## 0.5.0 — 2026-09-26
 
 - Cancel retained preview lifetimes before draining MCP on accepted application close, while preserving canceled-close and MCP-only recovery behavior; serialize overlapping MCP teardown.

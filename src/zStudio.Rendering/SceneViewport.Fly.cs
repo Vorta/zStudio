@@ -22,6 +22,7 @@ public sealed partial class SceneViewport
         rotationVelocity = default; rotationPoint = null; flyMovement = default; flyFrameTime = null;
         if (enabled)
         {
+            RestoreView(UprightPose(CaptureView() with { Projection = "perspective", OrthographicWidth = null }));
             if (!flySpeedInitialized)
             {
                 FlySpeed = FlyCameraMotion.InitialSpeed((sceneMax - sceneMin).Length());

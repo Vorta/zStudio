@@ -13,10 +13,11 @@ internal sealed class VisibleDepthRange
     private readonly Point3D eye;
     private readonly Vector3D forward, right, up;
     private readonly double horizontal, vertical, floor;
+    private readonly bool orthographic;
     public double Near { get; private set; } = double.PositiveInfinity;
     public double Far { get; private set; } = double.NegativeInfinity;
 
-    public VisibleDepthRange(Point3D eye, Vector3D look, Vector3D cameraUp, double fieldOfView, double aspect, double floor)
+    public VisibleDepthRange(Point3D eye, Vector3D look, Vector3D cameraUp, double fieldOfView, double aspect, double floor, double? orthographicWidth = null)
     {
         this.eye = eye; forward = look; forward.Normalize();
         right = Vector3D.CrossProduct(forward, cameraUp); right.Normalize();
@@ -24,6 +25,8 @@ internal sealed class VisibleDepthRange
         // A small guard band prevents projection changes as a surface grazes an edge.
         vertical = Math.Tan(fieldOfView * Math.PI / 360) * 1.05;
         horizontal = vertical * aspect; this.floor = floor;
+        orthographic = orthographicWidth.HasValue;
+        if (orthographicWidth is { } width) { horizontal = width * .525; vertical = horizontal / aspect; }
     }
 
     public void Include(MeshGeometry3D mesh, Matrix3D transform)
@@ -71,7 +74,8 @@ internal sealed class VisibleDepthRange
         return new(Vector3D.DotProduct(v, right), Vector3D.DotProduct(v, up), Vector3D.DotProduct(v, forward));
     }
     private double Distance(Vector3D p, int plane) => plane switch
-    { 0 => p.Z * horizontal + p.X, 1 => p.Z * horizontal - p.X, 2 => p.Z * vertical + p.Y, 3 => p.Z * vertical - p.Y, _ => p.Z - floor };
+    { 0 => (orthographic ? horizontal : p.Z * horizontal) + p.X, 1 => (orthographic ? horizontal : p.Z * horizontal) - p.X,
+      2 => (orthographic ? vertical : p.Z * vertical) + p.Y, 3 => (orthographic ? vertical : p.Z * vertical) - p.Y, _ => p.Z - floor };
     private void Include(double depth) { Near = Math.Min(Near, depth); Far = Math.Max(Far, depth); }
     private sealed class Bounds
     {

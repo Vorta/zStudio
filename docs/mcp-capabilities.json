@@ -2,6 +2,28 @@
   "schema": 1,
   "discovery": "Initialize, tools/list, resources/list and capabilities inspection are windowless. The first valid workspace request attaches or launches the opted-in GUI. Embedded command metadata is generated from the live registry and parity-tested. Camera arrays have exactly three numeric elements; export array items require kind/index identities. Recursive item validation rejects invalid_argument before handlers or workspace connection. Pickup source identities have four required typed fields; destination maps have string values; integers advertise handler-compatible bounds.",
   "inspection": "List queries filter case-insensitively before pagination and retain record identities. Preview state describes the active viewer; unavailable 3D options are null. Invalid workspace tab requests leave presentation preferences unchanged. Missing structural edit targets return stale_record. Preview capture requires the preview lifetime UUID and returns preview/asset identity; window captures are independent. 3D capture preserves aspect ratio. Explicit camera poses are clamped upright before subsequent movement. Isolation/Show all reject animation previews, matching GUI availability; static pickup isolation uses the complete pickup root. Scene selection and camera mutations preserve active GUI pickup drags by returning busy. Accepted application closing cancels retained preview/editor lifetimes before draining MCP; canceled closing preserves them, and MCP-only disable still permits recovery. Concurrent teardown is shared and cannot reopen access during shutdown. MCP shutdown cancels pending jobs and audio retries without owning retained preview lifetimes; canceled animation level refreshes release their loading overlay. Static LOD/horizon/texture-pack and Whole world difficulty refreshes retain the published scene and options until successful replacement; cancellation restores the saved difficulty. Canceled asset/document loading retries the still-current GUI selection outside the operation scope; navigation/disposal/shutdown suppress obsolete recovery. Superseded MCP scene refreshes report context_changed; failed preparation reports preview_unavailable, with no unpublished preview result. Properties opening verifies publication/identity, links request cancellation, and rechecks pending drafts after decoding. Decoder traversal observes cancellation. Inspection freezes one edited revision and links request/document cancellation, preserving separate original data; disposed or revised results are rejected. Reload stages parsing and guards drafts/revisions/navigation before atomic document replacement, retaining the old document/preview on staging failure. Root/file navigation guards asynchronous publication, including newer pending file loads. GUI browsing keeps pinned Properties drafts. Saves/modal dialogs exclude MCP mutations; read-only state remains available. Approved preview setting drafts apply as one frozen batch and preserve newer input. Late pickup sessions and export/validation reports cannot publish after document closure. Animation binds and late renderer refreshes recover only for originating MCP cancellation; same-editor GUI seek supersession reports context_changed. LOD waits cancel before mutation; pending picker choices cannot leak into another seek. Initial binding and Map/Horizon refreshes reconcile the latest presentation choices and retain playback or explicit Pause. Static refresh ownership survives reentrant status callbacks. Deferred window close preserves new edits/drafts/drag without prompting. Malformed keyframe payloads retain available property fields and a read-only diagnostic at segment 0.",
+  "interactions": [
+    {
+      "gui": "MainWindow.Navigation:CameraNavigationClick",
+      "tools": ["zstudio_camera", "zstudio_animation_options"],
+      "note": "Dynamically created View/3D Navigation items share named views, projection and framing with camera. Follow uses animation_options.followCamera. Projection check states read the live camera."
+    },
+    {
+      "gui": "MainWindow.Navigation:CameraKeyboard",
+      "tools": ["zstudio_camera", "zstudio_animation_options"],
+      "note": "Numpad views/orbit/pan/zoom/projection/framing and Home use shared semantic operations. Native text, timeline and menu keys remain native; Numpad 0 shares Follow camera."
+    },
+    {
+      "gui": "SceneViewport.Navigation:ConfigureNavigation",
+      "tools": ["zstudio_camera"],
+      "note": "Middle orbit, Shift-middle screen pan, Ctrl-middle centered zoom and Ctrl-Shift-middle dolly use camera rotate/pan/zoom/dolly. Camera reads expose projection and exact axis state; automation never captures physical input."
+    },
+    {
+      "gui": "SceneViewport.NavigationCube:NavigateCubeAt",
+      "tools": ["zstudio_camera"],
+      "note": "View-cube faces use camera view; edges/corners use perspective camera set. The cube uses +Y up and -Z front, matching keyboard/menu axis views."
+    }
+  ],
   "handlers": [
     {
       "gui": "AnimationEditor.xaml:AddSequenceClick",
@@ -407,7 +429,7 @@
       "tools": [
         "zstudio_window"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "Maximize/restore shares the visible native window. Windows 11 corner rounding is automatic in restored state; Windows controls maximized/Snap treatment. No separate corner setting."
     },
     {
       "gui": "MainWindow.xaml:CaptionMinimizeClick",
@@ -639,6 +661,11 @@
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
+      "gui": "MainWindow.xaml:NavigatorSelectionChanged",
+      "tools": ["zstudio_workspace_view"],
+      "note": "Stable section indices survive responsive Files detachment. Tree/content keyboard focus remembers the active section; Files and Navigator splitter widths share workspace_view preferences. Automatic reparenting never commits drafts."
+    },
+    {
       "gui": "MainWindow.xaml:PaletteClick",
       "tools": [
         "zstudio_texture_palette"
@@ -825,7 +852,14 @@
       "tools": [
         "zstudio_workspace_view"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "Files and Navigator splitters share changes.filesWidth/navigatorWidth; Inspector/tools retain their existing dimensions. Preferred widths survive automatic responsive layout changes; navigatorMode reports the effective layout."
+    },
+    {
+      "gui": "MainWindow.xaml:WorldHighlightChanged",
+      "tools": [
+        "zstudio_scene_options"
+      ],
+      "note": "Whole world exclusive solid highlights: changes.highlight accepts none, nonDefaultSoils (yellow), canModify (green), or clipTo (red). preview_state reports highlight, null outside Whole world. Uses the GUI setter without replacing the preview, changing source data, or enabling local MCP."
     },
     {
       "gui": "MainWindow.xaml:ZoomChanged",

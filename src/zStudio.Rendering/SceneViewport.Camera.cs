@@ -10,13 +10,30 @@ namespace Recoil.Zbd.Rendering;
 
 public sealed partial class SceneViewport
 {
-    public sealed record ViewPose(Point3D Position, Vector3D LookDirection, Vector3D UpDirection, double FieldOfView);
-    public ViewPose CaptureView() => viewport.Camera is HCamera camera ? new(camera.Position, camera.LookDirection, camera.UpDirection, camera.FieldOfView) : throw new InvalidOperationException("No perspective camera.");
+    public sealed record ViewPose(Point3D Position, Vector3D LookDirection, Vector3D UpDirection, double FieldOfView,
+        string Projection = "perspective", double? OrthographicWidth = null, string? AxisView = null, bool AutoPerspective = false);
+    private double perspectiveFieldOfView = 45;
+    private string? axisView;
+    private bool autoPerspective;
+    public ViewPose CaptureView() => viewport.Camera is ProjectionCamera camera
+        ? new(camera.Position, camera.LookDirection, camera.UpDirection, camera is HCamera p ? p.FieldOfView : perspectiveFieldOfView,
+            camera is OrthographicCamera ? "orthographic" : "perspective", (camera as OrthographicCamera)?.Width, axisView, autoPerspective)
+        : throw new InvalidOperationException("No projection camera.");
     public void RestoreView(ViewPose pose)
     {
-        if (viewport.Camera is not HCamera camera) return;
+        if (viewport.Camera is not ProjectionCamera previous) return;
+        ProjectionCamera camera = pose.Projection == "orthographic"
+            ? previous as OrthographicCamera ?? new OrthographicCamera()
+            : previous as HCamera ?? new HCamera();
         viewport.StopSpin(); rotationVelocity = default; rotationPoint = null;
-        camera.Position = pose.Position; camera.LookDirection = pose.LookDirection; camera.UpDirection = pose.UpDirection; camera.FieldOfView = pose.FieldOfView;
+        navigationVelocity = default;
+        camera.NearPlaneDistance = previous.NearPlaneDistance; camera.FarPlaneDistance = previous.FarPlaneDistance;
+        camera.Position = pose.Position; camera.LookDirection = pose.LookDirection; camera.UpDirection = pose.UpDirection;
+        perspectiveFieldOfView = pose.FieldOfView;
+        if (camera is HCamera perspective) perspective.FieldOfView = pose.FieldOfView;
+        if (camera is OrthographicCamera orthographic) orthographic.Width = pose.OrthographicWidth ?? ViewWidth(pose);
+        axisView = pose.AxisView; autoPerspective = pose.AutoPerspective;
+        if (!ReferenceEquals(camera, previous)) viewport.Camera = camera;
         cameraPoseDirty = true; viewport.InvalidateRender();
     }
     private bool preparingCamera, cameraPoseDirty = true, authoredCameraPose;
@@ -49,6 +66,7 @@ public sealed partial class SceneViewport
             PrepareFlyFrame(timeStamp);
             if (IsPickupDragging && pickupCameraPose != null) RestoreView(pickupCameraPose);
             double seconds = Math.Clamp((timeStamp - previousFrameTime).TotalSeconds, 0, .05); previousFrameTime = timeStamp;
+            AdvanceNavigationInertia(seconds);
             if (rotationPoint == null && rotationVelocity.LengthSquared > 1 && viewport.IsInertiaEnabled)
             {
                 RotateBy(rotationVelocity.X * seconds, rotationVelocity.Y * seconds); cameraPoseDirty = true;
@@ -68,7 +86,8 @@ public sealed partial class SceneViewport
     }
     private void KeepCameraUpright()
     {
-        if (viewport.Camera is not HCamera camera || camera.LookDirection.LengthSquared < 1e-12) return;
+        if (viewport.Camera is not ProjectionCamera camera || camera.LookDirection.LengthSquared < 1e-12) return;
+        if (axisView is "top" or "bottom" && !authoredCameraPose) return;
         var look = camera.LookDirection; double length = look.Length; look.Normalize();
         double yaw = Math.Atan2(look.X, -look.Z), pitch = Math.Asin(Math.Clamp(look.Y, -1, 1));
         if (look.X * look.X + look.Z * look.Z < 1e-12 || camera.UpDirection.Y < 0 && Math.Abs(lastForward.Y) > .98)
@@ -99,46 +118,25 @@ public sealed partial class SceneViewport
         look /= length;
         var forward = UprightDirection(Math.Atan2(look.X, -look.Z), Math.Asin(Math.Clamp(look.Y, -1, 1)));
         var right = Vector3D.CrossProduct(forward, new(0, 1, 0)); right.Normalize();
-        return pose with { LookDirection = forward * length, UpDirection = Vector3D.CrossProduct(right, forward) };
+        return pose with { LookDirection = forward * length, UpDirection = Vector3D.CrossProduct(right, forward), AxisView = null, AutoPerspective = false };
     }
     /// <summary>Rotate in screen pixels with an upright camera and a bounded pitch.</summary>
     public void RotateBy(double horizontal, double vertical)
     {
         if (IsFlyActive) { LookFlyBy(horizontal, vertical); return; }
-        if (viewport.Camera is not HCamera camera || !viewport.IsRotationEnabled || camera.LookDirection.LengthSquared < 1e-12) return;
+        if (IsPickupDragging || !viewport.IsRotationEnabled || horizontal == 0 && vertical == 0) return;
+        ManualNavigationStarting?.Invoke();
+        if (autoPerspective) ChangeProjection("perspective");
+        string? previousAxis = axisView; axisView = null; autoPerspective = false;
+        if (viewport.Camera is not ProjectionCamera camera || camera.LookDirection.LengthSquared < 1e-12) return;
         var look = camera.LookDirection; double length = look.Length; look.Normalize();
         double speed = (viewport.CameraMode == CameraMode.Inspect ? -.5 : .1) * Math.PI / 180 * viewport.RotationSensitivity;
-        var direction = UprightDirection(Math.Atan2(look.X, -look.Z) - horizontal * speed, Math.Asin(Math.Clamp(look.Y, -1, 1)) + vertical * speed);
+        double yaw = previousAxis is "top" or "bottom" ? 0 : Math.Atan2(look.X, -look.Z);
+        var direction = UprightDirection(yaw - horizontal * speed, Math.Asin(Math.Clamp(look.Y, -1, 1)) + vertical * speed);
         var target = camera.Position + camera.LookDirection;
         if (viewport.CameraMode == CameraMode.Inspect) camera.Position = target - direction * length;
         camera.LookDirection = direction * length;
         var right = Vector3D.CrossProduct(direction, new(0, 1, 0)); right.Normalize();
         camera.UpDirection = Vector3D.CrossProduct(right, direction);
-    }
-    private void ConfigureUprightRotation()
-    {
-        viewport.PreviewMouseDown += (_, e) =>
-        {
-            if (IsPickupDragging) { e.Handled = true; return; }
-            rotationVelocity = default;
-            if (e.ChangedButton != MouseButton.Right || Keyboard.Modifiers != ModifierKeys.None || !viewport.IsRotationEnabled) return;
-            viewport.StopSpin();
-            rotationInputTick = Stopwatch.GetTimestamp(); rotationPoint = e.GetPosition(viewport); viewport.CaptureMouse(); viewport.Focus(); e.Handled = true;
-        };
-        viewport.PreviewMouseMove += (_, e) =>
-        {
-            if (rotationPoint is not { } previous) return;
-            var current = e.GetPosition(viewport); var delta = current - previous;
-            double seconds = Math.Max(.008, Stopwatch.GetElapsedTime(rotationInputTick).TotalSeconds); rotationInputTick = Stopwatch.GetTimestamp();
-            rotationVelocity = delta / seconds;
-            RotateBy(delta.X, delta.Y); rotationPoint = current; e.Handled = true;
-        };
-        viewport.PreviewMouseUp += (_, e) =>
-        {
-            if (e.ChangedButton != MouseButton.Right || rotationPoint == null) return;
-            if (Stopwatch.GetElapsedTime(rotationInputTick).TotalSeconds > .15 || !viewport.IsInertiaEnabled) rotationVelocity = default;
-            rotationPoint = null; viewport.ReleaseMouseCapture(); viewport.InvalidateRender(); e.Handled = true;
-        };
-        viewport.LostMouseCapture += (_, _) => { if (rotationPoint != null) rotationVelocity = default; rotationPoint = null; };
     }
 }

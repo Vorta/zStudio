@@ -177,6 +177,19 @@ internal static class McpPreviewCheck
                 var gamezPath = Path.Combine(root, "m1", "gamez.zbd");
                 await CancelNavigation("open_document", new { path = gamezPath }, "World");
                 var (world, worldPreview) = await Select(gamezPath, "World", "Whole world");
+                var highlightHost = (System.Windows.Controls.ContentControl)window.FindName("SceneHost");
+                var highlightScene = (Recoil.Zbd.Rendering.SceneViewport)highlightHost.Content;
+                highlightScene.RestoreView(Recoil.Zbd.Rendering.SceneViewport.UprightPose(highlightScene.CaptureView()));
+                var highlightPose = highlightScene.CaptureView();
+                foreach (string highlight in new[] { "nonDefaultSoils", "canModify", "clipTo", "none", "nonDefaultSoils" })
+                {
+                    await Call("scene_options", new { preview = worldPreview, changes = new { highlight } });
+                    var highlighted = await Call("preview_state", new { preview = worldPreview });
+                    if (highlighted["highlight"]!.GetValue<string>() != highlight || !ReferenceEquals(highlightScene, highlightHost.Content) || highlightScene.CaptureView() != highlightPose)
+                        throw new InvalidDataException("MCP highlight differs from visible scene or replaced its camera/identity.");
+                    await Call("capture", new { target = "preview", preview = worldPreview, width = 800, height = 600 });
+                }
+                Console.WriteLine("MCP Whole world highlight modes and unchanged preview/camera passed.");
                 async Task CheckCanceledStaticRefresh()
                 {
                     var state = await Call("state", new { });
@@ -184,6 +197,7 @@ internal static class McpPreviewCheck
                     var sceneHost = (System.Windows.Controls.ContentControl)window.FindName("SceneHost");
                     var retainedScene = (Recoil.Zbd.Rendering.SceneViewport)sceneHost.Content;
                     var retainedData = retainedScene.PreviewScene;
+                    bool wholeWorld = retainedScene.Mission != null;
                     // FrameAll starts with world-up; the next presented frame
                     // orthogonalizes it. Start from an explicit upright pose so
                     // this check isolates refresh cancellation from that update.
@@ -224,6 +238,7 @@ internal static class McpPreviewCheck
                             throw new InvalidDataException("Canceled static refresh left an overlay or changed the texture picker.");
                         var after = await Call("preview_state", new { preview = retainedPreview });
                         if (!JsonNode.DeepEquals(before["lod"], after["lod"]) || !JsonNode.DeepEquals(before["horizon"], after["horizon"]) ||
+                            !JsonNode.DeepEquals(before["highlight"], after["highlight"]) ||
                             !JsonNode.DeepEquals(before["difficulty"], after["difficulty"]) ||
                             window.ViewModel.Settings.Difficulty != window.ViewModel.Difficulty)
                             throw new InvalidDataException("Canceled static refresh retained uncommitted option values.");
@@ -236,6 +251,8 @@ internal static class McpPreviewCheck
                     var published = await Call("state", new { });
                     if (published["preview"]!.GetValue<string>() == retainedPreview || ReferenceEquals(sceneHost.Content, retainedScene))
                         throw new InvalidDataException("Successful static refresh did not publish its replacement.");
+                    if (!JsonNode.DeepEquals(before["highlight"], (await Call("preview_state", new { preview = published["preview"]!.GetValue<string>() }))["highlight"]))
+                        throw new InvalidDataException("Successful refresh lost the highlight mode.");
                     await Call("capture", new { target = "preview", preview = published["preview"]!.GetValue<string>(), width = 800, height = 600 });
 
                     if (((Recoil.Zbd.Rendering.SceneViewport)sceneHost.Content).Mission != null)
@@ -280,6 +297,7 @@ internal static class McpPreviewCheck
                         if (superseded || e.PropertyName != nameof(MainViewModel.Status) || window.ViewModel.Status != "Updating preview…") return;
                         superseded = true;
                         using var gui = PreviewOperation.Begin(CancellationToken.None);
+                        if (wholeWorld) ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("HighlightCanModify")).IsChecked = true;
                         horizon.IsChecked = !horizon.IsChecked;
                     };
                     window.ViewModel.PropertyChanged += supersede;
@@ -293,6 +311,8 @@ internal static class McpPreviewCheck
                     var current = await Call("state", new { });
                     if (current["preview"]!.GetValue<string>() == published["preview"]!.GetValue<string>())
                         throw new InvalidDataException("The superseding GUI scene did not publish.");
+                    if (wholeWorld && (await Call("preview_state", new { preview = current["preview"]!.GetValue<string>() }))["highlight"]!.GetValue<string>() != "canModify")
+                        throw new InvalidDataException("Superseding refresh lost the newest GUI highlight.");
                     await Call("capture", new { target = "preview", preview = current["preview"]!.GetValue<string>(), width = 800, height = 600 });
                 }
                 await CheckCanceledStaticRefresh();

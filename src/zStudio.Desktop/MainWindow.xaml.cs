@@ -70,6 +70,7 @@ public partial class MainWindow : Window
         var s = ViewModel.Settings;
         RestoreWindowSize(new(SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight));
         InitializeWorkspace();
+        InitializeCameraNavigation();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard;
         PreviewKeyUp += (_, e) => flyCamera?.HandleKey(e, false);
@@ -147,7 +148,7 @@ public partial class MainWindow : Window
         if (FileTree.SelectedItem is FolderNode { File: { } file }) { e.Handled = true; await OpenBrowserFile(file.Path); }
     }
     private async void FileTreeKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter && e.OriginalSource is not Button && FileTree.SelectedItem is FolderNode { File: { } file }) { e.Handled = true; await OpenBrowserFile(file.Path); } }
-    private Task OpenBrowserFile(string path) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(path); if (doc != null && ViewModel.SelectedDocument == doc) NavigationTabs.SelectedItem = AssetsTab; });
+    private Task OpenBrowserFile(string path) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(path); if (doc != null && ViewModel.SelectedDocument == doc) SelectNavigatorSection(1); });
     private async void SearchDoubleClick(object sender, MouseButtonEventArgs e) { if (SearchList.SelectedItem is SearchHit hit) await Navigate(hit); }
     private async void RelatedDoubleClick(object sender, MouseButtonEventArgs e) { if (RelatedList.SelectedItem is SearchHit hit) await Navigate(hit); }
     private Task Navigate(SearchHit hit) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(hit.File); if (doc == null) return; doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Kind == hit.Kind && a.Index == hit.Index); AssetGrid.ScrollIntoView(doc.SelectedAsset); });
@@ -236,7 +237,7 @@ public partial class MainWindow : Window
                 int count = new SceneLods(doc.Document.Scene).Count(asset.Kind == AssetKind.World ? null : root is int r ? [r] : []);
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
-                WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
+                WorldHighlights.Visibility = WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
                 if (scene == null) { scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigurePickupScene(scene); SceneHost.Content = scene; ConfigureFlyScene(scene); }
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty) : null;
                 if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
@@ -420,9 +421,9 @@ public partial class MainWindow : Window
     }
     private string? PreferredPack => (TexturePackCombo.SelectedItem as PackChoice)?.Path;
     private async void SceneSourceChanged(object sender, RoutedEventArgs e) { if (ready && !updating && SceneHost.Visibility == Visibility.Visible && ViewModel.SelectedDocument is { } doc && shownAsset != null) await ShowAsset(doc, shownAsset); }
-    private void ApplySceneOptions() { scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); }
+    private void ApplySceneOptions() { scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); }
     private void SceneOptionsChanged(object sender, RoutedEventArgs e) { if (ready) ApplySceneOptions(); }
-    private void FrameSceneClick(object sender, RoutedEventArgs e) => scene?.FrameAll();
+    private void FrameSceneClick(object sender, RoutedEventArgs e) => RunCameraNavigation("frameAsset");
     private void IsolateClick(object sender, RoutedEventArgs e) { if (selectedNode != null) { isolatedNode = selectedNode; scene?.Isolate(selectedNode); } else ViewModel.Status = "Select a node in the scene or scene tree first"; }
     private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); }
     private void SceneTreeSelected(object sender, RoutedPropertyChangedEventArgs<object> e) { if (e.NewValue is SceneTreeItem item) { InspectNode(item.Node.Index); inspectedSceneSource = item; } }
@@ -433,7 +434,7 @@ public partial class MainWindow : Window
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
         scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.PickupsLocked ?? true);
-        selectedNode = index; var properties = (JsonObject)data.Nodes[index].Metadata.DeepClone();
+        selectedNode = index; scene?.SelectFramingNode(index); var properties = (JsonObject)data.Nodes[index].Metadata.DeepClone();
         if (scene?.Mission is { } mission)
         {
             properties["preview_instance"] = data.Nodes[index].Name;
@@ -529,7 +530,7 @@ public partial class MainWindow : Window
             var defaults = new WorkspaceLayout(); ViewModel.Settings.Workspace = defaults;
             previousPreset = defaults.Preset;
             navigatorTemporary = inspectorTemporary = toolsMaximized = false;
-            NavigationTabs.SelectedIndex = defaults.BrowserTab;
+            SelectNavigatorSection(defaults.BrowserTab);
             InspectorTabs.SelectedIndex = animation != null ? defaults.InspectorTab : -1;
             // Static viewers have no Dispatch page; use their normal Related fallback.
             ToolTabs.SelectedIndex = animation != null ? defaults.ToolTab : 4;
@@ -550,6 +551,7 @@ public partial class MainWindow : Window
     private void Keyboard(object sender, KeyEventArgs e)
     {
         if (flyCamera?.HandleKey(e, true) == true) return;
+        if (CameraKeyboard(e)) return;
         if ((e.Key == Key.Enter || e.SystemKey == Key.Enter) && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.Alt) { e.Handled = true; OpenCurrentProperties(); return; }
         if (e.Key == Key.Escape && scene?.CancelPickupDrag() == true) { e.Handled = true; return; }
         if (e.Key == Key.Space && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None &&
@@ -576,6 +578,7 @@ public partial class MainWindow : Window
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
         flyRequest++; flyCamera?.End();
+        scene?.CancelNavigation(); animation?.Viewport.CancelNavigation();
         if (resolvingClose) { e.Cancel = true; return; }
         if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
         {

@@ -10,14 +10,15 @@ public partial class MainWindow
     private bool automationCloseRequested;
     private void RegisterWorkspacePresentation(StudioCommands r)
     {
-        Register(r,"workspace_view","Read or set presentation preferences. Supports theme, density, preset, navigator/inspector/tools visibility, pane dimensions and tab indices. Does not commit drafts.",true,
+        Register(r,"workspace_view","Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). Supports theme, density, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",true,
             [WorkspaceChanges],a=>
         {
             // Validate all tab requests before changing preferences. A rejected
             // request must not leave its earlier theme/layout changes applied.
             foreach (var (key, value) in a["changes"] as JsonObject ?? new())
-                if (key is "navigatorTab" or "inspectorTab" or "toolsTab")
-                    ValidateTab(key == "navigatorTab" ? NavigationTabs : key == "inspectorTab" ? InspectorTabs : ToolTabs, value!.GetValue<int>());
+                if (key == "navigatorTab") ValidateNavigatorSection(value!.GetValue<int>());
+                else if (key is "inspectorTab" or "toolsTab")
+                    ValidateTab(key == "inspectorTab" ? InspectorTabs : ToolTabs, value!.GetValue<int>());
             foreach(var (key,value) in a["changes"] as JsonObject ?? new())
             {
                 switch(key)
@@ -31,9 +32,10 @@ public partial class MainWindow
                     case "tools": Layout.ToolsVisible=value!.GetValue<bool>(); break;
                     case "toolsMaximized": toolsMaximized=value!.GetValue<bool>(); break;
                     case "navigatorWidth": Layout.NavigatorWidth=value!.GetValue<double>(); break;
+                    case "filesWidth": Layout.FilesWidth=value!.GetValue<double>(); break;
                     case "inspectorWidth": Layout.InspectorWidth=value!.GetValue<double>(); break;
                     case "toolsHeight": Layout.ToolsHeight=value!.GetValue<double>(); break;
-                    case "navigatorTab": SetTab(NavigationTabs,value!.GetValue<int>()); break;
+                    case "navigatorTab": SelectNavigatorSection(value!.GetValue<int>()); break;
                     case "inspectorTab": SetTab(InspectorTabs,value!.GetValue<int>()); break;
                     case "toolsTab": SetTab(ToolTabs,value!.GetValue<int>()); break;
                     case "backupOnSave": ViewModel.Settings.CreateBackupOnSave=value!.GetValue<bool>(); BackupOnSave.IsChecked=ViewModel.Settings.CreateBackupOnSave; break;
@@ -41,7 +43,7 @@ public partial class MainWindow
                 }
             }
             if (a.ContainsKey("changes")) { Layout.Normalize(); ArrangeWorkspace(); SaveWorkspacePreferences(); ViewModel.Settings.Save(); }
-            return Result(new { theme=ViewModel.Settings.Theme,layout=Layout,ViewModel.Settings.CreateBackupOnSave });
+            return Result(new { theme=ViewModel.Settings.Theme,layout=Layout,navigatorMode=NavigatorMode,ViewModel.Settings.CreateBackupOnSave });
         });
         Register(r,"window","Read or change zStudio window state; close requires clean documents and resolved drafts.",true,
             [P("action","string","Window action.",true,"read","activate","minimize","maximize","restore","close")],a=>

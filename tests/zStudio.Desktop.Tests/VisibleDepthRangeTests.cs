@@ -9,6 +9,21 @@ namespace Recoil.Zbd.Desktop.Tests;
 
 public sealed class VisibleDepthRangeTests
 {
+    [Fact]
+    public void OrthographicSidePlanesDoNotWidenWithDepth()
+    {
+        var range = new VisibleDepthRange(new(0, 0, 10), new(0, 0, -1), new(0, 1, 0), 60, 2, .001, 4);
+        range.Include(Triangle(new(-1, -.5f, 0), new(1, -.5f, 0), new(0, .5f, 0)), Matrix3D.Identity);
+        range.Include(Triangle(new(3, 0, -100), new(4, 0, -100), new(3, .5f, -100)), Matrix3D.Identity);
+        Assert.Equal(10, range.Near); Assert.Equal(10, range.Far);
+    }
+    [Fact]
+    public void ExactTopOrthographicViewHasFiniteClippedDepth()
+    {
+        var range = new VisibleDepthRange(new(0, 10, 0), new(0, -1, 0), new(0, 0, -1), 60, 1.5, .001, 4);
+        range.Include(Triangle(new(-100, 0, -100), new(100, 0, -100), new(0, 0, 100)), Matrix3D.Identity);
+        Assert.Equal(10, range.Near); Assert.Equal(10, range.Far);
+    }
     [Theory]
     [InlineData(0)]
     [InlineData(2041)]
