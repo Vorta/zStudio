@@ -4,7 +4,7 @@
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, move mission pickups, and edit supported animation programs. This source tree targets **v0.4.8**.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, move mission pickups, and edit supported animation programs. The current release is **[v0.5.0](https://github.com/Vorta/zStudio/releases/tag/v0.5.0)**.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
@@ -30,7 +30,43 @@ dependencies/
 
 The dependencies folder contains the application libraries, bundled .NET runtime, documentation, and license notices. The executable and app window use the supplied Studio icon.
 
+zStudio v0.5.0 includes **local MCP access for AI agents**. Enable **Tools → MCP integration…**, copy the displayed configuration into your agent, and connect through `zStudio.exe --mcp`. Connecting and discovering tools stays in the background; the first workspace request opens or attaches to zStudio. Agents share the visible workspace and can browse, inspect, preview, edit, undo, export and save through the same protections as the GUI. See [MCP setup and tool guide](docs/mcp.md).
+
 Choose **File → Open folder** and select the folder containing `image.zbd` and the mission directories, such as `zbd_1999`. Double-click a file in Files to open it and switch to Assets. Open files are marked in Files and have a close button. Filter assets on the left, or use the Search tab across the selected root. Folder scanning includes unknown files, which can be inspected as raw bytes.
+
+## Configure MCP for Codex
+
+MCP requires **zStudio v0.5.0 or later** and Codex running locally on Windows under the same Windows account as zStudio. Keep `zStudio.exe` and its `dependencies` folder together at a stable installation path.
+
+1. Launch zStudio once, open **Tools → MCP integration…**, and check **Enable local MCP access**. Access is off by default. You can then close zStudio; the preference is retained.
+2. Open your Codex user configuration, normally `%USERPROFILE%\.codex\config.toml` (for example, `C:\Users\YourName\.codex\config.toml`). If you use a custom `CODEX_HOME`, use its `config.toml` instead. Add the block below, replacing the executable path with your installation path. Update an existing `mcp_servers.zstudio` section rather than adding a duplicate.
+
+   ```toml
+   [mcp_servers.zstudio]
+   command = 'D:\Tools\zStudio\zStudio.exe'
+   args = ["--mcp"]
+   enabled = true
+   startup_timeout_sec = 60
+   tool_timeout_sec = 120
+   ```
+
+   Single quotes in the TOML path preserve Windows backslashes. The **Copy configuration** button in zStudio provides generic MCP JSON; use the TOML form above for Codex's `config.toml`.
+
+3. Restart Codex to load the configuration. If the Codex CLI is installed, run `codex mcp get zstudio` to check the executable path and arguments. This confirms configuration; the first workspace request below checks the actual connection.
+4. Ask Codex: **“Use zStudio MCP to show the current workspace state.”** zStudio should open on this first workspace request, or attach to the already running instance of the configured installation. Then try: **“Open my ZBD root at D:\Games\Recoil\zbd, open m1/gamez.zbd in Whole world, and inspect its pickups without changing anything.”** Replace the root with your game-data folder.
+
+As an alternative to adding the configuration block manually, register the server from PowerShell with the Codex CLI:
+
+```powershell
+codex mcp add zstudio -- 'D:\Tools\zStudio\zStudio.exe' --mcp
+codex mcp get zstudio
+```
+
+You can then add the optional timeout values from the TOML example. Codex's supported configuration and CLI commands are documented in the [official MCP guide](https://developers.openai.com/codex/mcp).
+
+Starting Codex and discovering tools leaves the zStudio window closed. Only a workspace request launches it. Agents work in the visible GUI, sharing document selections, edits, undo history and saves. Camera commands move the viewport without taking over your physical mouse. Closing Codex leaves zStudio open.
+
+If a workspace call reports `access_disabled`, enable access in **Tools → MCP integration…** yourself. If you move or update the portable installation, check the configured executable path and restart the Codex connection. After **Disconnect clients**, restart the connection as well. If several instances of that installation are open, close the extra instances or use `args = ["--mcp", "--instance", "INSTANCE_ID"]` with the desired ID from the integration window; that ID is valid only for that running instance. To revoke access, uncheck **Enable local MCP access** in zStudio. See the [full MCP guide](docs/mcp.md) for tool coverage, drafts, save protections and connection details.
 
 ## Available tools
 

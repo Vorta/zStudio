@@ -52,7 +52,7 @@ public sealed partial class AnimationTests
         context.Effects.Add("spark", new("spark", "animated", 0, [], 1, false));
         var effect = AnimationCatalog.Create(3); effect.SetShort(12, 1); effect.SetShort(14, 1); effect.SetVector(16, new(1, 2, 3));
         var light = AnimationCatalog.Create(4); light.SetInt(48, 2); light.SetInt(52, 1); light.SetInt(68, 1); light.SetVector(72, new(2, 3, 4));
-        parent.Sequences[0].Events.AddRange([launch, effect, light, move.Duplicate()]);
+        parent.Sequences[0].Events.AddRange([launch, effect, light, move.Duplicate(TestContext.Current.CancellationToken)]);
         byte[] source = Pack(package);
         var baseline = new AnimationPlayer(context, 0).EvaluateForTest(.5);
         var raised = new AnimationPlayer(context, 0) { PreviewHeight = height }.EvaluateForTest(.5);

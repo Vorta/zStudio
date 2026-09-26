@@ -22,9 +22,10 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow : Window
 {
     public MainViewModel ViewModel { get; } = new();
-    private CancellationTokenSource preview = new();
+    private readonly CancellationTokenSource shutdown = new();
+    private readonly CancellationToken shutdownToken;
+    private CancellationTokenSource preview;
     private CancellationTokenSource? operation;
-    private CancellationTokenSource? difficultyRefresh;
     private readonly SemaphoreSlim thumbnailGate = new(2);
     private readonly Queue<AssetItem> thumbnails = new();
     private readonly DispatcherTimer diskTimer = new() { Interval = TimeSpan.FromSeconds(3) };
@@ -46,14 +47,26 @@ public partial class MainWindow : Window
     private Point scrollStart;
     private DocumentModel? shownDocument;
     private AssetRecord? shownAsset;
+    private Task previewWork = Task.CompletedTask;
+    private Guid previewId = Guid.NewGuid();
 
     public MainWindow()
     {
+        shutdownToken = shutdown.Token;
+        preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
         InitializeComponent(); DataContext = ViewModel;
         BackupOnSave.IsChecked = ViewModel.Settings.CreateBackupOnSave;
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;
+        ViewModel.ValidateNavigationPublication = closesDocuments =>
+        {
+            RequireAutomationMutationAvailable();
+            if (closesDocuments) RequireNoDrafts();
+            else if (animation?.HasAutomationDrafts == true)
+                throw new Recoil.Zbd.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
+        };
+        ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
         var s = ViewModel.Settings;
         RestoreWindowSize(new(SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight));
         InitializeWorkspace();
@@ -76,13 +89,14 @@ public partial class MainWindow : Window
     public async void OpenStartupPath(string path) => await RunUi(async () =>
     {
         if (Directory.Exists(path)) await ViewModel.OpenRootAsync(path);
-        else if (File.Exists(path)) { await ViewModel.OpenRootAsync(Path.GetDirectoryName(path)!); await ViewModel.OpenFileAsync(path); }
+        else if (File.Exists(path)) await OpenFilesAsync([path], forceRoot: true);
         else throw new IOException("The supplied path does not exist: " + path);
         UpdateRecent();
     });
     private async Task RunUi(Func<Task> work)
     {
         try { if (animation?.ResolvePendingDrafts() == false) return; await work(); }
+        catch (Recoil.Zbd.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
     }
@@ -95,7 +109,19 @@ public partial class MainWindow : Window
     private async void OpenFileClick(object sender, RoutedEventArgs e)
     {
         OpenFileDialog dialog = new() { Filter = "Recoil assets|*.zbd;*.zrd;*.wav|All files|*.*" };
-        if (dialog.ShowDialog(this) == true) await RunUi(async () => { if (!ViewModel.HasRoot) await ViewModel.OpenRootAsync(Path.GetDirectoryName(dialog.FileName)!); await ViewModel.OpenFileAsync(dialog.FileName); });
+        if (dialog.ShowDialog(this) == true) await RunUi(() => OpenFilesAsync([dialog.FileName]));
+    }
+    internal async Task OpenFilesAsync(IReadOnlyList<string> paths, bool forceRoot = false)
+    {
+        if (paths.Count == 0) return;
+        await ViewModel.EnsureRootForFileAsync(paths[0], forceRoot);
+        foreach (string path in paths)
+        {
+            var document = await ViewModel.OpenFileAsync(path);
+            if (document == null) return;
+            if (ViewModel.SelectedDocument != document)
+                throw new Recoil.Zbd.Automation.StudioCommandException("context_changed", "A newer selection superseded opening files.");
+        }
     }
     private void UpdateRecent()
     {
@@ -113,7 +139,7 @@ public partial class MainWindow : Window
     private async void OnDrop(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths) return;
-        await RunUi(async () => { if (Directory.Exists(paths[0])) { await ViewModel.OpenRootAsync(paths[0]); UpdateRecent(); } else { if (!ViewModel.HasRoot) await ViewModel.OpenRootAsync(Path.GetDirectoryName(paths[0])!); foreach (string path in paths) await ViewModel.OpenFileAsync(path); } });
+        await RunUi(async () => { if (Directory.Exists(paths[0])) { await ViewModel.OpenRootAsync(paths[0]); UpdateRecent(); } else await OpenFilesAsync(paths); });
     }
     private async void FileDoubleClick(object sender, MouseButtonEventArgs e)
     {
@@ -143,20 +169,26 @@ public partial class MainWindow : Window
     }
     private void CancelPreview()
     {
+        ++staticRefreshGeneration; staticRefresh?.Cancel(); staticRefreshWork = null; publishedStaticOptions = null;
+        previewId = Guid.NewGuid();
         flyRequest++; flyCamera?.End(); SynchronizeFly();
         ClearStaticPreviewProblems();
         DetachPickupEditor();
         selectedNode = null; isolatedNode = null; inspectedSceneSource = null;
-        difficultyRefresh?.Cancel();
         pendingAnimationPlay = false;
         EndImagePan();
         animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
-        preview.Cancel(); preview.Dispose(); preview = new(); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
+        preview.Cancel(); preview.Dispose(); preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
     }
-    private async Task ShowAsset(DocumentModel doc, AssetRecord? asset)
+    private Task ShowAsset(DocumentModel doc, AssetRecord? asset) => previewWork = ShowAssetCore(doc, asset);
+    private async Task ShowAssetCore(DocumentModel doc, AssetRecord? asset)
     {
+        if (shutdownToken.IsCancellationRequested) return;
         if (animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         bool differentAsset = shownAsset?.Id != asset?.Id;
+        if (!differentAsset && asset != null && shownDocument == doc && scene?.PreviewScene != null &&
+            animation == null && SceneHost.Visibility == Visibility.Visible && publishedStaticOptions != null && ViewModel.Resolver != null)
+        { await RefreshStaticSceneAsync(doc, asset); return; }
         // Entering the animation viewer starts at Sequences. Consecutive animation
         // selections (including asynchronous replacement) retain the chosen page.
         if (asset?.Kind == AssetKind.Animation && shownAsset?.Kind != AssetKind.Animation) Layout.InspectorTab = 0;
@@ -164,14 +196,16 @@ public partial class MainWindow : Window
         var previousView = previousMission == null ? null : scene?.CaptureView();
         int? previousSelection = selectedNode, previousIsolate = isolatedNode;
         var previousPickup = selectedNode is int selected ? scene?.PickupAt(selected)?.Pickup?.Source : null;
-        CancelPreview(); shownAsset = asset; var token = preview.Token;
+        CancelPreview(); shownAsset = asset; var previewLifetime = preview.Token;
+        using var loading = PreviewOperation.Link(previewLifetime);
+        var token = loading.Token;
         foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
         EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
         PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
         ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
         try
         {
-            properties = asset == null ? (JsonObject)doc.Document.Metadata.DeepClone() : await Task.Run(() => ExportService.AssetJson(doc.Document, asset, token), token);
+            properties = asset == null ? (JsonObject)doc.Document.Metadata.DeepClone() : await LoadAssetPropertiesAsync(doc.Document, asset, token);
             token.ThrowIfCancellationRequested(); SetProperties(properties); CentralTree.ItemsSource = asset?.Kind == AssetKind.Zrd && properties["tree"] is JsonNode hierarchy ? ZrdTree(doc,asset,hierarchy) : properties.Select(p => new InspectorNode(p.Key,p.Value)).ToArray();
             ContentText.Text = asset?.Content is ScriptContent script ? script.Text : LimitedJson(properties);
             var bytes = asset == null ? doc.Document.Bytes : doc.Document.Slice(asset.Offset, asset.Length);
@@ -190,7 +224,7 @@ public partial class MainWindow : Window
             }
             else if (asset?.Kind == AssetKind.Sound)
             {
-                var info = await Task.Run(() => WaveDecoder.Read(bytes), token); var peaks = await Task.Run(() => WaveDecoder.Peaks(bytes, info), token); token.ThrowIfCancellationRequested();
+                var info = await Task.Run(() => WaveDecoder.Read(bytes, token), token); var peaks = await Task.Run(() => WaveDecoder.Peaks(bytes, info), token); token.ThrowIfCancellationRequested();
                 waveInfo = info; wave = new(new MemoryStream(bytes.ToArray(), false)); AudioPanel.Visibility = Visibility.Visible;
                 AudioDetails.Text = $"{info.SampleRate:N0} Hz · {info.Channels} {(info.Channels == 1 ? "channel" : "channels")} · {info.BitsPerSample}-bit · encoding {info.Encoding}\n{info.Duration:F3} seconds · {info.DataLength:N0} audio bytes";
                 Waveform.Set(peaks, info.Duration); AudioSeek.Maximum = info.Duration; AudioCues.ItemsSource = info.Cues.Select(c => new CueChoice(c.Id, c.SampleOffset, (double)c.SampleOffset / info.SampleRate)).ToArray(); UpdateAudioPosition();
@@ -207,6 +241,7 @@ public partial class MainWindow : Window
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty) : null;
                 if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
                 await scene.ShowAsync(doc.Document, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
+                publishedStaticOptions = ReadStaticSceneOptions() with { Difficulty = mission?.Layout.Difficulty ?? ViewModel.Difficulty };
                 if (mission != null)
                 {
                     AttachPickupEditor(doc);
@@ -225,10 +260,10 @@ public partial class MainWindow : Window
             }
             else if (asset?.Kind == AssetKind.Animation && doc.AnimationEdits != null && ViewModel.Resolver != null)
             {
-                var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, token, ViewModel); animation = editor;
+                var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, previewLifetime, ViewModel); animation = editor;
                 if (pendingAnimationPlay) { pendingAnimationPlay = false; editor.TogglePlayback(); }
-                editor.StatusChanged += text => { if (!token.IsCancellationRequested) ViewModel.Status = text; };
-                editor.InspectionChanged += (json, data) => { if (token.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
+                editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
+                editor.InspectionChanged += (json, data) => { if (previewLifetime.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
                 editor.SaveRequested += async () => { await SaveAnimationAsync(doc); };
                 AnimationHost.Content = editor; AttachAnimationWorkspace(editor);
                 AnimationHost.Visibility = Visibility.Visible;
@@ -242,7 +277,19 @@ public partial class MainWindow : Window
             }
             token.ThrowIfCancellationRequested(); EmptyPreview.Visibility = Visibility.Collapsed;
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // MCP shutdown cancels the request, not the selection retained by the
+            // GUI. Rebuild that selection outside its canceled operation scope.
+            // Navigation, document disposal and shutdown cancel the lifetime and
+            // must never resurrect an obsolete preview.
+            if (loading.IsCancellationRequested && !previewLifetime.IsCancellationRequested && !doc.IsDisposed && shownDocument == doc &&
+                ViewModel.SelectedDocument == doc && shownAsset?.Id == asset?.Id)
+            {
+                using var recovery = PreviewOperation.Begin(CancellationToken.None);
+                await ShowAsset(doc, asset);
+            }
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { if (!token.IsCancellationRequested) { EmptyPreview.Text = "Preview unavailable: " + ex.Message; Report(ex); } }
     }
     private IEnumerable<SearchHit> FindRelated(AssetRecord asset, DocumentModel doc)
@@ -404,7 +451,14 @@ public partial class MainWindow : Window
     private void EventSelected(object sender, SelectionChangedEventArgs e) { if (EventGrid.SelectedItem is EventRow row) SetProperties(row.Data); }
     private void PlayAudioClick(object sender, RoutedEventArgs e)
     {
-        try { if (wave == null) return; if (player == null) { player = new WasapiPlayerBuilder().Build(); player.Init(wave); } if (player.PlaybackState == PlaybackState.Playing) player.Pause(); else { if (wave.Position >= wave.Length) wave.Position = 0; player.Play(); } } catch (Exception ex) { Report(ex); player?.Dispose(); player = null; }
+        try { if (player?.PlaybackState == PlaybackState.Playing) player.Pause(); else PlaySound(); } catch (Exception ex) { Report(ex); player?.Dispose(); player = null; }
+    }
+    private void PlaySound()
+    {
+        if (wave == null) return;
+        if (player == null) { player = new WasapiPlayerBuilder().Build(); player.Init(wave); }
+        if (wave.Position >= wave.Length) wave.Position = 0;
+        player.Play();
     }
     private void StopAudioClick(object sender, RoutedEventArgs e) { player?.Stop(); if (wave != null) wave.Position = 0; UpdateAudioPosition(); }
     private void StopAudio() { player?.Dispose(); player = null; wave?.Dispose(); wave = null; waveInfo = null; }
@@ -422,38 +476,12 @@ public partial class MainWindow : Window
         AssetRecord[] assets = all ? doc.Document.Assets.ToArray() : AssetGrid.SelectedItems.Cast<AssetItem>().Select(a => a.Record).ToArray();
         if (assets.Length == 0) { ViewModel.Status = "Select an asset to export"; return; }
         OpenFolderDialog dialog = new() { Title = "Choose an export destination outside the source folder" }; if (dialog.ShowDialog(this) != true) return;
-        using var cancellation = new CancellationTokenSource(); operation = cancellation; CancelOperationItem.IsEnabled = true;
-        try { string? pack = PreferredPack; int lod = LodCombo.SelectedIndex; var progress = new Progress<ExportProgress>(p => ViewModel.Status = $"Exporting {p.Completed}/{p.Total}: {p.Name}"); var result = await Task.Run(() => new ExportService(resolver).ExportAsync(doc.Document, assets, dialog.FolderName, json, pack, lod, progress, cancellation.Token)); foreach (string error in result.Errors) ViewModel.AddProblem(error, "Error", doc.Path); ViewModel.Status = $"Exported {result.Completed}/{assets.Length} assets to {result.Directory}"; MessageBox.Show(this, ViewModel.Status + (result.Errors.Count > 0 ? $"\n{result.Errors.Count} failures; see Diagnostics and export-report.json." : ""), "Export complete", MessageBoxButton.OK, result.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information); }
-        finally { operation = null; CancelOperationItem.IsEnabled = false; }
+        var result = await ExportAssetsAsync(doc, assets, dialog.FolderName, json, PreferredPack, Math.Max(0,LodCombo.SelectedIndex), CancellationToken.None);
+        MessageBox.Show(this, ViewModel.Status + (result.Errors.Count > 0 ? $"\n{result.Errors.Count} failures; see Problems and export-report.json." : ""), "Export complete", MessageBoxButton.OK, result.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
     });
     private async void ValidateClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
     {
-        if (ViewModel.SelectedDocument is not { } selected || operation != null) return;
-        using var cancellation = new CancellationTokenSource(); operation = cancellation; CancelOperationItem.IsEnabled = true;
-        try
-        {
-            ViewModel.Status = "Validating source file on disk…";
-            var diagnostics = await Task.Run(async () =>
-            {
-                var doc = await FormatRegistry.Default.OpenAsync(selected.Path,cancellation.Token);
-                var notes = doc.Diagnostics.Select(d => new StudioProblem(d.Severity,"File / operation",d.Message,selected.Path,d.AssetIndex,d.Offset)).ToList();
-                foreach (var asset in doc.Assets)
-                {
-                    cancellation.Token.ThrowIfCancellationRequested();
-                    try
-                    {
-                        if (asset.Kind == AssetKind.Texture) TextureDecoder.Decode(doc,asset,cancellation.Token);
-                        else if (asset.Kind == AssetKind.Zrd) ZrdDecoder.Decode(doc.Slice(asset.Offset,asset.Length),cancellation.Token);
-                        else if (asset.Kind == AssetKind.Sound) WaveDecoder.Read(doc.Slice(asset.Offset,asset.Length));
-                    }
-                    catch (InvalidDataException ex) { notes.Add(new("Error","File / operation",asset.Name + ": " + ex.Message,selected.Path,asset.Index,asset.Offset)); }
-                }
-                return notes;
-            },cancellation.Token);
-            foreach (var note in diagnostics) ViewModel.AddProblem(note.Message,note.Severity,note.File,note.AssetIndex,note.Offset);
-            ViewModel.Status = $"Source-file validation finished: {diagnostics.Count} diagnostics";
-        }
-        finally { operation = null; CancelOperationItem.IsEnabled = false; }
+        if (ViewModel.SelectedDocument is { } doc) await ValidateDocumentSourceAsync(doc, CancellationToken.None);
     });
     private async void ReloadClick(object sender, RoutedEventArgs e) => await RunUi(() => ViewModel.ReloadAsync());
     private void CancelClick(object sender, RoutedEventArgs e)
@@ -549,6 +577,12 @@ public partial class MainWindow : Window
     {
         flyRequest++; flyCamera?.End();
         if (resolvingClose) { e.Cancel = true; return; }
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        {
+            automationCloseRequested = false; e.Cancel = true;
+            ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
+            return;
+        }
         System.Windows.Input.Keyboard.ClearFocus();
         if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
@@ -568,10 +602,24 @@ public partial class MainWindow : Window
             Close();
             return;
         }
+        // Closing is now accepted. Cancel the retained preview/editor lifetimes
+        // before canceling MCP requests: request-only cancellation deliberately
+        // recovers an open preview, and awaiting that recovery would stall exit.
+        // A canceled close never reaches this irreversible lifetime boundary.
+        allowClose = true; automationCloseRequested = false; IsEnabled = false;
+        shutdown.Cancel(); operation?.Cancel();
+        if (mcpHost != null || mcpStopTask is { IsCompleted: false } || automationOperations.Values.Any(j => !j.Work.IsCompleted))
+        {
+            e.Cancel = true; resolvingClose = true;
+            await Dispatcher.Yield(DispatcherPriority.Normal);
+            try { await StopMcpAsync(); }
+            finally { resolvingClose = false; }
+            Close(); return;
+        }
         propertiesWindow?.CloseResolved();
         flyCamera?.Dispose();
         ObserveDocumentCommands(null);
-        operation?.Cancel(); preview.Cancel(); difficultyRefresh?.Cancel(); difficultyRefresh?.Dispose(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); scene?.Dispose(); ViewModel.Dispose();
+        operation?.Cancel(); preview.Cancel(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); scene?.Dispose(); ViewModel.Dispose(); shutdown.Dispose();
         var s = ViewModel.Settings; if (WindowState == WindowState.Normal) { s.Width = ActualWidth; s.Height = ActualHeight; }
         SaveWorkspacePreferences();
         try { s.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* Settings cannot prevent shutdown. */ }

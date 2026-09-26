@@ -1,0 +1,2548 @@
+[
+  {
+    "Name": "zstudio_state",
+    "Description": "Read the visible workspace, document identities, revisions and current preview.",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
+    "Name": "zstudio_capabilities",
+    "Description": "Read all capability schemas. Unsupported formats remain read-only; MCP does not add binary patching.",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
+    "Name": "zstudio_open_root",
+    "Description": "Open and index a ZBD root in the visible workspace. Dirty documents must be explicitly saved or closed first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "path",
+        "Type": "string",
+        "Description": "Absolute ZBD root directory.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_files",
+    "Description": "List recognized files in the current root.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_search",
+    "Description": "Search indexed assets without altering GUI selection; names are not identities.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_related",
+    "Description": "List related indexed assets for an explicit asset, retaining source identities.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "Asset kind returned by assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Authored record index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_asset_filter",
+    "Description": "Set the Assets list query and kind filter without changing the selected record.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Name filter.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "Asset kind or All types.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_open_document",
+    "Description": "Open or activate an archive and its visible preview. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "path",
+        "Type": "string",
+        "Description": "Absolute archive path.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_assets",
+    "Description": "List assets by stable kind/index in an open document.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_select_asset",
+    "Description": "Select an asset in the GUI and await its preview; does not retarget Properties. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "Asset kind returned by assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Authored record index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_inspect_asset",
+    "Description": "Read original asset metadata/content and a separately frozen animation edit snapshot at one revision. Closed or changed documents reject stale results.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "Asset kind returned by assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Authored record index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_bytes",
+    "Description": "Read at most 4096 original source bytes; these are not pending edits or runtime memory.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Absolute byte offset.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "length",
+        "Type": "integer",
+        "Description": "Byte count, 0\u20134096.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_close_document",
+    "Description": "Close a document. Explicit discard=true is required for unsaved edits; pending drafts are never discarded implicitly.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "discard",
+        "Type": "boolean",
+        "Description": "Explicitly discard this document\u0027s accepted unsaved edits.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_reload_document",
+    "Description": "Stage and reparse a clean document before replacing it. Failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_undo_redo",
+    "Description": "Undo or redo one accepted edit in the specified document.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "History direction.",
+        "Required": true,
+        "Choices": [
+          "undo",
+          "redo"
+        ],
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_save_document",
+    "Description": "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "New animation archive path.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "destinations",
+        "Type": "object",
+        "Description": "Pickup source archive path to new Save As path map.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "AdditionalProperties": {
+          "Name": "",
+          "Type": "string",
+          "Description": "New Save As path for this source archive.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        }
+      },
+      {
+        "Name": "backup",
+        "Type": "boolean",
+        "Description": "Pickup backup preference; defaults to app setting.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_export",
+    "Description": "Export assets through the existing deterministic exporter into a new folder outside the source tree. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "Destination directory.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "assets",
+        "Type": "array",
+        "Description": "Optional list of {kind,index}; omitted exports all.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Asset identity.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "kind",
+              "Type": "string",
+              "Description": "Asset kind.",
+              "Required": true,
+              "Choices": [
+                "Raw",
+                "Texture",
+                "Sound",
+                "Zrd",
+                "Script",
+                "Animation",
+                "Model",
+                "World",
+                "Node",
+                "Material",
+                "TextureReference"
+              ],
+              "Properties": null
+            },
+            {
+              "Name": "index",
+              "Type": "integer",
+              "Description": "Authored record index.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": -2147483648,
+              "Maximum": 2147483647
+            }
+          ]
+        }
+      },
+      {
+        "Name": "jsonOnly",
+        "Type": "boolean",
+        "Description": "Export inspection JSON.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "lod",
+        "Type": "integer",
+        "Description": "LOD rank; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "texturePack",
+        "Type": "string",
+        "Description": "Optional preferred texture pack path.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_validate",
+    "Description": "Validate the source archive on disk, not pending edits. Returns structured diagnostics. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_problems",
+    "Description": "List file/operation problems with original severity and source context.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_operation",
+    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available only for export/validation.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "id",
+        "Type": "string",
+        "Description": "Operation ID.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "cancel",
+        "Type": "boolean",
+        "Description": "Request cancellation of an export or validation.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_texture_palette",
+    "Description": "Read texture header and RGB565 palette entries.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "Asset kind returned by assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Authored record index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_preview_state",
+    "Description": "Read active preview options, camera and playback state.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_camera",
+    "Description": "Read or set an upright camera pose, move relative to its viewing basis, rotate, or frame the active scene. Never captures the user\u0027s mouse.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Camera operation.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "set",
+          "move",
+          "rotate",
+          "frame"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "position",
+        "Type": "array",
+        "Description": "Absolute XYZ for set.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Coordinate.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 3,
+        "MaxItems": 3
+      },
+      {
+        "Name": "look",
+        "Type": "array",
+        "Description": "Look direction XYZ for set.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Direction component.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 3,
+        "MaxItems": 3
+      },
+      {
+        "Name": "fov",
+        "Type": "number",
+        "Description": "Horizontal field of view in degrees.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "right",
+        "Type": "number",
+        "Description": "Right displacement in game units.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "up",
+        "Type": "number",
+        "Description": "World-Y displacement in game units.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "forward",
+        "Type": "number",
+        "Description": "Forward displacement in game units.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "horizontal",
+        "Type": "number",
+        "Description": "Horizontal mouse-equivalent delta.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "vertical",
+        "Type": "number",
+        "Description": "Vertical mouse-equivalent delta.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_scene_nodes",
+    "Description": "List active assembled scene nodes by index, including instance metadata.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_scene_selection",
+    "Description": "Select/inspect a scene node. Isolate and show_all are available only in static model/Whole world previews, matching the GUI.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Selection operation; isolate/show_all require a static model or Whole world preview.",
+        "Required": true,
+        "Choices": [
+          "select",
+          "isolate",
+          "show_all"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Node index.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_scene_options",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "changes",
+        "Type": "object",
+        "Description": "Static model/world options.",
+        "Required": true,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "textures",
+            "Type": "boolean",
+            "Description": "textures",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "wireframe",
+            "Type": "boolean",
+            "Description": "wireframe",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "bounds",
+            "Type": "boolean",
+            "Description": "bounds",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "horizon",
+            "Type": "boolean",
+            "Description": "horizon",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "lod",
+            "Type": "integer",
+            "Description": "Authored LOD rank.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "difficulty",
+            "Type": "string",
+            "Description": "Mission layout.",
+            "Required": false,
+            "Choices": [
+              "Easy",
+              "Medium",
+              "Hard"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "texturePack",
+            "Type": "string",
+            "Description": "Available texture pack path, or empty for automatic.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_options",
+    "Description": "Set animation options: map/grid/collision/horizon/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty, speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "changes",
+        "Type": "object",
+        "Description": "Animation options; only supplied values change.",
+        "Required": true,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "map",
+            "Type": "boolean",
+            "Description": "map",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "grid",
+            "Type": "boolean",
+            "Description": "grid",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "collision",
+            "Type": "boolean",
+            "Description": "collision",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "horizon",
+            "Type": "boolean",
+            "Description": "horizon",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "followCamera",
+            "Type": "boolean",
+            "Description": "followCamera",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "effects",
+            "Type": "boolean",
+            "Description": "effects",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "replay",
+            "Type": "boolean",
+            "Description": "replay",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "mute",
+            "Type": "boolean",
+            "Description": "mute",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "followLog",
+            "Type": "boolean",
+            "Description": "followLog",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "autoRange",
+            "Type": "boolean",
+            "Description": "autoRange",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "fitTrace",
+            "Type": "boolean",
+            "Description": "fitTrace",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "height",
+            "Type": "number",
+            "Description": "World Y offset from -999 to 999.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "lod",
+            "Type": "integer",
+            "Description": "Authored LOD rank.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "difficulty",
+            "Type": "string",
+            "Description": "Mission layout.",
+            "Required": false,
+            "Choices": [
+              "Easy",
+              "Medium",
+              "Hard"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "speed",
+            "Type": "number",
+            "Description": "0.25, 0.5, 1, 2 or 4.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "volume",
+            "Type": "number",
+            "Description": "0\u20131.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "phase",
+            "Type": "string",
+            "Description": "Playback phase.",
+            "Required": false,
+            "Choices": [
+              "runtime",
+              "cleanup"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "seed",
+            "Type": "integer",
+            "Description": "32-bit random seed.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "condition",
+            "Type": "integer",
+            "Description": "0: stored/game-dependent, 1: true, 2: false.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "range",
+            "Type": "number",
+            "Description": "Preview range in seconds, 1/60\u20133600.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "traceRange",
+            "Type": "number",
+            "Description": "Visible dispatch range, 1/60\u20133600 seconds.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "problemFilter",
+            "Type": "integer",
+            "Description": "0 All, 1 File/operation, 2 Preview, 3 Resource, 4 Support.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "worldPath",
+            "Type": "string",
+            "Description": "GameZ archive path.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "root",
+            "Type": "integer",
+            "Description": "Scene root node index.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "activationOrigin",
+            "Type": "string",
+            "Description": "Comma-separated XYZ, or blank for default.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "activationTarget",
+            "Type": "string",
+            "Description": "Comma-separated XYZ, or blank for default.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_transport",
+    "Description": "Play/pause/stop, frame-step or seek the current animation. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Transport action.",
+        "Required": true,
+        "Choices": [
+          "play",
+          "pause",
+          "stop",
+          "previous",
+          "next",
+          "seek"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "seconds",
+        "Type": "number",
+        "Description": "Seek time in seconds.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_runtime",
+    "Description": "Read preview status, sequence runtime, dispatched event occurrences, problems or bound scene nodes. Timing thresholds and observed dispatches remain distinct.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "section",
+        "Type": "string",
+        "Description": "Data section.",
+        "Required": true,
+        "Choices": [
+          "status",
+          "sequences",
+          "events",
+          "problems",
+          "scene"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_select",
+    "Description": "Select an authored sequence/event without changing playback phase or retargeting Properties.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "sequence",
+        "Type": "string",
+        "Description": "Sequence GUID; omit for entry.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "event",
+        "Type": "string",
+        "Description": "Event GUID; omit for sequence.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_texture_view",
+    "Description": "Inspect or set texture presentation. Channels: 0 RGBA, 1 RGB, 2 Alpha, 3 Red, 4 Green, 5 Blue. Coordinates are texture pixels.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "zoom",
+        "Type": "number",
+        "Description": "Zoom factor.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "fit",
+        "Type": "boolean",
+        "Description": "Fit texture to viewer.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "channel",
+        "Type": "integer",
+        "Description": "Channel index 0\u20135.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "smooth",
+        "Type": "boolean",
+        "Description": "Use smooth scaling.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "panX",
+        "Type": "number",
+        "Description": "Horizontal scroll offset in DIP.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "panY",
+        "Type": "number",
+        "Description": "Vertical scroll offset in DIP.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "x",
+        "Type": "integer",
+        "Description": "Pixel X to inspect.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "y",
+        "Type": "integer",
+        "Description": "Pixel Y to inspect.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_sound_transport",
+    "Description": "Control the selected sound preview and read waveform/cue metadata.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Playback action.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "play",
+          "pause",
+          "stop",
+          "seek"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "seconds",
+        "Type": "number",
+        "Description": "Seek seconds.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_capture",
+    "Description": "Capture the current preview or a zStudio-owned window as PNG; never captures other applications. 3D images fit within width/height without distortion or resizing the viewport. Texture/window captures keep native dimensions.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "Capture target.",
+        "Required": true,
+        "Choices": [
+          "preview",
+          "window",
+          "properties"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state; required for target=preview.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "width",
+        "Type": "integer",
+        "Description": "Maximum 3D image width, 1\u20134096; default 1280.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "height",
+        "Type": "integer",
+        "Description": "Maximum 3D image height, 1\u20134096; default 720.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_workspace_view",
+    "Description": "Read or set presentation preferences. Supports theme, density, preset, navigator/inspector/tools visibility, pane dimensions and tab indices. Does not commit drafts.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "changes",
+        "Type": "object",
+        "Description": "Optional presentation preferences.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "resetLayout",
+            "Type": "boolean",
+            "Description": "resetLayout",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "navigator",
+            "Type": "boolean",
+            "Description": "navigator",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "inspector",
+            "Type": "boolean",
+            "Description": "inspector",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "tools",
+            "Type": "boolean",
+            "Description": "tools",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "toolsMaximized",
+            "Type": "boolean",
+            "Description": "toolsMaximized",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "backupOnSave",
+            "Type": "boolean",
+            "Description": "backupOnSave",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "theme",
+            "Type": "string",
+            "Description": "Theme.",
+            "Required": false,
+            "Choices": [
+              "System",
+              "Light",
+              "Dark"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "density",
+            "Type": "string",
+            "Description": "Density.",
+            "Required": false,
+            "Choices": [
+              "Compact",
+              "Comfortable"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "preset",
+            "Type": "string",
+            "Description": "Workspace preset.",
+            "Required": false,
+            "Choices": [
+              "Inspect",
+              "Edit",
+              "Debug",
+              "Focus preview"
+            ],
+            "Properties": null
+          },
+          {
+            "Name": "navigatorWidth",
+            "Type": "number",
+            "Description": "Preferred dimension in DIP; clamped to supported layout limits.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "inspectorWidth",
+            "Type": "number",
+            "Description": "Preferred dimension in DIP; clamped to supported layout limits.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "toolsHeight",
+            "Type": "number",
+            "Description": "Preferred dimension in DIP; clamped to supported layout limits.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "navigatorTab",
+            "Type": "integer",
+            "Description": "Zero-based visible tab index.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "inspectorTab",
+            "Type": "integer",
+            "Description": "Zero-based visible tab index.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "toolsTab",
+            "Type": "integer",
+            "Description": "Zero-based visible tab index.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": -2147483648,
+            "Maximum": 2147483647
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_window",
+    "Description": "Read or change zStudio window state; close requires clean documents and resolved drafts.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Window action.",
+        "Required": true,
+        "Choices": [
+          "read",
+          "activate",
+          "minimize",
+          "maximize",
+          "restore",
+          "close"
+        ],
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_properties_open",
+    "Description": "Open the reusable Properties window for an explicit asset or animation sequence/event; current pending drafts must be resolved first.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "Asset kind returned by assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Authored record index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "sequence",
+        "Type": "string",
+        "Description": "Animation sequence GUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "event",
+        "Type": "string",
+        "Description": "Animation event GUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_properties_close",
+    "Description": "Close the Properties window after drafts have been explicitly resolved.",
+    "Mutates": true,
+    "Parameters": []
+  },
+  {
+    "Name": "zstudio_properties_state",
+    "Description": "Read the pinned Properties window identity, content and current editable fields.",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
+    "Name": "zstudio_scene_properties",
+    "Description": "Inspect a scene node or open its Properties window, including editable mission pickups.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "open",
+        "Type": "boolean",
+        "Description": "Open the pinned Properties window.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_records",
+    "Description": "List authored sequence identities; supply sequence to page its events with full edited fields. Cleanup is listed separately from runtime sequences.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Entry index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "sequence",
+        "Type": "string",
+        "Description": "Optional sequence UUID for event details.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_references",
+    "Description": "List authored reference table slots, including raw bytes and reserved/unverified status.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Animation entry index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "table",
+        "Type": "integer",
+        "Description": "Reference table 0\u20137.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_event_catalog",
+    "Description": "Describe supported event types, fields and preview limitations.",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
+    "Name": "zstudio_property_fields",
+    "Description": "Read the same fields, choices, validation hints and actions as animation Properties, without opening or retargeting its window. IDs apply to this target/segment/revision.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Animation entry index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "sequence",
+        "Type": "string",
+        "Description": "Sequence GUID; omit for entry properties.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "event",
+        "Type": "string",
+        "Description": "Event GUID; omit for sequence properties.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "segment",
+        "Type": "integer",
+        "Description": "Keyframe segment index; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_property_edit",
+    "Description": "Edit one Properties field using its current field ID and invariant editor text. Components use the delimiter shown in the current value. One undoable edit.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Animation entry index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "sequence",
+        "Type": "string",
+        "Description": "Sequence GUID; omit for entry properties.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "event",
+        "Type": "string",
+        "Description": "Event GUID; omit for sequence properties.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "segment",
+        "Type": "integer",
+        "Description": "Keyframe segment index; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "field",
+        "Type": "string",
+        "Description": "Field ID from property_fields.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "value",
+        "Type": "string",
+        "Description": "New editor value.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_property_action",
+    "Description": "Run a currently available Properties action, including add/copy/delete/reorder keyframe segments.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Animation entry index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "sequence",
+        "Type": "string",
+        "Description": "Sequence GUID; omit for entry properties.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "event",
+        "Type": "string",
+        "Description": "Event GUID; omit for sequence properties.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "segment",
+        "Type": "integer",
+        "Description": "Keyframe segment index; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Action ID from property_fields.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_animation_structure",
+    "Description": "Add, duplicate, delete or reorder authored sequences/events. Cleanup is not an extra runtime sequence.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Animation entry index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "sequence",
+        "Type": "string",
+        "Description": "Sequence GUID; omit for entry properties.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "event",
+        "Type": "string",
+        "Description": "Event GUID; omit for sequence properties.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "segment",
+        "Type": "integer",
+        "Description": "Keyframe segment index; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Structural operation.",
+        "Required": true,
+        "Choices": [
+          "add_sequence",
+          "add_event",
+          "duplicate",
+          "delete",
+          "up",
+          "down"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "eventType",
+        "Type": "integer",
+        "Description": "Catalog event type for add_event.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_reference_edit",
+    "Description": "Retarget a verified stored reference name, preserving table indices. Reserved/unverified slots remain read-only.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "entry",
+        "Type": "integer",
+        "Description": "Entry index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "table",
+        "Type": "integer",
+        "Description": "Reference table index, 1\u20135.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Nonreserved reference index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "New Latin-1 name.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_pickups",
+    "Description": "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_pickup_lock",
+    "Description": "Set this document\u0027s pickup editing lock; new documents are locked by default.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "locked",
+        "Type": "boolean",
+        "Description": "Whether placements are locked.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_pickup_move",
+    "Description": "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "source",
+        "Type": "object",
+        "Description": "Exact source identity returned by pickups; field names are case-sensitive.",
+        "Required": true,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "ArchivePath",
+            "Type": "string",
+            "Description": "Owning archive path returned by pickups.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "AssetIndex",
+            "Type": "integer",
+            "Description": "Resource asset index returned by pickups.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": 0,
+            "Maximum": 2147483647
+          },
+          {
+            "Name": "ResourceName",
+            "Type": "string",
+            "Description": "Resource name returned by pickups.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "RecordIndex",
+            "Type": "integer",
+            "Description": "Placement record index returned by pickups.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null,
+            "Minimum": 0,
+            "Maximum": 2147483647
+          }
+        ]
+      },
+      {
+        "Name": "x",
+        "Type": "number",
+        "Description": "World X.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "y",
+        "Type": "number",
+        "Description": "World Y.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "z",
+        "Type": "number",
+        "Description": "World Z.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_drafts",
+    "Description": "Read pending GUI drafts and their conflict token without committing or changing focus.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "Draft owner.",
+        "Required": true,
+        "Choices": [
+          "properties",
+          "preview"
+        ],
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_resolve_drafts",
+    "Description": "Explicitly apply or discard current GUI drafts. Invalid input is retained and returned as an error, without modal dialogs.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "Draft owner.",
+        "Required": true,
+        "Choices": [
+          "properties",
+          "preview"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "token",
+        "Type": "string",
+        "Description": "Current draft token.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Resolution.",
+        "Required": true,
+        "Choices": [
+          "apply",
+          "discard"
+        ],
+        "Properties": null
+      }
+    ]
+  }
+]

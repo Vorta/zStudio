@@ -35,7 +35,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private readonly DispatcherTimer timer = new(DispatcherPriority.Render) { Interval = TimeSpan.FromSeconds(1.0 / 30) };
     private readonly Stopwatch clock = new();
     private readonly SceneViewport viewport = new();
-    private readonly AnimationAudio audio = new();
+    private readonly AnimationAudio audio;
     private readonly List<string> audioDiagnostics = [];
     private bool audioDirty = true;
     private int audioRevision, audioPreparing;
@@ -51,6 +51,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private int contextGeneration;
     private SceneViewport.ViewPose? contextRefreshView;
     private int appliedSeed = 1;
+    private long settingsInputRevision, rangeInputRevision;
     private float appliedHeight;
     private Guid selectedSequence, selectedEvent;
     public AnimationPreviewOptions Options { get; } = new();
@@ -67,7 +68,10 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private AnimationEvent? Event => Sequence?.Events.FirstOrDefault(e => e.Id == selectedEvent);
 
     public AnimationEditor(DocumentModel document, int entryIndex, AssetResolver resolver, CancellationToken token, MainViewModel? preferences = null)
+        : this(document, entryIndex, resolver, token, preferences, new AnimationAudio()) { }
+    internal AnimationEditor(DocumentModel document, int entryIndex, AssetResolver resolver, CancellationToken token, MainViewModel? preferences, AnimationAudio audio)
     {
+        this.audio = audio;
         this.preferences = preferences;
         this.document = document; this.entryIndex = entryIndex; this.resolver = resolver; edits = document.AnimationEdits!;
         lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token);
@@ -87,39 +91,66 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         timer.Tick += Tick; edits.Changed += EditsChanged;
         Seed.KeyDown += (_, e) => { if (e.Key == Key.Enter) { SeedChanged(Seed, e); e.Handled = true; } };
         EndTime.KeyDown += (_, e) => { if (e.Key == Key.Enter) { RangeChanged(EndTime, e); e.Handled = true; } };
+        Seed.TextChanged += (_, _) => { if (!changing) ++settingsInputRevision; };
+        PreviewHeight.TextChanged += (_, _) => { if (!changing) ++settingsInputRevision; };
+        EndTime.TextChanged += (_, _) => { if (!changing) { ++settingsInputRevision; ++rangeInputRevision; } };
         RefreshLists(); ready = true; AudioChanged(this, new RoutedEventArgs());
     }
-    public async Task InitializeAsync(string? worldPath = null)
+    public async Task InitializeAsync(string? worldPath = null, bool recoverCanceledRequest = false)
     {
+        var operationToken = PreviewOperation.Current;
+        refreshingLevel = false; levelResume = false;
         contextRefreshView = null;
-        initializing?.Cancel(); initializing?.Dispose(); initializing = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        initializing?.Cancel(); initializing?.Dispose(); initializing = PreviewOperation.Link(lifetime.Token);
         var token = initializing.Token;
         int generation = ++contextGeneration; seeking?.Cancel(); SetPlaying(false); LoadingPanel.Visibility = Visibility.Visible;
         context = null; player = null; audioDirty = true; ++audioRevision;
         LoadingText.Text = "Loading animation…";
         try
         {
+            token.ThrowIfCancellationRequested();
             var loaded = await document.GetAnimationContextAsync(resolver, token, worldPath, SelectedDifficulty);
             if (generation != contextGeneration || disposed) return; context = loaded;
             changing = true; Lod.ItemsSource = SceneLods.Choices(context.Lods.Count()); Lod.SelectedIndex = 0; changing = false;
             token.ThrowIfCancellationRequested(); player = CreatePlayer(); frame = player.Frame();
             await UpdateDurationAsync(token);
             if (generation != contextGeneration || disposed) return;
-            await viewport.ShowAnimationAsync(context, frame, resolver, ShowLevel.IsChecked == true, token, showHorizon: ShowHorizon.IsChecked == true, previewLifetime: lifetime.Token);
-            LoadingText.Text = "Preparing audio…";
-            await PrepareAudioAsync(token);
-            token.ThrowIfCancellationRequested();
+            // GUI presentation choices may change while initial meshes upload.
+            // Their handlers defer to initialization; publish only a matching scene.
+            while (true)
+            {
+                bool includeLevel = ShowLevel.IsChecked == true, horizon = ShowHorizon.IsChecked == true;
+                int lod = player.LodLevel; frame = player.Frame();
+                await viewport.ShowAnimationAsync(context, frame, resolver, includeLevel, token, lod, horizon, lifetime.Token);
+                LoadingText.Text = "Preparing audio…";
+                await PrepareAudioAsync(token);
+                token.ThrowIfCancellationRequested();
+                if (includeLevel == (ShowLevel.IsChecked == true) && horizon == (ShowHorizon.IsChecked == true) && lod == player.LodLevel) break;
+            }
             LoadingPanel.Visibility = Visibility.Collapsed; Render();
             if (resetSimulation) await SeekAsync(0);
             Note($"Bound to {context.World.Path} · root #{context.ResolveRoot(Entry)} ({Entry.RootName})");
             StartPendingPlayback();
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // Explicit MCP world rebinding keeps this editor alive. Recover its
+            // current request without giving the canceled agent token ownership
+            // of the retained preview. A newer bind/selection owns its own recovery.
+            if (recoverCanceledRequest && operationToken.IsCancellationRequested && generation == contextGeneration && !disposed && !lifetime.IsCancellationRequested)
+            {
+                using var recovery = PreviewOperation.Begin(CancellationToken.None);
+                await InitializeAsync(worldPath);
+            }
+            if (recoverCanceledRequest) throw;
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
-        { if (generation == contextGeneration && !disposed) { pendingPlay = false; LoadingText.Text = ex.Message + "\nUse Scene → Choose GameZ… to choose the mission scene. Event editing is still available."; RecordPreviewError(ex.Message); } }
+        { if (generation == contextGeneration && !disposed) { previewOperationFailure = ex.Message; pendingPlay = false; LoadingText.Text = ex.Message + "\nUse Scene → Choose GameZ… to choose the mission scene. Event editing is still available."; RecordPreviewError(ex.Message); } }
     }
-    private AnimationPlayer CreatePlayer(AnimationPreviewContext? source = null) => new(source ?? context!, entryIndex, int.TryParse(Seed.Text, out int seed) ? seed : 1, Phase.SelectedIndex == 1)
-    { ConditionOverride = Condition.SelectedIndex switch { 1 => true, 2 => false, _ => null }, ActivationStart = activationStart, ReferencePosition = activationTarget, LodLevel = Math.Max(0, Lod.SelectedIndex), GroundPlaneEnabled = GroundCollision.IsChecked == true, PreviewHeight = appliedHeight };
+    private AnimationPlayer CreatePlayer(AnimationPreviewContext? source = null) => new(source ?? context!, entryIndex, appliedSeed, Phase.SelectedIndex == 1)
+    { ConditionOverride = Condition.SelectedIndex switch { 1 => true, 2 => false, _ => null }, ActivationStart = activationStart, ReferencePosition = activationTarget,
+        LodLevel = Math.Clamp(player?.LodLevel ?? 0, 0, Math.Max(0, (source ?? context!).Lods.Count() - 1)),
+        GroundPlaneEnabled = GroundCollision.IsChecked == true, PreviewHeight = appliedHeight };
     private void SetPlaying(bool value)
     {
         playing = value;
@@ -147,10 +178,16 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { SetPlaying(false); RecordPreviewError(ex.Message); }
     }
+    private long seekGeneration, publishedSeekGeneration;
+    private CancellationToken seekOperationToken;
     public async Task SeekAsync(double seconds, bool preservePlayhead = false)
     {
         if (context == null || disposed || LoadingPanel.Visibility == Visibility.Visible) return;
-        SetPlaying(false); seeking?.Cancel(); seeking?.Dispose(); seeking = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        long generation = ++seekGeneration;
+        var operationToken = seekOperationToken = PreviewOperation.Current;
+        long rangeRevision = rangeInputRevision;
+        bool retainRangeInput = RangePending;
+        SetPlaying(false); seeking?.Cancel(); seeking?.Dispose(); seeking = PreviewOperation.Link(lifetime.Token);
         var token = seeking.Token; PlayButton.IsEnabled = false;
         try
         {
@@ -178,13 +215,13 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                 token.ThrowIfCancellationRequested();
                 if (refreshScene)
                 {
-                    try { await viewport.ShowAnimationAsync(nextContext, nextFrame, resolver, ShowLevel.IsChecked == true, token, Math.Max(0, Lod.SelectedIndex), ShowHorizon.IsChecked == true, lifetime.Token); }
+                    try { await viewport.ShowAnimationAsync(nextContext, nextFrame, resolver, ShowLevel.IsChecked == true, token, nextPlayer.LodLevel, ShowHorizon.IsChecked == true, lifetime.Token); }
                     catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException and not StackOverflowException && !token.IsCancellationRequested)
                     {
                         // Resource failures after a render replacement must also keep the last valid scene.
                         if (frame != null)
                         {
-                            await viewport.ShowAnimationAsync(context, frame, resolver, ShowLevel.IsChecked == true, token, Math.Max(0, Lod.SelectedIndex), ShowHorizon.IsChecked == true, lifetime.Token);
+                            await viewport.ShowAnimationAsync(context, frame, resolver, ShowLevel.IsChecked == true, token, player?.LodLevel ?? 0, ShowHorizon.IsChecked == true, lifetime.Token);
                             viewport.RestoreView(view); Render();
                         }
                         throw;
@@ -193,14 +230,32 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                     changing = true; int lod = Lod.SelectedIndex; Lod.ItemsSource = SceneLods.Choices(nextContext.Lods.Count()); Lod.SelectedIndex = Math.Clamp(lod, 0, Lod.Items.Count - 1); changing = false;
                 }
                 context = nextContext; player = nextPlayer; frame = nextFrame; duration = measured;
-                contextDirty = false; contextRefreshView = null; resetSimulation = false; ApplyRange(range);
+                contextDirty = false; contextRefreshView = null; resetSimulation = false; ApplyRange(range, retainRangeInput || rangeInputRevision != rangeRevision);
                 Render();
+                publishedSeekGeneration = generation;
             }
             finally { simulationGate.Release(); }
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { contextRefreshView = null; Note($"Preview was not updated; retaining {context?.Mission?.Layout.Label}. {ex.Message}"); }
-        finally { if (!token.IsCancellationRequested && !disposed) { PlayButton.IsEnabled = true; StartPendingPlayback(); } }
+        catch (OperationCanceledException)
+        {
+            if (operationToken.IsCancellationRequested && !disposed && !lifetime.IsCancellationRequested && seeking?.Token == token)
+            {
+                // The request can be revoked after scene meshes or player state
+                // have begun rebuilding. Complete the still-current GUI request
+                // with its own lifetime, preserving the requested playhead/range.
+                using var recovery = PreviewOperation.Begin(CancellationToken.None);
+                await SeekAsync(seconds, preservePlayhead);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { previewOperationFailure = ex.Message; contextRefreshView = null; Note($"Preview was not updated; retaining {context?.Mission?.Layout.Label}. {ex.Message}"); }
+        finally
+        {
+            if (!disposed && seeking?.Token == token)
+            {
+                PlayButton.IsEnabled = true;
+                if (!token.IsCancellationRequested) StartPendingPlayback();
+            }
+        }
     }
     private void PresentationChanged(object sender, RoutedEventArgs e) { if (ready) Render(); }
     private void GridChanged(object sender, RoutedEventArgs e) { if (ready) viewport.SetGroundGrid(ShowGrid.IsChecked == true); }
@@ -222,7 +277,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (!ready || disposed) return;
         PreviewHeight.Text = appliedHeight.ToString(CultureInfo.InvariantCulture);
     }
-    private async void HeightChanged(object sender, TextChangedEventArgs e)
+    private async void HeightChanged(object sender, TextChangedEventArgs e) => await (optionWork = HeightChangedAsync(sender, e));
+    private async Task HeightChangedAsync(object sender, TextChangedEventArgs e)
     {
         if (!ready || changing || disposed) return;
         // Empty and incomplete text is normal while replacing a number. Keep the
@@ -233,7 +289,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         appliedHeight = height; resetSimulation = true; pendingPlay |= playing;
         await SeekAsync(frame?.Time ?? 0, preservePlayhead: true);
     }
-    private async void GroundChanged(object sender, RoutedEventArgs e)
+    private async void GroundChanged(object sender, RoutedEventArgs e) => await (optionWork = GroundChangedAsync(sender, e));
+    private async Task GroundChangedAsync(object sender, RoutedEventArgs e)
     {
         if (!ready || changing || disposed) return;
         viewport.SetGroundGrid(ShowGrid.IsChecked == true);
@@ -301,20 +358,15 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             RecordPreviewError(ex.Message); MessageBox.Show(Window.GetWindow(this), ex.Message, "Animation edit", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
-    private void ChangeEvents(string description, Action<List<AnimationEvent>> change) => TryEdit(() => edits.Apply(entryIndex, description, e => { var s = AnimationEditSession.FindSequence(e, selectedSequence); AnimationEditSession.EnsureEditable(s); change(s.Events); }));
     private int SelectedEventIndex => Sequence?.Events.FindIndex(e => e.Id == selectedEvent) ?? -1;
     private void InsertEvent(AnimationEventSpec spec)
     {
         if (Sequence == null || !ResolvePendingDrafts()) return;
-        int at = selectedEvent == Guid.Empty ? Sequence.Events.Count : SelectedEventIndex + 1;
-        var ev = AnimationCatalog.Create(spec.Type);
-        foreach (var field in spec.Fields.Where(f => f.ReferenceTable >= 0 && Entry.References[f.ReferenceTable].Count > 1 && (f.Name == "Target node" || f.ReferenceTable is 4 or 5))) field.Write(ev, "1");
-        ChangeEvents("Insert event", list => list.Insert(Math.Clamp(at, 0, list.Count), ev));
-        SelectSource(selectedSequence, ev.Id);
+        TryEdit(() => { var id = edits.InsertEvent(entryIndex, selectedSequence, spec.Type, selectedEvent); SelectSource(selectedSequence, id); });
     }
-    private void CopyEventClick(object sender, RoutedEventArgs e) { if (!ResolvePendingDrafts() || Event == null) return; var copy = Event.Duplicate(); int at = SelectedEventIndex + 1; ChangeEvents("Duplicate event", list => list.Insert(at, copy)); SelectSource(selectedSequence, copy.Id); }
-    private void DeleteEventClick(object sender, RoutedEventArgs e) { Guid id = selectedEvent; ChangeEvents("Delete event", list => list.RemoveAll(ev => ev.Id == id)); }
-    private void MoveEvent(int direction) { int at = SelectedEventIndex, to = at + direction; if (Sequence == null || at < 0 || to < 0 || to >= Sequence.Events.Count) return; ChangeEvents("Reorder event", list => (list[at], list[to]) = (list[to], list[at])); }
+    private void CopyEventClick(object sender, RoutedEventArgs e) { if (Event == null) return; TryEdit(() => { var id = edits.ChangeEventStructure(entryIndex, selectedSequence, selectedEvent, "duplicate"); SelectSource(selectedSequence, id); }); }
+    private void DeleteEventClick(object sender, RoutedEventArgs e) { if (Event != null) TryEdit(() => edits.ChangeEventStructure(entryIndex, selectedSequence, selectedEvent, "delete")); }
+    private void MoveEvent(int direction) { int at = SelectedEventIndex, to = at + direction; if (Sequence == null || at < 0 || to < 0 || to >= Sequence.Events.Count) return; TryEdit(() => edits.ChangeEventStructure(entryIndex, selectedSequence, selectedEvent, direction < 0 ? "up" : "down")); }
     private void MoveEventUpClick(object sender, RoutedEventArgs e) => MoveEvent(-1);
     private void MoveEventDownClick(object sender, RoutedEventArgs e) => MoveEvent(1);
     private void AddSequenceClick(object sender, RoutedEventArgs e) => TryEdit(() => edits.AddSequence(entryIndex));
@@ -343,8 +395,10 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (ResolvePendingDrafts()) await SeekAsync(e.NewValue);
         else { changing = true; SeekSlider.Value = frame?.Time ?? 0; changing = false; }
     }
-    private async void PreviewOptionChanged(object sender, SelectionChangedEventArgs e) { if (ready && !changing) { resetSimulation = true; await SeekAsync(0); } }
-    private async void SeedChanged(object sender, RoutedEventArgs e) { if (!ready) return; if (!int.TryParse(Seed.Text, out int seed)) { Note("Seed must be a 32-bit integer."); Seed.Text = "1"; seed = 1; } if (appliedSeed == seed) return; appliedSeed = seed; resetSimulation = true; await SeekAsync(0); }
+    private async void PreviewOptionChanged(object sender, SelectionChangedEventArgs e) => await (optionWork = PreviewOptionChangedAsync(sender, e));
+    private async Task PreviewOptionChangedAsync(object sender, SelectionChangedEventArgs e) { if (ready && !changing) { resetSimulation = true; await SeekAsync(0); } }
+    private async void SeedChanged(object sender, RoutedEventArgs e) => await (optionWork = SeedChangedAsync(sender, e));
+    private async Task SeedChangedAsync(object sender, RoutedEventArgs e) { if (!ready) return; if (!int.TryParse(Seed.Text, out int seed)) { Note("Seed must be a 32-bit integer."); Seed.Text = "1"; seed = 1; } if (appliedSeed == seed) return; appliedSeed = seed; resetSimulation = true; await SeekAsync(0); }
     private void RangeChanged(object sender, RoutedEventArgs e)
     {
         if (!ready) return;
@@ -360,7 +414,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         TimeLabel.HorizontalAlignment = HorizontalAlignment.Right;
     }
     private void FitTraceClick(object sender, RoutedEventArgs e) { Timeline.Duration = SeekSlider.Maximum; Timeline.InvalidateVisual(); }
-    private async void AutoRangeClick(object sender, RoutedEventArgs e) { customRange = false; if (duration != null) ApplyRange(duration.Seconds); await SeekAsync(frame?.Time ?? 0); }
+    private async void AutoRangeClick(object sender, RoutedEventArgs e) => await (optionWork = AutoRangeClickAsync(sender, e));
+    private async Task AutoRangeClickAsync(object sender, RoutedEventArgs e) { customRange = false; if (duration != null) ApplyRange(duration.Seconds); await SeekAsync(frame?.Time ?? 0); }
     private async Task UpdateDurationAsync(CancellationToken token)
     {
         if (context == null) return;
@@ -372,10 +427,10 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         var measuring = CreatePlayer(source.Snapshot());
         return Task.Run(() => measuring.MeasureDuration(token), token);
     }
-    private void ApplyRange(double seconds)
+    private void ApplyRange(double seconds, bool retainInput = false)
     {
         changing = true; SeekSlider.Maximum = seconds; Timeline.Duration = seconds;
-        EndTime.Text = seconds.ToString("0.###", CultureInfo.InvariantCulture); changing = false;
+        if (!retainInput) EndTime.Text = seconds.ToString("0.###", CultureInfo.InvariantCulture); changing = false;
         bool extended = !customRange && duration?.IsFinite == true && seconds > duration.Seconds + AnimationPlayer.StepSeconds / 2;
         RangeLabel.Text = extended ? "Auto duration · extended view" : customRange ? "Custom range" : duration?.Kind switch
         {
@@ -398,7 +453,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         }
         finally { audioPreparing--; }
     }
-    private async void AudioChanged(object sender, RoutedEventArgs e)
+    private async void AudioChanged(object sender, RoutedEventArgs e) => await (optionWork = AudioChangedAsync(sender, e));
+    private async Task AudioChangedAsync(object sender, RoutedEventArgs e)
     {
         if (!ready) return;
         bool wasMuted = audio.Muted;
@@ -406,44 +462,91 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (audio.Muted) audio.Stop();
         else if (wasMuted && !audio.IsPrepared && context != null && audioPreparing == 0)
         {
-            try { await PrepareAudioAsync(lifetime.Token); }
+            using var request = PreviewOperation.Link(lifetime.Token);
+            try { await PrepareAudioAsync(request.Token); }
             catch (OperationCanceledException) { }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { RecordPreviewError(ex.Message); }
         }
     }
-    private async void LevelChanged(object sender, RoutedEventArgs e)
+    private long levelGeneration, publishedLevelGeneration;
+    private CancellationToken levelOperationToken;
+    private bool refreshingLevel, levelResume;
+    private async void LevelChanged(object sender, RoutedEventArgs e) => await (optionWork = LevelChangedAsync(sender, e));
+    private async Task LevelChangedAsync(object sender, RoutedEventArgs e)
     {
-        if (ready && !PlayButton.IsEnabled) { contextDirty = true; resetSimulation = true; pendingPlay |= playing; _ = SeekAsync(frame?.Time ?? 0, preservePlayhead: true); return; }
-        if (!ready || changing || context == null || frame == null || LoadingPanel.Visibility == Visibility.Visible) return;
-        bool resume = playing; SetPlaying(false);
-        initializing?.Cancel(); initializing?.Dispose(); initializing = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-        var token = initializing.Token; LoadingPanel.Visibility = Visibility.Visible;
+        if (ready && !PlayButton.IsEnabled) { contextDirty = true; resetSimulation = true; pendingPlay |= playing; await SeekAsync(frame?.Time ?? 0, preservePlayhead: true); return; }
+        if (!ready || changing || context == null || frame == null || LoadingPanel.Visibility == Visibility.Visible && !refreshingLevel) return;
+        long generation = ++levelGeneration;
+        bool resume = playing || refreshingLevel && levelResume; levelResume = resume; SetPlaying(false);
+        var operationToken = levelOperationToken = PreviewOperation.Current;
+        initializing?.Cancel(); initializing?.Dispose(); initializing = PreviewOperation.Link(lifetime.Token);
+        var token = initializing.Token; refreshingLevel = true; LoadingPanel.Visibility = Visibility.Visible;
         try
         {
-            await viewport.ShowAnimationAsync(context, frame, resolver, ShowLevel.IsChecked == true, token, Math.Max(0, Lod.SelectedIndex), ShowHorizon.IsChecked == true, lifetime.Token);
-            token.ThrowIfCancellationRequested(); Render(); if (resume) SetPlaying(true);
+            await viewport.ShowAnimationAsync(context, frame, resolver, ShowLevel.IsChecked == true, token, player?.LodLevel ?? 0, ShowHorizon.IsChecked == true, lifetime.Token);
+            token.ThrowIfCancellationRequested(); Render(); if (levelResume) SetPlaying(true); publishedLevelGeneration = generation;
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { RecordPreviewError(ex.Message); }
-        finally { if (!token.IsCancellationRequested && !disposed) LoadingPanel.Visibility = Visibility.Collapsed; }
+        catch (OperationCanceledException)
+        {
+            if (operationToken.IsCancellationRequested && !disposed && !lifetime.IsCancellationRequested && initializing?.Token == token)
+            {
+                using var recovery = PreviewOperation.Begin(CancellationToken.None);
+                initializing.Dispose(); initializing = PreviewOperation.Link(lifetime.Token); token = initializing.Token;
+                try
+                {
+                    await viewport.ShowAnimationAsync(context, frame, resolver, ShowLevel.IsChecked == true, token, player?.LodLevel ?? 0, ShowHorizon.IsChecked == true, lifetime.Token);
+                    token.ThrowIfCancellationRequested(); Render(); if (levelResume) SetPlaying(true); publishedLevelGeneration = generation;
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { previewOperationFailure = ex.Message; RecordPreviewError(ex.Message); }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { previewOperationFailure = ex.Message; RecordPreviewError(ex.Message); }
+        finally
+        {
+            // A canceled MCP request leaves this editor alive. Only the current
+            // refresh owns its overlay; an older request cannot hide a newer one.
+            if (!disposed && initializing?.Token == token) { resume = levelResume; refreshingLevel = false; levelResume = false; LoadingPanel.Visibility = Visibility.Collapsed; }
+        }
         if (resetSimulation && !token.IsCancellationRequested && !disposed)
         {
             pendingPlay |= resume;
             await SeekAsync(frame?.Time ?? 0, preservePlayhead: true);
         }
     }
-    private async void LodChanged(object sender, SelectionChangedEventArgs e)
+    private long lodGeneration, publishedLodGeneration;
+    private CancellationToken lodOperationToken;
+    private async void LodChanged(object sender, SelectionChangedEventArgs e) => await (optionWork = LodChangedAsync(sender, e));
+    private async Task LodChangedAsync(object sender, SelectionChangedEventArgs e)
     {
         if (!ready || changing || player == null) return;
+        long generation = ++lodGeneration;
+        lodOperationToken = PreviewOperation.Current;
+        int requested = Lod.SelectedIndex, retained = player.LodLevel;
+        using var request = PreviewOperation.Link(lifetime.Token);
         try
         {
-            await simulationGate.WaitAsync(lifetime.Token);
-            try { player.LodLevel = Math.Max(0, Lod.SelectedIndex); frame = player.Frame(); }
+            await simulationGate.WaitAsync(request.Token);
+            try
+            {
+                request.Token.ThrowIfCancellationRequested();
+                if (generation != lodGeneration || Lod.SelectedIndex != requested) return;
+                player.LodLevel = Math.Max(0, requested); frame = player.Frame();
+            }
             finally { simulationGate.Release(); }
-            if (ShowLevel.IsChecked == true) LevelChanged(sender, e);
+            if (ShowLevel.IsChecked == true) await LevelChangedAsync(sender, e);
             else { Render(); viewport.FrameAnimation(frame); }
+            if (generation == lodGeneration && Lod.SelectedIndex == requested) publishedLodGeneration = generation;
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            if (!disposed && generation == lodGeneration && Lod.SelectedIndex == requested)
+            {
+                bool wasChanging = changing; changing = true;
+                try { Lod.SelectedIndex = Math.Clamp(retained, 0, Math.Max(0, Lod.Items.Count - 1)); }
+                finally { changing = wasChanging; }
+            }
+        }
     }
     private void FrameClick(object sender, RoutedEventArgs e) { if (frame != null) viewport.FrameAnimation(frame); }
     private async void WorldClick(object sender, RoutedEventArgs e) { OpenFileDialog dialog = new() { Filter = "GameZ scene|*.zbd", Title = "Choose this animation's mission scene" }; if (dialog.ShowDialog(Window.GetWindow(this)) == true) await InitializeAsync(dialog.FileName); }
@@ -460,7 +563,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (dialog.ShowDialog() == true && list.SelectedItem is NodeChoice selected) { context.RootOverrides[entryIndex] = selected.Index; resetSimulation = true; await SeekAsync(0); if (frame != null) viewport.FrameAnimation(frame); Note("Preview root bound to " + selected.Label); }
     }
     private void Note(string text) { if (disposed) return; StatusChanged?.Invoke(text); Diagnostics.Text = text + "\n" + Diagnostics.Text; }
-    public void Pause() { pendingPlay = false; SetPlaying(false); }
+    public void Pause() { levelResume = false; pendingPlay = false; SetPlaying(false); }
     public void Dispose()
     {
         if (disposed) return; if (operationDiagnostics != null) operationDiagnostics.CollectionChanged -= OperationDiagnosticsChanged; disposed = true; ready = false; pendingPlay = false; SetPlaying(false); lifetime.Cancel(); initializing?.Cancel(); initializing?.Dispose(); seeking?.Cancel(); seeking?.Dispose(); edits.Changed -= EditsChanged; if (preferences != null) preferences.PropertyChanged -= PreferencesChanged; audio.Dispose(); viewport.Dispose(); lifetime.Dispose(); GC.SuppressFinalize(this);

@@ -102,14 +102,7 @@ public partial class MainWindow
             }
             IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
             ViewModel.Status = "Saving and verifying pickup placements…";
-            var result = await edits.SaveAsync(destinations, ViewModel.Settings.CreateBackupOnSave, document.Lifetime.Token);
-            if (result.SavedPaths.Count > 0)
-            {
-                if (ViewModel.Resolver is { } resolver) await resolver.InvalidateAsync(result.SavedPaths, document.Lifetime.Token);
-                foreach (var doc in ViewModel.Documents) doc.InvalidateMissionContext();
-                ViewModel.CheckExternalChanges();
-                ViewModel.Status = "Saved and verified: " + string.Join("; ", result.SavedPaths);
-            }
+            var result = await SavePickupDestinationsAsync(document, destinations, ViewModel.Settings.CreateBackupOnSave);
             if (result.Errors.Count > 0)
             {
                 string message = "Saved: " + (result.SavedPaths.Count == 0 ? "none" : string.Join("; ", result.SavedPaths)) + "\n" + string.Join("\n", result.Errors) + "\nRemaining changes are unsaved.";

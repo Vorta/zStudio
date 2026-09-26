@@ -23,8 +23,7 @@ public partial class MainWindow
         IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
         try
         {
-            await AnimationWriter.SaveAsAsync(edits.Package, dialog.FileName, doc.Path, ViewModel.Resolver?.Root ?? Path.GetDirectoryName(doc.Path)!, doc.Lifetime.Token);
-            doc.LastSavedCopy = dialog.FileName; edits.MarkSaved(); ViewModel.Status = "Saved and verified " + dialog.FileName + " · preview keeps the original mission context";
+            await SaveAnimationToPathAsync(doc, dialog.FileName);
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); MessageBox.Show(this, ex.Message, "Animation Save As", MessageBoxButton.OK, MessageBoxImage.Information); return false; }

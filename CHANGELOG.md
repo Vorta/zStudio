@@ -2,7 +2,30 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## Unreleased
+## 0.5.0 — 2026-09-26
+
+- Cancel retained preview lifetimes before draining MCP on accepted application close, while preserving canceled-close and MCP-only recovery behavior; serialize overlapping MCP teardown.
+- Restrict isolation to GUI-supported model/Whole world previews, isolate complete pickups when child meshes are selected, and protect active pickup drags from MCP scene/camera changes.
+
+- Retain the current document and preview until a reload replacement is parsed and accepted; reject canceled, malformed, superseded or newly edited/drafted replacements.
+- Tie inspection to document lifetime and revision, freeze edited snapshots, and keep original animation data separate from working edits across Undo/Redo.
+- Revalidate asynchronous navigation and draft publication, exclude MCP mutations during saves/modal decisions, apply approved preview settings as a batch, and suppress obsolete pickup/export/validation results.
+
+- Verify Properties publication and preserve input entered during decoding; propagate request cancellation through queued UI work and large property/JSON expansions.
+- Define pickup identity and destination-map schemas, enforce integer bounds, report failed/superseded document reloads explicitly, and preserve new edits/input during a deferred MCP close.
+- Recover animation scene bindings and late renderer refreshes after MCP cancellation, retaining usable playback and reporting unavailable or superseded work. Keep LOD/map geometry consistent across concurrent changes, apply the latest Map/Horizon choices and preserve playback or explicit Pause through refreshes.
+
+- Recover the still-selected preview after MCP cancels asset/document loading, and reject superseded scene-option jobs instead of returning an unpublished preview identity.
+
+- Describe and validate MCP array items recursively, including three-number camera vectors and export asset identities; reject malformed input before workspace connection.
+- Retain loaded model/Whole world scenes during LOD, horizon, texture-pack and difficulty refreshes; publish only completed replacements and restore option controls after cancellation or load failure.
+- Recover animation controls after canceled level refreshes, cancel pending audio retries when MCP stops, and retain MCP inspection/editing of valid fields on malformed keyframe events with a read-only payload diagnostic.
+- Guard preview captures with their lifetime identity, clamp explicit camera poses before movement, and propagate MCP shutdown cancellation through pending workspace/preview/save work without canceling retained preview lifetimes.
+- Correct active-view MCP state after viewer changes, apply list queries before paging, reject invalid layout batches before changing preferences, report stale structural targets explicitly, and preserve 3D capture proportions. Add packaged stdio corpus regressions.
+
+- Add opt-in local MCP access to the visible zStudio workspace through a stdio connector and same-user named pipe, including on-demand visible startup (handshake and discovery stay windowless), connection controls and activity history.
+- Expose browsing/inspection, animation properties and structure, preview and camera controls, texture/audio inspection, pickup editing, undo/redo, verified saves, exports, diagnostics and captures. Retain document revisions, explicit draft/unsaved decisions and asynchronous operation tracking.
+- Require MCP parity for future GUI features; add an independent action inventory, schema/protocol tests and real-file/portable-connector verification tools.
 
 ## 0.4.8 — 2026-09-25
 

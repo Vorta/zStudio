@@ -24,7 +24,7 @@ public sealed partial class AnimationTests
     {
         var package = Fixture();
         var root = package.Entries[0];
-        var child = root.Clone(); child.SetText(0, "child"); child.Primary.Events.Clear(); child.Sequences[0].Events.Clear();
+        var child = root.Clone(TestContext.Current.CancellationToken); child.SetText(0, "child"); child.Primary.Events.Clear(); child.Sequences[0].Events.Clear();
         package.Entries.Add(child);
         var sample = new AnimationRecord(new byte[36]); sample.SetText(0, "sample"); root.References[4].Add(sample);
         var play = AnimationCatalog.Create(1); play.SetShort(12, 0); root.Sequences[0].Events.Add(play);
@@ -47,7 +47,7 @@ public sealed partial class AnimationTests
         var package = Fixture();
         foreach (string sound in new[] { "first", "second" })
         {
-            var entry = package.Entries[0].Clone(); entry.SetText(0, "duplicate");
+            var entry = package.Entries[0].Clone(TestContext.Current.CancellationToken); entry.SetText(0, "duplicate");
             entry.Sequences[0].Events.Add(SoundNode(sound)); package.Entries.Add(entry);
         }
         var events = package.Entries[0].Sequences[0].Events;

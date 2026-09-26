@@ -8,49 +8,14 @@ public partial class MainWindow
 {
     private async void DifficultyPreferenceChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.Difficulty)) await RefreshWorldDifficultyAsync();
+        if (!restoringStaticOptions && e.PropertyName == nameof(MainViewModel.Difficulty))
+            await (previewWork = RefreshWorldDifficultyAsync());
     }
-    private async Task RefreshWorldDifficultyAsync()
+    private Task RefreshWorldDifficultyAsync()
     {
-        if (!ready || SceneHost.Visibility != Visibility.Visible || scene?.Mission == null ||
-            ViewModel.SelectedDocument is not { } doc || ViewModel.Resolver is not { } resolver || shownAsset?.Kind != AssetKind.World) return;
-        difficultyRefresh?.Cancel(); difficultyRefresh?.Dispose();
-        difficultyRefresh = CancellationTokenSource.CreateLinkedTokenSource(preview.Token, doc.Lifetime.Token);
-        var token = difficultyRefresh.Token; var current = scene; var asset = shownAsset;
-        current.CancelPickupDrag();
-        var previous = current.Mission; var view = current.CaptureView(); int? selection = selectedNode, isolate = isolatedNode;
-        var selectedPickup = selection is int s ? current.PickupAt(s)?.Pickup?.Source : null;
-        var difficulty = ViewModel.Difficulty;
-        PickupTools.IsEnabled = SceneHost.IsEnabled = false;
-        ViewModel.Status = $"Loading {difficulty} mission layout…";
-        try
-        {
-            await doc.GetPickupEditsAsync(resolver, token);
-            var mission = await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: difficulty);
-            token.ThrowIfCancellationRequested();
-            await current.ShowAsync(doc.Document, asset, resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission);
-            token.ThrowIfCancellationRequested(); ApplySceneOptions(); PickupEditsChanged();
-            isolatedNode = isolate is int isolated && mission.RemapNodeFrom(previous, isolated) is >= 0 and int nextIsolate ? nextIsolate : null;
-            if (isolatedNode != null) current.Isolate(isolatedNode);
-            current.RestoreView(view);
-            selectedNode = RemapPickupSelection(selectedPickup, mission) ?? (selection is int index && mission.RemapNodeFrom(previous, index) is >= 0 and int mapped ? mapped : null);
-            if (selectedNode is int node) InspectNode(node); else SetProperties(doc.Document.Metadata);
-            WorldDifficulty.ToolTip = mission.Layout.Description;
-            ShowStaticPreviewProblems(doc, asset);
-            ViewModel.Status = mission.Layout.Description;
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
-        {
-            if (!token.IsCancellationRequested)
-            {
-                ViewModel.Status = $"Preview was not updated; retaining {previous.Layout.Label}. {ex.Message}";
-                ViewModel.AddProblem(ViewModel.Status);
-            }
-        }
-        finally
-        {
-            if (difficultyRefresh?.Token == token) PickupTools.IsEnabled = SceneHost.IsEnabled = true;
-        }
+        if (!ready || SceneHost.Visibility != Visibility.Visible || scene?.Mission == null || publishedStaticOptions == null ||
+            ViewModel.SelectedDocument is not { } doc || ViewModel.Resolver == null || shownAsset?.Kind != AssetKind.World)
+            return Task.CompletedTask;
+        return RefreshStaticSceneAsync(doc, shownAsset);
     }
 }

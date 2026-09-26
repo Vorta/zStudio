@@ -43,6 +43,17 @@ public sealed class WindowClosingTests
                     await Check(["Discard"], 1, closes: true, repeatClose: true);
                     await Check([], 0, closes: true);
                     await PropertiesWindowChecks.Run(app);
+                    await McpWorkspaceChecks.Run(app);
+                    await SceneSelectionMcpChecks.Run();
+                    await ShutdownMcpChecks.Run(app);
+                    await PropertiesMcpChecks.Run();
+                    await OperationPublicationChecks.Run();
+                    await AssetInspectionMcpChecks.Run();
+                    await NavigationMcpChecks.Run();
+                    await GuiNavigationChecks.Run();
+                    await DraftResolutionMcpChecks.Run();
+                    await AnimationMcpCancellationChecks.Run();
+                    await ReloadChecks.Run();
                 }
                 catch (Exception ex) { failure ??= ex; }
                 finally

@@ -149,7 +149,7 @@ public sealed partial class AnimationTests
         var package = Fixture(); var ev = AnimationCatalog.Create(12); ev.Bytes[2] = 0x79; ev.SetInt(16,unchecked((int)0xfedcba98));
         var segment = AnimationKeyframe.Create(1); segment.SetFloat(24,123); ev = ev.WithKeyframes([segment,AnimationKeyframe.Create(7)]); package.Entries[0].Sequences[0].Events.Add(ev);
         var reopened = Parse(Pack(package)).Entries[0].Sequences[0].Events[0];
-        Assert.Equal(0x79,reopened.Bytes[2]); Assert.Equal(0xfedcba98u,reopened.U32(16)); Assert.Equal(2,reopened.Keyframes().Count); Assert.Equal(123,reopened.Keyframes()[0].F32(24));
+        Assert.Equal(0x79,reopened.Bytes[2]); Assert.Equal(0xfedcba98u,reopened.U32(16)); Assert.Equal(2,reopened.Keyframes(TestContext.Current.CancellationToken).Count); Assert.Equal(123,reopened.Keyframes(TestContext.Current.CancellationToken)[0].F32(24));
     }
     [Fact]
     public void CleanupRestoresOnlyTrackedTransforms()

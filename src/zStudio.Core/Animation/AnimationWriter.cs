@@ -79,6 +79,40 @@ public sealed class AnimationEditSession(AnimationPackage package)
     public string? UndoDescription => undo.TryPeek(out var edit) ? edit.Description : null;
     public string? RedoDescription => redo.TryPeek(out var edit) ? edit.Description : null;
     public event Action? Changed;
+    public Guid InsertEvent(int entry, Guid sequence, byte type, Guid after = default)
+    {
+        var ev = AnimationCatalog.Create(type);
+        var owner = Package.Entries[entry];
+        foreach (var field in ev.Spec!.Fields.Where(f => f.ReferenceTable >= 0 && owner.References[f.ReferenceTable].Count > 1 && (f.Name == "Target node" || f.ReferenceTable is 4 or 5))) field.Write(ev, "1");
+        Apply(entry, "Insert event", e =>
+        {
+            var s = FindSequence(e, sequence); EnsureEditable(s);
+            int at = after == Guid.Empty ? s.Events.Count : s.Events.FindIndex(x => x.Id == after) + 1;
+            if (after != Guid.Empty && at == 0) throw new InvalidDataException("Insertion event no longer exists.");
+            s.Events.Insert(at, ev);
+        });
+        return ev.Id;
+    }
+    public Guid ChangeEventStructure(int entry, Guid sequence, Guid ev, string action)
+    {
+        Guid result = ev;
+        Apply(entry, action + " event", e =>
+        {
+            var s = FindSequence(e, sequence); EnsureEditable(s);
+            int at = s.Events.FindIndex(x => x.Id == ev); if (at < 0) throw new InvalidDataException("Event no longer exists.");
+            if (action == "duplicate") { var copy = s.Events[at].Duplicate(); result = copy.Id; s.Events.Insert(at + 1, copy); }
+            else if (action == "delete") s.Events.RemoveAt(at);
+            else if (action is "up" or "down") { int to = at + (action == "up" ? -1 : 1); if (to >= 0 && to < s.Events.Count) (s.Events[at], s.Events[to]) = (s.Events[to], s.Events[at]); }
+            else throw new ArgumentException("Unknown event operation.", nameof(action));
+        });
+        return result;
+    }
+    public void RetargetReference(int entry, int table, int index, string name)
+    {
+        if (table is < 1 or > 5 || index <= 0 || index >= Package.Entries[entry].References[table].Count)
+            throw new InvalidDataException("Reference is reserved, unavailable or unverified.");
+        Apply(entry, "Retarget reference", e => e.References[table][index].SetText(0, name));
+    }
     public void Apply(int index, string description, Action<AnimationEntry> change)
     {
         var before = Package.Entries[index]; var after = before.Clone(); change(after);

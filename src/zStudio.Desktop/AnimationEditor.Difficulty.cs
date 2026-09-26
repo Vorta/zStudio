@@ -11,7 +11,8 @@ public partial class AnimationEditor
         if (e.PropertyName == nameof(MainViewModel.Difficulty) && preferences != null)
             Difficulty.SelectedItem = preferences.Difficulty;
     }
-    private async void DifficultyChanged(object sender, SelectionChangedEventArgs e)
+    private async void DifficultyChanged(object sender, SelectionChangedEventArgs e) => await (optionWork = DifficultyChangedAsync(sender, e));
+    private async Task DifficultyChangedAsync(object sender, SelectionChangedEventArgs e)
     {
         if (!ready || changing || disposed) return;
         if (preferences != null) preferences.Difficulty = SelectedDifficulty;

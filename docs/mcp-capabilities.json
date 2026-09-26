@@ -1,0 +1,838 @@
+{
+  "schema": 1,
+  "discovery": "Initialize, tools/list, resources/list and capabilities inspection are windowless. The first valid workspace request attaches or launches the opted-in GUI. Embedded command metadata is generated from the live registry and parity-tested. Camera arrays have exactly three numeric elements; export array items require kind/index identities. Recursive item validation rejects invalid_argument before handlers or workspace connection. Pickup source identities have four required typed fields; destination maps have string values; integers advertise handler-compatible bounds.",
+  "inspection": "List queries filter case-insensitively before pagination and retain record identities. Preview state describes the active viewer; unavailable 3D options are null. Invalid workspace tab requests leave presentation preferences unchanged. Missing structural edit targets return stale_record. Preview capture requires the preview lifetime UUID and returns preview/asset identity; window captures are independent. 3D capture preserves aspect ratio. Explicit camera poses are clamped upright before subsequent movement. Isolation/Show all reject animation previews, matching GUI availability; static pickup isolation uses the complete pickup root. Scene selection and camera mutations preserve active GUI pickup drags by returning busy. Accepted application closing cancels retained preview/editor lifetimes before draining MCP; canceled closing preserves them, and MCP-only disable still permits recovery. Concurrent teardown is shared and cannot reopen access during shutdown. MCP shutdown cancels pending jobs and audio retries without owning retained preview lifetimes; canceled animation level refreshes release their loading overlay. Static LOD/horizon/texture-pack and Whole world difficulty refreshes retain the published scene and options until successful replacement; cancellation restores the saved difficulty. Canceled asset/document loading retries the still-current GUI selection outside the operation scope; navigation/disposal/shutdown suppress obsolete recovery. Superseded MCP scene refreshes report context_changed; failed preparation reports preview_unavailable, with no unpublished preview result. Properties opening verifies publication/identity, links request cancellation, and rechecks pending drafts after decoding. Decoder traversal observes cancellation. Inspection freezes one edited revision and links request/document cancellation, preserving separate original data; disposed or revised results are rejected. Reload stages parsing and guards drafts/revisions/navigation before atomic document replacement, retaining the old document/preview on staging failure. Root/file navigation guards asynchronous publication, including newer pending file loads. GUI browsing keeps pinned Properties drafts. Saves/modal dialogs exclude MCP mutations; read-only state remains available. Approved preview setting drafts apply as one frozen batch and preserve newer input. Late pickup sessions and export/validation reports cannot publish after document closure. Animation binds and late renderer refreshes recover only for originating MCP cancellation; same-editor GUI seek supersession reports context_changed. LOD waits cancel before mutation; pending picker choices cannot leak into another seek. Initial binding and Map/Horizon refreshes reconcile the latest presentation choices and retain playback or explicit Pause. Static refresh ownership survives reentrant status callbacks. Deferred window close preserves new edits/drafts/drag without prompting. Malformed keyframe payloads retain available property fields and a read-only diagnostic at segment 0.",
+  "handlers": [
+    {
+      "gui": "AnimationEditor.xaml:AddSequenceClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:AudioChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:AutoRangeClick",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:BindClick",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:ChooseEventClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:CopyLogSelectedClick",
+      "tools": [
+        "zstudio_animation_runtime"
+      ],
+      "note": "Return structured data directly; no clipboard side effect is needed."
+    },
+    {
+      "gui": "AnimationEditor.xaml:CopyLogVisibleClick",
+      "tools": [
+        "zstudio_animation_runtime"
+      ],
+      "note": "Return structured data directly; no clipboard side effect is needed."
+    },
+    {
+      "gui": "AnimationEditor.xaml:CopyProblemClick",
+      "tools": [
+        "zstudio_animation_runtime"
+      ],
+      "note": "Return structured data directly; no clipboard side effect is needed."
+    },
+    {
+      "gui": "AnimationEditor.xaml:DeleteRecordClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:DifficultyChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:DuplicateRecordClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:FitTraceClick",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:FrameClick",
+      "tools": [
+        "zstudio_camera"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:GridChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:GroundChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:HeightChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:HeightKeyDown",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:HeightLostKeyboardFocus",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:LevelChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:LodChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:LogDetailsClick",
+      "tools": [
+        "zstudio_animation_runtime"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:LogNavigate",
+      "tools": [
+        "zstudio_animation_select"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:MoveRecordDownClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:MoveRecordUpClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:NextFrameClick",
+      "tools": [
+        "zstudio_animation_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:PlayClick",
+      "tools": [
+        "zstudio_animation_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:PresentationChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:PreviewOptionChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:PreviousFrameClick",
+      "tools": [
+        "zstudio_animation_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:ProblemDetailsClick",
+      "tools": [
+        "zstudio_animation_runtime"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:ProblemFilterChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:ProblemNavigate",
+      "tools": [
+        "zstudio_animation_select"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:ProgramSelected",
+      "tools": [
+        "zstudio_animation_select"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:PropertiesClick",
+      "tools": [
+        "zstudio_properties_open"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:RangeChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:RuntimeDetailsClick",
+      "tools": [
+        "zstudio_animation_runtime"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:SeedChanged",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:SeekChanged",
+      "tools": [
+        "zstudio_animation_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:SetupClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:StopClick",
+      "tools": [
+        "zstudio_animation_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "AnimationEditor.xaml:WorldClick",
+      "tools": [
+        "zstudio_animation_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AboutClick",
+      "tools": [
+        "zstudio_state"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ActualImageClick",
+      "tools": [
+        "zstudio_texture_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationAddEventClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationAddSequenceClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationDeleteClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationDuplicateClick",
+      "tools": [
+        "zstudio_animation_structure"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationNextClick",
+      "tools": [
+        "zstudio_animation_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationPlayClick",
+      "tools": [
+        "zstudio_animation_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationPreviousClick",
+      "tools": [
+        "zstudio_animation_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AnimationStopClick",
+      "tools": [
+        "zstudio_animation_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AssetPropertiesClick",
+      "tools": [
+        "zstudio_properties_open"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AssetSelectionChanged",
+      "tools": [
+        "zstudio_select_asset"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:AudioSeekChanged",
+      "tools": [
+        "zstudio_sound_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:BackupOnSaveChanged",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:CancelClick",
+      "tools": [
+        "zstudio_operation"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:CaptionCloseClick",
+      "tools": [
+        "zstudio_window"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:CaptionMaximizeClick",
+      "tools": [
+        "zstudio_window"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:CaptionMinimizeClick",
+      "tools": [
+        "zstudio_window"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ClearAssetFilterClick",
+      "tools": [
+        "zstudio_asset_filter"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:CloseCurrentClick",
+      "tools": [
+        "zstudio_close_document"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:CloseFileClick",
+      "tools": [
+        "zstudio_close_document"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:CopyEventJsonClick",
+      "tools": [
+        "zstudio_inspect_asset"
+      ],
+      "note": "Return structured data directly; no clipboard side effect is needed."
+    },
+    {
+      "gui": "MainWindow.xaml:CueDoubleClick",
+      "tools": [
+        "zstudio_sound_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:DensityClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:DiagnosticsClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:EventSelected",
+      "tools": [
+        "zstudio_inspect_asset"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ExitClick",
+      "tools": [
+        "zstudio_window"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ExportAllClick",
+      "tools": [
+        "zstudio_export"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ExportJsonClick",
+      "tools": [
+        "zstudio_export"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ExportSelectedClick",
+      "tools": [
+        "zstudio_export"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:FileDoubleClick",
+      "tools": [
+        "zstudio_open_document"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:FileProblemDetailsClick",
+      "tools": [
+        "zstudio_problems"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:FileProblemDoubleClick",
+      "tools": [
+        "zstudio_problems"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:FileProblemSelectionChanged",
+      "tools": [
+        "zstudio_problems"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:FileTreeKeyDown",
+      "tools": [
+        "zstudio_open_document"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:FitImageClick",
+      "tools": [
+        "zstudio_texture_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:FlyChanged",
+      "tools": [
+        "zstudio_camera"
+      ],
+      "note": "Agents use camera move/rotate/set without capturing the user's physical mouse."
+    },
+    {
+      "gui": "MainWindow.xaml:FrameSceneClick",
+      "tools": [
+        "zstudio_camera"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:HelpClick",
+      "tools": [
+        "zstudio_capabilities"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ImageOptionsChanged",
+      "tools": [
+        "zstudio_texture_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:InspectorButtonClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:InspectorSelectionChanged",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:InspectorVisibilityClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:IsolateClick",
+      "tools": [
+        "zstudio_scene_selection"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:MaximizeToolsClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:McpIntegrationClick",
+      "tools": [],
+      "note": "Local trust and connection setup must be controlled by the user. Agents cannot enable themselves."
+    },
+    {
+      "gui": "MainWindow.xaml:NavigatorButtonClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:NavigatorClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:OpenFileClick",
+      "tools": [
+        "zstudio_open_document"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:OpenFolderClick",
+      "tools": [
+        "zstudio_open_root"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:PaletteClick",
+      "tools": [
+        "zstudio_texture_palette"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:PickupLockedChanged",
+      "tools": [
+        "zstudio_pickup_lock"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:PlayAudioClick",
+      "tools": [
+        "zstudio_sound_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:PresetClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:PreviewNoticesClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:PreviewSetupClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:PropertiesClick",
+      "tools": [
+        "zstudio_properties_open"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:RedoAnimationClick",
+      "tools": [
+        "zstudio_undo_redo"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:RelatedDoubleClick",
+      "tools": [
+        "zstudio_select_asset"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ReloadClick",
+      "tools": [
+        "zstudio_reload_document"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ResetLayoutClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:SaveCurrentAsClick",
+      "tools": [
+        "zstudio_save_document"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:SaveCurrentClick",
+      "tools": [
+        "zstudio_save_document"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneOptionsChanged",
+      "tools": [
+        "zstudio_scene_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ScenePropertiesClick",
+      "tools": [
+        "zstudio_scene_properties"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneSourceChanged",
+      "tools": [
+        "zstudio_scene_options"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:SceneTreeSelected",
+      "tools": [
+        "zstudio_scene_selection"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:SearchDoubleClick",
+      "tools": [
+        "zstudio_select_asset"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:SearchKeyDown",
+      "tools": [
+        "zstudio_select_asset"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ShowAllClick",
+      "tools": [
+        "zstudio_scene_selection"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:StopAudioClick",
+      "tools": [
+        "zstudio_sound_transport"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ThemeClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ToolsButtonClick",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ToolSelectionChanged",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:UndoAnimationClick",
+      "tools": [
+        "zstudio_undo_redo"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ValidateClick",
+      "tools": [
+        "zstudio_validate"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:WorkspaceSplitterCompleted",
+      "tools": [
+        "zstudio_workspace_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ZoomChanged",
+      "tools": [
+        "zstudio_texture_view"
+      ],
+      "note": "Use the semantic tool with explicit identities and arguments."
+    }
+  ]
+}

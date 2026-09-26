@@ -15,6 +15,18 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--mcp") return McpPreviewCheck.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--mcp-stdio") return McpStdioCheck.Run(args[1]);
+        if (args.Length == 3 && args[0] == "--mcp-stdio") return McpStdioCheck.Run(args[1], args[2]);
+        if (args.Length == 2 && args[0] == "--mcp-catalog")
+        {
+            var app = new App { ProcessCommandLine = false, ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            app.InitializeComponent();
+            var window = new MainWindow();
+            File.WriteAllText(args[1], Recoil.Zbd.Mcp.McpCommandCatalog.Serialize(window.Commands) + Environment.NewLine);
+            window.Close();
+            return 0;
+        }
         if (args.Length == 2 && args[0] == "--freecam") return FlyCameraCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--recent-folders") return GuiReviewCapture.Run(args[1],menusOnly:true);
         if (args.Length == 2 && args[0] == "--header-layout") return GuiReviewCapture.Run(args[1],headerOnly:true);

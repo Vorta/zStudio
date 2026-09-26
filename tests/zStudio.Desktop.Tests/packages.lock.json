@@ -130,17 +130,22 @@
         "resolved": "18.10.1",
         "contentHash": "tV7tCyp/t+DuwQugLkCeUN7NBFFB4fEGRPr0gkMQ2nQgAvQQjmGlZZi1dsLzbyoe/A0mbnKybmkIh8qhT9p4Zw=="
       },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.8.3",
+        "contentHash": "K0B05oApxmviWalNHPMBBcRC7erKiDATz3ENNR/jqTR9JwIwLRefgDhj2jCRwL1aca99pXUe0qyQC73/xIuZig=="
+      },
       "Microsoft.Extensions.DependencyInjection.Abstractions": {
         "type": "Transitive",
-        "resolved": "8.0.2",
-        "contentHash": "3iE7UF7MQkCv1cxzCahz+Y/guQbTqieyxyaWKhrRO91itI9cOKO76OHeQDahqG4MmW5umr3CcCvGmK92lWNlbg=="
+        "resolved": "10.0.10",
+        "contentHash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="
       },
       "Microsoft.Extensions.Logging.Abstractions": {
         "type": "Transitive",
-        "resolved": "8.0.2",
-        "contentHash": "nroMDjS7hNBPtkZqVBbSiQaQjWRDxITI8Y7XnDs97rqG3EbzVTNLZQf7bIeUJcaHOV8bca47s1Uxq94+2oGdxA==",
+        "resolved": "10.0.10",
+        "contentHash": "zkFxGYUvdxAvIKTyXHrmW+Sux53D4SezD9dMyZ6hrwwzPQJNuwCRy1f5W7AvYTqacEGhWF2XderRQG1OvbV8og==",
         "dependencies": {
-          "Microsoft.Extensions.DependencyInjection.Abstractions": "8.0.2"
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10"
         }
       },
       "Microsoft.NETCore.Platforms": {
@@ -337,14 +342,24 @@
           "xunit.v3.runner.common": "[4.0.1]"
         }
       },
+      "Recoil.Zbd.Application": {
+        "type": "Project"
+      },
       "Recoil.Zbd.Core": {
         "type": "Project"
+      },
+      "Recoil.Zbd.Mcp": {
+        "type": "Project",
+        "dependencies": {
+          "ModelContextProtocol.Core": "[2.2.0, )",
+          "Recoil.Zbd.Application": "[0.4.8, )"
+        }
       },
       "Recoil.Zbd.Rendering": {
         "type": "Project",
         "dependencies": {
           "HelixToolkit.Wpf.SharpDX": "[3.1.2, )",
-          "Recoil.Zbd.Core": "[0.3.0, )"
+          "Recoil.Zbd.Core": "[0.4.8, )"
         }
       },
       "Recoil.Zbd.Studio": {
@@ -353,8 +368,9 @@
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "NAudio.Core": "[3.1.0, )",
           "NAudio.Wasapi": "[3.1.0, )",
-          "Recoil.Zbd.Core": "[0.3.0, )",
-          "Recoil.Zbd.Rendering": "[0.3.0, )"
+          "Recoil.Zbd.Core": "[0.4.8, )",
+          "Recoil.Zbd.Mcp": "[0.4.8, )",
+          "Recoil.Zbd.Rendering": "[0.4.8, )"
         }
       },
       "CommunityToolkit.Mvvm": {
@@ -379,6 +395,16 @@
           "SharpDX.Direct2D1": "4.2.0",
           "SharpDX.Direct3D11": "4.2.0",
           "SharpDX.Direct3D9": "4.2.0"
+        }
+      },
+      "ModelContextProtocol.Core": {
+        "type": "CentralTransitive",
+        "requested": "[2.2.0, )",
+        "resolved": "2.2.0",
+        "contentHash": "FeBfXU6T8k+jw4afg4sfxdEX2rL/e5oKOk9ROOGztu9k47+7Bz08sdaToYt2XvMY1opNbwxYQOFMj6wH9TInhA==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.8.3",
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.10"
         }
       },
       "NAudio.Core": {

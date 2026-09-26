@@ -67,7 +67,7 @@ public sealed partial class AnimationPropertiesEditor : FieldEditor, IDisposable
         refreshingFields = true;
         try
         {
-            fieldsShape = shape; draftInputs.RemoveAll(d => d.Scope == "properties"); valueRefresh.Clear(); propertyGroups.Clear(); inputScope = "properties";
+            fieldsShape = shape; draftInputs.RemoveAll(d => d.Scope == "properties"); ClearAutomationFields("properties"); valueRefresh.Clear(); propertyGroups.Clear(); inputScope = "properties";
             StackPanel panel = new() { Margin = new(10) };
             fields.Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
             if (Event is { } ev)
@@ -121,7 +121,7 @@ public sealed partial class AnimationPropertiesEditor : FieldEditor, IDisposable
                     if (ev.Type == 12 && editable)
                     {
                         try { Keyframes(Group(panel, "Keyframe segments"), ev.Keyframes()); }
-                        catch (InvalidDataException ex) { Label(panel, ex.Message + " Keyframe payload remains read-only."); }
+                        catch (InvalidDataException ex) { Input(panel, "Keyframe diagnostic", ex.Message + " Keyframe payload remains read-only.", _ => { }, readOnly: true); }
                     }
                 }
                 var provenance = Group(panel, "Record identity / provenance", false);

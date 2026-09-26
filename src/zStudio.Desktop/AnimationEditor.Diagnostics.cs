@@ -63,13 +63,7 @@ public partial class AnimationEditor
     private void RefreshProblems()
     {
         if (Problems == null || disposed || !Problems.IsVisible) return;
-        List<ProblemRow> rows = [];
-        if (frame != null)
-            rows.AddRange(frame.Issues.Select(d => new ProblemRow(d.Severity,d.Category,$"Entry #{d.Source.Entry}" + (d.Source.Instance is long instance ? $" / instance {instance}" : ""),d.Message,d.Count,d.Source.Entry,d.Source.Sequence,d.Source.Event,$"First {d.FirstTime:0.000}s · last {d.LastTime:0.000}s · count is diagnostic emissions")));
-        rows.AddRange(localProblems);
-        foreach (var message in audioDiagnostics.Distinct(StringComparer.Ordinal)) rows.Add(new("Warning","Resource","Audio",message,1,entryIndex,null,null,"Audio preparation/output diagnostic"));
-        // File/operation source context is supplied by its emitter, independently of preview selection.
-        if (operationDiagnostics != null) rows.AddRange(operationDiagnostics.Select(m => new ProblemRow(m.Severity,m.Category,m.Scope,m.Message,1,-1,null,null,m.Details) { FileProblem = m }));
+        var rows = CurrentProblems();
         string filter = (ProblemFilter.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "All";
         var selected = Problems.SelectedItem as ProblemRow;
         var view = rows.Where(r => filter == "All" || r.Category == filter).ToArray();
@@ -80,6 +74,17 @@ public partial class AnimationEditor
         }
         while (problemRows.Count > view.Length) problemRows.RemoveAt(problemRows.Count - 1);
         if (selected != null) Problems.SelectedItem = problemRows.FirstOrDefault(r => r.Entry == selected.Entry && r.Sequence == selected.Sequence && r.Event == selected.Event && r.Message == selected.Message && r.Scope == selected.Scope);
+    }
+    private List<ProblemRow> CurrentProblems()
+    {
+        List<ProblemRow> rows = [];
+        if (frame != null)
+            rows.AddRange(frame.Issues.Select(d => new ProblemRow(d.Severity,d.Category,$"Entry #{d.Source.Entry}" + (d.Source.Instance is long instance ? $" / instance {instance}" : ""),d.Message,d.Count,d.Source.Entry,d.Source.Sequence,d.Source.Event,$"First {d.FirstTime:0.000}s · last {d.LastTime:0.000}s · count is diagnostic emissions")));
+        rows.AddRange(localProblems);
+        foreach (var message in audioDiagnostics.Distinct(StringComparer.Ordinal)) rows.Add(new("Warning","Resource","Audio",message,1,entryIndex,null,null,"Audio preparation/output diagnostic"));
+        // File/operation source context is supplied by its emitter, independently of preview selection.
+        if (operationDiagnostics != null) rows.AddRange(operationDiagnostics.Select(m => new ProblemRow(m.Severity,m.Category,m.Scope,m.Message,1,-1,null,null,m.Details) { FileProblem = m }));
+        return rows;
     }
     private void RecordPreviewError(string message)
     {
