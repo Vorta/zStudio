@@ -165,7 +165,7 @@ internal static class AnimationLayoutCheck
                 var resetViewMenu = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().Single(m => Equals(m.Header, "_View"));
                 resetViewMenu.Items.OfType<MenuItem>().Single(m => Equals(m.Header, "Reset layout")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
                 await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-                Require(navigation.SelectedIndex == 0 && inspector.SelectedIndex == 0 && tools.SelectedIndex == 0, "Reset layout did not apply live tab defaults");
+                Require(((FrameworkElement)window.FindName("FileTree")).IsVisible && window.ViewModel.Settings.GetWorkspace().BrowserTab == 0 && inspector.SelectedIndex == 0 && tools.SelectedIndex == 0, "Reset layout did not apply live tab defaults");
                 var resetPreferences = window.ViewModel.Settings.GetWorkspace();
                 Require(resetPreferences.BrowserTab == 0 && resetPreferences.InspectorTab == 0 && resetPreferences.ToolTab == 0, "Tab events overwrote reset defaults");
                 window.ViewModel.Settings.Save();
@@ -391,7 +391,7 @@ internal static class AnimationLayoutCheck
         RenderTargetBitmap bitmap = new((int)Math.Ceiling(window.ActualWidth*dpi.DpiScaleX),(int)Math.Ceiling(window.ActualHeight*dpi.DpiScaleY),dpi.PixelsPerInchX,dpi.PixelsPerInchY,PixelFormats.Pbgra32); bitmap.Render(window);
         PngBitmapEncoder encoder = new(); encoder.Frames.Add(BitmapFrame.Create(bitmap)); using var stream = File.Create(path); encoder.Save(stream);
     }
-    private static void CheckChrome(MainWindow window)
+    internal static void CheckChrome(MainWindow window)
     {
         nint handle = new WindowInteropHelper(window).Handle;
         nint Hit(Point point) { int x = (int)point.X,y = (int)point.Y; return SendMessage(handle,0x84,0,(nint)((y << 16) | (x & 0xffff))); }

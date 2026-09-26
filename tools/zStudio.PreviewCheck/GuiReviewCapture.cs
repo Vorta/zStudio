@@ -18,7 +18,7 @@ using Recoil.Zbd.Rendering;
 /// <summary>Captures only this harness's visible window, including the native caption and GPU surfaces.</summary>
 internal static class GuiReviewCapture
 {
-    public static int Run(string root,bool headerOnly = false,bool menusOnly = false)
+    public static int Run(string root,bool headerOnly = false,bool menusOnly = false,bool desktopCorners = true)
     {
         string output = Path.Combine(Path.GetTempPath(), "zstudio-gui-review-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
         Directory.CreateDirectory(output); Console.WriteLine("Screenshots: " + output);
@@ -79,7 +79,46 @@ internal static class GuiReviewCapture
                             }
                         }
                     }
-                    Console.WriteLine("PASS: complete header text, centered document commands and reclaimed row in 36 startup/loaded, theme, density and width/window-state combinations."); return;
+                    window.WindowState = WindowState.Normal; window.Width = 1600;
+                    var cornerWorld = await Open(Path.Combine("m1", "gamez.zbd"));
+                    await Select(cornerWorld,cornerWorld.Assets.First(a => a.Record.Kind == AssetKind.World));
+                    await Wait(() => ((ContentControl)window.FindName("SceneHost")).Content is SceneViewport { Mission: not null });
+                    window.OpenPropertiesWindow?.Close();
+                    window.Activate();
+                    await Capture("rounded-world");
+                    var worldViewport = (SceneViewport)((ContentControl)window.FindName("SceneHost")).Content;
+                    var worldCamera = worldViewport.CaptureView();
+                    window.Width = 1080; await Capture("files-tabbed-world");
+                    Require(window.NavigatorMode == "tabbed" && Equals(worldCamera,worldViewport.CaptureView()),"Compact Files changed world camera");
+                    window.Width = 1600; await Capture("files-split-world");
+                    Require(window.NavigatorMode == "split" && Equals(worldCamera,worldViewport.CaptureView()),"Detached Files changed world camera");
+                    window.SelectNavigatorSection(3); await Capture("files-split-document-scene");
+                    var responsiveAnimation = await Open(Path.Combine("m1","anim.zbd"));
+                    var responsiveAsset = responsiveAnimation.Assets.First(a => a.Name == "vtol_destruction1");
+                    await Select(responsiveAnimation,responsiveAsset);
+                    await Wait(() => ((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor a && a.CurrentFrame != null && ((Border)a.FindName("LoadingPanel")).Visibility == Visibility.Collapsed);
+                    var responsiveEditor = (AnimationEditor)((ContentControl)window.FindName("AnimationHost")).Content;
+                    ((CheckBox)responsiveEditor.FindName("Mute")).IsChecked = true;
+                    await responsiveEditor.SeekAsync(.6); window.OpenPropertiesWindow?.Close();
+                    var responsiveFrame = responsiveEditor.CurrentFrame;
+                    var responsiveCamera = responsiveEditor.Viewport.CaptureView();
+                    foreach (string theme in new[] { "Dark","Light","System" })
+                    foreach (string density in new[] { "Compact","Comfortable" })
+                    foreach (int width in new[] { 1600,1080,1600 })
+                    {
+                        Theme(theme);
+                        var view = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().First(m => Equals(m.Header,"_View"));
+                        view.Items.OfType<MenuItem>().First(m => Equals(m.Header,"Density")).Items.OfType<MenuItem>().First(m => Equals(m.Header,density)).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                        window.Width = width; await Capture($"files-animation-{theme}-{density}-{width}");
+                        Require(window.NavigatorMode == (width == 1600 ? "split" : "tabbed"),"Animation responsive Files mode is incorrect");
+                        Require(((FrameworkElement)window.FindName("InspectorHost")).IsVisible,"Files detachment displaced the animation Inspector");
+                        Require(ReferenceEquals(responsiveEditor,((ContentControl)window.FindName("AnimationHost")).Content) && ReferenceEquals(responsiveFrame,responsiveEditor.CurrentFrame) && Equals(responsiveCamera,responsiveEditor.Viewport.CaptureView()),"Responsive layout replaced the editor or changed frame/camera");
+                    }
+                    await responsiveEditor.SeekAsync(0); responsiveEditor.TogglePlayback();
+                    window.Width = 1080; await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                    window.Width = 1600; await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                    Require(responsiveEditor.IsPlaying,"Files detachment interrupted playback"); responsiveEditor.Pause();
+                    Console.WriteLine("PASS: 36 header combinations; responsive Files with world, Document scene and 18 animation theme/density/width transitions; native corners/caption bounds, retained editor/frame/camera and uninterrupted playback."); return;
                 }
                 CheckHeader(window);
                 var fileMenu = ((Menu)window.FindName("AppMenu")).Items.OfType<MenuItem>().First();
@@ -136,7 +175,7 @@ internal static class GuiReviewCapture
                 await Capture("02-folder-open");
                 var missionFolders = window.ViewModel.Folders.Single().Children.Where(n => n.File == null).Select(n => n.Name).ToArray();
                 Require(Array.IndexOf(missionFolders,"m2") < Array.IndexOf(missionFolders,"m10"),"Natural mission directory order regressed");
-                Require(((TabControl)window.FindName("NavigationTabs")).SelectedIndex == 0 && !((FrameworkElement)window.FindName("DocumentCommands")).IsVisible && !((FrameworkElement)window.FindName("InspectorTabs")).IsVisible, "Folder-only state did not show Files without empty document controls");
+                Require(window.ViewModel.Settings.GetWorkspace().BrowserTab == 0 && ((FrameworkElement)window.FindName("FileTree")).IsVisible && !((FrameworkElement)window.FindName("DocumentCommands")).IsVisible && !((FrameworkElement)window.FindName("InspectorTabs")).IsVisible, "Folder-only state did not show Files without empty document controls");
                 ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("FilesTab");
                 await Capture("03-files");
                 ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("SearchTab");
@@ -312,7 +351,7 @@ internal static class GuiReviewCapture
                 Require(!window.ViewModel.Documents.Any(d => d.IsDirty), "Capture changed serialized records");
                 foreach (var openDocument in window.ViewModel.Documents.ToArray()) await window.ViewModel.CloseAsync(openDocument);
                 await Capture("36-last-document-closed");
-                Require(((TabControl)window.FindName("NavigationTabs")).SelectedItem == window.FindName("FilesTab"),"Closing the last document did not return from Assets to Files");
+                Require(window.ViewModel.Settings.GetWorkspace().BrowserTab == 0 && ((FrameworkElement)window.FindName("FileTree")).IsVisible,"Closing the last document did not return from Assets to Files");
                 Require(!((FrameworkElement)window.FindName("InspectorTabs")).IsVisible && !((FrameworkElement)window.FindName("DocumentCommands")).IsVisible && ((TextBlock)window.FindName("WelcomeTitle")).Text == "Choose a file to inspect","Last document close exposed empty editor controls");
                 string stressText = "QA display fixture — deliberately long diagnostic; not a game/corpus finding.\n\n" + string.Join("\n",Enumerable.Range(1,80).Select(i => $"{i}: Full diagnostic detail remains selectable, wraps inside this owned window, and preserves record identity and source context when it exceeds the visible area."));
                 var detailsTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
@@ -366,12 +405,24 @@ internal static class GuiReviewCapture
                 async Task Wait(Func<bool> ready) { while (!ready()) await Task.Delay(100, timeout.Token); }
                 async Task Capture(string name)
                 {
-                    await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); window.UpdateLayout();
-                    await Task.Delay(650, timeout.Token);
-                    CheckTitleCommands(window);
-                    CaptureWindow(window, Path.Combine(output, name + ".png"));
-                    if (window.OpenPropertiesWindow is { IsVisible: true } popup) CaptureWindow(popup, Path.Combine(output, name + "-properties.png"));
-                    Console.WriteLine(name);
+                    bool desktopView = desktopCorners && name is "00-startup" or "rounded-world";
+                    bool previousTopmost = window.Topmost;
+                    try
+                    {
+                        // Keep only our capture window unobscured for the screenshot;
+                        // foreground activation can be refused after long UI checks.
+                        if (desktopView) window.Topmost = true;
+                        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle); window.UpdateLayout();
+                        await Task.Delay(650, timeout.Token);
+                        CheckTitleCommands(window);
+                        CheckNativeCorners(window);
+                        if (window.WindowState == WindowState.Normal) AnimationLayoutCheck.CheckChrome(window);
+                        CaptureWindow(window, Path.Combine(output, name + ".png"));
+                        if (desktopView) CaptureHandle(new WindowInteropHelper(window).Handle,Path.Combine(output,name + "-desktop.png"),desktopView:true);
+                        if (window.OpenPropertiesWindow is { IsVisible: true } popup) CaptureWindow(popup, Path.Combine(output, name + "-properties.png"));
+                        Console.WriteLine(name);
+                    }
+                    finally { if (desktopView) window.Topmost = previousTopmost; }
                 }
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
@@ -387,7 +438,16 @@ internal static class GuiReviewCapture
         bool hasDocument = window.ViewModel.SelectedDocument != null;
         bool hasScene = window.ViewModel.SelectedDocument?.SceneRoots.Count > 0;
         string[] expectedTabs = hasScene ? ["Files", "Assets", "Search", "Document scene"] : hasDocument ? ["Files", "Assets", "Search"] : ["Files", "Search"];
+        if (window.NavigatorMode == "split") expectedTabs = expectedTabs.Where(t => t != "Files").ToArray();
         Require(browser.Items.OfType<TabItem>().Where(t => t.Visibility == Visibility.Visible).Select(t => t.Header.ToString()).SequenceEqual(expectedTabs),"Navigator exposes tabs without available content");
+        Require(((FrameworkElement)window.FindName("DetachedFilesHost")).IsVisible == (window.NavigatorMode == "split"),"Files host disagrees with effective Navigator layout");
+        if (window.NavigatorMode == "split")
+        {
+            var workbench = (Grid)window.FindName("Workbench");
+            Require(workbench.ColumnDefinitions[2].ActualWidth >= 599.9,"Detached Files squeezed the preview below 600 DIP");
+            var files = (FrameworkElement)window.FindName("DetachedFilesHost");
+            Require(files.TranslatePoint(new(files.ActualWidth,0),window).X < browser.TranslatePoint(new(),window).X,"Files is not to the left of the content tabs");
+        }
         Require(browser.SelectedItem is TabItem { Visibility: Visibility.Visible },"Navigator retains a hidden selected page");
         bool animationOpen = ((ContentControl)window.FindName("AnimationHost")).Content is AnimationEditor;
         Require((((TabItem)window.FindName("ProgramTab")).Visibility == Visibility.Visible) == animationOpen,"Program tab availability does not follow the active animation");
@@ -452,13 +512,43 @@ internal static class GuiReviewCapture
         nint handle = new WindowInteropHelper(window).Handle;
         CaptureHandle(handle,path);
     }
-    private static void CaptureHandle(nint handle,string path)
+    private static void CheckNativeCorners(MainWindow window)
+    {
+        nint handle = new WindowInteropHelper(window).Handle;
+        if (window.WindowState == WindowState.Maximized)
+        {
+            var monitor = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+            Require(GetMonitorInfo(MonitorFromWindow(handle,2),ref monitor),"Cannot obtain maximized work area");
+            var shell = (FrameworkElement)window.FindName("Shell");
+            var top = shell.PointToScreen(new()); var bottom = shell.PointToScreen(new(shell.ActualWidth,shell.ActualHeight));
+            Require(top.X >= monitor.Work.Left - 1 && top.Y >= monitor.Work.Top - 1 && bottom.X <= monitor.Work.Right + 1 && bottom.Y <= monitor.Work.Bottom + 1,"Maximized shell escapes the monitor work area");
+        }
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10,0,22000)) return;
+        Require(DwmGetWindowAttribute(handle,33,out int preference,sizeof(int)) == 0 && preference == 2,"Native rounded-corner preference is missing");
+        Require(DwmIsCompositionEnabled(out bool composed) == 0,"Cannot query desktop composition");
+        if (!composed) return;
+        nint region = CreateRectRgn(0,0,0,0);
+        Require(region != 0,"Cannot allocate window-region query");
+        try { Require(GetWindowRgn(handle,region) == 0,"Custom window region blocks DWM corner rounding"); }
+        finally { DeleteObject(region); }
+    }
+    private static void CaptureHandle(nint handle,string path,bool desktopView = false)
     {
         Require(GetWindowRect(handle, out var rect), "Cannot obtain owned window bounds");
         nint screen = GetDC(0), memory = CreateCompatibleDC(screen), bitmap = CreateCompatibleBitmap(screen, rect.Right - rect.Left, rect.Bottom - rect.Top), old = SelectObject(memory, bitmap);
         try
         {
-            Require(PrintWindow(handle, memory, 2), "Cannot capture owned window");
+            if (desktopView)
+            {
+                // PrintWindow/WPF renders omit DWM's final corner mask. Capture
+                // only our unobscured window's desktop rectangle, without input.
+                foreach (int x in new[] { rect.Left + 32,(rect.Left + rect.Right) / 2,rect.Right - 32 })
+                foreach (int y in new[] { rect.Top + 32,(rect.Top + rect.Bottom) / 2,rect.Bottom - 32 })
+                    Require(GetAncestor(WindowFromPoint(new NativePoint { X=x,Y=y }),2) == handle,"Desktop corner capture is obscured or outside the screen");
+                DwmFlush();
+                Require(BitBlt(memory,0,0,rect.Right - rect.Left,rect.Bottom - rect.Top,screen,rect.Left,rect.Top,0x00CC0020),"Cannot capture composed window");
+            }
+            else Require(PrintWindow(handle, memory, 2), "Cannot capture owned window");
             var source = Imaging.CreateBitmapSourceFromHBitmap(bitmap, 0, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
             var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(source)); using var file = File.Create(path); encoder.Save(file);
         }
@@ -475,17 +565,26 @@ internal static class GuiReviewCapture
         }
     }
     [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X,Y; }
     [StructLayout(LayoutKind.Sequential)] private struct MonitorInfo { public int Size; public NativeRect Monitor,Work; public uint Flags; }
     [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint handle,uint flags);
     [DllImport("user32.dll",CharSet=CharSet.Auto)] private static extern bool GetMonitorInfo(nint monitor,ref MonitorInfo info);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(nint handle, out NativeRect rect);
     [DllImport("user32.dll")] private static extern bool GetClientRect(nint handle, out NativeRect rect);
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern nint WindowFromPoint(NativePoint point);
+    [DllImport("user32.dll")] private static extern nint GetAncestor(nint handle,uint flags);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(nint handle);
     [DllImport("user32.dll")] private static extern nint SendMessage(nint handle, uint message, nint wParam, nint lParam);
     [DllImport("user32.dll")] private static extern nint GetDC(nint handle);
     [DllImport("user32.dll")] private static extern bool PrintWindow(nint handle, nint dc, uint flags);
     [DllImport("user32.dll")] private static extern int ReleaseDC(nint handle, nint dc);
+    [DllImport("user32.dll")] private static extern int GetWindowRgn(nint handle,nint region);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint handle,int attribute,out int value,int size);
+    [DllImport("dwmapi.dll")] private static extern int DwmIsCompositionEnabled([MarshalAs(UnmanagedType.Bool)] out bool enabled);
+    [DllImport("dwmapi.dll")] private static extern int DwmFlush();
+    [DllImport("gdi32.dll")] private static extern nint CreateRectRgn(int left,int top,int right,int bottom);
+    [DllImport("gdi32.dll")] private static extern bool BitBlt(nint target,int x,int y,int width,int height,nint source,int sourceX,int sourceY,uint operation);
     [DllImport("gdi32.dll")] private static extern nint CreateCompatibleDC(nint dc);
     [DllImport("gdi32.dll")] private static extern nint CreateCompatibleBitmap(nint dc, int width, int height);
     [DllImport("gdi32.dll")] private static extern nint SelectObject(nint dc, nint obj);

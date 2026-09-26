@@ -745,7 +745,7 @@
   },
   {
     "Name": "zstudio_camera",
-    "Description": "Read or set an upright camera pose, move relative to its viewing basis, rotate, or frame the active scene. Never captures the user\u0027s mouse.",
+    "Description": "Read or navigate the shared 3D camera. Supports Blender-style orbit/pan/centered zoom/dolly, exact axis views, perspective/orthographic projection and framing. Valid manual navigation exits animation Follow camera. Never captures physical input.",
     "Mutates": true,
     "Parameters": [
       {
@@ -766,7 +766,12 @@
           "set",
           "move",
           "rotate",
-          "frame"
+          "frame",
+          "pan",
+          "zoom",
+          "dolly",
+          "view",
+          "projection"
         ],
         "Properties": null
       },
@@ -809,18 +814,22 @@
       {
         "Name": "fov",
         "Type": "number",
-        "Description": "Horizontal field of view in degrees.",
+        "Description": "Perspective camera field of view in degrees; retained in orthographic mode.",
         "Required": false,
         "Choices": null,
-        "Properties": null
+        "Properties": null,
+        "NumberMinimum": 1.000001,
+        "NumberMaximum": 178.999999
       },
       {
         "Name": "right",
         "Type": "number",
-        "Description": "Right displacement in game units.",
+        "Description": "View-relative displacement in game units.",
         "Required": false,
         "Choices": null,
-        "Properties": null
+        "Properties": null,
+        "NumberMinimum": -1000000000,
+        "NumberMaximum": 1000000000
       },
       {
         "Name": "up",
@@ -828,31 +837,118 @@
         "Description": "World-Y displacement in game units.",
         "Required": false,
         "Choices": null,
-        "Properties": null
+        "Properties": null,
+        "NumberMinimum": -1000000000,
+        "NumberMaximum": 1000000000
       },
       {
         "Name": "forward",
         "Type": "number",
-        "Description": "Forward displacement in game units.",
+        "Description": "View-relative displacement in game units.",
         "Required": false,
         "Choices": null,
-        "Properties": null
+        "Properties": null,
+        "NumberMinimum": -1000000000,
+        "NumberMaximum": 1000000000
       },
       {
         "Name": "horizontal",
         "Type": "number",
-        "Description": "Horizontal mouse-equivalent delta.",
+        "Description": "Mouse-equivalent delta in DIP for rotate or pan.",
         "Required": false,
         "Choices": null,
-        "Properties": null
+        "Properties": null,
+        "NumberMinimum": -36000,
+        "NumberMaximum": 36000
       },
       {
         "Name": "vertical",
         "Type": "number",
-        "Description": "Vertical mouse-equivalent delta.",
+        "Description": "Mouse-equivalent delta in DIP for rotate or pan.",
         "Required": false,
         "Choices": null,
+        "Properties": null,
+        "NumberMinimum": -36000,
+        "NumberMaximum": 36000
+      },
+      {
+        "Name": "steps",
+        "Type": "number",
+        "Description": "Wheel-equivalent zoom steps; positive zooms in around the view target.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": -100,
+        "NumberMaximum": 100
+      },
+      {
+        "Name": "distance",
+        "Type": "number",
+        "Description": "Dolly displacement in game units; positive moves forward together with the target.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": -1000000000,
+        "NumberMaximum": 1000000000
+      },
+      {
+        "Name": "view",
+        "Type": "string",
+        "Description": "Named view for action=view; axis views are orthographic with automatic perspective on orbit.",
+        "Required": false,
+        "Choices": [
+          "front",
+          "back",
+          "left",
+          "right",
+          "top",
+          "bottom",
+          "opposite"
+        ],
         "Properties": null
+      },
+      {
+        "Name": "projection",
+        "Type": "string",
+        "Description": "Required for action=projection; optional for set. Explicit orthographic mode persists while orbiting.",
+        "Required": false,
+        "Choices": [
+          "perspective",
+          "orthographic"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "width",
+        "Type": "number",
+        "Description": "Orthographic view width in game units, for set or projection.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "NumberMinimum": 0.001,
+        "NumberMaximum": 1000000000000
+      },
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "Frame target; defaults to asset, preserving the existing animation-only framing. Selected falls back to asset without a node selection.",
+        "Required": false,
+        "Choices": [
+          "asset",
+          "all",
+          "selected"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Optional source node identity to frame, including visible descendants/runtime instances.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
       }
     ]
   },
@@ -938,7 +1034,7 @@
   },
   {
     "Name": "zstudio_scene_options",
-    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo; Whole world only). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -952,7 +1048,7 @@
       {
         "Name": "changes",
         "Type": "object",
-        "Description": "Static model/world options.",
+        "Description": "Static model/world options. Validate the entire batch before applying changes; publish highlights only after requested refreshes succeed.",
         "Required": true,
         "Choices": null,
         "Properties": [
@@ -989,13 +1085,26 @@
             "Properties": null
           },
           {
+            "Name": "highlight",
+            "Type": "string",
+            "Description": "Whole world only: solid yellow non-default soils, green CanModify or red ClipTo; none restores normal appearance.",
+            "Required": false,
+            "Choices": [
+              "none",
+              "nonDefaultSoils",
+              "canModify",
+              "clipTo"
+            ],
+            "Properties": null
+          },
+          {
             "Name": "lod",
             "Type": "integer",
-            "Description": "Authored LOD rank.",
+            "Description": "Authored LOD rank within the active viewer\u0027s available range.",
             "Required": false,
             "Choices": null,
             "Properties": null,
-            "Minimum": -2147483648,
+            "Minimum": 0,
             "Maximum": 2147483647
           },
           {
@@ -1568,7 +1677,7 @@
   },
   {
     "Name": "zstudio_workspace_view",
-    "Description": "Read or set presentation preferences. Supports theme, density, preset, navigator/inspector/tools visibility, pane dimensions and tab indices. Does not commit drafts.",
+    "Description": "Read or set presentation preferences and read effective navigatorMode (hidden, tabbed, split). Supports theme, density, preset, pane visibility/dimensions and stable section indices, including detached Files. Does not commit drafts.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1663,9 +1772,17 @@
             "Properties": null
           },
           {
+            "Name": "filesWidth",
+            "Type": "number",
+            "Description": "Preferred detached Files width in DIP, clamped to 200\u2013650; automatic layout does not overwrite it.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
             "Name": "navigatorWidth",
             "Type": "number",
-            "Description": "Preferred dimension in DIP; clamped to supported layout limits.",
+            "Description": "Preferred dimension in DIP; clamped to supported layout limits. Navigator width is the content tabs width in split mode, or the combined tab group width otherwise.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1673,7 +1790,7 @@
           {
             "Name": "inspectorWidth",
             "Type": "number",
-            "Description": "Preferred dimension in DIP; clamped to supported layout limits.",
+            "Description": "Preferred dimension in DIP; clamped to supported layout limits. Navigator width is the content tabs width in split mode, or the combined tab group width otherwise.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1681,7 +1798,7 @@
           {
             "Name": "toolsHeight",
             "Type": "number",
-            "Description": "Preferred dimension in DIP; clamped to supported layout limits.",
+            "Description": "Preferred dimension in DIP; clamped to supported layout limits. Navigator width is the content tabs width in split mode, or the combined tab group width otherwise.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1689,7 +1806,7 @@
           {
             "Name": "navigatorTab",
             "Type": "integer",
-            "Description": "Zero-based visible tab index.",
+            "Description": "Stable section index: 0 Files (also when detached), 1 Assets, 2 Search, 3 Document scene. Unavailable document sections are rejected.",
             "Required": false,
             "Choices": null,
             "Properties": null,

@@ -47,7 +47,7 @@ public sealed class WorkspaceStateTests
         foreach (var (stored, expected) in new[] { (0,0), (1,2), (2,1), (3,0) })
         {
             var layout = JsonSerializer.Deserialize<WorkspaceLayout>($$"""{"Version":2,"BrowserTab":2,"InspectorTab":{{stored}},"PropertiesHeight":999,"ProgramHeight":999,"ProgramResized":true}""")!;
-            layout.Normalize(); Assert.Equal(3,layout.Version); Assert.Equal(2,layout.BrowserTab);
+            layout.Normalize(); Assert.Equal(4,layout.Version); Assert.Equal(2,layout.BrowserTab); Assert.Equal(2,layout.ContentBrowserTab);
             Assert.Equal(expected,layout.InspectorTab); Assert.Equal(720,layout.PropertiesWindow.Height);
             layout.PropertiesWindow.Height = 830; layout.PropertiesWindow.Left = -100;
             var restored = JsonSerializer.Deserialize<WorkspaceLayout>(JsonSerializer.Serialize(layout))!;
@@ -55,6 +55,18 @@ public sealed class WorkspaceStateTests
         }
         var invalid = new WorkspaceLayout { PropertiesWindow = new() { Height = double.NaN, Width = double.PositiveInfinity, Left = double.NaN, Top = double.PositiveInfinity }, InspectorTab = 99 };
         invalid.Normalize(); Assert.Equal(720,invalid.PropertiesWindow.Height); Assert.Equal(640, invalid.PropertiesWindow.Width); Assert.Null(invalid.PropertiesWindow.Left); Assert.Null(invalid.PropertiesWindow.Top); Assert.Equal(2,invalid.InspectorTab);
+    }
+    [Fact]
+    public void ResponsiveFilesPreferencesMigrateAndRetainIndependentWidths()
+    {
+        var layout = JsonSerializer.Deserialize<WorkspaceLayout>("""{"Version":3,"NavigatorWidth":350,"BrowserTab":3}""")!;
+        layout.Normalize(); Assert.Equal(240,layout.FilesWidth); Assert.Equal(350,layout.NavigatorWidth); Assert.Equal(3,layout.ContentBrowserTab);
+        layout.FilesWidth = 275; layout.BrowserTab = 0;
+        var restored = JsonSerializer.Deserialize<WorkspaceLayout>(JsonSerializer.Serialize(layout))!;
+        restored.Normalize(); Assert.Equal(275,restored.FilesWidth); Assert.Equal(350,restored.NavigatorWidth); Assert.Equal(0,restored.BrowserTab); Assert.Equal(3,restored.ContentBrowserTab);
+        restored.FilesWidth = double.NaN; restored.Normalize(); Assert.Equal(240,restored.FilesWidth);
+        restored.FilesWidth = 20; restored.Normalize(); Assert.Equal(200,restored.FilesWidth);
+        restored.FilesWidth = 900; restored.Normalize(); Assert.Equal(650,restored.FilesWidth);
     }
     [Fact]
     public void EveryCatalogFieldHasAReachablePresentationGroup()

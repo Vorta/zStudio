@@ -17,14 +17,18 @@ public partial class MainWindow
         WindowChrome.SetWindowChrome(this, new WindowChrome
         {
             CaptionHeight = TitleArea.Height,
-            GlassFrameThickness = new Thickness(0),
+            // A zero glass frame makes WPF install a window region, which blocks
+            // DWM's Windows 11 rounding even when its corner preference is set.
+            GlassFrameThickness = new Thickness(OperatingSystem.IsWindowsVersionAtLeast(10,0,22000) ? 1 : 0),
             ResizeBorderThickness = SystemParameters.WindowResizeBorderThickness,
             UseAeroCaptionButtons = false,
             CornerRadius = new CornerRadius(0)
         });
         SourceInitialized += (_, _) =>
         {
-            HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(ChromeMessage);
+            nint handle = new WindowInteropHelper(this).Handle;
+            HwndSource.FromHwnd(handle)?.AddHook(ChromeMessage);
+            ApplyCornerPreference(handle);
             UpdateCaptionBounds();
         };
         SizeChanged += (_, _) => UpdateCaptionBounds();
@@ -62,8 +66,18 @@ public partial class MainWindow
         {
             captionMaximizePressed = Mouse.Capture(this,CaptureMode.Element); SetMaximizeHover(true); handled = true; return 0;
         }
+        if (message is 0x031A or 0x031E) ApplyCornerPreference(hwnd);
         if (message is 0x02E0 or 0x031A or 0x031E or 0x001A or 0x0047) Dispatcher.BeginInvoke(DispatcherPriority.Loaded, UpdateCaptionBounds);
         return 0;
+    }
+    private static void ApplyCornerPreference(nint handle)
+    {
+        if (handle == 0 || !OperatingSystem.IsWindowsVersionAtLeast(10,0,22000)) return;
+        const int windowCornerPreference = 33;
+        int round = 2;
+        // This is a compositor hint. Unsupported composition environments can
+        // decline it without preventing startup; Windows owns maximized/Snap policy.
+        _ = DwmSetWindowAttribute(handle,windowCornerPreference,ref round,sizeof(int));
     }
     private void EndCaptionPress()
     {
@@ -115,4 +129,5 @@ public partial class MainWindow
     [DllImport("user32.dll",CharSet=CharSet.Auto)] private static extern bool GetMonitorInfo(nint monitor,ref MonitorBounds info);
     [DllImport("user32.dll")] private static extern bool GetClientRect(nint hwnd,out CaptionBounds rect);
     [DllImport("user32.dll")] private static extern bool ClientToScreen(nint hwnd,ref ScreenPoint point);
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint hwnd,int attribute,ref int value,int size);
 }

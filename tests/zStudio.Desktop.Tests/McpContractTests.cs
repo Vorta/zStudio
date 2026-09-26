@@ -8,6 +8,22 @@ namespace Recoil.Zbd.Desktop.Tests;
 public sealed class McpContractTests
 {
     [Fact]
+    public void CameraFractionalBoundsAreTypedAndValidatedWithoutWeakeningIntegerBounds()
+    {
+        var camera = McpCommandCatalog.Create((_, _, _) => throw new Exception("Must not execute")).All.Single(c => c.Name == "zstudio_camera");
+        var args = new JsonObject { ["preview"] = Guid.NewGuid().ToString(), ["action"] = "projection", ["projection"] = "orthographic", ["width"] = .001 };
+        camera.Validate(args);
+        Assert.Equal(.001, camera.InputSchema["properties"]!["width"]!["minimum"]!.GetValue<double>());
+        foreach (double invalid in new[] { 0, -.001, 1e13 })
+        {
+            args["width"] = invalid;
+            Assert.Equal("invalid_argument", Assert.Throws<StudioCommandException>(() => camera.Validate(args)).Code);
+        }
+        args["width"] = .0025; camera.Validate(args);
+        args["node"] = (long)int.MaxValue + 1;
+        Assert.Equal("invalid_argument", Assert.Throws<StudioCommandException>(() => camera.Validate(args)).Code);
+    }
+    [Fact]
     public void PickupIdentitySchemaDescribesRequiredCaseSensitiveFieldsAndAcceptsReturnedShape()
     {
         var command = McpCommandCatalog.Create((_, _, _) => throw new Exception("Must not execute"))

@@ -48,15 +48,14 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             ShowViewCube = true,
             EnableSwapChainRendering = false,
             IsInertiaEnabled = true,
-            ZoomAroundMouseDownPoint = true,
+            UseDefaultGestures = false,
+            ZoomAroundMouseDownPoint = false,
             ZoomExtentsWhenLoaded = false
         };
         viewport.OITRenderMode = OITRenderType.None;
         viewport.EnableRenderOrder = true;
-        viewport.InputBindings.Add(new MouseBinding(ViewportCommands.Pan, new MouseGesture(MouseAction.MiddleClick)));
-        viewport.PreviewMouseWheel += (_, e) => { if (!IsPickupDragging) ZoomAt(e.GetPosition(viewport), e.Delta); e.Handled = true; };
         viewport.CameraChanged += (_, _) => CameraChanged();
-        ConfigurePickupInput(); ConfigureUprightRotation();
+        ConfigurePickupInput(); ConfigureNavigation();
         viewport.RenderExceptionOccurred += (_, e) => { Information?.Invoke("3D preview unavailable: " + e.Exception.Message); e.Handled = true; };
         Content = viewport;
     }
@@ -90,7 +89,9 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 else notes.Add(new("Warning", $"Missing texture: {name}"));
             }
             HashSet<int> alphaTextures = textures.Where(p => HasAlpha(p.Value)).Select(p => p.Key).ToHashSet();
-            return new ScenePacket(view, geometry, textures, alphaTextures, notes);
+            var masks = asset.Kind == AssetKind.World
+                ? alphaTextures.ToDictionary(i => i, i => WhiteAlphaMask(textures[i], token)) : [];
+            return new ScenePacket(view, geometry, textures, alphaTextures, masks, notes);
         }, token);
         token.ThrowIfCancellationRequested(); if (current != generation) return;
         ClearMeshes(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects;
@@ -98,8 +99,16 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         if (asset.Kind == AssetKind.World) ConfigureHorizon(scene);
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
         Dictionary<(int Material, bool Horizon), DiffuseMaterial> materials = [];
+        Dictionary<MeshPart, MeshGeometry3D> geometries = [];
+        Dictionary<int, TextureModel> alphaMasks = [];
+        foreach (var (index, bytes) in packet.AlphaMasks)
+        {
+            var image = packet.Textures[index];
+            alphaMasks[index] = new TextureModel(bytes, SharpDX.DXGI.Format.R8G8B8A8_UNorm, image.Width, image.Height);
+        }
         int created = 0;
-        foreach (var group in packet.View.Placements.GroupBy(p => (Model: p.ModelIndex, Horizon: IsHorizon(p.NodeIndex))).OrderByDescending(g => g.Key.Horizon))
+        foreach (var group in packet.View.Placements.GroupBy(p => (Model: p.ModelIndex, Horizon: IsHorizon(p.NodeIndex),
+            Kind: asset.Kind == AssetKind.World ? WorldSurfaceHighlights.NodeKind(scene, p.NodeIndex) : WorldSurfaceKind.Default)).OrderByDescending(g => g.Key.Horizon))
         {
             var instances = group.ToArray();
             foreach (var part in packet.Geometry[group.Key.Model])
@@ -118,7 +127,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     }
                     materials[(part.MaterialIndex, group.Key.Horizon)] = material;
                 }
-                MeshGeometry3D geometry = new() { Positions = new Vector3Collection(part.Positions), Normals = new Vector3Collection(part.Normals), TextureCoordinates = new Vector2Collection(part.TextureCoordinates), Indices = new IntCollection(part.Indices) };
+                if (!geometries.TryGetValue(part, out var geometry))
+                    geometries[part] = geometry = new() { Positions = new Vector3Collection(part.Positions), Normals = new Vector3Collection(part.Normals), TextureCoordinates = new Vector2Collection(part.TextureCoordinates), Indices = new IntCollection(part.Indices) };
                 bool transparent = material.DiffuseColor.Alpha < 1 || part.MaterialIndex >= 0 && part.MaterialIndex < scene.Materials.Count && packet.AlphaTextures.Contains(scene.Materials[part.MaterialIndex].Int("texture_index", -1));
                 // Sort translucent placements individually; a batch spanning a map
                 // has no single correct distance relative to other alpha surfaces.
@@ -141,10 +151,17 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         if (!IsFlyActive && !IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
                         {
                             int at = hit.Tag is int instance ? instance : 0;
-                            if (at >= 0 && at < found.Length && found[at].NodeIndex >= 0) NodeSelected?.Invoke(found[at].NodeIndex);
+                            if (at >= 0 && at < found.Length && found[at].NodeIndex >= 0)
+                            { SelectFramingNode(PickupAt(found[at].NodeIndex)?.Root ?? found[at].NodeIndex); NodeSelected?.Invoke(found[at].NodeIndex); }
                         }
                     };
                     meshes.Add(mesh); placements[mesh] = visiblePlacements[mesh] = batch;
+                    if (asset.Kind == AssetKind.World)
+                    {
+                        JsonMaterial(scene, part.MaterialIndex, out _, out int texture);
+                        surfaceAppearances[mesh] = new(material, WorldSurfaceHighlights.Classify(scene, batch[0].NodeIndex, part.MaterialIndex),
+                            alphaMasks.GetValueOrDefault(texture), group.Key.Horizon);
+                    }
                     if (mesh.IsTransparent)
                     {
                         if (sceneAlphaGroup == null) { sceneAlphaGroup = new() { EnableSorting = true, SortTransparentOnly = true, SortingInterval = 0 }; viewport.Items.Add(sceneAlphaGroup); }
@@ -182,25 +199,18 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     public void FrameAll()
     {
-        rotationVelocity = default;
-        if (!float.IsFinite(sceneMin.X) || viewport.Camera is not HCamera camera) return;
-        Vector3 center = (sceneMin + sceneMax) / 2; double radius = Math.Max(1, (sceneMax - sceneMin).Length() / 2);
-        Vector3 direction = Vector3.Normalize(new Vector3(1, 1.6f, 1.5f)); double distance = radius * 2.6;
-        camera.Position = new(center.X + direction.X * distance, center.Y + direction.Y * distance, center.Z + direction.Z * distance);
-        camera.LookDirection = new(-direction.X * distance, -direction.Y * distance, -direction.Z * distance);
-        camera.UpDirection = new(0, 1, 0);
-        UpdateClipPlanes();
+        TryFrame("all", manual: false);
     }
     private void UpdateClipPlanes()
     {
-        if (updatingClipping || !float.IsFinite(sceneMin.X) || !float.IsFinite(sceneMax.X) || viewport.Camera is not HCamera camera) return;
+        if (updatingClipping || !float.IsFinite(sceneMin.X) || !float.IsFinite(sceneMax.X) || viewport.Camera is not ProjectionCamera camera) return;
         var direction = camera.LookDirection;
         if (direction.LengthSquared <= 0 || !double.IsFinite(direction.LengthSquared)) return;
         direction.Normalize();
         double radius = Math.Max(1, (sceneMax - sceneMin).Length() / 2);
         minimumClipDistance = Math.Clamp(radius / 1000000, 0.001, 0.05);
-        var range = new VisibleDepthRange(camera.Position, direction, camera.UpDirection, camera.FieldOfView,
-            Math.Max(1, viewport.ActualWidth) / Math.Max(1, viewport.ActualHeight), minimumClipDistance);
+        var range = new VisibleDepthRange(camera.Position, direction, camera.UpDirection, CaptureView().FieldOfView,
+            Aspect, minimumClipDistance, (camera as OrthographicCamera)?.Width);
         foreach (var mesh in DepthMeshes(viewport.Items))
         {
             if (mesh.Geometry is not MeshGeometry3D geometry) continue;
@@ -249,23 +259,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     /// <summary>Orbit zoom using standard mouse-wheel deltas. Captured Fly uses speed adjustment instead.</summary>
     public void ZoomAt(Point position, int wheelDelta)
     {
-        if (IsFlyActive || wheelDelta == 0 || !viewport.IsZoomEnabled || viewport.Camera is not HCamera camera) return;
-        var direction = camera.LookDirection;
-        double distance = direction.Length;
-        if (distance <= 0 || !double.IsFinite(distance)) return;
-        direction.Normalize();
-        Point3D origin = camera.Position + camera.LookDirection;
-        bool hasSurface = viewport.FindNearest(new Vector2((float)position.X, (float)position.Y), out var hit, out _, out _);
-        if (hasSurface)
-        {
-            origin = new(hit.X, hit.Y, hit.Z);
-            distance = (origin - camera.Position).Length;
-        }
-        // Refresh the focus distance so an old orbit target above the map cannot stall zoom.
-        distance = Math.Max(distance, minimumClipDistance * 4);
-        camera.LookDirection = direction * distance;
-        if (!hasSurface) origin = camera.Position + camera.LookDirection;
-        viewport.AddZoomForce(-wheelDelta * 0.001, origin);
+        ZoomBy(wheelDelta / 120.0);
     }
     public void SetWireframe(bool enabled) { foreach (var mesh in meshes) mesh.FillMode = enabled ? FillMode.Wireframe : FillMode.Solid; }
     public void SetTextured(bool enabled)
@@ -294,11 +288,13 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private void ClearMeshes()
     {
+        CancelNavigation(); FramingSelection = null;
         SetFly(false); flySpeedInitialized = false;
         ClearPickupEditing();
         groundGrid?.Dispose(); groundGrid = null;
         rotationVelocity = default; rotationPoint = null; cameraPoseDirty = true; authoredCameraPose = false;
         ClearAnimationResources();
+        ClearWorldHighlights();
         horizonNodes.Clear(); Mission = null; PreviewScene = null;
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
@@ -317,7 +313,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         var scaled = new System.Windows.Media.Imaging.TransformedBitmap(image, new ScaleTransform(scaleX, scaleY));
         scaled.Freeze(); return scaled;
     }
-    public void Dispose() { Clear(); viewport.Dispose(); effects?.Dispose(); effects = null; GC.SuppressFinalize(this); }
+    public void Dispose() { Clear(); AttachNavigationWindow(null); viewport.Dispose(); effects?.Dispose(); effects = null; GC.SuppressFinalize(this); }
     private static bool HasAlpha(DecodedImage image) { for (int i = 3; i < image.Rgba.Length; i += 4) if (image.Rgba[i] != 255) return true; return false; }
-    private sealed record ScenePacket(SceneView View, Dictionary<int, IReadOnlyList<MeshPart>> Geometry, Dictionary<int, DecodedImage> Textures, HashSet<int> AlphaTextures, List<Diagnostic> Notes);
+    private sealed record ScenePacket(SceneView View, Dictionary<int, IReadOnlyList<MeshPart>> Geometry, Dictionary<int, DecodedImage> Textures, HashSet<int> AlphaTextures, Dictionary<int, byte[]> AlphaMasks, List<Diagnostic> Notes);
 }

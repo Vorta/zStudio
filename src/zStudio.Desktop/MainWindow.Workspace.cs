@@ -18,6 +18,7 @@ public partial class MainWindow
     {
         var layout = Layout;
         NavigationTabs.SelectedIndex = layout.BrowserTab; InspectorTabs.SelectedIndex = layout.InspectorTab; ToolTabs.SelectedIndex = layout.ToolTab;
+        InitializeResponsiveNavigator();
         InitializeChrome(); ApplyDensity();
         RecentMenu.Loaded += (_,_) =>
         {
@@ -30,7 +31,7 @@ public partial class MainWindow
                 grid.ColumnDefinitions.Insert(0,new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "MenuItemCheckBoxIconColumnGroup" });
             }
         };
-        foreach (var splitter in new[] { NavigatorSplitter,InspectorSplitter,ToolsSplitter })
+        foreach (var splitter in new[] { FilesSplitter,NavigatorSplitter,InspectorSplitter,ToolsSplitter })
             splitter.KeyUp += (_,e) => { if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down) WorkspaceSplitterCompleted(splitter,new DragCompletedEventArgs(0,0,false)); };
         Loaded += (_, _) => ArrangeWorkspace();
         ViewModel.PropertyChanged += DocumentChanged;
@@ -38,7 +39,7 @@ public partial class MainWindow
         {
             if (args.PropertyName is nameof(MainViewModel.RootPath) or nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) UpdateDocumentCommands();
             if (args.PropertyName is nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) ArrangeWorkspace();
-            if (args.PropertyName == nameof(MainViewModel.RootPath) && ViewModel.SelectedDocument == null) NavigationTabs.SelectedItem = FilesTab;
+            if (args.PropertyName == nameof(MainViewModel.RootPath) && ViewModel.SelectedDocument == null) SelectNavigatorSection(0);
             if (args.PropertyName == nameof(MainViewModel.GlobalQuery)) UpdateSearchHint();
         };
         ViewModel.SearchResults.CollectionChanged += (_, _) => UpdateSearchHint();
@@ -51,14 +52,9 @@ public partial class MainWindow
         var doc = ViewModel.SelectedDocument;
         ObserveDocumentCommands(doc);
         bool hasDocument = doc != null;
-        bool hasScene = doc?.SceneRoots.Count > 0;
         // Move off an unavailable page before collapsing its tab. Preserve Files
         // and Search selections when the document context changes.
-        if ((!hasDocument && AssetsTab.IsSelected) || (!hasScene && DocumentSceneTab.IsSelected))
-            NavigationTabs.SelectedItem = hasDocument ? AssetsTab : FilesTab;
-        AssetsTab.Visibility = hasDocument ? Visibility.Visible : Visibility.Collapsed;
-        DocumentSceneTab.Visibility = hasScene ? Visibility.Visible : Visibility.Collapsed;
-        AssetsTab.IsEnabled = hasDocument; DocumentSceneTab.IsEnabled = hasScene;
+        UpdateNavigatorAvailability();
         InspectorVisibilityMenu.IsEnabled = InspectorPaneButton.IsEnabled = animation != null;
         PropertiesMenu.IsEnabled = hasDocument;
         ToolsVisibilityMenu.IsEnabled = ToolsPaneButton.IsEnabled = hasDocument || ViewModel.Problems.Count > 0;
@@ -148,7 +144,15 @@ public partial class MainWindow
             navigatorCollapsed = width < navigatorBreakpoint + (navigatorCollapsed ? 40 : 0);
             bool nav = ViewModel.HasRoot && layout.NavigatorVisible && !focus && (!navigatorCollapsed || navigatorTemporary);
             bool inspector = animation != null && layout.InspectorVisible && !focus;
-            double navWidth = nav ? layout.NavigatorWidth : 0;
+            double splitThreshold = layout.FilesWidth + layout.NavigatorWidth + 600 + 12 + (inspector ? layout.InspectorWidth + 6 : 0);
+            bool splitFiles = nav && width >= splitThreshold + (filesDetached ? 0 : 40);
+            SetFilesDetached(splitFiles);
+            double navWidth = nav ? layout.NavigatorWidth + (splitFiles ? layout.FilesWidth + 6 : 0) : 0;
+            DetachedFilesColumn.Width = new(splitFiles ? layout.FilesWidth : 0);
+            DetachedFilesColumn.MinWidth = splitFiles ? 200 : 0;
+            DetachedFilesColumn.MaxWidth = splitFiles ? 650 : double.PositiveInfinity;
+            FilesSplitterColumn.Width = new(splitFiles ? 6 : 0);
+            NavigatorContentColumn.Width = new(1,GridUnitType.Star);
             bool replacement = inspector && width - navWidth - layout.InspectorWidth - 12 < 360;
             if (replacement && !inspectorTemporary) inspector = false;
             NavigatorVisibilityMenu.IsChecked = nav; InspectorVisibilityMenu.IsChecked = inspector;
@@ -185,7 +189,8 @@ public partial class MainWindow
     {
         if (arrangingWorkspace) return;
         var layout = Layout;
-        if (sender == NavigatorSplitter) layout.NavigatorWidth = FilesColumn.ActualWidth;
+        if (sender == NavigatorSplitter) layout.NavigatorWidth = FilesColumn.ActualWidth - (filesDetached ? layout.FilesWidth + 6 : 0);
+        if (sender == FilesSplitter) { layout.FilesWidth = DetachedFilesColumn.ActualWidth; layout.NavigatorWidth = NavigatorContentColumn.ActualWidth; }
         if (sender == InspectorSplitter) layout.InspectorWidth = PropertiesColumn.ActualWidth;
         if (sender == ToolsSplitter) { layout.ToolsHeight = ToolsRow.ActualHeight; toolsMaximized = false; }
         layout.Normalize(); ArrangeWorkspace(); SaveWorkspacePreferences();
@@ -193,7 +198,6 @@ public partial class MainWindow
     private void SaveWorkspacePreferences()
     {
         if (detachingWorkspace) return;
-        Layout.BrowserTab = NavigationTabs.SelectedIndex;
         if (animation != null && ProgramHost.Content != null && InspectorTabs.SelectedIndex >= 0) Layout.InspectorTab = InspectorTabs.SelectedIndex;
         Layout.ToolTab = Math.Max(0, ToolTabs.SelectedIndex);
     }

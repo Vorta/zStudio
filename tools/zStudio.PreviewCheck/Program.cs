@@ -28,8 +28,11 @@ internal static class Program
             return 0;
         }
         if (args.Length == 2 && args[0] == "--freecam") return FlyCameraCheck.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--blender-navigation") return BlenderNavigationCheck.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--world-highlights") return WorldHighlightCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--recent-folders") return GuiReviewCapture.Run(args[1],menusOnly:true);
         if (args.Length == 2 && args[0] == "--header-layout") return GuiReviewCapture.Run(args[1],headerOnly:true);
+        if (args.Length == 2 && args[0] == "--responsive-files") return GuiReviewCapture.Run(args[1],headerOnly:true,desktopCorners:false);
         if (args.Length == 2 && args[0] == "--gui-review") return GuiReviewCapture.Run(args[1]);
         if (args.Length == 2 && args[0] == "--workspace-performance") return WorkspacePerformanceCheck.Run(args[1]);
         if (args.Length == 2 && args[0] is "--pickup-editor" or "--pickup-pointer") return PickupEditorCheck.Run(args[1], args[0] == "--pickup-pointer");

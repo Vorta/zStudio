@@ -94,7 +94,11 @@ public sealed partial class SceneViewport
                     bool horizon = IsHorizon(pose.SourceNode);
                     var material = PreviewMaterials.Create(horizon); material.EnableUnLit = true;
                     var mesh = new MeshGeometryModel3D { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, IsThrowingShadow = false, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
-                    int source = pose.SourceNode; mesh.MouseDown3D += (_, _) => NodeSelected?.Invoke(source);
+                    int source = pose.SourceNode; mesh.MouseDown3D += (_, e) =>
+                    {
+                        if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: System.Windows.Input.MouseButtonEventArgs { ChangedButton: System.Windows.Input.MouseButton.Left } })
+                        { SelectFramingNode(source); NodeSelected?.Invoke(source); }
+                    };
                     animationGroup!.Children.Add(mesh);
                     return new AnimatedMesh(mesh, material, part);
                 }).ToArray();
@@ -138,8 +142,10 @@ public sealed partial class SceneViewport
                 if (!horizon && pose.Visible && item.Mesh.Geometry?.Positions is { } positions) IncludeBounds(positions, transform);
             }
         }
-        if (followCamera && frame.Camera is { } c && viewport.Camera is HCamera live)
+        if (followCamera && frame.Camera is { } c)
         {
+            ChangeProjection("perspective"); axisView = null; autoPerspective = false;
+            var live = (HCamera)viewport.Camera!;
             authoredCameraPose = true;
             live.Position = new(c.Position.X, c.Position.Y, c.Position.Z);
             var look = c.Target - c.Position; if (look.LengthSquared() > 1e-8f) live.LookDirection = new(look.X, look.Y, look.Z);
@@ -153,11 +159,16 @@ public sealed partial class SceneViewport
     {
         var transform = pose.Transform;
         // The retail facade projection differs; this preview keeps effect cards readable.
-        if ((pose.Texture != null || model.Metadata.Int("model_type") == 1) && viewport.Camera is HCamera camera && Matrix4x4.Decompose(transform, out var size, out _, out var position))
+        if ((pose.Texture != null || model.Metadata.Int("model_type") == 1) && viewport.Camera is ProjectionCamera camera && Matrix4x4.Decompose(transform, out var size, out _, out var position))
         {
             var p = camera.Position; var facing = new Vector3((float)p.X, (float)p.Y, (float)p.Z);
+            if (camera is OrthographicCamera) facing = position - new Vector3((float)camera.LookDirection.X, (float)camera.LookDirection.Y, (float)camera.LookDirection.Z);
             if ((model.Metadata.UInt("flags") & 0x10) == 0 && pose.Texture == null) facing.Y = position.Y;
-            transform = Matrix4x4.CreateScale(size) * Matrix4x4.CreateBillboard(position, facing, Vector3.UnitY, Vector3.UnitZ);
+            var up = camera.UpDirection;
+            var billboardUp = Math.Abs(Vector3.Dot(Vector3.Normalize(facing - position), Vector3.UnitY)) > .999f
+                ? new Vector3((float)up.X, (float)up.Y, (float)up.Z) : Vector3.UnitY;
+            if (Vector3.DistanceSquared(position, facing) < 1e-10f) facing = position + Vector3.UnitZ;
+            transform = Matrix4x4.CreateScale(size) * Matrix4x4.CreateBillboard(position, facing, billboardUp, Vector3.UnitZ);
         }
         return transform;
     }
@@ -170,7 +181,7 @@ public sealed partial class SceneViewport
                 float falloff = Math.Clamp(1 - Vector3.Distance(pose.Transform.Translation, light.Position) / light.Range, 0, 1);
                 rgb = Vector3.Lerp(rgb, Vector3.Max(rgb * .65f, light.Color), Math.Clamp(light.Intensity * falloff, 0, 1));
             }
-        if (effectLighting && frame.Fog is { Enabled: true } fog && viewport.Camera is HCamera camera)
+        if (effectLighting && frame.Fog is { Enabled: true } fog && viewport.Camera is ProjectionCamera camera)
         {
             var p = camera.Position;
             float distance = Vector3.Distance(pose.Transform.Translation, new((float)p.X, (float)p.Y, (float)p.Z));
@@ -204,10 +215,7 @@ public sealed partial class SceneViewport
 
     public void FrameAnimation(AnimationFrame frame)
     {
-        if (animationContext == null) return;
-        var min = sceneMin; var max = sceneMax; sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
-        foreach (var pose in frame.Nodes.Where(p => p.Visible && !IsHorizon(p.SourceNode))) if (animatedMeshes.TryGetValue(pose.Id, out var items)) foreach (var item in items) IncludeBounds(item.Part.Positions, pose.Transform);
-        FrameAll(); sceneMin = min; sceneMax = max; UpdateClipPlanes();
+        TryFrame("asset", manual: false);
     }
     private void QueueAnimationTexture(string name)
     {

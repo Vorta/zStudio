@@ -79,6 +79,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         Difficulty.ItemsSource = MainViewModel.DifficultyChoices; Difficulty.SelectedItem = preferences?.Difficulty ?? MissionDifficulty.Medium;
         if (preferences != null) preferences.PropertyChanged += PreferencesChanged;
         viewport.Information += Note;
+        viewport.ManualNavigationStarting += () => { if (FollowCamera.IsChecked == true) FollowCamera.IsChecked = false; };
         audio.Diagnostic += message =>
         {
             if (disposed) return;
@@ -99,7 +100,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     public async Task InitializeAsync(string? worldPath = null, bool recoverCanceledRequest = false)
     {
         var operationToken = PreviewOperation.Current;
-        refreshingLevel = false; levelResume = false;
+        refreshingLevel = false; levelResume = false; levelRefreshView = null; levelRefreshSelection = null;
         contextRefreshView = null;
         initializing?.Cancel(); initializing?.Dispose(); initializing = PreviewOperation.Link(lifetime.Token);
         var token = initializing.Token;
@@ -257,7 +258,16 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             }
         }
     }
-    private void PresentationChanged(object sender, RoutedEventArgs e) { if (ready) Render(); }
+    private void PresentationChanged(object sender, RoutedEventArgs e)
+    {
+        if (sender == FollowCamera)
+        {
+            if (FollowCamera.IsChecked == true) viewport.PrepareAuthoredCamera();
+            else viewport.StopCameraMotion();
+        }
+        if (ready) Render();
+    }
+    internal void ToggleCameraFollow() => FollowCamera.IsChecked = FollowCamera.IsChecked != true;
     private void GridChanged(object sender, RoutedEventArgs e) { if (ready) viewport.SetGroundGrid(ShowGrid.IsChecked == true); }
     private void HeightKeyDown(object sender, KeyEventArgs e)
     {
@@ -471,6 +481,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private long levelGeneration, publishedLevelGeneration;
     private CancellationToken levelOperationToken;
     private bool refreshingLevel, levelResume;
+    private SceneViewport.ViewPose? levelRefreshView;
+    private int? levelRefreshSelection;
     private async void LevelChanged(object sender, RoutedEventArgs e) => await (optionWork = LevelChangedAsync(sender, e));
     private async Task LevelChangedAsync(object sender, RoutedEventArgs e)
     {
@@ -480,11 +492,14 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         bool resume = playing || refreshingLevel && levelResume; levelResume = resume; SetPlaying(false);
         var operationToken = levelOperationToken = PreviewOperation.Current;
         initializing?.Cancel(); initializing?.Dispose(); initializing = PreviewOperation.Link(lifetime.Token);
+        if (!refreshingLevel) { levelRefreshView = viewport.CaptureView(); levelRefreshSelection = viewport.FramingSelection; }
         var token = initializing.Token; refreshingLevel = true; LoadingPanel.Visibility = Visibility.Visible;
+        var retainedView = levelRefreshView ?? viewport.CaptureView(); int? retainedSelection = levelRefreshSelection;
         try
         {
             await viewport.ShowAnimationAsync(context, frame, resolver, ShowLevel.IsChecked == true, token, player?.LodLevel ?? 0, ShowHorizon.IsChecked == true, lifetime.Token);
-            token.ThrowIfCancellationRequested(); Render(); if (levelResume) SetPlaying(true); publishedLevelGeneration = generation;
+            token.ThrowIfCancellationRequested(); viewport.RestoreView(retainedView); viewport.SelectFramingNode(retainedSelection);
+            Render(); if (levelResume) SetPlaying(true); publishedLevelGeneration = generation;
         }
         catch (OperationCanceledException)
         {
@@ -495,7 +510,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                 try
                 {
                     await viewport.ShowAnimationAsync(context, frame, resolver, ShowLevel.IsChecked == true, token, player?.LodLevel ?? 0, ShowHorizon.IsChecked == true, lifetime.Token);
-                    token.ThrowIfCancellationRequested(); Render(); if (levelResume) SetPlaying(true); publishedLevelGeneration = generation;
+                    token.ThrowIfCancellationRequested(); viewport.RestoreView(retainedView); viewport.SelectFramingNode(retainedSelection);
+                    Render(); if (levelResume) SetPlaying(true); publishedLevelGeneration = generation;
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { previewOperationFailure = ex.Message; RecordPreviewError(ex.Message); }
@@ -506,7 +522,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         {
             // A canceled MCP request leaves this editor alive. Only the current
             // refresh owns its overlay; an older request cannot hide a newer one.
-            if (!disposed && initializing?.Token == token) { resume = levelResume; refreshingLevel = false; levelResume = false; LoadingPanel.Visibility = Visibility.Collapsed; }
+            if (!disposed && initializing?.Token == token) { resume = levelResume; refreshingLevel = false; levelResume = false; levelRefreshView = null; levelRefreshSelection = null; LoadingPanel.Visibility = Visibility.Collapsed; }
         }
         if (resetSimulation && !token.IsCancellationRequested && !disposed)
         {
@@ -535,7 +551,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             }
             finally { simulationGate.Release(); }
             if (ShowLevel.IsChecked == true) await LevelChangedAsync(sender, e);
-            else { Render(); viewport.FrameAnimation(frame); }
+            else Render();
             if (generation == lodGeneration && Lod.SelectedIndex == requested) publishedLodGeneration = generation;
         }
         catch (OperationCanceledException)
@@ -548,7 +564,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             }
         }
     }
-    private void FrameClick(object sender, RoutedEventArgs e) { if (frame != null) viewport.FrameAnimation(frame); }
+    private void FrameClick(object sender, RoutedEventArgs e) { if (frame != null && !viewport.TryFrame("asset")) Note("No visible geometry is available to frame."); }
     private async void WorldClick(object sender, RoutedEventArgs e) { OpenFileDialog dialog = new() { Filter = "GameZ scene|*.zbd", Title = "Choose this animation's mission scene" }; if (dialog.ShowDialog(Window.GetWindow(this)) == true) await InitializeAsync(dialog.FileName); }
     private async void BindClick(object sender, RoutedEventArgs e)
     {

@@ -1,11 +1,14 @@
 using System.IO;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Core;
@@ -45,6 +48,27 @@ internal static class McpWorkspaceChecks
             var resources = await client.ListResourcesAsync(); Assert.Equal(2,resources.Count);
             var state=await Call("state",new()); Assert.Equal(doc.SessionId.ToString(),state["documents"]![0]!["id"]!.GetValue<string>());
             string originalPreview = state["preview"]!.GetValue<string>();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            CheckNativeCorners(main);
+            foreach (string action in new[] { "maximize", "restore", "minimize", "restore" })
+            {
+                var windowState = await Call("window", new() { ["action"] = action });
+                string expected = action == "maximize" ? "Maximized" : action == "minimize" ? "Minimized" : "Normal";
+                Assert.Equal(expected, windowState["state"]!.GetValue<string>());
+                Assert.Equal(expected, main.WindowState.ToString());
+                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                if (action != "minimize") CheckNativeCorners(main);
+            }
+            if (OperatingSystem.IsWindowsVersionAtLeast(10,0,22000))
+                foreach (uint message in new uint[] { 0x031A, 0x031E })
+                {
+                    nint handle = new WindowInteropHelper(main).Handle;
+                    int square = 1;
+                    Assert.Equal(0,DwmSetWindowAttribute(handle,33,ref square,sizeof(int)));
+                    SendMessage(handle,message,0,0);
+                    await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                    CheckNativeCorners(main);
+                }
             await CancelPreviewJob("select_asset", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Raw", ["index"] = 1 }, "Raw #1:");
             Assert.Equal(1, doc.SelectedAsset!.Index);
             Assert.Equal(Visibility.Collapsed, ((TextBlock)main.FindName("EmptyPreview")).Visibility);
@@ -227,6 +251,26 @@ internal static class McpWorkspaceChecks
         }
         finally { main.OpenPropertiesWindow?.CloseResolved(); doc.AnimationEdits?.MarkSaved(); main.Close(); }
     }
+    private static void CheckNativeCorners(Window window)
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10,0,22000)) return;
+        nint handle = new WindowInteropHelper(window).Handle;
+        Assert.Equal(0, DwmGetWindowAttribute(handle,33,out int preference,sizeof(int)));
+        Assert.Equal(2,preference);
+        Assert.Equal(0,DwmIsCompositionEnabled(out bool composed));
+        if (!composed) return;
+        nint region = CreateRectRgn(0,0,0,0);
+        Assert.NotEqual(0,region);
+        try { Assert.Equal(0,GetWindowRgn(handle,region)); }
+        finally { DeleteObject(region); }
+    }
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint handle,int attribute,out int value,int size);
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint handle,int attribute,ref int value,int size);
+    [DllImport("dwmapi.dll")] private static extern int DwmIsCompositionEnabled([MarshalAs(UnmanagedType.Bool)] out bool enabled);
+    [DllImport("user32.dll")] private static extern int GetWindowRgn(nint handle,nint region);
+    [DllImport("user32.dll")] private static extern nint SendMessage(nint handle,uint message,nint wParam,nint lParam);
+    [DllImport("gdi32.dll")] private static extern nint CreateRectRgn(int left,int top,int right,int bottom);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(nint handle);
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
     { yield return root; for(int i=0;i<VisualTreeHelper.GetChildrenCount(root);i++) foreach(var child in Descendants(VisualTreeHelper.GetChild(root,i))) yield return child; }
 }

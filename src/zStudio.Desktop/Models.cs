@@ -19,6 +19,8 @@ public sealed record FileEntry(string Path, string RelativePath, FormatProbe Pro
 }
 public sealed partial class FolderNode(string name, string path, FileEntry? file = null) : ObservableObject
 {
+    [ObservableProperty] private bool isExpanded = true;
+    [ObservableProperty] private bool isSelected;
     public string Name { get; } = name;
     public string Path { get; } = path;
     public FileEntry? File { get; } = file;

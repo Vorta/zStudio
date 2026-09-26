@@ -15,17 +15,20 @@ public partial class MainWindow
         P("worldPath","string","GameZ archive path."), P("root","integer","Scene root node index."),
         P("activationOrigin","string","Comma-separated XYZ, or blank for default."), P("activationTarget","string","Comma-separated XYZ, or blank for default.")
     ]);
-    private static StudioParameter SceneChanges => new("changes", "object", "Static model/world options.", true, Properties:
+    private static StudioParameter SceneChanges => new("changes", "object", "Static model/world options. Validate the entire batch before applying changes; publish highlights only after requested refreshes succeed.", true, Properties:
     [
         .. new[] { "textures", "wireframe", "bounds", "horizon" }.Select(n => P(n,"boolean",n)),
-        P("lod","integer","Authored LOD rank."), P("difficulty","string","Mission layout.",false,"Easy","Medium","Hard"), P("texturePack","string","Available texture pack path, or empty for automatic.")
+        P("highlight", "string", "Whole world only: solid yellow non-default soils, green CanModify or red ClipTo; none restores normal appearance.", false, "none", "nonDefaultSoils", "canModify", "clipTo"),
+        new("lod","integer","Authored LOD rank within the active viewer's available range.", Minimum: 0, Maximum: int.MaxValue), P("difficulty","string","Mission layout.",false,"Easy","Medium","Hard"), P("texturePack","string","Available texture pack path, or empty for automatic.")
     ]);
     private static StudioParameter WorkspaceChanges => new("changes", "object", "Optional presentation preferences.", Properties:
     [
         .. new[] { "resetLayout", "navigator", "inspector", "tools", "toolsMaximized", "backupOnSave" }.Select(n=>P(n,"boolean",n)),
         P("theme","string","Theme.",false,"System","Light","Dark"), P("density","string","Density.",false,"Compact","Comfortable"),
         P("preset","string","Workspace preset.",false,"Inspect","Edit","Debug","Focus preview"),
-        .. new[] { "navigatorWidth", "inspectorWidth", "toolsHeight" }.Select(n=>P(n,"number","Preferred dimension in DIP; clamped to supported layout limits.")),
-        .. new[] { "navigatorTab", "inspectorTab", "toolsTab" }.Select(n=>P(n,"integer","Zero-based visible tab index."))
+        P("filesWidth","number","Preferred detached Files width in DIP, clamped to 200–650; automatic layout does not overwrite it."),
+        .. new[] { "navigatorWidth", "inspectorWidth", "toolsHeight" }.Select(n=>P(n,"number","Preferred dimension in DIP; clamped to supported layout limits. Navigator width is the content tabs width in split mode, or the combined tab group width otherwise.")),
+        P("navigatorTab","integer","Stable section index: 0 Files (also when detached), 1 Assets, 2 Search, 3 Document scene. Unavailable document sections are rejected."),
+        .. new[] { "inspectorTab", "toolsTab" }.Select(n=>P(n,"integer","Zero-based visible tab index."))
     ]);
 }

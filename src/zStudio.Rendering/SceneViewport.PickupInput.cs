@@ -23,7 +23,7 @@ public sealed partial class SceneViewport
     private HitTestResult? PickPickupHandle(Point point)
     {
         if (pickupLocked || !pickupEditable || selectedPickup is not int root ||
-            pickupManipulator?.Visibility != Visibility.Visible || viewport.Camera is not HelixToolkit.Wpf.SharpDX.PerspectiveCamera camera ||
+            pickupManipulator?.Visibility != Visibility.Visible || viewport.Camera is not HelixToolkit.Wpf.SharpDX.ProjectionCamera camera ||
             !IsInsidePickupViewport(point)) return null;
         var origin = pickupPositions[root] + pickupManipulator.CenterOffset;
         var start = viewport.Project(new Point3D(origin.X, origin.Y, origin.Z));
