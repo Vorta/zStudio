@@ -16,10 +16,11 @@ public partial class MainWindow
     private readonly ObservableCollection<string> mcpActivity = [];
     private StudioCommands? studioCommands;
     private readonly SemaphoreSlim automationGate = new(1);
+    private Task? mcpStopTask;
     internal StudioCommands Commands => studioCommands ??= CreateCommands();
     internal void InitializeMcp()
     {
-        if (!ViewModel.Settings.McpEnabled || mcpHost != null) return;
+        if (!ViewModel.Settings.McpEnabled || mcpHost != null || stoppingAutomation || shutdownToken.IsCancellationRequested) return;
         try
         {
             mcpHost = new(Commands, typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "unknown");
@@ -27,9 +28,14 @@ public partial class MainWindow
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { ViewModel.AddProblem("MCP: " + ex.Message); }
     }
-    internal async Task StopMcpAsync()
+    internal Task StopMcpAsync()
     {
+        if (mcpStopTask is { IsCompleted: false }) return mcpStopTask;
         stoppingAutomation = true;
+        return mcpStopTask = StopMcpCoreAsync();
+    }
+    private async Task StopMcpCoreAsync()
+    {
         var host = mcpHost; mcpHost = null;
         try
         {
@@ -39,15 +45,27 @@ public partial class MainWindow
         }
         finally { stoppingAutomation = false; }
     }
-    private void McpIntegrationClick(object sender, RoutedEventArgs e)
+    private async void McpIntegrationClick(object sender, RoutedEventArgs e)
     {
+        if (stoppingAutomation) await StopMcpAsync();
+        if (shutdownToken.IsCancellationRequested) return;
         if (mcpWindow != null) { mcpWindow.Activate(); return; }
         StackPanel panel = new() { Margin = new(18) };
         CheckBox enabled = new() { Content = "Enable local MCP access", IsChecked = ViewModel.Settings.McpEnabled, Margin = new(0,0,0,12) };
         panel.Children.Add(enabled);
         TextBlock status = new() { TextWrapping = TextWrapping.Wrap, Margin = new(0,0,0,12) }; panel.Children.Add(status);
         void Refresh() => status.Text = mcpHost == null ? "Disabled. Enable MCP before connecting an agent." : $"Ready · {mcpHost.ConnectionCount} clients\nInstance: {mcpHost.Instance.Id}\nAgents share this workspace and its undo history. Discovery stays in the background; the first workspace request can open zStudio. No network port is used.";
-        enabled.Click += async (_, _) => { ViewModel.Settings.McpEnabled = enabled.IsChecked == true; ViewModel.Settings.Save(); if (enabled.IsChecked == true) InitializeMcp(); else await StopMcpAsync(); Refresh(); };
+        enabled.Click += async (_, _) =>
+        {
+            if (shutdownToken.IsCancellationRequested || !enabled.IsEnabled) return;
+            enabled.IsEnabled = false;
+            try
+            {
+                ViewModel.Settings.McpEnabled = enabled.IsChecked == true; ViewModel.Settings.Save();
+                if (enabled.IsChecked == true) InitializeMcp(); else await StopMcpAsync();
+            }
+            finally { enabled.IsEnabled = !shutdownToken.IsCancellationRequested; Refresh(); }
+        };
         TextBox config = new() { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 95, Text = JsonSerializer.Serialize(new { mcpServers = new { zStudio = new { command = Environment.ProcessPath, args = new[] { "--mcp" } } } }, new JsonSerializerOptions { WriteIndented = true }) }; panel.Children.Add(config);
         WrapPanel buttons = new(); panel.Children.Add(buttons);
         foreach (var (label, action) in new (string, Action)[] { ("Copy configuration", () => Clipboard.SetText(config.Text)), ("Disconnect clients", () => mcpHost?.DisconnectClients()), ("Refresh", Refresh) })

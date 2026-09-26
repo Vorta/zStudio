@@ -4,6 +4,9 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.5.0 — Unreleased
 
+- Cancel retained preview lifetimes before draining MCP on accepted application close, while preserving canceled-close and MCP-only recovery behavior; serialize overlapping MCP teardown.
+- Restrict isolation to GUI-supported model/Whole world previews, isolate complete pickups when child meshes are selected, and protect active pickup drags from MCP scene/camera changes.
+
 - Retain the current document and preview until a reload replacement is parsed and accepted; reject canceled, malformed, superseded or newly edited/drafted replacements.
 - Tie inspection to document lifetime and revision, freeze edited snapshots, and keep original animation data separate from working edits across Undo/Redo.
 - Revalidate asynchronous navigation and draft publication, exclude MCP mutations during saves/modal decisions, apply approved preview settings as a batch, and suppress obsolete pickup/export/validation results.

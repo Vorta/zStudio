@@ -22,7 +22,9 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow : Window
 {
     public MainViewModel ViewModel { get; } = new();
-    private CancellationTokenSource preview = new();
+    private readonly CancellationTokenSource shutdown = new();
+    private readonly CancellationToken shutdownToken;
+    private CancellationTokenSource preview;
     private CancellationTokenSource? operation;
     private readonly SemaphoreSlim thumbnailGate = new(2);
     private readonly Queue<AssetItem> thumbnails = new();
@@ -50,6 +52,8 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        shutdownToken = shutdown.Token;
+        preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
         InitializeComponent(); DataContext = ViewModel;
         BackupOnSave.IsChecked = ViewModel.Settings.CreateBackupOnSave;
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
@@ -174,11 +178,12 @@ public partial class MainWindow : Window
         pendingAnimationPlay = false;
         EndImagePan();
         animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
-        preview.Cancel(); preview.Dispose(); preview = new(); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
+        preview.Cancel(); preview.Dispose(); preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
     }
     private Task ShowAsset(DocumentModel doc, AssetRecord? asset) => previewWork = ShowAssetCore(doc, asset);
     private async Task ShowAssetCore(DocumentModel doc, AssetRecord? asset)
     {
+        if (shutdownToken.IsCancellationRequested) return;
         if (animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         bool differentAsset = shownAsset?.Id != asset?.Id;
         if (!differentAsset && asset != null && shownDocument == doc && scene?.PreviewScene != null &&
@@ -200,7 +205,7 @@ public partial class MainWindow : Window
         ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
         try
         {
-            properties = asset == null ? (JsonObject)doc.Document.Metadata.DeepClone() : await Task.Run(() => ExportService.AssetJson(doc.Document, asset, token), token);
+            properties = asset == null ? (JsonObject)doc.Document.Metadata.DeepClone() : await LoadAssetPropertiesAsync(doc.Document, asset, token);
             token.ThrowIfCancellationRequested(); SetProperties(properties); CentralTree.ItemsSource = asset?.Kind == AssetKind.Zrd && properties["tree"] is JsonNode hierarchy ? ZrdTree(doc,asset,hierarchy) : properties.Select(p => new InspectorNode(p.Key,p.Value)).ToArray();
             ContentText.Text = asset?.Content is ScriptContent script ? script.Text : LimitedJson(properties);
             var bytes = asset == null ? doc.Document.Bytes : doc.Document.Slice(asset.Offset, asset.Length);
@@ -597,7 +602,13 @@ public partial class MainWindow : Window
             Close();
             return;
         }
-        if (mcpHost != null || automationOperations.Values.Any(j => !j.Work.IsCompleted))
+        // Closing is now accepted. Cancel the retained preview/editor lifetimes
+        // before canceling MCP requests: request-only cancellation deliberately
+        // recovers an open preview, and awaiting that recovery would stall exit.
+        // A canceled close never reaches this irreversible lifetime boundary.
+        allowClose = true; automationCloseRequested = false; IsEnabled = false;
+        shutdown.Cancel(); operation?.Cancel();
+        if (mcpHost != null || mcpStopTask is { IsCompleted: false } || automationOperations.Values.Any(j => !j.Work.IsCompleted))
         {
             e.Cancel = true; resolvingClose = true;
             await Dispatcher.Yield(DispatcherPriority.Normal);
@@ -608,7 +619,7 @@ public partial class MainWindow : Window
         propertiesWindow?.CloseResolved();
         flyCamera?.Dispose();
         ObserveDocumentCommands(null);
-        operation?.Cancel(); preview.Cancel(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); scene?.Dispose(); ViewModel.Dispose();
+        operation?.Cancel(); preview.Cancel(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); scene?.Dispose(); ViewModel.Dispose(); shutdown.Dispose();
         var s = ViewModel.Settings; if (WindowState == WindowState.Normal) { s.Width = ActualWidth; s.Height = ActualHeight; }
         SaveWorkspacePreferences();
         try { s.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* Settings cannot prevent shutdown. */ }

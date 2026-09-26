@@ -81,6 +81,15 @@ internal static class McpPreviewCheck
                 var (animation, preview) = await Select(animPath, "Animation", "vtol_destruction1");
                 await Call("animation_options", new { preview, changes = new { mute = true, height = 50, grid = true, collision = true } });
                 var editor = (AnimationEditor)((System.Windows.Controls.ContentControl)window.FindName("AnimationHost")).Content;
+                var isolationPose = editor.Viewport.CaptureView();
+                foreach (string action in new[] { "isolate", "show_all" })
+                {
+                    bool rejected = false;
+                    try { await Call("scene_selection", new { preview, action, node = 0 }); }
+                    catch (InvalidDataException ex) when (ex.Message.Contains("unsupported", StringComparison.Ordinal)) { rejected = true; }
+                    if (!rejected || editor.Viewport.CaptureView() != isolationPose)
+                        throw new InvalidDataException("Animation isolation was not rejected without changing the camera.");
+                }
                 ((System.Windows.Controls.TextBox)editor.FindName("PreviewHeight")).Text = "-";
                 bool draftRejected = false;
                 try { await Call("animation_transport", new { preview, action = "play" }); }

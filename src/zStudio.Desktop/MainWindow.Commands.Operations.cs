@@ -71,6 +71,8 @@ public partial class MainWindow
     private int documentSaveDepth;
     private void RequireAutomationMutationAvailable()
     {
+        if (shutdownToken.IsCancellationRequested)
+            throw new StudioCommandException("shutting_down", "The workspace is closing.");
         if (!IsEnabled || documentSaveDepth != 0 || System.Windows.Interop.ComponentDispatcher.IsThreadModal)
             throw new StudioCommandException("busy", "A GUI operation or document save is in progress. Retry after it completes.");
     }

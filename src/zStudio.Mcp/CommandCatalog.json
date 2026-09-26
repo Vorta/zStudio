@@ -901,7 +901,7 @@
   },
   {
     "Name": "zstudio_scene_selection",
-    "Description": "Select/inspect a scene node, isolate it, or show all nodes.",
+    "Description": "Select/inspect a scene node. Isolate and show_all are available only in static model/Whole world previews, matching the GUI.",
     "Mutates": true,
     "Parameters": [
       {
@@ -915,7 +915,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Selection operation.",
+        "Description": "Selection operation; isolate/show_all require a static model or Whole world preview.",
         "Required": true,
         "Choices": [
           "select",

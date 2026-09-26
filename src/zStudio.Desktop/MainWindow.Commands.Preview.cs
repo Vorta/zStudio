@@ -70,6 +70,8 @@ public partial class MainWindow
             [PreviewParameter, P("action", "string", "Camera operation.", true, "read", "set", "move", "rotate", "frame"), new("position", "array", "Absolute XYZ for set.", Items: new("", "number", "Coordinate."), MinItems: 3, MaxItems: 3), new("look", "array", "Look direction XYZ for set.", Items: new("", "number", "Direction component."), MinItems: 3, MaxItems: 3), P("fov", "number", "Horizontal field of view in degrees."), P("right", "number", "Right displacement in game units."), P("up", "number", "World-Y displacement in game units."), P("forward", "number", "Forward displacement in game units."), P("horizontal", "number", "Horizontal mouse-equivalent delta."), P("vertical", "number", "Vertical mouse-equivalent delta.")], a =>
         {
             var viewport = TargetViewport(a); string action = Text(a,"action"); var pose = viewport.CaptureView();
+            if (action != "read" && viewport.IsPickupDragging)
+                throw new StudioCommandException("busy", "A pickup drag is in progress. Finish or cancel the drag before changing the camera.");
             if (action == "frame") { if (animation?.CurrentFrame is { } frame) viewport.FrameAnimation(frame); else viewport.FrameAll(); }
             else if (action != "read")
             {
@@ -99,14 +101,24 @@ public partial class MainWindow
         {
             var viewport = TargetViewport(a); return Page((viewport.PreviewScene?.Nodes ?? []).Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)).Select(n => new { n.Index,n.Name,n.Class,n.Metadata }), a);
         });
-        Register(r, "scene_selection", "Select/inspect a scene node, isolate it, or show all nodes.", true, [PreviewParameter, P("action","string","Selection operation.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
+        Register(r, "scene_selection", "Select/inspect a scene node. Isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
             var viewport = TargetViewport(a); string action = Text(a,"action");
+            if (animation != null && action is "isolate" or "show_all")
+                throw new StudioCommandException("unsupported", "Isolation is available only in model and Whole world previews. Animation scenes remain fully visible.");
+            if (viewport.IsPickupDragging)
+                throw new StudioCommandException("busy", "A pickup drag is in progress. Finish or cancel the drag before changing scene selection.");
             if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; }
             else
             {
                 int node = Int(a,"node",-1); if (node < 0 || viewport.PreviewScene == null || node >= viewport.PreviewScene.Nodes.Count) throw new StudioCommandException("stale_record","Scene node unavailable.");
-                if (animation == null) InspectNode(node);
+                if (animation == null)
+                {
+                    // A picked pickup mesh represents its whole placed instance,
+                    // matching the GUI's selection and subsequent Isolate command.
+                    node = viewport.PickupAt(node)?.Root ?? node;
+                    InspectNode(node);
+                }
                 if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; }
                 return Result(viewport.PreviewScene!.Nodes[node].Metadata);
             }
