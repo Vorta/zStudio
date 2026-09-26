@@ -97,8 +97,11 @@ public partial class MainWindow
                 return await Dispatcher.InvokeAsync(async () =>
                 {
                     token.ThrowIfCancellationRequested();
+                    if (mutates) RequireAutomationMutationAvailable();
                     using var scope = PreviewOperation.Begin(token);
-                    return await action(args, token);
+                    var result = await action(args, token);
+                    token.ThrowIfCancellationRequested();
+                    return result;
                 }, System.Windows.Threading.DispatcherPriority.Normal, token).Task.Unwrap();
             }
             finally { if (mutates) automationGate.Release(); }

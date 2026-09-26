@@ -4,6 +4,10 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.5.0 — Unreleased
 
+- Retain the current document and preview until a reload replacement is parsed and accepted; reject canceled, malformed, superseded or newly edited/drafted replacements.
+- Tie inspection to document lifetime and revision, freeze edited snapshots, and keep original animation data separate from working edits across Undo/Redo.
+- Revalidate asynchronous navigation and draft publication, exclude MCP mutations during saves/modal decisions, apply approved preview settings as a batch, and suppress obsolete pickup/export/validation results.
+
 - Verify Properties publication and preserve input entered during decoding; propagate request cancellation through queued UI work and large property/JSON expansions.
 - Define pickup identity and destination-map schemas, enforce integer bounds, report failed/superseded document reloads explicitly, and preserve new edits/input during a deferred MCP close.
 - Recover animation scene bindings and late renderer refreshes after MCP cancellation, retaining usable playback and reporting unavailable or superseded work. Keep LOD/map geometry consistent across concurrent changes, apply the latest Map/Horizon choices and preserve playback or explicit Pause through refreshes.

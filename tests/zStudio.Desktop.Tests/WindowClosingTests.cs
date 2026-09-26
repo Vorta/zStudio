@@ -45,7 +45,13 @@ public sealed class WindowClosingTests
                     await PropertiesWindowChecks.Run(app);
                     await McpWorkspaceChecks.Run(app);
                     await PropertiesMcpChecks.Run();
+                    await OperationPublicationChecks.Run();
+                    await AssetInspectionMcpChecks.Run();
+                    await NavigationMcpChecks.Run();
+                    await GuiNavigationChecks.Run();
+                    await DraftResolutionMcpChecks.Run();
                     await AnimationMcpCancellationChecks.Run();
+                    await ReloadChecks.Run();
                 }
                 catch (Exception ex) { failure ??= ex; }
                 finally

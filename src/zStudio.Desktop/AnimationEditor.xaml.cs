@@ -51,6 +51,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private int contextGeneration;
     private SceneViewport.ViewPose? contextRefreshView;
     private int appliedSeed = 1;
+    private long settingsInputRevision, rangeInputRevision;
     private float appliedHeight;
     private Guid selectedSequence, selectedEvent;
     public AnimationPreviewOptions Options { get; } = new();
@@ -90,6 +91,9 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         timer.Tick += Tick; edits.Changed += EditsChanged;
         Seed.KeyDown += (_, e) => { if (e.Key == Key.Enter) { SeedChanged(Seed, e); e.Handled = true; } };
         EndTime.KeyDown += (_, e) => { if (e.Key == Key.Enter) { RangeChanged(EndTime, e); e.Handled = true; } };
+        Seed.TextChanged += (_, _) => { if (!changing) ++settingsInputRevision; };
+        PreviewHeight.TextChanged += (_, _) => { if (!changing) ++settingsInputRevision; };
+        EndTime.TextChanged += (_, _) => { if (!changing) { ++settingsInputRevision; ++rangeInputRevision; } };
         RefreshLists(); ready = true; AudioChanged(this, new RoutedEventArgs());
     }
     public async Task InitializeAsync(string? worldPath = null, bool recoverCanceledRequest = false)
@@ -143,7 +147,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         { if (generation == contextGeneration && !disposed) { previewOperationFailure = ex.Message; pendingPlay = false; LoadingText.Text = ex.Message + "\nUse Scene → Choose GameZ… to choose the mission scene. Event editing is still available."; RecordPreviewError(ex.Message); } }
     }
-    private AnimationPlayer CreatePlayer(AnimationPreviewContext? source = null) => new(source ?? context!, entryIndex, int.TryParse(Seed.Text, out int seed) ? seed : 1, Phase.SelectedIndex == 1)
+    private AnimationPlayer CreatePlayer(AnimationPreviewContext? source = null) => new(source ?? context!, entryIndex, appliedSeed, Phase.SelectedIndex == 1)
     { ConditionOverride = Condition.SelectedIndex switch { 1 => true, 2 => false, _ => null }, ActivationStart = activationStart, ReferencePosition = activationTarget,
         LodLevel = Math.Clamp(player?.LodLevel ?? 0, 0, Math.Max(0, (source ?? context!).Lods.Count() - 1)),
         GroundPlaneEnabled = GroundCollision.IsChecked == true, PreviewHeight = appliedHeight };
@@ -181,6 +185,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         if (context == null || disposed || LoadingPanel.Visibility == Visibility.Visible) return;
         long generation = ++seekGeneration;
         var operationToken = seekOperationToken = PreviewOperation.Current;
+        long rangeRevision = rangeInputRevision;
+        bool retainRangeInput = RangePending;
         SetPlaying(false); seeking?.Cancel(); seeking?.Dispose(); seeking = PreviewOperation.Link(lifetime.Token);
         var token = seeking.Token; PlayButton.IsEnabled = false;
         try
@@ -224,7 +230,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                     changing = true; int lod = Lod.SelectedIndex; Lod.ItemsSource = SceneLods.Choices(nextContext.Lods.Count()); Lod.SelectedIndex = Math.Clamp(lod, 0, Lod.Items.Count - 1); changing = false;
                 }
                 context = nextContext; player = nextPlayer; frame = nextFrame; duration = measured;
-                contextDirty = false; contextRefreshView = null; resetSimulation = false; ApplyRange(range);
+                contextDirty = false; contextRefreshView = null; resetSimulation = false; ApplyRange(range, retainRangeInput || rangeInputRevision != rangeRevision);
                 Render();
                 publishedSeekGeneration = generation;
             }
@@ -421,10 +427,10 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         var measuring = CreatePlayer(source.Snapshot());
         return Task.Run(() => measuring.MeasureDuration(token), token);
     }
-    private void ApplyRange(double seconds)
+    private void ApplyRange(double seconds, bool retainInput = false)
     {
         changing = true; SeekSlider.Maximum = seconds; Timeline.Duration = seconds;
-        EndTime.Text = seconds.ToString("0.###", CultureInfo.InvariantCulture); changing = false;
+        if (!retainInput) EndTime.Text = seconds.ToString("0.###", CultureInfo.InvariantCulture); changing = false;
         bool extended = !customRange && duration?.IsFinite == true && seconds > duration.Seconds + AnimationPlayer.StepSeconds / 2;
         RangeLabel.Text = extended ? "Auto duration · extended view" : customRange ? "Custom range" : duration?.Kind switch
         {

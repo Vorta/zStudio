@@ -1,6 +1,7 @@
 using System.IO;
 using System.Reflection;
 using System.Text.Json.Nodes;
+using System.Windows;
 using System.Windows.Controls;
 using NAudio.Wave;
 using Recoil.Zbd.Automation;
@@ -60,6 +61,92 @@ internal static class AnimationMcpCancellationChecks
             await editor.SetPreviewOptionAsync("mute", JsonValue.Create(false)!);
             Assert.True(audio.IsPrepared);
             Assert.Equal(1, audio.OutputInitializations);
+
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var initialPlayer = new AnimationPlayer(context, 0);
+            typeof(AnimationEditor).GetField("player", flags)!.SetValue(editor, initialPlayer);
+            typeof(AnimationEditor).GetField("frame", flags)!.SetValue(editor, initialPlayer.Frame());
+            ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Collapsed;
+            var seedInput = (TextBox)editor.FindName("Seed");
+            var rangeInput = (TextBox)editor.FindName("EndTime");
+            var range = (Slider)editor.FindName("SeekSlider");
+            range.Maximum = 1;
+            seedInput.Text = "2"; rangeInput.Text = "10";
+            editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
+            await editor.AwaitOptionWorkAsync();
+            Assert.Equal(10, range.Maximum);
+            Assert.Equal(2, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
+
+            var gate = (SemaphoreSlim)typeof(AnimationEditor).GetField("simulationGate", flags)!.GetValue(editor)!;
+            await gate.WaitAsync();
+            Task applying;
+            try
+            {
+                seedInput.Text = "3"; rangeInput.Text = "12";
+                editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
+                applying = editor.AwaitOptionWorkAsync();
+                Assert.False(applying.IsCompleted);
+                seedInput.Text = "99"; rangeInput.Text = "20";
+            }
+            finally { gate.Release(); }
+            Assert.Equal("draft_conflict", (await Assert.ThrowsAsync<StudioCommandException>(() => applying)).Code);
+            Assert.Equal(12, range.Maximum); Assert.Equal("20", rangeInput.Text); Assert.Equal("99", seedInput.Text);
+            Assert.Equal(3, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
+            editor.ResolveAutomationDrafts(editor.DraftToken, apply: false);
+            await editor.SeekAsync(.5);
+            Assert.Equal(.5, ((AnimationFrame)typeof(AnimationEditor).GetField("frame", flags)!.GetValue(editor)!).Time, 6);
+
+            ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Visible;
+            seedInput.Text = "4";
+            editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
+            Assert.Equal("not_ready", (await Assert.ThrowsAsync<StudioCommandException>(() => editor.AwaitOptionWorkAsync())).Code);
+            Assert.Equal("4", seedInput.Text);
+            Assert.Equal(3, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
+            ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Collapsed;
+            // Force an actual rebuild error. Seek reports failures through the
+            // editor; draft resolution must not turn that into MCP success.
+            var retainedEntry = context.Package.Entries[0];
+            await gate.WaitAsync();
+            try
+            {
+                editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
+                // Field refresh sees the valid document. Only the deferred
+                // simulation snapshot fails after it acquires its gate.
+                context.Package.Entries.Clear();
+            }
+            finally { gate.Release(); }
+            try
+            {
+                Assert.Equal("preview_unavailable", (await Assert.ThrowsAsync<StudioCommandException>(() => editor.AwaitOptionWorkAsync())).Code);
+            }
+            finally { context.Package.Entries.Add(retainedEntry); }
+            Assert.Equal(3, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
+            // The accepted seed text already matches appliedSeed after failure.
+            // Retrying it must still finish the pending reconstruction.
+            editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
+            await editor.AwaitOptionWorkAsync();
+            Assert.Equal(4, ((AnimationPlayer)typeof(AnimationEditor).GetField("player", flags)!.GetValue(editor)!).Seed);
+            Assert.Equal(0, ((AnimationFrame)typeof(AnimationEditor).GetField("frame", flags)!.GetValue(editor)!).Time);
+            Assert.False((bool)typeof(AnimationEditor).GetField("resetSimulation", flags)!.GetValue(editor)!);
+            // A range-only failure can occur after simulation flags were reset.
+            // Its retained failure must also require successful reconstruction.
+            rangeInput.Text = "8";
+            await gate.WaitAsync();
+            try
+            {
+                editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
+                context.Package.Entries.Clear();
+            }
+            finally { gate.Release(); }
+            try { Assert.Equal("preview_unavailable", (await Assert.ThrowsAsync<StudioCommandException>(() => editor.AwaitOptionWorkAsync())).Code); }
+            finally { context.Package.Entries.Add(retainedEntry); }
+            Assert.False((bool)typeof(AnimationEditor).GetField("resetSimulation", flags)!.GetValue(editor)!);
+            long lastSeek = (long)typeof(AnimationEditor).GetField("seekGeneration", flags)!.GetValue(editor)!;
+            editor.ResolveAutomationDrafts(editor.DraftToken, apply: true);
+            await editor.AwaitOptionWorkAsync();
+            Assert.Null(typeof(AnimationEditor).GetField("previewOperationFailure", flags)!.GetValue(editor));
+            Assert.Equal(lastSeek + 1, (long)typeof(AnimationEditor).GetField("publishedSeekGeneration", flags)!.GetValue(editor)!);
+            Assert.Equal(8, range.Maximum);
 
             // Explicit scene rebinding must report a failed preview, rather than
             // returning a successful MCP result for the retained loading overlay.

@@ -29,10 +29,11 @@ public partial class MainWindow
     {
         RegisterJob(r, "open_root", "Open and index a ZBD root in the visible workspace. Dirty documents must be explicitly saved or closed first.", [P("path", "string", "Absolute ZBD root directory.", true)], false, async (a, token) =>
         {
-            RequireNoDrafts(); if (ViewModel.Documents.Any(d => d.IsDirty)) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard dirty documents before changing roots.");
+            RequireRootPublication();
             string path = Path.GetFullPath(Text(a,"path"));
-            await ViewModel.OpenRootAsync(path, token);
-            if (!ViewModel.RootPath.Equals(path,StringComparison.OrdinalIgnoreCase)) throw new StudioCommandException("context_changed","Workspace was replaced during indexing.");
+            long workspaceGeneration = ViewModel.WorkspaceGeneration + 1;
+            await ViewModel.OpenRootAsync(path, token, RequireRootPublication);
+            if (ViewModel.WorkspaceGeneration != workspaceGeneration || !ViewModel.RootPath.Equals(path,StringComparison.OrdinalIgnoreCase)) throw new StudioCommandException("context_changed","Workspace was replaced during indexing.");
             UpdateRecent(); return Result(new { ViewModel.RootPath, ViewModel.Status, files = ViewModel.Files.Count });
         });
         Register(r, "files", "List recognized files in the current root.", false, PageParameters, a => Page(ViewModel.Files.Where(f => f.RelativePath.Contains(Text(a, "query"), StringComparison.OrdinalIgnoreCase)), a));
@@ -50,8 +51,8 @@ public partial class MainWindow
         RegisterJob(r, "open_document", "Open or activate an archive and its visible preview.", [P("path", "string", "Absolute archive path.", true)], false, async (a, token) =>
         {
             RequireNoDrafts(); string path = Path.GetFullPath(Text(a, "path"));
-            if (!ViewModel.HasRoot) await ViewModel.OpenRootAsync(Path.GetDirectoryName(path)!, token);
-            var doc = await ViewModel.OpenFileAsync(path, token) ?? throw new StudioCommandException("open_failed", ViewModel.Status);
+            await ViewModel.EnsureRootForFileAsync(path, cancellationToken: token, beforePublish: RequireRootPublication);
+            var doc = await ViewModel.OpenFileAsync(path, token, () => { RequireAutomationMutationAvailable(); RequireNoDrafts(); }) ?? throw new StudioCommandException("open_failed", ViewModel.Status);
             NavigationTabs.SelectedItem = AssetsTab; await previewWork;
             if (doc.IsDisposed || ViewModel.SelectedDocument != doc) throw new StudioCommandException("context_changed","The active document changed while opening.");
             return Result(DocumentState(doc));
@@ -69,11 +70,10 @@ public partial class MainWindow
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);
             return Result(new { document = DocumentState(doc), asset = asset.Id, ViewModel.Status });
         });
-        Register(r, "inspect_asset", "Read stored asset metadata and content. Animation edited state is returned separately from source.", false, AssetParameters, async (a, token) =>
+        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen animation edit snapshot at one revision. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
         {
             var doc = TargetDocument(a); var asset = TargetAsset(doc, a);
-            var source = await Task.Run(() => ExportService.AssetJson(doc.Document, asset, token), token);
-            return Result(new { document = doc.SessionId, doc.Revision, source, edited = asset.Kind == AssetKind.Animation ? doc.AnimationEdits?.Package.Entries[asset.Index].ToJson() : null });
+            return await InspectAssetAsync(doc, asset, token);
         });
         Register(r, "source_bytes", "Read at most 4096 original source bytes; these are not pending edits or runtime memory.", false,
             [DocumentParameter, new("offset", "integer", "Absolute byte offset.", true, Minimum: 0, Maximum: long.MaxValue), P("length", "integer", "Byte count, 0–4096.", true)], a =>
@@ -88,14 +88,27 @@ public partial class MainWindow
             var doc = TargetDocument(a, true); if (doc.IsDirty && !Flag(a, "discard")) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });
         });
-        RegisterJob(r, "reload_document", "Reload a clean document from disk; dirty documents must first be saved or explicitly closed.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
+        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it. Failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
             var doc = TargetDocument(a, true); if (doc.IsDirty) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
-            string path = doc.Path; ViewModel.CloseResolved(doc);
-            var next = await ViewModel.OpenFileAsync(path, token) ?? throw new StudioCommandException("open_failed", ViewModel.Status);
-            await previewWork; token.ThrowIfCancellationRequested();
-            if (next.IsDisposed || ViewModel.SelectedDocument != next) throw new StudioCommandException("context_changed", "The active document changed while reloading.");
-            return Result(DocumentState(next));
+            bool active = ViewModel.SelectedDocument == doc;
+            var selected = ViewModel.SelectedDocument;
+            long generation = ViewModel.NavigationGeneration + 1;
+            try
+            {
+                var next = await ViewModel.ReloadDocumentAsync(doc, doc.Revision, cancellationToken: token);
+                if (active) await previewWork;
+                token.ThrowIfCancellationRequested();
+                if (next.IsDisposed || !ViewModel.Documents.Contains(next) || active && ViewModel.SelectedDocument != next)
+                    throw new StudioCommandException("context_changed", "The reloaded document was closed or superseded before completion.");
+                return Result(DocumentState(next));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+            {
+                if (ViewModel.NavigationGeneration == generation && !doc.IsDisposed && ViewModel.SelectedDocument == selected)
+                    ViewModel.Status = ex is OperationCanceledException ? "Reload canceled; the existing document was retained." : ex.Message;
+                throw;
+            }
         });
         Register(r, "undo_redo", "Undo or redo one accepted edit in the specified document.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], a =>
         {
@@ -129,5 +142,11 @@ public partial class MainWindow
         RegisterJob(r, "validate", "Validate the source archive on disk, not pending edits. Returns structured diagnostics.", [DocumentParameter], true, async (a, token) => Result(await ValidateDocumentSourceAsync(TargetDocument(a), token)));
         Register(r, "problems", "List file/operation problems with original severity and source context.", false, PageParameters, a => Page(ViewModel.Problems, a, p => p.Message + " " + p.File + " " + p.Severity + " " + p.Category));
         RegisterOperationCommands(r);
+    }
+    private void RequireRootPublication()
+    {
+        RequireAutomationMutationAvailable(); RequireNoDrafts();
+        if (ViewModel.Documents.Any(d => d.IsDirty))
+            throw new StudioCommandException("unsaved_changes", "Save or explicitly discard dirty documents before changing roots.");
     }
 }

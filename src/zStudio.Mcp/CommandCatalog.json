@@ -281,7 +281,7 @@
   },
   {
     "Name": "zstudio_inspect_asset",
-    "Description": "Read stored asset metadata and content. Animation edited state is returned separately from source.",
+    "Description": "Read original asset metadata/content and a separately frozen animation edit snapshot at one revision. Closed or changed documents reject stale results.",
     "Mutates": false,
     "Parameters": [
       {
@@ -382,7 +382,7 @@
   },
   {
     "Name": "zstudio_reload_document",
-    "Description": "Reload a clean document from disk; dirty documents must first be saved or explicitly closed. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Stage and reparse a clean document before replacing it. Failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

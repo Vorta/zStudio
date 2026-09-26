@@ -26,11 +26,16 @@ public partial class AnimationEditor
     internal override void ResolveAutomationDrafts(string expectedToken, bool apply)
     {
         if (expectedToken != DraftToken) throw new StudioCommandException("draft_conflict", "Drafts changed. Read them again.");
-        if (apply && (!float.TryParse(PreviewHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float height) || !float.IsFinite(height) || height is < -999 or > 999 ||
-            !int.TryParse(Seed.Text, CultureInfo.InvariantCulture, out _) || !double.TryParse(EndTime.Text, CultureInfo.InvariantCulture, out double end) || !double.IsFinite(end) || end < 1d / 60 || end > 3600))
-            throw new StudioCommandException("invalid_draft", "Height, seed or range is invalid. Input was retained.");
+        SettingDrafts? approved = null;
+        if (apply)
+        {
+            if (!float.TryParse(PreviewHeight.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float height) || !float.IsFinite(height) || height is < -999 or > 999 ||
+                !int.TryParse(Seed.Text, CultureInfo.InvariantCulture, out int seed) || !double.TryParse(EndTime.Text, CultureInfo.InvariantCulture, out double end) || !double.IsFinite(end) || end < 1d / 60 || end > 3600)
+                throw new StudioCommandException("invalid_draft", "Height, seed or range is invalid. Input was retained.");
+            approved = new(height, seed, end, HeightPending, SeedPending, RangePending);
+        }
         base.ResolveAutomationDrafts(expectedToken, apply);
-        if (apply) optionWork = ApplySettingDraftsAsync();
+        if (approved != null) optionWork = ApplySettingDraftsAsync(approved);
         else
         {
             PreviewHeight.Text = appliedHeight.ToString(CultureInfo.InvariantCulture);
@@ -38,11 +43,33 @@ public partial class AnimationEditor
             EndTime.Text = SeekSlider.Maximum.ToString("0.###", CultureInfo.InvariantCulture);
         }
     }
-    private async Task ApplySettingDraftsAsync()
+    private sealed record SettingDrafts(float Height, int Seed, double Range, bool HeightPending, bool SeedPending, bool RangePending);
+    private async Task ApplySettingDraftsAsync(SettingDrafts approved)
     {
-        if (HeightPending) await HeightChangedAsync(this, new(System.Windows.Controls.TextBox.TextChangedEvent, System.Windows.Controls.UndoAction.None));
-        if (SeedPending) await SeedChangedAsync(this, new());
-        if (RangePending) { customRange = true; ApplyRange(Math.Ceiling(double.Parse(EndTime.Text, CultureInfo.InvariantCulture) * 60) / 60); await SeekAsync(frame?.Time ?? 0); }
+        // Accepted settings can outlive a failed or superseded reconstruction.
+        // Retrying the same input must finish that work, even when no text differs.
+        bool resetSeed = approved.SeedPending || player is { } seedPlayer && seedPlayer.Seed != appliedSeed;
+        bool restoreHeight = approved.HeightPending || player is { } heightPlayer && heightPlayer.PreviewHeight != appliedHeight;
+        bool rebuild = resetSeed || restoreHeight || approved.RangePending || resetSimulation || contextDirty || previewOperationFailure != null;
+        if (rebuild && (disposed || context == null || LoadingPanel.Visibility == System.Windows.Visibility.Visible))
+            throw new StudioCommandException("not_ready", "Wait for the animation preview to load before applying preview settings. Input was retained.");
+        // Freeze every approved operand before field commits or asynchronous
+        // rebuilds can rewrite controls. Apply the batch once, then reconstruct.
+        if (approved.HeightPending) { appliedHeight = approved.Height; resetSimulation = true; pendingPlay |= playing; }
+        if (approved.SeedPending) { appliedSeed = approved.Seed; resetSimulation = true; }
+        resetSimulation |= resetSeed || restoreHeight;
+        if (approved.RangePending) { customRange = true; ApplyRange(Math.Ceiling(approved.Range * 60) / 60); }
+        if (!rebuild) return;
+        long revision = settingsInputRevision;
+        long requested = seekGeneration + 1;
+        previewOperationFailure = null;
+        await SeekAsync(resetSeed ? 0 : frame?.Time ?? 0, preservePlayhead: restoreHeight && !approved.RangePending);
+        PreviewOperation.Current.ThrowIfCancellationRequested();
+        if (settingsInputRevision != revision)
+            throw new StudioCommandException("draft_conflict", "New preview input was retained while the approved settings were applied. Read drafts again.");
+        if (previewOperationFailure != null) throw new StudioCommandException("preview_unavailable", previewOperationFailure);
+        if (disposed || seekGeneration != requested || publishedSeekGeneration != requested)
+            throw new StudioCommandException("context_changed", "The animation rebuild for the approved settings was superseded.");
     }
     internal async Task AwaitOptionWorkAsync()
     {

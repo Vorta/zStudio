@@ -55,6 +55,14 @@ public partial class MainWindow : Window
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;
+        ViewModel.ValidateNavigationPublication = closesDocuments =>
+        {
+            RequireAutomationMutationAvailable();
+            if (closesDocuments) RequireNoDrafts();
+            else if (animation?.HasAutomationDrafts == true)
+                throw new Recoil.Zbd.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
+        };
+        ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
         var s = ViewModel.Settings;
         RestoreWindowSize(new(SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight));
         InitializeWorkspace();
@@ -77,13 +85,14 @@ public partial class MainWindow : Window
     public async void OpenStartupPath(string path) => await RunUi(async () =>
     {
         if (Directory.Exists(path)) await ViewModel.OpenRootAsync(path);
-        else if (File.Exists(path)) { await ViewModel.OpenRootAsync(Path.GetDirectoryName(path)!); await ViewModel.OpenFileAsync(path); }
+        else if (File.Exists(path)) await OpenFilesAsync([path], forceRoot: true);
         else throw new IOException("The supplied path does not exist: " + path);
         UpdateRecent();
     });
     private async Task RunUi(Func<Task> work)
     {
         try { if (animation?.ResolvePendingDrafts() == false) return; await work(); }
+        catch (Recoil.Zbd.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
     }
@@ -96,7 +105,19 @@ public partial class MainWindow : Window
     private async void OpenFileClick(object sender, RoutedEventArgs e)
     {
         OpenFileDialog dialog = new() { Filter = "Recoil assets|*.zbd;*.zrd;*.wav|All files|*.*" };
-        if (dialog.ShowDialog(this) == true) await RunUi(async () => { if (!ViewModel.HasRoot) await ViewModel.OpenRootAsync(Path.GetDirectoryName(dialog.FileName)!); await ViewModel.OpenFileAsync(dialog.FileName); });
+        if (dialog.ShowDialog(this) == true) await RunUi(() => OpenFilesAsync([dialog.FileName]));
+    }
+    internal async Task OpenFilesAsync(IReadOnlyList<string> paths, bool forceRoot = false)
+    {
+        if (paths.Count == 0) return;
+        await ViewModel.EnsureRootForFileAsync(paths[0], forceRoot);
+        foreach (string path in paths)
+        {
+            var document = await ViewModel.OpenFileAsync(path);
+            if (document == null) return;
+            if (ViewModel.SelectedDocument != document)
+                throw new Recoil.Zbd.Automation.StudioCommandException("context_changed", "A newer selection superseded opening files.");
+        }
     }
     private void UpdateRecent()
     {
@@ -114,7 +135,7 @@ public partial class MainWindow : Window
     private async void OnDrop(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } paths) return;
-        await RunUi(async () => { if (Directory.Exists(paths[0])) { await ViewModel.OpenRootAsync(paths[0]); UpdateRecent(); } else { if (!ViewModel.HasRoot) await ViewModel.OpenRootAsync(Path.GetDirectoryName(paths[0])!); foreach (string path in paths) await ViewModel.OpenFileAsync(path); } });
+        await RunUi(async () => { if (Directory.Exists(paths[0])) { await ViewModel.OpenRootAsync(paths[0]); UpdateRecent(); } else await OpenFilesAsync(paths); });
     }
     private async void FileDoubleClick(object sender, MouseButtonEventArgs e)
     {

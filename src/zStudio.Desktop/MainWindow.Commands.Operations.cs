@@ -47,6 +47,7 @@ public partial class MainWindow
             await automationGate.WaitAsync(job.Cancellation.Token); acquired = true; job.State = "running";
             using var scope = PreviewOperation.Begin(job.Cancellation.Token);
             job.Cancellation.Token.ThrowIfCancellationRequested();
+            RequireAutomationMutationAvailable();
             job.Data = (await execute(arguments, job.Cancellation.Token)).Data;
             job.Cancellation.Token.ThrowIfCancellationRequested(); job.State = "completed";
         }
@@ -67,16 +68,43 @@ public partial class MainWindow
                 return Result(job.Snapshot());
             }, System.Windows.Threading.DispatcherPriority.Normal, token)));
     }
-    private async Task SaveAnimationToPathAsync(DocumentModel doc, string destination, CancellationToken token = default)
+    private int documentSaveDepth;
+    private void RequireAutomationMutationAvailable()
     {
+        if (!IsEnabled || documentSaveDepth != 0 || System.Windows.Interop.ComponentDispatcher.IsThreadModal)
+            throw new StudioCommandException("busy", "A GUI operation or document save is in progress. Retry after it completes.");
+    }
+    private IDisposable BeginDocumentSave()
+    {
+        if (documentSaveDepth != 0) throw new StudioCommandException("busy", "A document save is already in progress.");
+        bool enabled = IsEnabled;
+        var pinnedWindow = propertiesWindow; bool propertiesEnabled = pinnedWindow?.IsEnabled == true;
+        ++documentSaveDepth; IsEnabled = false; if (pinnedWindow != null) pinnedWindow.IsEnabled = false;
+        return new SaveExclusion(() =>
+        {
+            --documentSaveDepth; IsEnabled = enabled;
+            if (pinnedWindow != null && propertiesWindow == pinnedWindow) pinnedWindow.IsEnabled = propertiesEnabled;
+        });
+    }
+    private sealed class SaveExclusion(Action release) : IDisposable
+    {
+        public void Dispose() => release();
+    }
+    internal Func<AnimationPackage, string, string, string, CancellationToken, Task> WriteAnimationArchiveAsync { get; set; } = AnimationWriter.SaveAsAsync;
+    internal Func<AssetResolver, IAssetExporter> CreateAssetExporter { get; set; } = static resolver => new ExportService(resolver);
+    internal Func<string, CancellationToken, Task<ZbdDocument>> ReadValidationSourceAsync { get; set; } = static (path, token) => FormatRegistry.Default.OpenAsync(path, token);
+    internal async Task SaveAnimationToPathAsync(DocumentModel doc, string destination, CancellationToken token = default)
+    {
+        using var save = BeginDocumentSave();
         var edits = doc.AnimationEdits ?? throw new InvalidOperationException("Not an editable animation pack.");
         if (shownDocument == doc) animation?.Pause();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
-        await AnimationWriter.SaveAsAsync(edits.Package, destination, doc.Path, ViewModel.Resolver?.Root ?? Path.GetDirectoryName(doc.Path)!, cancellation.Token);
+        await WriteAnimationArchiveAsync(edits.Package, destination, doc.Path, ViewModel.Resolver?.Root ?? Path.GetDirectoryName(doc.Path)!, cancellation.Token);
         doc.LastSavedCopy = destination; edits.MarkSaved(); ViewModel.Status = "Saved and verified " + destination + " · preview keeps the original mission context";
     }
     private async Task<PickupPlacementSaveResult> SavePickupDestinationsAsync(DocumentModel doc, IReadOnlyDictionary<string, string>? destinations, bool backup, CancellationToken token = default)
     {
+        using var save = BeginDocumentSave();
         var edits = doc.PickupEdits ?? throw new InvalidOperationException("No editable pickup placements loaded.");
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
         var result = await edits.SaveAsync(destinations, backup, cancellation.Token);
@@ -97,8 +125,14 @@ public partial class MainWindow
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token); operation = cancellation; CancelOperationItem.IsEnabled = true;
         try
         {
-            var progress = new Progress<ExportProgress>(p => ViewModel.Status = $"Exporting {p.Completed}/{p.Total}: {p.Name}");
-            var result = await Task.Run(() => new ExportService(resolver).ExportAsync(doc.Document, assets, destination, json, pack, lod, progress, cancellation.Token), cancellation.Token);
+            var progress = new Progress<ExportProgress>(p =>
+            {
+                if (operation == cancellation && !cancellation.IsCancellationRequested && !doc.IsDisposed)
+                    ViewModel.Status = $"Exporting {p.Completed}/{p.Total}: {p.Name}";
+            });
+            var exporter = CreateAssetExporter(resolver);
+            var result = await Task.Run(() => exporter.ExportAsync(doc.Document, assets, destination, json, pack, lod, progress, cancellation.Token), cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
             foreach (string error in result.Errors) ViewModel.AddProblem(error, file: doc.Path);
             ViewModel.Status = $"Exported {result.Completed}/{assets.Length} assets to {result.Directory}"; return result;
         }
@@ -113,7 +147,7 @@ public partial class MainWindow
             ViewModel.Status = "Validating source file on disk…";
             var notes = await Task.Run(async () =>
             {
-                var doc = await FormatRegistry.Default.OpenAsync(selected.Path, cancellation.Token);
+                var doc = await ReadValidationSourceAsync(selected.Path, cancellation.Token);
                 var diagnostics = doc.Diagnostics.Select(d => new StudioProblem(d.Severity, "File / operation", d.Message, selected.Path, d.AssetIndex, d.Offset)).ToList();
                 foreach (var asset in doc.Assets)
                 {
@@ -128,6 +162,7 @@ public partial class MainWindow
                 }
                 return diagnostics;
             }, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
             foreach (var note in notes) ViewModel.AddProblem(note.Message, note.Severity, note.File, note.AssetIndex, note.Offset);
             ViewModel.Status = $"Source-file validation finished: {notes.Count} diagnostics"; return notes;
         }

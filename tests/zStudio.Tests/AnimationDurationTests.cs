@@ -97,7 +97,7 @@ public sealed partial class AnimationTests
     {
         var package = Fixture(); var events = package.Entries[0].Sequences[0].Events;
         var shortMotion = AnimationCatalog.Create(11); shortMotion.SetInt(16, 1);
-        var longMotion = shortMotion.Duplicate(); longMotion.SetFloat(140, 3);
+        var longMotion = shortMotion.Duplicate(TestContext.Current.CancellationToken); longMotion.SetFloat(140, 3);
         events.AddRange([AnimationCatalog.Create(31), shortMotion, AnimationCatalog.Create(32), longMotion, AnimationCatalog.Create(34)]);
         Assert.Equal(60, new AnimationPlayer(Context(package), 0) { ConditionOverride = true }.MeasureDuration(TestContext.Current.CancellationToken).Frames);
         Assert.Equal(180, new AnimationPlayer(Context(package), 0) { ConditionOverride = false }.MeasureDuration(TestContext.Current.CancellationToken).Frames);

@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
 
@@ -27,12 +29,43 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private MissionDifficulty difficulty = MissionDifficulty.Medium;
     private readonly Dictionary<string,FolderNode> fileNodes = new(StringComparer.OrdinalIgnoreCase);
     private FolderNode? otherOpenFiles;
+    private long navigationGeneration;
+    private bool disposed;
+    internal long NavigationGeneration => navigationGeneration;
+    internal long WorkspaceGeneration { get; private set; }
+    internal long WorkspaceNavigationGeneration { get; private set; }
+    internal Func<string, CancellationToken, Task<ZbdDocument>> LoadDocumentAsync { get; set; } =
+        static (path, token) => Task.Run(() => FormatRegistry.Default.OpenAsync(path, token), token).WaitAsync(token);
+    internal Func<string, CancellationToken, Task<bool>> CheckRootExistsAsync { get; set; } =
+        static (path, token) => Task.Run(() => Directory.Exists(path), token).WaitAsync(token);
     public MainViewModel()
     {
         difficulty = Settings.Difficulty;
-        Documents.CollectionChanged += (_,_) => SynchronizeOpenFiles();
+        Documents.CollectionChanged += (_,_) => { ++navigationGeneration; SynchronizeOpenFiles(); };
     }
-    partial void OnSelectedDocumentChanged(DocumentModel? value) => SynchronizeOpenFiles();
+    partial void OnSelectedDocumentChanging(DocumentModel? value)
+    { if (SelectedDocument != null) SelectedDocument.PropertyChanged -= SelectedDocumentSelectionChanged; }
+    partial void OnSelectedDocumentChanged(DocumentModel? value)
+    {
+        ++navigationGeneration;
+        if (value != null) value.PropertyChanged += SelectedDocumentSelectionChanged;
+        SynchronizeOpenFiles();
+    }
+    private void SelectedDocumentSelectionChanged(object? sender, PropertyChangedEventArgs e)
+    { if (e.PropertyName == nameof(DocumentModel.SelectedAsset)) ++navigationGeneration; }
+    private void RequireCurrentNavigation(long generation)
+    {
+        if (disposed || generation != navigationGeneration)
+            throw new StudioCommandException("context_changed", "A newer workspace navigation superseded this request.");
+    }
+    internal async Task EnsureRootForFileAsync(string path, bool forceRoot = false, CancellationToken cancellationToken = default, Action? beforePublish = null)
+    {
+        if (HasRoot && !forceRoot) return;
+        long expectedWorkspace = WorkspaceGeneration + 1;
+        await OpenRootAsync(Path.GetDirectoryName(Path.GetFullPath(path))!, cancellationToken, beforePublish);
+        if (WorkspaceGeneration != expectedWorkspace || NavigationGeneration != WorkspaceNavigationGeneration || SelectedDocument != null)
+            throw new StudioCommandException("context_changed", "The user navigated elsewhere while the workspace was opening.");
+    }
     private void SynchronizeOpenFiles()
     {
         foreach (var node in fileNodes.Values)
@@ -60,6 +93,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AddProblem("Could not save mission difficulty: " + ex.Message); }
     }
     public Func<DocumentModel, Task<bool>>? ConfirmDiscardAsync { get; set; }
+    internal Action<bool>? ValidateNavigationPublication { get; set; }
     private CancellationTokenSource workspace = new();
     private readonly List<SearchHit> index = [];
     [ObservableProperty] private string rootPath = "Open a ZBD folder to start exploring";
@@ -69,16 +103,38 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string globalQuery = "";
     [ObservableProperty] private bool hasRoot;
     [ObservableProperty] private bool searchIsLimited;
-    public async Task OpenRootAsync(string root, CancellationToken cancellationToken = default)
+    public async Task OpenRootAsync(string root, CancellationToken cancellationToken = default, Action? beforePublish = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        long generation = ++navigationGeneration;
+        RequireCurrentNavigation(generation);
         root = Path.GetFullPath(root);
         // Directory checks can block on unavailable network shares. Keep that work off
         // the dispatcher and abandon the wait on shutdown; it has no workspace effects.
-        if (!await Task.Run(() => Directory.Exists(root), cancellationToken).WaitAsync(cancellationToken)) throw new DirectoryNotFoundException(root);
+        bool exists;
+        using (var preflight = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken))
+        {
+            try { exists = await CheckRootExistsAsync(root, preflight.Token); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            { throw new StudioCommandException("context_changed", "The workspace changed while checking the requested folder."); }
+        }
         cancellationToken.ThrowIfCancellationRequested();
-        foreach (var document in Documents.ToArray()) if (!await CanRemoveAsync(document)) return;
+        RequireCurrentNavigation(generation);
+        if (!exists) throw new DirectoryNotFoundException(root);
+        Dictionary<DocumentModel, long> acceptedRevisions = [];
+        if (beforePublish == null)
+            foreach (var document in Documents.ToArray())
+            {
+                if (!await CanRemoveAsync(document)) return;
+                cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
+                acceptedRevisions.Add(document, document.Revision);
+            }
         cancellationToken.ThrowIfCancellationRequested();
+        if (acceptedRevisions.Any(pair => pair.Key.IsDisposed || pair.Key.Revision != pair.Value))
+            throw new StudioCommandException("revision_conflict", "A document changed after its close decision. Its current edits were retained.");
+        ValidateNavigationPublication?.Invoke(true);
+        beforePublish?.Invoke(); RequireCurrentNavigation(generation);
+        long committedWorkspace = ++WorkspaceGeneration;
         workspace.Cancel(); workspace.Dispose(); workspace = new(); var workspaceToken = workspace.Token;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(workspaceToken, cancellationToken);
         var token = cancellation.Token;
@@ -86,7 +142,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // A previous asynchronous operation may still hold its resolver; its
         // canceled task owns that short remaining lifetime, not the new workspace.
         Resolver = new AssetResolver(root); Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
-        RootPath = root; HasRoot = true; IsBusy = true; Status = "Scanning files…";
+        RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";
         Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
         try
         {
@@ -114,8 +170,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 node = new(Path.GetFileName(path), path); directories[path] = node; EnsureDirectory(Path.GetDirectoryName(path)!).Children.Add(node); return node;
             }
         }
-        catch (OperationCanceledException) { if (workspace.Token == workspaceToken) Status = "Scan canceled"; cancellationToken.ThrowIfCancellationRequested(); }
-        finally { if (workspace.Token == workspaceToken) IsBusy = false; }
+        catch (OperationCanceledException) { if (WorkspaceGeneration == committedWorkspace) Status = "Scan canceled"; cancellationToken.ThrowIfCancellationRequested(); }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            if (WorkspaceGeneration != committedWorkspace)
+                throw new StudioCommandException("context_changed", "A newer workspace replaced the failed folder scan.");
+            throw;
+        }
+        finally { if (WorkspaceGeneration == committedWorkspace) IsBusy = false; }
     }
     private async Task IndexAsync(List<FileEntry> files, CancellationToken token)
     {
@@ -130,35 +192,48 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 foreach (var diagnostic in doc.Diagnostics) { warnings++; if (Diagnostics.Count < 500) AddProblem(diagnostic.Message, diagnostic.Severity, file.Path, diagnostic.AssetIndex, diagnostic.Offset); }
                 Status = $"Indexed {++completed} containers · {index.Count:N0} assets";
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { AddProblem(ex.Message, "Error", file.Path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { token.ThrowIfCancellationRequested(); AddProblem(ex.Message, "Error", file.Path); }
         }
-        RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics";
+        token.ThrowIfCancellationRequested(); RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics";
     }
-    public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default)
+    public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        long generation = ++navigationGeneration;
+        RequireCurrentNavigation(generation);
         path = Path.GetFullPath(path);
         var existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
-        if (existing != null) { SelectedDocument = existing; return existing; }
+        if (existing != null) { ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation); SelectedDocument = existing; return existing; }
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken);
         var token = cancellation.Token; Status = "Opening " + Path.GetFileName(path) + "…";
         try
         {
-            var doc = await Task.Run(() => FormatRegistry.Default.OpenAsync(path, token), token).WaitAsync(token); token.ThrowIfCancellationRequested();
+            var doc = await LoadDocumentAsync(path, token); token.ThrowIfCancellationRequested();
+            RequireCurrentNavigation(generation); ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation);
             existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
             if (existing != null) { SelectedDocument = existing; return existing; }
             DocumentModel model = new(doc); Documents.Add(model); SelectedDocument = model;
             foreach (var diagnostic in doc.Diagnostics) AddProblem(diagnostic.Message, diagnostic.Severity, path, diagnostic.AssetIndex, diagnostic.Offset);
             Status = model.Description; return model;
         }
-        catch (OperationCanceledException) { cancellationToken.ThrowIfCancellationRequested(); return null; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { AddProblem(ex.Message, "Error", path); Status = "Could not open file: " + ex.Message; return null; }
+        catch (OperationCanceledException)
+        {
+            if (!disposed && generation == navigationGeneration) Status = "Opening canceled; the current document was retained.";
+            cancellationToken.ThrowIfCancellationRequested();
+            if (beforePublish != null) throw new StudioCommandException("context_changed", "The workspace changed while opening the requested document.");
+            return null;
+        }
+        catch (StudioCommandException ex)
+        { if (!disposed && generation == navigationGeneration) Status = ex.Message; throw; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { RequireCurrentNavigation(generation); token.ThrowIfCancellationRequested(); AddProblem(ex.Message, "Error", path); Status = "Could not open file: " + ex.Message; return null; }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        { RequireCurrentNavigation(generation); throw; }
     }
     public void Close(DocumentModel document) { if (document.IsDirty) throw new InvalidOperationException("Use CloseAsync to resolve unsaved edits."); RemoveDocument(document); }
     public async Task CloseAsync(DocumentModel document) { if (await CanRemoveAsync(document)) RemoveDocument(document); }
     private Task<bool> CanRemoveAsync(DocumentModel document) => ConfirmDiscardAsync?.Invoke(document) ?? Task.FromResult(!document.IsDirty);
     private void RemoveDocument(DocumentModel document) { int i = Documents.IndexOf(document); Documents.Remove(document); document.Dispose(); if (SelectedDocument == document) SelectedDocument = Documents.Count > 0 ? Documents[Math.Clamp(i, 0, Documents.Count - 1)] : null; }
-    public async Task ReloadAsync() { if (SelectedDocument is not { } doc || !await CanRemoveAsync(doc)) return; string path = doc.Path; RemoveDocument(doc); await OpenFileAsync(path); }
+    public Task ReloadAsync() => ReloadSelectedAsync();
     public void CheckExternalChanges()
     {
         foreach (var doc in Documents)
@@ -176,5 +251,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public IEnumerable<SearchHit> Related(string name, string context) => index.Where(h => !h.File.Equals(context, StringComparison.OrdinalIgnoreCase) && Path.GetFileNameWithoutExtension(h.Name).Equals(Path.GetFileNameWithoutExtension(name), StringComparison.OrdinalIgnoreCase)).Take(100);
     internal IEnumerable<SearchHit> SearchIndex(string query) => index.Where(h => h.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || h.Location.Contains(query, StringComparison.OrdinalIgnoreCase));
     internal void CloseResolved(DocumentModel doc) => RemoveDocument(doc);
-    public void Dispose() { workspace.Cancel(); foreach (var doc in Documents) doc.Dispose(); workspace.Dispose(); GC.SuppressFinalize(this); }
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true; ++navigationGeneration; ++WorkspaceGeneration;
+        if (SelectedDocument != null) SelectedDocument.PropertyChanged -= SelectedDocumentSelectionChanged;
+        workspace.Cancel(); foreach (var doc in Documents) doc.Dispose(); workspace.Dispose(); GC.SuppressFinalize(this);
+    }
 }

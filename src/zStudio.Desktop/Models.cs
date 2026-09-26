@@ -71,14 +71,19 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public event Action? PickupEditsChanged;
     public async Task<PickupPlacementEditSession> GetPickupEditsAsync(AssetResolver resolver, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        if (IsDisposed) throw new OperationCanceledException("The pickup document was closed.", token);
+        var lifetime = Lifetime.Token;
         if (PickupEdits != null)
         {
             if (PickupEdits.HasSourceChanges()) throw new IOException("A pickup source archive changed outside zStudio. Save pending edits as a copy, then reload the map (F5) before rebuilding its preview.");
             return PickupEdits;
         }
         if (pickupLoading == null || pickupLoading.IsCanceled || pickupLoading.IsFaulted)
-            pickupLoading = PickupPlacementEditSession.LoadAsync(Path, resolver, Lifetime.Token);
+            pickupLoading = PickupPlacementEditSession.LoadAsync(Path, resolver, lifetime);
         var edits = await pickupLoading.WaitAsync(token);
+        token.ThrowIfCancellationRequested();
+        lifetime.ThrowIfCancellationRequested();
         if (PickupEdits == null)
         {
             PickupEdits = edits;
@@ -119,7 +124,16 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public DocumentModel(ZbdDocument doc)
     {
         Document = doc;
-        if (doc.Animations != null) { AnimationEdits = new(doc.Animations); AnimationEdits.Changed += () => { Revision++; contextLoading?.Cancel(); animationContext = null; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); }; }
+        if (doc.Animations is { } source)
+        {
+            // Accepted edits replace complete entry snapshots. Give that working
+            // set its own container so source inspection/export stays original;
+            // sharing initial entries is safe because edits clone before writing.
+            var working = new AnimationPackage { Prefix = source.Prefix, Tail = source.Tail };
+            working.Entries.AddRange(source.Entries); working.Diagnostics.AddRange(source.Diagnostics);
+            AnimationEdits = new(working);
+            AnimationEdits.Changed += () => { Revision++; contextLoading?.Cancel(); animationContext = null; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); };
+        }
         Assets = new(doc.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).Select(a => new AssetItem(a)));
         Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()];
         FilteredAssets = CollectionViewSource.GetDefaultView(Assets); FilteredAssets.Filter = Matches;

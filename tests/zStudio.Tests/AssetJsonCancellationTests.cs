@@ -150,6 +150,28 @@ public sealed class AssetJsonCancellationTests
         Assert.Equal(Convert.ToHexStringLower(bytes), JsonData.Hex(bytes, TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public void AnimationSnapshotPreservesIdentityAndUnknownBytesWithoutSharedBuffers()
+    {
+        var entry = new AnimationEntry(new byte[308], 0, 72);
+        var unknown = Enumerable.Range(0, 12345).Select(i => (byte)i).ToArray(); unknown[0] = 254;
+        var sequence = new AnimationSequence(new byte[64], 400);
+        sequence.Events.Add(new AnimationEvent(unknown, 464)); entry.Sequences.Add(sequence);
+        entry.References[1].Add(new([3, 1, 4]));
+        var snapshot = entry.Clone(TestContext.Current.CancellationToken);
+        Assert.Equal(sequence.Id, snapshot.Sequences[0].Id);
+        Assert.Equal(sequence.Events[0].Id, snapshot.Sequences[0].Events[0].Id);
+        Assert.Equal(unknown, snapshot.Sequences[0].Events[0].Bytes);
+        snapshot.Sequences[0].Events[0].Bytes[4096] = 99;
+        snapshot.References[1][0].Bytes[0] = 9;
+        Assert.Equal(0, unknown[4096]);
+        Assert.Equal(3, entry.References[1][0].Bytes[0]);
+        using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => entry.Clone(cancellation.Token));
+        Assert.Throws<OperationCanceledException>(() => sequence.Clone(false, cancellation.Token));
+        Assert.Throws<OperationCanceledException>(() => sequence.Events[0].Clone(cancellation.Token));
+    }
+
     private static ZbdDocument Document() => new("fixture", new(0, DateTime.MinValue),
         new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
 

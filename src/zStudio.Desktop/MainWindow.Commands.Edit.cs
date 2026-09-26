@@ -83,6 +83,9 @@ public partial class MainWindow
         RegisterJob(r, "pickups", "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts.", [DocumentParameter, .. PageParameters], false, async (a, token) =>
         {
             var d = TargetDocument(a); using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, d.Lifetime.Token); var edits = await d.GetPickupEditsAsync(ViewModel.Resolver ?? throw new StudioCommandException("no_workspace", "Open a root first."), cancellation.Token);
+            token.ThrowIfCancellationRequested();
+            if (d.IsDisposed || !ViewModel.Documents.Contains(d)) throw new StudioCommandException("stale_document", "The pickup document is no longer open. Read zstudio_state before retrying.");
+            cancellation.Token.ThrowIfCancellationRequested();
             return Page(edits.Records.Select(p => new { source = p.Source, p.Type, position = edits.Position(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) }), a, p => p.Type + " " + p.source.ResourceName + " " + p.target);
         });
         Register(r, "pickup_lock", "Set this document's pickup editing lock; new documents are locked by default.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether placements are locked.", true)], a =>
@@ -110,12 +113,17 @@ public partial class MainWindow
             var fields = DraftOwner(Text(a, "target")); return Result(new { document = Text(a, "target") == "properties" ? propertiesWindow?.Document?.SessionId : shownDocument?.SessionId, drafts = fields?.DescribeDrafts() });
         });
         Register(r, "resolve_drafts", "Explicitly apply or discard current GUI drafts. Invalid input is retained and returned as an error, without modal dialogs.", true,
-            [DocumentParameter, P("target", "string", "Draft owner.", true, "properties", "preview"), P("token", "string", "Current draft token.", true), P("action", "string", "Resolution.", true, "apply", "discard")], async (a, _) =>
+            [DocumentParameter, P("target", "string", "Draft owner.", true, "properties", "preview"), P("token", "string", "Current draft token.", true), P("action", "string", "Resolution.", true, "apply", "discard")], async (a, token) =>
         {
             var d = TargetDocument(a); string target = Text(a, "target");
             if ((target == "properties" ? propertiesWindow?.Document : shownDocument) != d) throw new StudioCommandException("context_changed", "Draft owner changed.");
             var owner = DraftOwner(target) ?? throw new StudioCommandException("not_ready", "No field editor is open."); owner.ResolveAutomationDrafts(Text(a, "token"), Text(a, "action") == "apply");
             if (owner is AnimationEditor editor) await editor.AwaitOptionWorkAsync();
+            token.ThrowIfCancellationRequested();
+            if (d.IsDisposed || !ViewModel.Documents.Contains(d))
+                throw new StudioCommandException("stale_document", "The draft document was closed during resolution.");
+            if (DraftOwner(target) != owner || (target == "properties" ? propertiesWindow?.Document : shownDocument) != d)
+                throw new StudioCommandException("context_changed", "The draft editor was replaced during resolution.");
             return Result(DocumentState(d));
         });
     }

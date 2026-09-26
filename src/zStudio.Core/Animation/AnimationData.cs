@@ -9,6 +9,18 @@ namespace Recoil.Zbd.Core.Animation;
 public class AnimationRecord(byte[] bytes)
 {
     public byte[] Bytes { get; } = bytes;
+    protected static byte[] SnapshotBytes(byte[] bytes, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        byte[] copy = new byte[bytes.Length];
+        for (int offset = 0; offset < bytes.Length; offset += 4096)
+        {
+            token.ThrowIfCancellationRequested();
+            bytes.AsSpan(offset, Math.Min(4096, bytes.Length - offset)).CopyTo(copy.AsSpan(offset));
+        }
+        token.ThrowIfCancellationRequested();
+        return copy;
+    }
     public int I32(int offset) => BinaryPrimitives.ReadInt32LittleEndian(Bytes.AsSpan(offset, 4));
     public uint U32(int offset) => BinaryPrimitives.ReadUInt32LittleEndian(Bytes.AsSpan(offset, 4));
     public short I16(int offset) => BinaryPrimitives.ReadInt16LittleEndian(Bytes.AsSpan(offset, 2));
@@ -46,8 +58,10 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
     public float Threshold { get => F32(8); set => SetFloat(8, value); }
     public AnimationEventSpec? Spec => AnimationCatalog.Find(Type);
     public string Name => Spec?.Name ?? $"Unknown event 0x{Type:X2}";
-    public AnimationEvent Clone() => new((byte[])Bytes.Clone(), SourceOffset) { Id = Id };
-    public AnimationEvent Duplicate() => new((byte[])Bytes.Clone());
+    public AnimationEvent Clone() => Clone(default);
+    public AnimationEvent Clone(CancellationToken token) => new(SnapshotBytes(Bytes, token), SourceOffset) { Id = Id };
+    public AnimationEvent Duplicate() => Duplicate(default);
+    public AnimationEvent Duplicate(CancellationToken token) => new(SnapshotBytes(Bytes, token));
     public IReadOnlyList<AnimationKeyframe> Keyframes(CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
@@ -122,10 +136,13 @@ public sealed class AnimationSequence(byte[] header, long offset = -1) : Animati
     public List<AnimationEvent> Events { get; } = [];
     public byte[] OpaqueTail { get; internal set; } = [];
     public bool IsEditable => OpaqueTail.Length == 0;
-    public AnimationSequence Clone(bool newIdentity = false)
+    public AnimationSequence Clone(bool newIdentity = false) => Clone(newIdentity, default);
+    public AnimationSequence Clone(bool newIdentity, CancellationToken token)
     {
-        var copy = new AnimationSequence((byte[])Bytes.Clone(), SourceOffset) { Id = newIdentity ? Guid.NewGuid() : Id, OpaqueTail = (byte[])OpaqueTail.Clone() };
-        copy.Events.AddRange(Events.Select(e => newIdentity ? e.Duplicate() : e.Clone())); return copy;
+        var copy = new AnimationSequence(SnapshotBytes(Bytes, token), SourceOffset) { Id = newIdentity ? Guid.NewGuid() : Id, OpaqueTail = SnapshotBytes(OpaqueTail, token) };
+        foreach (var ev in Events) copy.Events.Add(newIdentity ? ev.Duplicate(token) : ev.Clone(token));
+        token.ThrowIfCancellationRequested();
+        return copy;
     }
     public override string ToString() => $"{Name} · {Events.Count} events";
 }
@@ -143,11 +160,15 @@ public sealed class AnimationEntry(byte[] header, int index, long offset) : Anim
     public byte[] OriginalPrimaryHeader { get; internal set; } = [];
     public List<AnimationSequence> Sequences { get; } = [];
     public IEnumerable<AnimationSequence> AllSequences => new[] { Primary }.Concat(Sequences);
-    public AnimationEntry Clone()
+    public AnimationEntry Clone() => Clone(default);
+    public AnimationEntry Clone(CancellationToken token)
     {
-        var copy = new AnimationEntry((byte[])Bytes.Clone(), Index, SourceOffset) { Primary = Primary.Clone(), SourceLength = SourceLength, OriginalPrimaryHeader = OriginalPrimaryHeader };
-        for (int i = 0; i < 8; i++) copy.References[i].AddRange(References[i].Select(r => new AnimationRecord((byte[])r.Bytes.Clone())));
-        copy.Sequences.AddRange(Sequences.Select(s => s.Clone())); return copy;
+        var copy = new AnimationEntry(SnapshotBytes(Bytes, token), Index, SourceOffset) { Primary = Primary.Clone(false, token), SourceLength = SourceLength, OriginalPrimaryHeader = SnapshotBytes(OriginalPrimaryHeader, token) };
+        for (int i = 0; i < 8; i++)
+            foreach (var record in References[i]) copy.References[i].Add(new(SnapshotBytes(record.Bytes, token)));
+        foreach (var sequence in Sequences) copy.Sequences.Add(sequence.Clone(false, token));
+        token.ThrowIfCancellationRequested();
+        return copy;
     }
     public JsonObject ToJson(CancellationToken token = default)
     {

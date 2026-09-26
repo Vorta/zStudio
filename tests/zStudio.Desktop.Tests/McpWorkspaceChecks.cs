@@ -153,6 +153,22 @@ internal static class McpWorkspaceChecks
                 Assert.Equal(recoveryPath, main.ViewModel.SelectedDocument!.Path);
                 Assert.Equal(Visibility.Collapsed, ((TextBlock)main.FindName("EmptyPreview")).Visibility);
                 var reloading = main.ViewModel.SelectedDocument;
+                var load = main.ViewModel.LoadDocumentAsync;
+                TaskCompletionSource reloadStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                main.ViewModel.LoadDocumentAsync = async (_, token) =>
+                { reloadStarted.SetResult(); await Task.Delay(Timeout.Infinite, token); throw new InvalidOperationException("unreachable"); };
+                try
+                {
+                    var canceledReload = await Call("reload_document", new() { ["document"] = reloading.SessionId.ToString(), ["revision"] = reloading.Revision });
+                    await reloadStarted.Task.WaitAsync(deadline.Token);
+                    await main.StopMcpAsync().WaitAsync(deadline.Token);
+                    canceledReload = await Call("operation", new() { ["id"] = canceledReload["id"]!.GetValue<string>() });
+                    Assert.Equal("canceled", canceledReload["State"]!.GetValue<string>());
+                    Assert.Same(reloading, main.ViewModel.SelectedDocument); Assert.False(reloading.IsDisposed);
+                    Assert.StartsWith("Reload canceled", main.ViewModel.Status);
+                    Assert.Equal(Visibility.Collapsed, ((TextBlock)main.FindName("EmptyPreview")).Visibility);
+                }
+                finally { main.ViewModel.LoadDocumentAsync = load; }
                 File.Delete(recoveryPath);
                 var reload = await Call("reload_document", new() { ["document"] = reloading.SessionId.ToString(), ["revision"] = reloading.Revision });
                 while (reload["State"]!.GetValue<string>() is "queued" or "running")
@@ -162,8 +178,10 @@ internal static class McpWorkspaceChecks
                 }
                 Assert.Equal("failed", reload["State"]!.GetValue<string>());
                 Assert.Equal("open_failed", reload["result"]!["code"]!.GetValue<string>());
-                Assert.Null(main.ViewModel.SelectedDocument);
+                Assert.Same(reloading, main.ViewModel.SelectedDocument); Assert.False(reloading.IsDisposed);
+                Assert.DoesNotContain("Reloading", main.ViewModel.Status);
                 File.WriteAllBytes(recoveryPath, [255,255,255,255,255,255,255,255]);
+                main.ViewModel.CloseResolved(reloading);
                 await CancelPreviewJob("open_document", new() { ["path"] = recoveryPath }, "Raw #0: recovery.zbd", close: true);
                 Assert.Null(main.ViewModel.SelectedDocument);
             }
