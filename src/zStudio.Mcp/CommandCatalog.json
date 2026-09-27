@@ -443,7 +443,7 @@
   },
   {
     "Name": "zstudio_save_document",
-    "Description": "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD saves verify and atomically replace the working destination or create a new Save As file. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -467,7 +467,15 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "New animation archive path.",
+        "Description": "New animation or ZAR/ZRD Save As path. Omit for verified ZAR/ZRD save to its working destination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "modelDirectory",
+        "Type": "string",
+        "Description": "Model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -2658,6 +2666,470 @@
           "apply",
           "discard"
         ],
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_model_bundle_export",
+    "Description": "Export all authored models under a node or an animation root as assembled and local OBJ/MTL/PNG files with stable indices, transforms and source fingerprint. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "Asset kind returned by assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Authored record index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "Export folder outside the source tree.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "rootNode",
+        "Type": "integer",
+        "Description": "Explicit GameZ root node, required for ambiguous animation roots.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "texturePack",
+        "Type": "string",
+        "Description": "Optional preferred texture pack.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_model_replace",
+    "Description": "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Saves use save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "manifest",
+        "Type": "string",
+        "Description": "Absolute replacement manifest JSON path.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_archive_members",
+    "Description": "List edited resource members in stored order with stable identities and original source indices. Duplicate names are allowed. Standalone ZRD has one member.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_archive_edit",
+    "Description": "Add, replace, rename, duplicate, delete or reorder a ZAR member as one undoable edit. add_zrd creates an empty array. Names use Latin-1 and are not identities. Move position is the final zero-based index. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Member operation.",
+        "Required": true,
+        "Choices": [
+          "add",
+          "add_zrd",
+          "replace",
+          "rename",
+          "duplicate",
+          "delete",
+          "move"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Required member UUID except for add/add_zrd.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "Required for add/add_zrd/rename/duplicate; 1\u201363 Latin-1 characters.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "path",
+        "Type": "string",
+        "Description": "Input file for add/replace.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "position",
+        "Type": "integer",
+        "Description": "Final index for move.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_resource_select",
+    "Description": "Select a member and optional ZRD node by stable UUID in the visible Data tree. Properties retains its pinned target. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "string",
+        "Description": "Optional ZRD node UUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_zrd_nodes",
+    "Description": "Read an edited typed ZRD root, or page the immediate children of a node. Values use invariant editor text; strings are JSON-quoted, floats include raw bits. Node IDs survive edits and undo. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "string",
+        "Description": "Optional parent node UUID; omit to return the root.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_zrd_edit",
+    "Description": "Edit typed ZRD values or structure as one undoable operation. add inserts in the selected array. move uses parent UUID and final position after removal. Root deletion/duplication and cycles are rejected. Changing type replaces the old value/children. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "string",
+        "Description": "Stable ZRD node UUID from zrd_nodes.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Node operation.",
+        "Required": true,
+        "Choices": [
+          "set",
+          "type",
+          "add",
+          "duplicate",
+          "delete",
+          "move"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "Type for add/type; default String.",
+        "Required": false,
+        "Choices": [
+          "Int",
+          "Float",
+          "String",
+          "Array"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "value",
+        "Type": "string",
+        "Description": "Invariant int/float, explicit 0xXXXXXXXX float bits, or JSON-quoted Latin-1 string.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "parent",
+        "Type": "string",
+        "Description": "Destination array UUID for move.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "position",
+        "Type": "integer",
+        "Description": "Final child index; add defaults to append.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_resource_properties",
+    "Description": "Read generated resource Properties fields, open the pinned Properties window, or edit one current field. Node omitted targets the member. Editing requires revision and rejects pending drafts. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "string",
+        "Description": "Optional ZRD node UUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Properties operation.",
+        "Required": true,
+        "Choices": [
+          "fields",
+          "open",
+          "edit"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Required current revision for edit.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "field",
+        "Type": "string",
+        "Description": "Current field ID for edit.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "value",
+        "Type": "string",
+        "Description": "Invariant field editor text for edit.",
+        "Required": false,
+        "Choices": null,
         "Properties": null
       }
     ]

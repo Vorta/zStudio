@@ -15,15 +15,12 @@ public interface IAssetExporter
         string? preferredTexturePack = null, int lodLevel = 0, IProgress<ExportProgress>? progress = null, CancellationToken token = default);
 }
 
-public sealed class ExportService(AssetResolver resolver) : IAssetExporter
+public sealed partial class ExportService(AssetResolver resolver) : IAssetExporter
 {
     public async Task<ExportResult> ExportAsync(ZbdDocument doc, IReadOnlyList<AssetRecord> assets, string destination, bool jsonOnly,
         string? preferredTexturePack = null, int lodLevel = 0, IProgress<ExportProgress>? progress = null, CancellationToken token = default)
     {
-        destination = Path.GetFullPath(destination);
-        if (IsWithin(resolver.Root, destination)) throw new IOException("Choose an export folder outside the opened source tree.");
-        for (var directory = new DirectoryInfo(destination); directory != null; directory = directory.Parent)
-            if (directory.Exists && directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Choose an export destination without directory links.");
+        destination = ValidateExportDirectory(destination);
         Directory.CreateDirectory(destination);
         string folder = SafeName(Path.GetFileName(Path.GetDirectoryName(doc.Path)) + "_" + Path.GetFileName(doc.Path));
         string target = Path.Combine(destination, folder); int suffix = 2;
@@ -97,10 +94,10 @@ public sealed class ExportService(AssetResolver resolver) : IAssetExporter
         token.ThrowIfCancellationRequested();
         return result;
     }
-    private async Task ExportObj(ZbdDocument doc, AssetRecord asset, string target, string name, string? preferred, int lod, CancellationToken token)
+    private async Task ExportObj(ZbdDocument doc, AssetRecord asset, string target, string name, string? preferred, int lod, CancellationToken token, SceneView? placements = null)
     {
         GameScene scene = doc.Scene ?? throw new InvalidDataException("Missing GameZ scene.");
-        var view = SceneBuilder.ForAsset(scene, asset, lod, token);
+        var view = placements ?? SceneBuilder.ForAsset(scene, asset, lod, token);
         StringBuilder obj = new("# zStudio static geometry export\n"); string mtlName = Path.GetFileName(name) + ".mtl"; obj.AppendLine("mtllib " + mtlName);
         HashSet<int> usedMaterials = []; int vertexBase = 1; Dictionary<int, IReadOnlyList<MeshPart>> meshes = [];
         foreach (var placement in view.Placements)
@@ -137,7 +134,7 @@ public sealed class ExportService(AssetResolver resolver) : IAssetExporter
                 if (resolved != null)
                 {
                     string file = $"texture_{texture:D4}_{SafeName(resolved.Asset.Name)}.png";
-                    string relative = (Path.GetDirectoryName(name) + "/" + file).Replace('\\', '/');
+                    string relative = Path.Combine(Path.GetDirectoryName(name) ?? "", file).Replace('\\', '/');
                     if (!File.Exists(Path.Combine(target, relative))) await WriteAtomicAsync(target, relative, PngEncoder.Encode(TextureDecoder.Decode(resolved.Document, resolved.Asset, token), token), token).ConfigureAwait(false);
                     mtl.AppendLine("map_Kd " + file);
                     if (resolved.Ambiguous) notes.Add($"Ambiguous texture {textureName}; used {resolved.Asset.Id}.");
@@ -156,6 +153,18 @@ public sealed class ExportService(AssetResolver resolver) : IAssetExporter
         safe = safe.TrimEnd('.', ' '); if (safe.Length > 140) safe = safe[..140]; if (safe.Length == 0 || safe is "." or "..") safe = "asset";
         string stem = safe.Split('.')[0]; if (new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" }.Contains(stem, StringComparer.OrdinalIgnoreCase)) safe = "_" + safe;
         return safe;
+    }
+    private string ValidateExportDirectory(string destination)
+    {
+        destination = Path.GetFullPath(destination);
+        if (IsWithin(resolver.Root, destination) || PickupPlacementEditSession.IsProtectedPath(destination))
+            throw new IOException("Choose an export folder outside the opened source tree and protected datasets.");
+        // Inspect ancestors above the selected folder too: a junction there can
+        // otherwise redirect an apparently external export into the source tree.
+        for (var directory = new DirectoryInfo(destination); directory != null; directory = directory.Parent)
+            if (directory.Exists && directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new IOException("Choose an export destination without directory links.");
+        return destination;
     }
     public static bool IsWithin(string root, string path) => Path.GetFullPath(path).Equals(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) || Path.GetFullPath(path).StartsWith(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     public static string DestinationPath(string root, string relative)

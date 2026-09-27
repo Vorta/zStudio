@@ -61,6 +61,8 @@ public partial class MainWindow
         DocumentCommands.Visibility = hasDocument ? Visibility.Visible : Visibility.Collapsed;
         ExportSelectedMenu.IsEnabled = ExportAllMenu.IsEnabled = ExportJsonMenu.IsEnabled = CloseDocumentMenu.IsEnabled = ValidateMenu.IsEnabled = ReloadMenu.IsEnabled = hasDocument;
         BackupOnSave.IsEnabled = doc?.PickupEdits != null;
+        ExportModelsMenu.IsEnabled = doc?.SelectedAsset?.Record.Kind is Recoil.Zbd.Core.AssetKind.Animation or Recoil.Zbd.Core.AssetKind.Node or Recoil.Zbd.Core.AssetKind.Model;
+        ReplaceModelsMenu.IsEnabled = doc?.ModelEdits != null;
         WelcomeTitle.Text = ViewModel.HasRoot ? "Choose a file to inspect" : "Explore Recoil’s assets";
         WelcomeDescription.Text = ViewModel.HasRoot ? "Open a ZBD file from Files, or search for an asset across this folder." : "Textures, worlds, models, audio, scripts, and animation sequences — together in one workspace.";
         WelcomeOpen.Visibility = ViewModel.HasRoot ? Visibility.Collapsed : Visibility.Visible;
@@ -69,10 +71,10 @@ public partial class MainWindow
         CopyEventJsonMenu.IsEnabled = animation != null;
         foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.AnimationEdits != null ? Visibility.Visible : Visibility.Collapsed;
         foreach (var item in AnimationMenu.Items.OfType<MenuItem>()) if (item.Tag is string command) item.IsEnabled = animation?.CanRunCommand(command) == true;
-        DocumentSave.IsEnabled = doc?.AnimationEdits != null || doc?.PickupEdits != null;
-        DocumentSave.ToolTip = doc?.PickupEdits != null ? "Save pickup placements to the owning archive (Ctrl+S)" : doc?.AnimationEdits != null ? "Save the animation pack to a new file (Ctrl+S)" : "Save (Ctrl+S)";
-        DocumentUndo.IsEnabled = doc?.AnimationEdits?.CanUndo == true || doc?.PickupEdits?.CanUndo == true;
-        DocumentRedo.IsEnabled = doc?.AnimationEdits?.CanRedo == true || doc?.PickupEdits?.CanRedo == true;
+        DocumentSave.IsEnabled = doc?.AnimationEdits != null || doc?.PickupEdits != null || doc?.ModelEdits != null || doc?.ResourceEdits != null;
+        DocumentSave.ToolTip = doc?.ModelEdits?.IsDirty == true ? "Save model and texture changes (Ctrl+S)" : doc?.PickupEdits != null ? "Save pickup placements to the owning archive (Ctrl+S)" : doc?.AnimationEdits != null ? "Save the animation pack to a new file (Ctrl+S)" : "Save (Ctrl+S)";
+        DocumentUndo.IsEnabled = doc?.AnimationEdits?.CanUndo == true || doc?.CanUndoScene == true || doc?.ResourceEdits?.CanUndo == true;
+        DocumentRedo.IsEnabled = doc?.AnimationEdits?.CanRedo == true || doc?.CanRedoScene == true || doc?.ResourceEdits?.CanRedo == true;
         SaveMenu.IsEnabled = SaveAsMenu.IsEnabled = DocumentSave.IsEnabled;
         UndoMenu.IsEnabled = DocumentUndo.IsEnabled; RedoMenu.IsEnabled = DocumentRedo.IsEnabled;
         DocumentUndo.ToolTip = doc?.AnimationEdits?.UndoDescription is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
@@ -85,19 +87,23 @@ public partial class MainWindow
         {
             if (previous.AnimationEdits is { } edits) edits.Changed -= UpdateDocumentCommands;
             previous.PickupEditsChanged -= UpdateDocumentCommands;
+            previous.ModelEditsChanged -= UpdateDocumentCommands;
+            previous.ResourceEditsChanged -= UpdateDocumentCommands;
         }
         commandDocument = document;
         if (document != null)
         {
             if (document.AnimationEdits is { } edits) edits.Changed += UpdateDocumentCommands;
             document.PickupEditsChanged += UpdateDocumentCommands;
+            document.ModelEditsChanged += UpdateDocumentCommands;
+            document.ResourceEditsChanged += UpdateDocumentCommands;
         }
     }
     private void AttachAnimationWorkspace(AnimationEditor editor)
     {
         int preferredTool = Layout.ToolTab, preferredInspector = Layout.InspectorTab; detachingWorkspace = true;
         ProgramHost.Content = editor.ProgramView;
-        editor.PropertiesRequested += (sequence, ev) => OpenAnimationProperties(shownDocument!, editor.EntryIndex, sequence, ev);
+        editor.PropertiesRequested += async (sequence, ev) => { var document = shownDocument; if (document != null && await ResolvePropertiesDraftsAsync() && !document.IsDisposed) OpenAnimationProperties(document, editor.EntryIndex, sequence, ev); };
         var ownerDocument = shownDocument!;
         editor.ResolvePropertyDrafts = () => ResolvePropertiesDrafts(ownerDocument);
         ReferencesHost.Content = editor.ReferencesView; PreviewSetupHost.Content = editor.PreviewSetupView;

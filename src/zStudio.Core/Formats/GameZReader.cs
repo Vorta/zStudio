@@ -21,7 +21,9 @@ internal sealed class GameZReader : IZbdFormatReader
         }
         ReadMaterials(doc, scene, new(doc.Slice(materialOffset, modelOffset - materialOffset), materialOffset), token);
         ReadModels(doc, scene, new(doc.Slice(modelOffset, nodeOffset - modelOffset), modelOffset), token);
-        ReadNodes(doc, scene, new(doc.Slice(nodeOffset, doc.Bytes.Length - nodeOffset), nodeOffset), nodeCapacity, token);
+        var nodeDataOffsets = ReadNodes(doc, scene, new(doc.Slice(nodeOffset, doc.Bytes.Length - nodeOffset), nodeOffset), nodeCapacity, token);
+        doc.GameZLayout = new(checked((int)textureOffset), checked((int)materialOffset), checked((int)modelOffset), checked((int)nodeOffset),
+            new BinaryCursor(doc.Slice(materialOffset, 4)).I32(), new BinaryCursor(doc.Slice(modelOffset, 4)).I32(), checked((int)nodeCapacity), nodeDataOffsets);
         foreach (GameModel model in scene.Models)
         {
             var node = scene.Nodes.FirstOrDefault(n => n.ModelIndex == model.Index);
@@ -36,7 +38,8 @@ internal sealed class GameZReader : IZbdFormatReader
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested(); long offset = c.AbsolutePosition;
-            var material = FieldLayouts.Read(c, 40, "GAMEZ_MATERIAL_LAYOUT"); material["next_index"] = (long)c.I16(); material["prev_index"] = (long)c.I16();
+            // gmod.h zModel_MaterialSlot: previous at +0x28, next at +0x2A.
+            var material = FieldLayouts.Read(c, 40, "GAMEZ_MATERIAL_LAYOUT"); material["prev_index"] = (long)c.I16(); material["next_index"] = (long)c.I16();
             scene.Materials.Add(material); doc.Add(AssetKind.Material, i, $"Material {i}", offset, 44, material).Summary = $"Texture {material.Int("texture_index", -1)}";
         }
         c.Skip(checked((int)(capacity - count) * 44));
@@ -74,7 +77,7 @@ internal sealed class GameZReader : IZbdFormatReader
             var a = doc.Add(AssetKind.Model, index, $"Model {index}", start, c.AbsolutePosition - start, info, model); a.Summary = $"{vertices.Length:N0} vertices · {polygons.Count:N0} polygons";
         }
     }
-    private static void ReadNodes(ZbdDocument doc, GameScene scene, BinaryCursor c, uint capacity, CancellationToken token)
+    private static IReadOnlyList<long> ReadNodes(ZbdDocument doc, GameScene scene, BinaryCursor c, uint capacity, CancellationToken token)
     {
         int count = c.Count(capacity, 196); List<(JsonObject Info, uint Offset, long Header)> entries = []; bool free = false;
         for (int i = 0; i < count; i++)
@@ -84,10 +87,12 @@ internal sealed class GameZReader : IZbdFormatReader
             if (!free) entries.Add((FieldLayouts.Decode(raw, FieldLayouts.Definitions["layouts"]!["GAMEZ_NODE_BASE_LAYOUT"]!.AsArray()), offset, header));
         }
         string[] names = ["none", "camera", "world", "window", "display", "object3d", "lod", "unknown_7", "unknown_8", "light"];
+        List<long> dataOffsets = [];
         for (int i = 0; i < entries.Count; i++)
         {
             token.ThrowIfCancellationRequested(); var (info, offset, header) = entries[i]; int classId = info.Int("node_class"); string kind = classId >= 0 && classId < names.Length ? names[classId] : $"unknown_{classId}";
             info["node_class"] = kind; info["data_offset_word"] = $"0x{offset:X8}";
+            dataOffsets.Add(c.AbsolutePosition);
             JsonObject data = ReadNodeData(c, kind);
             int[] parents = kind == "none" ? offset == uint.MaxValue ? [] : [unchecked((int)offset)] : c.Indices(info.Int("parent_count"));
             int[] children = c.Indices(info.Int("child_count"));
@@ -96,6 +101,7 @@ internal sealed class GameZReader : IZbdFormatReader
             scene.Nodes.Add(node); doc.Add(AssetKind.Node, i, node.Name, header, 196, info, node).Summary = $"{kind} · {children.Length} children";
         }
         if (c.Remaining > 0) doc.Diagnostics.Add(new("Warning", $"{c.Remaining} trailing node bytes preserved.", Offset: c.AbsolutePosition));
+        return dataOffsets;
     }
     private static JsonObject ReadNodeData(BinaryCursor c, string kind)
     {

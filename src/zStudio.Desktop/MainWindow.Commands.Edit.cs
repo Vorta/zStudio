@@ -117,7 +117,7 @@ public partial class MainWindow
         {
             var d = TargetDocument(a); string target = Text(a, "target");
             if ((target == "properties" ? propertiesWindow?.Document : shownDocument) != d) throw new StudioCommandException("context_changed", "Draft owner changed.");
-            var owner = DraftOwner(target) ?? throw new StudioCommandException("not_ready", "No field editor is open."); owner.ResolveAutomationDrafts(Text(a, "token"), Text(a, "action") == "apply");
+            var owner = DraftOwner(target) ?? throw new StudioCommandException("not_ready", "No field editor is open."); await owner.ResolveAutomationDraftsAsync(Text(a, "token"), Text(a, "action") == "apply");
             if (owner is AnimationEditor editor) await editor.AwaitOptionWorkAsync();
             token.ThrowIfCancellationRequested();
             if (d.IsDisposed || !ViewModel.Documents.Contains(d))
@@ -127,5 +127,5 @@ public partial class MainWindow
             return Result(DocumentState(d));
         });
     }
-    private FieldEditor? DraftOwner(string target) => target == "preview" ? animation : (FieldEditor?)propertiesWindow?.AnimationFields ?? propertiesWindow?.PickupFields;
+    private FieldEditor? DraftOwner(string target) => target == "preview" ? animation : (FieldEditor?)propertiesWindow?.ResourceFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? propertiesWindow?.PickupFields;
 }

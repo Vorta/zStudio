@@ -2,6 +2,16 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.5.4 — 2026-09-27
+
+- Export an animation root or GameZ node's referenced models as an assembled OBJ/MTL/PNG bundle, individual local-space meshes and an identity/transform manifest for remodeling in Blender.
+- Replace explicit GameZ v15 models from bounded OBJ/PNG batches, with shared undo/redo, edited previews, texture-variant updates and verified saves. Preserve node transforms, unrelated records and material-pool links; rebuild solid-model bounds and expand ancestor bounds using retail rules.
+- Add general ZAR member import, replacement, rename, duplication, deletion and reordering, including creation of empty ZRD resources.
+- Edit standalone and embedded ZRD values, raw float bits, types and ordered array structure through the Data tree and pinned Properties window. Preserve stable record identities, untouched bytes and unknown data.
+- Share resource edits across inspection, export and dependent previews, with asynchronous property drafts, document undo/redo, Save As retargeting, external-change checks and verified atomic archive saves. Prevent conflicting pickup and direct-resource writers from owning the same archive.
+- Add eight shared MCP tools for model bundles/replacement and archive/ZRD editing, bringing the discovery catalog to 60 tools. Extend typed schemas, GUI parity mappings and real named-pipe regression coverage.
+- Document supported import/editing formats and limits, and keep the latest validated portable build in `artifacts/zStudio-win-x64` for local use.
+
 ## 0.5.2 — 2026-09-26
 
 - Add Blender-style navigation to model, Whole world and animation previews: middle-mouse orbit, Shift+middle pan, Ctrl+middle centered zoom, Ctrl+Shift+middle dolly, and numpad view/projection/framing shortcuts with retained smooth inertia.

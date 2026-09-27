@@ -17,7 +17,7 @@ internal static class McpParityChecks
         var capabilityMap = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "docs", "mcp-capabilities.json")))!;
         var inventory = capabilityMap["handlers"]!.AsArray();
         var interactions = capabilityMap["interactions"]!.AsArray();
-        Assert.Equal(new[] { "MainWindow.Navigation:CameraNavigationClick", "MainWindow.Navigation:CameraKeyboard", "SceneViewport.Navigation:ConfigureNavigation", "SceneViewport.NavigationCube:NavigateCubeAt" },
+        Assert.Equal(new[] { "MainWindow.Navigation:CameraNavigationClick", "MainWindow.Navigation:CameraKeyboard", "SceneViewport.Navigation:ConfigureNavigation", "SceneViewport.NavigationCube:NavigateCubeAt", "MainWindow.Resources:ArchiveMembers", "MainWindow.Resources:ZrdNodes", "ResourcePropertiesEditor:Fields" },
             interactions.Select(row => row!["gui"]!.GetValue<string>()));
         var mapped = inventory.Select(x => x!["gui"]!.GetValue<string>()).Order().ToArray();
         string[] events = ["Click", "Checked", "Unchecked", "SelectionChanged", "ValueChanged", "TextChanged", "LostFocus", "LostKeyboardFocus", "KeyDown", "SelectedItemChanged", "MouseDoubleClick", "DragCompleted"];

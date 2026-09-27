@@ -32,6 +32,8 @@ public sealed partial class PickupPlacementEditSession
     private readonly List<string> diagnostics = [];
     private bool saving;
     public event Action? Changed;
+    public event Action? EditAccepted;
+    public event Action? BeforeEdit;
     public IReadOnlyList<string> Diagnostics => diagnostics.AsReadOnly();
     public IReadOnlyList<PickupPlacementRecord> Records => entries.Values.Select(e => e.Record).ToArray();
     public bool IsDirty => positions.Any(p => p.Value != savedPositions[p.Key]);
@@ -156,7 +158,7 @@ public sealed partial class PickupPlacementEditSession
         var before = Scope(source).Sources.ToDictionary(s => s, s => positions[s]);
         var after = before.ToDictionary(p => p.Key, p => p.Key == source ? position : p.Value + delta);
         foreach (var value in after.Values) RequireFinite(value);
-        undo.Push(new(before, after)); redo.Clear(); Apply(after); return true;
+        BeforeEdit?.Invoke(); undo.Push(new(before, after)); redo.Clear(); EditAccepted?.Invoke(); Apply(after); return true;
     }
     public void Undo() { if (CanUndo) { var move = undo.Pop(); redo.Push(move); Apply(move.Before); } }
     public void Redo() { if (CanRedo) { var move = redo.Pop(); undo.Push(move); Apply(move.After); } }

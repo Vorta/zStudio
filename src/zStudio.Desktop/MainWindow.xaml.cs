@@ -70,6 +70,7 @@ public partial class MainWindow : Window
         var s = ViewModel.Settings;
         RestoreWindowSize(new(SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight));
         InitializeWorkspace();
+        InitializeResourceMenus();
         InitializeCameraNavigation();
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard;
@@ -206,11 +207,22 @@ public partial class MainWindow : Window
         ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
         try
         {
-            properties = asset == null ? (JsonObject)doc.Document.Metadata.DeepClone() : await LoadAssetPropertiesAsync(doc.Document, asset, token);
-            token.ThrowIfCancellationRequested(); SetProperties(properties); CentralTree.ItemsSource = asset?.Kind == AssetKind.Zrd && properties["tree"] is JsonNode hierarchy ? ZrdTree(doc,asset,hierarchy) : properties.Select(p => new InspectorNode(p.Key,p.Value)).ToArray();
+            var snapshot = doc.PreviewDocument;
+            properties = asset == null ? (JsonObject)snapshot.Metadata.DeepClone() : await LoadAssetPropertiesAsync(snapshot, asset, token);
+            token.ThrowIfCancellationRequested(); SetProperties(properties);
+            if (asset?.Kind == AssetKind.Zrd && doc.ResourceEdits is { } resources)
+            {
+                var root = await ResourceTreeAsync(doc, resources.Current.Members[asset.Index].Id, token);
+                token.ThrowIfCancellationRequested(); var item = new ResourceTreeItem(root, 0, null, resourceExpansion);
+                Guid? retained = selectedResourceNode; CentralTree.ItemsSource = new[] { item };
+                if (retained is Guid id) SelectResourceNode(item, id);
+            }
+            else CentralTree.ItemsSource = asset?.Kind == AssetKind.Zrd && properties["tree"] is JsonNode hierarchy ? ZrdTree(doc,asset,hierarchy) : properties.Select(p => new InspectorNode(p.Key,p.Value)).ToArray();
             ContentText.Text = asset?.Content is ScriptContent script ? script.Text : LimitedJson(properties);
-            var bytes = asset == null ? doc.Document.Bytes : doc.Document.Slice(asset.Offset, asset.Length);
-            RawText.Text = Hex(bytes.Span[..Math.Min(bytes.Length, 4096)], asset?.Offset ?? 0) + (bytes.Length > 4096 ? "\n… first 4,096 bytes shown. Export for complete data." : "");
+            var bytes = asset == null ? snapshot.Bytes : snapshot.Slice(asset.Offset, asset.Length);
+            var original = asset != null && doc.ResourceEdits is { } re ? re.OriginalAsset(re.Current.Members[asset.Index]) : asset;
+            var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);
+            RawText.Text = original == null && asset != null ? "New member: no original source bytes." : Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 original source bytes shown." : "");
             RelatedList.ItemsSource = asset == null ? null : FindRelated(asset, doc).ToArray();
             if (asset?.Kind == AssetKind.Texture)
             {
@@ -233,15 +245,15 @@ public partial class MainWindow : Window
             else if (asset != null && (asset.Kind is AssetKind.Model or AssetKind.World || asset.Content is GameNode { Class: "object3d" or "lod" }) && doc.Document.Scene != null && ViewModel.Resolver != null)
             {
                 int selectedLod = differentAsset ? 0 : Math.Max(0, LodCombo.SelectedIndex);
-                int? root = SceneLods.PreviewRoot(doc.Document.Scene, asset);
-                int count = new SceneLods(doc.Document.Scene).Count(asset.Kind == AssetKind.World ? null : root is int r ? [r] : []);
+                int? root = SceneLods.PreviewRoot(doc.PreviewDocument.Scene!, asset);
+                int count = new SceneLods(doc.PreviewDocument.Scene!).Count(asset.Kind == AssetKind.World ? null : root is int r ? [r] : []);
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
                 WorldHighlights.Visibility = WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
                 if (scene == null) { scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigurePickupScene(scene); SceneHost.Content = scene; ConfigureFlyScene(scene); }
-                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty) : null;
+                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty) : null;
                 if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
-                await scene.ShowAsync(doc.Document, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
+                await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
                 publishedStaticOptions = ReadStaticSceneOptions() with { Difficulty = mission?.Layout.Difficulty ?? ViewModel.Difficulty };
                 if (mission != null)
                 {
@@ -474,7 +486,7 @@ public partial class MainWindow : Window
     {
         if (ViewModel.SelectedDocument is not { } doc || ViewModel.Resolver is not { } resolver) return;
         if (operation != null) { ViewModel.Status = "Wait for the current operation or cancel it first"; return; }
-        AssetRecord[] assets = all ? doc.Document.Assets.ToArray() : AssetGrid.SelectedItems.Cast<AssetItem>().Select(a => a.Record).ToArray();
+        AssetRecord[] assets = all ? doc.PreviewDocument.Assets.ToArray() : AssetGrid.SelectedItems.Cast<AssetItem>().Select(a => a.Record).ToArray();
         if (assets.Length == 0) { ViewModel.Status = "Select an asset to export"; return; }
         OpenFolderDialog dialog = new() { Title = "Choose an export destination outside the source folder" }; if (dialog.ShowDialog(this) != true) return;
         var result = await ExportAssetsAsync(doc, assets, dialog.FolderName, json, PreferredPack, Math.Max(0,LodCombo.SelectedIndex), CancellationToken.None);
@@ -595,7 +607,7 @@ public partial class MainWindow : Window
                 // Discard (and a canceled Save As) can finish synchronously. Leave the
                 // original WPF Closing event before showing prompts or calling Close again.
                 await Dispatcher.Yield(DispatcherPriority.Normal);
-                if (animation?.ResolvePendingDrafts() == false || !ResolvePropertiesDrafts()) return;
+                if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync()) return;
                 foreach (var document in ViewModel.Documents.ToArray())
                     if (!await ConfirmDocumentCloseAsync(document)) return;
                 allowClose = true;

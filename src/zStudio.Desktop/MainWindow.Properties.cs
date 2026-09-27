@@ -53,11 +53,13 @@ public partial class MainWindow
         window.Activate();
     }
     internal bool ResolvePropertiesDrafts(DocumentModel? doc = null) => propertiesWindow == null || doc != null && propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts();
+    internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync();
     private void UndoDocument(DocumentModel doc, bool redo)
     {
+        if (doc.ResourceEdits != null) { resourceWork = UndoResourcesAsync(doc, redo); return; }
         if (doc.IsDisposed || !ResolvePropertiesDrafts(doc) || shownDocument == doc && animation?.ResolvePendingDrafts() == false) return;
         if (shownDocument == doc) { animation?.Pause(); scene?.CancelPickupDrag(); }
-        if (doc.PickupEdits is { } pickup) { if (redo) pickup.Redo(); else pickup.Undo(); }
+        if (doc.ModelEdits != null || doc.PickupEdits != null) { doc.UndoScene(redo); if (doc.ModelEdits != null) modelRefreshWork = RefreshModelDependentsAsync(doc); }
         else if (doc.AnimationEdits is { } edits) { if (redo) edits.Redo(); else edits.Undo(); }
         UpdateDocumentCommands();
     }
@@ -70,9 +72,16 @@ public partial class MainWindow
     }
     internal async Task<PropertiesWindow?> OpenAssetPropertiesAsync(DocumentModel doc, AssetRecord asset, CancellationToken cancellationToken = default, bool automation = false)
     {
+        Guid? resourceMember = doc.Assets.FirstOrDefault(row => ReferenceEquals(row.Record, asset))?.ResourceId;
+        if (!automation && !await ResolvePropertiesDraftsAsync()) return null;
         long request = ++propertyRequest;
         if (doc.IsDisposed) return null;
         cancellationToken.ThrowIfCancellationRequested();
+        if (doc.ResourceEdits != null)
+        {
+            if (resourceMember == null) throw new StudioCommandException("stale_asset", "Read the current member identity before opening Properties.");
+            return await OpenResourcePropertiesAsync(doc, resourceMember.Value, null, cancellationToken, automation);
+        }
         if (asset.Kind == AssetKind.Animation && doc.AnimationEdits != null) return OpenAnimationProperties(doc, asset.Index, Guid.Empty, Guid.Empty);
         try
         {
@@ -95,6 +104,9 @@ public partial class MainWindow
     internal async void OpenCurrentProperties()
     {
         if (ViewModel.SelectedDocument is not { } doc) return;
+        if (!await ResolvePropertiesDraftsAsync()) return;
+        if (CentralTree.IsKeyboardFocusWithin && CentralTree.SelectedItem is ResourceTreeItem resource && doc.SelectedAsset?.ResourceId is Guid member)
+        { await OpenResourcePropertiesAsync(doc, member, resource.Node.Id); return; }
         if (AssetGrid.IsKeyboardFocusWithin && doc.SelectedAsset is { } asset) { await OpenAssetPropertiesAsync(doc, asset.Record); return; }
         if (inspectedSceneSource is { } item) { OpenSceneProperties(doc, item); return; }
         if (animation is { } editor)
@@ -131,7 +143,11 @@ public partial class MainWindow
         assetPointerContext = false; AssetPropertiesMenu.IsEnabled = contextAsset != null;
     }
     private async void AssetPropertiesClick(object sender, RoutedEventArgs e)
-    { if (contextAsset is { } asset && assetContextDocument is { IsDisposed: false } doc) await OpenAssetPropertiesAsync(doc, asset.Record); }
+    {
+        if (contextAsset is not { } asset || assetContextDocument is not { IsDisposed: false } doc) return;
+        if (asset.ResourceId is Guid member) await ResourceUiAsync(async () => { await OpenResourcePropertiesAsync(doc, member, null); });
+        else await OpenAssetPropertiesAsync(doc, asset.Record);
+    }
     private void SceneContextTarget(object sender, MouseButtonEventArgs e)
     {
         contextScene = PropertyContext.FindAncestor<TreeViewItem>(e.OriginalSource as DependencyObject)?.DataContext as SceneTreeItem;
@@ -142,6 +158,6 @@ public partial class MainWindow
         if (!scenePointerContext) { contextScene = DocumentSceneTree.SelectedItem as SceneTreeItem; sceneContextDocument = ViewModel.SelectedDocument; }
         scenePointerContext = false; ScenePropertiesMenu.IsEnabled = contextScene != null;
     }
-    private void ScenePropertiesClick(object sender, RoutedEventArgs e)
-    { if (contextScene is { } item && sceneContextDocument is { IsDisposed: false } doc) OpenSceneProperties(doc, item); }
+    private async void ScenePropertiesClick(object sender, RoutedEventArgs e)
+    { if (contextScene is { } item && sceneContextDocument is { IsDisposed: false } doc && await ResolvePropertiesDraftsAsync()) OpenSceneProperties(doc, item); }
 }

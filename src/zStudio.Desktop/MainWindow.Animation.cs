@@ -31,13 +31,13 @@ public partial class MainWindow
     }
     private async Task<bool> ConfirmDocumentCloseAsync(DocumentModel document)
     {
-        if (!ResolvePropertiesDrafts(document) || shownDocument == document && animation?.ResolvePendingDrafts() == false) return false;
+        if (!await ResolvePropertiesDraftsAsync(document) || shownDocument == document && animation?.ResolvePendingDrafts() == false) return false;
         System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag(); if (!document.IsDirty) return true;
-        bool pickup = document.PickupEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
+        bool pickup = document.PickupEdits?.IsDirty == true || document.ResourceEdits != null || document.ModelEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
         animation?.Pause(); string choice = "Cancel";
         StackPanel panel = new() { Margin = new(20) };
         panel.Children.Add(new TextBlock { Text = $"Save changes to {document.Title.TrimEnd(' ', '*')}?", FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-        panel.Children.Add(new TextBlock { Text = pickup ? "Save updates the pickup placement archives. Protected reference datasets require saving a copy elsewhere." : "Save As writes a new animation pack and preserves the original source.", Margin = new(0,12,0,20), TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = pickup ? "Save verifies changes before updating working files. Protected reference datasets require saving a copy elsewhere." : "Save As writes a new animation pack and preserves the original source.", Margin = new(0,12,0,20), TextWrapping = TextWrapping.Wrap });
         WrapPanel buttons = new() { HorizontalAlignment = HorizontalAlignment.Right }; panel.Children.Add(buttons);
         Window dialog = new() { Owner = this, Title = "Unsaved changes", Width = 470, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = panel };
         foreach (string label in new[] { saveLabel, "Discard", "Cancel" })

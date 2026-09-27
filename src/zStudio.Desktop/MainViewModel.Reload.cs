@@ -41,6 +41,7 @@ public sealed partial class MainViewModel
 
         Validate();
         var replacement = new DocumentModel(loaded) { Query = original.Query, KindFilter = original.KindFilter };
+        replacement.AttachResolver(Resolver);
         var asset = original.SelectedAsset?.Record;
         replacement.SelectedAsset = asset == null ? null : replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind && a.Record.Index == asset.Index);
         // Parsing and every fallible asynchronous guard have finished. Publishing

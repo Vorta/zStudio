@@ -4,7 +4,7 @@
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse game archives, inspect and export assets, preview assembled worlds, move mission pickups, and edit supported animation programs. This source tree targets **v0.5.2**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse and edit game archives and typed data, inspect and export assets, replace supported 3D models, preview assembled worlds, move mission pickups, and edit supported animation programs. This source tree targets **v0.5.4**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
@@ -17,7 +17,7 @@ zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF F
 
 Game files are supplied by the user and are not included. Recognizing an archive does not imply that every editing operation is supported or that edited files have been verified in the original game.
 
-The version-28 animation editor supports event and sequence editing, deterministic playback and seeking, preloaded audio, undo/redo and verified Save As. Its preview includes mission starting layouts, authored camera following, texture cycles, transparency, LOD selection and an adjustable-height ground grid for falling debris. The [pickup placement editor](docs/pickup-editor.md) adds selection, axis dragging, exact coordinates and verified archive saving in Whole world. Other formats provide browsing, inspection, previews and standard exports. See [the animation editor guide](docs/animation-editor.md) for controls and preview limitations.
+The version-28 animation editor supports event and sequence editing, deterministic playback and seeking, preloaded audio, undo/redo and verified Save As. Its preview includes mission starting layouts, authored camera following, texture cycles, transparency, LOD selection and an adjustable-height ground grid for falling debris. The [pickup placement editor](docs/pickup-editor.md) adds selection, axis dragging, exact coordinates and verified archive saving in Whole world. The [model replacement workflow](docs/model-replacement.md) exports components for Blender and imports replacement meshes and textures into supported GameZ v15 files. The [resource editors](docs/resource-editing.md) edit ZAR members and standalone or embedded typed ZRD trees with shared undo/redo and verified saves. Other formats provide browsing, inspection, previews and standard exports. See [the animation editor guide](docs/animation-editor.md) for controls and preview limitations.
 
 ## Run
 
@@ -70,14 +70,15 @@ If a workspace call reports `access_disabled`, enable access in **Tools → MCP 
 
 ## Available tools
 
-| Content | Browse and inspect | Export |
+| Content | Browse, inspect and edit | Export and save |
 | --- | --- | --- |
 | Texture packs | Thumbnails, enlarged preview, zoom/pan, channel views, pixel values, palettes and headers | PNG with alpha, JSON |
 | Sound archives | Member list, PCM waveform, play/pause/stop, seeking, cue points | Original WAV/member bytes, JSON |
-| ZRD data | Typed nested trees, values and raw float bits | Original bytes and JSON |
+| ZAR archives | Import, replace, rename, duplicate, delete and reorder members; create ZRD resources | Edited member bytes and JSON; verified Save and Save As |
+| ZRD data | Edit typed nested trees, scalar values, raw float bits and ordered array structure | Edited bytes and JSON; verified Save and Save As, including the owning archive |
 | Prepared scripts | Reconstructed script text and instruction data | Text and JSON |
 | Animation/effects | Edit events, sequences, references and keyframes; scrub motion/effects/audio previews in isolation or mission context | Verified new ZBD with Save As; edited JSON |
-| GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties | OBJ/MTL with PNG textures, JSON |
+| GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties; replace supported v15 models and textures | OBJ/MTL/PNG component bundles, JSON; verified model/texture Save and Save As |
 | Mission pickups | Select pickups in Whole world, show bounds, unlock XYZ arrows or enter coordinates, undo/redo; matching difficulties move together | Save coordinates to their owning ZBD archive; Save As; optional backups |
 
 The workspace uses resizable navigation, preview and tool panes, with Properties in a separate window. The Navigator tabs are Files, Assets, Search and Document scene. On wide windows, Files automatically becomes its own resizable column to the left of the remaining tabs, leaving at least 600 DIP for the central preview and room for the animation Inspector. At smaller widths it returns to the first tab. Both column widths, tree state and the active section are retained. Assets appears only while a file is open; Document scene appears only when the active file contains a scene hierarchy. Files marks open documents with a blue dot and bold filename, underlines the active document, adds an asterisk for unsaved changes, and provides a close button on each open file row. Double-click a file or press Enter to open it and switch to Assets; use Search for root-wide asset searches. Related references navigate to matching assets. Files changed externally get a reload banner. Settings retain theme, pane widths, window size, and recent roots.
