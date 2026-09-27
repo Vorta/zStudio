@@ -25,21 +25,9 @@ public sealed partial class SceneViewport
     internal bool TryNavigationSurface(Point point, out Point3D surface)
     {
         surface = default;
-        if (!IsOrbitPickingReady || !IsNavigationPointInside(point)) return false;
-        if (viewport.Camera is not ProjectionCamera camera) return false;
-        // FindHits/UnProject uses the previous render context's camera matrices.
-        // Construct the ray from the current camera, then use the renderer's
-        // triangle/instance hit tests, without forcing a render or controller tick.
-        var projection = camera.CreateProjectionMatrix(Aspect);
+        if (!IsOrbitPickingReady || viewport.Camera is not ProjectionCamera camera
+            || !TryNavigationRay(point, out var origin, out var direction)) return false;
         var forward = camera.LookDirection; forward.Normalize();
-        var right = Vector3D.CrossProduct(forward, camera.UpDirection); right.Normalize();
-        var up = Vector3D.CrossProduct(right, forward);
-        double x = (2 * point.X / viewport.ActualWidth - 1) / projection.M11;
-        double y = (1 - 2 * point.Y / viewport.ActualHeight) / projection.M22;
-        var origin = camera.Position;
-        var direction = forward;
-        if (camera is OrthographicCamera) origin += right * x + up * y;
-        else { direction += right * x + up * y; direction.Normalize(); }
         // Adaptive clipping is finalized on the next frame. Starting at the eye
         // keeps immediate/substep queries independent of the previous near plane.
         var ray = new HelixToolkit.Maths.Ray(new Vector3((float)origin.X, (float)origin.Y, (float)origin.Z),
@@ -56,6 +44,27 @@ public sealed partial class SceneViewport
             surface = candidate; return true;
         }
         return false;
+    }
+
+    /// <summary>Current-camera ray, available before rendering and over empty space.</summary>
+    internal bool TryNavigationRay(Point point, out Point3D origin, out Vector3D direction)
+    {
+        origin = default; direction = default;
+        if (!IsNavigationPointInside(point) || viewport.Camera is not ProjectionCamera camera) return false;
+        // FindHits/UnProject uses the previous render context's camera matrices.
+        // Use the current pose without forcing a render or controller tick.
+        var projection = camera.CreateProjectionMatrix(Aspect);
+        var forward = camera.LookDirection; forward.Normalize();
+        var right = Vector3D.CrossProduct(forward, camera.UpDirection); right.Normalize();
+        var up = Vector3D.CrossProduct(right, forward);
+        double x = (2 * point.X / viewport.ActualWidth - 1) / projection.M11;
+        double y = (1 - 2 * point.Y / viewport.ActualHeight) / projection.M22;
+        origin = camera.Position;
+        direction = forward;
+        if (camera is OrthographicCamera) origin += right * x + up * y;
+        else { direction += right * x + up * y; direction.Normalize(); }
+        return double.IsFinite(origin.X) && double.IsFinite(origin.Y) && double.IsFinite(origin.Z)
+            && double.IsFinite(direction.X) && double.IsFinite(direction.Y) && double.IsFinite(direction.Z);
     }
 
     private bool IsOrbitSurface(MeshGeometryModel3D mesh, object? instance)

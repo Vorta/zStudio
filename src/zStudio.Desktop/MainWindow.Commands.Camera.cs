@@ -8,7 +8,7 @@ public partial class MainWindow
 {
     private void RegisterCameraCommand(StudioCommands registry)
     {
-        Register(registry, "camera", "Read or navigate the shared 3D camera. Supports Blender-style surface-pivot orbit, pan, continuous centered zoom with pointer-surface speed, dolly, exact axis views, perspective/orthographic projection and framing. Valid manual navigation exits animation Follow camera. Never captures physical input.", true,
+        Register(registry, "camera", "Read or navigate the shared 3D camera. Supports Blender-style surface-pivot orbit, pan, continuous pointer-directed zoom with pointed-surface speed and orthographic pointer anchoring, dolly, exact axis views, perspective/orthographic projection and framing. Valid manual navigation exits animation Follow camera. Never captures physical input.", true,
         [
             PreviewParameter, P("action", "string", "Camera operation.", true, "read", "set", "move", "rotate", "frame", "pan", "zoom", "dolly", "view", "projection"),
             new("position", "array", "Absolute XYZ for set.", Items: new("", "number", "Coordinate."), MinItems: 3, MaxItems: 3),
@@ -16,9 +16,9 @@ public partial class MainWindow
             new("fov", "number", "Perspective camera field of view in degrees; retained in orthographic mode.", NumberMinimum: 1.000001, NumberMaximum: 178.999999),
             .. new[] { "right", "up", "forward" }.Select(n => new StudioParameter(n, "number", n == "up" ? "World-Y displacement in game units." : "View-relative displacement in game units.", NumberMinimum: -1e9, NumberMaximum: 1e9)),
             .. new[] { "horizontal", "vertical" }.Select(n => new StudioParameter(n, "number", "Mouse-equivalent delta in DIP for rotate or pan.", NumberMinimum: -36000, NumberMaximum: 36000)),
-            new("screenPoint", "array", "Optional [x,y] viewport DIP for rotate or zoom. Rotate picks an orbit pivot once without recentering; zoom refreshes speed from the pointed scene surface while moving along the view center. Misses retain the pivot or last zoom speed. Zoom defaults to viewport center.",
+            new("screenPoint", "array", "Optional [x,y] viewport DIP for rotate or zoom. Rotate picks an orbit pivot once without recentering; perspective zoom moves along the pointer ray and refreshes speed from the pointed scene surface; orthographic zoom scales about that point. Misses retain the pivot or last zoom speed. Zoom defaults to viewport center.",
                 Items: new("", "number", "Viewport coordinate.", NumberMinimum: 0), MinItems: 2, MaxItems: 2),
-            new("steps", "number", "Wheel-equivalent zoom steps; positive moves forward along the view center at a speed based on the pointed surface, independently of the orbit target. Camera readback NavigationReferenceDistance retains the last surface distance or initial framing/pose fallback.", NumberMinimum: -100, NumberMaximum: 100),
+            new("steps", "number", "Wheel-equivalent zoom steps; positive moves forward along the pointer ray at a speed based on the pointed surface, independently of the orbit target, or magnifies orthographic views about the pointer. Camera readback NavigationReferenceDistance retains the last surface distance or initial framing/pose fallback.", NumberMinimum: -100, NumberMaximum: 100),
             new("distance", "number", "Dolly displacement in game units; positive moves forward together with the target.", NumberMinimum: -1e9, NumberMaximum: 1e9),
             P("view", "string", "Named view for action=view; axis views are orthographic with automatic perspective on orbit.", false, "front", "back", "left", "right", "top", "bottom", "opposite"),
             P("projection", "string", "Required for action=projection; optional for set. Explicit orthographic mode persists while orbiting.", false, "perspective", "orthographic"),

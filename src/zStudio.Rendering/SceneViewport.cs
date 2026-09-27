@@ -42,7 +42,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     {
         viewport = new FrameViewport(PrepareCameraFrame)
         {
-            Camera = new HCamera { Position = new(10, 8, 15), LookDirection = new(-10, -8, -15), UpDirection = new(0, 1, 0), FarPlaneDistance = 100000, NearPlaneDistance = 0.1 },
+            Camera = new NavigationPerspectiveCamera { Position = new(10, 8, 15), LookDirection = new(-10, -8, -15), UpDirection = new(0, 1, 0), FarPlaneDistance = 100000, NearPlaneDistance = 0.1 },
             BackgroundColor = Color.FromRgb(26, 31, 38),
             ShowCoordinateSystem = true,
             ShowViewCube = true,

@@ -18,6 +18,7 @@ using Recoil.Zbd.Mcp;
 using Recoil.Zbd.Rendering;
 using Xunit;
 using MeshGeometry3D = HelixToolkit.SharpDX.MeshGeometry3D;
+using ProjectionCamera = HelixToolkit.Wpf.SharpDX.ProjectionCamera;
 
 namespace Recoil.Zbd.Desktop.Tests;
 
@@ -57,10 +58,16 @@ internal static class BlenderNavigationChecks
         }
         scene.SetProjection("orthographic"); scene.RotateBy(20, 10); Assert.Equal("orthographic", scene.CaptureView().Projection);
         scene.RestoreView(initial); scene.ZoomAt(new(0, 0), 120); var cornerZoom = scene.CaptureView();
-        scene.RestoreView(initial); scene.ZoomAt(new(900, 600), 120); Assert.Equal(cornerZoom, scene.CaptureView());
-        Near(target, cornerZoom.Position + cornerZoom.LookDirection);
+        scene.RestoreView(initial); scene.ZoomAt(new(900, 600), 120); var oppositeZoom = scene.CaptureView();
+        Assert.True(cornerZoom.Position.X < 0 && cornerZoom.Position.Y > 0);
+        Assert.True(oppositeZoom.Position.X > 0 && oppositeZoom.Position.Y < 0);
+        Assert.Equal(1.2, (cornerZoom.Position - initial.Position).Length, 8);
+        Assert.Equal(initial.UpDirection, cornerZoom.UpDirection);
+        Near(target, cornerZoom.OrbitPivot!.Value);
+        CheckPointerAnchoring(scene, initial);
         scene.RestoreView(initial); scene.DollyBy(4); Assert.Equal(initial.LookDirection, scene.CaptureView().LookDirection); Assert.Equal(6, scene.CaptureView().Position.Z);
         CheckContinuousZoomAndPivot(scene, initial);
+        CheckLiveModifiers(scene, initial);
         foreach (var (modifier, gesture) in new[]
         {
             (ModifierKeys.None, SceneViewport.NavigationGesture.Orbit), (ModifierKeys.Shift, SceneViewport.NavigationGesture.Pan),
@@ -88,6 +95,129 @@ internal static class BlenderNavigationChecks
         var prior = scene.CaptureView(); Assert.False(scene.TryFrame("selected", 99)); Assert.Equal(prior, scene.CaptureView());
         await CheckProtocol(scene, initial);
         CheckInertiaHorizon();
+    }
+    private static void CheckPointerAnchoring(SceneViewport scene, SceneViewport.ViewPose initial)
+    {
+        var surface = (Viewport3DX)scene.Content;
+        var point = new Point3D(2, 1, 0);
+        foreach (string projection in new[] { "perspective", "orthographic" })
+        {
+            scene.RestoreView(initial with { Projection = projection, OrthographicWidth = projection == "orthographic" ? 20 : null });
+            var before = scene.CaptureView(); var screen = Project(point);
+            scene.ZoomBy(2, screen); var after = scene.CaptureView();
+            Assert.True((Project(point) - screen).Length < .0001, "Zoom moved the pointed feature on screen");
+            Assert.Equal(before.UpDirection, after.UpDirection);
+            Assert.Equal(0, Vector3D.CrossProduct(before.LookDirection, after.LookDirection).Length, 8);
+            Assert.True(after.Position.X > before.Position.X && after.Position.Y > before.Position.Y);
+            scene.ZoomBy(-2, screen); Near(before.Position, scene.CaptureView().Position);
+            if (projection == "orthographic")
+            {
+                Near(before.OrbitPivot!.Value, scene.CaptureView().OrbitPivot!.Value);
+                Assert.Equal(before.OrthographicWidth!.Value, scene.CaptureView().OrthographicWidth!.Value, 8);
+                foreach (var (width, steps) in new[] { (.001, 100d), (1e12, -100d) })
+                {
+                    scene.RestoreView(before with { OrthographicWidth = width }); var limit = scene.CaptureView();
+                    scene.ZoomBy(steps, new(100, 100)); Assert.Equal(limit, scene.CaptureView());
+                }
+            }
+        }
+        foreach (string axis in new[] { "front", "back", "left", "right", "top", "bottom" })
+        {
+            scene.RestoreView(initial); scene.SetAxisView(axis); var before = scene.CaptureView();
+            var screen = new Point(650, 200);
+            Assert.True(scene.TryNavigationRay(screen, out var origin, out var direction));
+            var anchor = origin + direction * 10; var projected = Project(anchor);
+            scene.ZoomBy(1, screen); Assert.True((Project(anchor) - projected).Length < .0001);
+            Assert.Equal(before.AxisView, scene.CaptureView().AxisView);
+            Assert.Equal(before.LookDirection, scene.CaptureView().LookDirection);
+        }
+        scene.RestoreView(initial); scene.ZoomBy(2, new(-300, 900)); var clamped = scene.CaptureView();
+        scene.RestoreView(initial); scene.ZoomBy(2, new(0, Math.BitDecrement(600))); Assert.Equal(clamped, scene.CaptureView());
+        foreach (string projection in new[] { "perspective", "orthographic" })
+        foreach (double length in new[] { .000001, .01, 1, 1000 })
+        {
+            var look = new Vector3D(-.5, -.4, -.75); look.Normalize();
+            var pose = SceneViewport.UprightPose(initial with { Position = new(5305, 2879, 7446), LookDirection = look * length,
+                Projection = projection, OrthographicWidth = projection == "orthographic" ? 20 : null });
+            scene.RestoreView(pose);
+            var camera = (ProjectionCamera)surface.Camera!;
+            foreach (var matrix in new[] { camera.CreateViewMatrix(), ((ProjectionCamera)camera.Clone()).CreateViewMatrix() })
+                Assert.True(Vector3.Distance(new(-matrix.M13, -matrix.M23, -matrix.M33), new((float)look.X, (float)look.Y, (float)look.Z)) < 1e-6,
+                    "Rendered view direction lost precision with a short look vector at a map-scale position");
+        }
+        scene.RestoreView(initial);
+
+        Point Project(Point3D p)
+        {
+            var camera = (ProjectionCamera)surface.Camera!;
+            var matrix = camera.CreateViewMatrix() * camera.CreateProjectionMatrix(1.5);
+            var clip = Vector4.Transform(new Vector4((float)p.X, (float)p.Y, (float)p.Z, 1), matrix);
+            return new((clip.X / clip.W + 1) * 450, (1 - clip.Y / clip.W) * 300);
+        }
+    }
+    private static void CheckLiveModifiers(SceneViewport scene, SceneViewport.ViewPose initial)
+    {
+        Point start = new(300, 200), finish = new(330, 220);
+        var surface = (Viewport3DX)scene.Content;
+        foreach (var (key, modifiers) in new[] { (Key.LeftShift, ModifierKeys.Shift), (Key.RightShift, ModifierKeys.Shift),
+            (Key.LeftCtrl, ModifierKeys.Control), (Key.RightCtrl, ModifierKeys.Control),
+            (Key.LeftShift, ModifierKeys.Control | ModifierKeys.Shift), (Key.RightCtrl, ModifierKeys.Control | ModifierKeys.Shift) })
+        {
+            scene.RestoreView(initial); scene.BeginNavigationDrag(SceneViewport.Gesture(MouseButton.Middle, modifiers), start);
+            scene.MoveNavigationDrag(finish, modifiers); scene.EndNavigationDrag(); var first = scene.CaptureView();
+            scene.RestoreView(initial); scene.BeginNavigationDrag(SceneViewport.NavigationGesture.Orbit, start);
+            var before = scene.CaptureView(); Assert.True(scene.NavigationModifierKey(key, modifiers, start));
+            Assert.Equal(before, scene.CaptureView());
+            scene.MoveNavigationDrag(finish, modifiers); scene.EndNavigationDrag(); Assert.Equal(first, scene.CaptureView());
+            Assert.False(surface.IsMouseCaptured);
+        }
+        foreach (string projection in new[] { "perspective", "orthographic" })
+        {
+            scene.RestoreView(initial with { Projection = projection, OrthographicWidth = projection == "orthographic" ? 20 : null });
+            scene.BeginNavigationDrag(SceneViewport.NavigationGesture.Orbit, start); scene.MoveNavigationDrag(finish);
+            foreach (var modifiers in new[] { ModifierKeys.Shift, ModifierKeys.Control | ModifierKeys.Shift, ModifierKeys.Control,
+                ModifierKeys.None, ModifierKeys.Alt, ModifierKeys.Shift, ModifierKeys.Windows, ModifierKeys.None })
+            {
+                var before = scene.CaptureView();
+                scene.UpdateNavigationModifiers(modifiers, finish); Assert.Equal(before, scene.CaptureView());
+                Assert.Equal(default, Velocity("rotationVelocity")); Assert.Equal(default, Velocity("navigationVelocity"));
+                scene.MoveNavigationDrag(start, modifiers);
+                if (modifiers is ModifierKeys.Alt or ModifierKeys.Windows) Assert.Equal(before, scene.CaptureView());
+                else Assert.NotEqual(before.Position, scene.CaptureView().Position);
+                Assert.Equal(default, Velocity(modifiers == ModifierKeys.None ? "navigationVelocity" : "rotationVelocity"));
+                scene.MoveNavigationDrag(finish, modifiers);
+            }
+            var last = scene.CaptureView(); scene.UpdateNavigationModifiers(ModifierKeys.Shift, finish); scene.EndNavigationDrag();
+            typeof(SceneViewport).GetMethod("PrepareCameraFrame", Fields)!.Invoke(scene, [TimeSpan.FromSeconds(1)]);
+            Assert.Equal(last, scene.CaptureView()); // No last-mode movement means no release inertia.
+        }
+        scene.RestoreView(initial); scene.SetAxisView("top");
+        scene.BeginNavigationDrag(SceneViewport.NavigationGesture.Pan, start); scene.MoveNavigationDrag(finish, ModifierKeys.Shift);
+        scene.NavigationModifierKey(Key.LeftShift, ModifierKeys.None, finish); scene.MoveNavigationDrag(start, ModifierKeys.None);
+        Assert.Equal("perspective", scene.CaptureView().Projection);
+        scene.NavigationModifierKey(Key.RightShift, ModifierKeys.Shift, start); var orbit = scene.CaptureView();
+        scene.MoveNavigationDrag(finish, ModifierKeys.Shift); Assert.NotEqual(orbit.Position, scene.CaptureView().Position);
+        Assert.Equal(orbit.LookDirection, scene.CaptureView().LookDirection); scene.CancelNavigation();
+        foreach (var routedEvent in new[] { UIElement.LostMouseCaptureEvent, Keyboard.LostKeyboardFocusEvent })
+        {
+            scene.RestoreView(initial); scene.BeginNavigationDrag(SceneViewport.NavigationGesture.Orbit, start); scene.MoveNavigationDrag(finish);
+            if (routedEvent == Keyboard.LostKeyboardFocusEvent)
+                surface.RaiseEvent(new KeyboardFocusChangedEventArgs(Keyboard.PrimaryDevice, 0, surface, null) { RoutedEvent = routedEvent });
+            else surface.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = routedEvent });
+            var canceled = scene.CaptureView(); scene.MoveNavigationDrag(start, ModifierKeys.Shift); scene.EndNavigationDrag();
+            Assert.Equal(canceled, scene.CaptureView()); Assert.Equal(default, Velocity("rotationVelocity")); Assert.Equal(default, Velocity("navigationVelocity"));
+        }
+        scene.RestoreView(initial); scene.BeginNavigationDrag(SceneViewport.NavigationGesture.Orbit, start);
+        scene.MoveNavigationDrag(finish, ModifierKeys.Shift); var reconciled = scene.CaptureView();
+        scene.MoveNavigationDrag(start, ModifierKeys.Shift); Assert.NotEqual(reconciled.Position, scene.CaptureView().Position);
+        var panVelocity = Velocity("navigationVelocity");
+        Assert.True(scene.NavigationModifierKey(Key.LeftShift, ModifierKeys.Shift, start));
+        Assert.True(scene.NavigationModifierKey(Key.RightShift, ModifierKeys.Shift, start));
+        Assert.Equal(panVelocity, Velocity("navigationVelocity")); // Repeats/one Shift released while the other is held.
+        Assert.False(scene.NavigationModifierKey(Key.A, ModifierKeys.Shift, start));
+        Assert.Equal(panVelocity, Velocity("navigationVelocity"));
+        scene.CancelNavigation(); scene.RestoreView(initial);
+        System.Windows.Vector Velocity(string name) => (System.Windows.Vector)typeof(SceneViewport).GetField(name, Fields)!.GetValue(scene)!;
     }
     private static void CheckContinuousZoomAndPivot(SceneViewport scene, SceneViewport.ViewPose initial)
     {

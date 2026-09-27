@@ -27,9 +27,9 @@ public sealed partial class SceneViewport
     {
         if (viewport.Camera is not ProjectionCamera previous) return;
         ProjectionCamera camera = pose.Projection == "orthographic"
-            ? previous as OrthographicCamera ?? new OrthographicCamera()
-            : previous as HCamera ?? new HCamera();
-        viewport.StopSpin(); rotationVelocity = default; rotationPoint = null;
+            ? previous as NavigationOrthographicCamera ?? new NavigationOrthographicCamera()
+            : previous as NavigationPerspectiveCamera ?? new NavigationPerspectiveCamera();
+        viewport.StopSpin(); rotationVelocity = default; rotationPoint = null; pendingOrbitPoint = null;
         navigationVelocity = default;
         camera.NearPlaneDistance = previous.NearPlaneDistance; camera.FarPlaneDistance = previous.FarPlaneDistance;
         camera.Position = pose.Position; camera.LookDirection = pose.LookDirection; camera.UpDirection = pose.UpDirection;

@@ -38,14 +38,21 @@ internal static class McpLiveCheck
             await Call("camera", new { preview, action = "frame", target = "selected" });
             var cameraBefore = await Call("camera", new { preview, action = "read" });
             var cameraAfter = await Call("camera", new { preview, action = "zoom", steps = .5, screenPoint = new[] { 10d, 10d } });
-            double directionLength = Math.Sqrt(new[] { "X", "Y", "Z" }.Sum(axis => Math.Pow(cameraBefore["LookDirection"]![axis]!.GetValue<double>(), 2)));
             double zoomTravel = .06 * Math.Max(.01, cameraAfter["NavigationReferenceDistance"]!.GetValue<double>());
-            foreach (string axis in new[] { "X", "Y", "Z" })
-            {
-                double delta = cameraAfter["Position"]![axis]!.GetValue<double>() - cameraBefore["Position"]![axis]!.GetValue<double>();
-                double expected = cameraBefore["LookDirection"]![axis]!.GetValue<double>() / directionLength * zoomTravel;
-                Equal(true, Math.Abs(delta - expected) < 1e-6, "packaged pointed zoom travel " + axis);
-            }
+            var delta = new[] { "X", "Y", "Z" }.Select(axis => cameraAfter["Position"]![axis]!.GetValue<double>() - cameraBefore["Position"]![axis]!.GetValue<double>()).ToArray();
+            Equal(true, Math.Abs(Math.Sqrt(delta.Sum(v => v * v)) - zoomTravel) < 1e-6, "packaged pointed zoom travel");
+            var movement = new System.Numerics.Vector3((float)delta[0], (float)delta[1], (float)delta[2]);
+            var forward = ReadVector(cameraBefore["LookDirection"]!); var up = ReadVector(cameraBefore["UpDirection"]!);
+            var right = System.Numerics.Vector3.Cross(forward, up);
+            Equal(true, System.Numerics.Vector3.Dot(movement, right) < 0 && System.Numerics.Vector3.Dot(movement, up) > 0
+                && System.Numerics.Vector3.Dot(movement, forward) > 0, "packaged top-left pointer zoom direction");
+            await Call("camera", new { preview, action = "projection", projection = "orthographic" });
+            var orthoBefore = await Call("camera", new { preview, action = "read" });
+            var orthoAfter = await Call("camera", new { preview, action = "zoom", steps = .5, screenPoint = new[] { 10d, 10d } });
+            Equal(true, Math.Abs(orthoAfter["OrthographicWidth"]!.GetValue<double>() / orthoBefore["OrthographicWidth"]!.GetValue<double>() - Math.Exp(-.06)) < 1e-9,
+                "packaged orthographic width");
+            Equal(false, JsonNode.DeepEquals(orthoBefore["Position"], orthoAfter["Position"]), "packaged orthographic pointer anchoring translates eye");
+            await Call("camera", new { preview, action = "projection", projection = "perspective" });
             await Call("properties_close", new { });
             await Call("scene_options", new { preview, changes = new { aiNodes = false } });
             var pickups = await Call("pickups", new { document = worldId, query = "no-such-pickup" });
@@ -136,6 +143,7 @@ internal static class McpLiveCheck
         }
     }
 
+    private static System.Numerics.Vector3 ReadVector(JsonNode value) => new(value["X"]!.GetValue<float>(), value["Y"]!.GetValue<float>(), value["Z"]!.GetValue<float>());
     private static void Equal<T>(T expected, T actual, string message)
     { if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new InvalidDataException(message + $": expected {expected}, got {actual}"); }
 }

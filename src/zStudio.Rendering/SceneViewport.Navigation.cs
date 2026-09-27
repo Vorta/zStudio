@@ -15,6 +15,7 @@ public sealed partial class SceneViewport
     private NavigationGesture navigationGesture;
     private Vector navigationVelocity;
     private Point? zoomScreenPoint;
+    private Point? pendingOrbitPoint;
     private Window? navigationWindow;
     private double Aspect => Math.Max(1, viewport.ActualWidth) / Math.Max(1, viewport.ActualHeight);
     private double ViewWidth(ViewPose pose) => pose.Projection == "orthographic" && pose.OrthographicWidth is { } width
@@ -104,20 +105,32 @@ public sealed partial class SceneViewport
         var up = Vector3D.CrossProduct(right, forward);
         TranslateNavigation(camera, (-right * horizontal + up * vertical) * UnitsPerPixel);
     }
-    /// <summary>Centered travel at a speed based on the pointed surface; misses retain the last speed.</summary>
+    private Point ClampNavigationPoint(Point point) => new(
+        double.IsFinite(point.X) ? Math.Clamp(point.X, 0, Math.Max(0, Math.BitDecrement(viewport.ActualWidth))) : viewport.ActualWidth / 2,
+        double.IsFinite(point.Y) ? Math.Clamp(point.Y, 0, Math.Max(0, Math.BitDecrement(viewport.ActualHeight))) : viewport.ActualHeight / 2);
+
+    /// <summary>Zoom towards the pointer at pointed-surface speed, or scale orthographic views about it.</summary>
     public void ZoomBy(double steps, Point? screenPoint = null)
     {
         if (!BeginManualNavigation() || !viewport.IsZoomEnabled || viewport.Camera is not ProjectionCamera camera) return;
         steps = Math.Clamp(steps, -100, 100);
         if (steps == 0 || !double.IsFinite(steps)) return;
-        zoomScreenPoint = screenPoint ?? new Point(viewport.ActualWidth / 2, viewport.ActualHeight / 2);
+        zoomScreenPoint = ClampNavigationPoint(screenPoint ?? new Point(viewport.ActualWidth / 2, viewport.ActualHeight / 2));
+        bool hasRay = TryNavigationRay(zoomScreenPoint.Value, out var rayOrigin, out var rayDirection);
         double factor = Math.Exp(-steps * .12);
-        if (camera is OrthographicCamera orthographic) orthographic.Width = Math.Clamp(orthographic.Width * factor, .001, 1e12);
+        if (camera is OrthographicCamera orthographic)
+        {
+            double previousWidth = orthographic.Width;
+            double width = Math.Clamp(previousWidth * factor, .001, 1e12);
+            if (hasRay) TranslateNavigation(camera, (rayOrigin - camera.Position) * (1 - width / previousWidth));
+            orthographic.Width = width;
+        }
         else
         {
             double distance = camera.LookDirection.Length;
             if (!double.IsFinite(distance) || distance < 1e-12) return;
             var forward = camera.LookDirection / distance;
+            var direction = hasRay ? rayDirection : forward;
             navigationReferenceDistance ??= distance;
             orbitPivot ??= camera.Position + camera.LookDirection;
             // A short explicit look vector must not make the eye jump backwards.
@@ -130,9 +143,10 @@ public sealed partial class SceneViewport
                 double step = Math.Clamp(steps, -1, 1);
                 if (TryNavigationSurface(zoomScreenPoint.Value, out var hit)) navigationReferenceDistance = (hit - camera.Position).Length;
                 double travel = .12 * Math.Max(navigationReferenceDistance.Value, .01) * step;
-                double next = Math.Clamp(distance - travel, .01, 1e12);
-                orbitPivot += forward * (travel + next - distance);
-                camera.Position += forward * travel;
+                double forwardTravel = Vector3D.DotProduct(direction, forward) * travel;
+                double next = Math.Clamp(distance - forwardTravel, .01, 1e12);
+                orbitPivot += forward * (forwardTravel + next - distance);
+                camera.Position += direction * travel;
                 camera.LookDirection = forward * next;
                 distance = next; steps -= step;
             }
@@ -173,32 +187,54 @@ public sealed partial class SceneViewport
     {
         if (gesture == NavigationGesture.None || !BeginManualNavigation()) return;
         StopNavigationMotion(); navigationGesture = gesture;
-        if (gesture == NavigationGesture.Orbit) PickOrbitPivot(position);
+        pendingOrbitPoint = gesture == NavigationGesture.Orbit ? position : null;
         if (gesture == NavigationGesture.Zoom) zoomScreenPoint = position;
         rotationPoint = position; rotationInputTick = Stopwatch.GetTimestamp();
     }
-    internal void MoveNavigationDrag(Point current)
+    internal void UpdateNavigationModifiers(ModifierKeys modifiers, Point position)
     {
+        if (rotationPoint == null) return;
+        var gesture = Gesture(MouseButton.Middle, modifiers);
+        if (gesture == navigationGesture) return;
+        navigationGesture = gesture;
+        rotationVelocity = default; navigationVelocity = default;
+        rotationPoint = position; rotationInputTick = Stopwatch.GetTimestamp();
+        pendingOrbitPoint = gesture == NavigationGesture.Orbit ? position : null;
+        zoomScreenPoint = gesture == NavigationGesture.Zoom ? ClampNavigationPoint(position) : null;
+    }
+    internal bool NavigationModifierKey(Key key, ModifierKeys modifiers, Point position)
+    {
+        if (rotationPoint == null || key is not (Key.LeftShift or Key.RightShift or Key.LeftCtrl or Key.RightCtrl
+            or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin)) return false;
+        UpdateNavigationModifiers(modifiers, position);
+        return true;
+    }
+    internal void MoveNavigationDrag(Point current, ModifierKeys? modifiers = null)
+    {
+        if (modifiers is { } held) UpdateNavigationModifiers(held, current);
         if (rotationPoint is not { } previous) return;
         var delta = current - previous;
+        if (delta.LengthSquared == 0) return;
         double seconds = Math.Max(.008, Stopwatch.GetElapsedTime(rotationInputTick).TotalSeconds);
         rotationInputTick = Stopwatch.GetTimestamp();
-        if (navigationGesture == NavigationGesture.Zoom) zoomScreenPoint = current;
+        if (navigationGesture == NavigationGesture.Orbit && pendingOrbitPoint is { } pivotPoint)
+        { pendingOrbitPoint = null; PickOrbitPivot(pivotPoint); }
+        if (navigationGesture == NavigationGesture.Zoom) zoomScreenPoint = ClampNavigationPoint(current);
         ApplyNavigationDelta(navigationGesture, delta);
         rotationPoint = current;
         if (navigationGesture == NavigationGesture.Orbit) rotationVelocity = delta / seconds;
-        else navigationVelocity = delta / seconds;
+        else if (navigationGesture != NavigationGesture.None) navigationVelocity = delta / seconds;
     }
     internal void EndNavigationDrag()
     {
         if (Stopwatch.GetElapsedTime(rotationInputTick).TotalSeconds > .15 || !viewport.IsInertiaEnabled)
         { rotationVelocity = default; navigationVelocity = default; }
-        rotationPoint = null; viewport.InvalidateRender();
+        rotationPoint = null; pendingOrbitPoint = null; viewport.InvalidateRender();
     }
     public void CancelNavigation()
     {
         rotationVelocity = default; navigationVelocity = default; rotationPoint = null;
-        zoomScreenPoint = null;
+        zoomScreenPoint = null; pendingOrbitPoint = null;
         if (viewport.IsMouseCaptured && !IsPickupDragging && !IsFlyActive) viewport.ReleaseMouseCapture();
     }
     private void ConfigureNavigation()
@@ -217,11 +253,14 @@ public sealed partial class SceneViewport
         PreviewMouseMove += (_, e) =>
         {
             if (rotationPoint == null) return;
-            MoveNavigationDrag(e.GetPosition(viewport)); e.Handled = true;
+            MoveNavigationDrag(e.GetPosition(viewport), Keyboard.Modifiers); e.Handled = true;
         };
+        PreviewKeyDown += NavigationModifiersChanged;
+        PreviewKeyUp += NavigationModifiersChanged;
         PreviewMouseUp += (_, e) =>
         {
             if (e.ChangedButton != MouseButton.Middle || rotationPoint == null) return;
+            UpdateNavigationModifiers(Keyboard.Modifiers, e.GetPosition(viewport));
             EndNavigationDrag(); viewport.ReleaseMouseCapture(); e.Handled = true;
         };
         PreviewMouseWheel += (_, e) =>
@@ -240,6 +279,12 @@ public sealed partial class SceneViewport
         Unloaded += (_, _) => { CancelNavigation(); AttachNavigationWindow(null); };
         Loaded += (_, _) => AttachNavigationWindow(Window.GetWindow(this));
         IsVisibleChanged += (_, _) => { if (!IsVisible) CancelNavigation(); };
+    }
+    private void NavigationModifiersChanged(object sender, KeyEventArgs e)
+    {
+        if (rotationPoint == null) return;
+        if (NavigationModifierKey(e.Key == Key.System ? e.SystemKey : e.Key, Keyboard.Modifiers, Mouse.GetPosition(viewport)))
+            e.Handled = true;
     }
     private void AttachNavigationWindow(Window? window)
     {
