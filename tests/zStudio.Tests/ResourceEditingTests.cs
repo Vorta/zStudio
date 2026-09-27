@@ -9,6 +9,31 @@ namespace Recoil.Zbd.Tests;
 public sealed class ResourceEditingTests
 {
     [Fact]
+    public void ZrdPreviewBoundsFormattingBeforeEscapingAndPreservesExactPrefixes()
+    {
+        foreach (string text in new[] { "", "plain", new string('x', 4094), new string('x', 4095), string.Concat(Enumerable.Range(0, 256).Select(i => (char)i)) })
+        {
+            var node = ZrdNode.Create(ZrdKind.String) with { Text = text };
+            string full = System.Text.Json.JsonSerializer.Serialize(text);
+            foreach (int limit in new[] { 1, 2, 199, 200, 4096 })
+            {
+                var preview = node.PreviewValue(limit);
+                Assert.Equal(full[..Math.Min(limit, full.Length)], preview.Value);
+                Assert.Equal(full.Length > limit, preview.Truncated);
+            }
+        }
+        foreach (var node in new[] { ZrdNode.Create(ZrdKind.Int, "-2147483648"), ZrdNode.Create(ZrdKind.Float, "0x7FA12345"), ZrdNode.Create(ZrdKind.Array) })
+            Assert.Equal((node.Value, false), node.PreviewValue(4096));
+        var large = ZrdNode.Create(ZrdKind.String) with { Text = new string('\0', 8 * 1024 * 1024) };
+        _ = large.PreviewValue(4096);
+        long allocated = GC.GetAllocatedBytesForCurrentThread();
+        var bounded = large.PreviewValue(4096);
+        allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+        Assert.Equal(4096, bounded.Value.Length); Assert.True(bounded.Truncated);
+        Assert.True(allocated < 128 * 1024, $"Formatting allocated {allocated:N0} bytes for a bounded prefix.");
+        Assert.Throws<ArgumentOutOfRangeException>(() => large.PreviewValue(0));
+    }
+    [Fact]
     public async Task OptionalCorpusArchiveAndZrdRoundTripsAreByteIdentical()
     {
         string? root = Environment.GetEnvironmentVariable("ZSTUDIO_CORPUS"); if (root == null) return;

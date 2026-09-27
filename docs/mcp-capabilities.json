@@ -50,7 +50,7 @@
         "zstudio_zrd_edit",
         "zstudio_resource_select"
       ],
-      "note": "Typed Data tree and dynamic context/Edit menus use ordered node UUIDs. Add/type/duplicate/delete/move use shared validation and one undo step. Selection keeps Properties pinned."
+      "note": "Typed Data tree and dynamic context/Edit menus use ordered node UUIDs. Add/type/duplicate/delete/move use shared validation and one undo step. Selection keeps Properties pinned. GUI labels and zrd_nodes bound string prefixes before JSON escaping; MCP marks valueTruncated at 4096 characters without formatting the complete stored string."
     },
     {
       "gui": "ResourcePropertiesEditor:Fields",

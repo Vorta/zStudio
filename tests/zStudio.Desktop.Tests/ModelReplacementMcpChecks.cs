@@ -47,6 +47,17 @@ internal static class ModelReplacementMcpChecks
             await Job("save_document",new() { ["document"] = doc.SessionId.ToString(),["revision"] = doc.Revision }); Assert.False(doc.IsDirty); Assert.False(doc.ModelEdits!.HasExternalChanges());
             var saved = await FormatRegistry.Default.OpenAsync(source,token); Assert.Equal(0,saved.Scene!.Models[1].Metadata.Int("model_type"));
             var png = await FormatRegistry.Default.OpenAsync(texture,token); Assert.Single(png.Assets);
+            string copies = Path.Combine(root, "copies");
+            await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["modelDirectory"] = copies });
+            File.Delete(source); File.Delete(texture);
+            main.ViewModel.CheckExternalChanges(); Assert.False(doc.IsStale);
+            await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
+            await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
+            Assert.Equal(ModelFixture.GameZ(), await File.ReadAllBytesAsync(Path.Combine(copies, "gamez.zbd"), token));
+            Assert.Equal(ModelFixture.Texture(), await File.ReadAllBytesAsync(Path.Combine(copies, "texture2.zbd"), token));
+            Assert.False(doc.IsDirty); main.ViewModel.CheckExternalChanges(); Assert.False(doc.IsStale);
+            await File.AppendAllTextAsync(Path.Combine(copies, "texture2.zbd"), "external change", token);
+            main.ViewModel.CheckExternalChanges(); Assert.True(doc.IsStale);
             async Task<JsonNode> Call(string name, Dictionary<string,object?> arguments)
             {
                 var result = await client.CallToolAsync("zstudio_" + name,arguments,cancellationToken:token); Assert.False(result.IsError == true,string.Join(";",result.Content.OfType<TextContentBlock>().Select(c=>c.Text)));

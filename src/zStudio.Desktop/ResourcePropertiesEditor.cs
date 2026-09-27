@@ -72,7 +72,14 @@ public sealed class ResourceTreeItem(ZrdNode node, int index, ResourceTreeItem? 
     public ZrdNode Node { get; } = node;
     public ResourceTreeItem? Parent { get; } = parent;
     public int Index { get; } = index;
-    public string Label => (Parent == null ? "Root" : "[" + Index + "]") + " · " + Node.Kind + " · " + (Node.Value.Length > 200 ? Node.Value[..200] + "…" : Node.Value);
+    public string Label
+    {
+        get
+        {
+            var preview = Node.PreviewValue(200);
+            return (Parent == null ? "Root" : "[" + Index + "]") + " · " + Node.Kind + " · " + preview.Value + (preview.Truncated ? "…" : "");
+        }
+    }
     public bool IsExpanded { get => expansion.TryGetValue(Node.Id, out bool value) ? value : Parent == null; set { expansion[Node.Id] = value; PropertyChanged?.Invoke(this, new(nameof(IsExpanded))); } }
     private IReadOnlyList<ResourceTreeItem>? children;
     public IReadOnlyList<ResourceTreeItem> Children => children ??= Node.Children.Select((c, i) => new ResourceTreeItem(c, i, this, expansion)).ToArray();

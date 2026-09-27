@@ -115,6 +115,39 @@ public sealed class ModelReplacementTests
         finally { Directory.Delete(root,true); }
     }
     [Fact]
+    public async Task SaveAsWatchesCurrentWorldAndTextureTargets()
+    {
+        var token = TestContext.Current.CancellationToken;
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-model-retarget-" + Guid.NewGuid().ToString("N"));
+        string sourceFolder = Path.Combine(root, "source"), first = Path.Combine(root, "first"), second = Path.Combine(root, "second");
+        Directory.CreateDirectory(sourceFolder);
+        try
+        {
+            string world = Path.Combine(sourceFolder, "gamez.zbd"), texture = Path.Combine(sourceFolder, "texture2.zbd");
+            await File.WriteAllBytesAsync(world, ModelFixture.GameZ(), token); await File.WriteAllBytesAsync(texture, ModelFixture.Texture(), token);
+            using AssetResolver resolver = new(sourceFolder); var source = await resolver.OpenCachedAsync(world, token); var edits = new ModelEditSession(source);
+            var batch = new ModelImportBatch(Convert.ToHexString(SHA256.HashData(source.Bytes.Span)), "new", Image, new Dictionary<int, ImportedMesh> { [1] = ModelFixture.Mesh });
+            edits.Accept(await edits.PrepareAsync(batch, resolver, token));
+            Assert.Empty((await edits.SaveAsync(first, token)).Errors);
+            await File.AppendAllTextAsync(world, "external source change", token);
+            await File.AppendAllTextAsync(texture, "external source change", token);
+            Assert.False(edits.HasExternalChanges());
+            File.Delete(world); File.Delete(texture);
+            Assert.False(edits.HasExternalChanges());
+            Assert.Empty((await edits.SaveAsync(second, token)).Errors);
+            File.Delete(Path.Combine(first, "gamez.zbd")); File.Delete(Path.Combine(first, "texture2.zbd"));
+            Assert.False(edits.HasExternalChanges());
+            edits.Undo(); Assert.Empty((await edits.SaveAsync(token: token)).Errors);
+            Assert.Equal(ModelFixture.GameZ(), await File.ReadAllBytesAsync(Path.Combine(second, "gamez.zbd"), token));
+            Assert.Equal(ModelFixture.Texture(), await File.ReadAllBytesAsync(Path.Combine(second, "texture2.zbd"), token));
+            Assert.False(edits.HasExternalChanges());
+            await File.AppendAllTextAsync(Path.Combine(second, "texture2.zbd"), "external target change", token);
+            Assert.True(edits.HasExternalChanges());
+            await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(token: token));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+    [Fact]
     public void ObjCoordinatesAndTextureVSurviveNativeRoundTrip()
     {
         var source = FormatRegistry.Default.OpenBytes("gamez.zbd",ModelFixture.GameZ(), token: TestContext.Current.CancellationToken); Assert.Empty(source.Diagnostics);

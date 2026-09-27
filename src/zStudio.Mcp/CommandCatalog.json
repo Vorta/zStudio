@@ -2913,7 +2913,7 @@
   },
   {
     "Name": "zstudio_zrd_nodes",
-    "Description": "Read an edited typed ZRD root, or page the immediate children of a node. Values use invariant editor text; strings are JSON-quoted, floats include raw bits. Node IDs survive edits and undo. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Read an edited typed ZRD root, or page the immediate children of a node. Values use invariant editor text; strings are JSON-quoted, floats include raw bits. Formatting is bounded to a 4096-character prefix with valueTruncated; truncated text may be incomplete JSON. Node IDs survive edits and undo. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

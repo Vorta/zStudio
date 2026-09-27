@@ -133,12 +133,17 @@ public partial class MainWindow
                 }
                 return Result(new { d.Revision, member, node = node == Guid.Empty ? (Guid?)null : node });
             });
-        RegisterJob(r, "zrd_nodes", "Read an edited typed ZRD root, or page the immediate children of a node. Values use invariant editor text; strings are JSON-quoted, floats include raw bits. Node IDs survive edits and undo.",
+        RegisterJob(r, "zrd_nodes", "Read an edited typed ZRD root, or page the immediate children of a node. Values use invariant editor text; strings are JSON-quoted, floats include raw bits. Formatting is bounded to a 4096-character prefix with valueTruncated; truncated text may be incomplete JSON. Node IDs survive edits and undo.",
             [DocumentParameter, MemberParameter, P("node", "string", "Optional parent node UUID; omit to return the root."), .. PageParameters], false, async (a, token) =>
             {
                 var d = TargetDocument(a); var root = await ResourceTreeAsync(d, GuidArg(a,"member"), token); Guid id = GuidArg(a,"node");
                 var parent = id == Guid.Empty ? null : root.Find(id) ?? throw new InvalidDataException("Node no longer exists.");
-                return Result(new { d.Revision, nodes = Page((parent == null ? new[] { root } : parent.Children).Select((n, i) => new { node = n.Id, parent = parent?.Id, index = i, kind = n.Kind.ToString(), value = n.Value.Length > 4096 ? n.Value[..4096] : n.Value, valueTruncated = n.Value.Length > 4096, bits = $"0x{n.Bits:X8}", children = n.Children.Count, originalOffset = n.SourceOffset }), a, n => n.value).Data });
+                var rows = (parent == null ? new[] { root } : parent.Children).Select((n, i) =>
+                {
+                    var preview = n.PreviewValue(4096);
+                    return new { node = n.Id, parent = parent?.Id, index = i, kind = n.Kind.ToString(), value = preview.Value, valueTruncated = preview.Truncated, bits = $"0x{n.Bits:X8}", children = n.Children.Count, originalOffset = n.SourceOffset };
+                });
+                return Result(new { d.Revision, nodes = Page(rows, a, n => n.value).Data });
             });
         RegisterJob(r, "zrd_edit", "Edit typed ZRD values or structure as one undoable operation. add inserts in the selected array. move uses parent UUID and final position after removal. Root deletion/duplication and cycles are rejected. Changing type replaces the old value/children.",
             [DocumentParameter, RevisionParameter, MemberParameter, NodeParameter, P("action", "string", "Node operation.", true, "set", "type", "add", "duplicate", "delete", "move"), P("kind", "string", "Type for add/type; default String.", false, "Int", "Float", "String", "Array"), P("value", "string", "Invariant int/float, explicit 0xXXXXXXXX float bits, or JSON-quoted Latin-1 string."), P("parent", "string", "Destination array UUID for move."), new("position", "integer", "Final child index; add defaults to append.", Minimum: 0, Maximum: int.MaxValue)], false,

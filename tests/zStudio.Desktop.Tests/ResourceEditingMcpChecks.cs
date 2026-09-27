@@ -93,6 +93,28 @@ internal static class ResourceEditingMcpChecks
             await Job("open_document", new() { ["path"] = standalone }); doc = main.ViewModel.Documents.Single(); edits = doc.ResourceEdits!; member = edits.Current.Members.Single().Id; root = edits.Tree(edits.Member(member), token).Id;
             await Job("zrd_edit", Args(("action", "type"), ("member", member), ("node", root), ("kind", "Int"), ("value", "0")));
             await Job("save_document", Args()); Assert.Equal(8, new FileInfo(standalone).Length);
+            await Call("close_document", Args());
+            // Bound formatting work as well as the response: escaping NUL expands each byte sixfold.
+            string largePath = Path.Combine(rootPath, "large.zrd");
+            var large = ZrdNode.Create(ZrdKind.String) with { Text = new string('\0', 2 * 1024 * 1024) };
+            await File.WriteAllBytesAsync(largePath, ZrdWriter.Write(large, token), token);
+            await Job("open_document", new() { ["path"] = largePath }); doc = main.ViewModel.Documents.Single(); edits = doc.ResourceEdits!; member = edits.Current.Members.Single().Id;
+            await Job("zrd_nodes", Args(("member", member))); // Warm protocol/serializer caches before measuring.
+            long allocated = GC.GetTotalAllocatedBytes(true);
+            var largeListing = await Job("zrd_nodes", Args(("member", member)));
+            allocated = GC.GetTotalAllocatedBytes(true) - allocated;
+            Assert.True(allocated < 8 * 1024 * 1024, $"Bounded ZRD listing allocated {allocated:N0} bytes.");
+            var largeRow = Assert.Single(largeListing["nodes"]!["items"]!.AsArray())!;
+            Assert.True(largeRow["valueTruncated"]!.GetValue<bool>());
+            string expectedPrefix = "\"" + string.Concat(Enumerable.Repeat("\\u0000", 683));
+            Assert.Equal(expectedPrefix[..4096], largeRow["value"]!.GetValue<string>());
+            var largeTree = new ResourceTreeItem(large, 0, null, new Dictionary<Guid, bool>());
+            long labelAllocated = GC.GetAllocatedBytesForCurrentThread();
+            string label = largeTree.Label;
+            labelAllocated = GC.GetAllocatedBytesForCurrentThread() - labelAllocated;
+            Assert.Equal("Root · String · " + expectedPrefix[..200] + "…", label);
+            Assert.True(labelAllocated < 128 * 1024, $"Data tree label allocated {labelAllocated:N0} bytes.");
+            Assert.False(doc.IsDirty);
             await CheckSharedPickupOwnerAsync(rootPath, token);
 
             Dictionary<string, object?> Args(params (string Key, object Value)[] values)

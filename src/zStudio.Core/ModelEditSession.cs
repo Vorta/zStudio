@@ -88,7 +88,10 @@ public sealed class ModelEditSession
                     token.ThrowIfCancellationRequested(); ValidateDestination(item.Target);
                     if (item.Replace) { var prior = saved[item.Doc.Path]; await CheckExternalAsync(prior.Target,prior.Bytes,token); File.Replace(item.Temp,item.Target,null); }
                     else File.Move(item.Temp,item.Target,false);
-                    saved[item.Doc.Path] = (item.Target,item.Doc.Bytes.ToArray()); observedStamps[item.Target] = FileStamp.Read(item.Target); completed.Add(item.Target);
+                    string previousTarget = saved[item.Doc.Path].Target;
+                    saved[item.Doc.Path] = (item.Target,item.Doc.Bytes.ToArray());
+                    observedStamps.Remove(previousTarget);
+                    observedStamps[item.Target] = FileStamp.Read(item.Target); completed.Add(item.Target);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { errors.Add(item.Target + ": " + ex.Message); break; }
             }

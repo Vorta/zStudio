@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR #10 review fixes (2026-09-27)
+
+Fixed the P1 large-string listing allocation and P2 model Save As monitoring findings. ZRD node listings and Data tree labels now bound the stored prefix before JSON escaping, retaining exact displayed prefixes and explicit truncation. Model saves replace each successfully published file's previous monitoring target, so old-source changes/removal do not mark a retargeted copy stale; current-copy changes still do. Preserved the maintainer's documentation cleanup commit.
+
+Both new regressions failed before their fixes: a 2 MiB ZRD string caused about 76 MB of listing allocations, and a changed original model source incorrectly marked the saved copy stale. The Release build passes with zero warnings/errors and all 308 tests pass (220 Core, 88 Desktop), including allocation bounds, escaping boundaries, repeated Save As, old-source removal, copy modification, undo/save and GUI/MCP parity. Updated capability documentation and regenerated the embedded 60-tool catalog. Required PR CI and the latest portable build are checked on the pushed revision before resolving the review threads.
+
 ## v0.5.4 PR preparation (2026-09-27)
 
 Collected the model bundle/replacement workflow, retail model-bound fixes, ZAR archive and typed ZRD editors, shared GUI/MCP support and latest-portable-build guidance into `feature/v0.5.4-editors`. Updated the source version, README, changelog and current packaging examples to 0.5.4. This prepares a PR; it does not publish a release.

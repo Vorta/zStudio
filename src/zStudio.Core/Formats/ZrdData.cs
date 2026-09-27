@@ -18,6 +18,16 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
         ZrdKind.String => JsonSerializer.Serialize(Text),
         _ => $"{Children.Count} item{(Children.Count == 1 ? "" : "s")}"
     };
+    /// <summary>Bound string input before JSON escaping, so preview allocations do not scale with stored text.</summary>
+    public (string Value, bool Truncated) PreviewValue(int maximumCharacters)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCharacters);
+        string value = Kind == ZrdKind.String
+            ? JsonSerializer.Serialize(Text.Length > maximumCharacters ? Text[..maximumCharacters] : Text)
+            : Value;
+        bool truncated = value.Length > maximumCharacters || Kind == ZrdKind.String && Text.Length > maximumCharacters;
+        return (value.Length > maximumCharacters ? value[..maximumCharacters] : value, truncated);
+    }
     public ZrdNode? Find(Guid id) => Id == id ? this : Children.Select(c => c.Find(id)).FirstOrDefault(n => n != null);
     public ZrdNode Duplicate() => this with { Id = Guid.NewGuid(), SourceOffset = -1, Children = Children.Select(c => c.Duplicate()).ToArray() };
     public static ZrdNode Create(ZrdKind kind, string value = "") => Set(new(Guid.NewGuid(), kind, 0, "", []), kind, value);
