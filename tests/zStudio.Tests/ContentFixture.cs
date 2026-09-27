@@ -17,6 +17,25 @@ internal static class ContentFixture
         var entry = new PreparedScriptEntry(Guid.NewGuid(), 0, "same", 123, record, [instruction], new byte[] { 0xde, 0xad });
         return PreparedScriptWriter.Write(new(header, new byte[] { 9, 8, 7 }, [entry, entry with { Id = Guid.NewGuid(), SourceIndex = 1, FollowingBytes = ReadOnlyMemory<byte>.Empty }], new byte[] { 0xfa, 0xfb }));
     }
+    internal static byte[] DamagedScripts(int index, string damage)
+    {
+        var package = FormatRegistry.Default.OpenBytes("interp.zbd", Scripts()).Scripts!;
+        var entries = Enumerable.Range(0, 3).Select(i => package.Entries[0].Duplicate($"script-{i}.zrd")).ToArray();
+        byte[] bytes = PreparedScriptWriter.Write(package with { Entries = entries });
+        int directoryOffset = 12 + index * 128 + 124;
+        int offset = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(directoryOffset));
+        switch (damage)
+        {
+            case "count": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + 4), uint.MaxValue); break;
+            case "size": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), uint.MaxValue); break;
+            case "string": bytes.AsSpan(offset + 8, (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset))).Fill(0x41); break;
+            case "terminator": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + entries[index].Instructions[0].Raw.Length), 1); break;
+            case "index": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(directoryOffset), 1); break;
+            case "outside": BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(directoryOffset), (uint)bytes.Length + 1); break;
+            default: throw new ArgumentException("Unknown fixture damage.", nameof(damage));
+        }
+        return bytes;
+    }
     internal static byte[] Texture(int width, int height, bool shared)
     {
         const int table = 104; int offset = table + (shared ? 512 : 0), pixels = width * height;

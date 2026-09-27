@@ -29,6 +29,8 @@ Current Save As destinations are aliases of the source records in the open batch
 
 Script entry and instruction UUIDs survive edits/reordering/undo for the life of the document. Duplicates receive new IDs. Deleted pinned targets display an unavailable notice and return through Undo. Source indices/offsets continue to identify original data. The shared writer preserves unedited instruction blocks, instruction padding, unchanged directory bytes, header fields, gaps, terminators and the package tail; a no-op write is byte-identical.
 
+If an individual script is malformed, Problems identifies its name, authored index and source offset. Valid records remain available in Assets, Text, inspection and export under their original indices, including records after the damaged entry. The entire pack remains read-only: no partial editing session or Save is enabled. Invalid pack headers/directories can still prevent record recovery.
+
 Saved and pending script snapshots feed the existing mission resource/texture-cycle preview consumers. Editing does not run arbitrary commands or implement general gameplay scripting. Preview approximations remain as documented in the animation guide.
 
 ## Save protections and limits

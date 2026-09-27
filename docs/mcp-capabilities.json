@@ -77,13 +77,18 @@
     {
       "gui": "MainWindow.Content:Scripts",
       "tools": [
+        "zstudio_assets",
+        "zstudio_select_asset",
+        "zstudio_inspect_asset",
+        "zstudio_export",
+        "zstudio_problems",
         "zstudio_script_records",
         "zstudio_script_entry_edit",
         "zstudio_script_instruction_edit",
         "zstudio_script_select",
         "zstudio_script_properties"
       ],
-      "note": "Dynamic script menus and virtualized instruction rows share stable script/instruction identities, structural actions and explicit pinned Properties targeting. Read-only reconstructed Text and original Bytes remain separate. Selection never executes commands or retargets Properties."
+      "note": "Dynamic script menus and virtualized instruction rows share stable script/instruction identities, structural actions and explicit pinned Properties targeting. Read-only reconstructed Text and original Bytes remain separate. Malformed records retain scoped errors and leave valid scripts inspectable/exportable at their authored indices, while the whole pack stays ineligible for editing/saving. Selection never executes commands or retargets Properties."
     },
     {
       "gui": "ScriptPropertiesEditor:Fields",

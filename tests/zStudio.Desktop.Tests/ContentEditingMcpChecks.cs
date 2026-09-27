@@ -142,6 +142,21 @@ internal static class ContentEditingMcpChecks
             doc=mirror;await Job("reload_document",Args());doc=main.ViewModel.Documents.Single();Assert.False(doc.IsContentMirror);
             Assert.Equal(await File.ReadAllBytesAsync(second,token),doc.PreviewDocument.Bytes.ToArray());await Call("close_document",Args());
 
+            string damagedPath=Path.Combine(root,"damaged.zbd");byte[] damaged=ContentFixture.DamagedScripts(1,"string");
+            await File.WriteAllBytesAsync(damagedPath,damaged,token);await Job("open_document",new() { ["path"]=damagedPath });doc=main.ViewModel.Documents.Single();
+            Assert.Null(doc.ScriptEdits);Assert.False(((Button)main.FindName("DocumentSave")).IsEnabled);
+            Assert.False(((MenuItem)main.FindName("SaveAsMenu")).IsEnabled);
+            var surviving=await Call("assets",new() { ["document"]=doc.SessionId.ToString() });
+            Assert.Equal(new[] { 0,2 },surviving["items"]!.AsArray().Select(a=>a!["Index"]!.GetValue<int>()));
+            await Job("select_asset",new() { ["document"]=doc.SessionId.ToString(),["kind"]="Script",["index"]=2 });
+            Assert.Equal(2,doc.SelectedAsset!.Index);Assert.Contains("strange command",((TextBox)main.FindName("ContentText")).Text);
+            var inspected=await Call("inspect_asset",new() { ["document"]=doc.SessionId.ToString(),["kind"]="Script",["index"]=2 });
+            Assert.Equal("strange command",inspected["source"]!["instructions"]![0]![0]!.GetValue<string>());Assert.Null(inspected["edited"]);
+            var rejected=await Job("script_entry_edit",Args(("action","add"),("name","blocked.zrd")),"failed");Assert.Equal("unsupported",rejected["code"]!.GetValue<string>());
+            rejected=await Job("save_document",Args(("destination",Path.Combine(root,"blocked.zbd"))),"failed");Assert.Equal("unsupported",rejected["code"]!.GetValue<string>());
+            Assert.False(File.Exists(Path.Combine(root,"blocked.zbd")));Assert.False(doc.IsDirty);Assert.Equal(damaged,await File.ReadAllBytesAsync(damagedPath,token));
+            await Call("close_document",Args());
+
             async Task CheckPalette(DocumentModel view,int index)
             {
                 var record=view.PreviewDocument.Assets[index];var info=Assert.IsType<TextureInfo>(record.Content);

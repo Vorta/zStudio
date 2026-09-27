@@ -13,6 +13,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Exclude current Save As aliases from independent texture variant targets, and diagnose malformed AI nodes individually while preserving valid neighbors and ambiguous-link safeguards.
 - Refresh only the displayed static scene after content or background resource edits, so switching from a 3D preview into a script or texture editor cannot fail an accepted edit by refreshing the retained, cleared viewport.
 - Read edited and mirrored texture palettes from the current snapshot in MCP, matching GUI inspection after replacement, addition, undo/redo and Save As.
+- Isolate malformed script records with name/index/offset diagnostics, retaining valid records for inspection and export while keeping the damaged pack read-only.
 
 ## 0.5.4 — 2026-09-27
 

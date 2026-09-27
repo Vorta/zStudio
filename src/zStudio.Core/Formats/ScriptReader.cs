@@ -32,22 +32,27 @@ internal sealed class ScriptReader : IZbdFormatReader
         }
         int tableEnd = checked(12 + count * 128);
         long first = count == 0 ? tableEnd : directory[0].Offset;
-        BinaryCursor.CheckRange(doc.Bytes.Length, tableEnd, first - tableEnd);
         List<PreparedScriptEntry> entries = []; ReadOnlyMemory<byte> tail = count == 0 ? doc.Bytes[tableEnd..] : ReadOnlyMemory<byte>.Empty;
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested(); var e = directory[i]; long end = i + 1 < count ? directory[i + 1].Offset : doc.Bytes.Length;
-            if (e.Offset < tableEnd) throw new InvalidDataException("Script overlaps the index.");
-            var bytes = doc.Slice(e.Offset, end - e.Offset);
-            var (instructions, used) = DecodeRecords(bytes, e.Offset, token);
-            var following = bytes[used..];
-            if (i == count - 1) { tail = following; following = ReadOnlyMemory<byte>.Empty; }
-            entries.Add(new(Guid.NewGuid(), i, e.Name, e.Time, e.Raw, instructions, following));
-            var a = doc.Add(AssetKind.Script, i, e.Name, e.Offset, end - e.Offset,
-                new JsonObject { ["file_time"] = (long)e.Time }, Content(instructions));
-            a.Summary = $"{instructions.Count:N0} instructions";
+            try
+            {
+                if (e.Offset < tableEnd) throw new InvalidDataException("Script overlaps the index.");
+                var bytes = doc.Slice(e.Offset, end - e.Offset);
+                var (instructions, used) = DecodeRecords(bytes, e.Offset, token);
+                var following = bytes[used..];
+                if (i == count - 1) { tail = following; following = ReadOnlyMemory<byte>.Empty; }
+                entries.Add(new(Guid.NewGuid(), i, e.Name, e.Time, e.Raw, instructions, following));
+                var a = doc.Add(AssetKind.Script, i, e.Name, e.Offset, end - e.Offset,
+                    new JsonObject { ["file_time"] = (long)e.Time }, Content(instructions));
+                a.Summary = $"{instructions.Count:N0} instructions";
+            }
+            catch (InvalidDataException ex) { doc.Diagnostics.Add(new("Error", $"Script {e.Name}: {ex.Message}", i, e.Offset)); }
         }
-        doc.Scripts = new(doc.Bytes[..12], doc.Slice(tableEnd, first - tableEnd), entries, tail);
+        // Intact records remain inspectable with their authored indices. Only a
+        // complete lossless package can be edited; never serialize a partial parse.
+        if (entries.Count == count) doc.Scripts = new(doc.Bytes[..12], doc.Slice(tableEnd, first - tableEnd), entries, tail);
     }
     public static ScriptContent Decode(ReadOnlyMemory<byte> bytes, CancellationToken token)
         => Content(DecodeRecords(bytes, 0, token).Instructions);

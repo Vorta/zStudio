@@ -55,6 +55,29 @@ public sealed class ContentEditingTests
         var doc = FormatRegistry.Default.OpenBytes("bad.zbd", source, token: Token);
         Assert.NotEmpty(doc.Diagnostics); Assert.Throws<InvalidDataException>(() => new ScriptEditSession(doc));
     }
+    [Theory]
+    [InlineData(0, "count")]
+    [InlineData(1, "size")]
+    [InlineData(1, "string")]
+    [InlineData(2, "terminator")]
+    [InlineData(0, "index")]
+    [InlineData(0, "outside")]
+    public void DamagedScriptKeepsValidRecordsAndScopedDiagnosticsWithoutEnablingEdits(int index, string damage)
+    {
+        byte[] bytes = ContentFixture.DamagedScripts(index, damage), original = bytes.ToArray();
+        var doc = FormatRegistry.Default.OpenBytes("damaged.zbd", bytes, token: Token);
+        Assert.Equal(Enumerable.Range(0, 3).Where(i => i != index), doc.Assets.Select(a => a.Index));
+        foreach (var asset in doc.Assets)
+        {
+            Assert.Equal(AssetKind.Script, asset.Kind); Assert.Equal($"script-{asset.Index}.zrd", asset.Name);
+            Assert.Equal(new[] { "strange command", "", "é\n\\\"" }, Assert.IsType<ScriptContent>(asset.Content).Instructions.Single());
+        }
+        var diagnostic = Assert.Single(doc.Diagnostics);
+        Assert.Equal("Error", diagnostic.Severity); Assert.Equal(index, diagnostic.AssetIndex);
+        Assert.Equal((long)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(12 + index * 128 + 124)), diagnostic.Offset);
+        Assert.Contains($"script-{index}.zrd", diagnostic.Message); Assert.DoesNotContain("Parsing stopped", diagnostic.Message);
+        Assert.Null(doc.Scripts); Assert.Throws<InvalidDataException>(() => new ScriptEditSession(doc)); Assert.Equal(original, doc.Bytes.ToArray());
+    }
     [Fact]
     public void EmbeddedPaletteUsesStorageFlagRatherThanRuntimeOwnership()
     {
