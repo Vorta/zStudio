@@ -59,6 +59,7 @@ public partial class MainWindow
             RequirePreview(a); return Result(new { preview = previewId, asset = shownAsset?.Id, animation = animation?.PreviewState(),
                 camera = animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? scene?.CaptureView() : null),
                 framingSelection = animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
+                ai = AiPreviewState(),
                 lod = animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = ViewModel.Difficulty.ToString(), texturePacks = animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>().ToArray() : [],
                 textured = animation != null ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
                 wireframe = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
@@ -97,11 +98,23 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo; Whole world only).", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null) throw new StudioCommandException("unsupported","Use animation_options.");
             TargetViewport(a); var doc = shownDocument!; var asset = shownAsset!;
             var changes = (JsonObject)a["changes"]!;
+            bool changesAi = changes.Any(p => p.Key is "aiNodes" or "aiThroughGeometry" or "aiNetwork" or "aiSnapshot");
+            string? requestedAiNetwork = changes.ContainsKey("aiNetwork") ? Text(changes, "aiNetwork") == "all" ? null : Text(changes, "aiNetwork") : aiNetworkFilter;
+            long aiGeneration = aiOptionsGeneration;
+            string? expectedAiSnapshot = scene?.AiNetworks.Id;
+            if (changesAi)
+            {
+                if (!IsAiWorld) throw new StudioCommandException("unsupported", "AI visualization is available only in Whole world.");
+                if ((changes.ContainsKey("aiSnapshot") || changes.ContainsKey("aiNetwork") && requestedAiNetwork != null) && Text(changes, "aiSnapshot") != expectedAiSnapshot)
+                    throw new StudioCommandException("stale_snapshot", "Supply the current aiSnapshot from preview_state.ai.");
+                if (requestedAiNetwork != null && !scene!.AiNetworks.Networks.Any(n => n.Id == requestedAiNetwork))
+                    throw new StudioCommandException("stale_record", "AI network unavailable.");
+            }
             if (changes.ContainsKey("highlight") && asset.Kind != AssetKind.World)
                 throw new StudioCommandException("unsupported", "Surface highlighting is available only in Whole world.");
             // Schema validation covers types/enums. Validate current-view constraints
@@ -123,6 +136,7 @@ public partial class MainWindow
                 {
                     // Publish the highlight only after every requested refresh succeeds.
                     case "highlight": break;
+                    case "aiNodes": case "aiThroughGeometry": case "aiNetwork": case "aiSnapshot": break;
                     case "textures": TexturesEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "wireframe": Wireframe.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
                     case "bounds": BoundsEnabled.IsChecked = value!.GetValue<bool>(); ApplySceneOptions(); break;
@@ -154,6 +168,8 @@ public partial class MainWindow
                     if (previewId != published) throw new StudioCommandException("context_changed", "The published preview was replaced. Read zstudio_state before retrying.");
                 }
             }
+            if (changesAi && (aiGeneration != aiOptionsGeneration || expectedAiSnapshot != scene?.AiNetworks.Id))
+                throw new StudioCommandException("context_changed", "AI visualization or its source graph changed during this request.");
             if (changes.ContainsKey("highlight"))
             {
                 if (worldHighlightGeneration != highlightGeneration)
@@ -166,6 +182,7 @@ public partial class MainWindow
                     _ => WorldHighlightMode.None
                 });
             }
+            if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
             return Result(new { preview = previewId, ViewModel.Status });
         });
         RegisterJob(r, "animation_options", "Set animation options: map/grid/collision/horizon/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty, speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>

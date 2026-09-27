@@ -15,9 +15,13 @@ public partial class MainWindow
         P("worldPath","string","GameZ archive path."), P("root","integer","Scene root node index."),
         P("activationOrigin","string","Comma-separated XYZ, or blank for default."), P("activationTarget","string","Comma-separated XYZ, or blank for default.")
     ]);
-    private static StudioParameter SceneChanges => new("changes", "object", "Static model/world options. Validate the entire batch before applying changes; publish highlights only after requested refreshes succeed.", true, Properties:
+    private static StudioParameter SceneChanges => new("changes", "object", "Static model/world options. Validate the entire batch before applying changes; publish highlights and AI options only after requested refreshes succeed.", true, Properties:
     [
         .. new[] { "textures", "wireframe", "bounds", "horizon" }.Select(n => P(n,"boolean",n)),
+        P("aiNodes", "boolean", "Whole world: show authored AI nodes and directed links."),
+        P("aiThroughGeometry", "boolean", "Whole world: show AI through scene geometry; false enables depth occlusion."),
+        P("aiNetwork", "string", "Whole world: all, or an AI network ID. A specific ID requires aiSnapshot."),
+        P("aiSnapshot", "string", "Expected AI graph snapshot from preview_state.ai; required with a specific aiNetwork ID."),
         P("highlight", "string", "Whole world only: solid yellow non-default soils, green CanModify or red ClipTo; none restores normal appearance.", false, "none", "nonDefaultSoils", "canModify", "clipTo"),
         new("lod","integer","Authored LOD rank within the active viewer's available range.", Minimum: 0, Maximum: int.MaxValue), P("difficulty","string","Mission layout.",false,"Easy","Medium","Hard"), P("texturePack","string","Available texture pack path, or empty for automatic.")
     ]);

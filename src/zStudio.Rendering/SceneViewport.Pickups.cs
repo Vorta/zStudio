@@ -50,17 +50,18 @@ public sealed partial class SceneViewport
         // Pick overlay handles on the parent, before Helix's viewport class handler picks the scene.
         PreviewMouseDown += (_, e) =>
         {
-            if (HandlePickupPointerDown(e.GetPosition(viewport), e)) e.Handled = true;
+            if (HandlePickupPointerDown(e.GetPosition(viewport), e) || HandleAiPointerDown(e.GetPosition(viewport), e)) e.Handled = true;
         };
         PreviewMouseMove += (_, e) =>
         {
             if (HandlePickupPointerMove(e.GetPosition(viewport))) e.Handled = true;
+            else HandleAiPointerMove(e.GetPosition(viewport));
         };
         PreviewMouseUp += (_, e) =>
         {
             if (HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
         };
-        MouseLeave += (_, _) => { CancelPickupDrag(); SetPickupHover(false); };
+        MouseLeave += (_, _) => { CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); };
         viewport.LostMouseCapture += (_, _) => { if (IsPickupDragging) CancelPickupDrag(); };
         viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && CancelPickupDrag()) e.Handled = true; };
     }

@@ -16,7 +16,7 @@ public sealed class McpLazyConnectorTests
         int connections = 0;
         await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => false, async client =>
         {
-            Assert.Equal(67, (await client.ListToolsAsync()).Count);
+            Assert.Equal(70, (await client.ListToolsAsync()).Count);
             Assert.Equal(2, (await client.ListResourcesAsync()).Count);
             Assert.False((await client.CallToolAsync("zstudio_capabilities")).IsError);
             Assert.Single((await client.ReadResourceAsync("zstudio://capabilities")).Contents);
@@ -27,6 +27,27 @@ public sealed class McpLazyConnectorTests
         });
     }
 
+    [Fact]
+    public async Task InvalidAiOptionsAndHandlesNeverLaunchWorkspace()
+    {
+        int connections = 0;
+        await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => true, async client =>
+        {
+            foreach (var (tool, args) in new (string, Dictionary<string, object?>)[]
+            {
+                ("zstudio_scene_options", new() { ["preview"] = "preview", ["changes"] = new JsonObject { ["aiNodes"] = "true" } }),
+                ("zstudio_scene_options", new() { ["preview"] = "preview", ["changes"] = new JsonObject { ["aiNetwork"] = 1 } }),
+                ("zstudio_ai_nodes", new() { ["preview"] = "preview" }),
+                ("zstudio_ai_selection", new() { ["preview"] = "preview", ["snapshot"] = "snapshot", ["action"] = "move" }),
+                ("zstudio_ai_selection", new() { ["preview"] = "preview", ["snapshot"] = "snapshot", ["action"] = "select", ["node"] = 7 })
+            })
+            {
+                var result = await client.CallToolAsync(tool, args);
+                Assert.True(result.IsError); Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());
+            }
+            Assert.Equal(0, connections);
+        });
+    }
     [Fact]
     public async Task InvalidTextureTargetsAndScriptTokensNeverLaunchWorkspace()
     {

@@ -120,6 +120,7 @@ public partial class MainWindow
         { await OpenResourcePropertiesAsync(doc, member, resource.Node.Id); return; }
         if (AssetGrid.IsKeyboardFocusWithin && doc.SelectedAsset is { } asset) { await OpenAssetPropertiesAsync(doc, asset.Record); return; }
         if (inspectedSceneSource is { } item) { await OpenScenePropertiesAsync(doc, item); return; }
+        if (IsAiWorld && scene?.SelectedAiNode is { } aiNode) { await OpenAiPropertiesAsync(aiNode, false); return; }
         if (animation is { } editor)
         {
             var target = editor.PropertySelection; OpenAnimationProperties(doc, editor.EntryIndex, target.Sequence, target.Event); return;

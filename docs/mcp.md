@@ -95,7 +95,7 @@ The SDK is pinned to [ModelContextProtocol.Core 2.2.0](https://github.com/modelc
 
 ## Archive and typed-resource editing
 
-ZAR member CRUD and standalone/embedded ZRD structural editing have full shared GUI/MCP paths. The six resource tools, identity rules, draft behavior, save destinations, ownership conflicts and value formats are documented in [resource-editing.md](resource-editing.md). The generated catalog now exposes 67 tools. Resource saves verify both bytes and shared-reader parsing before atomic replacement; new Save As destinations become the subsequent save target. Original-source inspection stays separate from edited payloads.
+ZAR member CRUD and standalone/embedded ZRD structural editing have full shared GUI/MCP paths. The six resource tools, identity rules, draft behavior, save destinations, ownership conflicts and value formats are documented in [resource-editing.md](resource-editing.md). The generated catalog now exposes 70 tools. Resource saves verify both bytes and shared-reader parsing before atomic replacement; new Save As destinations become the subsequent save target. Original-source inspection stays separate from edited payloads.
 
 Standalone ZRD editing requires a complete bounded decode; malformed documents retain raw inspection with diagnostics and reject resource/save operations. Asset listings reflect current model replacements and appended records. Their `Offset`/`Length` describe the edited snapshot; nullable `sourceOffset`/`sourceLength` identify the original range for `source_bytes`. Pinned model Properties follows the same kind/index through replacement and undo/redo, and `properties_state` includes generated resource fields when a resource is pinned.
 
@@ -103,3 +103,5 @@ Standalone ZRD editing requires a complete bounded decode; malformed documents r
 ## Texture and prepared-script editing
 
 The seven texture/script tools, direct PNG replacement and explicit variant batches, virtualized instruction editor, token limits, pinned drafts, shared ownership, snapshot previews and verified saves are documented in [texture-script-editing.md](texture-script-editing.md). `save_document` accepts a single new `destination` or a complete batch `destinations` map, and returns per-file successes/errors. Working saves retain external-change and protected-source checks. `script_records` uses lifetime-stable entry/instruction UUIDs, not names or mutable row indices. Generated Properties includes asynchronous argument actions through `script_properties`.
+
+AI network visualization has shared Whole world controls and three discovery/inspection tools. See [ai-networks.md](ai-networks.md) for scene options, graph identities, pagination, selection, framing and snapshot behavior.

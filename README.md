@@ -91,6 +91,8 @@ Textures open at 1:1 (100%) with the scroll position reset. At 1:1, each texture
 
 Whole world also offers [surface highlights](docs/world-highlights.md): **Non-default soils** in yellow, **CanModify** regions in green, and **ClipTo** regions in red. Use the three icon buttons after Bounds; only one mode is active at a time, and clicking it again restores normal appearance. Solid colors preserve transparency and do not change source data.
 
+Whole world also provides [AI network visualization](docs/ai-networks.md): node markers, directed connections, filtering by source network, through-geometry or depth-tested drawing, and pinned read-only Properties. Enable **AI nodes** in the toolbar or its overflow menu. This displays authored paths without simulating AI behavior.
+
 Click **Fly camera** in a model or **Whole world** preview to capture the mouse and keyboard for freecam navigation. The cursor is hidden while flying; the highlighted button and viewer overlay show that freecam is active, together with the current speed.
 
 | Freecam control | Action |

@@ -76,7 +76,7 @@ public partial class MainWindow : Window
         ApplyTheme(s.Theme); UpdateRecent(); ready = true;
         PreviewKeyDown += Keyboard;
         PreviewKeyUp += (_, e) => flyCamera?.HandleKey(e, false);
-        diskTimer.Tick += (_, _) => ViewModel.CheckExternalChanges(); diskTimer.Start();
+        diskTimer.Tick += (_, _) => { ViewModel.CheckExternalChanges(); CheckAiPropertiesSnapshot(); }; diskTimer.Start();
         audioTimer.Tick += (_, _) => UpdateAudioPosition(); audioTimer.Start();
         Waveform.SeekRequested += SeekAudio;
     }
@@ -238,7 +238,7 @@ public partial class MainWindow : Window
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
                 WorldHighlights.Visibility = WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
-                if (scene == null) { scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigurePickupScene(scene); SceneHost.Content = scene; ConfigureFlyScene(scene); }
+                if (scene == null) { scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigureAiScene(scene); ConfigurePickupScene(scene); SceneHost.Content = scene; ConfigureFlyScene(scene); }
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty) : null;
                 if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
                 await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
@@ -447,7 +447,7 @@ public partial class MainWindow : Window
     }
     private string? PreferredPack => (TexturePackCombo.SelectedItem as PackChoice)?.Path;
     private async void SceneSourceChanged(object sender, RoutedEventArgs e) { if (ready && !updating && SceneHost.Visibility == Visibility.Visible && ViewModel.SelectedDocument is { } doc && shownAsset != null) await ShowAsset(doc, shownAsset); }
-    private void ApplySceneOptions() { scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); }
+    private void ApplySceneOptions() { scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions(); }
     private void SceneOptionsChanged(object sender, RoutedEventArgs e) { if (ready) ApplySceneOptions(); }
     private void FrameSceneClick(object sender, RoutedEventArgs e) => RunCameraNavigation("frameAsset");
     private void IsolateClick(object sender, RoutedEventArgs e) { if (selectedNode != null) { isolatedNode = selectedNode; scene?.Isolate(selectedNode); } else ViewModel.Status = "Select a node in the scene or scene tree first"; }

@@ -110,6 +110,14 @@ public sealed class PropertiesWindow : Window
         if (!SetReadOnly(document, $"{asset.Name} · {asset.Kind} #{asset.Index}", json)) return false;
         readOnlyAsset = asset.Id; return true;
     }
+    internal void MarkAiSnapshotStale()
+    {
+        const string message = "Source resources changed. Reopen this AI node to inspect the current graph.";
+        if (snapshot?["ai_snapshot"] == null || snapshot["snapshot_status"]?.GetValue<string>() == message) return;
+        snapshot["snapshot_status"] = message;
+        if (body.Content is ReadOnlyPropertySheet sheet) sheet.Show(snapshot, false);
+        Refresh();
+    }
     private void ModelAssetsChanged() => AssetRefreshWork = RefreshAssetAsync();
     private async Task RefreshAssetAsync()
     {

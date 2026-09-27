@@ -47,6 +47,7 @@ public sealed class WindowClosingTests
                     await ResponsiveNavigatorChecks.Run(app);
                     await SceneSelectionMcpChecks.Run();
                     await WorldHighlightMcpChecks.Run();
+                    await AiNetworkMcpChecks.Run();
                     await BlenderNavigationChecks.Run();
                     await ShutdownMcpChecks.Run(app);
                     await PropertiesMcpChecks.Run();

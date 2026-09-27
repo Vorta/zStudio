@@ -21,6 +21,7 @@ public sealed class MissionSceneContext
     public IReadOnlySet<int> DormantRoots { get; }
     public IReadOnlyList<string> Diagnostics { get; }
     public MissionLayoutSelection Layout { get; }
+    public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
     private readonly int originalNodeCount;
     internal MissionSceneContext(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> dormant, List<string> diagnostics, MissionLayoutSelection layout, int originalNodeCount)
     {
@@ -86,6 +87,7 @@ public static partial class MissionSceneLoader
         var cache = Cache.GetOrCreateValue(world);
         if (cache.TryGetValue(key, out var cached)) return cached;
         List<string> diagnostics = []; Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> resources = new(StringComparer.OrdinalIgnoreCase);
+        List<(ZbdDocument Archive, AssetRecord Asset)> aiResources = [];
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
@@ -96,6 +98,7 @@ public static partial class MissionSceneLoader
                     package = (await resolver.OpenCachedAsync(file, token).ConfigureAwait(false)).Animations;
                 if (family != FormatFamily.Archive) continue;
                 var archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
+                aiResources.AddRange(archive.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (archive, a)));
                 foreach (var asset in archive.Assets.Where(a => a.Name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd" or "vehicle.zrd" or "vehicle_easy.zrd" or "vehicle_hard.zrd" or "startanims.zrd" or "ai.zrd" or "puppies.zrd" or "puppies_easy.zrd" or "puppies_hard.zrd"))
                 {
                     resources.TryAdd(asset.Name, (archive, asset));
@@ -109,8 +112,13 @@ public static partial class MissionSceneLoader
         var selection = new MissionLayoutSelection(difficulty, aivName, vehicleName, pickupName);
         MissionResourceSource? pickupSource = resources.TryGetValue(pickupName, out var pickupResource)
             ? new(pickupResource.Archive.Path, pickupResource.Asset.Index, pickupResource.Asset.Name) : null;
-        var result = await Task.Run(() => Build(world, package, Decode(aivName), Decode(vehicleName), Decode("startanims.zrd"), diagnostics, token, selection,
-            Decode("ai.zrd"), Decode(pickupName), pickupSource), token).ConfigureAwait(false);
+        var result = await Task.Run(() =>
+        {
+            var context = Build(world, package, Decode(aivName), Decode(vehicleName), Decode("startanims.zrd"), diagnostics, token, selection,
+                Decode("ai.zrd"), Decode(pickupName), pickupSource);
+            context.AiNetworks = MissionAiNetworks.Read(aiResources, token);
+            return context;
+        }, token).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
         if (cache.Count >= 4) cache.Clear();
         cache[key] = result; return result;

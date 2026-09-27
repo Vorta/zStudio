@@ -96,6 +96,16 @@
         "zstudio_save_document"
       ],
       "note": "Generated timestamp/name/token fields and asynchronous argument actions use shared draft validation, revisions, stable identities and undo. Literal Latin-1 tokens use JSON quotes. Oversized values are read-only prefixes; complete instruction replacement remains available. Save As retargets later saves and reload."
+    },
+    {
+      "gui": "SceneViewport.Ai:HandleAiPointerDown",
+      "tools": [
+        "zstudio_ai_networks",
+        "zstudio_ai_nodes",
+        "zstudio_ai_selection",
+        "zstudio_camera"
+      ],
+      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Hover/selection labels derive from the same node data. Frame selected uses camera; normal scene framing excludes the overlay."
     }
   ],
   "handlers": [
@@ -962,6 +972,14 @@
         "zstudio_model_replace"
       ],
       "note": "Validate explicit source-fingerprinted OBJ/PNG mappings as one shared document undo step, with native model and texture save support. Shared ownership claims all prepared source/current/destination paths before acceptance or save. Conflicts preserve revision/history, claims survive undo/save until close, and oversized model/texture outputs fail before allocation. Assets, Document scene and pinned asset Properties refresh accepted records by identity; Undo/Redo removes/restores appended records without retargeting Properties."
+    },
+    {
+      "gui": "MainWindow.xaml:AiOptionsChanged",
+      "tools": [
+        "zstudio_scene_options",
+        "zstudio_preview_state"
+      ],
+      "note": "Whole world AI visibility, network filter and through-geometry drawing share scene options and preview state. AI controls form one native overflow group and coexist with surface highlights."
     }
   ]
 }

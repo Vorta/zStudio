@@ -1042,7 +1042,7 @@
   },
   {
     "Name": "zstudio_scene_options",
-    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo; Whole world only). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1056,7 +1056,7 @@
       {
         "Name": "changes",
         "Type": "object",
-        "Description": "Static model/world options. Validate the entire batch before applying changes; publish highlights only after requested refreshes succeed.",
+        "Description": "Static model/world options. Validate the entire batch before applying changes; publish highlights and AI options only after requested refreshes succeed.",
         "Required": true,
         "Choices": null,
         "Properties": [
@@ -1088,6 +1088,38 @@
             "Name": "horizon",
             "Type": "boolean",
             "Description": "horizon",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "aiNodes",
+            "Type": "boolean",
+            "Description": "Whole world: show authored AI nodes and directed links.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "aiThroughGeometry",
+            "Type": "boolean",
+            "Description": "Whole world: show AI through scene geometry; false enables depth occlusion.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "aiNetwork",
+            "Type": "string",
+            "Description": "Whole world: all, or an AI network ID. A specific ID requires aiSnapshot.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "aiSnapshot",
+            "Type": "string",
+            "Description": "Expected AI graph snapshot from preview_state.ai; required with a specific aiNetwork ID.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1955,6 +1987,151 @@
         "Name": "open",
         "Type": "boolean",
         "Description": "Open the pinned Properties window.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_ai_networks",
+    "Description": "List authored AI networks with distinct source identities, counts and diagnostics. Does not simulate activation or change visualization.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_ai_nodes",
+    "Description": "List authored AI nodes, XYZ, raw integer and all three directed link slots. Negative indices mean no link; unresolved targets retain diagnostics.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "snapshot",
+        "Type": "string",
+        "Description": "AI graph snapshot from preview_state.ai. Handles apply only to this snapshot.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "network",
+        "Type": "string",
+        "Description": "Network ID, or all/omitted for all networks.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_ai_selection",
+    "Description": "Select/clear an AI marker or open its pinned read-only Properties. Selection requires enabled visualization and a matching filter. Frame it with camera action=frame,target=selected.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "snapshot",
+        "Type": "string",
+        "Description": "AI graph snapshot from preview_state.ai. Handles apply only to this snapshot.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Selection action.",
+        "Required": true,
+        "Choices": [
+          "select",
+          "clear",
+          "properties"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "string",
+        "Description": "Snapshot-scoped node ID; required except for clear.",
         "Required": false,
         "Choices": null,
         "Properties": null

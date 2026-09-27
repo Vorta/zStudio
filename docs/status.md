@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## AI network visualization (2026-09-27)
+
+Implemented the accepted Whole world AI overlay: compact node markers and directed arrows, deterministic network colors, source-qualified network filtering, through-geometry/default and depth-tested modes, hover/selection labels, pinned read-only Properties and Frame selected. Native toolbar overflow and Blender navigation remain shared; pickup handles take precedence and overlays stay outside normal framing, camera clipping, source geometry and exports.
+
+Core uses shared typed ZRD parsing and published resource snapshots, preserving duplicate source records and all three raw link slots. Retail 0x403040/0x403550 verified optional version 105, node_00 through node_98, authored float XYZ and negative link sentinels. Unknown node integer semantics remain raw. Missing/ambiguous endpoints, malformed data and unsupported versions are diagnosed; malformed duplicates cannot redirect links. Graph caching and snapshot-scoped handles prevent stale retargeting. This remains authored-data inspection, not AI simulation or a graph authoring UI.
+
+Validation: all 345 solution tests pass (255 Core, 90 Desktop), including named-pipe GUI parity, invalid batches, stale snapshots, filtering, pinned Properties, framing, windowless schema rejection and full 70-command catalog parity. All 255 Core tests also pass separately against each reference root. Read-only corpus checks cover 940 networks, 7,434 nodes and 12,480 directed link slots in 12 network-bearing archives, with unchanged source hashes. The GPU check passes opaque occlusion, transparency-aware picking, through-geometry rendering, reciprocal arrows, camera/depth-bound preservation, idle back-buffer stability, m1 integration, difficulty refresh and native overflow. Reviewed temporary viewport/UI captures. Product version remains 0.5.4; no PR or public release is created. Portable packaging follows this validation.
+
 ## Texture and prepared-script editors (2026-09-27)
 
 Implemented direct PNG texture replacement/addition with explicit sibling variant selection, record-index disambiguation, original dimensions and direct/indexed storage, deterministic private palettes, premultiplied-alpha resampling, preserved shared palettes and one batch undo. Texture views follow the owner at source and current Save As paths, then re-read disk when the owner closes. Shared ownership protects model imports and all save paths. Saves verify every staged file before per-file atomic publication and report saved, failed and remaining paths; a locked-file regression verifies partial-save retry. Model texture append now uses the same encoder/writer while retaining its existing opaque/power-of-two/512 limits.

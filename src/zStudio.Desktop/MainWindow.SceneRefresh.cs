@@ -63,6 +63,7 @@ public partial class MainWindow
             if (!OwnsRequest()) return null;
 
             var view = previous.CaptureView();
+            string? aiSelection = previous.SelectedAiNode;
             int? selection = selectedNode, isolate = isolatedNode;
             var pickup = selection is int s ? previous.PickupAt(s)?.Pickup?.Source : null;
             previous.CancelPickupDrag(); DetachPickupEditor();
@@ -70,6 +71,7 @@ public partial class MainWindow
             scene = replacement; replacement = null;
             scene.Information += text => { PreviewInfo.Text = text; PreviewInfo.ToolTip = text; };
             scene.NodeSelected += InspectNode;
+            ConfigureAiScene(scene);
             ConfigurePickupScene(scene); ConfigureFlyScene(scene);
             SceneHost.Content = scene;
             ApplySceneOptions();
@@ -82,6 +84,7 @@ public partial class MainWindow
                 ? RemapPickupSelection(pickup, mission) ?? (selection is int oldSelection && mission.RemapNodeFrom(previous.Mission, oldSelection) is >= 0 and int mappedSelection ? mappedSelection : null)
                 : selection;
             if (selectedNode is int node) InspectNode(node);
+            if (aiSelection != null && previous.AiNetworks.Id == scene.AiNetworks.Id) scene.SelectAiNode(aiSelection);
             publishedStaticOptions = requested; previewId = Guid.NewGuid();
             PreviewInfo.Text = scene.PreviewSummary; PreviewInfo.ToolTip = scene.PreviewSummary;
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;

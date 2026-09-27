@@ -49,6 +49,7 @@ public partial class MainWindow
     }
     private async Task RefreshResourceDependentsAsync(DocumentModel doc)
     {
+        if (aiPropertiesArchive != null && (aiPropertiesArchive.Equals(doc.Path, StringComparison.OrdinalIgnoreCase) || aiPropertiesArchive.Equals(doc.ResourceEdits?.TargetPath, StringComparison.OrdinalIgnoreCase))) propertiesWindow?.MarkAiSnapshotStale();
         foreach (var open in ViewModel.Documents) { open.InvalidateMissionContext(); if (open != doc) open.InvalidateCleanPickupEdits(); }
         await previewWork;
         if (shownDocument != doc && animation != null) await animation.RefreshModelContextAsync(resourceChanges: true);
