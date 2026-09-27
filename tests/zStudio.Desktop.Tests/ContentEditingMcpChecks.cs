@@ -30,7 +30,21 @@ internal static class ContentEditingMcpChecks
             await using var host = new LocalMcpHost(main.Commands,"test");
             await using var pipe = new NamedPipeClientStream(".",host.Instance.Pipe,PipeDirection.InOut,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);await pipe.ConnectAsync(token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe,pipe),cancellationToken:token);
+            // Exercise editors after a real 3D preview has been cleared but its viewport retained.
+            string worldPath=Path.Combine(root,"gamez.zbd");await File.WriteAllBytesAsync(worldPath,ModelFixture.GameZ(),token);
+            await Job("open_document",new() { ["path"]=worldPath });var world=main.ViewModel.Documents.Single();
+            Assert.NotNull(Assert.IsType<Recoil.Zbd.Rendering.SceneViewport>(((ContentControl)main.FindName("SceneHost")).Content).PreviewScene);
+            await Call("close_document",new() { ["document"]=world.SessionId.ToString(),["revision"]=world.Revision });
             await Job("open_document",new() { ["path"]=source });var doc=main.ViewModel.Documents.Single();var edits=doc.ScriptEdits!;
+            string resourcePath=Path.Combine(root,"background.zrd");await File.WriteAllBytesAsync(resourcePath,ZrdWriter.Write(ZrdNode.Create(ZrdKind.Int,"7"),token),token);
+            await Job("open_document",new() { ["path"]=resourcePath });var resourceDoc=main.ViewModel.Documents.Single(d=>d.Path==resourcePath);var resourceEdits=resourceDoc.ResourceEdits!;
+            await Job("open_document",new() { ["path"]=source });var resourceMember=resourceEdits.Current.Members[0];
+            await Job("zrd_edit",new() { ["document"]=resourceDoc.SessionId.ToString(),["revision"]=resourceDoc.Revision,["member"]=resourceMember.Id.ToString(),
+                ["node"]=resourceEdits.Tree(resourceMember,token).Id.ToString(),["action"]="set",["value"]="8" });
+            Assert.Same(doc,main.ViewModel.SelectedDocument);Assert.True(((FrameworkElement)main.FindName("StructuredPanel")).IsVisible);
+            Assert.Equal(Visibility.Collapsed,((ContentControl)main.FindName("SceneHost")).Visibility);
+            await Call("undo_redo",new() { ["document"]=resourceDoc.SessionId.ToString(),["revision"]=resourceDoc.Revision,["action"]="undo" });
+            await Call("close_document",new() { ["document"]=resourceDoc.SessionId.ToString(),["revision"]=resourceDoc.Revision });
             var scripts=await Call("script_records",Args()); Guid entry=Guid.Parse(scripts["scripts"]!["items"]![0]!["script"]!.GetValue<string>());
             var instructions=await Call("script_records",Args(("script",entry)));Guid instruction=Guid.Parse(instructions["instructions"]!["items"]![0]!["instruction"]!.GetValue<string>());
             await Job("script_select",Args(("script",entry),("instruction",instruction)));
@@ -86,6 +100,7 @@ internal static class ContentEditingMcpChecks
             await Job("texture_import",Args(("path",png),("index",0),("targets",targetList)));
             Assert.True(doc.IsDirty);Assert.True(mirror.IsContentMirror);Assert.Same(textures.Current.Documents[second],mirror.PreviewDocument);
             Assert.Equal((byte)255,TextureDecoder.Decode(doc.PreviewDocument,doc.PreviewDocument.Assets[0],token).Rgba[3]);
+            await CheckPalette(doc,0);await CheckPalette(mirror,0);
             await Task.Delay(150,token);
             var thumbnail=Assert.IsAssignableFrom<System.Windows.Media.Imaging.BitmapSource>(doc.Assets[0].Thumbnail);
             byte[] firstPixel=new byte[4];thumbnail.CopyPixels(new Int32Rect(0,0,1,1),firstPixel,4,0);
@@ -95,9 +110,12 @@ internal static class ContentEditingMcpChecks
             var conflict=await Job("texture_import",Args(("path",png),("index",0)),"failed");Assert.Equal("owned_resource",conflict["code"]!.GetValue<string>());Assert.False(mirror.IsDirty);doc=owner;
             var stale=Args(("path",png),("index",0));stale["revision"]=0;Assert.Equal("revision_conflict",(await Job("texture_import",stale,"failed"))["code"]!.GetValue<string>());
             await Call("undo_redo",Args(("action","undo")));Assert.False(doc.IsDirty);Assert.Equal(ContentFixture.Texture(1,1,true),mirror.PreviewDocument.Bytes.ToArray());
+            await CheckPalette(doc,0);await CheckPalette(mirror,0);
             await Call("undo_redo",Args(("action","redo")));Assert.Same(textures.Current.Documents[second],mirror.PreviewDocument);
+            await CheckPalette(doc,0);await CheckPalette(mirror,0);
             await Job("save_document",Args());Assert.False(doc.IsDirty);Assert.False(textures.HasExternalChanges());
             await Job("texture_import",Args(("path",png),("name","added")));Assert.Equal(3,doc.Assets.Count);
+            await CheckPalette(doc,2);
             await Call("undo_redo",Args(("action","undo")));Assert.Equal(2,doc.Assets.Count);Assert.False(doc.IsDirty);
             var siblingCopies=new Dictionary<string,string> { [first]=Path.Combine(root,"saved-texture16.zbd"),[second]=Path.Combine(root,"saved-rtexture16.zbd") };
             var publish=textures.PublishFile;
@@ -116,6 +134,7 @@ internal static class ContentEditingMcpChecks
             await Job("save_document",Args(("destinations",destinations)));
             await Job("open_document",new() { ["path"]=destinations[first] });var copyView=main.ViewModel.Documents.Single(d=>d.Path==destinations[first]);Assert.True(copyView.IsContentMirror);
             await Job("texture_import",Args(("path",png),("name","copy-visible")));Assert.Equal(3,copyView.Assets.Count);Assert.All(copyView.Assets,a=>Assert.Equal(copyView.Path,a.Record.Id.File));
+            await CheckPalette(copyView,0);await CheckPalette(copyView,2);
             await Call("undo_redo",Args(("action","undo")));Assert.Equal(2,copyView.Assets.Count);
             await Call("close_document",new() { ["document"]=copyView.SessionId.ToString(),["revision"]=copyView.Revision });
             await Call("close_document",Args());await mirror.ContentMirrorWork;
@@ -123,6 +142,14 @@ internal static class ContentEditingMcpChecks
             doc=mirror;await Job("reload_document",Args());doc=main.ViewModel.Documents.Single();Assert.False(doc.IsContentMirror);
             Assert.Equal(await File.ReadAllBytesAsync(second,token),doc.PreviewDocument.Bytes.ToArray());await Call("close_document",Args());
 
+            async Task CheckPalette(DocumentModel view,int index)
+            {
+                var record=view.PreviewDocument.Assets[index];var info=Assert.IsType<TextureInfo>(record.Content);
+                var response=await Call("texture_palette",new() { ["document"]=view.SessionId.ToString(),["kind"]="Texture",["index"]=index,["limit"]=200 });
+                var palette=response["palette"]!["items"]!.AsArray();int count=info.PaletteOffset<0?0:info.PaletteLength/2;
+                Assert.Equal(count,response["palette"]!["total"]!.GetValue<int>());Assert.Equal(Math.Min(count,200),palette.Count);
+                for(int i=0;i<palette.Count;i++)Assert.Equal((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(view.PreviewDocument.Slice(info.PaletteOffset+i*2,2).Span),palette[i]!["rgb565"]!.GetValue<int>());
+            }
             Dictionary<string,object?> Args(params(string Key,object Value)[] values)
             {var a=new Dictionary<string,object?> { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision };foreach(var(k,v)in values)a[k]=v is Guid id?id.ToString():v;return a;}
             async Task<JsonNode> Call(string name,Dictionary<string,object?> a)

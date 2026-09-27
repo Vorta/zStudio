@@ -53,7 +53,7 @@ public partial class MainWindow
         foreach (var open in ViewModel.Documents) { open.InvalidateMissionContext(); if (open != doc) open.InvalidateCleanPickupEdits(); }
         await previewWork;
         if (shownDocument != doc && animation != null) await animation.RefreshModelContextAsync(resourceChanges: true);
-        else if (shownDocument != doc && shownDocument is { } shown && scene != null && shownAsset != null) await RefreshStaticSceneAsync(shown, shownAsset);
+        else if (shownDocument != doc && HasPublishedStaticScene && shownDocument is { } shown) await RefreshStaticSceneAsync(shown, shownAsset!);
         UpdateDocumentCommands();
     }
     private async Task UndoResourcesAsync(DocumentModel doc, bool redo)

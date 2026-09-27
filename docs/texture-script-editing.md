@@ -49,6 +49,7 @@ All names below have the `zstudio_` prefix. Mutations require the document lifet
 | --- | --- |
 | `texture_targets` | Discover/page matching sibling records, dimensions, ambiguity and problems for a selected index. |
 | `texture_import` | `path` is the PNG; `index` replaces a record, or omit it and provide `name` to add. Optional `targets: [{path,index}, …]` is the explicit complete batch, including the selected pack. |
+| `texture_palette` | Read the current edited or mirrored header and paged RGB565 palette, matching the GUI inspector through replacement, addition, undo/redo and Save As. |
 | `script_records` | Page script entries, or provide `script` UUID to page instructions. Token previews are bounded to 16 tokens of 64 characters each, with truncation disclosed. |
 | `script_entry_edit` | `add`, `duplicate`, `rename`, `delete`, `move`, `timestamp`; `fileTime` is an unsigned 32-bit value. |
 | `script_instruction_edit` | `add`, `set`, `duplicate`, `delete`, `move`; `tokens` contains the literal command and ordered arguments. |

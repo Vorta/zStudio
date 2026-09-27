@@ -677,7 +677,7 @@
   },
   {
     "Name": "zstudio_texture_palette",
-    "Description": "Read texture header and RGB565 palette entries.",
+    "Description": "Read the current edited or mirrored texture header and paged RGB565 palette entries, matching the GUI palette inspector.",
     "Mutates": false,
     "Parameters": [
       {

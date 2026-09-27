@@ -760,7 +760,7 @@
       "tools": [
         "zstudio_texture_palette"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "GUI and MCP inspect the same current edited or mirrored texture snapshot, including moved private palettes, added records, undo/redo and Save As aliases."
     },
     {
       "gui": "MainWindow.xaml:PickupLockedChanged",

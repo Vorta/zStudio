@@ -40,7 +40,7 @@ public partial class MainWindow
         foreach (var open in ViewModel.Documents) { open.InvalidateMissionContext(); if (open != doc) open.InvalidateCleanPickupEdits(); }
         await previewWork;
         if (animation != null) await animation.RefreshModelContextAsync(resourceChanges: true);
-        else if (shownDocument is { } shown && scene != null && shownAsset != null) await RefreshStaticSceneAsync(shown, shownAsset);
+        else if (HasPublishedStaticScene && shownDocument is { } shown) await RefreshStaticSceneAsync(shown, shownAsset!);
         else if (shownDocument is { ContentEdits: not null } current)
         {
             shownAsset = current.SelectedAsset?.Record;

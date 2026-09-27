@@ -37,14 +37,14 @@ public partial class MainWindow
     }
     private void RegisterPreviewCommands(StudioCommands r)
     {
-        Register(r, "texture_palette", "Read texture header and RGB565 palette entries.", false, [.. AssetParameters, .. PageParameters], a =>
+        Register(r, "texture_palette", "Read the current edited or mirrored texture header and paged RGB565 palette entries, matching the GUI palette inspector.", false, [.. AssetParameters, .. PageParameters], a =>
         {
             var d = TargetDocument(a); var asset = TargetAsset(d, a);
             if (asset.Content is not TextureInfo t) throw new StudioCommandException("unsupported", "Choose a texture.");
             List<object> colors = [];
             if (t.PaletteOffset >= 0)
             {
-                var bytes = d.Document.Slice(t.PaletteOffset, t.PaletteLength).Span;
+                var bytes = d.PreviewDocument.Slice(t.PaletteOffset, t.PaletteLength).Span;
                 for (int i = 0; i < bytes.Length / 2; i++)
                 {
                     ushort value = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes[(i * 2)..]);

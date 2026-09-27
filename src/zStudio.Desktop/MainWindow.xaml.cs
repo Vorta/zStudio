@@ -190,8 +190,7 @@ public partial class MainWindow : Window
         if (animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         asset = asset == null ? null : doc.PreviewDocument.Assets.SingleOrDefault(a => a.Id == asset.Id);
         bool differentAsset = shownAsset?.Id != asset?.Id;
-        if (!differentAsset && asset != null && shownDocument == doc && scene?.PreviewScene != null &&
-            animation == null && SceneHost.Visibility == Visibility.Visible && publishedStaticOptions != null && ViewModel.Resolver != null)
+        if (!differentAsset && asset != null && shownDocument == doc && HasPublishedStaticScene && ViewModel.Resolver != null)
         { shownAsset = asset; await RefreshStaticSceneAsync(doc, asset); return; }
         // Entering the animation viewer starts at Sequences. Consecutive animation
         // selections (including asynchronous replacement) retain the chosen page.

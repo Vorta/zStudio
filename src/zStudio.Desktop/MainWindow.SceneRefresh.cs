@@ -12,6 +12,8 @@ public partial class MainWindow
     private CancellationTokenSource? staticRefresh;
     private Task<Guid?>? staticRefreshWork;
     private long staticRefreshGeneration;
+    private bool HasPublishedStaticScene => animation == null && scene?.PreviewScene != null && publishedStaticOptions != null &&
+        SceneHost.Visibility == Visibility.Visible && shownAsset != null;
     private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty);
     private void RestoreStaticSceneOptions(StaticSceneOptions options)
     {

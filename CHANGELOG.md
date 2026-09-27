@@ -11,6 +11,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Correct inline palette detection to use the retail external-palette flag, and share the texture encoder/writer with existing model import.
 - Retain every requested destination after a partial content Save As; ordinary Save retries unpublished copies as new files without falling back to source paths or overwriting competing files. Keep pending copies dirty and reject directory or conflicting source-identity destinations before publication.
 - Exclude current Save As aliases from independent texture variant targets, and diagnose malformed AI nodes individually while preserving valid neighbors and ambiguous-link safeguards.
+- Refresh only the displayed static scene after content or background resource edits, so switching from a 3D preview into a script or texture editor cannot fail an accepted edit by refreshing the retained, cleared viewport.
+- Read edited and mirrored texture palettes from the current snapshot in MCP, matching GUI inspection after replacement, addition, undo/redo and Save As.
 
 ## 0.5.4 — 2026-09-27
 
