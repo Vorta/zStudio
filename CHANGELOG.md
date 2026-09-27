@@ -2,12 +2,15 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## Unreleased
+## 0.6.0 — 2026-09-27
 
 - Add direct PNG replacement and addition in texture packs, with explicit sibling variants, original dimensions/storage, alpha-safe resampling and private palette quantization. Keep batch undo, ownership, mirrored views and verified saves consistent across GUI and MCP.
 - Edit prepared v7 script entries, ordered instructions and arguments in a virtualized Instructions tab and pinned Properties. Preserve stable IDs, unknown commands, raw timestamps and untouched storage; retain read-only text reconstruction and source bytes.
-- Add seven shared texture/script MCP tools, typed input bounds and asynchronous generated argument actions, bringing discovery to 67 tools. Extend drafts/history/save integration, per-file partial-save reporting and meaningful protocol/corpus regressions.
+- Visualize authored AI networks in Whole world with colored node markers, directed connections, source-qualified filters, optional geometry occlusion, pinned read-only Properties and Frame selected. Preserve selection through unchanged-graph preview refreshes and keep overlays outside scene framing, clipping bounds and exports.
+- Add ten shared texture/script/AI MCP tools, typed input bounds and asynchronous generated argument actions, bringing discovery to 70 tools. Extend drafts/history/save integration, snapshot-scoped AI identities, per-file partial-save reporting and protocol/corpus regressions.
 - Correct inline palette detection to use the retail external-palette flag, and share the texture encoder/writer with existing model import.
+- Retain every requested destination after a partial content Save As; ordinary Save retries unpublished copies as new files without falling back to source paths or overwriting competing files. Keep pending copies dirty and reject directory or conflicting source-identity destinations before publication.
+- Exclude current Save As aliases from independent texture variant targets, and diagnose malformed AI nodes individually while preserving valid neighbors and ambiguous-link safeguards.
 
 ## 0.5.4 — 2026-09-27
 
