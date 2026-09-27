@@ -54,6 +54,14 @@ public sealed class AiNetworkTests
         Assert.Throws<InvalidDataException>(() => Decode(I(1)));
     }
     [Fact]
+    public void WrongNodeValueTypeDoesNotHideValidNodesOrResolveAmbiguousLinks()
+    {
+        var graph = Decode(A(S("node_00"), I(7), S("node_00"), Node(), S("node_01"), Node(0), S("node_02"), S("malformed")));
+        Assert.Equal(2, graph.Nodes.Count);
+        Assert.Equal("Ambiguous target", graph.Nodes[1].Links[0].Problem); Assert.Null(graph.Nodes[1].Links[0].Target);
+        Assert.Contains(graph.Diagnostics, d => d.Message.Contains("node_02"));
+    }
+    [Fact]
     public void MalformedDuplicateDoesNotRedirectLinksToAnotherRecord()
     {
         var graph = Decode(A(S("node_00"), A(I(1)), S("node_00"), Node(), S("node_01"), Node(0)));

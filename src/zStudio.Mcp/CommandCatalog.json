@@ -443,7 +443,7 @@
   },
   {
     "Name": "zstudio_save_document",
-    "Description": "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Content batches return saved paths and errors; state.contentEdits lists affected paths and targets. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Content batches return saved paths and errors; state.contentEdits lists affected paths and targets. A partial content Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3313,7 +3313,7 @@
   },
   {
     "Name": "zstudio_texture_targets",
-    "Description": "Discover sibling texture packs with matching names. Default replacement is this pack only. Duplicate matches require explicit record indices. Names are not identities. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Discover sibling texture packs with matching names. Current Save As aliases are excluded because their source records already belong to this batch. Default replacement is this pack only. Duplicate matches require explicit record indices. Names are not identities. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

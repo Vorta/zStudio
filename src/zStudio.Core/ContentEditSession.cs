@@ -12,17 +12,17 @@ public abstract class ContentEditSession
 {
     private readonly List<ContentSnapshot> undo = [], redo = [];
     private readonly Dictionary<string, ZbdDocument> sources = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, (string Path, ReadOnlyMemory<byte> Bytes, FileStamp Stamp)> saved = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (string Path, ReadOnlyMemory<byte> Bytes, FileStamp Stamp, bool NeedsCreate)> saved = new(StringComparer.OrdinalIgnoreCase);
     private bool saving;
     public string SourcePath { get; }
     public ContentSnapshot Current { get; private set; }
     public IEnumerable<ZbdDocument> Documents => sources.Select(p => Current.Documents.TryGetValue(p.Key, out var doc) ? doc : p.Value);
-    public bool IsDirty => Documents.Any(d => !d.Bytes.Span.SequenceEqual(saved[d.Path].Bytes.Span));
+    public bool IsDirty => saved.Values.Any(s => s.NeedsCreate) || Documents.Any(d => !d.Bytes.Span.SequenceEqual(saved[d.Path].Bytes.Span));
     public bool CanUndo => !saving && undo.Count > 0;
     public bool CanRedo => !saving && redo.Count > 0;
     public bool HasHistory => undo.Count > 0 || redo.Count > 0;
     public bool HasAcceptedEdits { get; private set; }
-    public bool HasExternalChanges() => saved.Values.Any(s => FileStamp.Read(s.Path) != s.Stamp);
+    public bool HasExternalChanges() => saved.Values.Any(s => s.NeedsCreate ? File.Exists(s.Path) || Directory.Exists(s.Path) : FileStamp.Read(s.Path) != s.Stamp);
     public string TargetPath(string source) => saved[source].Path;
     public IEnumerable<ZbdDocument> PublishedDocuments
     {
@@ -46,10 +46,13 @@ public abstract class ContentEditSession
     }
     public event Action? Changed;
     public event Action<IEnumerable<string>>? BeforeEdit;
+    // Verification and destination checks remain outside this publication seam.
+    internal Action<string, string, bool> PublishFile { get; set; } = static (temp, target, createNew) =>
+    { if (createNew) File.Move(temp, target, false); else File.Replace(temp, target, null); };
     protected ContentEditSession(ZbdDocument source, object state)
     {
         if (source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact document is required for editing.");
-        SourcePath = source.Path; sources[source.Path] = source; saved[source.Path] = (source.Path, source.Bytes, source.Stamp);
+        SourcePath = source.Path; sources[source.Path] = source; saved[source.Path] = (source.Path, source.Bytes, source.Stamp, false);
         Current = new(new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase) { [source.Path] = source }, state);
     }
     public void Accept(PreparedContentEdit edit)
@@ -59,7 +62,7 @@ public abstract class ContentEditSession
         if (edit.After.Documents.Keys.Any(p => !sources.ContainsKey(p) && !edit.Baselines.ContainsKey(p))) throw new InvalidOperationException("Missing prepared baseline.");
         BeforeEdit?.Invoke(edit.After.Documents.Keys.Concat(saved.Values.Select(s => s.Path)));
         foreach (var p in edit.Baselines)
-            if (!sources.ContainsKey(p.Key)) { sources.Add(p.Key, p.Value); saved.Add(p.Key, (p.Key, p.Value.Bytes, p.Value.Stamp)); }
+            if (!sources.ContainsKey(p.Key)) { sources.Add(p.Key, p.Value); saved.Add(p.Key, (p.Key, p.Value.Bytes, p.Value.Stamp, false)); }
         undo.Add(Current); Trim(undo); redo.Clear(); Current = edit.After; HasAcceptedEdits = true; Changed?.Invoke();
     }
     public void UndoRedo(bool forward)
@@ -83,28 +86,35 @@ public abstract class ContentEditSession
         if (destinations != null && (destinations.Count != documents.Length || documents.Any(d => !destinations.ContainsKey(d.Path)))) throw new InvalidDataException("Save As must specify a new destination for every affected file.");
         var targets = documents.ToDictionary(d => d.Path, d => Path.GetFullPath(destinations == null ? saved[d.Path].Path : destinations[d.Path]), StringComparer.OrdinalIgnoreCase);
         if (targets.Values.Distinct(StringComparer.OrdinalIgnoreCase).Count() != targets.Count) throw new InvalidDataException("Save destinations must be distinct.");
+        if (targets.Any(p => sources.ContainsKey(p.Value) && !p.Key.Equals(p.Value, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException("A save destination cannot use another record's source identity in this batch, even if that source file is missing.");
         BeforeEdit?.Invoke(sources.Keys.Concat(saved.Values.Select(s => s.Path)).Concat(targets.Values));
-        saving = true; List<(ZbdDocument Doc, string Target, string Temp)> staged = []; List<string> completed = [], errors = [];
+        saving = true; List<(ZbdDocument Doc, string Target, string Temp, bool CreateNew)> staged = []; List<string> completed = [], errors = [];
         try
         {
             foreach (var doc in documents)
             {
                 token.ThrowIfCancellationRequested(); string target = targets[doc.Path];
+                bool createNew = destinations != null || saved[doc.Path].NeedsCreate;
                 VerifiedDocumentSave.ValidateDestination(target);
-                if (destinations == null) await VerifiedDocumentSave.CheckBaselineAsync(target, saved[doc.Path].Bytes, token);
+                if (!createNew) await VerifiedDocumentSave.CheckBaselineAsync(target, saved[doc.Path].Bytes, token);
                 else if (File.Exists(target)) throw new IOException("Save As requires new files: " + target);
-                if (destinations == null && doc.Bytes.Span.SequenceEqual(saved[doc.Path].Bytes.Span)) continue;
-                string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp"; staged.Add((doc, target, temp));
+                if (!createNew && doc.Bytes.Span.SequenceEqual(saved[doc.Path].Bytes.Span)) continue;
+                string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp"; staged.Add((doc, target, temp, createNew));
                 await VerifiedDocumentSave.StageAsync(doc, temp, token, target);
             }
+            // Once every output is verified, retain the complete Save As intent.
+            // A partial publication must never send a later Save back to a source.
+            foreach (var item in staged.Where(s => s.CreateNew))
+            { saved[item.Doc.Path] = (item.Target, saved[item.Doc.Path].Bytes, new(0, DateTime.MinValue), true); HasAcceptedEdits = true; }
             foreach (var item in staged)
             {
                 try
                 {
                     token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(item.Target);
-                    if (destinations == null) { await VerifiedDocumentSave.CheckBaselineAsync(item.Target, saved[item.Doc.Path].Bytes, token); File.Replace(item.Temp, item.Target, null); }
-                    else File.Move(item.Temp, item.Target, false);
-                    saved[item.Doc.Path] = (item.Target, item.Doc.Bytes, FileStamp.Read(item.Target)); completed.Add(item.Target);
+                    if (!item.CreateNew) await VerifiedDocumentSave.CheckBaselineAsync(item.Target, saved[item.Doc.Path].Bytes, token);
+                    PublishFile(item.Temp, item.Target, item.CreateNew);
+                    saved[item.Doc.Path] = (item.Target, item.Doc.Bytes, FileStamp.Read(item.Target), false); completed.Add(item.Target);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { errors.Add(item.Target + ": " + ex.Message); break; }
             }
@@ -113,7 +123,7 @@ public abstract class ContentEditSession
         }
         finally
         {
-            foreach (var item in staged) { try { if (File.Exists(item.Temp)) File.Delete(item.Temp); } catch (IOException) { } }
+            foreach (var item in staged) { try { if (File.Exists(item.Temp)) File.Delete(item.Temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
             saving = false; Changed?.Invoke();
         }
     }
@@ -124,6 +134,7 @@ internal static class VerifiedDocumentSave
     internal static void ValidateDestination(string path)
     {
         if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException("Save outside protected reference datasets.");
+        if (Directory.Exists(path)) throw new IOException("The save destination is a directory. Choose a new file path.");
         if (File.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Cannot save through a file link.");
         for (var d = new DirectoryInfo(Path.GetDirectoryName(path)!); d != null; d = d.Parent)
             if (d.Exists && d.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Cannot save through directory links.");

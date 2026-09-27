@@ -15,6 +15,8 @@ These editors use the same accepted snapshots, undo history, ownership and verif
 
 The document initiating a batch owns all affected source and save paths until it closes. Other open texture views, including current Save As destinations, follow its pending snapshots and cannot independently edit or save those files. After the owner closes, those views read the files again; Reload establishes a new editing baseline if the saved bytes changed. Conflicting model imports or other resource edits are rejected before accepting a batch.
 
+Current Save As destinations are aliases of the source records in the open batch. Variant discovery excludes these aliases, and explicit import targets must use the original source identities instead of adding a saved copy as another variant.
+
 ## Edit a prepared v7 script
 
 1. Open `interp.zbd`, then choose a script from Assets. **Instructions** shows the stored order in a virtualized grid. **Text** retains a bounded read-only reconstruction; export provides the full text. **Bytes** continues to show original source bytes.
@@ -34,6 +36,8 @@ Saved and pending script snapshots feed the existing mission resource/texture-cy
 Source datasets named `zbd_1998` or `zbd_1999` require Save As. Save As never overwrites an existing file. Working-file saves check the expected disk bytes, stage and flush output, reparse it with the shared format reader, and verify bytes before atomic per-file replacement. File/directory links are rejected for saves. Exports retain their existing source-tree and destination protections.
 
 All batch files pass staging/verification before publication starts. Publication is atomic per file, not across a directory: an external change, access failure or shutdown during publication may leave a partial batch. The save result lists successfully saved paths, errors and remaining unpublished paths; successful targets are tracked individually, remaining changes stay dirty, and retry saves the remaining files. History and source inspection stay available until the document closes.
+
+After a partial Save As, every requested destination remains attached to the batch. Ordinary Save retries only unpublished copies and never falls back to an original source path. Pending copies keep the document dirty even when their bytes match an earlier saved snapshot. A file that appears at a pending destination is an external conflict; it is never overwritten. Invalid directory destinations are rejected during preflight.
 
 Retail references used for the format constraints are `0x46EE69` (external palette flag `0x10`; `0x80` is runtime ownership), `0x4C1160` (prepared instruction blocks/terminators), and `0x4C5740` (loose-file timestamp precedence). The private reconstruction's `zInterp` layout corroborates the 16-pointer token list. These sources are evidence, not build dependencies, and are not distributed.
 

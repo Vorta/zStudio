@@ -74,11 +74,11 @@ If a workspace call reports `access_disabled`, enable access in **Tools → MCP 
 
 | Content | Browse, inspect and edit | Export and save |
 | --- | --- | --- |
-| Texture packs | Thumbnails, enlarged preview, zoom/pan, channel views, pixel values, palettes and headers | PNG with alpha, JSON |
+| Texture packs | PNG replacement/addition, explicit sibling variants, batch undo, thumbnails, zoom/pan, channels and palettes | PNG with alpha, JSON; verified Save and Save As |
 | Sound archives | Member list, PCM waveform, play/pause/stop, seeking, cue points | Original WAV/member bytes, JSON |
 | ZAR archives | Import, replace, rename, duplicate, delete and reorder members; create ZRD resources | Edited member bytes and JSON; verified Save and Save As |
 | ZRD data | Edit typed nested trees, scalar values, raw float bits and ordered array structure | Edited bytes and JSON; verified Save and Save As, including the owning archive |
-| Prepared scripts | Reconstructed script text and instruction data | Text and JSON |
+| Prepared scripts | Edit ordered entries, instructions, arguments and timestamps with pinned Properties and undo | Text and JSON; verified Save and Save As |
 | Animation/effects | Edit events, sequences, references and keyframes; scrub motion/effects/audio previews in isolation or mission context | Verified new ZBD with Save As; edited JSON |
 | GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties; replace supported v15 models and textures | OBJ/MTL/PNG component bundles, JSON; verified model/texture Save and Save As |
 | Mission pickups | Select pickups in Whole world, show bounds, unlock XYZ arrows or enter coordinates, undo/redo; matching difficulties move together | Save coordinates to their owning ZBD archive; Save As; optional backups |
@@ -136,7 +136,7 @@ The solution separates binary readers/exporters (`zStudio.Core`), Direct3D previ
 
 ## Current limits
 
-Animation version 28 supports editing existing entries and Save As to a new file. Mission pickups stored in `puppies*.zrd` resources support position editing from Whole world; see [the pickup editor guide](docs/pickup-editor.md). Vehicles, turrets, scenery, directly authored GameZ pickups, texture import/replace, and creation of whole animation entries remain outside the supported editing tools. Animation preview approximates physics, beams, lighting, fog, camera parameters, screen effects and audio; game callbacks are trace-only. LOD selection is manual; camera-distance fades are not simulated. Edited animation packs and pickup archives have not yet been tested in the original game. Missing textures are reported; unresolved animation texture cards stay hidden. Six 1999 missions reference some textures absent from their own packs.
+Animation version 28 supports editing existing entries and Save As to a new file. Mission pickups stored in `puppies*.zrd` resources support position editing from Whole world; see [the pickup editor guide](docs/pickup-editor.md). Vehicles, turrets, scenery, directly authored GameZ pickups and creation of whole animation entries remain outside the supported editing tools. Texture packs support PNG import/replacement, and prepared scripts support entry/instruction editing; neither feature executes arbitrary game behavior. AI networks provide authored-data visualization and inspection. Animation preview approximates physics, beams, lighting, fog, camera parameters, screen effects and audio; game callbacks are trace-only. LOD selection is manual; camera-distance fades are not simulated. Edited files have not yet been tested in the original game. Missing textures are reported; unresolved animation texture cards stay hidden. Six 1999 missions reference some textures absent from their own packs.
 
 Unknown versions remain available for raw inspection. The snapshot reader limits individual files to 512 MiB. JSON exports are intended for inspection and external tools; they are not the Python CLI repack schema. The portable build is unsigned and has not yet been checked on an independent clean Windows machine.
 

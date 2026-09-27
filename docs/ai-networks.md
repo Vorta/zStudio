@@ -21,6 +21,8 @@ Retail `AINet::LoadFromZrd` at `0x403040` verifies optional version 105, canonic
 
 Malformed nodes and unsupported versions produce source-specific preview diagnostics. Valid parts remain visible; missing or ambiguous endpoints do not produce guessed connections. Self-links use a small loop. Positions outside the finite ±1e12 preview range cannot render. Large text fields are truncated in bounded inspection results, with stored lengths retained.
 
+A node with an incorrect ZRD value type is diagnosed individually. It does not hide valid neighboring nodes, and a malformed duplicate still makes links to that numeric index ambiguous.
+
 Normal depth mode uses the existing opaque depth buffer. Transparent surfaces retain their no-depth-write behavior. AI geometry does not participate in ordinary framing, navigation clearance, scene clipping bounds, isolation or exports. Missions without supported nodes show an explicit empty message.
 
 ## MCP

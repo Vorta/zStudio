@@ -87,7 +87,7 @@ public static partial class MissionAiNetworks
         for (int i = 0; i < fields.Count; i += 2)
         {
             token.ThrowIfCancellationRequested();
-            if (fields[i].Kind != ZrdKind.String || fields[i + 1].Kind != ZrdKind.Array) throw new InvalidDataException("Expected named network fields with array values.");
+            if (fields[i].Kind != ZrdKind.String) throw new InvalidDataException("Expected named network fields.");
             pairs.Add((fields[i].Text, fields[i + 1]));
         }
         List<Diagnostic> notes = [];
@@ -127,7 +127,7 @@ public static partial class MissionAiNetworks
             try
             {
                 var c = value.Children;
-                if (c.Count != 3 || c[1].Kind != ZrdKind.Array || c[1].Children.Count != 3 || c[2].Kind != ZrdKind.Array || c[2].Children.Count != 3)
+                if (value.Kind != ZrdKind.Array || c.Count != 3 || c[1].Kind != ZrdKind.Array || c[1].Children.Count != 3 || c[2].Kind != ZrdKind.Array || c[2].Children.Count != 3)
                     throw new InvalidDataException("Expected raw integer, XYZ and three link slots.");
                 var p = c[1].Children; Vector3 position = new(Float(p[0]), Float(p[1]), Float(p[2]));
                 if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)) throw new InvalidDataException("Non-finite node coordinates.");

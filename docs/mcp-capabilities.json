@@ -72,7 +72,7 @@
         "zstudio_undo_redo",
         "zstudio_save_document"
       ],
-      "note": "Edit and Assets context menus share PNG import, explicit sibling targets, record-index disambiguation, one batch undo, ownership, mirrored open views and verified per-file save results. This pack is the default; variant dimensions and storage class are retained."
+      "note": "Edit and Assets context menus share PNG import, explicit sibling targets, record-index disambiguation, one batch undo, ownership, mirrored open views and verified per-file save results. Current Save As aliases are excluded from variant discovery and explicit imports. Partial Save As retains all requested destinations, keeps unpublished copies dirty and retries them as new files without falling back to source paths. This pack is the default; variant dimensions and storage class are retained."
     },
     {
       "gui": "MainWindow.Content:Scripts",
@@ -105,7 +105,7 @@
         "zstudio_ai_selection",
         "zstudio_camera"
       ],
-      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Hover/selection labels derive from the same node data. Frame selected uses camera; normal scene framing excludes the overlay."
+      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Hover/selection labels derive from the same node data. Malformed node value types are diagnosed individually while valid neighbors remain visible; malformed duplicate indices remain ambiguous. Frame selected uses camera; normal scene framing excludes the overlay."
     }
   ],
   "handlers": [

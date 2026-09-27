@@ -130,7 +130,7 @@ public partial class MainWindow
     private void RegisterContentCommands(StudioCommands r)
     {
         var scriptParameter = P("script", "string", "Stable script UUID from script_records.", true);
-        RegisterJob(r, "texture_targets", "Discover sibling texture packs with matching names. Default replacement is this pack only. Duplicate matches require explicit record indices. Names are not identities.",
+        RegisterJob(r, "texture_targets", "Discover sibling texture packs with matching names. Current Save As aliases are excluded because their source records already belong to this batch. Default replacement is this pack only. Duplicate matches require explicit record indices. Names are not identities.",
             [DocumentParameter, new("index", "integer", "Selected texture record index.", true, Minimum:0, Maximum:4095), .. PageParameters], false, async (a, token) =>
             {
                 var d = TargetDocument(a); long revision = d.Revision;

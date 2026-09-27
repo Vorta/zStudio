@@ -9,6 +9,8 @@ public sealed class TextureEditSession : ContentEditSession
 {
     public const int MaximumPngBytes = 16 * 1024 * 1024;
     private IReadOnlyDictionary<string, TexturePackEdit> Packs => (IReadOnlyDictionary<string, TexturePackEdit>)Current.State;
+    private HashSet<string> SaveAsAliases() => Documents.Where(d => !d.Path.Equals(TargetPath(d.Path), StringComparison.OrdinalIgnoreCase))
+        .Select(d => TargetPath(d.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
     public TextureEditSession(ZbdDocument source) : base(source, Initial(source)) { }
     private static IReadOnlyDictionary<string, TexturePackEdit> Initial(ZbdDocument source)
     {
@@ -17,12 +19,12 @@ public sealed class TextureEditSession : ContentEditSession
     }
     public async Task<IReadOnlyList<TextureTargetCandidate>> DiscoverTargetsAsync(int index, AssetResolver resolver, CancellationToken token = default)
     {
-        var before = Current;
+        var before = Current; var aliases = SaveAsAliases();
         return await Task.Run(async () =>
         {
         var selected = before.Documents[SourcePath].Assets.SingleOrDefault(a => a.Index == index) ?? throw new InvalidDataException("Texture no longer exists.");
         List<TextureTargetCandidate> results = [];
-        var paths = resolver.TexturePacks(SourcePath).Where(p => Path.GetDirectoryName(p)!.Equals(Path.GetDirectoryName(SourcePath), StringComparison.OrdinalIgnoreCase)).ToArray();
+        var paths = resolver.TexturePacks(SourcePath).Where(p => !aliases.Contains(p) && Path.GetDirectoryName(p)!.Equals(Path.GetDirectoryName(SourcePath), StringComparison.OrdinalIgnoreCase)).ToArray();
         if (paths.Length > 64) throw new InvalidDataException("Discovery supports at most 64 sibling packs. Select explicit targets instead.");
         foreach (string path in paths)
         {
@@ -50,6 +52,8 @@ public sealed class TextureEditSession : ContentEditSession
         byte[] png = new byte[(int)input.Length]; await input.ReadExactlyAsync(png, token);
         var image = await Task.Run(() => ModelImport.ReadPng(png, token, 4096), token);
         var chosen = targets?.Select(t => t with { Path = Path.GetFullPath(t.Path) }).ToArray() ?? (index is int i ? [new TextureTarget(SourcePath, i)] : []);
+        var aliases = SaveAsAliases();
+        if (chosen.Any(t => aliases.Contains(t.Path))) throw new InvalidDataException("A current Save As destination is already part of this texture batch. Select its original source record instead of adding the saved copy as a variant.");
         if (index == null && chosen.Length > 0) throw new InvalidDataException("Adding a texture targets only the open pack.");
         if (index != null && (chosen.Length is < 1 or > 64 || chosen.Select(t => t.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != chosen.Length || !chosen.Any(t => t.Path.Equals(SourcePath, StringComparison.OrdinalIgnoreCase) && t.Index == index)))
             throw new InvalidDataException("Choose the selected texture and at most one record per sibling pack (up to 64 packs).");

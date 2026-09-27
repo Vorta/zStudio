@@ -114,6 +114,31 @@ public sealed class ContentEditingTests
         finally { Directory.Delete(root, true); }
     }
     [Fact]
+    public async Task TextureSaveAsAliasesCannotBecomeIndependentVariantTargets()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-texture-alias-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+        try
+        {
+            string source = Path.Combine(root, "texture1.zbd"), copy = Path.Combine(root, "texture2.zbd"), png = Path.Combine(root, "image.png");
+            await File.WriteAllBytesAsync(source, ContentFixture.Texture(2, 1, true), Token);
+            await File.WriteAllBytesAsync(png, PngEncoder.Encode(new(2, 1, [0, 0, 255, 255, 0, 0, 255, 255]), Token), Token);
+            using AssetResolver resolver = new(root); var edits = new TextureEditSession(await resolver.OpenCachedAsync(source, Token));
+            Guid owner = Guid.NewGuid(); edits.Changed += () => resolver.SetWorkspaceSnapshots(owner, edits.PublishedDocuments);
+            await edits.SaveAsync(new Dictionary<string, string> { [source] = copy }, Token);
+            var before = edits.Current;
+            var candidates = await edits.DiscoverTargetsAsync(0, resolver, Token);
+            Assert.DoesNotContain(candidates, c => c.Path.Equals(copy, StringComparison.OrdinalIgnoreCase));
+            await Assert.ThrowsAsync<InvalidDataException>(() => edits.PrepareAsync(png, 0, "", [new(source, 0), new(copy, 0)], resolver, Token));
+            Assert.Same(before, edits.Current); Assert.False(edits.IsDirty); Assert.False(edits.CanUndo);
+            edits.Accept(await edits.PrepareAsync(png, 0, "", null, resolver, Token));
+            Assert.Equal(edits.Current.Documents[source].Bytes.ToArray(), (await resolver.OpenCachedAsync(copy, Token)).Bytes.ToArray());
+            await edits.SaveAsync(token: Token);
+            Assert.Equal(ContentFixture.Texture(2, 1, true), await File.ReadAllBytesAsync(source, Token));
+            Assert.Equal(edits.Current.Documents[source].Bytes.ToArray(), await File.ReadAllBytesAsync(copy, Token));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+    [Fact]
     public async Task PngNoOpPreservesTextureBytesAndLargeUiDimensionsRemainSupported()
     {
         string root = Path.Combine(Path.GetTempPath(), "zstudio-texture-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
@@ -130,7 +155,7 @@ public sealed class ContentEditingTests
     [Fact]
     public async Task ReadOnlyScriptCorpusRoundTrips()
     {
-        string? root = Environment.GetEnvironmentVariable("ZBD_CORPUS_ROOT"); if (string.IsNullOrEmpty(root)) return;
+        string? root = Environment.GetEnvironmentVariable("ZSTUDIO_CORPUS"); if (string.IsNullOrEmpty(root)) return;
         string path = Path.Combine(root, "interp.zbd"); if (!File.Exists(path)) return;
         var doc = await FormatRegistry.Default.OpenAsync(path, Token); Assert.Equal(doc.Bytes.ToArray(), PreparedScriptWriter.Write(doc.Scripts!, Token));
     }
@@ -173,6 +198,9 @@ public sealed class ContentEditingTests
             Assert.False(File.Exists(output));Assert.Equal("untouched",await File.ReadAllTextAsync(existing,Token));Assert.True(edits.IsDirty);Assert.Empty(Directory.GetFiles(root,"*.tmp"));
             await Assert.ThrowsAsync<IOException>(()=>edits.SaveAsync(new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase) { [first]=output,[second]=Path.Combine(root,"zbd_1999","bad.zbd") },Token));
             Assert.False(File.Exists(output));Assert.Equal(ContentFixture.Texture(2,1,true),await File.ReadAllBytesAsync(first,Token));
+            string directory = Path.Combine(root, "directory.zbd"); Directory.CreateDirectory(directory);
+            await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(new Dictionary<string,string> { [first]=output, [second]=directory }, Token));
+            Assert.False(File.Exists(output)); Assert.Equal(second, edits.TargetPath(second)); Assert.Empty(Directory.GetFiles(root, "*.tmp"));
         }
         finally { Directory.Delete(root,true); }
     }
@@ -196,6 +224,46 @@ public sealed class ContentEditingTests
             Assert.False(edits.HasExternalChanges());var retry=await edits.SaveAsync(token:Token);Assert.Equal(new[] { second },retry.SavedPaths);Assert.Empty(retry.Errors);Assert.Empty(retry.RemainingPaths);Assert.False(edits.IsDirty);
         }
         finally { Directory.Delete(root,true); }
+    }
+    [Fact]
+    public async Task PartialSaveAsRetainsUnpublishedDestinationsAndNeverRetriesIntoSources()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-partial-saveas-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+        try
+        {
+            string first = Path.Combine(root, "texture1.zbd"), second = Path.Combine(root, "texture2.zbd"), png = Path.Combine(root, "image.png");
+            await File.WriteAllBytesAsync(first, ContentFixture.Texture(2, 1, true), Token); await File.WriteAllBytesAsync(second, ContentFixture.Texture(1, 1, true), Token);
+            await File.WriteAllBytesAsync(png, PngEncoder.Encode(new(2, 1, [0, 0, 255, 255, 0, 0, 255, 255]), Token), Token);
+            using AssetResolver resolver = new(root); var edits = new TextureEditSession(await resolver.OpenCachedAsync(first, Token));
+            edits.Accept(await edits.PrepareAsync(png, 0, "", [new(first, 0), new(second, 0)], resolver, Token));
+            string copy1 = Path.Combine(root, "copy1.zbd"), copy2 = Path.Combine(root, "copy2.zbd");
+            var publish = edits.PublishFile;
+            edits.PublishFile = (temp, target, createNew) => { if (target == copy2) throw new IOException("Injected publication failure after successful staging."); publish(temp, target, createNew); };
+            var result = await edits.SaveAsync(new Dictionary<string, string> { [first] = copy1, [second] = copy2 }, Token);
+            Assert.Equal(new[] { copy1 }, result.SavedPaths); Assert.Equal(new[] { copy2 }, result.RemainingPaths); Assert.Single(result.Errors);
+            Assert.Equal(copy2, edits.TargetPath(second)); Assert.True(edits.IsDirty);
+            edits.PublishFile = publish;
+            // A competing file must never be overwritten by a pending Save As retry.
+            await File.WriteAllTextAsync(copy2, "external", Token); Assert.True(edits.HasExternalChanges());
+            await Assert.ThrowsAsync<IOException>(() => edits.SaveAsync(token: Token));
+            Assert.Equal("external", await File.ReadAllTextAsync(copy2, Token)); File.Delete(copy2);
+            Assert.False(edits.HasExternalChanges());
+            var retry = await edits.SaveAsync(token: Token);
+            Assert.Equal(new[] { copy2 }, retry.SavedPaths); Assert.Empty(retry.Errors); Assert.False(edits.IsDirty);
+            Assert.Equal(ContentFixture.Texture(2, 1, true), await File.ReadAllBytesAsync(first, Token));
+            Assert.Equal(ContentFixture.Texture(1, 1, true), await File.ReadAllBytesAsync(second, Token));
+            Assert.Equal(edits.Current.Documents[second].Bytes.ToArray(), await File.ReadAllBytesAsync(copy2, Token));
+            // Even an unchanged snapshot must remain dirty while its requested copy is unpublished.
+            string copy3 = Path.Combine(root, "copy3.zbd"), copy4 = Path.Combine(root, "copy4.zbd");
+            edits.PublishFile = (_, _, _) => throw new IOException("Publication unavailable.");
+            var pending = await edits.SaveAsync(new Dictionary<string, string> { [first] = copy3, [second] = copy4 }, Token);
+            Assert.Empty(pending.SavedPaths); Assert.True(edits.IsDirty); Assert.Equal(copy4, edits.TargetPath(second));
+            edits.PublishFile = publish; Assert.Empty((await edits.SaveAsync(token: Token)).Errors); Assert.False(edits.IsDirty);
+            File.Delete(second); string copy5 = Path.Combine(root, "copy5.zbd");
+            await Assert.ThrowsAsync<InvalidDataException>(() => edits.SaveAsync(new Dictionary<string, string> { [first] = second, [second] = copy5 }, Token));
+            Assert.False(File.Exists(second)); Assert.False(File.Exists(copy5)); Assert.Equal(copy3, edits.TargetPath(first)); Assert.False(edits.IsDirty);
+        }
+        finally { Directory.Delete(root, true); }
     }
     [Fact]
     public async Task AmbiguousVariantNamesRequireAnExplicitRecordAndLeaveItsPeerUntouched()
