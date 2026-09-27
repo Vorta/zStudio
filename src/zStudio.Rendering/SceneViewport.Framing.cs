@@ -13,6 +13,14 @@ public sealed partial class SceneViewport
     {
         if (target is not ("all" or "asset" or "selected")) throw new ArgumentException("Unknown framing target.", nameof(target));
         if (IsPickupDragging || IsFlyActive || viewport.Camera is not ProjectionCamera) return false;
+        if (target == "selected" && node == null && AiVisible && SelectedAiNode is { } ai && AiNetworks.Find(ai) is { } selectedAi)
+        {
+            Rect3D aiBounds = Rect3D.Empty;
+            var targets = selectedAi.Node.Links.Where(l => l.Target != null).Select(l => l.Target).Append(ai).ToHashSet();
+            foreach (var item in selectedAi.Network.Nodes.Where(n => targets.Contains(n.Id))) aiBounds.Union(new Point3D(item.Position.X, item.Position.Y, item.Position.Z));
+            aiBounds.Union(new Rect3D(selectedAi.Node.Position.X - 2, selectedAi.Node.Position.Y - 2, selectedAi.Node.Position.Z - 2, 4, 4, 4));
+            return FrameBounds(aiBounds, manual);
+        }
         node ??= target == "selected" ? FramingSelection : null;
         HashSet<int>? selected = null;
         if (node is int root)
@@ -47,6 +55,20 @@ public sealed partial class SceneViewport
                     if (item.Mesh.Visibility == Visibility.Visible && item.Mesh.IsRendering)
                         Include(item.Mesh, item.Mesh.Transform?.Value ?? Matrix3D.Identity);
             }
+        return FrameBounds(bounds, manual);
+
+        void Include(MeshGeometryModel3D mesh, Matrix3D transform)
+        {
+            if (mesh.Geometry is not MeshGeometry3D geometry || geometry.Positions == null) return;
+            foreach (var p in geometry.Positions)
+            {
+                var point = transform.Transform(new Point3D(p.X, p.Y, p.Z));
+                if (double.IsFinite(point.X) && double.IsFinite(point.Y) && double.IsFinite(point.Z)) bounds.Union(point);
+            }
+        }
+    }
+    private bool FrameBounds(Rect3D bounds, bool manual)
+    {
         if (bounds.IsEmpty) return false;
         if (manual && !BeginManualNavigation()) return false;
         StopCameraMotion();
@@ -69,15 +91,5 @@ public sealed partial class SceneViewport
             OrthographicWidth = view.Projection == "orthographic" ? width : null });
         UpdateClipPlanes();
         return true;
-
-        void Include(MeshGeometryModel3D mesh, Matrix3D transform)
-        {
-            if (mesh.Geometry is not MeshGeometry3D geometry || geometry.Positions == null) return;
-            foreach (var p in geometry.Positions)
-            {
-                var point = transform.Transform(new Point3D(p.X, p.Y, p.Z));
-                if (double.IsFinite(point.X) && double.IsFinite(point.Y) && double.IsFinite(point.Z)) bounds.Union(point);
-            }
-        }
     }
 }

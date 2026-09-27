@@ -6,4 +6,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup><EmbeddedResource Include="Formats/field-layouts.json" /></ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Recoil.Zbd.Tests" />
+    <InternalsVisibleTo Include="Recoil.Zbd.Desktop.Tests" />
+  </ItemGroup>
 </Project>

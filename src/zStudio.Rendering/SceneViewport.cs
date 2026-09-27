@@ -75,7 +75,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                 while (pending.TryPop(out int index)) { if (index < 0 || index >= scene.Nodes.Count || !backdrop.Add(index)) continue; foreach (int child in SceneBuilder.Children(scene.Nodes[index])) pending.Push(child); }
                 view = view with { Placements = view.Placements.Where(p => !backdrop.Contains(p.NodeIndex)).ToArray() };
             }
-            List<Diagnostic> notes = [.. view.Diagnostics, .. mission?.Diagnostics.Select(n => new Diagnostic("Warning", n)) ?? []]; Dictionary<int, IReadOnlyList<MeshPart>> geometry = [];
+            List<Diagnostic> notes = [.. view.Diagnostics, .. mission?.Diagnostics.Select(n => new Diagnostic("Warning", n)) ?? [], .. mission?.AiNetworks.Diagnostics ?? []]; Dictionary<int, IReadOnlyList<MeshPart>> geometry = [];
             foreach (int index in view.Placements.Select(p => p.ModelIndex).Distinct()) geometry[index] = GeometryBuilder.Build(scene.Models[index], notes, token);
             Dictionary<int, DecodedImage> textures = [];
             foreach (int index in geometry.Values.SelectMany(p => p).Select(p => p.MaterialIndex).Distinct())
@@ -96,6 +96,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         token.ThrowIfCancellationRequested(); if (current != generation) return;
         ClearMeshes(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects;
         Mission = mission; PreviewScene = scene;
+        if (asset.Kind == AssetKind.World) SetAiNetworks(mission?.AiNetworks ?? AiNetworkSnapshot.Empty);
         if (asset.Kind == AssetKind.World) ConfigureHorizon(scene);
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
         Dictionary<(int Material, bool Horizon), DiffuseMaterial> materials = [];
@@ -251,7 +252,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     {
         foreach (var element in elements)
         {
-            if (element.Visibility != Visibility.Visible || !element.IsRendering || element is TopMostGroup3D or TransformManipulator3D) continue;
+            if (element.Visibility != Visibility.Visible || !element.IsRendering || element is TopMostGroup3D or TransformManipulator3D or AiOverlayGroup) continue;
             if (element is MeshGeometryModel3D mesh && mesh.IsDepthClipEnabled) yield return mesh;
             else if (element is GroupModel3D group) foreach (var child in DepthMeshes(group.Children)) yield return child;
         }
@@ -295,6 +296,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         rotationVelocity = default; rotationPoint = null; cameraPoseDirty = true; authoredCameraPose = false;
         ClearAnimationResources();
         ClearWorldHighlights();
+        ClearAi();
         horizonNodes.Clear(); Mission = null; PreviewScene = null;
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);

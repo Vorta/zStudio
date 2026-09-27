@@ -158,41 +158,19 @@ public sealed class ResourceEditSession
         string target = Path.GetFullPath(destination ?? TargetPath), temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp"; saving = true;
         try
         {
-            ValidateDestination(target);
+            VerifiedDocumentSave.ValidateDestination(target);
             if (destination == null) await CheckBaseline(token); else if (File.Exists(target)) throw new IOException("Save As requires a new file.");
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            await using (FileStream output = new(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
-            { await output.WriteAsync(Current.Document.Bytes, token); await output.FlushAsync(token); output.Flush(true); }
-            var readback = await File.ReadAllBytesAsync(temp, token);
-            await Task.Run(() =>
-            {
-                if (Hash(readback) != Current.Hash) throw new IOException("Saved resource byte verification failed.");
-                var check = FormatRegistry.Default.OpenBytes(target, readback, token: token);
-                if (check.Probe.Family != source.Probe.Family || check.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("Saved resource failed shared-reader verification.");
-                if (!IsArchive) _ = ZrdDecoder.Read(readback, token);
-            }, token);
-            token.ThrowIfCancellationRequested(); ValidateDestination(target);
+            await VerifiedDocumentSave.StageAsync(Current.Document, temp, token, target);
+            token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(target);
             if (destination == null) { await CheckBaseline(token); File.Replace(temp, target, null); } else File.Move(temp, target, false);
             TargetPath = target; TargetStamp = FileStamp.Read(target); saved = Current; return target;
         }
         finally { try { if (File.Exists(temp)) File.Delete(temp); } finally { saving = false; Changed?.Invoke(); } }
     }
-    private async Task CheckBaseline(CancellationToken token)
-    {
-        await using FileStream file = new(TargetPath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        if (file.Length != saved.Document.Bytes.Length || Convert.ToHexString(await SHA256.HashDataAsync(file, token)) != saved.Hash)
-            throw new IOException("The file changed outside zStudio. Reload or choose a new Save As destination.");
-    }
+    private Task CheckBaseline(CancellationToken token) => VerifiedDocumentSave.CheckBaselineAsync(TargetPath, saved.Document.Bytes, token);
     private static string Hash(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(SHA256.HashData(bytes.Span));
     private static void ValidateName(string name)
     { if (name.Length is < 1 or > 63 || name.Any(c => c == 0 || c > 255)) throw new InvalidDataException("Member names require 1–63 Latin-1 characters without NUL."); }
-    private static void ValidateDestination(string path)
-    {
-        if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException("Save outside protected reference datasets.");
-        if (File.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Cannot save through a file link.");
-        for (var d = new DirectoryInfo(Path.GetDirectoryName(path)!); d != null; d = d.Parent)
-            if (d.Exists && d.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Cannot save through directory links.");
-    }
 }
 
 public static class ArchiveWriter

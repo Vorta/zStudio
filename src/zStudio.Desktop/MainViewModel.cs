@@ -237,7 +237,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void CheckExternalChanges()
     {
         foreach (var doc in Documents)
-            try { doc.IsStale = (doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
+            try { doc.IsStale = (doc.ContentEdits is { } content ? content.HasExternalChanges() : doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { doc.IsStale = true; }
     }
     partial void OnGlobalQueryChanged(string value) => RefreshSearch();

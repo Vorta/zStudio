@@ -9,7 +9,7 @@ public partial class FieldEditor
 {
     internal sealed record AutomationChoice(int Value, string Label);
     private sealed record AutomationField(string Id, string Scope, string Label, string Kind, Func<string> Read, Action<string>? Write, string[]? Components, string? Hint, AutomationChoice[]? Choices, Func<string,Task>? AsyncWrite);
-    private sealed record AutomationAction(string Id, string Scope, string Label, Action Run);
+    private sealed record AutomationAction(string Id, string Scope, string Label, Action Run, Func<Task>? AsyncRun = null);
     private readonly List<AutomationField> automationFields = [];
     private readonly List<AutomationAction> automationActions = [];
     protected void ClearAutomationFields(string scope)
@@ -18,6 +18,16 @@ public partial class FieldEditor
         => automationFields.Add(new(inputScope + "/" + automationFields.Count(f => f.Scope == inputScope), inputScope, label, kind, read, write, components, hint, choices, asyncWrite));
     private void AddAutomationAction(string label, Action action)
         => automationActions.Add(new(inputScope + "/action/" + automationActions.Count(f => f.Scope == inputScope), inputScope, label, action));
+    private void AddAutomationAsyncAction(string label, Func<Task> action)
+        => automationActions.Add(new(inputScope + "/action/" + automationActions.Count(f => f.Scope == inputScope), inputScope, label, () => throw new StudioCommandException("async_required", "Use an asynchronous property action."), action));
+    internal async Task InvokeAutomationActionAsync(string id)
+    {
+        var action = automationActions.SingleOrDefault(a => a.Id == id) ?? throw new StudioCommandException("unknown_action", "Read the current action list.");
+        if (action.AsyncRun == null) { InvokeAutomationAction(id); return; }
+        if (HasPendingDrafts) throw new StudioCommandException("pending_drafts", "Resolve unfinished input first.");
+        committingDraft = true;
+        try { await action.AsyncRun(); } finally { committingDraft = false; if (!disposed) RefreshProperties(); }
+    }
     internal object DescribeAutomationFields() => new
     {
         fields = automationFields.Select(f => new { f.Id, f.Label, f.Kind, value = f.Read(), readOnly = f.Write == null, f.Components, f.Hint, f.Choices }).ToArray(),

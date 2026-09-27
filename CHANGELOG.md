@@ -2,6 +2,19 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.6.0 — 2026-09-27
+
+- Add direct PNG replacement and addition in texture packs, with explicit sibling variants, original dimensions/storage, alpha-safe resampling and private palette quantization. Keep batch undo, ownership, mirrored views and verified saves consistent across GUI and MCP.
+- Edit prepared v7 script entries, ordered instructions and arguments in a virtualized Instructions tab and pinned Properties. Preserve stable IDs, unknown commands, raw timestamps and untouched storage; retain read-only text reconstruction and source bytes.
+- Visualize authored AI networks in Whole world with colored node markers, directed connections, source-qualified filters, optional geometry occlusion, pinned read-only Properties and Frame selected. Preserve selection through unchanged-graph preview refreshes and keep overlays outside scene framing, clipping bounds and exports.
+- Add ten shared texture/script/AI MCP tools, typed input bounds and asynchronous generated argument actions, bringing discovery to 70 tools. Extend drafts/history/save integration, snapshot-scoped AI identities, per-file partial-save reporting and protocol/corpus regressions.
+- Correct inline palette detection to use the retail external-palette flag, and share the texture encoder/writer with existing model import.
+- Retain every requested destination after a partial content Save As; ordinary Save retries unpublished copies as new files without falling back to source paths or overwriting competing files. Keep pending copies dirty and reject directory or conflicting source-identity destinations before publication.
+- Exclude current Save As aliases from independent texture variant targets, and diagnose malformed AI nodes individually while preserving valid neighbors and ambiguous-link safeguards.
+- Refresh only the displayed static scene after content or background resource edits, so switching from a 3D preview into a script or texture editor cannot fail an accepted edit by refreshing the retained, cleared viewport.
+- Read edited and mirrored texture palettes from the current snapshot in MCP, matching GUI inspection after replacement, addition, undo/redo and Save As.
+- Isolate malformed script records with name/index/offset diagnostics, retaining valid records for inspection and export while keeping the damaged pack read-only.
+
 ## 0.5.4 — 2026-09-27
 
 - Export an animation root or GameZ node's referenced models as an assembled OBJ/MTL/PNG bundle, individual local-space meshes and an identity/transform manifest for remodeling in Blender.

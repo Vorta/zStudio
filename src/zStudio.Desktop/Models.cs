@@ -70,9 +70,10 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public ModelEditSession? ModelEdits { get; }
     public ResourceEditSession? ResourceEdits { get; }
     public event Action? ResourceEditsChanged;
-    public ZbdDocument PreviewDocument => ResourceEdits?.Current.Document ?? ModelEdits?.Current.World ?? Document;
+    public ZbdDocument PreviewDocument => contentMirror ?? ContentEdits?.Current.Documents.GetValueOrDefault(Path) ?? ResourceEdits?.Current.Document ?? ModelEdits?.Current.World ?? Document;
     public AssetRecord? OriginalAsset(AssetRecord asset) => ResourceEdits is { } resources
         ? resources.OriginalAsset(resources.Current.Members[asset.Index])
+        : ScriptEdits is { } scripts ? scripts.Package.Entries.ElementAtOrDefault(asset.Index)?.SourceIndex is int index ? Document.Assets.SingleOrDefault(a => a.Index == index) : null
         : Document.Assets.SingleOrDefault(a => a.Kind == asset.Kind && a.Index == asset.Index);
     public event Action? ModelEditsChanged;
     private readonly Stack<bool> sceneUndo = [], sceneRedo = [];
@@ -88,7 +89,13 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (model) { if (redo) ModelEdits!.Redo(); else ModelEdits!.Undo(); }
         else { if (redo) PickupEdits!.Redo(); else PickupEdits!.Undo(); }
     }
-    public void AttachResolver(AssetResolver? resolver) => workspaceResolver = resolver;
+    public void AttachResolver(AssetResolver? resolver)
+    {
+        if (workspaceResolver != null) workspaceResolver.WorkspaceSnapshotsChanged -= ContentSnapshotsChanged;
+        workspaceResolver = resolver;
+        if (resolver != null) resolver.WorkspaceSnapshotsChanged += ContentSnapshotsChanged;
+        ContentSnapshotsChanged();
+    }
     public PickupPlacementEditSession? PickupEdits { get; private set; }
     private Task<PickupPlacementEditSession>? pickupLoading;
     private long pickupSnapshotRevision;
@@ -98,7 +105,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public event Action? Disposing;
     public bool PickupDiagnosticsReported { get; set; }
     internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
-    public bool IsDirty => ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
+    public bool IsDirty => ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
     public void ClaimResourcePaths(IEnumerable<string> paths) => workspaceResolver?.EditOwnership.Acquire(SessionId, Title, paths);
     public void InvalidateCleanPickupEdits()
     {
@@ -182,6 +189,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         Assets = new(doc.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).Select(a => new AssetItem(a)));
         Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()];
         FilteredAssets = CollectionViewSource.GetDefaultView(Assets); FilteredAssets.Filter = Matches;
+        InitializeContentEdits(doc);
         if (doc.Probe.Family is FormatFamily.Archive or FormatFamily.Zrd && !doc.Diagnostics.Any(d => d.Severity == "Error"))
         {
             ResourceEdits = new(doc);
@@ -253,7 +261,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     private bool Matches(object o) => o is AssetItem a && (KindFilter == "All types" || KindFilter == a.Kind) && (Query.Length == 0 || a.Name.Contains(Query, StringComparison.OrdinalIgnoreCase) || a.Identity.Contains(Query, StringComparison.OrdinalIgnoreCase));
     partial void OnQueryChanged(string value) => FilteredAssets.Refresh();
     partial void OnKindFilterChanged(string value) => FilteredAssets.Refresh();
-    public void Dispose() { if (IsDisposed) return; IsDisposed = true; workspaceResolver?.SetWorkspaceSnapshots(SessionId, []); workspaceResolver?.EditOwnership.Release(SessionId); Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
+    public void Dispose() { if (IsDisposed) return; IsDisposed = true; if (workspaceResolver != null) workspaceResolver.WorkspaceSnapshotsChanged -= ContentSnapshotsChanged; workspaceResolver?.SetWorkspaceSnapshots(SessionId, []); workspaceResolver?.EditOwnership.Release(SessionId); Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
 }
 public sealed partial class InspectorNode : ObservableObject
 {

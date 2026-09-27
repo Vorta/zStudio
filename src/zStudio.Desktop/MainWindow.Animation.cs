@@ -33,7 +33,7 @@ public partial class MainWindow
     {
         if (!await ResolvePropertiesDraftsAsync(document) || shownDocument == document && animation?.ResolvePendingDrafts() == false) return false;
         System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag(); if (!document.IsDirty) return true;
-        bool pickup = document.PickupEdits?.IsDirty == true || document.ResourceEdits != null || document.ModelEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
+        bool pickup = document.ContentEdits != null || document.PickupEdits?.IsDirty == true || document.ResourceEdits != null || document.ModelEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
         animation?.Pause(); string choice = "Cancel";
         StackPanel panel = new() { Margin = new(20) };
         panel.Children.Add(new TextBlock { Text = $"Save changes to {document.Title.TrimEnd(' ', '*')}?", FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });

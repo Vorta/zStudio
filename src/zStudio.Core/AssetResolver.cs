@@ -14,6 +14,9 @@ public sealed class AssetResolver(string root) : IDisposable
     private readonly object snapshotGate = new();
     private readonly Dictionary<Guid, ZbdDocument[]> workspaceSnapshots = [];
     public long SnapshotRevision { get; private set; }
+    public event Action? WorkspaceSnapshotsChanged;
+    public ZbdDocument? WorkspaceSnapshot(string path, Guid excludingOwner)
+    { lock (snapshotGate) return workspaceSnapshots.Where(p => p.Key != excludingOwner).SelectMany(p => p.Value).SingleOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase)); }
     private IReadOnlyDictionary<string, ZbdDocument> publishedSnapshots = new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase);
     public void SetWorkspaceSnapshots(Guid owner, IEnumerable<ZbdDocument> documents)
     {
@@ -26,6 +29,7 @@ public sealed class AssetResolver(string root) : IDisposable
             if (values.Length == 0) workspaceSnapshots.Remove(owner); else workspaceSnapshots[owner] = values;
             publishedSnapshots = next; SnapshotRevision++;
         }
+        WorkspaceSnapshotsChanged?.Invoke();
     }
     public IEnumerable<string> ResourceDirectories(string context)
     {

@@ -12,7 +12,7 @@ public sealed partial class MainViewModel
     {
         long generation = ++navigationGeneration;
         var selected = SelectedDocument;
-        string reloadPath = original.ResourceEdits?.TargetPath ?? original.ModelEdits?.TargetPath(original.Path) ?? original.Path;
+        string reloadPath = original.ContentEdits?.TargetPath(original.Path) ?? original.ResourceEdits?.TargetPath ?? original.ModelEdits?.TargetPath(original.Path) ?? original.Path;
         using var request = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, original.Lifetime.Token, cancellationToken);
         void Validate()
         {

@@ -205,7 +205,7 @@
   },
   {
     "Name": "zstudio_assets",
-    "Description": "List current edited assets by stable kind/index. Offset/Length describe the edited snapshot; sourceOffset/sourceLength identify original bytes, or are null for newly added records.",
+    "Description": "List current edited assets by current kind/index. Resource member/script UUIDs remain stable through reordering. Offset/Length describe the edited snapshot; sourceOffset/sourceLength identify original bytes, or are null for newly added records.",
     "Mutates": false,
     "Parameters": [
       {
@@ -281,7 +281,7 @@
   },
   {
     "Name": "zstudio_inspect_asset",
-    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD inspection bounds tree nodes and strings with explicit truncation markers; export retains complete data. Closed or changed documents reject stale results.",
+    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings with explicit truncation markers; export retains complete data. Closed or changed documents reject stale results.",
     "Mutates": false,
     "Parameters": [
       {
@@ -443,7 +443,7 @@
   },
   {
     "Name": "zstudio_save_document",
-    "Description": "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD saves verify and atomically replace the working destination or create a new Save As file. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Content batches return saved paths and errors; state.contentEdits lists affected paths and targets. A partial content Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -467,7 +467,7 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "New animation or ZAR/ZRD Save As path. Omit for verified ZAR/ZRD save to its working destination.",
+        "Description": "New single-file Save As path (animation, ZAR/ZRD, script or texture pack). Omit to save working files.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -483,7 +483,7 @@
       {
         "Name": "destinations",
         "Type": "object",
-        "Description": "Pickup source archive path to new Save As path map.",
+        "Description": "Pickup or texture batch source path to new Save As path map; cover every affected file.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -677,7 +677,7 @@
   },
   {
     "Name": "zstudio_texture_palette",
-    "Description": "Read texture header and RGB565 palette entries.",
+    "Description": "Read the current edited or mirrored texture header and paged RGB565 palette entries, matching the GUI palette inspector.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1042,7 +1042,7 @@
   },
   {
     "Name": "zstudio_scene_options",
-    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo; Whole world only). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1056,7 +1056,7 @@
       {
         "Name": "changes",
         "Type": "object",
-        "Description": "Static model/world options. Validate the entire batch before applying changes; publish highlights only after requested refreshes succeed.",
+        "Description": "Static model/world options. Validate the entire batch before applying changes; publish highlights and AI options only after requested refreshes succeed.",
         "Required": true,
         "Choices": null,
         "Properties": [
@@ -1088,6 +1088,38 @@
             "Name": "horizon",
             "Type": "boolean",
             "Description": "horizon",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "aiNodes",
+            "Type": "boolean",
+            "Description": "Whole world: show authored AI nodes and directed links.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "aiThroughGeometry",
+            "Type": "boolean",
+            "Description": "Whole world: show AI through scene geometry; false enables depth occlusion.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "aiNetwork",
+            "Type": "string",
+            "Description": "Whole world: all, or an AI network ID. A specific ID requires aiSnapshot.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "aiSnapshot",
+            "Type": "string",
+            "Description": "Expected AI graph snapshot from preview_state.ai; required with a specific aiNetwork ID.",
             "Required": false,
             "Choices": null,
             "Properties": null
@@ -1955,6 +1987,151 @@
         "Name": "open",
         "Type": "boolean",
         "Description": "Open the pinned Properties window.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_ai_networks",
+    "Description": "List authored AI networks with distinct source identities, counts and diagnostics. Does not simulate activation or change visualization.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_ai_nodes",
+    "Description": "List authored AI nodes, XYZ, raw integer and all three directed link slots. Negative indices mean no link; unresolved targets retain diagnostics.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "snapshot",
+        "Type": "string",
+        "Description": "AI graph snapshot from preview_state.ai. Handles apply only to this snapshot.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "network",
+        "Type": "string",
+        "Description": "Network ID, or all/omitted for all networks.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_ai_selection",
+    "Description": "Select/clear an AI marker or open its pinned read-only Properties. Selection requires enabled visualization and a matching filter. Frame it with camera action=frame,target=selected.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "snapshot",
+        "Type": "string",
+        "Description": "AI graph snapshot from preview_state.ai. Handles apply only to this snapshot.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Selection action.",
+        "Required": true,
+        "Choices": [
+          "select",
+          "clear",
+          "properties"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "string",
+        "Description": "Snapshot-scoped node ID; required except for clear.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -3128,6 +3305,466 @@
         "Name": "value",
         "Type": "string",
         "Description": "Invariant field editor text for edit.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_texture_targets",
+    "Description": "Discover sibling texture packs with matching names. Current Save As aliases are excluded because their source records already belong to this batch. Default replacement is this pack only. Duplicate matches require explicit record indices. Names are not identities. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Selected texture record index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 4095
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_texture_import",
+    "Description": "Replace a texture from RGB/RGBA PNG (16 MiB; up to 4096\u00D74096), or add a named texture when index is omitted. Replacement dimensions must match the selected record. Explicit sibling targets retain their dimensions, using premultiplied-alpha resampling and private palettes for indexed records. One undo step owns the complete batch. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "path",
+        "Type": "string",
+        "Description": "PNG input path.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Texture to replace; omit to add.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 4095
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "New texture name, required when adding.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "targets",
+        "Type": "array",
+        "Description": "Optional explicit replacement targets, including the selected record; one per sibling pack, maximum 64.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Target identity.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "path",
+              "Type": "string",
+              "Description": "Texture pack path.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null
+            },
+            {
+              "Name": "index",
+              "Type": "integer",
+              "Description": "Record index.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 0,
+              "Maximum": 4095
+            }
+          ]
+        },
+        "MinItems": 1,
+        "MaxItems": 64
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_script_records",
+    "Description": "Page scripts in stored order, or instructions of one script. UUIDs survive edits and undo. Token previews are capped at 64 characters and 16 tokens; source offsets refer to original bytes.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "script",
+        "Type": "string",
+        "Description": "Optional script UUID to list instructions.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_script_entry_edit",
+    "Description": "Add, duplicate, rename, delete, reorder or set the stored timestamp of a script. Unknown commands and unrelated bytes are preserved. No scripts execute and names/references are not rewritten. New timestamps default to zero. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Entry action.",
+        "Required": true,
+        "Choices": [
+          "add",
+          "duplicate",
+          "rename",
+          "delete",
+          "move",
+          "timestamp"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "script",
+        "Type": "string",
+        "Description": "Required script UUID except add.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "Name for add/duplicate/rename; 1\u2013119 Latin-1 characters.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "position",
+        "Type": "integer",
+        "Description": "Final index for move.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "fileTime",
+        "Type": "integer",
+        "Description": "Raw stored timestamp.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 4294967295
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_script_instruction_edit",
+    "Description": "Add, replace tokens, duplicate, delete or reorder an instruction. Tokens contain command followed by ordered arguments: 1\u201316 Latin-1 strings, no NUL, each at most 16384 characters. Move position is the final index; add defaults to append. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "script",
+        "Type": "string",
+        "Description": "Stable script UUID from script_records.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "instruction",
+        "Type": "string",
+        "Description": "Required instruction UUID except add.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Instruction action.",
+        "Required": true,
+        "Choices": [
+          "add",
+          "set",
+          "duplicate",
+          "delete",
+          "move"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "tokens",
+        "Type": "array",
+        "Description": "Complete command and arguments for add/set.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Literal token.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 16
+      },
+      {
+        "Name": "position",
+        "Type": "integer",
+        "Description": "Insertion/final index.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_script_select",
+    "Description": "Select a script and optional instruction in the visible workspace, retaining the pinned Properties target. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "script",
+        "Type": "string",
+        "Description": "Stable script UUID from script_records.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "instruction",
+        "Type": "string",
+        "Description": "Optional instruction UUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_script_properties",
+    "Description": "Read generated fields/actions, open pinned script/instruction Properties, edit a field, or invoke an argument action. Field tokens are JSON-quoted. Mutations require revision and no pending drafts. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "script",
+        "Type": "string",
+        "Description": "Stable script UUID from script_records.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "instruction",
+        "Type": "string",
+        "Description": "Optional instruction UUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Properties action.",
+        "Required": true,
+        "Choices": [
+          "fields",
+          "open",
+          "edit",
+          "invoke"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Required revision for edit/invoke.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "field",
+        "Type": "string",
+        "Description": "Field ID for edit.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "value",
+        "Type": "string",
+        "Description": "Editor text.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "propertyAction",
+        "Type": "string",
+        "Description": "Generated action ID for invoke.",
         "Required": false,
         "Choices": null,
         "Properties": null

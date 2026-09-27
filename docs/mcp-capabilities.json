@@ -63,6 +63,54 @@
         "zstudio_save_document"
       ],
       "note": "Generated member/node fields share asynchronous validation, retained invalid drafts, document revision checks, undo and verified saves. Values over 16384 displayed characters expose a read-only prefix, never an editable truncated draft. ZRD JSON inspection bounds tree/string expansion and marks truncation; full exports remain available. Retarget and close resolve drafts. Save As requires a new destination and retargets later saves and reload; an already-open destination blocks reload."
+    },
+    {
+      "gui": "MainWindow.Content:Textures",
+      "tools": [
+        "zstudio_texture_targets",
+        "zstudio_texture_import",
+        "zstudio_undo_redo",
+        "zstudio_save_document"
+      ],
+      "note": "Edit and Assets context menus share PNG import, explicit sibling targets, record-index disambiguation, one batch undo, ownership, mirrored open views and verified per-file save results. Current Save As aliases are excluded from variant discovery and explicit imports. Partial Save As retains all requested destinations, keeps unpublished copies dirty and retries them as new files without falling back to source paths. This pack is the default; variant dimensions and storage class are retained."
+    },
+    {
+      "gui": "MainWindow.Content:Scripts",
+      "tools": [
+        "zstudio_assets",
+        "zstudio_select_asset",
+        "zstudio_inspect_asset",
+        "zstudio_export",
+        "zstudio_problems",
+        "zstudio_script_records",
+        "zstudio_script_entry_edit",
+        "zstudio_script_instruction_edit",
+        "zstudio_script_select",
+        "zstudio_script_properties"
+      ],
+      "note": "Dynamic script menus and virtualized instruction rows share stable script/instruction identities, structural actions and explicit pinned Properties targeting. Read-only reconstructed Text and original Bytes remain separate. Malformed records retain scoped errors and leave valid scripts inspectable/exportable at their authored indices, while the whole pack stays ineligible for editing/saving. Selection never executes commands or retargets Properties."
+    },
+    {
+      "gui": "ScriptPropertiesEditor:Fields",
+      "tools": [
+        "zstudio_script_properties",
+        "zstudio_properties_state",
+        "zstudio_drafts",
+        "zstudio_resolve_drafts",
+        "zstudio_undo_redo",
+        "zstudio_save_document"
+      ],
+      "note": "Generated timestamp/name/token fields and asynchronous argument actions use shared draft validation, revisions, stable identities and undo. Literal Latin-1 tokens use JSON quotes. Oversized values are read-only prefixes; complete instruction replacement remains available. Save As retargets later saves and reload."
+    },
+    {
+      "gui": "SceneViewport.Ai:HandleAiPointerDown",
+      "tools": [
+        "zstudio_ai_networks",
+        "zstudio_ai_nodes",
+        "zstudio_ai_selection",
+        "zstudio_camera"
+      ],
+      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Hover/selection labels derive from the same node data. Malformed node value types are diagnosed individually while valid neighbors remain visible; malformed duplicate indices remain ambiguous. Frame selected uses camera; normal scene framing excludes the overlay."
     }
   ],
   "handlers": [
@@ -717,7 +765,7 @@
       "tools": [
         "zstudio_texture_palette"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "GUI and MCP inspect the same current edited or mirrored texture snapshot, including moved private palettes, added records, undo/redo and Save As aliases."
     },
     {
       "gui": "MainWindow.xaml:PickupLockedChanged",
@@ -929,6 +977,14 @@
         "zstudio_model_replace"
       ],
       "note": "Validate explicit source-fingerprinted OBJ/PNG mappings as one shared document undo step, with native model and texture save support. Shared ownership claims all prepared source/current/destination paths before acceptance or save. Conflicts preserve revision/history, claims survive undo/save until close, and oversized model/texture outputs fail before allocation. Assets, Document scene and pinned asset Properties refresh accepted records by identity; Undo/Redo removes/restores appended records without retargeting Properties."
+    },
+    {
+      "gui": "MainWindow.xaml:AiOptionsChanged",
+      "tools": [
+        "zstudio_scene_options",
+        "zstudio_preview_state"
+      ],
+      "note": "Whole world AI visibility, network filter and through-geometry drawing share scene options and preview state. AI controls form one native overflow group and coexist with surface highlights."
     }
   ]
 }

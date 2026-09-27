@@ -75,8 +75,11 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             }, token);
         }
         else if (a.Content is ScriptContent script)
-            result["instructions"] = JsonData.Array(script.Instructions, instruction =>
-                JsonData.Array(instruction, word => JsonValue.Create(word), token), token);
+        {
+            result["instructions"] = JsonData.Array(boundedZrd ? script.Instructions.Take(64) : script.Instructions, instruction =>
+                JsonData.Array(boundedZrd ? instruction.Take(16) : instruction, word => JsonValue.Create(boundedZrd && word.Length > 128 ? word[..128] : word), token), token);
+            if (boundedZrd) result["instructions_truncated"] = script.Instructions.Count > 64 || script.Instructions.Any(i => i.Length > 16 || i.Any(t => t.Length > 128));
+        }
         else if (a.Kind == AssetKind.Animation && doc.Animations is { } animations) result["properties"] = animations.Entries[a.Index].ToJson(token);
         else if (a.Kind == AssetKind.Zrd)
         {

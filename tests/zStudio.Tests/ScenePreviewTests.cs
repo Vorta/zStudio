@@ -67,6 +67,32 @@ public sealed class ScenePreviewTests
         Assert.Equal(before, scene.Materials[0].ToJsonString());
         Assert.Same(context.MaterialCycles[0], context.Snapshot().MaterialCycles[0]);
     }
+    [Fact]
+    public async Task PendingScriptEditsFeedTextureCycleConsumerAndUndoRestoresIt()
+    {
+        var token = TestContext.Current.CancellationToken;
+        string folder = Path.Combine(Path.GetTempPath(), "zstudio-script-cycles-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
+        try
+        {
+            string path = Path.Combine(folder,"interp.zbd");
+            var fixture = FormatRegistry.Default.OpenBytes(path,ContentFixture.Scripts(),token:token).Scripts!;
+            string[][] commands = [["FindNode","first"],["FindSubNode","highA"],["CycleTextureSetOn","2"],["CycleTextureSetLooping","on"],["CycleTextureSetMap","a"],["CycleTextureSetMap","b"],["CycleTextureSetSpeed","12"]];
+            var entry = fixture.Entries[0] with { Name="mission",Instructions=commands.Select(t=>new ScriptInstruction(Guid.NewGuid(),t,ReadOnlyMemory<byte>.Empty,null)).ToArray() };
+            byte[] original=PreparedScriptWriter.Write(fixture with { Entries=[entry] },token);await File.WriteAllBytesAsync(path,original,token);
+            using AssetResolver resolver = new(folder);var edits = new ScriptEditSession(await resolver.OpenCachedAsync(path,token));entry=edits.Package.Entries[0];Guid owner=Guid.NewGuid();
+            Assert.Equal(12,await ReadSpeed());
+            edits.Accept(await edits.PrepareInstructionAsync(entry.Id,"set",entry.Instructions[^1].Id,["CycleTextureSetSpeed","30"],token:token));resolver.SetWorkspaceSnapshots(owner,edits.Documents);
+            Assert.Equal(30,await ReadSpeed());Assert.Equal(original,await File.ReadAllBytesAsync(path,token));
+            edits.UndoRedo(false);resolver.SetWorkspaceSnapshots(owner,edits.Documents);Assert.Equal(12,await ReadSpeed());
+            async Task<float> ReadSpeed()
+            {
+                var scene=LodScene();scene.Materials.Add(new JsonObject { ["alpha"]=255 });scene.Models[0]=scene.Models[0] with { Polygons=[new(0,0,[],[],[],[])] };
+                var context=Context(scene);var document=await resolver.OpenCachedAsync(path,token);
+                context.ReadTextureScript("mission",document.Assets.ToDictionary(a=>a.Name,a=>(ScriptContent)a.Content!));return context.MaterialCycles[0].Speed;
+            }
+        }
+        finally { Directory.Delete(folder,true); }
+    }
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

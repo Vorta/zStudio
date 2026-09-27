@@ -4,9 +4,11 @@
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse and edit game archives and typed data, inspect and export assets, replace supported 3D models, preview assembled worlds, move mission pickups, and edit supported animation programs. This source tree targets **v0.5.4**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse and edit game archives, typed data, texture packs and prepared scripts, inspect and export assets, replace supported 3D models, preview assembled worlds, move mission pickups, and edit supported animation programs. This source tree targets **v0.6.0**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
+
+Texture PNG import and the prepared-script instruction editor are described in the [texture and script editing guide](docs/texture-script-editing.md). Both share undo, verified save and MCP support.
 
 ## Compatible games
 
@@ -72,11 +74,11 @@ If a workspace call reports `access_disabled`, enable access in **Tools → MCP 
 
 | Content | Browse, inspect and edit | Export and save |
 | --- | --- | --- |
-| Texture packs | Thumbnails, enlarged preview, zoom/pan, channel views, pixel values, palettes and headers | PNG with alpha, JSON |
+| Texture packs | PNG replacement/addition, explicit sibling variants, batch undo, thumbnails, zoom/pan, channels and palettes | PNG with alpha, JSON; verified Save and Save As |
 | Sound archives | Member list, PCM waveform, play/pause/stop, seeking, cue points | Original WAV/member bytes, JSON |
 | ZAR archives | Import, replace, rename, duplicate, delete and reorder members; create ZRD resources | Edited member bytes and JSON; verified Save and Save As |
 | ZRD data | Edit typed nested trees, scalar values, raw float bits and ordered array structure | Edited bytes and JSON; verified Save and Save As, including the owning archive |
-| Prepared scripts | Reconstructed script text and instruction data | Text and JSON |
+| Prepared scripts | Edit ordered entries, instructions, arguments and timestamps with pinned Properties and undo | Text and JSON; verified Save and Save As |
 | Animation/effects | Edit events, sequences, references and keyframes; scrub motion/effects/audio previews in isolation or mission context | Verified new ZBD with Save As; edited JSON |
 | GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties; replace supported v15 models and textures | OBJ/MTL/PNG component bundles, JSON; verified model/texture Save and Save As |
 | Mission pickups | Select pickups in Whole world, show bounds, unlock XYZ arrows or enter coordinates, undo/redo; matching difficulties move together | Save coordinates to their owning ZBD archive; Save As; optional backups |
@@ -88,6 +90,8 @@ Textures open at 1:1 (100%) with the scroll position reset. At 1:1, each texture
 3D textures display their original colors without added scene lighting. Middle-button drag orbits, Shift + middle-button drag pans, and Ctrl + middle-button drag or the wheel zooms around the view center. Ctrl + Shift + middle-button drag dollies. Numpad views, perspective/orthographic switching and framing shortcuts are available, with menu equivalents under View → 3D Navigation. See [3D navigation](docs/3d-navigation.md) for the complete controls. Select a node in the view or Scene tree to inspect or isolate it. Wireframe, textures, bounds, fly mode, LOD choices, and texture variants are available. **LOD 0 · Highest detail** is the default. Higher numbers select lower-detail distance bands separately for each object; objects with fewer variants keep their last available level. A model belonging to an LOD group previews that group's selected variant. The animation toolbar has the same picker, also applied to its optional mission level. The camera-following horizon is optional in the preview; OBJ world exports include it.
 
 Whole world also offers [surface highlights](docs/world-highlights.md): **Non-default soils** in yellow, **CanModify** regions in green, and **ClipTo** regions in red. Use the three icon buttons after Bounds; only one mode is active at a time, and clicking it again restores normal appearance. Solid colors preserve transparency and do not change source data.
+
+Whole world also provides [AI network visualization](docs/ai-networks.md): node markers, directed connections, filtering by source network, through-geometry or depth-tested drawing, and pinned read-only Properties. Enable **AI nodes** in the toolbar or its overflow menu. This displays authored paths without simulating AI behavior.
 
 Click **Fly camera** in a model or **Whole world** preview to capture the mouse and keyboard for freecam navigation. The cursor is hidden while flying; the highlighted button and viewer overlay show that freecam is active, together with the current speed.
 
@@ -132,7 +136,7 @@ The solution separates binary readers/exporters (`zStudio.Core`), Direct3D previ
 
 ## Current limits
 
-Animation version 28 supports editing existing entries and Save As to a new file. Mission pickups stored in `puppies*.zrd` resources support position editing from Whole world; see [the pickup editor guide](docs/pickup-editor.md). Vehicles, turrets, scenery, directly authored GameZ pickups, texture import/replace, and creation of whole animation entries remain outside the supported editing tools. Animation preview approximates physics, beams, lighting, fog, camera parameters, screen effects and audio; game callbacks are trace-only. LOD selection is manual; camera-distance fades are not simulated. Edited animation packs and pickup archives have not yet been tested in the original game. Missing textures are reported; unresolved animation texture cards stay hidden. Six 1999 missions reference some textures absent from their own packs.
+Animation version 28 supports editing existing entries and Save As to a new file. Mission pickups stored in `puppies*.zrd` resources support position editing from Whole world; see [the pickup editor guide](docs/pickup-editor.md). Vehicles, turrets, scenery, directly authored GameZ pickups and creation of whole animation entries remain outside the supported editing tools. Texture packs support PNG import/replacement, and prepared scripts support entry/instruction editing; neither feature executes arbitrary game behavior. AI networks provide authored-data visualization and inspection. Animation preview approximates physics, beams, lighting, fog, camera parameters, screen effects and audio; game callbacks are trace-only. LOD selection is manual; camera-distance fades are not simulated. Edited files have not yet been tested in the original game. Missing textures are reported; unresolved animation texture cards stay hidden. Six 1999 missions reference some textures absent from their own packs.
 
 Unknown versions remain available for raw inspection. The snapshot reader limits individual files to 512 MiB. JSON exports are intended for inspection and external tools; they are not the Python CLI repack schema. The portable build is unsigned and has not yet been checked on an independent clean Windows machine.
 

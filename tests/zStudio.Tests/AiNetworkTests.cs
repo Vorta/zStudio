@@ -1,0 +1,133 @@
+using System.Numerics;
+using System.Security.Cryptography;
+using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Formats;
+using Xunit;
+
+namespace Recoil.Zbd.Tests;
+
+public sealed class AiNetworkTests
+{
+    private static ZrdNode I(int n) => ZrdNode.Create(ZrdKind.Int, n.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    private static ZrdNode F(string n) => ZrdNode.Create(ZrdKind.Float, n);
+    private static ZrdNode S(string text) => ZrdNode.Create(ZrdKind.String) with { Text = text };
+    private static ZrdNode A(params ZrdNode[] children) => ZrdNode.Create(ZrdKind.Array) with { Children = children };
+    private static ZrdNode Node(int a = -1, int b = -1, int c = -1) => A(I(12), A(F("1.25"), F("-2"), F("3")), A(I(a), I(b), I(c)));
+    private static AiNetwork Decode(ZrdNode root) => MissionAiNetworks.Decode("network", "archive.zbd", 3, "net_01.zrd", root, TestContext.Current.CancellationToken);
+    private static ZbdDocument Archive(params ZrdNode[] roots) => FormatRegistry.Default.OpenBytes("ai-test.zbd",
+        ResourceEditingTests.Archive(roots.Select(root => ("net_01.zrd", ZrdWriter.Write(root, TestContext.Current.CancellationToken))).ToArray()), token: TestContext.Current.CancellationToken);
+    private static AiNetworkSnapshot Read(ZbdDocument doc) => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), TestContext.Current.CancellationToken);
+
+    [Fact]
+    public void DirectedSlotsRetainOrderAndAllNegativeSentinelsWithoutInventingReverseEdges()
+    {
+        var network = Decode(A(A(S("version"), A(I(105)), S("name"), A(S("Name")), S("type"), A(S("standard")),
+            S("path_width"), A(F("7.5")), S("node_00"), Node(2, -7, 2), S("node_02"), Node())));
+        Assert.Empty(network.Diagnostics); Assert.Equal(7.5f, network.PathWidth); Assert.Equal("standard", network.Type);
+        var first = network.Nodes[0]; Assert.Equal(12, first.RawValue); Assert.Equal(new Vector3(1.25f, -2, 3), first.Position);
+        Assert.Equal(new[] { 0, 1, 2 }, first.Links.Select(l => l.Slot));
+        Assert.Equal(new[] { 2, -7, 2 }, first.Links.Select(l => l.TargetIndex));
+        Assert.Equal(network.Nodes[1].Id, first.Links[0].Target); Assert.Equal(first.Links[0].Target, first.Links[2].Target);
+        Assert.Null(first.Links[1].Target); Assert.All(network.Nodes[1].Links, l => Assert.Null(l.Target));
+    }
+    [Fact]
+    public void DuplicateIndicesMissingLinksAndUnsupportedKeysRemainDiagnosed()
+    {
+        var graph = Decode(A(S("node_00"), Node(1, 9, 0), S("node_01"), Node(), S("node_01"), Node(), S("node_99"), Node(), S("node_bad"), Node()));
+        Assert.Equal(3, graph.Nodes.Count); Assert.Equal(3, graph.Nodes.Select(n => n.Id).Distinct().Count());
+        Assert.Equal("Ambiguous target", graph.Nodes[0].Links[0].Problem); Assert.Equal("Missing target", graph.Nodes[0].Links[1].Problem);
+        Assert.Equal(graph.Nodes[0].Id, graph.Nodes[0].Links[2].Target);
+        Assert.Contains(graph.Diagnostics, d => d.Message.Contains("node_99")); Assert.Contains(graph.Diagnostics, d => d.Message.Contains("node_bad"));
+        Assert.All(graph.Diagnostics, d => { Assert.Equal("Warning", d.Severity); Assert.Equal(3, d.AssetIndex); Assert.Contains("archive.zbd", d.Message); });
+    }
+    [Fact]
+    public void MalformedNodesDoNotDiscardValidNeighboursOrPublishNonFiniteCoordinates()
+    {
+        var graph = Decode(A(S("node_00"), A(I(12), A(F("0x7FC00000"), F("0"), F("0")), A(I(-1), I(-1), I(-1))),
+            S("node_01"), A(I(12)), S("node_02"), Node(0, 1, -1)));
+        Assert.Single(graph.Nodes); Assert.Equal(2, graph.Nodes[0].Index);
+        Assert.Contains(graph.Diagnostics, d => d.Message.Contains("Non-finite"));
+        Assert.All(graph.Nodes[0].Links.Take(2), l => Assert.Equal("Missing target", l.Problem));
+        Assert.Throws<InvalidDataException>(() => Decode(A(S("version"), A(I(106)), S("node_00"), Node())));
+        Assert.Throws<InvalidDataException>(() => Decode(A(S("version"), A(I(105)), S("version"), A(I(105)))));
+        Assert.Throws<InvalidDataException>(() => Decode(A(S("node_00"))));
+        Assert.Throws<InvalidDataException>(() => Decode(I(1)));
+    }
+    [Fact]
+    public void WrongNodeValueTypeDoesNotHideValidNodesOrResolveAmbiguousLinks()
+    {
+        var graph = Decode(A(S("node_00"), I(7), S("node_00"), Node(), S("node_01"), Node(0), S("node_02"), S("malformed")));
+        Assert.Equal(2, graph.Nodes.Count);
+        Assert.Equal("Ambiguous target", graph.Nodes[1].Links[0].Problem); Assert.Null(graph.Nodes[1].Links[0].Target);
+        Assert.Contains(graph.Diagnostics, d => d.Message.Contains("node_02"));
+    }
+    [Fact]
+    public void MalformedDuplicateDoesNotRedirectLinksToAnotherRecord()
+    {
+        var graph = Decode(A(S("node_00"), A(I(1)), S("node_00"), Node(), S("node_01"), Node(0)));
+        Assert.Equal(2, graph.Nodes.Count);
+        Assert.Null(graph.Nodes[1].Links[0].Target); Assert.Equal("Ambiguous target", graph.Nodes[1].Links[0].Problem);
+    }
+    [Fact]
+    public void DuplicateMembersHaveDifferentIdentitiesWhileUnchangedSnapshotsStayStable()
+    {
+        var doc = Archive(A(S("node_00"), Node()), A(S("node_00"), Node())); byte[] before = doc.Bytes.ToArray();
+        var first = Read(doc); var second = Read(doc);
+        Assert.Equal(first.Id, second.Id); Assert.Equal(first.Networks.Select(n => n.Id), second.Networks.Select(n => n.Id));
+        Assert.NotEqual(first.Networks[0].Id, first.Networks[1].Id); Assert.NotEqual(first.Networks[0].Nodes[0].Id, first.Networks[1].Nodes[0].Id);
+        Assert.True(first.Networks[0].Nodes[0].SourceOffset >= 0); Assert.Equal(before, doc.Bytes.ToArray());
+        var changed = Read(Archive(A(S("node_00"), Node(0)), A(S("node_00"), Node())));
+        Assert.NotEqual(first.Id, changed.Id);
+        using var canceled = new CancellationTokenSource(); canceled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), canceled.Token));
+    }
+    [Fact]
+    public async Task PublishedUnsavedResourcesAndUndoDriveTheSameGraphReader()
+    {
+        var doc = Archive(A(S("node_00"), Node())); var before = Read(doc); var edits = new ResourceEditSession(doc);
+        var member = edits.Current.Members[0]; var root = edits.Tree(member, TestContext.Current.CancellationToken);
+        var x = root.Children[1].Children[1].Children[0];
+        edits.Accept(await edits.PrepareZrdAsync(member.Id, x.Id, "set", value: "88", token: TestContext.Current.CancellationToken));
+        using AssetResolver resolver = new(Path.GetTempPath()); Guid owner = Guid.NewGuid();
+        resolver.SetWorkspaceSnapshots(owner, [edits.Current.Document]);
+        var current = Read(await resolver.OpenCachedAsync(doc.Path, TestContext.Current.CancellationToken));
+        Assert.Equal(88, current.Networks[0].Nodes[0].Position.X); Assert.NotEqual(before.Id, current.Id);
+        edits.UndoRedo(false); resolver.SetWorkspaceSnapshots(owner, [edits.Current.Document]);
+        Assert.Equal(before.Id, Read(await resolver.OpenCachedAsync(doc.Path, TestContext.Current.CancellationToken)).Id);
+        Assert.Equal(1.25f, Read(doc).Networks[0].Nodes[0].Position.X);
+    }
+    [Fact]
+    public void UnsupportedAndMalformedMembersAreVisibleAsDiagnosticsAlongsideValidNetworks()
+    {
+        var doc = Archive(A(S("version"), A(I(104))), I(1), A(S("node_98"), Node(98)));
+        var graph = Read(doc); Assert.Equal(3, graph.Networks.Count); Assert.Empty(graph.Networks[0].Nodes); Assert.Empty(graph.Networks[1].Nodes);
+        Assert.Equal(2, graph.Diagnostics.Count()); Assert.Single(graph.Networks[2].Nodes);
+    }
+    [Fact]
+    public void CanonicalKeysAndSafePreviewCoordinatesAreValidated()
+    {
+        Assert.True(MissionAiNetworks.IsCandidate("NET_01.ZRD"));
+        Assert.False(MissionAiNetworks.IsCandidate("net_01.zrd\n"));
+        var graph = Decode(A(S("node_00\n"), Node(), S("name"), A(I(1)), S("node_01"),
+            A(I(12), A(F("1e30"), F("0"), F("0")), A(I(-1), I(-1), I(-1)))));
+        Assert.Empty(graph.Nodes); Assert.Equal(3, graph.Diagnostics.Count);
+        Assert.Contains(graph.Diagnostics, d => d.Message.Contains("preview range"));
+        Assert.Contains(graph.Diagnostics, d => d.Message.Contains("Invalid name"));
+    }
+    [Fact]
+    public async Task CorpusGraphsMatchAuthoredCountsWithoutChangingSourceFiles()
+    {
+        string? root = Environment.GetEnvironmentVariable("ZSTUDIO_CORPUS"); if (root == null) return;
+        int networks = 0, nodes = 0, links = 0, archives = 0;
+        foreach (string path in Directory.EnumerateFiles(root, "zrdr.zbd", SearchOption.AllDirectories))
+        {
+            byte[] before = SHA256.HashData(await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
+            var doc = await FormatRegistry.Default.OpenAsync(path, TestContext.Current.CancellationToken);
+            var graph = MissionAiNetworks.Read(doc.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (doc, a)), TestContext.Current.CancellationToken);
+            Assert.Empty(graph.Diagnostics); networks += graph.Networks.Count; if (graph.Networks.Count > 0) archives++;
+            nodes += graph.Networks.Sum(n => n.Nodes.Count); links += graph.Networks.Sum(n => n.Nodes.Sum(p => p.Links.Count(l => l.Target != null)));
+            Assert.Equal(before, SHA256.HashData(await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken)));
+        }
+        Assert.Equal(6, archives); Assert.Equal(470, networks); Assert.Equal(3717, nodes); Assert.Equal(6240, links);
+    }
+}

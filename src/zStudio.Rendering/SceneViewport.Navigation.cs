@@ -10,7 +10,7 @@ public sealed partial class SceneViewport
 {
     public event Action? ManualNavigationStarting;
     public int? FramingSelection { get; private set; }
-    public void SelectFramingNode(int? node) => FramingSelection = node;
+    public void SelectFramingNode(int? node) { FramingSelection = node; if (node != null && SelectedAiNode != null) SelectAiNode(null); }
     internal enum NavigationGesture { None, Orbit, Pan, Zoom, Dolly }
     private NavigationGesture navigationGesture;
     private Vector navigationVelocity;

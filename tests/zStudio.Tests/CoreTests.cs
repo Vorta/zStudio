@@ -44,7 +44,7 @@ public sealed class CoreTests
     private static byte[] TextureFixture(int encoding)
     {
         int offset = encoding == 1 ? 576 : 64, pixelBytes = encoding == 0 ? 4 : 2; byte[] bytes = new byte[offset + 16 + pixelBytes + 2 + (encoding == 2 ? 4 : 0)];
-        Words(0, 1, encoding == 1 ? 1u : 0u, 1, 0, 0).CopyTo(bytes, 0); "colors"u8.CopyTo(bytes.AsSpan(24)); BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(56), offset); bytes[offset] = (byte)(encoding == 2 ? 136 : encoding == 0 ? 9 : 8); bytes[offset + 4] = 2; bytes[offset + 6] = 1; bytes[offset + 12] = encoding == 0 ? (byte)0 : (byte)2;
+        Words(0, 1, encoding == 1 ? 1u : 0u, 1, 0, 0).CopyTo(bytes, 0); "colors"u8.CopyTo(bytes.AsSpan(24)); BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(56), offset); bytes[offset] = (byte)(encoding == 2 ? 137 : encoding == 0 ? 9 : 25); bytes[offset + 4] = 2; bytes[offset + 6] = 1; bytes[offset + 12] = encoding == 0 ? (byte)0 : (byte)2;
         int palette = encoding == 0 ? offset + 16 : encoding == 1 ? 64 : offset + 20; new byte[] { 0, 248, 224, 7 }.CopyTo(bytes, palette);
         if (encoding != 0) { bytes[offset + 16] = 0; bytes[offset + 17] = 1; }
         bytes[offset + 16 + pixelBytes] = 64; bytes[offset + 17 + pixelBytes] = 255; return bytes;

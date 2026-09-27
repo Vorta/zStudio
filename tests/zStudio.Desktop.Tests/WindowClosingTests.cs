@@ -47,6 +47,7 @@ public sealed class WindowClosingTests
                     await ResponsiveNavigatorChecks.Run(app);
                     await SceneSelectionMcpChecks.Run();
                     await WorldHighlightMcpChecks.Run();
+                    await AiNetworkMcpChecks.Run();
                     await BlenderNavigationChecks.Run();
                     await ShutdownMcpChecks.Run(app);
                     await PropertiesMcpChecks.Run();
@@ -54,6 +55,7 @@ public sealed class WindowClosingTests
                     await AssetInspectionMcpChecks.Run();
                     await ModelReplacementMcpChecks.Run();
                     await ResourceEditingMcpChecks.Run();
+                    await ContentEditingMcpChecks.Run();
                     await NavigationMcpChecks.Run();
                     await GuiNavigationChecks.Run();
                     await DraftResolutionMcpChecks.Run();

@@ -42,6 +42,7 @@ public sealed class ZbdDocument
     public GameZSourceLayout? GameZLayout { get; internal set; }
     public long? ArchiveDirectoryOffset { get; internal set; }
     public Animation.AnimationPackage? Animations { get; set; }
+    public Formats.PreparedScriptPackage? Scripts { get; internal set; }
     public ZbdDocument(string path, FileStamp stamp, FormatProbe probe, ReadOnlyMemory<byte> bytes)
     { Path = path; Stamp = stamp; Probe = probe; Bytes = bytes; }
     public ReadOnlyMemory<byte> Slice(long offset, long length)
