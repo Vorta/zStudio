@@ -80,7 +80,8 @@ public sealed partial class SceneViewport
         StopCameraMotion(); ChangeProjection("orthographic");
         var pose = CaptureView(); var target = pose.Position + pose.LookDirection;
         look *= pose.LookDirection.Length;
-        RestoreView(pose with { Position = target - look, LookDirection = look, UpDirection = up, AxisView = view, AutoPerspective = true });
+        RestoreView(pose with { Position = target - look, LookDirection = look, UpDirection = up, AxisView = view, AutoPerspective = true,
+            OrbitPivot = target });
     }
     public void OppositeView()
     {
@@ -91,7 +92,8 @@ public sealed partial class SceneViewport
             return;
         }
         StopCameraMotion(); var pose = CaptureView();
-        RestoreView(UprightPose(pose with { Position = pose.Position + pose.LookDirection * 2, LookDirection = -pose.LookDirection }));
+        RestoreView(UprightPose(pose with { Position = pose.Position + pose.LookDirection * 2, LookDirection = -pose.LookDirection,
+            OrbitPivot = pose.Position + pose.LookDirection }));
     }
     public void PanBy(double horizontal, double vertical)
     {
@@ -99,27 +101,43 @@ public sealed partial class SceneViewport
         var forward = camera.LookDirection; forward.Normalize();
         var right = Vector3D.CrossProduct(forward, camera.UpDirection); right.Normalize();
         var up = Vector3D.CrossProduct(right, forward);
-        camera.Position += (-right * horizontal + up * vertical) * UnitsPerPixel;
+        TranslateNavigation(camera, (-right * horizontal + up * vertical) * UnitsPerPixel);
     }
-    /// <summary>Signed wheel-equivalent steps; positive zooms in, around the current target.</summary>
+    /// <summary>Centered zoom with distance-based approach followed by continuous forward travel.</summary>
     public void ZoomBy(double steps)
     {
         if (!BeginManualNavigation() || !viewport.IsZoomEnabled || viewport.Camera is not ProjectionCamera camera) return;
-        double factor = Math.Exp(-Math.Clamp(steps, -100, 100) * .12);
+        steps = Math.Clamp(steps, -100, 100);
+        double factor = Math.Exp(-steps * .12);
         if (camera is OrthographicCamera orthographic) orthographic.Width = Math.Clamp(orthographic.Width * factor, .001, 1e12);
         else
         {
-            var target = camera.Position + camera.LookDirection;
             double distance = camera.LookDirection.Length;
-            double next = Math.Clamp(distance * factor, minimumClipDistance * 4, 1e12);
-            camera.LookDirection *= next / distance; camera.Position = target - camera.LookDirection;
+            if (!double.IsFinite(distance) || distance < 1e-12 || steps == 0) return;
+            var forward = camera.LookDirection / distance;
+            navigationReferenceDistance ??= distance;
+            orbitPivot ??= camera.Position + camera.LookDirection;
+            double transition = Math.Clamp(navigationReferenceDistance.Value * .01, .01, 10);
+            // A short explicit look vector must not make the eye jump backwards.
+            if (distance < transition) orbitPivot += forward * (transition - distance);
+            distance = Math.Max(distance, transition);
+            double approachSteps = steps > 0 ? Math.Min(steps, Math.Max(0, Math.Log(distance / transition) / .12)) : steps;
+            double next = Math.Clamp(distance * Math.Exp(-approachSteps * .12), transition, 1e12);
+            camera.Position += forward * (distance - next);
+            camera.LookDirection = forward * next;
+            if (steps > approachSteps) TranslateNavigation(camera, forward * ((steps - approachSteps) * .12 * transition));
         }
     }
     /// <summary>Move eye and orbit target together along the view direction, in game units.</summary>
     public void DollyBy(double distance)
     {
         if (!BeginManualNavigation() || viewport.Camera is not ProjectionCamera camera) return;
-        var direction = camera.LookDirection; direction.Normalize(); camera.Position += direction * distance;
+        var direction = camera.LookDirection; direction.Normalize(); TranslateNavigation(camera, direction * distance);
+    }
+    private void TranslateNavigation(ProjectionCamera camera, Vector3D delta)
+    {
+        orbitPivot = (orbitPivot ?? camera.Position + camera.LookDirection) + delta;
+        camera.Position += delta;
     }
     internal void ApplyNavigationDelta(NavigationGesture gesture, Vector delta)
     {
@@ -145,6 +163,7 @@ public sealed partial class SceneViewport
     {
         if (gesture == NavigationGesture.None || !BeginManualNavigation()) return;
         StopNavigationMotion(); navigationGesture = gesture;
+        if (gesture == NavigationGesture.Orbit) PickOrbitPivot(position);
         rotationPoint = position; rotationInputTick = Stopwatch.GetTimestamp();
     }
     internal void MoveNavigationDrag(Point current)

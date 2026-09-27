@@ -2,6 +2,12 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.6.1 — 2026-09-27
+
+- Continue perspective zoom forward past the original view target, retaining the distance-based approach and smooth inertia. Wheel, Ctrl + middle drag, numpad and MCP share the same centered motion, independent of clipping planes.
+- Orbit around the visible scene surface beneath the initial middle-button press without recentering the camera. Retain that world-space point through dragging, inertia and preview refreshes; empty space keeps the previous pivot. Exclude horizon, grid, AI overlays and editing handles.
+- Expose surface-pivot picking through the optional `zstudio_camera` rotate `screenPoint` parameter, with pivot and navigation-scale readback, typed validation and shared GUI/MCP behavior.
+
 ## 0.6.0 — 2026-09-27
 
 - Add direct PNG replacement and addition in texture packs, with explicit sibling variants, original dimensions/storage, alpha-safe resampling and private palette quantization. Keep batch undo, ownership, mirrored views and verified saves consistent across GUI and MCP.

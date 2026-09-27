@@ -1,5 +1,17 @@
 # Desktop implementation status
 
+## Continuous zoom and surface-pivot orbit — 0.6.1 (2026-09-27)
+
+Perspective wheel/Ctrl-middle/numpad/MCP zoom now approaches the view center at the existing exponential rate, then continues forward beyond the original target. The transition uses a retained navigation reference independent of clipping planes, and consumes fractional/batched input without losing the remainder at the transition. Short explicit look vectors establish a forward target without moving the eye backward. Orthographic zoom retains width scaling.
+
+Unmodified middle press picks the nearest eligible scene triangle as a separate world-space orbit pivot. Eye offset and viewing basis rotate together, preserving the off-center point's projected position and radius without a pick-time snap. The pivot remains fixed through drag/inertia; empty space keeps it. Static transformed instances and runtime animation geometry participate; hidden geometry, horizon, grid, bounds, AI overlays and handles do not. Picks use the current camera to avoid stale render-context matrices during immediate consecutive navigation. Pan/dolly translate the pivot, and snapshots retain it and the navigation reference through refreshes. Source selection and animation time remain unchanged.
+
+MCP `camera.rotate` adds optional typed `screenPoint: [x,y]` viewport DIP coordinates, validated before leaving Follow/Fly or stopping motion. Readback adds `OrbitPivot` and `NavigationReferenceDistance`. The shared registry, generated catalog, capability map and navigation guides are updated. Picking retains geometric material semantics, including transparent triangles without per-texel alpha sampling.
+
+Validation: Release solution build has zero warnings/errors; all **354 tests pass** (264 Core, 90 Desktop). Expanded regressions cover continuous/reversed/fractional/inertial zoom, clip independence, short look vectors, off-center perspective/orthographic orbit, pivot persistence, exclusions, pickup guards and typed named-pipe requests. The GPU suite passes on both 1998 and 1999 datasets: synthetic transformed instances, nearest hits, empty-space fallback, hidden/helper/horizon exclusions and orbit inertia, then real world/model/runtime-animation picking and named-pipe GUI/MCP parity, immediate camera changes, projection/axis views, idle back buffers, pickup handles, difficulty/Map/LOD/resize retention, playback/Follow and unchanged source hashes.
+
+Local portable delivery: `artifacts/zStudio-win-x64/zStudio.exe` and `artifacts/zStudio-0.6.1-win-x64.zip`. No public release is part of this implementation.
+
 ## PR #11 malformed-script isolation (2026-09-27)
 
 Fixed the P2 where one malformed script instruction block stopped the entire prepared pack reader and hid later valid records. Entry-level bounded decoding now retains valid scripts with their authored indices and reports each damaged record's name, index and offset. Prefix preservation is deferred until every record succeeds, so a bad first offset no longer prevents inspection of later valid records. Only a complete package receives an editing model; malformed packs cannot create a script edit session or save a partial parse.

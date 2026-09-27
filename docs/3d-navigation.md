@@ -1,10 +1,14 @@
 # 3D navigation
 
-Models, Whole world and animation previews share Blender-style navigation. Smooth camera inertia remains enabled. Zoom uses the current view center/orbit target, independent of the surface under the pointer.
+Models, Whole world and animation previews share Blender-style navigation. Smooth camera inertia remains enabled. Zoom moves toward the view center, independent of the pointer position. Perspective zoom retains its distance-based approach, then continues forward past the old target instead of stopping near it. Orthographic zoom changes the view width.
+
+Press the middle button over a visible object to orbit around the surface beneath the pointer. Picking does not move or recenter the camera: an off-center point stays at the same screen position as you orbit. The point remains fixed in world space through the drag and its inertia, even if the object animates. A press over empty space keeps the existing pivot. Hidden objects, the horizon, grid, bounds, AI overlays and editing handles do not supply orbit points. Picking uses scene triangles, including transparent materials, without per-texel alpha testing.
+
+Pan and dolly translate the pivot along with the camera. Framing, explicit camera positioning and named views establish a view-center pivot. Ordinary perspective zoom retains the pivot during its approach; continuous forward travel advances it with the view target. Snapshots preserve the pivot and navigation scale through preview refreshes.
 
 | Input | Action |
 |---|---|
-| Middle-button drag | Orbit |
+| Middle-button drag | Pick the surface under the initial press, then orbit around it |
 | Shift + middle-button drag | Pan in the screen plane |
 | Ctrl + middle-button drag | Zoom; down zooms in, up zooms out |
 | Wheel / Numpad + or − | Zoom in/out |
@@ -40,11 +44,14 @@ Fly remains an explicitly activated mode for models and Whole world. Entering it
 Additional actions:
 
 - `pan`: `horizontal` and `vertical` screen deltas in DIP.
+- `rotate`: `horizontal` and `vertical` deltas, with optional `screenPoint: [x, y]` in viewport DIP to pick an orbit surface once before rotating. Omit it to keep the current pivot. Empty-space picks keep the pivot; coordinates outside the viewport are rejected. The preview must be rendered before picking.
 - `zoom`: signed wheel-equivalent `steps`, positive to zoom in.
 - `dolly`: signed `distance` in game units, positive forward.
 - `view`: `front`, `back`, `left`, `right`, `top`, `bottom`, or `opposite`.
 - `projection`: `perspective` or `orthographic`, with optional positive orthographic `width` in game units.
 
-`set` also accepts projection and orthographic width. Readback retains Position, LookDirection, UpDirection and FieldOfView and adds Projection, OrthographicWidth, AxisView, AutoPerspective and FramingSelection. FieldOfView retains the perspective camera setting while orthographic is active. `preview_state` includes the expanded camera state and `framingSelection`. Animation camera following uses the existing `animation_options.changes.followCamera`.
+`set` also accepts projection and orthographic width. Readback includes Position, LookDirection, UpDirection, FieldOfView, Projection, OrthographicWidth, AxisView, AutoPerspective, OrbitPivot, NavigationReferenceDistance and FramingSelection. FieldOfView retains the perspective camera setting while orthographic is active. `preview_state` includes the expanded camera state and `framingSelection`. Animation camera following uses the existing `animation_options.changes.followCamera`.
+
+The continuous-zoom transition is 1% of NavigationReferenceDistance, clamped to 0.01–10 game units and independent of near/far clipping. Framing, explicit positioning and a new surface pick reset that reference. Approach uses an exponential factor of `exp(-0.12 * steps)`; beyond the transition, each step moves forward by `0.12 * transition` game units. Reversing zoom increases distance from the advanced view target.
 
 Invalid arguments are rejected before changing navigation/follow state. Camera mutations return `busy` during pickup drags; reads remain available. MCP uses semantic operations and never captures physical input. Discovery remains windowless.

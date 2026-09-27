@@ -290,6 +290,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private void ClearMeshes()
     {
         CancelNavigation(); FramingSelection = null;
+        orbitPivot = null; navigationReferenceDistance = null;
         SetFly(false); flySpeedInitialized = false;
         ClearPickupEditing();
         groundGrid?.Dispose(); groundGrid = null;

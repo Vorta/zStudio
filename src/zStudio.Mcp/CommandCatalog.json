@@ -753,7 +753,7 @@
   },
   {
     "Name": "zstudio_camera",
-    "Description": "Read or navigate the shared 3D camera. Supports Blender-style orbit/pan/centered zoom/dolly, exact axis views, perspective/orthographic projection and framing. Valid manual navigation exits animation Follow camera. Never captures physical input.",
+    "Description": "Read or navigate the shared 3D camera. Supports Blender-style surface-pivot orbit, pan, continuous centered zoom, dolly, exact axis views, perspective/orthographic projection and framing. Valid manual navigation exits animation Follow camera. Never captures physical input.",
     "Mutates": true,
     "Parameters": [
       {
@@ -880,9 +880,28 @@
         "NumberMaximum": 36000
       },
       {
+        "Name": "screenPoint",
+        "Type": "array",
+        "Description": "Optional [x,y] viewport DIP for rotate. Pick the nearest visible scene triangle once as the orbit pivot; empty space retains the pivot. Does not recenter the view.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Viewport coordinate.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null,
+          "NumberMinimum": 0
+        },
+        "MinItems": 2,
+        "MaxItems": 2
+      },
+      {
         "Name": "steps",
         "Type": "number",
-        "Description": "Wheel-equivalent zoom steps; positive zooms in around the view target.",
+        "Description": "Wheel-equivalent zoom steps; positive approaches the view center then continues forward past it.",
         "Required": false,
         "Choices": null,
         "Properties": null,

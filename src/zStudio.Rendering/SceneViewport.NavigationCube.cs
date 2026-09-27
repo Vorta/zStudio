@@ -51,7 +51,7 @@ public sealed partial class SceneViewport
             StopCameraMotion(); ChangeProjection("perspective"); var pose = CaptureView();
             var look = new Vector3D(normal.X, normal.Y, normal.Z); look.Normalize(); look *= pose.LookDirection.Length;
             var target = pose.Position + pose.LookDirection;
-            RestoreView(UprightPose(pose with { Position = target - look, LookDirection = look }));
+            RestoreView(UprightPose(pose with { Position = target - look, LookDirection = look, OrbitPivot = target }));
         }
         return true;
     }

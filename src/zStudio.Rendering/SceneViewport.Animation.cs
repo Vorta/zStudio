@@ -150,6 +150,7 @@ public sealed partial class SceneViewport
             live.Position = new(c.Position.X, c.Position.Y, c.Position.Z);
             var look = c.Target - c.Position; if (look.LengthSquared() > 1e-8f) live.LookDirection = new(look.X, look.Y, look.Z);
             live.FieldOfView = Math.Clamp(c.FieldOfView, 1, 170);
+            orbitPivot = null; navigationReferenceDistance = null;
         }
         if (!preparingCamera) viewport.InvalidateRender();
         }
