@@ -13,7 +13,7 @@ public partial class MainWindow
         // Capture mutable edits on their owning dispatcher. Both conversions then
         // read frozen input, and neither may publish for a changed document.
         var editedEntry = asset.Kind == AssetKind.Animation ? doc.AnimationEdits?.Package.Entries[asset.Index].Clone(cancellation.Token) : null;
-        var modelSnapshot = doc.ResourceEdits?.Current.Document ?? doc.ModelEdits?.Current.World;
+        var modelSnapshot = doc.ContentEdits != null ? doc.PreviewDocument : doc.ResourceEdits?.Current.Document ?? doc.ModelEdits?.Current.World;
         try
         {
             var original = doc.OriginalAsset(asset);

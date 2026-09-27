@@ -28,7 +28,9 @@ internal sealed class TextureReader : IZbdFormatReader
                 int paletteOffset = -1, paletteBytes = 0;
                 if (paletteCount > 0)
                 {
-                    if ((flags & 128) != 0) { paletteOffset = end; paletteBytes = checked(paletteCount * 2); end = checked(end + paletteBytes); }
+                    // Retail ReadData (0x46EE69) tests external-palette bit 0x10.
+                    // 0x80 is runtime ownership, not the serialized palette location.
+                    if ((flags & 16) == 0) { paletteOffset = end; paletteBytes = checked(paletteCount * 2); end = checked(end + paletteBytes); }
                     else if (page >= 0 && page < pages) { paletteOffset = checked(pageOffset + page * 512); paletteBytes = 512; }
                     else throw new InvalidDataException($"Missing palette page {page}.");
                 }

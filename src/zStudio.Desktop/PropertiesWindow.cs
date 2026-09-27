@@ -32,11 +32,12 @@ public sealed class PropertiesWindow : Window
     public AnimationPropertiesEditor? AnimationFields { get; private set; }
     public PickupPropertiesEditor? PickupFields { get; private set; }
     public ResourcePropertiesEditor? ResourceFields { get; private set; }
-    public bool HasPendingDrafts => AnimationFields?.HasPendingDrafts == true || PickupFields?.HasPendingDrafts == true || ResourceFields?.HasPendingDrafts == true;
+    public ScriptPropertiesEditor? ScriptFields { get; private set; }
+    public bool HasPendingDrafts => AnimationFields?.HasPendingDrafts == true || PickupFields?.HasPendingDrafts == true || ResourceFields?.HasPendingDrafts == true || ScriptFields?.HasPendingDrafts == true;
     public Func<DocumentModel, bool, Task<bool>>? SaveRequested { get; set; }
     public Action<DocumentModel, bool>? UndoRequested { get; set; }
     public Action<DocumentModel>? Editing { get; set; }
-    public JsonObject? CurrentJson => ResourceFields?.Json ?? AnimationFields?.Json ?? PickupFields?.Json ?? snapshot;
+    public JsonObject? CurrentJson => ScriptFields?.Json ?? ResourceFields?.Json ?? AnimationFields?.Json ?? PickupFields?.Json ?? snapshot;
 
     public PropertiesWindow(Window owner, MainViewModel preferences)
     {
@@ -137,6 +138,11 @@ public sealed class PropertiesWindow : Window
         if (!BeginTarget(document)) return false;
         ResourceFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
     }
+    public bool SetScript(DocumentModel document, ScriptPropertiesEditor fields)
+    {
+        if (!BeginTarget(document)) return false;
+        ScriptFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
+    }
     private bool BeginTarget(DocumentModel document)
     {
         if (!ResolvePendingDrafts() || document.IsDisposed) return false;
@@ -145,6 +151,7 @@ public sealed class PropertiesWindow : Window
         if (document.AnimationEdits is { } edits) edits.Changed += Refresh;
         document.PickupEditsChanged += Refresh;
         document.ModelEditsChanged += ModelAssetsChanged;
+        document.ContentEditsChanged += ModelAssetsChanged;
         return true;
     }
     private void Detach()
@@ -155,27 +162,28 @@ public sealed class PropertiesWindow : Window
             if (doc.AnimationEdits is { } edits) edits.Changed -= Refresh;
             doc.PickupEditsChanged -= Refresh;
             doc.ModelEditsChanged -= ModelAssetsChanged;
+            doc.ContentEditsChanged -= ModelAssetsChanged;
         }
-        AnimationFields?.Dispose(); PickupFields?.Dispose(); ResourceFields?.Dispose();
+        AnimationFields?.Dispose(); PickupFields?.Dispose(); ResourceFields?.Dispose(); ScriptFields?.Dispose(); ScriptFields = null;
         AnimationFields = null; PickupFields = null; ResourceFields = null; Document = null; snapshot = null; body.Content = null; readOnlyAsset = null; ++assetRefreshGeneration;
     }
     private void DocumentDisposing() => CloseResolved();
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
-    public bool ResolvePendingDrafts() => AnimationFields?.ResolvePendingDrafts() != false && PickupFields?.ResolvePendingDrafts() != false && ResourceFields?.ResolvePendingDrafts() != false;
-    public async Task<bool> ResolvePendingDraftsAsync() => ResourceFields != null ? await ResourceFields.ResolvePendingDraftsAsync() : ResolvePendingDrafts();
+    public bool ResolvePendingDrafts() => AnimationFields?.ResolvePendingDrafts() != false && PickupFields?.ResolvePendingDrafts() != false && ResourceFields?.ResolvePendingDrafts() != false && ScriptFields?.ResolvePendingDrafts() != false;
+    public async Task<bool> ResolvePendingDraftsAsync() => ScriptFields != null ? await ScriptFields.ResolvePendingDraftsAsync() : ResourceFields != null ? await ResourceFields.ResolvePendingDraftsAsync() : ResolvePendingDrafts();
     private void Refresh()
     {
         if (Document is not { } doc) return;
         string path = preferences.RootPath.Length > 0 ? Path.GetRelativePath(preferences.RootPath, doc.Path) : doc.Path;
-        string target = ResourceFields?.TargetLabel ?? AnimationFields?.TargetLabel ?? label;
+        string target = ScriptFields?.TargetLabel ?? ResourceFields?.TargetLabel ?? AnimationFields?.TargetLabel ?? label;
         Title = "Properties — " + Path.GetFileName(doc.Path) + " — " + target;
         heading.Text = path + " → " + target;
         heading.ToolTip = doc.Path + " → " + target;
         notice.Text = doc.IsStale ? "The source file changed on disk. These properties belong to the open document; reload to read the changed source."
-            : doc.AnimationEdits != null || PickupFields != null || ResourceFields != null ? "Edits update this document; Ctrl+S saves it to disk." : "Stored properties of the explicitly opened item.";
-        undo.IsEnabled = doc.AnimationEdits?.CanUndo == true || doc.CanUndoScene || doc.ResourceEdits?.CanUndo == true;
-        redo.IsEnabled = doc.AnimationEdits?.CanRedo == true || doc.CanRedoScene || doc.ResourceEdits?.CanRedo == true;
-        undo.Visibility = redo.Visibility = doc.AnimationEdits != null || doc.PickupEdits != null || doc.ModelEdits != null || doc.ResourceEdits != null ? Visibility.Visible : Visibility.Collapsed;
+            : doc.AnimationEdits != null || PickupFields != null || ResourceFields != null || ScriptFields != null ? "Edits update this document; Ctrl+S saves it to disk." : "Stored properties of the explicitly opened item.";
+        undo.IsEnabled = doc.AnimationEdits?.CanUndo == true || doc.CanUndoScene || doc.ResourceEdits?.CanUndo == true || doc.ContentEdits?.CanUndo == true;
+        redo.IsEnabled = doc.AnimationEdits?.CanRedo == true || doc.CanRedoScene || doc.ResourceEdits?.CanRedo == true || doc.ContentEdits?.CanRedo == true;
+        undo.Visibility = redo.Visibility = doc.AnimationEdits != null || doc.PickupEdits != null || doc.ModelEdits != null || doc.ResourceEdits != null || doc.ContentEdits != null ? Visibility.Visible : Visibility.Collapsed;
     }
     private async void RunUndo(bool isRedo)
     { if (Document is { } doc && await ResolvePendingDraftsAsync()) UndoRequested?.Invoke(doc, isRedo); }

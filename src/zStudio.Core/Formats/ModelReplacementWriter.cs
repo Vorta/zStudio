@@ -208,7 +208,7 @@ public static class ModelReplacementWriter
     private static Vector3 ReadVector(byte[] bytes, int offset) => new(BitConverter.ToSingle(bytes, offset), BitConverter.ToSingle(bytes, offset + 4), BitConverter.ToSingle(bytes, offset + 8));
 }
 
-public static class TexturePackWriter
+public static partial class TexturePackWriter
 {
     /// <summary>
     /// Retail zImage ReadHeader 0x46ED70 stores 16-bit sizes and allocates by pixel count; the
@@ -226,25 +226,8 @@ public static class TexturePackWriter
             throw new InvalidDataException($"Game textures must be power-of-two RGB/RGBA images up to {MaximumDimension} × {MaximumDimension}.");
         if (Enumerable.Range(0, image.Width * image.Height).Any(i => image.Rgba[i * 4 + 3] != 255)) throw new InvalidDataException("Replacement solid meshes require an opaque diffuse texture.");
         int count = source.Assets.Count;
-        if (count >= 4096) throw new InvalidDataException("Texture pack is full.");
-        long outputLength = source.Bytes.Length + 40L + 16 + image.Width * image.Height * 2L;
-        FormatRegistry.ValidateDocumentSize(outputLength);
-        byte[] bytes = new byte[checked((int)outputLength)];
-        int insert = 24 + count * 40;
-        source.Bytes.Span[..insert].CopyTo(bytes); source.Bytes.Span[insert..].CopyTo(bytes.AsSpan(insert + 40));
-        ModelReplacementWriter.Put(bytes, 12, count + 1);
-        for (int i = 0; i < count; i++) ModelReplacementWriter.Put(bytes, 24 + i * 40 + 32, checked(ModelReplacementWriter.I32(bytes, 24 + i * 40 + 32) + 40));
-        Encoding.ASCII.GetBytes(name).CopyTo(bytes, insert); int imageOffset = source.Bytes.Length + 40;
-        ModelReplacementWriter.Put(bytes, insert + 32, imageOffset); ModelReplacementWriter.Put(bytes, insert + 36, -1);
-        bytes[imageOffset] = 1;
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(imageOffset + 4), (ushort)image.Width);
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(imageOffset + 6), (ushort)image.Height);
-        for (int i = 0; i < image.Width * image.Height; i++)
-        {
-            if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
-            int c = i * 4; ushort rgb = (ushort)((image.Rgba[c] >> 3) << 11 | (image.Rgba[c + 1] >> 2) << 5 | image.Rgba[c + 2] >> 3);
-            BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(imageOffset + 16 + i * 2), rgb);
-        }
+        var encoded = Encode(name, image, token: token);
+        byte[] bytes = Write(new(source, new Dictionary<int, TexturePayload>(), [encoded.Payload]), token);
         var parsed = FormatRegistry.Default.OpenBytes(source.Path, bytes, token: token);
         if (parsed.Diagnostics.Any(d => d.Severity == "Error") || parsed.Assets.Count != count + 1) throw new InvalidDataException("Texture pack failed readback.");
         return bytes;

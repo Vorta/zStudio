@@ -54,6 +54,7 @@ public sealed class WindowClosingTests
                     await AssetInspectionMcpChecks.Run();
                     await ModelReplacementMcpChecks.Run();
                     await ResourceEditingMcpChecks.Run();
+                    await ContentEditingMcpChecks.Run();
                     await NavigationMcpChecks.Run();
                     await GuiNavigationChecks.Run();
                     await DraftResolutionMcpChecks.Run();

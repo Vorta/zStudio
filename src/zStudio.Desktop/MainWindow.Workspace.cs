@@ -71,10 +71,10 @@ public partial class MainWindow
         CopyEventJsonMenu.IsEnabled = animation != null;
         foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.AnimationEdits != null ? Visibility.Visible : Visibility.Collapsed;
         foreach (var item in AnimationMenu.Items.OfType<MenuItem>()) if (item.Tag is string command) item.IsEnabled = animation?.CanRunCommand(command) == true;
-        DocumentSave.IsEnabled = doc?.AnimationEdits != null || doc?.PickupEdits != null || doc?.ModelEdits != null || doc?.ResourceEdits != null;
+        DocumentSave.IsEnabled = doc?.AnimationEdits != null || doc?.PickupEdits != null || doc?.ModelEdits != null || doc?.ResourceEdits != null || doc?.ContentEdits != null;
         DocumentSave.ToolTip = doc?.ModelEdits?.IsDirty == true ? "Save model and texture changes (Ctrl+S)" : doc?.PickupEdits != null ? "Save pickup placements to the owning archive (Ctrl+S)" : doc?.AnimationEdits != null ? "Save the animation pack to a new file (Ctrl+S)" : "Save (Ctrl+S)";
-        DocumentUndo.IsEnabled = doc?.AnimationEdits?.CanUndo == true || doc?.CanUndoScene == true || doc?.ResourceEdits?.CanUndo == true;
-        DocumentRedo.IsEnabled = doc?.AnimationEdits?.CanRedo == true || doc?.CanRedoScene == true || doc?.ResourceEdits?.CanRedo == true;
+        DocumentUndo.IsEnabled = doc?.AnimationEdits?.CanUndo == true || doc?.CanUndoScene == true || doc?.ResourceEdits?.CanUndo == true || doc?.ContentEdits?.CanUndo == true;
+        DocumentRedo.IsEnabled = doc?.AnimationEdits?.CanRedo == true || doc?.CanRedoScene == true || doc?.ResourceEdits?.CanRedo == true || doc?.ContentEdits?.CanRedo == true;
         SaveMenu.IsEnabled = SaveAsMenu.IsEnabled = DocumentSave.IsEnabled;
         UndoMenu.IsEnabled = DocumentUndo.IsEnabled; RedoMenu.IsEnabled = DocumentRedo.IsEnabled;
         DocumentUndo.ToolTip = doc?.AnimationEdits?.UndoDescription is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
@@ -89,6 +89,8 @@ public partial class MainWindow
             previous.PickupEditsChanged -= UpdateDocumentCommands;
             previous.ModelEditsChanged -= UpdateDocumentCommands;
             previous.ResourceEditsChanged -= UpdateDocumentCommands;
+            previous.ContentEditsChanged -= UpdateDocumentCommands;
+            previous.ContentEditsChanged -= ContentWorkspaceChanged;
         }
         commandDocument = document;
         if (document != null)
@@ -97,6 +99,8 @@ public partial class MainWindow
             document.PickupEditsChanged += UpdateDocumentCommands;
             document.ModelEditsChanged += UpdateDocumentCommands;
             document.ResourceEditsChanged += UpdateDocumentCommands;
+            document.ContentEditsChanged += UpdateDocumentCommands;
+            document.ContentEditsChanged += ContentWorkspaceChanged;
         }
     }
     private void AttachAnimationWorkspace(AnimationEditor editor)

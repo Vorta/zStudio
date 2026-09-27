@@ -56,6 +56,7 @@ public partial class MainWindow
     internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync();
     private void UndoDocument(DocumentModel doc, bool redo)
     {
+        if (doc.ContentEdits != null) { contentWork = UndoContentAsync(doc, redo); return; }
         if (doc.ResourceEdits != null) { resourceWork = UndoResourcesAsync(doc, redo); return; }
         if (doc.IsDisposed || !ResolvePropertiesDrafts(doc) || shownDocument == doc && animation?.ResolvePendingDrafts() == false) return;
         if (shownDocument == doc) { animation?.Pause(); scene?.CancelPickupDrag(); }
@@ -77,6 +78,11 @@ public partial class MainWindow
         long request = ++propertyRequest;
         if (doc.IsDisposed) return null;
         cancellationToken.ThrowIfCancellationRequested();
+        if (doc.ScriptEdits != null)
+        {
+            if (resourceMember == null) throw new StudioCommandException("stale_asset", "Read the current script identity before opening Properties.");
+            return await OpenScriptPropertiesAsync(doc, resourceMember.Value, null, automation);
+        }
         if (doc.ResourceEdits != null)
         {
             if (resourceMember == null) throw new StudioCommandException("stale_asset", "Read the current member identity before opening Properties.");
@@ -108,6 +114,8 @@ public partial class MainWindow
     {
         if (ViewModel.SelectedDocument is not { } doc) return;
         if (!await ResolvePropertiesDraftsAsync()) return;
+        if (scriptGrid.IsKeyboardFocusWithin && scriptGrid.SelectedItem is ScriptRow scriptRow && doc.SelectedAsset?.ResourceId is Guid script)
+        { await OpenScriptPropertiesAsync(doc, script, scriptRow.Id); return; }
         if (CentralTree.IsKeyboardFocusWithin && CentralTree.SelectedItem is ResourceTreeItem resource && doc.SelectedAsset?.ResourceId is Guid member)
         { await OpenResourcePropertiesAsync(doc, member, resource.Node.Id); return; }
         if (AssetGrid.IsKeyboardFocusWithin && doc.SelectedAsset is { } asset) { await OpenAssetPropertiesAsync(doc, asset.Record); return; }
@@ -144,7 +152,8 @@ public partial class MainWindow
     private async void AssetPropertiesClick(object sender, RoutedEventArgs e)
     {
         if (contextAsset is not { } asset || assetContextDocument is not { IsDisposed: false } doc) return;
-        if (asset.ResourceId is Guid member) await ResourceUiAsync(async () => { await OpenResourcePropertiesAsync(doc, member, null); });
+        if (doc.ResourceEdits != null && asset.ResourceId is Guid member) await ResourceUiAsync(async () => { await OpenResourcePropertiesAsync(doc, member, null); });
+        else if (doc.ScriptEdits != null && asset.ResourceId is Guid script) await ResourceUiAsync(async () => { await OpenScriptPropertiesAsync(doc, script, null); });
         else await OpenAssetPropertiesAsync(doc, asset.Record);
     }
     private void SceneContextTarget(object sender, MouseButtonEventArgs e)

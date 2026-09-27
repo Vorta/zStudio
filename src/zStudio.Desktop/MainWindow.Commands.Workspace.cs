@@ -63,13 +63,13 @@ public partial class MainWindow
             if (doc.IsDisposed || ViewModel.SelectedDocument != doc) throw new StudioCommandException("context_changed","The active document changed while opening.");
             return Result(DocumentState(doc));
         });
-        Register(r, "assets", "List current edited assets by stable kind/index. Offset/Length describe the edited snapshot; sourceOffset/sourceLength identify original bytes, or are null for newly added records.", false, [DocumentParameter, .. PageParameters], a =>
+        Register(r, "assets", "List current edited assets by current kind/index. Resource member/script UUIDs remain stable through reordering. Offset/Length describe the edited snapshot; sourceOffset/sourceLength identify original bytes, or are null for newly added records.", false, [DocumentParameter, .. PageParameters], a =>
         {
             var doc = TargetDocument(a);
             return Page(doc.Assets, a, x => x.Name, x =>
             {
                 var source = doc.OriginalAsset(x.Record);
-                return new { x.Record.Kind, x.Index, x.Name, x.Record.Offset, x.Record.Length, x.Summary, member = x.ResourceId, sourceOffset = source?.Offset, sourceLength = source?.Length };
+                return new { x.Record.Kind, x.Index, x.Name, x.Record.Offset, x.Record.Length, x.Summary, member = doc.ResourceEdits == null ? (Guid?)null : x.ResourceId, script = doc.ScriptEdits == null ? (Guid?)null : x.ResourceId, sourceOffset = source?.Offset, sourceLength = source?.Length };
             });
         });
         RegisterJob(r, "select_asset", "Select an asset in the GUI and await its preview; does not retarget Properties.", AssetParameters, false, async (a, token) =>
@@ -81,7 +81,7 @@ public partial class MainWindow
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);
             return Result(new { document = DocumentState(doc), asset = asset.Id, ViewModel.Status });
         });
-        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD inspection bounds tree nodes and strings with explicit truncation markers; export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
+        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings with explicit truncation markers; export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
         {
             var doc = TargetDocument(a); var asset = TargetAsset(doc, a);
             return await InspectAssetAsync(doc, asset, token);
@@ -123,15 +123,25 @@ public partial class MainWindow
         });
         Register(r, "undo_redo", "Undo or redo one accepted edit in the specified document.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], async (a, token) =>
         {
-            var d = TargetDocument(a, true); UndoDocument(d, Text(a, "action") == "redo"); if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
+            var d = TargetDocument(a, true); UndoDocument(d, Text(a, "action") == "redo"); if (d.ContentEdits != null) await contentWork.WaitAsync(token); else if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
         });
-        RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD saves verify and atomically replace the working destination or create a new Save As file.",
-            [DocumentParameter, RevisionParameter, P("destination", "string", "New animation or ZAR/ZRD Save As path. Omit for verified ZAR/ZRD save to its working destination."), P("modelDirectory", "string", "Model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Pickup source archive path to new Save As path map.", AdditionalProperties: new("", "string", "New Save As path for this source archive.")), P("backup", "boolean", "Pickup backup preference; defaults to app setting.")], false, async (a, token) =>
+        RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Content batches return saved paths and errors; state.contentEdits lists affected paths and targets.",
+            [DocumentParameter, RevisionParameter, P("destination", "string", "New single-file Save As path (animation, ZAR/ZRD, script or texture pack). Omit to save working files."), P("modelDirectory", "string", "Model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Pickup or texture batch source path to new Save As path map; cover every affected file.", AdditionalProperties: new("", "string", "New Save As path for this source archive.")), P("backup", "boolean", "Pickup backup preference; defaults to app setting.")], false, async (a, token) =>
         {
             var d = TargetDocument(a, true);
             IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
             try
             {
+                if (d.ContentEdits != null)
+                {
+                    var targets = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value!.GetValue<string>(), StringComparer.OrdinalIgnoreCase);
+                    if (a.ContainsKey("destination"))
+                    {
+                        if (targets != null) throw new StudioCommandException("invalid_argument", "Use destination or destinations, not both.");
+                        targets = new(StringComparer.OrdinalIgnoreCase) { [d.Path] = Text(a,"destination") };
+                    }
+                    var result = await SaveContentAsync(d, targets, token); return Result(new { document = DocumentState(d), result });
+                }
                 if (d.ResourceEdits != null)
                 { await SaveResourcesAsync(d, Text(a, "destination") is { Length: > 0 } path ? path : null, token); return Result(DocumentState(d)); }
                 if (d.AnimationEdits != null)

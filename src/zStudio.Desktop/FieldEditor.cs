@@ -209,5 +209,19 @@ public partial class FieldEditor : UserControl
         picker.SelectionChanged += (_,_) => { if (!refreshingFields && picker.SelectedItem is string text && ResolvePendingDrafts()) { commit(text); RefreshProperties(); } };
     }
     protected void Button(Panel panel,string text,Action action) { AddAutomationAction(text, action); Button button = new() { Content = text,Margin = new(2),Padding = new(6,3,6,3) }; button.Click += (_,_) => action(); panel.Children.Add(button); }
+    protected void AsyncButton(Panel panel, string text, Func<Task> action)
+    {
+        AddAutomationAsyncAction(text, action);
+        Button button = new() { Content = text, Margin = new(2), Padding = new(6,3,6,3) };
+        button.Click += async (_, _) =>
+        {
+            if (!await ResolvePendingDraftsAsync()) return;
+            button.IsEnabled = false; committingDraft = true;
+            try { await action(); }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { MessageBox.Show(Window.GetWindow(this), ex.Message, "Edit properties"); }
+            finally { committingDraft = false; button.IsEnabled = true; if (!disposed) RefreshProperties(); }
+        };
+        panel.Children.Add(button);
+    }
     protected sealed record ChoiceValue(int Value,string Label);
 }

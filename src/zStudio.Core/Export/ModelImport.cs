@@ -118,8 +118,9 @@ public static class ModelImport
     }
 
     /// <summary>Strict 8-bit RGB/RGBA PNG decoder for Blender diffuse exports; limits decoded allocations.</summary>
-    public static DecodedImage ReadPng(byte[] png, CancellationToken token = default)
+    public static DecodedImage ReadPng(byte[] png, CancellationToken token = default, int maximumDimension = Formats.TexturePackWriter.MaximumDimension)
     {
+        if (maximumDimension is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(maximumDimension));
         if (png.Length < 33 || !png.AsSpan(0, 8).SequenceEqual(new byte[] { 137,80,78,71,13,10,26,10 })) throw new InvalidDataException("Expected PNG.");
         int width = 0, height = 0, channels = 0, offset = 8; bool ended = false, header = false;
         using MemoryStream compressed = new();
@@ -137,7 +138,7 @@ public static class ModelImport
             {
                 if (header || offset != 8 || length != 13) throw new InvalidDataException("Invalid PNG header.");
                 width = BinaryPrimitives.ReadInt32BigEndian(data); height = BinaryPrimitives.ReadInt32BigEndian(data[4..]);
-                const int limit = Formats.TexturePackWriter.MaximumDimension;
+                int limit = maximumDimension;
                 if (width < 1 || width > limit || height < 1 || height > limit || data[8] != 8 || data[9] is not (2 or 6) || data[10] != 0 || data[11] != 0 || data[12] != 0)
                     throw new InvalidDataException($"Export a non-interlaced 8-bit RGB/RGBA PNG up to {limit} × {limit}.");
                 channels = data[9] == 6 ? 4 : 3; header = true;

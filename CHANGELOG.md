@@ -2,6 +2,13 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## Unreleased
+
+- Add direct PNG replacement and addition in texture packs, with explicit sibling variants, original dimensions/storage, alpha-safe resampling and private palette quantization. Keep batch undo, ownership, mirrored views and verified saves consistent across GUI and MCP.
+- Edit prepared v7 script entries, ordered instructions and arguments in a virtualized Instructions tab and pinned Properties. Preserve stable IDs, unknown commands, raw timestamps and untouched storage; retain read-only text reconstruction and source bytes.
+- Add seven shared texture/script MCP tools, typed input bounds and asynchronous generated argument actions, bringing discovery to 67 tools. Extend drafts/history/save integration, per-file partial-save reporting and meaningful protocol/corpus regressions.
+- Correct inline palette detection to use the retail external-palette flag, and share the texture encoder/writer with existing model import.
+
 ## 0.5.4 — 2026-09-27
 
 - Export an animation root or GameZ node's referenced models as an assembled OBJ/MTL/PNG bundle, individual local-space meshes and an identity/transform manifest for remodeling in Blender.

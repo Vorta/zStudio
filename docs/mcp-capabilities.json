@@ -63,6 +63,39 @@
         "zstudio_save_document"
       ],
       "note": "Generated member/node fields share asynchronous validation, retained invalid drafts, document revision checks, undo and verified saves. Values over 16384 displayed characters expose a read-only prefix, never an editable truncated draft. ZRD JSON inspection bounds tree/string expansion and marks truncation; full exports remain available. Retarget and close resolve drafts. Save As requires a new destination and retargets later saves and reload; an already-open destination blocks reload."
+    },
+    {
+      "gui": "MainWindow.Content:Textures",
+      "tools": [
+        "zstudio_texture_targets",
+        "zstudio_texture_import",
+        "zstudio_undo_redo",
+        "zstudio_save_document"
+      ],
+      "note": "Edit and Assets context menus share PNG import, explicit sibling targets, record-index disambiguation, one batch undo, ownership, mirrored open views and verified per-file save results. This pack is the default; variant dimensions and storage class are retained."
+    },
+    {
+      "gui": "MainWindow.Content:Scripts",
+      "tools": [
+        "zstudio_script_records",
+        "zstudio_script_entry_edit",
+        "zstudio_script_instruction_edit",
+        "zstudio_script_select",
+        "zstudio_script_properties"
+      ],
+      "note": "Dynamic script menus and virtualized instruction rows share stable script/instruction identities, structural actions and explicit pinned Properties targeting. Read-only reconstructed Text and original Bytes remain separate. Selection never executes commands or retargets Properties."
+    },
+    {
+      "gui": "ScriptPropertiesEditor:Fields",
+      "tools": [
+        "zstudio_script_properties",
+        "zstudio_properties_state",
+        "zstudio_drafts",
+        "zstudio_resolve_drafts",
+        "zstudio_undo_redo",
+        "zstudio_save_document"
+      ],
+      "note": "Generated timestamp/name/token fields and asynchronous argument actions use shared draft validation, revisions, stable identities and undo. Literal Latin-1 tokens use JSON quotes. Oversized values are read-only prefixes; complete instruction replacement remains available. Save As retargets later saves and reload."
     }
   ],
   "handlers": [
