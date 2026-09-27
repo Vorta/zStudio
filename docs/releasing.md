@@ -21,8 +21,8 @@ Dependency alerts/security update PRs and confidential vulnerability reporting a
    ```powershell
    git switch main
    git pull --ff-only
-   git tag -a v0.5.2 -m 'zStudio 0.5.2'
-   git push origin v0.5.2
+   git tag -a v0.5.4 -m 'zStudio 0.5.4'
+   git push origin v0.5.4
    ```
 
 4. The Release workflow checks tag/version equality and main ancestry, restores locked dependencies, builds, tests and packages. A separate job with release-write permission uploads the verified ZIP and `SHA256SUMS` to GitHub Releases. Changelog text supplies the notes. Prerelease version suffixes create prereleases; ordinary versions become the latest release.
@@ -34,12 +34,14 @@ The first zStudio release is 0.2.17. Earlier Recoil ZBD Studio builds were local
 
 Run `./tools/publish.ps1`. It creates `artifacts/zStudio-win-x64/` and `artifacts/zStudio-<version>-win-x64.zip`, verifies file versions, relative apphost binding, and SHA-256 parity of every ZIP file. The archive root contains exactly `zStudio.exe` and `dependencies/`. Managed/native runtime files, MIT license, third-party notices and documentation are inside dependencies. The archive is self-contained and unsigned.
 
+Keep this folder and ZIP current with the latest validated local build. Use `artifacts/zStudio-win-x64/zStudio.exe` for user-facing launches and live GUI/MCP work, including unreleased feature work; republish application changes before handoff. A local package refresh does not publish a release or change its version. Internal test/build outputs may remain in `bin`, but they are not the user-facing installation.
+
 The executable remains the SDK apphost bound to `dependencies/Recoil.Zbd.Studio.dll`. Internal assembly names and `%LOCALAPPDATA%/RecoilZbdStudio` settings/error logs remain stable across the rename. The icon uses the owner's updated artwork at the existing checked-in resource path. A previous portable directory is retained as a backup during packaging; recycle superseded output only after verifying its replacement. Keep the current folder and ZIP in artifacts, with reports/checksum sidecars in a temporary directory.
 
 The package verifier can be run independently:
 
 ```powershell
-./tools/verify-package.ps1 -Directory artifacts/zStudio-win-x64 -Archive artifacts/zStudio-0.5.2-win-x64.zip -ExpectedVersion 0.5.2
+./tools/verify-package.ps1 -Directory artifacts/zStudio-win-x64 -Archive artifacts/zStudio-0.5.4-win-x64.zip -ExpectedVersion 0.5.4
 ```
 
 ## Maintenance checks

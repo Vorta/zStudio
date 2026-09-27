@@ -6,10 +6,27 @@ namespace Recoil.Zbd.Core;
 public sealed record ResolvedTexture(ZbdDocument Document, AssetRecord Asset, bool Ambiguous);
 public sealed class AssetResolver(string root) : IDisposable
 {
+    public ResourceEditOwnership EditOwnership { get; } = new();
     public string Root { get; } = Path.GetFullPath(root);
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, (ZbdDocument Document, long Used)> cache = new(StringComparer.OrdinalIgnoreCase);
     private long clock;
+    private readonly object snapshotGate = new();
+    private readonly Dictionary<Guid, ZbdDocument[]> workspaceSnapshots = [];
+    public long SnapshotRevision { get; private set; }
+    private IReadOnlyDictionary<string, ZbdDocument> publishedSnapshots = new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase);
+    public void SetWorkspaceSnapshots(Guid owner, IEnumerable<ZbdDocument> documents)
+    {
+        lock (snapshotGate)
+        {
+            var values = documents.ToArray();
+            // Build the complete replacement before changing either published state or ownership history.
+            var next = workspaceSnapshots.Where(p => p.Key != owner).SelectMany(p => p.Value).Concat(values)
+                .ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase);
+            if (values.Length == 0) workspaceSnapshots.Remove(owner); else workspaceSnapshots[owner] = values;
+            publishedSnapshots = next; SnapshotRevision++;
+        }
+    }
     public IEnumerable<string> ResourceDirectories(string context)
     {
         string directory = Path.GetDirectoryName(context)!;
@@ -34,6 +51,8 @@ public sealed class AssetResolver(string root) : IDisposable
     }
     public async Task<ZbdDocument> OpenCachedAsync(string path, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        lock (snapshotGate) if (publishedSnapshots.TryGetValue(path, out var snapshot)) return snapshot;
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {

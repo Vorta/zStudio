@@ -8,6 +8,27 @@ namespace Recoil.Zbd.Tests;
 public sealed partial class AnimationTests
 {
     [Fact]
+    public async Task UnsavedResourcePublicationInvalidatesMissionBaselinesWithoutDiskChanges()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var definitions = Zrd(Arr(Str("animated"), Arr()));
+        await WithMissionArchiveAsync(new() { ["aiv.zrd"] = Zrd(Arr(Str("animated_01"), Spawn(10, 2, 3, 0))), ["vehicle.zrd"] = definitions }, async (world, resolver) =>
+        {
+            string path = Path.Combine(resolver.Root, "resources.zbd"); byte[] original = await File.ReadAllBytesAsync(path, token);
+            var before = await MissionSceneLoader.LoadAsync(world, resolver, token: token);
+            var edited = Recoil.Zbd.Core.Formats.FormatRegistry.Default.OpenBytes(path, ResourceEditingTests.Archive(("aiv.zrd", Zrd(Arr(Str("animated_02"), Spawn(40, 5, 6, 0)))), ("vehicle.zrd", definitions)), token: token);
+            Guid owner = Guid.NewGuid(); resolver.SetWorkspaceSnapshots(owner, [edited]);
+            var after = await MissionSceneLoader.LoadAsync(world, resolver, token: token);
+            Assert.Equal("animated_02", Assert.Single(after.Actors).Name);
+            Assert.Equal(40, SceneBuilder.LocalTransform(after.Scene.Nodes[after.Actors[0].Root]).M41);
+            Assert.Equal("animated_01", Assert.Single(before.Actors).Name);
+            resolver.SetWorkspaceSnapshots(owner, []);
+            var discarded = await MissionSceneLoader.LoadAsync(world, resolver, token: token);
+            Assert.Equal("animated_01", Assert.Single(discarded.Actors).Name);
+            Assert.Equal(original, await File.ReadAllBytesAsync(path, token));
+        });
+    }
+    [Fact]
     public async Task DifficultySelectsAuthoredPositionsAndSeparatesCachedBaselines()
     {
         await WithMissionArchiveAsync(new() {

@@ -358,6 +358,14 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         double time = frame?.Time ?? 0; contextDirty = true; resetSimulation = true; audioDirty = true; ++audioRevision;
         RefreshLists(); _ = SeekAsync(time);
     }
+    internal async Task RefreshModelContextAsync(bool resourceChanges = false)
+    {
+        if (disposed) return;
+        pendingPlay |= playing;
+        if (resourceChanges) { audioDirty = true; ++audioRevision; }
+        contextDirty = true; resetSimulation = true;
+        await SeekAsync(frame?.Time ?? 0, preservePlayhead: true);
+    }
     private void TryEdit(Action action)
     {
         if (!committingDraft && (!ResolvePendingDrafts() || ResolvePropertyDrafts?.Invoke() == false)) return;

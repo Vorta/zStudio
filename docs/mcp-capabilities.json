@@ -5,23 +5,64 @@
   "interactions": [
     {
       "gui": "MainWindow.Navigation:CameraNavigationClick",
-      "tools": ["zstudio_camera", "zstudio_animation_options"],
+      "tools": [
+        "zstudio_camera",
+        "zstudio_animation_options"
+      ],
       "note": "Dynamically created View/3D Navigation items share named views, projection and framing with camera. Follow uses animation_options.followCamera. Projection check states read the live camera."
     },
     {
       "gui": "MainWindow.Navigation:CameraKeyboard",
-      "tools": ["zstudio_camera", "zstudio_animation_options"],
+      "tools": [
+        "zstudio_camera",
+        "zstudio_animation_options"
+      ],
       "note": "Numpad views/orbit/pan/zoom/projection/framing and Home use shared semantic operations. Native text, timeline and menu keys remain native; Numpad 0 shares Follow camera."
     },
     {
       "gui": "SceneViewport.Navigation:ConfigureNavigation",
-      "tools": ["zstudio_camera"],
+      "tools": [
+        "zstudio_camera"
+      ],
       "note": "Middle orbit, Shift-middle screen pan, Ctrl-middle centered zoom and Ctrl-Shift-middle dolly use camera rotate/pan/zoom/dolly. Camera reads expose projection and exact axis state; automation never captures physical input. Camera-dependent horizons and animation effects refresh after inertial motion at the frame boundary."
     },
     {
       "gui": "SceneViewport.NavigationCube:NavigateCubeAt",
-      "tools": ["zstudio_camera"],
+      "tools": [
+        "zstudio_camera"
+      ],
       "note": "View-cube faces use camera view; edges/corners use perspective camera set. The cube uses +Y up and -Z front, matching keyboard/menu axis views."
+    },
+    {
+      "gui": "MainWindow.Resources:ArchiveMembers",
+      "tools": [
+        "zstudio_archive_members",
+        "zstudio_archive_edit",
+        "zstudio_resource_select",
+        "zstudio_export"
+      ],
+      "note": "Dynamic Edit/Archive members and Assets context menus share the resource session. Member UUIDs survive rename, reorder and undo; imported known payloads are validated off-thread. Aliased payload ranges share immutable decoding but retain independent member edits. Malformed embedded ZRD remains raw with a warning and supports member repair. Raw export uses the edited snapshot."
+    },
+    {
+      "gui": "MainWindow.Resources:ZrdNodes",
+      "tools": [
+        "zstudio_zrd_nodes",
+        "zstudio_zrd_edit",
+        "zstudio_resource_select"
+      ],
+      "note": "Typed Data tree and dynamic context/Edit menus use ordered node UUIDs. Standalone ZRD requires complete bounded decoding before edit/save controls are enabled. Complete structural decoding retains ZRD editing after member rename/save/reopen, without relying on extensions. Add/type/duplicate/delete/move use shared validation and one undo step; type replaces existing children even when choosing Array again, while set accepts scalars. Selection keeps Properties pinned. GUI labels and zrd_nodes bound string prefixes before JSON escaping; MCP marks valueTruncated at 4096 characters. Paging retains only the returned page; ZRD filtering runs off-thread with cancellation/revision checks."
+    },
+    {
+      "gui": "ResourcePropertiesEditor:Fields",
+      "tools": [
+        "zstudio_resource_properties",
+        "zstudio_properties_state",
+        "zstudio_drafts",
+        "zstudio_resolve_drafts",
+        "zstudio_undo_redo",
+        "zstudio_save_document"
+      ],
+      "note": "Generated member/node fields share asynchronous validation, retained invalid drafts, document revision checks, undo and verified saves. Values over 16384 displayed characters expose a read-only prefix, never an editable truncated draft. ZRD JSON inspection bounds tree/string expansion and marks truncation; full exports remain available. Retarget and close resolve drafts. Save As requires a new destination and retargets later saves and reload; an already-open destination blocks reload."
     }
   ],
   "handlers": [
@@ -385,16 +426,20 @@
     {
       "gui": "MainWindow.xaml:AssetPropertiesClick",
       "tools": [
-        "zstudio_properties_open"
+        "zstudio_properties_open",
+        "zstudio_resource_properties"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
     {
       "gui": "MainWindow.xaml:AssetSelectionChanged",
       "tools": [
-        "zstudio_select_asset"
+        "zstudio_select_asset",
+        "zstudio_assets",
+        "zstudio_inspect_asset",
+        "zstudio_source_bytes"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "Model rows expose accepted AssetRecords and appended material/texture references while retaining kind/index identity through undo/redo. Asset offsets describe edited ranges; nullable sourceOffset/sourceLength and GUI Bytes retain original source ranges. New records have no original bytes."
     },
     {
       "gui": "MainWindow.xaml:AudioSeekChanged",
@@ -662,7 +707,9 @@
     },
     {
       "gui": "MainWindow.xaml:NavigatorSelectionChanged",
-      "tools": ["zstudio_workspace_view"],
+      "tools": [
+        "zstudio_workspace_view"
+      ],
       "note": "Stable section indices survive responsive Files detachment. Tree/content keyboard focus remembers the active section; Files and Navigator splitter widths share workspace_view preferences. Automatic reparenting never commits drafts."
     },
     {
@@ -710,7 +757,8 @@
     {
       "gui": "MainWindow.xaml:PropertiesClick",
       "tools": [
-        "zstudio_properties_open"
+        "zstudio_properties_open",
+        "zstudio_resource_properties"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -867,6 +915,20 @@
         "zstudio_texture_view"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
+    },
+    {
+      "gui": "MainWindow.xaml:ExportModelBundleClick",
+      "tools": [
+        "zstudio_model_bundle_export"
+      ],
+      "note": "Export all node-bound authored geometry through the shared bundle exporter, retaining model/node indices and local coordinates."
+    },
+    {
+      "gui": "MainWindow.xaml:ReplaceModelsClick",
+      "tools": [
+        "zstudio_model_replace"
+      ],
+      "note": "Validate explicit source-fingerprinted OBJ/PNG mappings as one shared document undo step, with native model and texture save support. Shared ownership claims all prepared source/current/destination paths before acceptance or save. Conflicts preserve revision/history, claims survive undo/save until close, and oversized model/texture outputs fail before allocation. Assets, Document scene and pinned asset Properties refresh accepted records by identity; Undo/Redo removes/restores appended records without retargeting Properties."
     }
   ]
 }

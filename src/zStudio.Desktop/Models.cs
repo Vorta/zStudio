@@ -43,10 +43,16 @@ public sealed partial class FolderNode(string name, string path, FileEntry? file
 }
 public sealed partial class AssetItem(AssetRecord record) : ObservableObject
 {
-    public AssetRecord Record { get; } = record;
+    public Guid? ResourceId { get; init; }
+    public AssetRecord Record { get; private set; } = record;
     public string Name => Record.Name;
     public string Kind => Record.Kind.ToString();
     public string Summary => Record.Summary.Length > 0 ? Record.Summary : $"{Record.Length:N0} bytes";
+    internal void UpdateRecord(AssetRecord value)
+    {
+        if (Record.Id != value.Id) throw new InvalidOperationException("An asset row must retain its identity.");
+        Record = value; OnPropertyChanged(nameof(Record)); OnPropertyChanged(nameof(Name)); OnPropertyChanged(nameof(Summary));
+    }
     public int Index => Record.Index;
     public string Identity => $"{Record.Kind} #{Record.Index}";
     public string SequenceCount => Record.Content is AnimationEntry entry ? entry.Sequences.Count.ToString() : "";
@@ -61,15 +67,44 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public string Path => Document.Path;
     public string Title => System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) + "/" + System.IO.Path.GetFileName(Path) + (IsDirty ? " *" : "");
     public AnimationEditSession? AnimationEdits { get; }
+    public ModelEditSession? ModelEdits { get; }
+    public ResourceEditSession? ResourceEdits { get; }
+    public event Action? ResourceEditsChanged;
+    public ZbdDocument PreviewDocument => ResourceEdits?.Current.Document ?? ModelEdits?.Current.World ?? Document;
+    public AssetRecord? OriginalAsset(AssetRecord asset) => ResourceEdits is { } resources
+        ? resources.OriginalAsset(resources.Current.Members[asset.Index])
+        : Document.Assets.SingleOrDefault(a => a.Kind == asset.Kind && a.Index == asset.Index);
+    public event Action? ModelEditsChanged;
+    private readonly Stack<bool> sceneUndo = [], sceneRedo = [];
+    private AssetResolver? workspaceResolver;
+    public bool CanUndoScene => sceneUndo.Count > 0;
+    public bool CanRedoScene => sceneRedo.Count > 0;
+    private void RecordSceneEdit(bool model) { sceneUndo.Push(model); sceneRedo.Clear(); }
+    public void UndoScene(bool redo)
+    {
+        var from = redo ? sceneRedo : sceneUndo; var to = redo ? sceneUndo : sceneRedo;
+        if (!from.TryPop(out bool model)) return;
+        to.Push(model);
+        if (model) { if (redo) ModelEdits!.Redo(); else ModelEdits!.Undo(); }
+        else { if (redo) PickupEdits!.Redo(); else PickupEdits!.Undo(); }
+    }
+    public void AttachResolver(AssetResolver? resolver) => workspaceResolver = resolver;
     public PickupPlacementEditSession? PickupEdits { get; private set; }
     private Task<PickupPlacementEditSession>? pickupLoading;
+    private long pickupSnapshotRevision;
     private bool pickupsLocked = true;
     public bool PickupsLocked { get => pickupsLocked; set => SetProperty(ref pickupsLocked, value); }
     public bool IsDisposed { get; private set; }
     public event Action? Disposing;
     public bool PickupDiagnosticsReported { get; set; }
     internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
-    public bool IsDirty => AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true;
+    public bool IsDirty => ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
+    public void ClaimResourcePaths(IEnumerable<string> paths) => workspaceResolver?.EditOwnership.Acquire(SessionId, Title, paths);
+    public void InvalidateCleanPickupEdits()
+    {
+        if (PickupEdits is { IsDirty: false, CanUndo: false, CanRedo: false } || PickupEdits == null)
+        { PickupEdits = null; pickupLoading = null; PickupDiagnosticsReported = false; }
+    }
     public event Action? PickupEditsChanged;
     public async Task<PickupPlacementEditSession> GetPickupEditsAsync(AssetResolver resolver, CancellationToken token)
     {
@@ -78,22 +113,40 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         var lifetime = Lifetime.Token;
         if (PickupEdits != null)
         {
+            if (pickupSnapshotRevision != resolver.SnapshotRevision && !PickupEdits.CanUndo && !PickupEdits.CanRedo) InvalidateCleanPickupEdits();
+        }
+        if (PickupEdits != null)
+        {
             if (PickupEdits.HasSourceChanges()) throw new IOException("A pickup source archive changed outside zStudio. Save pending edits as a copy, then reload the map (F5) before rebuilding its preview.");
             return PickupEdits;
         }
         if (pickupLoading == null || pickupLoading.IsCanceled || pickupLoading.IsFaulted)
+        {
+            pickupSnapshotRevision = resolver.SnapshotRevision;
             pickupLoading = PickupPlacementEditSession.LoadAsync(Path, resolver, lifetime);
+        }
         var edits = await pickupLoading.WaitAsync(token);
         token.ThrowIfCancellationRequested();
         lifetime.ThrowIfCancellationRequested();
         if (PickupEdits == null)
         {
             PickupEdits = edits;
+            edits.BeforeEdit += () =>
+            {
+                if (pickupSnapshotRevision != resolver.SnapshotRevision && !edits.CanUndo && !edits.CanRedo)
+                    throw new InvalidOperationException("Resource previews changed. Refresh this map before editing pickup placements.");
+                ClaimResourcePaths(edits.ArchivePaths.Concat(edits.ArchivePaths.Select(edits.TargetPath)));
+            };
+            edits.EditAccepted += () => RecordSceneEdit(false);
             edits.Changed += () => { Revision++; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); PickupEditsChanged?.Invoke(); };
         }
         return edits;
     }
-    public void InvalidateMissionContext() { contextLoading?.Cancel(); animationContext = null; MissionSceneLoader.Invalidate(Document); }
+    public void InvalidateMissionContext()
+    {
+        contextLoading?.Cancel(); animationContext = null; MissionSceneLoader.Invalidate(Document);
+        if (!ReferenceEquals(PreviewDocument, Document)) MissionSceneLoader.Invalidate(PreviewDocument);
+    }
     public string? LastSavedCopy { get; set; }
     private Task<AnimationPreviewContext>? animationContext;
     private string? animationWorldPath;
@@ -113,7 +166,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         }
         return animationContext.WaitAsync(token);
     }
-    public string Description => $"{Document.Probe.Description} · {Document.Assets.Count:N0} assets";
+    public string Description => $"{Document.Probe.Description} · {Assets.Count:N0} assets";
     public ObservableCollection<AssetItem> Assets { get; }
     public ICollectionView FilteredAssets { get; }
     public ObservableCollection<SceneTreeItem> SceneRoots { get; } = [];
@@ -122,10 +175,37 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     [ObservableProperty] private string kindFilter = "All types";
     [ObservableProperty] private AssetItem? selectedAsset;
     [ObservableProperty] private bool isStale;
-    public string[] Kinds { get; }
+    public string[] Kinds { get; private set; }
     public DocumentModel(ZbdDocument doc)
     {
         Document = doc;
+        Assets = new(doc.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).Select(a => new AssetItem(a)));
+        Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()];
+        FilteredAssets = CollectionViewSource.GetDefaultView(Assets); FilteredAssets.Filter = Matches;
+        if (doc.Probe.Family is FormatFamily.Archive or FormatFamily.Zrd && !doc.Diagnostics.Any(d => d.Severity == "Error"))
+        {
+            ResourceEdits = new(doc);
+            ResourceEdits.BeforeEdit += () => ClaimResourcePaths([Path, ResourceEdits.TargetPath]);
+            RebuildResourceAssets();
+            ResourceEdits.Changed += () =>
+            {
+                Revision++; workspaceResolver?.SetWorkspaceSnapshots(SessionId, [ResourceEdits.Current.Document]);
+                RebuildResourceAssets(); InvalidateMissionContext();
+                OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ResourceEditsChanged?.Invoke();
+            };
+        }
+        if (doc.GameZLayout != null && doc.Probe.Version == 15 && !doc.Diagnostics.Any(d => d.Severity == "Error"))
+        {
+            ModelEdits = new(doc);
+            ModelEdits.BeforeEdit += ClaimResourcePaths;
+            ModelEdits.EditAccepted += () => RecordSceneEdit(true);
+            ModelEdits.Changed += () =>
+            {
+                Revision++; workspaceResolver?.SetWorkspaceSnapshots(SessionId, ModelEdits.Documents);
+                RebuildModelAssets();
+                InvalidateMissionContext(); OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ModelEditsChanged?.Invoke();
+            };
+        }
         if (doc.Animations is { } source)
         {
             // Accepted edits replace complete entry snapshots. Give that working
@@ -136,19 +216,48 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             AnimationEdits = new(working);
             AnimationEdits.Changed += () => { Revision++; contextLoading?.Cancel(); animationContext = null; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); };
         }
-        Assets = new(doc.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).Select(a => new AssetItem(a)));
-        Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()];
-        FilteredAssets = CollectionViewSource.GetDefaultView(Assets); FilteredAssets.Filter = Matches;
         if (doc.Scene is GameScene scene)
             foreach (var root in scene.Nodes.Where(n => n.Class == "world")) SceneRoots.Add(new(scene, root.Index, []));
+    }
+    private void RebuildModelAssets()
+    {
+        var current = ModelEdits!.Current.World;
+        var selected = SelectedAsset?.Record.Id;
+        var existing = Assets.ToDictionary(a => a.Record.Id);
+        var records = current.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).ToArray();
+        var retained = records.Select(a => a.Id).ToHashSet();
+        foreach (var row in Assets.Where(a => !retained.Contains(a.Record.Id)).ToArray()) Assets.Remove(row);
+        for (int i = 0; i < records.Length; i++)
+        {
+            var record = records[i];
+            if (existing.TryGetValue(record.Id, out var row)) row.UpdateRecord(record);
+            else { row = new(record); Assets.Insert(i, row); }
+        }
+        Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()]; OnPropertyChanged(nameof(Kinds));
+        if (!Kinds.Contains(KindFilter)) KindFilter = "All types";
+        SelectedAsset = Assets.FirstOrDefault(a => a.Record.Id == selected) ?? (selected == null ? null : Assets.FirstOrDefault());
+        foreach (var root in SceneRoots) root.UpdateScene(current.Scene!);
+        OnPropertyChanged(nameof(Description));
+    }
+    private void RebuildResourceAssets()
+    {
+        if (ResourceEdits == null) return;
+        Guid? selected = SelectedAsset?.ResourceId; int oldIndex = SelectedAsset?.Index ?? 0;
+        Assets.Clear();
+        foreach (var a in ResourceEdits.Current.Document.Assets) Assets.Add(new(a) { ResourceId = ResourceEdits.Current.Members[a.Index].Id });
+        Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()]; OnPropertyChanged(nameof(Kinds));
+        if (!Kinds.Contains(KindFilter)) KindFilter = "All types";
+        SelectedAsset = Assets.FirstOrDefault(a => a.ResourceId == selected) ?? Assets.ElementAtOrDefault(Math.Clamp(oldIndex, 0, Math.Max(0, Assets.Count - 1)));
+        OnPropertyChanged(nameof(Description));
     }
     private bool Matches(object o) => o is AssetItem a && (KindFilter == "All types" || KindFilter == a.Kind) && (Query.Length == 0 || a.Name.Contains(Query, StringComparison.OrdinalIgnoreCase) || a.Identity.Contains(Query, StringComparison.OrdinalIgnoreCase));
     partial void OnQueryChanged(string value) => FilteredAssets.Refresh();
     partial void OnKindFilterChanged(string value) => FilteredAssets.Refresh();
-    public void Dispose() { if (IsDisposed) return; IsDisposed = true; Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
+    public void Dispose() { if (IsDisposed) return; IsDisposed = true; workspaceResolver?.SetWorkspaceSnapshots(SessionId, []); workspaceResolver?.EditOwnership.Release(SessionId); Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
 }
 public sealed partial class InspectorNode : ObservableObject
 {
+    [ObservableProperty] private bool isSelected;
     private readonly JsonNode? node;
     private readonly IDictionary<string,bool>? expansion;
     private readonly string path;
@@ -176,8 +285,15 @@ public sealed partial class InspectorNode : ObservableObject
     }
     public string FullText => node?.ToJsonString(JsonData.Options) ?? "null";
 }
-public sealed class SceneTreeItem(GameScene scene, int index, HashSet<int> ancestors)
+public sealed class SceneTreeItem(GameScene scene, int index, HashSet<int> ancestors) : INotifyPropertyChanged
 {
+    public event PropertyChangedEventHandler? PropertyChanged;
+    internal void UpdateScene(GameScene value)
+    {
+        scene = value;
+        foreach (var child in children ?? []) child.UpdateScene(value);
+        PropertyChanged?.Invoke(this, new(nameof(Node))); PropertyChanged?.Invoke(this, new(nameof(Label)));
+    }
     public GameNode Node => scene.Nodes[index];
     public string Label => $"{Node.Name}  ·  {Node.Class}  #{index}";
     private IReadOnlyList<SceneTreeItem>? children;

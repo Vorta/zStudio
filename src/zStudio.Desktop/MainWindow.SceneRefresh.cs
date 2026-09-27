@@ -50,14 +50,16 @@ public partial class MainWindow
         try
         {
             token.ThrowIfCancellationRequested();
-            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.Document, resolver, token: token, difficulty: requested.Difficulty) : null;
+            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, resolver, token: token, difficulty: requested.Difficulty) : null;
             if (mission != null) await doc.GetPickupEditsAsync(resolver, token);
             token.ThrowIfCancellationRequested();
             // Keep all partially built meshes off the displayed viewport. ShowAsync
             // yields during GPU object creation, so cancellation must not touch it.
             replacement = new SceneViewport();
-            await replacement.ShowAsync(doc.Document, asset, resolver, requested.Pack?.Path, requested.Lod, token, requested.Horizon, mission);
+            await replacement.ShowAsync(doc.PreviewDocument, asset, resolver, requested.Pack?.Path, requested.Lod, token, requested.Horizon, mission);
             token.ThrowIfCancellationRequested();
+            if (!OwnsRequest()) return null;
+            await RefreshAssetInspectionAsync(doc, asset, token);
             if (!OwnsRequest()) return null;
 
             var view = previous.CaptureView();
@@ -79,7 +81,7 @@ public partial class MainWindow
             selectedNode = mission != null && previous.Mission != null
                 ? RemapPickupSelection(pickup, mission) ?? (selection is int oldSelection && mission.RemapNodeFrom(previous.Mission, oldSelection) is >= 0 and int mappedSelection ? mappedSelection : null)
                 : selection;
-            if (selectedNode is int node) InspectNode(node); else SetProperties(doc.Document.Metadata);
+            if (selectedNode is int node) InspectNode(node);
             publishedStaticOptions = requested; previewId = Guid.NewGuid();
             PreviewInfo.Text = scene.PreviewSummary; PreviewInfo.ToolTip = scene.PreviewSummary;
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;

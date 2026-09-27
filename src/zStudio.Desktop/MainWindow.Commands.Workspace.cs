@@ -11,17 +11,23 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     private static readonly StudioParameter[] PageParameters = [P("offset", "integer", "Zero-based result offset."), P("limit", "integer", "Page size, 1–200; default 100."), P("query", "string", "Case-insensitive name/path or displayed-text filter, applied before pagination.")];
-    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null)
+    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null, Func<T, object>? project = null)
     {
         int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
         if (search != null && Text(a, "query") is { Length: > 0 } query) source = source.Where(item => search(item).Contains(query, StringComparison.OrdinalIgnoreCase));
-        var all = source.ToArray(); return Result(new { total = all.Length, offset, nextOffset = (long)offset + limit < all.Length ? (int?)(offset + limit) : null, items = all.Skip(offset).Take(limit) });
+        int total = 0; List<object?> items = [];
+        foreach (var item in source)
+        {
+            if (total >= offset && items.Count < limit) items.Add(project == null ? item : project(item));
+            total++;
+        }
+        return Result(new { total, offset, nextOffset = (long)offset + limit < total ? (int?)(offset + limit) : null, items });
     }
     private static AssetRecord TargetAsset(DocumentModel doc, JsonObject a)
     {
         if (!a.ContainsKey("index") || !Enum.TryParse<AssetKind>(Text(a, "kind"), out var kind) || !Enum.IsDefined(kind)) throw new StudioCommandException("invalid_argument", "Provide a valid asset kind and explicit index.");
-        return doc.Document.Assets.SingleOrDefault(x => x.Kind == kind && x.Index == Int(a, "index")) ?? throw new StudioCommandException("stale_asset", "Asset not found in this document.");
+        return doc.PreviewDocument.Assets.SingleOrDefault(x => x.Kind == kind && x.Index == Int(a, "index")) ?? throw new StudioCommandException("stale_asset", "Asset not found in this document.");
     }
     private static readonly StudioParameter[] AssetParameters = [DocumentParameter, P("kind", "string", "Asset kind returned by assets.", true), P("index", "integer", "Authored record index.", true)];
 
@@ -57,20 +63,25 @@ public partial class MainWindow
             if (doc.IsDisposed || ViewModel.SelectedDocument != doc) throw new StudioCommandException("context_changed","The active document changed while opening.");
             return Result(DocumentState(doc));
         });
-        Register(r, "assets", "List assets by stable kind/index in an open document.", false, [DocumentParameter, .. PageParameters], a =>
+        Register(r, "assets", "List current edited assets by stable kind/index. Offset/Length describe the edited snapshot; sourceOffset/sourceLength identify original bytes, or are null for newly added records.", false, [DocumentParameter, .. PageParameters], a =>
         {
-            var doc = TargetDocument(a); return Page(doc.Document.Assets.Where(x => x.Name.Contains(Text(a, "query"), StringComparison.OrdinalIgnoreCase)).Select(x => new { x.Kind, x.Index, x.Name, x.Offset, x.Length, x.Summary }), a);
+            var doc = TargetDocument(a);
+            return Page(doc.Assets, a, x => x.Name, x =>
+            {
+                var source = doc.OriginalAsset(x.Record);
+                return new { x.Record.Kind, x.Index, x.Name, x.Record.Offset, x.Record.Length, x.Summary, member = x.ResourceId, sourceOffset = source?.Offset, sourceLength = source?.Length };
+            });
         });
         RegisterJob(r, "select_asset", "Select an asset in the GUI and await its preview; does not retarget Properties.", AssetParameters, false, async (a, token) =>
         {
             RequireNoDrafts(); var doc = TargetDocument(a); var asset = TargetAsset(doc, a); ViewModel.SelectedDocument = doc;
-            doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.Single(x => x.Record == asset); SelectNavigatorSection(1);
+            doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.Single(x => x.Record.Kind == asset.Kind && x.Index == asset.Index); SelectNavigatorSection(1);
             await previewWork;
             if (shownDocument != doc || shownAsset?.Id != asset.Id) throw new StudioCommandException("context_changed", "The user selected another preview.");
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);
             return Result(new { document = DocumentState(doc), asset = asset.Id, ViewModel.Status });
         });
-        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen animation edit snapshot at one revision. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
+        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD inspection bounds tree nodes and strings with explicit truncation markers; export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
         {
             var doc = TargetDocument(a); var asset = TargetAsset(doc, a);
             return await InspectAssetAsync(doc, asset, token);
@@ -88,7 +99,7 @@ public partial class MainWindow
             var doc = TargetDocument(a, true); if (doc.IsDirty && !Flag(a, "discard")) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });
         });
-        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it. Failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
+        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
             var doc = TargetDocument(a, true); if (doc.IsDirty) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
             bool active = ViewModel.SelectedDocument == doc;
@@ -110,33 +121,41 @@ public partial class MainWindow
                 throw;
             }
         });
-        Register(r, "undo_redo", "Undo or redo one accepted edit in the specified document.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], a =>
+        Register(r, "undo_redo", "Undo or redo one accepted edit in the specified document.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], async (a, token) =>
         {
-            var d = TargetDocument(a, true); UndoDocument(d, Text(a, "action") == "redo"); return Result(DocumentState(d));
+            var d = TargetDocument(a, true); UndoDocument(d, Text(a, "action") == "redo"); if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
         });
-        RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations.",
-            [DocumentParameter, RevisionParameter, P("destination", "string", "New animation archive path."), new("destinations", "object", "Pickup source archive path to new Save As path map.", AdditionalProperties: new("", "string", "New Save As path for this source archive.")), P("backup", "boolean", "Pickup backup preference; defaults to app setting.")], false, async (a, token) =>
+        RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD saves verify and atomically replace the working destination or create a new Save As file.",
+            [DocumentParameter, RevisionParameter, P("destination", "string", "New animation or ZAR/ZRD Save As path. Omit for verified ZAR/ZRD save to its working destination."), P("modelDirectory", "string", "Model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Pickup source archive path to new Save As path map.", AdditionalProperties: new("", "string", "New Save As path for this source archive.")), P("backup", "boolean", "Pickup backup preference; defaults to app setting.")], false, async (a, token) =>
         {
             var d = TargetDocument(a, true);
             IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
             try
             {
+                if (d.ResourceEdits != null)
+                { await SaveResourcesAsync(d, Text(a, "destination") is { Length: > 0 } path ? path : null, token); return Result(DocumentState(d)); }
                 if (d.AnimationEdits != null)
                 {
                     if (Text(a, "destination").Length == 0) throw new StudioCommandException("destination_required", "Animation Save As requires a new output path.");
                     await SaveAnimationToPathAsync(d, Text(a, "destination"), token); return Result(DocumentState(d));
                 }
-                if (d.PickupEdits is not { } edits) throw new StudioCommandException("unsupported", "This document does not support saving edits.");
+                ModelSaveResult? models = null;
+                if (d.ModelEdits?.IsDirty == true || d.ModelEdits != null && a.ContainsKey("modelDirectory"))
+                {
+                    models = await SaveModelsAsync(d, Text(a,"modelDirectory") is { Length: > 0 } directory ? directory : null, token);
+                    if (models.Errors.Count > 0 || d.PickupEdits?.IsDirty != true) return Result(new { document = DocumentState(d), models });
+                }
+                if (d.PickupEdits is not { } edits) throw new StudioCommandException("unsupported", "This document has no accepted unsaved edits.");
                 var destinations = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value?.GetValue<string>() ?? "", StringComparer.OrdinalIgnoreCase);
                 var saved = await SavePickupDestinationsAsync(d, destinations, Flag(a, "backup", ViewModel.Settings.CreateBackupOnSave), token);
-                return Result(new { document = DocumentState(d), result = saved });
+                return Result(new { document = DocumentState(d), result = saved, models });
             }
             finally { IsEnabled = true; if (propertiesWindow != null) propertiesWindow.IsEnabled = true; }
         });
         RegisterJob(r, "export", "Export assets through the existing deterministic exporter into a new folder outside the source tree.",
             [DocumentParameter, P("destination", "string", "Destination directory.", true), new("assets", "array", "Optional list of {kind,index}; omitted exports all.", Items: new("", "object", "Asset identity.", Properties: [new("kind", "string", "Asset kind.", true, Enum.GetNames<AssetKind>()), P("index", "integer", "Authored record index.", true)])), P("jsonOnly", "boolean", "Export inspection JSON."), P("lod", "integer", "LOD rank; default 0."), P("texturePack", "string", "Optional preferred texture pack path.")], true, async (a, token) =>
         {
-            var d = TargetDocument(a); var assets = a["assets"] is JsonArray list ? list.Select(x => TargetAsset(d, x as JsonObject ?? throw new StudioCommandException("invalid_argument", "Asset must contain kind/index."))).ToArray() : d.Document.Assets.ToArray();
+            var d = TargetDocument(a); var assets = a["assets"] is JsonArray list ? list.Select(x => TargetAsset(d, x as JsonObject ?? throw new StudioCommandException("invalid_argument", "Asset must contain kind/index."))).ToArray() : d.PreviewDocument.Assets.ToArray();
             return Result(await ExportAssetsAsync(d, assets, Text(a, "destination"), Flag(a, "jsonOnly"), Text(a, "texturePack") is { Length: > 0 } pack ? pack : null, Int(a, "lod"), token));
         });
         RegisterJob(r, "validate", "Validate the source archive on disk, not pending edits. Returns structured diagnostics.", [DocumentParameter], true, async (a, token) => Result(await ValidateDocumentSourceAsync(TargetDocument(a), token)));

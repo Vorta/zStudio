@@ -39,6 +39,8 @@ public sealed class ZbdDocument
     public List<Diagnostic> Diagnostics { get; } = [];
     public JsonObject Metadata { get; } = [];
     public GameScene? Scene { get; set; }
+    public GameZSourceLayout? GameZLayout { get; internal set; }
+    public long? ArchiveDirectoryOffset { get; internal set; }
     public Animation.AnimationPackage? Animations { get; set; }
     public ZbdDocument(string path, FileStamp stamp, FormatProbe probe, ReadOnlyMemory<byte> bytes)
     { Path = path; Stamp = stamp; Probe = probe; Bytes = bytes; }
@@ -50,6 +52,10 @@ public sealed class ZbdDocument
         Assets.Add(asset); return asset;
     }
 }
+
+/// <summary>Physical ranges recorded by the shared reader; stored pointer words remain metadata.</summary>
+public sealed record GameZSourceLayout(int TextureOffset, int MaterialOffset, int ModelOffset, int NodeOffset,
+    int MaterialCapacity, int ModelCapacity, int NodeCapacity, IReadOnlyList<long> NodeDataOffsets);
 
 public sealed record TextureInfo(int Width, int Height, byte Flags, int PaletteCount, int PalettePage,
     int PixelsOffset, int PixelsLength, int AlphaOffset, int PaletteOffset, int PaletteLength);
@@ -73,7 +79,8 @@ public sealed class GameScene
 }
 public static class JsonData
 {
-    public static JsonSerializerOptions Options { get; } = new() { WriteIndented = true, MaxDepth = 256 };
+    // A supported 128-level ZRD uses both an object and a children array per level, plus export wrappers.
+    public static JsonSerializerOptions Options { get; } = new() { WriteIndented = true, MaxDepth = 512 };
     public static long Integer(JsonNode? node, long fallback = 0)
     {
         if (node is not JsonValue v) return fallback;

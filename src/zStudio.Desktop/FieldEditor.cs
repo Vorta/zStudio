@@ -20,14 +20,14 @@ public partial class FieldEditor : UserControl
     protected readonly List<Action> valueRefresh = [];
     protected readonly List<Action> referenceRefresh = [];
     protected string inputScope = "properties";
-    public bool HasPendingDrafts => draftInputs.Any(d => d.Draft.IsPending);
+    public bool HasPendingDrafts => draftInputs.Any(d => d.Draft.IsPending || d.Draft.IsCommitting);
     private protected sealed record DraftInput(FieldDraft Draft, FrameworkElement Control, Action Display, string Scope);
     protected virtual void RefreshProperties() { }
     protected static void Label(StackPanel panel,string text,bool title = false) => panel.Children.Add(new TextBlock { Text = text,TextWrapping = TextWrapping.Wrap,FontWeight = title ? FontWeights.SemiBold : FontWeights.Normal,Opacity = title ? 1 : .75,Margin = new(0,3,0,6) });
     protected static void ReadOnlyText(StackPanel panel,string text) => panel.Children.Add(new TextBox { Text = text,IsReadOnly = true,TextWrapping = TextWrapping.Wrap,BorderThickness = new(0),Background = Brushes.Transparent,Margin = new(0,3,0,6) });
-    protected void Input(StackPanel panel,string label,string value,Action<string> commit,bool readOnly = false,string? hint = null,Func<string>? getter = null,string[]? components = null,string separator = ", ",int? componentColumns = null)
+    protected void Input(StackPanel panel,string label,string value,Action<string> commit,bool readOnly = false,string? hint = null,Func<string>? getter = null,string[]? components = null,string separator = ", ",int? componentColumns = null,Func<string,Task>? asyncCommit = null)
     {
-        AddAutomationField(label, components == null ? "text" : "components", () => getter?.Invoke() ?? value, readOnly ? null : commit, components, hint);
+        AddAutomationField(label, components == null ? "text" : "components", () => getter?.Invoke() ?? value, readOnly ? null : commit, components, hint, asyncWrite: readOnly ? null : asyncCommit);
         // A vector's components share one draft and one commit boundary.
         Grid row = new() { Margin = new(0,2,0,5) };
         row.ColumnDefinitions.Add(new() { Width = new(112) }); row.ColumnDefinitions.Add(new());
@@ -61,7 +61,7 @@ public partial class FieldEditor : UserControl
             };
         }
         TextBlock error = new() { TextWrapping = TextWrapping.Wrap,Visibility = Visibility.Collapsed,Margin = new(0,3,0,0) }; Grid.SetRow(error,components == null ? 1 : 2); Grid.SetColumnSpan(error,2); row.Children.Add(error); panel.Children.Add(row);
-        FieldDraft draft = new(value,commit);
+        FieldDraft draft = new(value,commit,asyncCommit);
         bool displaying = false;
         void Display()
         {
@@ -75,12 +75,12 @@ public partial class FieldEditor : UserControl
         foreach (var box in boxes)
         {
             box.TextChanged += (_,_) => { if (!displaying) draft.Text = components == null ? box.Text : string.Join(separator,boxes.Select(b => b.Text)); };
-            box.LostKeyboardFocus += (_,_) => { if (CanCommitFocus(row) && !readOnly) CommitInput(input); };
-            box.PreviewKeyDown += (_,e) =>
+            box.LostKeyboardFocus += async (_,_) => { if (CanCommitFocus(row) && !readOnly) await CommitInputAsync(input); };
+            box.PreviewKeyDown += async (_,e) =>
             {
                 if (readOnly) return;
-                if (e.Key == Key.Enter) { CommitInput(input); e.Handled = true; }
-                else if (e.Key == Key.Escape) { draft.Discard(); Display(); e.Handled = true; }
+                if (e.Key == Key.Enter) { e.Handled = true; await CommitInputAsync(input); }
+                else if (e.Key == Key.Escape && !draft.IsCommitting) { draft.Discard(); Display(); e.Handled = true; }
             };
             if (components != null)
             {
@@ -117,8 +117,29 @@ public partial class FieldEditor : UserControl
         if (success) Dispatcher.BeginInvoke(DispatcherPriority.Background, () => { if (!disposed && !HasPendingDrafts) RefreshProperties(); });
         return success;
     }
+    private protected async Task<bool> CommitInputAsync(DraftInput input)
+    {
+        if (!input.Draft.IsAsync) return CommitInput(input);
+        if (disposed) return false;
+        committingDraft = true;
+        try { bool result = await input.Draft.CommitAsync(); if (!disposed) input.Display(); return result; }
+        finally { committingDraft = false; if (!disposed && !HasPendingDrafts) RefreshProperties(); }
+    }
+    public async Task<bool> ResolvePendingDraftsAsync()
+    {
+        if (!draftInputs.Any(d => d.Draft.IsAsync)) return ResolvePendingDrafts();
+        foreach (var input in draftInputs.Where(d => d.Draft.IsPending || d.Draft.IsCommitting).ToArray())
+            if (!await CommitInputAsync(input))
+            {
+                var choice = MessageBox.Show(Window.GetWindow(this), (input.Draft.Error ?? "Invalid input.") + "\n\nDiscard this draft?", "Unfinished property input", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (choice != MessageBoxResult.Yes) return false;
+                input.Draft.Discard(); input.Display();
+            }
+        return !HasPendingDrafts;
+    }
     public virtual bool ResolvePendingDrafts()
     {
+        if (draftInputs.Any(d => d.Draft.IsAsync && (d.Draft.IsPending || d.Draft.IsCommitting))) return false;
         if (committingDraft || resolvingDrafts || disposed) return true;
         resolvingDrafts = true;
         try

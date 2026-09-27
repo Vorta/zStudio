@@ -1,5 +1,60 @@
 # Desktop implementation status
 
+## PR #10 complete resource validation and model inspection review (2026-09-27)
+
+Fixed the additional standalone-ZRD and stale-model-row P2 findings. Standalone ZRD now passes the complete shared bounded decoder while opening, retains its validated tree, and exposes malformed input as read-only raw data with diagnostics. Resource session construction also validates uncached standalone input. Model rows now reference accepted records and include appended materials/texture references; existing row selection keeps its kind/index identity. Document scene, central inspection and pinned asset Properties follow replacement and undo/redo. Pinned records removed by Undo remain pinned with an unavailable notice. Original Bytes uses original record ranges, and MCP assets exposes those separately from edited offsets.
+
+The follow-up review covered all PR format/writer changes, import/export boundaries, shared ownership, async publication and cancellation, drafts, save/reload, source-versus-edited identity, dynamically created GUI actions and MCP readbacks. Additional fixes include independent edits for aliased archive payloads without repeated decoding, raw repair of malformed embedded ZRD, complete array replacement when choosing Array again, resource fields in properties_state, and model Save As routing after undoing all imports. A depth-boundary regression also found that valid 128-level ZRD failed JSON export; complete export now supports that depth and JSON inspection limits child depth to 24 with explicit truncation, retaining the full typed editor. Mission cache identity now includes the workspace snapshot revision, and invalidation includes the edited GameZ snapshot, so unsaved resource edits and their removal cannot reuse a stale starting layout.
+
+Both reported regressions failed before their fixes. All 318 Release tests pass (230 Core, 88 Desktop), including real named-pipe/GUI checks for new model records, pinned Properties, original bytes, undo/redo, malformed save rejection and deep inspection. All 230 Core tests pass with the read-only 1999 corpus and all 17 resource tests pass with 1998. Updated shared discovery descriptions/catalog, capability mappings and editing guides. The allocation fixture now permits cold serializer buffer rentals while keeping a 256 KiB ceiling for an 8 MiB stored value; an unrelated native-focus fixture failure passed on an unchanged retry. Required CI and the refreshed portable package are verified on the pushed revision before resolving review threads. Original-game compatibility remains outside these checks.
+
+## PR #10 additional fixes and adversarial review (2026-09-27)
+
+Fixed the three additional P1/P2 findings: model replacements now claim the GameZ file and every prepared texture through shared workspace ownership before accepting edits, texture/model writers reject oversized output before allocating it, and embedded ZRD resources remain typed and editable after renaming away from `.zrd`, including fresh saved-file reopen. Model Save As claims current and proposed destinations before staging; ownership conflicts preserve the accepted snapshot, revision and undo history.
+
+The adversarial review also found and fixed resolver ownership state changing after rejected snapshot publication, unbounded large ZRD values in Properties/inspection, node paging materializing every formatted row, and Reload opening the original source after Save As. Large Properties values expose an explicitly read-only prefix with a complete-value replacement path; inspection discloses bounded strings/children and exports retain all data. Paging formats only requested rows and runs ZRD scanning off-thread. Reload uses the current model/resource destination and retains the existing document if that destination is already open.
+
+Release build passes with zero warnings/errors; all 312 tests pass (224 Core, 88 Desktop), including real named-pipe/GUI ownership, save/reload, rename/reopen, bounded inspection, complete replacement/undo and catalog parity. All 224 Core tests also pass against the read-only 1999 corpus, and all 12 resource tests pass against the 1998 corpus. Updated editing/MCP documentation and regenerated the 60-tool embedded catalog. Preserved the maintainer's documentation changes. Required CI and portable packaging are verified on the pushed revision before resolving threads. Original-game compatibility of arbitrary edits remains untested.
+
+## PR #10 review fixes (2026-09-27)
+
+Fixed the P1 large-string listing allocation and P2 model Save As monitoring findings. ZRD node listings and Data tree labels now bound the stored prefix before JSON escaping, retaining exact displayed prefixes and explicit truncation. Model saves replace each successfully published file's previous monitoring target, so old-source changes/removal do not mark a retargeted copy stale; current-copy changes still do. Preserved the maintainer's documentation cleanup commit.
+
+Both new regressions failed before their fixes: a 2 MiB ZRD string caused about 76 MB of listing allocations, and a changed original model source incorrectly marked the saved copy stale. The Release build passes with zero warnings/errors and all 308 tests pass (220 Core, 88 Desktop), including allocation bounds, escaping boundaries, repeated Save As, old-source removal, copy modification, undo/save and GUI/MCP parity. Updated capability documentation and regenerated the embedded 60-tool catalog. Required PR CI and the latest portable build are checked on the pushed revision before resolving the review threads.
+
+## v0.5.4 PR preparation (2026-09-27)
+
+Collected the model bundle/replacement workflow, retail model-bound fixes, ZAR archive and typed ZRD editors, shared GUI/MCP support and latest-portable-build guidance into `feature/v0.5.4-editors`. Updated the source version, README, changelog and current packaging examples to 0.5.4. This prepares a PR; it does not publish a release.
+
+Locked restore and Release build pass with zero warnings/errors. All 306 asset-independent tests pass (218 Core, 88 Desktop), including generated catalog/GUI parity and real named-pipe model/resource workflows. All 218 Core tests also pass with the read-only 1999 corpus, and all eight resource editor tests pass with the 1998 corpus. The main and release-tag protections remain active without bypass actors. No game assets, exported models, corpus reports or build output are included. Original-game validation of arbitrary model/resource edits remains outside these checks.
+
+## ZAR archive and typed ZRD editors (2026-09-27)
+
+Implemented general ZAR member add/replace/rename/duplicate/delete/reorder and standalone/embedded typed ZRD scalar and structural editing. Assets and Data context menus, contextual Edit menus, pinned Properties, shared undo/redo, edited export/inspection and verified Save/Save As use one ResourceEditSession. Typed nodes preserve Latin-1 bytes, raw float bits and ordered identity; archive serialization preserves untouched payload/directory bytes and avoids compaction. Shared archive ownership prevents concurrent pickup/direct-resource writers and retains claims through undo until document closure.
+
+Six new MCP tools expose the same operations, generated property fields, node selection and stable identities. The embedded registry catalog and capability map now contain 60 tools. Dependent previews use edited resolver snapshots; resource changes rebuild animation audio with the existing warm output. Pending input, revision/lifetime publication, external-change detection and protected datasets retain shared guards. See [resource-editing.md](resource-editing.md) for the workflow and limits.
+
+Read-only corpus checks pass for both `zbd_1998` and `zbd_1999`: all recognized ZAR archives and embedded ZRD resources serialize byte-identically without edits. All 306 Release tests pass, including shared pickup/archive ownership, asynchronous draft retention and real named-pipe editing/save workflows. No release or version bump is part of this work. Runtime semantics of arbitrary ZRD structural changes remain game-dependent. Prepared scripts and other unsupported families remain read-only.
+
+## Model replacement bounds and 512 textures (2026-09-27)
+
+- **Node bounds:** replacement now writes exact solid-model node boxes and expands ancestor child/node boxes only where needed. This follows the retail rules `gwNodeRecalcBBox` `0x448E90` and `gwNodeComputeChildBBox` `0x4491B0`; stored bounds load verbatim. World-partitioned nodes are still refused.
+- **Sphere cache:** the node render-sphere cache (`+0x64`/`+0x70`), which is zero in every stored node, is no longer written.
+- **Model radius:** the model centre/radius now use the `zDi::RebuildBounds` `0x483AD0` approximation, which reproduces the corpus radii.
+- **Texture size:** the import/texture limit rose to 512. The retail loader has no fixed limit, and `CreateTextureRecord` `0x4AA0F0` falls back to the default texture only above the device-reported maximum.
+- **Build and tests:** the Release build has zero warnings or errors. All 296 tests pass, including new bounds and 512-texture tests; the optional read-only 1999 corpus replacement test also passes. The portable package was republished and verified (580 files).
+- **Limitation:** 512 textures need a device or wrapper (for example dgVoodoo) that reports a maximum texture size of at least 512. The original game was not run against edited files.
+
+## Latest local build in artifacts (2026-09-27)
+
+The user's standing preference is recorded in AGENTS.md and the packaging guide: keep `artifacts/zStudio-win-x64` and its matching ZIP current, and use that executable for user-facing launches and live GUI/MCP work. Published the current model-replacement branch locally with `tools/publish.ps1`; the 580-file self-contained package passes layout, version, relative apphost binding and ZIP hash-parity verification. Its stdio smoke check passes with 54 tools and two resources, windowless discovery, concurrent first-use launch, reconnect, shared clients and clean shutdown. The previous application validation remains 295 passing tests and a zero-warning/error Release build; only guidance changed during this packaging task. The superseded package was recycled. No public release or version bump was made.
+
+## Native model replacement (2026-09-27)
+
+Implemented shared v15 source ranges, bounded OBJ/PNG import, all-descendant model bundle export, immutable editing snapshots, combined document undo history and verified texture-first saves. GUI and MCP share explicit model indices, source SHA-256, revision/draft checks, edited inspection and frozen preview dependencies. The generated catalog contains 54 tools. Both export paths reject source/protected destinations and linked ancestors. Native material allocation uses retail-verified previous/next offsets and validates both complete pool chains. See [the model replacement workflow](model-replacement.md) for supported formats and limits.
+
+Final Release build: zero warnings/errors. All 295 tests pass (209 Core, 86 Desktop), including read-only 1999 M1 corpus preservation, malformed imports/pools, protected exports/saves, external-change checks, undo/redo, real named-pipe replacement and full GUI/catalog parity. Changes remain uncommitted; released artifacts and MCP opt-in settings are unchanged.
+
 ## PR #9 navigation help and proactive P1/P2 review (2026-09-26)
 
 Addressed review comment 4112679136: built-in Help now describes the shared Blender-style model/Whole world/animation controls, centered zoom, projection/axis shortcuts, framing and Follow camera behavior. Removed obsolete right-drag and unchanged-animation guidance from the current README, pickup guide and testing instructions.

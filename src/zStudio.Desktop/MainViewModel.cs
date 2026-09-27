@@ -212,7 +212,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             RequireCurrentNavigation(generation); ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation);
             existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
             if (existing != null) { SelectedDocument = existing; return existing; }
-            DocumentModel model = new(doc); Documents.Add(model); SelectedDocument = model;
+            DocumentModel model = new(doc); model.AttachResolver(Resolver); Documents.Add(model); SelectedDocument = model;
             foreach (var diagnostic in doc.Diagnostics) AddProblem(diagnostic.Message, diagnostic.Severity, path, diagnostic.AssetIndex, diagnostic.Offset);
             Status = model.Description; return model;
         }
@@ -237,7 +237,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void CheckExternalChanges()
     {
         foreach (var doc in Documents)
-            try { doc.IsStale = FileStamp.Read(doc.Path) != doc.Document.Stamp || doc.PickupEdits?.HasExternalChanges() == true; }
+            try { doc.IsStale = (doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { doc.IsStale = true; }
     }
     partial void OnGlobalQueryChanged(string value) => RefreshSearch();

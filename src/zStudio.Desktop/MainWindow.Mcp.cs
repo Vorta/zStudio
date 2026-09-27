@@ -141,6 +141,8 @@ public partial class MainWindow
         RegisterWorkspaceCommands(registry);
         RegisterPreviewCommands(registry);
         RegisterEditCommands(registry);
+        RegisterModelCommands(registry);
+        RegisterResourceCommands(registry);
         return registry;
     }
 }

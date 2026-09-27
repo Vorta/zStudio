@@ -108,6 +108,7 @@ public partial class MainWindow
     {
         using var save = BeginDocumentSave();
         var edits = doc.PickupEdits ?? throw new InvalidOperationException("No editable pickup placements loaded.");
+        doc.ClaimResourcePaths(edits.ArchivePaths.Concat(edits.ArchivePaths.Select(edits.TargetPath)).Concat(destinations?.Values ?? []));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
         var result = await edits.SaveAsync(destinations, backup, cancellation.Token);
         if (result.SavedPaths.Count > 0)
@@ -133,7 +134,9 @@ public partial class MainWindow
                     ViewModel.Status = $"Exporting {p.Completed}/{p.Total}: {p.Name}";
             });
             var exporter = CreateAssetExporter(resolver);
-            var result = await Task.Run(() => exporter.ExportAsync(doc.Document, assets, destination, json, pack, lod, progress, cancellation.Token), cancellation.Token);
+            var snapshot = doc.PreviewDocument;
+            var exportAssets = assets.Select(a => snapshot.Assets.Single(s => s.Id.Kind == a.Kind && s.Index == a.Index)).ToArray();
+            var result = await Task.Run(() => exporter.ExportAsync(snapshot, exportAssets, destination, json, pack, lod, progress, cancellation.Token), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             foreach (string error in result.Errors) ViewModel.AddProblem(error, file: doc.Path);
             ViewModel.Status = $"Exported {result.Completed}/{assets.Length} assets to {result.Directory}"; return result;
