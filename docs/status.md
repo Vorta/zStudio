@@ -14,48 +14,24 @@ Six new MCP tools expose the same operations, generated property fields, node se
 
 Read-only corpus checks pass for both `zbd_1998` and `zbd_1999`: all recognized ZAR archives and embedded ZRD resources serialize byte-identically without edits. All 306 Release tests pass, including shared pickup/archive ownership, asynchronous draft retention and real named-pipe editing/save workflows. No release or version bump is part of this work. Runtime semantics of arbitrary ZRD structural changes remain game-dependent. Prepared scripts and other unsupported families remain read-only.
 
-## pu001 3D HE mortar bombs in the RECOIL-1999 install (2026-09-27)
+## Model replacement bounds and 512 textures (2026-09-27)
 
-The six camera-facing bomb sprites in m1's `pu001` pickup (facade models 1207–1212) are now solid 3D bombs.
-
-### Model and texture
-- Each bomb has 276 triangles: a 12-sided lathe traced from the user's extracted silhouette, plus four bevelled, flat-bottomed fins fitted pixel-for-pixel to the `00235_mortammo2` sprite at its 45° view.
-- In the holder, each bomb is spun 45° and centred on the latch-texture lines. Those offsets are baked into each node's own model, so node transforms are unchanged.
-- One 512×512 texture, `hemortar_bomb`, has unique UVs and baked key/ambient/specular lighting. It was tuned against the sprite's per-column brightness and pre-quantised to exact RGB565.
-- The installed texture is now the user's scuffed repaint of that bake. Its body wrap was made seamless: darkened island borders were trimmed, brightness was matched, and an offset-overlap crossfade was applied. It was then triangle-resampled from 1254² to 512² in linear light and dithered to RGB565.
-- The Blender project, scripts, renders and replacement batch are outside the repository in `3D Models/Pickups`.
-
-### zStudio changes
 - **Node bounds:** replacement now writes exact solid-model node boxes and expands ancestor child/node boxes only where needed. This follows the retail rules `gwNodeRecalcBBox` `0x448E90` and `gwNodeComputeChildBBox` `0x4491B0`; stored bounds load verbatim. World-partitioned nodes are still refused.
 - **Sphere cache:** the node render-sphere cache (`+0x64`/`+0x70`), which is zero in every stored node, is no longer written.
 - **Model radius:** the model centre/radius now use the `zDi::RebuildBounds` `0x483AD0` approximation, which reproduces the corpus radii.
 - **Texture size:** the import/texture limit rose to 512. The retail loader has no fixed limit, and `CreateTextureRecord` `0x4AA0F0` falls back to the default texture only above the device-reported maximum.
 - **Build and tests:** the Release build has zero warnings or errors. All 296 tests pass, including new bounds and 512-texture tests; the optional read-only 1999 corpus replacement test also passes. The portable package was republished and verified (580 files).
-
-### Save and verification
-- The batch was imported through MCP and saved in place. Only m1 `gamez.zbd` and its five texture packs changed; `anim.zbd`, `zrdr.zbd` and all other missions are byte-unchanged.
-- Each pack gained entry 576, `hemortar_bomb`, 512×512.
-- The originals and their SHA-256 values are in `3D Models/Pickups/backup/RECOIL-1999-m1-original`.
-- **Texture update:** the files were restored from those originals, verified by checksum, and re-imported with the scuffed texture, so no orphaned texture or material remains. The re-saved `gamez.zbd` is byte-identical to the first version (SHA-256 `01f3fa33…`). All five packs hold exactly one `hemortar_bomb` entry whose pixels match the source PNG. The first installed version is kept in `backup/RECOIL-1999-m1-hemortar-v1`.
-- After a fresh reopen, the install indexes 105 files with zero reader diagnostics. The `pu001` animation binds the new solid models; its preview, seek and playback were checked, and the edited node and group bounds were inspected.
-
-### Limitations
-- The original game was not run against the changed files.
-- 512 textures need a device or wrapper (for example dgVoodoo) that reports a maximum texture size of at least 512.
-- The baked lighting is fixed to the model.
-- Only m1 was changed.
+- **Limitation:** 512 textures need a device or wrapper (for example dgVoodoo) that reports a maximum texture size of at least 512. The original game was not run against edited files.
 
 ## Latest local build in artifacts (2026-09-27)
 
-The user's standing preference is recorded in AGENTS.md and the packaging guide: keep `artifacts/zStudio-win-x64` and its matching ZIP current, and use that executable for user-facing launches and live GUI/MCP work. Published the current model-replacement branch locally with `tools/publish.ps1`; the 580-file self-contained package passes layout, version, relative apphost binding and ZIP hash-parity verification. Its stdio smoke check passes with 54 tools and two resources, windowless discovery, concurrent first-use launch, reconnect, shared clients and clean shutdown. The previous application validation remains 295 passing tests and a zero-warning/error Release build; only guidance changed during this packaging task. The superseded package was recycled. No public release or version bump was made. The former `Pickups/pu001` working directory is no longer present; the packaged app is left on the welcome screen without recreating user assets.
+The user's standing preference is recorded in AGENTS.md and the packaging guide: keep `artifacts/zStudio-win-x64` and its matching ZIP current, and use that executable for user-facing launches and live GUI/MCP work. Published the current model-replacement branch locally with `tools/publish.ps1`; the 580-file self-contained package passes layout, version, relative apphost binding and ZIP hash-parity verification. Its stdio smoke check passes with 54 tools and two resources, windowless discovery, concurrent first-use launch, reconnect, shared clients and clean shutdown. The previous application validation remains 295 passing tests and a zero-warning/error Release build; only guidance changed during this packaging task. The superseded package was recycled. No public release or version bump was made.
 
-## Native model replacement and pu001 remake (2026-09-27)
+## Native model replacement (2026-09-27)
 
-Implemented on `feature/pu001-model-replacement`: shared v15 source ranges, bounded OBJ/PNG import, all-descendant model bundle export, immutable editing snapshots, combined document undo history and verified texture-first saves. GUI and MCP share explicit model indices, source SHA-256, revision/draft checks, edited inspection and frozen preview dependencies. The generated catalog contains 54 tools. Both export paths reject source/protected destinations and linked ancestors. Native material allocation uses retail-verified previous/next offsets and validates both complete pool chains. See [the model replacement workflow](model-replacement.md) for supported formats and limits.
+Implemented shared v15 source ranges, bounded OBJ/PNG import, all-descendant model bundle export, immutable editing snapshots, combined document undo history and verified texture-first saves. GUI and MCP share explicit model indices, source SHA-256, revision/draft checks, edited inspection and frozen preview dependencies. The generated catalog contains 54 tools. Both export paths reject source/protected destinations and linked ancestors. Native material allocation uses retail-verified previous/next offsets and validates both complete pool chains. See [the model replacement workflow](model-replacement.md) for supported formats and limits.
 
-Exported all eight pu001 components through zStudio, built and saved the Blender master, and replaced the six facade shells with solid meshes at 1,004 triangles each. The 1024×1024 bake master supplies the opaque 256×256 game atlas. The complete working copy, Blender project, interchange assets, source hashes and delivery guide are outside the repository in the user's `3D Models/Pickups/pu001` directory. Only its M1 GameZ and five texture packs changed; animation bytes, holder/collision geometry, identities and placements are preserved. All 105 protected-source file hashes remain unchanged, as does the user's prepared Blender file.
-
-Final Release build: zero warnings/errors. All 295 tests pass (209 Core, 86 Desktop), including read-only 1999 M1 corpus preservation, malformed imports/pools, protected exports/saves, external-change checks, undo/redo, real named-pipe replacement and full GUI/catalog parity. Fresh saved-file reload, Whole world loading, all five texture variants, animation playback/seeking/cleanup and front/back/side/above views were checked. The complete working root validates 105 archives and decodes 31,364 textures with zero errors; transient reports are in the OS temporary directory. The original Recoil executable was not run against this copy. Changes remain uncommitted; released artifacts and MCP opt-in settings are unchanged.
+Final Release build: zero warnings/errors. All 295 tests pass (209 Core, 86 Desktop), including read-only 1999 M1 corpus preservation, malformed imports/pools, protected exports/saves, external-change checks, undo/redo, real named-pipe replacement and full GUI/catalog parity. Changes remain uncommitted; released artifacts and MCP opt-in settings are unchanged.
 
 ## PR #9 navigation help and proactive P1/P2 review (2026-09-26)
 
