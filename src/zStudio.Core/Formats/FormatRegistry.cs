@@ -14,6 +14,10 @@ public sealed class FormatRegistry
     { new TextureReader(), new ArchiveReader(), new ScriptReader(), new AnimationReader(), new GameZReader() }.ToDictionary(r => r.Family);
     public static FormatRegistry Default { get; } = new();
     public const long MaximumDocumentBytes = 512L * 1024 * 1024;
+    internal static void ValidateDocumentSize(long size)
+    {
+        if (size < 0 || size > MaximumDocumentBytes) throw new InvalidDataException("Files larger than 512 MiB cannot be opened or saved in this version.");
+    }
 
     public static FormatProbe Probe(string path)
     {
@@ -65,13 +69,14 @@ public sealed class FormatRegistry
     {
         path = System.IO.Path.GetFullPath(path);
         FileStamp stamp = FileStamp.Read(path);
-        if (stamp.Length > MaximumDocumentBytes) throw new InvalidDataException("Files larger than 512 MiB cannot be opened in this version.");
+        ValidateDocumentSize(stamp.Length);
         byte[] bytes = await File.ReadAllBytesAsync(path, token).ConfigureAwait(false);
         if (FileStamp.Read(path) != stamp) throw new IOException("The file changed while opening. Reload it to read a consistent snapshot.");
         return await Task.Run(() => OpenBytes(path, bytes, stamp, token), token).ConfigureAwait(false);
     }
     public ZbdDocument OpenBytes(string path, byte[] bytes, FileStamp? stamp = null, CancellationToken token = default)
     {
+        ValidateDocumentSize(bytes.LongLength);
         var probe = Probe(bytes.AsSpan(0, Math.Min(36, bytes.Length)), bytes.AsSpan(Math.Max(0, bytes.Length - 8)), bytes.Length, System.IO.Path.GetExtension(path));
         ZbdDocument doc = new(path, stamp ?? new(bytes.Length, DateTime.MinValue), probe, bytes);
         doc.Metadata["family"] = probe.Family.ToString(); doc.Metadata["version"] = probe.Version; doc.Metadata["file_size"] = bytes.Length;

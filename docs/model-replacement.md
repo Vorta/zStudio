@@ -57,9 +57,13 @@ Node bounds follow the retail rules, because the engine loads them verbatim and 
 
 The new dedicated texture is appended to every local mission texture-pack variant. The original texture and material remain available to other models. Preview, dependent animations and exports use frozen accepted document snapshots. Model and pickup edits share document undo ordering; Properties drafts and pickup drags must be resolved before an import. One GameZ document at a time may own model imports in a mission because the texture packs are shared.
 
+Model acceptance claims the GameZ file, every prepared texture pack and current save targets through the same workspace ownership service used by resource/pickup editors. Conflicts are rejected before changing the snapshot, revision or undo history. Save As also claims every destination before staging files. Claims remain through undo and saving until the owning document closes. Both model and texture output sizes are checked against the 512 MiB document limit before output allocation.
+
 **Save** stages and reparses all outputs before publishing textures first and GameZ last. Existing targets are checked against their saved bytes before atomic replacement. Per-file results disclose partial commits; remaining changes stay dirty. **Save As** requires new GameZ/texture paths in a chosen directory and retargets subsequent model saves. External-change monitoring follows each successfully saved destination and stops watching its former target, including after repeated Save As operations; files not yet published retain their existing target checks. A complete playable working root also needs its unchanged companion files, including the original animation archive. The protected `zbd_1998` and `zbd_1999` datasets are never save targets. No game assets belong in the repository.
 
 Saving an upgraded pickup's GameZ dependencies does not require changing its animation event bytes. Reopen the saved working root to verify that the animation binds the replaced models. Parsing, source-byte preservation and Studio playback checks do not by themselves establish original-game compatibility.
+
+After Save As, **Reload / F5** opens the saved GameZ destination and its local dependencies. If that destination is already open in another document, close that document first; reload retains the current document instead of creating competing copies.
 
 ## MCP
 

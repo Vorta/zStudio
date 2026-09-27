@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #10 additional fixes and adversarial review (2026-09-27)
+
+Fixed the three additional P1/P2 findings: model replacements now claim the GameZ file and every prepared texture through shared workspace ownership before accepting edits, texture/model writers reject oversized output before allocating it, and embedded ZRD resources remain typed and editable after renaming away from `.zrd`, including fresh saved-file reopen. Model Save As claims current and proposed destinations before staging; ownership conflicts preserve the accepted snapshot, revision and undo history.
+
+The adversarial review also found and fixed resolver ownership state changing after rejected snapshot publication, unbounded large ZRD values in Properties/inspection, node paging materializing every formatted row, and Reload opening the original source after Save As. Large Properties values expose an explicitly read-only prefix with a complete-value replacement path; inspection discloses bounded strings/children and exports retain all data. Paging formats only requested rows and runs ZRD scanning off-thread. Reload uses the current model/resource destination and retains the existing document if that destination is already open.
+
+Release build passes with zero warnings/errors; all 312 tests pass (224 Core, 88 Desktop), including real named-pipe/GUI ownership, save/reload, rename/reopen, bounded inspection, complete replacement/undo and catalog parity. All 224 Core tests also pass against the read-only 1999 corpus, and all 12 resource tests pass against the 1998 corpus. Updated editing/MCP documentation and regenerated the 60-tool embedded catalog. Preserved the maintainer's documentation changes. Required CI and portable packaging are verified on the pushed revision before resolving threads. Original-game compatibility of arbitrary edits remains untested.
+
 ## PR #10 review fixes (2026-09-27)
 
 Fixed the P1 large-string listing allocation and P2 model Save As monitoring findings. ZRD node listings and Data tree labels now bound the stored prefix before JSON escaping, retaining exact displayed prefixes and explicit truncation. Model saves replace each successfully published file's previous monitoring target, so old-source changes/removal do not mark a retargeted copy stale; current-copy changes still do. Preserved the maintainer's documentation cleanup commit.

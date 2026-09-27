@@ -281,7 +281,7 @@
   },
   {
     "Name": "zstudio_inspect_asset",
-    "Description": "Read original asset metadata/content and a separately frozen animation edit snapshot at one revision. Closed or changed documents reject stale results.",
+    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD inspection bounds tree nodes and strings with explicit truncation markers; export retains complete data. Closed or changed documents reject stale results.",
     "Mutates": false,
     "Parameters": [
       {
@@ -382,7 +382,7 @@
   },
   {
     "Name": "zstudio_reload_document",
-    "Description": "Stage and reparse a clean document before replacing it. Failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2731,7 +2731,7 @@
   },
   {
     "Name": "zstudio_model_replace",
-    "Description": "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Saves use save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3067,7 +3067,7 @@
   },
   {
     "Name": "zstudio_resource_properties",
-    "Description": "Read generated resource Properties fields, open the pinned Properties window, or edit one current field. Node omitted targets the member. Editing requires revision and rejects pending drafts. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Read generated resource Properties fields, open the pinned Properties window, or edit one current field. Node omitted targets the member. Values exceeding 16384 displayed characters use a read-only prefix; zrd_edit can replace the complete value and export retains full data. Editing requires revision and rejects pending drafts. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

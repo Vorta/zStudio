@@ -138,17 +138,21 @@ public partial class MainWindow
             {
                 var d = TargetDocument(a); var root = await ResourceTreeAsync(d, GuidArg(a,"member"), token); Guid id = GuidArg(a,"node");
                 var parent = id == Guid.Empty ? null : root.Find(id) ?? throw new InvalidDataException("Node no longer exists.");
-                var rows = (parent == null ? new[] { root } : parent.Children).Select((n, i) =>
+                long revision = d.Revision;
+                var page = await Task.Run(() => Page((parent == null ? new[] { root } : parent.Children).Select((n, i) => { token.ThrowIfCancellationRequested(); return (Node: n, Index: i); }), a,
+                    row => { token.ThrowIfCancellationRequested(); return row.Node.PreviewValue(4096).Value; }, row =>
                 {
+                    token.ThrowIfCancellationRequested(); var n = row.Node;
                     var preview = n.PreviewValue(4096);
-                    return new { node = n.Id, parent = parent?.Id, index = i, kind = n.Kind.ToString(), value = preview.Value, valueTruncated = preview.Truncated, bits = $"0x{n.Bits:X8}", children = n.Children.Count, originalOffset = n.SourceOffset };
-                });
-                return Result(new { d.Revision, nodes = Page(rows, a, n => n.value).Data });
+                    return new { node = n.Id, parent = parent?.Id, index = row.Index, kind = n.Kind.ToString(), value = preview.Value, valueTruncated = preview.Truncated, bits = $"0x{n.Bits:X8}", children = n.Children.Count, originalOffset = n.SourceOffset };
+                }), token);
+                token.ThrowIfCancellationRequested(); CheckResourceContext(d, revision);
+                return Result(new { d.Revision, nodes = page.Data });
             });
         RegisterJob(r, "zrd_edit", "Edit typed ZRD values or structure as one undoable operation. add inserts in the selected array. move uses parent UUID and final position after removal. Root deletion/duplication and cycles are rejected. Changing type replaces the old value/children.",
             [DocumentParameter, RevisionParameter, MemberParameter, NodeParameter, P("action", "string", "Node operation.", true, "set", "type", "add", "duplicate", "delete", "move"), P("kind", "string", "Type for add/type; default String.", false, "Int", "Float", "String", "Array"), P("value", "string", "Invariant int/float, explicit 0xXXXXXXXX float bits, or JSON-quoted Latin-1 string."), P("parent", "string", "Destination array UUID for move."), new("position", "integer", "Final child index; add defaults to append.", Minimum: 0, Maximum: int.MaxValue)], false,
             async (a, token) => { var d = TargetDocument(a, true); var edits = ResourceSession(d); var kind = a.ContainsKey("kind") ? Enum.Parse<ZrdKind>(Text(a,"kind")) : ZrdKind.String; await ApplyResourceAsync(d, ct => edits.PrepareZrdAsync(GuidArg(a,"member"), GuidArg(a,"node"), Text(a,"action"), kind, Text(a,"value"), GuidArg(a,"parent"), Int(a,"position",-1), ct), d.Revision, token); return Result(DocumentState(d)); });
-        RegisterJob(r, "resource_properties", "Read generated resource Properties fields, open the pinned Properties window, or edit one current field. Node omitted targets the member. Editing requires revision and rejects pending drafts.",
+        RegisterJob(r, "resource_properties", "Read generated resource Properties fields, open the pinned Properties window, or edit one current field. Node omitted targets the member. Values exceeding 16384 displayed characters use a read-only prefix; zrd_edit can replace the complete value and export retains full data. Editing requires revision and rejects pending drafts.",
             [DocumentParameter, MemberParameter, P("node", "string", "Optional ZRD node UUID."), P("action", "string", "Properties operation.", true, "fields", "open", "edit"), new("revision", "integer", "Required current revision for edit.", Minimum: 0, Maximum: long.MaxValue), P("field", "string", "Current field ID for edit."), P("value", "string", "Invariant field editor text for edit.")], false, async (a, token) =>
             {
                 string action = Text(a,"action"); var d = TargetDocument(a, action == "edit"); Guid member = GuidArg(a,"member"); Guid? node = a.ContainsKey("node") ? GuidArg(a,"node") : null;

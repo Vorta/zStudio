@@ -9,6 +9,25 @@ namespace Recoil.Zbd.Tests;
 
 public sealed class ModelReplacementTests
 {
+    [Fact]
+    public void TextureAppendRejectsOversizedOutputBeforeReadingOrAllocatingIt()
+    {
+        using var memory = new LengthOnlyMemory((int)FormatRegistry.MaximumDocumentBytes - 1);
+        var source = new ZbdDocument("texture.zbd", new(memory.Bytes.Length, DateTime.MinValue), new(FormatFamily.TexturePack, 1, Recognition.Supported, "size boundary"), memory.Bytes);
+        long allocated = GC.GetAllocatedBytesForCurrentThread();
+        var error = Assert.Throws<InvalidDataException>(() => TexturePackWriter.Append(source, "new", Image, TestContext.Current.CancellationToken));
+        allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+        Assert.Contains("512 MiB", error.Message);
+        Assert.True(allocated < 1024 * 1024, $"Oversized output allocated {allocated:N0} bytes before rejection.");
+    }
+    private sealed class LengthOnlyMemory(int length) : System.Buffers.MemoryManager<byte>
+    {
+        public ReadOnlyMemory<byte> Bytes => CreateMemory(length);
+        public override Span<byte> GetSpan() => throw new InvalidOperationException("Oversized texture input must not be read.");
+        public override System.Buffers.MemoryHandle Pin(int elementIndex = 0) => throw new NotSupportedException();
+        public override void Unpin() { }
+        protected override void Dispose(bool disposing) { }
+    }
     [Theory]
     [InlineData("source")]
     [InlineData("zbd_1999")]

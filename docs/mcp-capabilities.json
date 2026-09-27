@@ -50,7 +50,7 @@
         "zstudio_zrd_edit",
         "zstudio_resource_select"
       ],
-      "note": "Typed Data tree and dynamic context/Edit menus use ordered node UUIDs. Add/type/duplicate/delete/move use shared validation and one undo step. Selection keeps Properties pinned. GUI labels and zrd_nodes bound string prefixes before JSON escaping; MCP marks valueTruncated at 4096 characters without formatting the complete stored string."
+      "note": "Typed Data tree and dynamic context/Edit menus use ordered node UUIDs. Complete structural decoding retains ZRD editing after member rename/save/reopen, without relying on extensions. Add/type/duplicate/delete/move use shared validation and one undo step. Selection keeps Properties pinned. GUI labels and zrd_nodes bound string prefixes before JSON escaping; MCP marks valueTruncated at 4096 characters. Paging retains only the returned page; ZRD filtering runs off-thread with cancellation/revision checks."
     },
     {
       "gui": "ResourcePropertiesEditor:Fields",
@@ -61,7 +61,7 @@
         "zstudio_undo_redo",
         "zstudio_save_document"
       ],
-      "note": "Generated member/node fields share asynchronous validation, retained invalid drafts, document revision checks, undo and verified saves. Retarget and close resolve drafts. Save As requires a new destination and retargets later saves."
+      "note": "Generated member/node fields share asynchronous validation, retained invalid drafts, document revision checks, undo and verified saves. Values over 16384 displayed characters expose a read-only prefix, never an editable truncated draft. ZRD JSON inspection bounds tree/string expansion and marks truncation; full exports remain available. Retarget and close resolve drafts. Save As requires a new destination and retargets later saves and reload; an already-open destination blocks reload."
     }
   ],
   "handlers": [
@@ -924,7 +924,7 @@
       "tools": [
         "zstudio_model_replace"
       ],
-      "note": "Validate explicit source-fingerprinted OBJ/PNG mappings as one shared document undo step, with native model and texture save support."
+      "note": "Validate explicit source-fingerprinted OBJ/PNG mappings as one shared document undo step, with native model and texture save support. Shared ownership claims all prepared source/current/destination paths before acceptance or save. Conflicts preserve revision/history, claims survive undo/save until close, and oversized model/texture outputs fail before allocation."
     }
   ]
 }

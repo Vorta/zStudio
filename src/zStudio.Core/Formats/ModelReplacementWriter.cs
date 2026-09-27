@@ -14,6 +14,16 @@ public static class ModelReplacementWriter
         var layout = source.GameZLayout ?? throw new InvalidDataException("Model replacement requires GameZ v15.");
         var scene = source.Scene!;
         if (source.Probe.Version != 15 || source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact GameZ v15 document is required.");
+        var sourceModels = source.Assets.Where(a => a.Kind == AssetKind.Model).ToDictionary(a => a.Index);
+        long outputLength = source.Bytes.Length + 36L;
+        foreach (var (index, mesh) in replacements)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!sourceModels.TryGetValue(index, out var original)) throw new InvalidDataException("Missing model index.");
+            mesh.Validate();
+            outputLength += mesh.Positions.Length * 24L + mesh.Triangles.Length / 3L * 76 - original.Length;
+        }
+        FormatRegistry.ValidateDocumentSize(outputLength);
         ValidateName(textureName);
         if (scene.Textures.Any(t => t.Text("name").Equals(textureName, StringComparison.OrdinalIgnoreCase))) throw new InvalidDataException("Choose a new, unique texture name.");
         if (scene.Textures.Count >= 4096) throw new InvalidDataException("The engine texture directory is full.");
@@ -35,7 +45,6 @@ public static class ModelReplacementWriter
         ValidatePool(materials, material + 1, layout.MaterialCapacity);
 
         byte[] table = source.Slice(layout.ModelOffset, 12L + layout.ModelCapacity * 88L).ToArray();
-        var sourceModels = source.Assets.Where(a => a.Kind == AssetKind.Model).ToDictionary(a => a.Index);
         int newModelOffset = layout.ModelOffset + 36;
         using MemoryStream dynamics = new();
         foreach (var model in scene.Models)
@@ -49,7 +58,6 @@ public static class ModelReplacementWriter
             {
                 dynamics.Write(source.Slice(originalAsset.Offset, originalAsset.Length).Span); continue;
             }
-            mesh.Validate();
             if (model.Morphs.Length != 0 || model.Metadata.Int("light_count") != 0) throw new InvalidDataException($"Model {model.Index} has morphs or lights; replacement is not supported.");
             Put(table, header, 0); // Ordinary mesh; facade rotation must no longer apply.
             Put(table, header + 12, mesh.Triangles.Length / 3); Put(table, header + 16, mesh.Positions.Length);
@@ -219,7 +227,9 @@ public static class TexturePackWriter
         if (Enumerable.Range(0, image.Width * image.Height).Any(i => image.Rgba[i * 4 + 3] != 255)) throw new InvalidDataException("Replacement solid meshes require an opaque diffuse texture.");
         int count = source.Assets.Count;
         if (count >= 4096) throw new InvalidDataException("Texture pack is full.");
-        byte[] bytes = new byte[checked(source.Bytes.Length + 40 + 16 + image.Width * image.Height * 2)];
+        long outputLength = source.Bytes.Length + 40L + 16 + image.Width * image.Height * 2L;
+        FormatRegistry.ValidateDocumentSize(outputLength);
+        byte[] bytes = new byte[checked((int)outputLength)];
         int insert = 24 + count * 40;
         source.Bytes.Span[..insert].CopyTo(bytes); source.Bytes.Span[insert..].CopyTo(bytes.AsSpan(insert + 40));
         ModelReplacementWriter.Put(bytes, 12, count + 1);

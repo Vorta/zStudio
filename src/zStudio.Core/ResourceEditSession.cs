@@ -32,7 +32,7 @@ public sealed class ResourceEditSession
     {
         if (document.Probe.Family is not (FormatFamily.Archive or FormatFamily.Zrd) || document.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact ZAR archive or standalone ZRD is required.");
         source = document; TargetPath = document.Path; TargetStamp = document.Stamp;
-        var members = document.Assets.Select(a => new ResourceMember(Guid.NewGuid(), a.Index, a.Name, document.Slice(a.Offset, a.Length), IsArchive ? document.Slice(document.ArchiveDirectoryOffset!.Value + a.Index * 148L, 148) : ReadOnlyMemory<byte>.Empty)).ToArray();
+        var members = document.Assets.Select(a => new ResourceMember(Guid.NewGuid(), a.Index, a.Name, document.Slice(a.Offset, a.Length), IsArchive ? document.Slice(document.ArchiveDirectoryOffset!.Value + a.Index * 148L, 148) : ReadOnlyMemory<byte>.Empty, a.Content as ZrdNode)).ToArray();
         Current = saved = new(members, document, Hash(document.Bytes));
     }
     public ResourceMember Member(Guid id) => Current.Members.SingleOrDefault(m => m.Id == id) ?? throw new InvalidDataException("The archive member no longer exists.");
@@ -74,8 +74,10 @@ public sealed class ResourceEditSession
             {
                 var item = action == "add" ? list[^1] : list[index];
                 var probe = FormatRegistry.Probe(item.Data.Span[..Math.Min(36, item.Data.Length)], item.Data.Span[Math.Max(0, item.Data.Length - 8)..], item.Data.Length, Path.GetExtension(item.Name));
-                if (probe.Family == FormatFamily.Zrd || Path.GetExtension(item.Name).Equals(".zrd", StringComparison.OrdinalIgnoreCase))
-                    list[action == "add" ? list.Count - 1 : index] = item with { Tree = ZrdDecoder.Read(item.Data, token).Duplicate() }; // Imported offsets are not original archive ranges.
+                var tree = probe.Family == FormatFamily.Zrd || Path.GetExtension(item.Name).Equals(".zrd", StringComparison.OrdinalIgnoreCase)
+                    ? ZrdDecoder.Read(item.Data, token) : ZrdDecoder.TryRead(item.Data, token);
+                if (tree != null)
+                    list[action == "add" ? list.Count - 1 : index] = item with { Tree = tree.Duplicate() }; // Imported offsets are not original archive ranges.
                 if (probe.Family == FormatFamily.Wave || Path.GetExtension(item.Name).Equals(".wav", StringComparison.OrdinalIgnoreCase)) _ = WaveDecoder.Read(item.Data, token);
             }
             return new PreparedResourceEdit(before, Build(list, token));

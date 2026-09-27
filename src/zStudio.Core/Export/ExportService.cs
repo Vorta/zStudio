@@ -56,7 +56,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         await WriteJson(target, "export-report.json", new JsonObject { ["source"] = doc.Path, ["completed"] = complete, ["errors"] = new JsonArray(errors.Select(e => (JsonNode?)JsonValue.Create(e)).ToArray()), ["purpose"] = "Standard assets; not a repackable project" }, token).ConfigureAwait(false);
         return new(target, complete, errors);
     }
-    public static JsonObject AssetJson(ZbdDocument doc, AssetRecord a, CancellationToken token = default)
+    public static JsonObject AssetJson(ZbdDocument doc, AssetRecord a, CancellationToken token = default, bool boundedZrd = false)
     {
         token.ThrowIfCancellationRequested();
         JsonObject result = new() { ["name"] = a.Name, ["kind"] = a.Kind.ToString(), ["index"] = a.Index, ["source_offset"] = a.Offset, ["source_length"] = a.Length, ["properties"] = JsonData.Clone(a.Metadata, token) };
@@ -78,7 +78,11 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             result["instructions"] = JsonData.Array(script.Instructions, instruction =>
                 JsonData.Array(instruction, word => JsonValue.Create(word), token), token);
         else if (a.Kind == AssetKind.Animation && doc.Animations is { } animations) result["properties"] = animations.Entries[a.Index].ToJson(token);
-        else if (a.Kind == AssetKind.Zrd) result["tree"] = ZrdDecoder.Decode(doc.Slice(a.Offset, a.Length), token);
+        else if (a.Kind == AssetKind.Zrd)
+        {
+            var tree = a.Content as ZrdNode ?? ZrdDecoder.Read(doc.Slice(a.Offset, a.Length), token);
+            result["tree"] = boundedZrd ? tree.ToPreviewJson(token) : tree.ToJson(token);
+        }
         else if (a.Kind == AssetKind.Sound)
         {
             var info = WaveDecoder.Read(doc.Slice(a.Offset, a.Length), token);

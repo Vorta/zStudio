@@ -20,8 +20,11 @@ public sealed class AssetResolver(string root) : IDisposable
         lock (snapshotGate)
         {
             var values = documents.ToArray();
+            // Build the complete replacement before changing either published state or ownership history.
+            var next = workspaceSnapshots.Where(p => p.Key != owner).SelectMany(p => p.Value).Concat(values)
+                .ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase);
             if (values.Length == 0) workspaceSnapshots.Remove(owner); else workspaceSnapshots[owner] = values;
-            publishedSnapshots = workspaceSnapshots.Values.SelectMany(v => v).ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase); SnapshotRevision++;
+            publishedSnapshots = next; SnapshotRevision++;
         }
     }
     public IEnumerable<string> ResourceDirectories(string context)

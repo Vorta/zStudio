@@ -8,6 +8,7 @@ ZAR containers and typed ZRD resources now have shared GUI/MCP editors. These ar
 2. Right-click a member and open **Edit archive member**, or use **Edit → Archive members**. The menu can add a file, create an empty ZRD array, replace a member, rename, duplicate, delete, or move a member up/down.
 3. Choose a file for Add/Replace. Replacement can change the payload length. Known ZRD/WAV inputs are validated before accepting the edit; other payloads remain opaque. The resulting container must still be recognized unambiguously by the shared format reader.
 4. Names are 1–63 Latin-1 characters without NUL. Duplicate names are allowed. The editor tracks the member's identity rather than using its name or current row number.
+   A complete bounded structural decode identifies embedded ZRD data even after its `.zrd` extension is removed. Renaming retains the same node identities, and the typed GUI/MCP editor remains available after save/reopen. A plausible first word alone does not classify opaque bytes as ZRD.
 5. Use the document's **Undo/Redo** controls to reverse accepted changes. **File → Export selected** exports the edited payload; ZRD export also includes inspection JSON.
 6. **Save** verifies and atomically replaces the working file. **Save As** requires a new file and makes it the destination for subsequent saves. Reference datasets `zbd_1998` and `zbd_1999` require a copy elsewhere. The Properties window and MCP state identify the save destination; the open document retains its original source context.
 
@@ -24,6 +25,10 @@ Unchanged payload bytes, original payload padding, and untouched directory metad
 7. Save the owning archive or standalone ZRD with the normal document controls. Embedded resource changes share the archive's undo history and save transaction.
 
 ZRD is generic typed data: arrays are ordered containers, not inferred name/value dictionaries. The editor does not automatically repair script references, resource names or game-specific record shapes after structural changes. Successful parse/save verification establishes format integrity, not original-game compatibility.
+
+Properties values longer than 16,384 displayed characters show a read-only prefix, with no editable truncated draft. Use **Change type** with the existing type to replace the complete value, or export the resource for external editing. JSON inspection is limited to 1,024 nodes, 4,096 characters per string and 65,536 string characters in total; truncation markers retain the stored counts. Exports retain complete data. MCP `resource_properties` and `inspect_asset` share these limits; `zrd_edit` can explicitly replace the complete value within the normal request limit. Node paging formats only the returned page when no query is supplied, and filtering runs off the UI thread with cancellation and revision checks.
+
+**Reload / F5** uses the current Save As destination. It retains the existing document if the destination is already open, unavailable, malformed or changed during reload.
 
 ## Shared ownership and previews
 

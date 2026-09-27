@@ -37,6 +37,13 @@ internal static class ModelReplacementMcpChecks
             var tools = await client.ListToolsAsync(cancellationToken:token); Assert.Contains(tools,t=>t.Name=="zstudio_model_replace");
             await Job("open_document",new() { ["path"] = source });
             var doc = main.ViewModel.Documents.Single();
+            var resolver = main.ViewModel.Resolver!; Guid otherOwner = Guid.NewGuid();
+            resolver.EditOwnership.Acquire(otherOwner, "other resource editor", [texture]);
+            long originalRevision = doc.Revision; var originalSnapshot = doc.ModelEdits!.Current;
+            var ownershipFailure = await Job("model_replace", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["manifest"] = manifest }, "failed");
+            Assert.Contains("owned", ownershipFailure.ToJsonString()); Assert.Same(originalSnapshot, doc.ModelEdits.Current);
+            Assert.Equal(originalRevision, doc.Revision); Assert.False(doc.IsDirty); Assert.False(doc.CanUndoScene);
+            resolver.EditOwnership.Release(otherOwner);
             var replaced = await Job("model_replace",new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["manifest"] = manifest });
             Assert.True(doc.IsDirty); Assert.True(((MenuItem)main.FindName("UndoMenu")).IsEnabled);
             Assert.Equal(0,doc.PreviewDocument.Scene!.Models[1].Metadata.Int("model_type")); Assert.Equal(1,doc.Document.Scene!.Models[1].Metadata.Int("model_type"));
@@ -48,7 +55,13 @@ internal static class ModelReplacementMcpChecks
             var saved = await FormatRegistry.Default.OpenAsync(source,token); Assert.Equal(0,saved.Scene!.Models[1].Metadata.Int("model_type"));
             var png = await FormatRegistry.Default.OpenAsync(texture,token); Assert.Single(png.Assets);
             string copies = Path.Combine(root, "copies");
+            resolver.EditOwnership.Acquire(otherOwner, "destination editor", [Path.Combine(copies, "texture2.zbd")]);
+            originalRevision = doc.Revision;
+            ownershipFailure = await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["modelDirectory"] = copies }, "failed");
+            Assert.Contains("owned", ownershipFailure.ToJsonString()); Assert.False(Directory.Exists(copies)); Assert.Equal(originalRevision, doc.Revision);
+            resolver.EditOwnership.Release(otherOwner);
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["modelDirectory"] = copies });
+            Assert.Throws<InvalidOperationException>(() => resolver.EditOwnership.Acquire(otherOwner, "destination editor", [Path.Combine(copies, "texture2.zbd")]));
             File.Delete(source); File.Delete(texture);
             main.ViewModel.CheckExternalChanges(); Assert.False(doc.IsStale);
             await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
@@ -56,8 +69,13 @@ internal static class ModelReplacementMcpChecks
             Assert.Equal(ModelFixture.GameZ(), await File.ReadAllBytesAsync(Path.Combine(copies, "gamez.zbd"), token));
             Assert.Equal(ModelFixture.Texture(), await File.ReadAllBytesAsync(Path.Combine(copies, "texture2.zbd"), token));
             Assert.False(doc.IsDirty); main.ViewModel.CheckExternalChanges(); Assert.False(doc.IsStale);
-            await File.AppendAllTextAsync(Path.Combine(copies, "texture2.zbd"), "external change", token);
+            Assert.Throws<InvalidOperationException>(() => resolver.EditOwnership.Acquire(otherOwner, "source editor", [texture]));
+            await Job("reload_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision }); doc = main.ViewModel.Documents.Single();
+            Assert.Equal(Path.Combine(copies, "gamez.zbd"), doc.Path);
+            await File.AppendAllTextAsync(Path.Combine(copies, "gamez.zbd"), "external change", token);
             main.ViewModel.CheckExternalChanges(); Assert.True(doc.IsStale);
+            await Call("close_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
+            resolver.EditOwnership.Acquire(otherOwner, "next editor", [texture, Path.Combine(copies, "texture2.zbd")]); resolver.EditOwnership.Release(otherOwner);
             async Task<JsonNode> Call(string name, Dictionary<string,object?> arguments)
             {
                 var result = await client.CallToolAsync("zstudio_" + name,arguments,cancellationToken:token); Assert.False(result.IsError == true,string.Join(";",result.Content.OfType<TextContentBlock>().Select(c=>c.Text)));

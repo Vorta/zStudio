@@ -22,6 +22,7 @@ public sealed class ModelEditSession
     public bool IsDirty => Documents.Any(d => !saved.TryGetValue(d.Path, out var s) || !d.Bytes.Span.SequenceEqual(s.Bytes));
     public event Action? Changed;
     public event Action? EditAccepted;
+    public event Action<IEnumerable<string>>? BeforeEdit;
     public IEnumerable<ZbdDocument> Documents => originalTextures.Keys.Union(Current.Textures.Keys, StringComparer.OrdinalIgnoreCase).Select(p => Current.Textures.TryGetValue(p, out var d) ? d : originalTextures[p]).Append(Current.World);
     public ModelEditSession(ZbdDocument world) { Current = new(world, new Dictionary<string,ZbdDocument>(StringComparer.OrdinalIgnoreCase)); saved[world.Path] = (world.Path, world.Bytes.ToArray()); observedStamps[world.Path] = world.Stamp; }
     public bool HasExternalChanges() => observedStamps.Any(p => FileStamp.Read(p.Key) != p.Value);
@@ -47,7 +48,9 @@ public sealed class ModelEditSession
     public void Accept(ModelEditSnapshot snapshot)
     {
         if (saving) throw new InvalidOperationException("A model save is in progress.");
-        foreach (var doc in (snapshot.Baselines ?? throw new InvalidOperationException("Missing prepared source snapshot.")).Values)
+        var baselines = snapshot.Baselines ?? throw new InvalidOperationException("Missing prepared source snapshot.");
+        BeforeEdit?.Invoke(snapshot.Textures.Keys.Append(snapshot.World.Path).Concat(saved.Values.Select(s => s.Target)));
+        foreach (var doc in baselines.Values)
             if (!saved.ContainsKey(doc.Path)) { saved[doc.Path] = (doc.Path, doc.Bytes.ToArray()); originalTextures[doc.Path] = doc; observedStamps[doc.Path] = doc.Stamp; }
         undo.Push(Current); redo.Clear(); Current = snapshot; EditAccepted?.Invoke(); Changed?.Invoke();
     }
@@ -59,14 +62,17 @@ public sealed class ModelEditSession
     public async Task<ModelSaveResult> SaveAsync(string? destinationDirectory = null, CancellationToken token = default)
     {
         if (saving) throw new InvalidOperationException("A model save is in progress.");
+        token.ThrowIfCancellationRequested();
+        var documents = Documents.ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase);
+        var targets = documents.Keys.ToDictionary(path => path, path => destinationDirectory == null ? saved[path].Target : Path.Combine(Path.GetFullPath(destinationDirectory), Path.GetFileName(path)), StringComparer.OrdinalIgnoreCase);
+        BeforeEdit?.Invoke(documents.Keys.Concat(saved.Values.Select(s => s.Target)).Concat(targets.Values));
         saving = true; List<(ZbdDocument Doc,string Target,string Temp,bool Replace)> staged = []; List<string> completed = [], errors = [];
         try
         {
-            var documents = Documents.ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase);
             foreach (var doc in documents.Values.OrderBy(d => d.Probe.Family == FormatFamily.GameZ ? 1 : 0).ThenBy(d => d.Path, StringComparer.OrdinalIgnoreCase))
             {
                 token.ThrowIfCancellationRequested();
-                var prior = saved[doc.Path]; string target = destinationDirectory == null ? prior.Target : Path.Combine(Path.GetFullPath(destinationDirectory), Path.GetFileName(doc.Path));
+                var prior = saved[doc.Path]; string target = targets[doc.Path];
                 ValidateDestination(target);
                 bool replace = destinationDirectory == null;
                 if (replace) await CheckExternalAsync(prior.Target, prior.Bytes, token);

@@ -12,6 +12,7 @@ public sealed partial class MainViewModel
     {
         long generation = ++navigationGeneration;
         var selected = SelectedDocument;
+        string reloadPath = original.ResourceEdits?.TargetPath ?? original.ModelEdits?.TargetPath(original.Path) ?? original.Path;
         using var request = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, original.Lifetime.Token, cancellationToken);
         void Validate()
         {
@@ -20,14 +21,16 @@ public sealed partial class MainViewModel
                 throw new StudioCommandException("context_changed", "Reload was superseded; the existing document was retained where still open.");
             if (original.Revision != revision) throw new StudioCommandException("revision_conflict", "The document changed during reload; its current edits were retained.");
             if (!discardAccepted && original.IsDirty) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard edits before reloading.");
+            if (Documents.Any(d => d != original && d.Path.Equals(reloadPath, StringComparison.OrdinalIgnoreCase)))
+                throw new StudioCommandException("destination_open", "The saved destination is already open. Close that document before reloading this saved copy.");
             ValidateReload?.Invoke(original);
         }
         Validate();
-        Status = "Reloading " + Path.GetFileName(original.Path) + "…";
+        Status = "Reloading " + Path.GetFileName(reloadPath) + "…";
         ZbdDocument loaded;
         try
         {
-            loaded = await LoadDocumentAsync(original.Path, request.Token).WaitAsync(request.Token);
+            loaded = await LoadDocumentAsync(reloadPath, request.Token).WaitAsync(request.Token);
             request.Token.ThrowIfCancellationRequested();
             if (loaded.Probe.Recognition is Recognition.Malformed or Recognition.UnsupportedVersion ||
                 original.Document.Probe.Recognition == Recognition.Supported && loaded.Probe.Recognition != Recognition.Supported ||

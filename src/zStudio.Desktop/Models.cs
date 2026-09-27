@@ -187,6 +187,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (doc.GameZLayout != null && doc.Probe.Version == 15)
         {
             ModelEdits = new(doc);
+            ModelEdits.BeforeEdit += ClaimResourcePaths;
             ModelEdits.EditAccepted += () => RecordSceneEdit(true);
             ModelEdits.Changed += () =>
             {

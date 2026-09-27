@@ -30,7 +30,7 @@ public partial class MainWindow
     private bool assetPointerContext, scenePointerContext;
     private long propertyRequest;
     internal Func<ZbdDocument, AssetRecord, CancellationToken, Task<JsonObject>> LoadAssetPropertiesAsync { get; set; } =
-        static (doc, asset, token) => Task.Run(() => ExportService.AssetJson(doc, asset, token), token);
+        static (doc, asset, token) => Task.Run(() => ExportService.AssetJson(doc, asset, token, boundedZrd: true), token);
     internal PropertiesWindow? OpenPropertiesWindow => propertiesWindow;
 
     private PropertiesWindow GetPropertiesWindow()

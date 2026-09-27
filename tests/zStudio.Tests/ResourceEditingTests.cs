@@ -9,6 +9,54 @@ namespace Recoil.Zbd.Tests;
 public sealed class ResourceEditingTests
 {
     [Fact]
+    public async Task RejectedWorkspacePublicationLeavesEveryPreviousOwnerIntact()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-snapshots");
+        using AssetResolver resolver = new(root); var token = TestContext.Current.CancellationToken;
+        var first = FormatRegistry.Default.OpenBytes(Path.Combine(root, "one.zbd"), Archive(), token: token);
+        var second = FormatRegistry.Default.OpenBytes(Path.Combine(root, "two.zbd"), Archive(), token: token);
+        Guid a = Guid.NewGuid(), b = Guid.NewGuid();
+        resolver.SetWorkspaceSnapshots(a, [first]); resolver.SetWorkspaceSnapshots(b, [second]); long revision = resolver.SnapshotRevision;
+        Assert.Throws<ArgumentException>(() => resolver.SetWorkspaceSnapshots(b, [first]));
+        Assert.Equal(revision, resolver.SnapshotRevision);
+        resolver.SetWorkspaceSnapshots(a, []);
+        Assert.Same(second, await resolver.OpenCachedAsync(second.Path, token));
+        resolver.SetWorkspaceSnapshots(a, [first]);
+        Assert.Same(first, await resolver.OpenCachedAsync(first.Path, token));
+    }
+    [Fact]
+    public async Task RenamedTypedMembersKeepStructureAfterUndoAndReopen()
+    {
+        var token = TestContext.Current.CancellationToken;
+        foreach (var node in new[] { ZrdNode.Create(ZrdKind.Int, "0"), ZrdNode.Create(ZrdKind.String, "\"value\""), ZrdNode.Create(ZrdKind.Array) })
+        {
+            var doc = FormatRegistry.Default.OpenBytes("test.zbd", Archive(("typed.zrd", ZrdWriter.Write(node, token))), token: token);
+            var edits = new ResourceEditSession(doc); var member = edits.Current.Members.Single(); Guid id = edits.Tree(member, token).Id;
+            edits.Accept(await edits.PrepareArchiveAsync("rename", member.Id, "renamed.bin", token: token));
+            Assert.Equal(AssetKind.Zrd, edits.Current.Document.Assets.Single().Kind); Assert.Equal(id, edits.Tree(edits.Member(member.Id), token).Id);
+            var reopened = FormatRegistry.Default.OpenBytes("copy.zbd", edits.Current.Document.Bytes.ToArray(), token: token);
+            Assert.Equal(AssetKind.Zrd, reopened.Assets.Single().Kind);
+            Assert.Equal(node.Kind, Assert.IsType<ZrdNode>(reopened.Assets.Single().Content).Kind);
+            edits.UndoRedo(false); Assert.Equal("typed.zrd", edits.Current.Members.Single().Name); edits.UndoRedo(true);
+            Assert.Equal(id, edits.Tree(edits.Member(member.Id), token).Id);
+        }
+        var opaque = FormatRegistry.Default.OpenBytes("opaque.zbd", Archive(("not-zrd", new byte[] {1,0,0,0,0,0,0,0,99})), token: token);
+        Assert.Equal(AssetKind.Raw, opaque.Assets.Single().Kind); // A plausible first word is insufficient.
+    }
+    [Fact]
+    public void ZrdInspectionBoundsTreeAndStringsWithoutTruncatingExports()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var text = ZrdNode.Create(ZrdKind.String) with { Text = new string('\0', 1024 * 1024) };
+        var root = ZrdNode.Create(ZrdKind.Array) with { Children = Enumerable.Range(0, 2048).Select(_ => text with { Id = Guid.NewGuid() }).ToArray() };
+        var preview = root.ToPreviewJson(token); Assert.True(preview["children_truncated"]!.GetValue<bool>());
+        Assert.Equal(1023, preview["children"]!.AsArray().Count);
+        Assert.True(preview["children"]![0]!["value_truncated"]!.GetValue<bool>());
+        Assert.True(preview["children"]!.AsArray().Sum(n => n!["value"]!.GetValue<string>().Length) <= 65536);
+        Assert.True(preview.ToJsonString().Length < 512 * 1024);
+        Assert.Equal(text.Text, text.ToJson(token)["value"]!.GetValue<string>());
+    }
+    [Fact]
     public void ZrdPreviewBoundsFormattingBeforeEscapingAndPreservesExactPrefixes()
     {
         foreach (string text in new[] { "", "plain", new string('x', 4094), new string('x', 4095), string.Concat(Enumerable.Range(0, 256).Select(i => (char)i)) })

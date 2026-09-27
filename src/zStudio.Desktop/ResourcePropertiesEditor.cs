@@ -8,6 +8,7 @@ namespace Recoil.Zbd.Desktop;
 /// <summary>Properties stay attached to a member/node identity across reordering and undo.</summary>
 public sealed class ResourcePropertiesEditor : FieldEditor, IDisposable
 {
+    private const int MaximumFieldCharacters = 16384;
     private readonly DocumentModel document;
     private readonly Guid memberId;
     private readonly Guid? nodeId;
@@ -26,7 +27,14 @@ public sealed class ResourcePropertiesEditor : FieldEditor, IDisposable
         }
     }
     public string TargetLabel => Member == null ? "Deleted member" : Member.Name + (nodeId == null ? "" : Node == null ? " · deleted node" : " · " + Node.Kind);
-    public JsonObject Json => new() { ["member"] = memberId.ToString(), ["node"] = nodeId?.ToString(), ["name"] = Member?.Name, ["kind"] = Node?.Kind.ToString(), ["value"] = Node?.Value, ["bytes"] = Member?.Data.Length, ["save_destination"] = document.ResourceEdits!.TargetPath };
+    public JsonObject Json
+    {
+        get
+        {
+            var node = Node; var preview = node?.PreviewValue(4096);
+            return new() { ["member"] = memberId.ToString(), ["node"] = nodeId?.ToString(), ["name"] = Member?.Name, ["kind"] = node?.Kind.ToString(), ["value"] = preview?.Value, ["value_truncated"] = preview?.Truncated ?? false, ["bytes"] = Member?.Data.Length, ["save_destination"] = document.ResourceEdits!.TargetPath };
+        }
+    }
     public ResourcePropertiesEditor(DocumentModel document, Guid member, Guid? node, Func<string, string, Task> edit)
     {
         this.document = document; memberId = member; nodeId = node; this.edit = edit;
@@ -36,7 +44,9 @@ public sealed class ResourcePropertiesEditor : FieldEditor, IDisposable
     {
         if (disposed || committingDraft) return;
         var member = Member; var node = Node;
+        var preview = node?.PreviewValue(MaximumFieldCharacters);
         string next = member == null ? "missing-member" : nodeId != null && node == null ? "missing-node" : node?.Kind.ToString() ?? "member";
+        if (preview?.Truncated == true) next += "-large";
         if (form != next && !HasPendingDrafts)
         {
             form = next; draftInputs.Clear(); valueRefresh.Clear(); ClearAutomationFields("properties");
@@ -51,7 +61,12 @@ public sealed class ResourcePropertiesEditor : FieldEditor, IDisposable
                 {
                     Input(panel, "Type", node!.Kind.ToString(), _ => { }, true);
                     if (node.Kind != ZrdKind.Array)
-                        Input(panel, "Value", node.Value, _ => { }, hint: node.Kind == ZrdKind.String ? "JSON-quoted Latin-1 string, including escaped NUL bytes." : node.Kind == ZrdKind.Float ? "Finite decimal or 0x followed by eight raw float-bit hex digits." : "Signed 32-bit integer.", getter: () => Node?.Value ?? "", asyncCommit: value => edit("set", value));
+                    {
+                        bool large = preview!.Value.Truncated;
+                        Input(panel, "Value", preview.Value.Value, _ => { }, readOnly: large,
+                            hint: large ? "This prefix is read-only because the value exceeds 16,384 displayed characters. Use Change type in the Data tree to replace the complete value, or export the resource for external editing." : node.Kind == ZrdKind.String ? "JSON-quoted Latin-1 string, including escaped NUL bytes." : node.Kind == ZrdKind.Float ? "Finite decimal or 0x followed by eight raw float-bit hex digits." : "Signed 32-bit integer.",
+                            getter: () => Node?.PreviewValue(MaximumFieldCharacters).Value ?? "", asyncCommit: value => edit("set", value));
+                    }
                     else Label(panel, "Use the Data tree context menu to add, move or remove ordered children.");
                 }
                 Input(panel, "Save to", document.ResourceEdits!.TargetPath, _ => { }, true, getter: () => document.ResourceEdits!.TargetPath);

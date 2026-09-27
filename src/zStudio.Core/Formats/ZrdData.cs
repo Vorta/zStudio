@@ -59,10 +59,41 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
         else { result["value"] = JsonData.Number(BitConverter.UInt32BitsToSingle(Bits)); result["raw_bits"] = $"0x{Bits:X8}"; }
         return result;
     }
+    /// <summary>Inspection uses a bounded tree; full exports continue to use ToJson.</summary>
+    public JsonObject ToPreviewJson(CancellationToken token = default)
+    {
+        int nodes = 1024, characters = 65536;
+        return Visit(this);
+        JsonObject Visit(ZrdNode node)
+        {
+            token.ThrowIfCancellationRequested(); nodes--;
+            if (node.Kind is not (ZrdKind.String or ZrdKind.Array)) return node.ToJson(token);
+            JsonObject result = new() { ["offset"] = node.SourceOffset < 0 ? null : $"0x{node.SourceOffset:X}", ["type"] = node.Kind.ToString().ToLowerInvariant() };
+            if (node.Kind == ZrdKind.String)
+            {
+                int count = Math.Min(node.Text.Length, Math.Min(characters, 4096)); characters -= count;
+                result["value"] = node.Text[..count];
+                if (count != node.Text.Length) { result["value_truncated"] = true; result["stored_characters"] = node.Text.Length; }
+            }
+            else
+            {
+                JsonArray children = []; result["children"] = children;
+                foreach (var child in node.Children) { if (nodes == 0) break; children.Add(Visit(child)); }
+                if (children.Count != node.Children.Count) { result["children_truncated"] = true; result["stored_children"] = node.Children.Count; }
+            }
+            return result;
+        }
+    }
 }
 
 public static partial class ZrdDecoder
 {
+    internal static ZrdNode? TryRead(ReadOnlyMemory<byte> bytes, CancellationToken token)
+    {
+        if (bytes.Length < 8 || BinaryPrimitives.ReadUInt32LittleEndian(bytes.Span) is < 1 or > 4) return null;
+        try { return Read(bytes, token); }
+        catch (InvalidDataException) { return null; }
+    }
     public static ZrdNode Read(ReadOnlyMemory<byte> bytes, CancellationToken token = default)
     {
         BinaryCursor cursor = new(bytes); int budget = 2_000_000;

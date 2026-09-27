@@ -82,11 +82,22 @@ internal static class ResourceEditingMcpChecks
             await Job("save_document", Args(("destination", copy))); Assert.False(doc.IsDirty); Assert.Equal(copy, edits.TargetPath); Assert.Equal(bytes, await File.ReadAllBytesAsync(source, token));
             Assert.Contains(Descendants(pinned).OfType<TextBox>(), b => b.IsReadOnly && b.Text == copy);
             await Job("archive_edit", Args(("action", "rename"), ("member", member), ("name", "renamed.zrd")));
+            await Job("archive_edit", Args(("action", "rename"), ("member", member), ("name", "renamed.bin")));
+            await Job("resource_select", Args(("member", member), ("node", value)));
+            Assert.Equal(AssetKind.Zrd, doc.SelectedAsset!.Record.Kind); Assert.IsType<ResourceTreeItem>(tree.Items[0]);
+            Assert.Equal(value, main.OpenPropertiesWindow!.ResourceFields!.NodeId);
             await Job("save_document", Args()); Assert.False(doc.IsDirty);
-            var saved = await FormatRegistry.Default.OpenAsync(copy, token); Assert.Equal("renamed.zrd", saved.Assets[0].Name);
+            var saved = await FormatRegistry.Default.OpenAsync(copy, token); Assert.Equal("renamed.bin", saved.Assets[0].Name); Assert.Equal(AssetKind.Zrd, saved.Assets[0].Kind);
             Assert.Equal(126u, ZrdDecoder.Read(saved.Slice(saved.Assets[0].Offset, saved.Assets[0].Length), token).FindByPath(1, 0).Bits);
             var editMenu = (MenuItem)main.FindName("EditMenu"); editMenu.RaiseEvent(new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, editMenu));
             Assert.Contains(editMenu.Items.OfType<MenuItem>(), m => Equals(m.Header, "Archive members") && m.IsEnabled && m.Items.Count == 8);
+            await Job("open_document", new() { ["path"] = copy });
+            var openCopy = main.ViewModel.Documents.Single(d => d.Path == copy);
+            Assert.Equal("destination_open", (await Job("reload_document", Args(), "failed"))["code"]!.GetValue<string>());
+            Assert.False(doc.IsDisposed); Assert.Equal(2, main.ViewModel.Documents.Count); Assert.Same(edits, doc.ResourceEdits);
+            await Call("close_document", new() { ["document"] = openCopy.SessionId.ToString(), ["revision"] = openCopy.Revision });
+            await Job("reload_document", Args()); doc = main.ViewModel.Documents.Single(); edits = doc.ResourceEdits!;
+            Assert.Equal(copy, doc.Path); Assert.Equal("renamed.bin", doc.Assets[0].Name); Assert.Equal(AssetKind.Zrd, doc.Assets[0].Record.Kind);
             await Call("close_document", Args()); resolver.EditOwnership.Acquire(other, "pickup editor", [source]); resolver.EditOwnership.Release(other);
             // Standalone root type replacement must remain ZRD even when an int payload resembles a ZAR footer.
             string standalone = Path.Combine(rootPath, "single.zrd"); await File.WriteAllBytesAsync(standalone, data, token);
@@ -115,6 +126,27 @@ internal static class ResourceEditingMcpChecks
             Assert.Equal("Root · String · " + expectedPrefix[..200] + "…", label);
             Assert.True(labelAllocated < 128 * 1024, $"Data tree label allocated {labelAllocated:N0} bytes.");
             Assert.False(doc.IsDirty);
+            var largeNodeId = edits.Tree(edits.Member(member), token).Id;
+            var largeFields = await Job("resource_properties", Args(("action", "fields"), ("member", member), ("node", largeNodeId)));
+            var valueField = largeFields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Value")!;
+            Assert.True(valueField["readOnly"]!.GetValue<bool>()); Assert.Equal(16384, valueField["value"]!.GetValue<string>().Length);
+            await Job("resource_properties", Args(("action", "open"), ("member", member), ("node", largeNodeId)));
+            Assert.DoesNotContain(Descendants(main.OpenPropertiesWindow!.ResourceFields!).OfType<TextBox>(), b => !b.IsReadOnly);
+            Assert.False(main.OpenPropertiesWindow.ResourceFields!.HasPendingDrafts);
+            var inspected = await Call("inspect_asset", Args(("kind", "Zrd"), ("index", 0)));
+            Assert.True(inspected["source"]!["tree"]!["value_truncated"]!.GetValue<bool>());
+            Assert.Equal(4096, inspected["edited"]!["tree"]!["value"]!.GetValue<string>().Length);
+            Assert.Equal(large.Text, edits.Tree(edits.Member(member), token).Text); Assert.False(doc.IsDirty);
+            await Job("zrd_edit", Args(("action", "type"), ("member", member), ("node", largeNodeId), ("kind", "String"), ("value", "\"short\"")));
+            Assert.Equal("\"short\"", Descendants(main.OpenPropertiesWindow!.ResourceFields!).OfType<TextBox>().Single(b => !b.IsReadOnly).Text);
+            await Call("undo_redo", Args(("action", "undo")));
+            Assert.DoesNotContain(Descendants(main.OpenPropertiesWindow.ResourceFields!).OfType<TextBox>(), b => !b.IsReadOnly);
+            Assert.Equal(large.Text, edits.Tree(edits.Member(member), token).Text); Assert.False(doc.IsDirty);
+            int projections = 0;
+            var paged = MainWindow.Page(Enumerable.Range(0, 10000), new() { ["offset"] = 10, ["limit"] = 2, ["query"] = "9" }, i => i.ToString(System.Globalization.CultureInfo.InvariantCulture), i => { projections++; return new { index = i }; }).Data;
+            var matching = Enumerable.Range(0, 10000).Where(i => i.ToString(System.Globalization.CultureInfo.InvariantCulture).Contains('9')).ToArray();
+            Assert.Equal(2, projections); Assert.Equal(matching.Length, paged["total"]!.GetValue<int>());
+            Assert.Equal(matching[10], paged["items"]![0]!["index"]!.GetValue<int>()); Assert.Equal(12, paged["nextOffset"]!.GetValue<int>());
             await CheckSharedPickupOwnerAsync(rootPath, token);
 
             Dictionary<string, object?> Args(params (string Key, object Value)[] values)
@@ -122,7 +154,7 @@ internal static class ResourceEditingMcpChecks
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {
                 // Read-only schemas deliberately reject accidental revision arguments.
-                if (name is "archive_members" or "resolve_drafts") arguments.Remove("revision");
+                if (name is "archive_members" or "resolve_drafts" or "inspect_asset") arguments.Remove("revision");
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token); Assert.False(result.IsError == true, string.Join(";", result.Content.OfType<TextContentBlock>().Select(c => c.Text)));
                 return JsonNode.Parse(result.Content.OfType<TextContentBlock>().Single().Text)!;
             }
