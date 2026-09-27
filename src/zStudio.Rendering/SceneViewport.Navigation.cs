@@ -14,6 +14,7 @@ public sealed partial class SceneViewport
     internal enum NavigationGesture { None, Orbit, Pan, Zoom, Dolly }
     private NavigationGesture navigationGesture;
     private Vector navigationVelocity;
+    private Point? zoomScreenPoint;
     private Window? navigationWindow;
     private double Aspect => Math.Max(1, viewport.ActualWidth) / Math.Max(1, viewport.ActualHeight);
     private double ViewWidth(ViewPose pose) => pose.Projection == "orthographic" && pose.OrthographicWidth is { } width
@@ -103,29 +104,38 @@ public sealed partial class SceneViewport
         var up = Vector3D.CrossProduct(right, forward);
         TranslateNavigation(camera, (-right * horizontal + up * vertical) * UnitsPerPixel);
     }
-    /// <summary>Centered zoom with distance-based approach followed by continuous forward travel.</summary>
-    public void ZoomBy(double steps)
+    /// <summary>Centered travel at a speed based on the pointed surface; misses retain the last speed.</summary>
+    public void ZoomBy(double steps, Point? screenPoint = null)
     {
         if (!BeginManualNavigation() || !viewport.IsZoomEnabled || viewport.Camera is not ProjectionCamera camera) return;
         steps = Math.Clamp(steps, -100, 100);
+        if (steps == 0 || !double.IsFinite(steps)) return;
+        zoomScreenPoint = screenPoint ?? new Point(viewport.ActualWidth / 2, viewport.ActualHeight / 2);
         double factor = Math.Exp(-steps * .12);
         if (camera is OrthographicCamera orthographic) orthographic.Width = Math.Clamp(orthographic.Width * factor, .001, 1e12);
         else
         {
             double distance = camera.LookDirection.Length;
-            if (!double.IsFinite(distance) || distance < 1e-12 || steps == 0) return;
+            if (!double.IsFinite(distance) || distance < 1e-12) return;
             var forward = camera.LookDirection / distance;
             navigationReferenceDistance ??= distance;
             orbitPivot ??= camera.Position + camera.LookDirection;
-            double transition = Math.Clamp(navigationReferenceDistance.Value * .01, .01, 10);
             // A short explicit look vector must not make the eye jump backwards.
-            if (distance < transition) orbitPivot += forward * (transition - distance);
-            distance = Math.Max(distance, transition);
-            double approachSteps = steps > 0 ? Math.Min(steps, Math.Max(0, Math.Log(distance / transition) / .12)) : steps;
-            double next = Math.Clamp(distance * Math.Exp(-approachSteps * .12), transition, 1e12);
-            camera.Position += forward * (distance - next);
-            camera.LookDirection = forward * next;
-            if (steps > approachSteps) TranslateNavigation(camera, forward * ((steps - approachSteps) * .12 * transition));
+            if (distance < .01) orbitPivot += forward * (.01 - distance);
+            distance = Math.Max(distance, .01);
+            // Refresh at most one wheel step at a time, including immediately
+            // after crossing the old view target. Target length never sets speed.
+            while (steps != 0)
+            {
+                double step = Math.Clamp(steps, -1, 1);
+                if (TryNavigationSurface(zoomScreenPoint.Value, out var hit)) navigationReferenceDistance = (hit - camera.Position).Length;
+                double travel = .12 * Math.Max(navigationReferenceDistance.Value, .01) * step;
+                double next = Math.Clamp(distance - travel, .01, 1e12);
+                orbitPivot += forward * (travel + next - distance);
+                camera.Position += forward * travel;
+                camera.LookDirection = forward * next;
+                distance = next; steps -= step;
+            }
         }
     }
     /// <summary>Move eye and orbit target together along the view direction, in game units.</summary>
@@ -145,7 +155,7 @@ public sealed partial class SceneViewport
         {
             case NavigationGesture.Orbit: RotateBy(delta.X, delta.Y); break;
             case NavigationGesture.Pan: PanBy(delta.X, delta.Y); break;
-            case NavigationGesture.Zoom: ZoomBy(delta.Y / 40); break;
+            case NavigationGesture.Zoom: ZoomBy(delta.Y / 40, zoomScreenPoint); break;
             case NavigationGesture.Dolly: DollyBy(delta.Y * UnitsPerPixel); break;
         }
     }
@@ -164,6 +174,7 @@ public sealed partial class SceneViewport
         if (gesture == NavigationGesture.None || !BeginManualNavigation()) return;
         StopNavigationMotion(); navigationGesture = gesture;
         if (gesture == NavigationGesture.Orbit) PickOrbitPivot(position);
+        if (gesture == NavigationGesture.Zoom) zoomScreenPoint = position;
         rotationPoint = position; rotationInputTick = Stopwatch.GetTimestamp();
     }
     internal void MoveNavigationDrag(Point current)
@@ -172,6 +183,7 @@ public sealed partial class SceneViewport
         var delta = current - previous;
         double seconds = Math.Max(.008, Stopwatch.GetElapsedTime(rotationInputTick).TotalSeconds);
         rotationInputTick = Stopwatch.GetTimestamp();
+        if (navigationGesture == NavigationGesture.Zoom) zoomScreenPoint = current;
         ApplyNavigationDelta(navigationGesture, delta);
         rotationPoint = current;
         if (navigationGesture == NavigationGesture.Orbit) rotationVelocity = delta / seconds;
@@ -186,6 +198,7 @@ public sealed partial class SceneViewport
     public void CancelNavigation()
     {
         rotationVelocity = default; navigationVelocity = default; rotationPoint = null;
+        zoomScreenPoint = null;
         if (viewport.IsMouseCaptured && !IsPickupDragging && !IsFlyActive) viewport.ReleaseMouseCapture();
     }
     private void ConfigureNavigation()
@@ -216,7 +229,7 @@ public sealed partial class SceneViewport
             if (IsFlyActive) return;
             if (!IsPickupDragging)
             {
-                StopCameraMotion(); ZoomBy(e.Delta / 120.0);
+                StopCameraMotion(); ZoomAt(e.GetPosition(viewport), e.Delta);
                 navigationGesture = NavigationGesture.Zoom;
                 if (viewport.IsInertiaEnabled) navigationVelocity = new(0, e.Delta / 120.0 * 80);
             }

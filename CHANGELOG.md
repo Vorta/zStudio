@@ -4,9 +4,9 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.6.1 — 2026-09-27
 
-- Continue perspective zoom forward past the original view target, retaining the distance-based approach and smooth inertia. Wheel, Ctrl + middle drag, numpad and MCP share the same centered motion, independent of clipping planes.
+- Base perspective zoom speed on the scene surface under the pointer while moving along the view center. Refresh that distance during zoom, retain the last speed over empty space, and continue past the old target without needing a small pan/orbit to restore speed. Wheel, Ctrl + middle drag, numpad and MCP share the behavior and smooth inertia, independently of clipping planes.
 - Orbit around the visible scene surface beneath the initial middle-button press without recentering the camera. Retain that world-space point through dragging, inertia and preview refreshes; empty space keeps the previous pivot. Exclude horizon, grid, AI overlays and editing handles.
-- Expose surface-pivot picking through the optional `zstudio_camera` rotate `screenPoint` parameter, with pivot and navigation-scale readback, typed validation and shared GUI/MCP behavior.
+- Expose surface-pivot picking and pointed-surface zoom speed through the optional `zstudio_camera` rotate/zoom `screenPoint` parameter, with pivot and zoom-reference readback, typed validation and shared GUI/MCP behavior.
 
 ## 0.6.0 — 2026-09-27
 

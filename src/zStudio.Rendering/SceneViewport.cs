@@ -260,7 +260,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     /// <summary>Orbit zoom using standard mouse-wheel deltas. Captured Fly uses speed adjustment instead.</summary>
     public void ZoomAt(Point position, int wheelDelta)
     {
-        ZoomBy(wheelDelta / 120.0);
+        ZoomBy(wheelDelta / 120.0, position);
     }
     public void SetWireframe(bool enabled) { foreach (var mesh in meshes) mesh.FillMode = enabled ? FillMode.Wireframe : FillMode.Solid; }
     public void SetTextured(bool enabled)

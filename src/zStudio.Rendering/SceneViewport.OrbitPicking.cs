@@ -18,7 +18,14 @@ public sealed partial class SceneViewport
     /// Uses geometric material picking, including transparent scene triangles.</summary>
     public bool PickOrbitPivot(Point point)
     {
-        if (IsFlyActive || IsPickupDragging || !IsOrbitPickingReady || !IsNavigationPointInside(point)) return false;
+        return !IsFlyActive && !IsPickupDragging && TryNavigationSurface(point, out var hit) && SetOrbitPivot(hit);
+    }
+
+    /// <summary>Query a scene surface without changing the camera, selection or navigation references.</summary>
+    internal bool TryNavigationSurface(Point point, out Point3D surface)
+    {
+        surface = default;
+        if (!IsOrbitPickingReady || !IsNavigationPointInside(point)) return false;
         if (viewport.Camera is not ProjectionCamera camera) return false;
         // FindHits/UnProject uses the previous render context's camera matrices.
         // Construct the ray from the current camera, then use the renderer's
@@ -33,7 +40,8 @@ public sealed partial class SceneViewport
         var direction = forward;
         if (camera is OrthographicCamera) origin += right * x + up * y;
         else { direction += right * x + up * y; direction.Normalize(); }
-        origin += direction * (camera.NearPlaneDistance / Vector3D.DotProduct(direction, forward));
+        // Adaptive clipping is finalized on the next frame. Starting at the eye
+        // keeps immediate/substep queries independent of the previous near plane.
         var ray = new HelixToolkit.Maths.Ray(new Vector3((float)origin.X, (float)origin.Y, (float)origin.Z),
             new Vector3((float)direction.X, (float)direction.Y, (float)direction.Z));
         var context = new HitTestContext(viewport.RenderContext, ray, new Vector2((float)point.X, (float)point.Y));
@@ -42,7 +50,10 @@ public sealed partial class SceneViewport
         foreach (var hit in hits.OrderBy(h => h.Distance))
         {
             if (!hit.IsValid || hit.ModelHit is not MeshGeometryModel3D mesh || !IsOrbitSurface(mesh, hit.Tag)) continue;
-            if (SetOrbitPivot(new(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z))) return true;
+            var candidate = new Point3D(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z);
+            if (!double.IsFinite(candidate.X) || !double.IsFinite(candidate.Y) || !double.IsFinite(candidate.Z)
+                || Vector3D.DotProduct(candidate - camera.Position, forward) < 1e-6) continue;
+            surface = candidate; return true;
         }
         return false;
     }
@@ -61,8 +72,10 @@ public sealed partial class SceneViewport
         var forward = camera.LookDirection; forward.Normalize();
         double depth = Vector3D.DotProduct(point - camera.Position, forward);
         if (!double.IsFinite(depth) || depth < 1e-6) return false;
+        // Picking establishes an orbit target, not a new zoom speed. Preserve the
+        // initial fallback too when no zoom/framing operation has established it.
+        navigationReferenceDistance ??= camera.LookDirection.Length;
         orbitPivot = point;
-        navigationReferenceDistance = depth;
         camera.LookDirection = forward * depth;
         return true;
     }

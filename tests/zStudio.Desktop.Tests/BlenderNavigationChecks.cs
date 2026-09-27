@@ -94,13 +94,20 @@ internal static class BlenderNavigationChecks
         var surface = (Viewport3DX)scene.Content;
         scene.RestoreView(initial); scene.ZoomBy(100); var batch = scene.CaptureView();
         Assert.True(batch.Position.Z < 0, "Zoom must travel past the original target");
-        Assert.Equal(.1, batch.LookDirection.Length, 10);
+        Assert.Equal(.01, batch.LookDirection.Length, 10);
+        Assert.Equal(-110, batch.Position.Z, 8);
         scene.RestoreView(initial);
         for (int i = 0; i < 400; i++) scene.ZoomBy(.25);
         Near(batch.Position, scene.CaptureView().Position); Near(batch.OrbitPivot!.Value, scene.CaptureView().OrbitPivot!.Value);
         double previous = scene.CaptureView().Position.Z;
-        for (int i = 0; i < 100; i++) { scene.ZoomBy(1); Assert.True(scene.CaptureView().Position.Z < previous); previous = scene.CaptureView().Position.Z; }
-        scene.ZoomBy(-2); Assert.True(scene.CaptureView().Position.Z > previous); Assert.True(scene.CaptureView().LookDirection.Z < 0);
+        for (int i = 0; i < 100; i++) { scene.ZoomBy(1); Assert.Equal(1.2, previous - scene.CaptureView().Position.Z, 8); previous = scene.CaptureView().Position.Z; }
+        scene.ZoomBy(-2); Assert.Equal(2.4, scene.CaptureView().Position.Z - previous, 8); Assert.True(scene.CaptureView().LookDirection.Z < 0);
+        foreach (var gesture in new[] { SceneViewport.NavigationGesture.Pan, SceneViewport.NavigationGesture.Orbit })
+        {
+            scene.BeginNavigationDrag(gesture, new(100, 100)); scene.MoveNavigationDrag(new(100.01, 100.01)); scene.EndNavigationDrag(); scene.StopCameraMotion();
+            var eye = scene.CaptureView().Position; scene.ZoomBy(1);
+            Assert.Equal(1.2, (scene.CaptureView().Position - eye).Length, 8); Assert.Equal(10, scene.CaptureView().NavigationReferenceDistance);
+        }
         scene.RestoreView(initial); typeof(SceneViewport).GetField("minimumClipDistance", Fields)!.SetValue(scene, 10d);
         scene.ZoomBy(100); Near(batch.Position, scene.CaptureView().Position);
         foreach (double distance in new[] { .000001, .001, .01 })
@@ -115,7 +122,7 @@ internal static class BlenderNavigationChecks
         typeof(SceneViewport).GetField("navigationGesture", Fields)!.SetValue(scene, SceneViewport.NavigationGesture.Zoom);
         typeof(SceneViewport).GetField("navigationVelocity", Fields)!.SetValue(scene, new System.Windows.Vector(0, 200));
         typeof(SceneViewport).GetMethod("AdvanceNavigationInertia", Fields)!.Invoke(scene, [.04]);
-        Assert.True(scene.CaptureView().Position.Z < previous); scene.StopCameraMotion();
+        Assert.Equal(.24, previous - scene.CaptureView().Position.Z, 8); scene.StopCameraMotion();
 
         var pivot = new Point3D(2, 1, 0);
         foreach (string projection in new[] { "perspective", "orthographic" })
@@ -140,7 +147,7 @@ internal static class BlenderNavigationChecks
         }
         scene.RestoreView(initial); Assert.True(scene.SetOrbitPivot(new(2, 1, 5)));
         Assert.Equal(initial.Position, scene.CaptureView().Position); Assert.Equal(5, scene.CaptureView().LookDirection.Length);
-        Assert.Equal(5, scene.CaptureView().NavigationReferenceDistance);
+        Assert.Equal(10, scene.CaptureView().NavigationReferenceDistance);
         var inertial = scene.CaptureView();
         typeof(SceneViewport).GetField("rotationVelocity", Fields)!.SetValue(scene, new System.Windows.Vector(100, 20));
         typeof(SceneViewport).GetMethod("PrepareCameraFrame", Fields)!.Invoke(scene, [TimeSpan.FromSeconds(1)]);
@@ -266,9 +273,12 @@ internal static class BlenderNavigationChecks
                 ("view", new() { ["view"] = "invalid" }), ("view", new()), ("projection", new()),
                 ("rotate", new() { ["screenPoint"] = new JsonArray(1) }), ("rotate", new() { ["screenPoint"] = new JsonArray(1, 2, 3) }),
                 ("rotate", new() { ["screenPoint"] = new JsonArray("x", 2) }), ("rotate", new() { ["screenPoint"] = new JsonArray(-1, 2) }),
-                ("rotate", new() { ["screenPoint"] = new JsonArray(901, 2) }), ("zoom", new() { ["screenPoint"] = new JsonArray(1, 2) }),
+                ("rotate", new() { ["screenPoint"] = new JsonArray(901, 2) }), ("pan", new() { ["screenPoint"] = new JsonArray(1, 2) }),
+                ("zoom", new() { ["screenPoint"] = new JsonArray(1) }), ("zoom", new() { ["screenPoint"] = new JsonArray(901, 2) }),
                 ("set", new() { ["position"] = new JsonArray(0, 0, 1), ["look"] = new JsonArray(0, 0, 0) }) })
             { var pose = scene.CaptureView(); await Call(action, args, "invalid_argument"); Assert.Equal(pose, scene.CaptureView()); }
+            var notReady = scene.CaptureView();
+            await Call("zoom", new() { ["screenPoint"] = new JsonArray(10, 10), ["steps"] = 1 }, "not_ready"); Assert.Equal(notReady, scene.CaptureView());
             foreach (var (action, args) in new (string, JsonObject)[] { ("pan", new() { ["horizontal"] = 20, ["vertical"] = 10 }),
                 ("zoom", new() { ["steps"] = 2 }), ("dolly", new() { ["distance"] = 4 }), ("rotate", new() { ["horizontal"] = 10 }) })
             { scene.RestoreView(initial); await Call(action, args); Assert.NotEqual(initial, scene.CaptureView()); }
@@ -291,6 +301,7 @@ internal static class BlenderNavigationChecks
                 editor.ToggleCameraFollow(); Assert.True(editor.Options.FollowCamera);
                 await Call("view", new() { ["view"] = "invalid" }, "invalid_argument"); Assert.True(editor.Options.FollowCamera);
                 await Call("rotate", new() { ["screenPoint"] = new JsonArray(-1, 2) }, "invalid_argument"); Assert.True(editor.Options.FollowCamera);
+                await Call("zoom", new() { ["screenPoint"] = new JsonArray(-1, 2) }, "invalid_argument"); Assert.True(editor.Options.FollowCamera);
                 await Call("view", new() { ["view"] = "top" }); Assert.False(editor.Options.FollowCamera); Assert.Equal("top", editor.Viewport.CaptureView().AxisView);
                 Assert.True(main.RunCameraNavigation("follow")); Assert.True(editor.Options.FollowCamera); Assert.Equal("perspective", editor.Viewport.CaptureView().Projection);
                 await Call("zoom", new() { ["steps"] = 1 }); Assert.False(editor.Options.FollowCamera);

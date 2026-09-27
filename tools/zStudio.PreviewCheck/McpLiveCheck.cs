@@ -36,6 +36,16 @@ internal static class McpLiveCheck
             await Call("ai_selection", new { preview, snapshot = aiSnapshot, action = "properties", node = aiNode });
             Equal(aiNode, (await Call("properties_state", new { }))["content"]!["node_id"]!.GetValue<string>(), "AI pinned Properties");
             await Call("camera", new { preview, action = "frame", target = "selected" });
+            var cameraBefore = await Call("camera", new { preview, action = "read" });
+            var cameraAfter = await Call("camera", new { preview, action = "zoom", steps = .5, screenPoint = new[] { 10d, 10d } });
+            double directionLength = Math.Sqrt(new[] { "X", "Y", "Z" }.Sum(axis => Math.Pow(cameraBefore["LookDirection"]![axis]!.GetValue<double>(), 2)));
+            double zoomTravel = .06 * Math.Max(.01, cameraAfter["NavigationReferenceDistance"]!.GetValue<double>());
+            foreach (string axis in new[] { "X", "Y", "Z" })
+            {
+                double delta = cameraAfter["Position"]![axis]!.GetValue<double>() - cameraBefore["Position"]![axis]!.GetValue<double>();
+                double expected = cameraBefore["LookDirection"]![axis]!.GetValue<double>() / directionLength * zoomTravel;
+                Equal(true, Math.Abs(delta - expected) < 1e-6, "packaged pointed zoom travel " + axis);
+            }
             await Call("properties_close", new { });
             await Call("scene_options", new { preview, changes = new { aiNodes = false } });
             var pickups = await Call("pickups", new { document = worldId, query = "no-such-pickup" });

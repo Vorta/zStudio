@@ -181,14 +181,20 @@ internal static class BlenderNavigationCheck
                     Require(reply.IsError != true, string.Join(" ", reply.Content.OfType<TextContentBlock>().Select(c => c.Text)));
                     var remote = view.CaptureView();
                     Require((remote.Position - rotated.Position).Length < 1e-6 && (remote.OrbitPivot!.Value - pivot).Length < 1e-6, label + " GUI/MCP pivot mismatch");
-                    view.RestoreView(before);
-                    double transition = Math.Clamp(before.NavigationReferenceDistance!.Value * .01, .01, 10);
-                    var originalTarget = before.Position + before.LookDirection;
-                    double stepsToCross = Math.Log(before.LookDirection.Length / transition) / .12 + 20;
-                    for (int i = 0; i < Math.Ceiling(stepsToCross); i++) view.ZoomBy(1);
-                    Require(Vector3D.DotProduct(view.CaptureView().Position - originalTarget, a) > 0, label + " zoom stopped at original target");
-                    var advanced = view.CaptureView(); view.ZoomBy(.5);
-                    Require(Vector3D.DotProduct(view.CaptureView().Position - advanced.Position, a) > 0, "Fractional zoom stopped");
+                    var nearTarget = before with { LookDirection = a * .01 };
+                    view.RestoreView(nearTarget);
+                    Require(view.TryNavigationSurface(point.Value, out var speedSurface), "Zoom surface unavailable");
+                    double expectedTravel = .12 * (speedSurface - nearTarget.Position).Length;
+                    view.ZoomAt(point.Value, 120); var zoomed = view.CaptureView();
+                    Require(Math.Abs((zoomed.Position - nearTarget.Position).Length - expectedTravel) < 1e-6, label + " zoom used the old target distance");
+                    Require((zoomed.Position - (nearTarget.Position + a * expectedTravel)).Length < 1e-6, "Zoom followed pointer direction instead of view center");
+                    Require(Vector3D.DotProduct(zoomed.Position - (nearTarget.Position + nearTarget.LookDirection), a) > 0, label + " zoom stopped at original target");
+                    view.RestoreView(nearTarget);
+                    reply = await client.CallToolAsync("zstudio_camera", new Dictionary<string, object?> { ["preview"] = id, ["action"] = "zoom",
+                        ["screenPoint"] = new[] { point.Value.X, point.Value.Y }, ["steps"] = 1 }, cancellationToken: timeout.Token);
+                    Require(reply.IsError != true, string.Join(" ", reply.Content.OfType<TextContentBlock>().Select(c => c.Text)));
+                    Require((view.CaptureView().Position - zoomed.Position).Length < 1e-5
+                        && Math.Abs(view.CaptureView().NavigationReferenceDistance!.Value - zoomed.NavigationReferenceDistance!.Value) < 1e-5, label + " GUI/MCP pointed zoom mismatch");
                     view.RestoreView(remote); await Task.Delay(100, timeout.Token);
                     Require(view.CaptureView().OrbitPivot == remote.OrbitPivot, "Snapshot lost picked pivot");
                     foreach (var (mesh, visibility) in staticMeshes) mesh.Visibility = visibility;
@@ -250,9 +256,83 @@ internal static class BlenderNavigationCheck
                 Require(view.CaptureView().OrbitPivot == picked.OrbitPivot && !viewport.IsMouseCaptured, "Orbit inertia repicked or captured input");
                 view.StopCameraMotion();
             }
+            await CheckPointerZoom(view, mesh, initial);
             Console.WriteLine("PASS: rendered perspective/orthographic transformed instances, nearest surface, helper/horizon/hidden exclusions, empty-space fallback and orbit inertia");
         }
         finally { viewport.Items.Remove(helper); helper.Dispose(); window.Close(); }
+    }
+    private static async Task CheckPointerZoom(SceneViewport view, MeshGeometryModel3D mesh, SceneViewport.ViewPose initial)
+    {
+        const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
+        var viewport = (Viewport3DX)view.Content;
+        mesh.Transform = Transform3D.Identity;
+        mesh.Instances = [System.Numerics.Matrix4x4.CreateScale(30, 30, 1) * System.Numerics.Matrix4x4.CreateTranslation(0, 0, -100),
+            System.Numerics.Matrix4x4.CreateScale(.2f, .2f, 1) * System.Numerics.Matrix4x4.CreateTranslation(-.5f, 0, 11)];
+        initial = initial with { LookDirection = new(0, 0, -.01), NavigationReferenceDistance = 12 };
+        view.RestoreView(initial); await Task.Delay(150);
+        var far = viewport.Project(new Point3D(20, 0, -100)); var near = viewport.Project(new Point3D(-.5, 0, 11));
+        var beforeQuery = view.CaptureView();
+        Require(view.TryNavigationSurface(far, out var farHit) && Math.Abs(farHit.Z + 100) < .001, "Distant pointed surface unavailable");
+        Require(view.CaptureView() == beforeQuery, "Surface query mutated the camera/reference");
+        double farDistance = (farHit - initial.Position).Length;
+        view.ZoomBy(.5, far); var farZoom = view.CaptureView();
+        CheckTravel(initial, farZoom, .06 * farDistance);
+        Require(farZoom.Position.Z < initial.Position.Z + initial.LookDirection.Z, "Tiny old target stopped far-surface zoom");
+        view.RestoreView(initial);
+        Require(view.TryNavigationSurface(near, out var nearHit) && Math.Abs(nearHit.Z - 11) < .001, "Near pointed surface unavailable");
+        double nearDistance = (nearHit - initial.Position).Length;
+        view.ZoomBy(.5, near); CheckTravel(initial, view.CaptureView(), .06 * nearDistance);
+        Require(farDistance > nearDistance * 90, "Pointed near/far speed did not differ");
+        view.ZoomBy(.5, far);
+        Require(view.CaptureView().NavigationReferenceDistance > 100, "Moving pointer did not immediately refresh zoom speed");
+
+        // Unrelated nearby geometry and the previous projection near plane must not set speed.
+        var instances = mesh.Instances; mesh.Instances = [instances[0]]; view.RestoreView(initial); await Task.Delay(100);
+        view.ZoomBy(.5, far); CheckTravel(initial, view.CaptureView(), .06 * farDistance);
+        mesh.Instances = instances; view.RestoreView(initial); await Task.Delay(100);
+        var camera = (ProjectionCamera)viewport.Camera!; double nearPlane = camera.NearPlaneDistance; camera.NearPlaneDistance = 500;
+        view.ZoomBy(.5, far); CheckTravel(initial, view.CaptureView(), .06 * farDistance); camera.NearPlaneDistance = nearPlane;
+
+        var empty = new Point(1, 1);
+        Require(!view.TryNavigationSurface(empty, out _), "Empty-space fixture unexpectedly hit geometry");
+        var retained = view.CaptureView(); view.ZoomBy(2.5, empty); CheckTravel(retained, view.CaptureView(), .3 * farDistance);
+        Require(view.CaptureView().NavigationReferenceDistance == retained.NavigationReferenceDistance, "Empty space changed zoom speed");
+        var restored = view.CaptureView(); view.RestoreView(initial); view.RestoreView(restored); Require(view.CaptureView() == restored, "Snapshot lost zoom speed");
+        view.ZoomBy(-.5, empty); CheckTravel(restored, view.CaptureView(), -.06 * farDistance);
+
+        foreach (var gesture in new[] { SceneViewport.NavigationGesture.Pan, SceneViewport.NavigationGesture.Orbit })
+        {
+            view.RestoreView(farZoom); double reference = view.CaptureView().NavigationReferenceDistance!.Value;
+            view.BeginNavigationDrag(gesture, far); view.MoveNavigationDrag(far + new Vector(.01, .01)); view.EndNavigationDrag(); view.StopCameraMotion();
+            Require(view.CaptureView().NavigationReferenceDistance == reference, "Tiny pan/orbit reset zoom reference");
+            var pose = view.CaptureView(); Require(view.TryNavigationSurface(far, out var pointed), "Pointed surface lost after tiny gesture");
+            view.ZoomBy(1, far); CheckTravel(pose, view.CaptureView(), .12 * (pointed - pose.Position).Length);
+        }
+        view.RestoreView(initial); view.ZoomBy(3.5, far); var batched = view.CaptureView();
+        view.RestoreView(initial); view.ZoomBy(1, far); view.ZoomBy(1, far); view.ZoomBy(1, far); view.ZoomBy(.5, far);
+        Require((batched.Position - view.CaptureView().Position).Length < 1e-6, "Batched zoom did not refresh surfaces between steps");
+        view.RestoreView(initial); view.BeginNavigationDrag(SceneViewport.NavigationGesture.Zoom, near);
+        var dragPoint = far + new Vector(0, 10); var dragStart = view.CaptureView();
+        Require(view.TryNavigationSurface(dragPoint, out var dragHit), "Drag surface unavailable");
+        view.MoveNavigationDrag(dragPoint); view.CancelNavigation();
+        CheckTravel(dragStart, view.CaptureView(), .12 * (dragHit - dragStart.Position).Length * ((dragPoint.Y - near.Y) / 40));
+        view.RestoreView(initial); view.ZoomBy(.25, far); var inertial = view.CaptureView();
+        Require(view.TryNavigationSurface(far, out var inertiaHit), "Inertia surface unavailable");
+        typeof(SceneViewport).GetField("navigationGesture", fields)!.SetValue(view, SceneViewport.NavigationGesture.Zoom);
+        typeof(SceneViewport).GetField("navigationVelocity", fields)!.SetValue(view, new Vector(0, 200));
+        typeof(SceneViewport).GetMethod("AdvanceNavigationInertia", fields)!.Invoke(view, [.04]);
+        CheckTravel(inertial, view.CaptureView(), .024 * (inertiaHit - inertial.Position).Length); view.StopCameraMotion();
+        view.RestoreView(initial);
+        for (int i = 0; i < 120; i++) view.ZoomBy(1, far);
+        Require(view.CaptureView().Position.Z < -100, "Repeated pointed zoom asymptotically stopped at the surface");
+        Console.WriteLine("PASS: measured pointer-based near/far speed, unrelated close geometry, tiny pan/orbit, empty-space retention, clipping independence, drag/inertia sampling, batching and surface crossing");
+
+        static void CheckTravel(SceneViewport.ViewPose before, SceneViewport.ViewPose after, double travel)
+        {
+            var forward = before.LookDirection; forward.Normalize();
+            Require((after.Position - (before.Position + forward * travel)).Length < 1e-6,
+                $"Incorrect zoom travel: expected={travel}, actual={Vector3D.DotProduct(after.Position - before.Position, forward)}");
+        }
     }
     private static BitmapSource Presented(Viewport3DX viewport)
     {

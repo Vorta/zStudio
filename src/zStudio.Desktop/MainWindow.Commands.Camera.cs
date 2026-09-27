@@ -8,7 +8,7 @@ public partial class MainWindow
 {
     private void RegisterCameraCommand(StudioCommands registry)
     {
-        Register(registry, "camera", "Read or navigate the shared 3D camera. Supports Blender-style surface-pivot orbit, pan, continuous centered zoom, dolly, exact axis views, perspective/orthographic projection and framing. Valid manual navigation exits animation Follow camera. Never captures physical input.", true,
+        Register(registry, "camera", "Read or navigate the shared 3D camera. Supports Blender-style surface-pivot orbit, pan, continuous centered zoom with pointer-surface speed, dolly, exact axis views, perspective/orthographic projection and framing. Valid manual navigation exits animation Follow camera. Never captures physical input.", true,
         [
             PreviewParameter, P("action", "string", "Camera operation.", true, "read", "set", "move", "rotate", "frame", "pan", "zoom", "dolly", "view", "projection"),
             new("position", "array", "Absolute XYZ for set.", Items: new("", "number", "Coordinate."), MinItems: 3, MaxItems: 3),
@@ -16,9 +16,9 @@ public partial class MainWindow
             new("fov", "number", "Perspective camera field of view in degrees; retained in orthographic mode.", NumberMinimum: 1.000001, NumberMaximum: 178.999999),
             .. new[] { "right", "up", "forward" }.Select(n => new StudioParameter(n, "number", n == "up" ? "World-Y displacement in game units." : "View-relative displacement in game units.", NumberMinimum: -1e9, NumberMaximum: 1e9)),
             .. new[] { "horizontal", "vertical" }.Select(n => new StudioParameter(n, "number", "Mouse-equivalent delta in DIP for rotate or pan.", NumberMinimum: -36000, NumberMaximum: 36000)),
-            new("screenPoint", "array", "Optional [x,y] viewport DIP for rotate. Pick the nearest visible scene triangle once as the orbit pivot; empty space retains the pivot. Does not recenter the view.",
+            new("screenPoint", "array", "Optional [x,y] viewport DIP for rotate or zoom. Rotate picks an orbit pivot once without recentering; zoom refreshes speed from the pointed scene surface while moving along the view center. Misses retain the pivot or last zoom speed. Zoom defaults to viewport center.",
                 Items: new("", "number", "Viewport coordinate.", NumberMinimum: 0), MinItems: 2, MaxItems: 2),
-            new("steps", "number", "Wheel-equivalent zoom steps; positive approaches the view center then continues forward past it.", NumberMinimum: -100, NumberMaximum: 100),
+            new("steps", "number", "Wheel-equivalent zoom steps; positive moves forward along the view center at a speed based on the pointed surface, independently of the orbit target. Camera readback NavigationReferenceDistance retains the last surface distance or initial framing/pose fallback.", NumberMinimum: -100, NumberMaximum: 100),
             new("distance", "number", "Dolly displacement in game units; positive moves forward together with the target.", NumberMinimum: -1e9, NumberMaximum: 1e9),
             P("view", "string", "Named view for action=view; axis views are orthographic with automatic perspective on orbit.", false, "front", "back", "left", "right", "top", "bottom", "opposite"),
             P("projection", "string", "Required for action=projection; optional for set. Explicit orthographic mode persists while orbiting.", false, "perspective", "orthographic"),
@@ -35,10 +35,10 @@ public partial class MainWindow
             System.Windows.Point? screenPoint = null;
             if (a.TryGetPropertyValue("screenPoint", out var point))
             {
-                if (action != "rotate") throw new StudioCommandException("invalid_argument", "screenPoint requires action=rotate.");
+                if (action is not ("rotate" or "zoom")) throw new StudioCommandException("invalid_argument", "screenPoint requires action=rotate or zoom.");
                 screenPoint = new(point![0]!.GetValue<double>(), point[1]!.GetValue<double>());
                 if (!viewport.IsNavigationPointInside(screenPoint.Value)) throw new StudioCommandException("invalid_argument", "screenPoint must be inside the current viewport in DIP.");
-                if (!viewport.IsOrbitPickingReady) throw new StudioCommandException("not_ready", "Wait for the 3D preview to render before picking an orbit surface.");
+                if (!viewport.IsOrbitPickingReady) throw new StudioCommandException("not_ready", "Wait for the 3D preview to render before querying a navigation surface.");
             }
             if (action == "set")
             {
@@ -79,7 +79,7 @@ public partial class MainWindow
                         if (screenPoint is { } pick) viewport.PickOrbitPivot(pick);
                         viewport.RotateBy(Number(a, "horizontal"), Number(a, "vertical")); break;
                     case "pan": viewport.StopCameraMotion(); viewport.PanBy(Number(a, "horizontal"), Number(a, "vertical")); break;
-                    case "zoom": viewport.StopCameraMotion(); viewport.ZoomBy(Number(a, "steps")); break;
+                    case "zoom": viewport.StopCameraMotion(); viewport.ZoomBy(Number(a, "steps"), screenPoint); break;
                     case "dolly": viewport.StopCameraMotion(); viewport.DollyBy(Number(a, "distance")); break;
                     case "view": if (Text(a, "view") == "opposite") viewport.OppositeView(); else viewport.SetAxisView(Text(a, "view")); break;
                     case "projection":
