@@ -63,8 +63,8 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
     public JsonObject ToPreviewJson(CancellationToken token = default)
     {
         int nodes = 1024, characters = 65536;
-        return Visit(this);
-        JsonObject Visit(ZrdNode node)
+        return Visit(this, 0);
+        JsonObject Visit(ZrdNode node, int depth)
         {
             token.ThrowIfCancellationRequested(); nodes--;
             if (node.Kind is not (ZrdKind.String or ZrdKind.Array)) return node.ToJson(token);
@@ -78,7 +78,7 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
             else
             {
                 JsonArray children = []; result["children"] = children;
-                foreach (var child in node.Children) { if (nodes == 0) break; children.Add(Visit(child)); }
+                foreach (var child in node.Children) { if (nodes == 0 || depth >= 24) break; children.Add(Visit(child, depth + 1)); }
                 if (children.Count != node.Children.Count) { result["children_truncated"] = true; result["stored_children"] = node.Children.Count; }
             }
             return result;

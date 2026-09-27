@@ -37,6 +37,10 @@ internal static class ModelReplacementMcpChecks
             var tools = await client.ListToolsAsync(cancellationToken:token); Assert.Contains(tools,t=>t.Name=="zstudio_model_replace");
             await Job("open_document",new() { ["path"] = source });
             var doc = main.ViewModel.Documents.Single();
+            await Job("select_asset", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Model", ["index"] = 1 });
+            var sourceModelRow = doc.SelectedAsset!;
+            string originalBytesText = ((TextBox)main.FindName("RawText")).Text;
+            await Call("properties_open", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Model", ["index"] = 1 });
             var resolver = main.ViewModel.Resolver!; Guid otherOwner = Guid.NewGuid();
             resolver.EditOwnership.Acquire(otherOwner, "other resource editor", [texture]);
             long originalRevision = doc.Revision; var originalSnapshot = doc.ModelEdits!.Current;
@@ -46,11 +50,41 @@ internal static class ModelReplacementMcpChecks
             resolver.EditOwnership.Release(otherOwner);
             var replaced = await Job("model_replace",new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["manifest"] = manifest });
             Assert.True(doc.IsDirty); Assert.True(((MenuItem)main.FindName("UndoMenu")).IsEnabled);
+            Assert.Equal(doc.PreviewDocument.Assets.Count, doc.Assets.Count);
+            Assert.All(doc.Assets, row => Assert.Same(doc.PreviewDocument.Assets.Single(a => a.Id == row.Record.Id), row.Record));
+            Assert.Equal(sourceModelRow.Record.Id, doc.SelectedAsset!.Record.Id);
+            Assert.Same(sourceModelRow, doc.SelectedAsset);
+            Assert.Equal(0, main.OpenPropertiesWindow!.CurrentJson!["properties"]!.Int("model_type"));
+            Assert.Equal(0, JsonNode.Parse(((TextBox)main.FindName("ContentText")).Text)!["properties"]!.Int("model_type"));
+            Assert.Equal(originalBytesText, ((TextBox)main.FindName("RawText")).Text);
+            var assetList = await Call("assets", new() { ["document"] = doc.SessionId.ToString(), ["limit"] = 200 });
+            Assert.Equal(doc.PreviewDocument.Assets.Count, assetList["total"]!.GetValue<int>());
+            var listedModel = assetList["items"]!.AsArray().Single(a => a!["Kind"]!.GetValue<string>() == "Model" && a["Index"]!.GetValue<int>() == 1)!;
+            Assert.Equal(doc.Document.Assets.Single(a => a.Kind == AssetKind.Model && a.Index == 1).Offset, listedModel["sourceOffset"]!.GetValue<long>());
+            Assert.NotEqual(listedModel["sourceOffset"]!.GetValue<long>(), listedModel["Offset"]!.GetValue<long>());
             Assert.Equal(0,doc.PreviewDocument.Scene!.Models[1].Metadata.Int("model_type")); Assert.Equal(1,doc.Document.Scene!.Models[1].Metadata.Int("model_type"));
             var inspection = await Call("inspect_asset",new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Model", ["index"] = 1 });
             Assert.Equal(1,inspection["source"]!["properties"]!["model_type"]!.GetValue<int>()); Assert.Equal(0,inspection["edited"]!["properties"]!["model_type"]!.GetValue<int>());
             var stale = await Job("model_replace",new() { ["document"] = doc.SessionId.ToString(), ["revision"] = 0, ["manifest"] = manifest },"failed"); Assert.Equal("revision_conflict",stale["code"]!.GetValue<string>());
-            foreach (string action in new[] { "undo", "redo" }) { await Call("undo_redo",new() { ["document"] = doc.SessionId.ToString(),["revision"] = doc.Revision,["action"] = action }); Assert.Equal(action=="redo",doc.IsDirty); }
+            foreach (string action in new[] { "undo", "redo" })
+            {
+                await Call("undo_redo",new() { ["document"] = doc.SessionId.ToString(),["revision"] = doc.Revision,["action"] = action }); Assert.Equal(action=="redo",doc.IsDirty);
+                Assert.Same(sourceModelRow, doc.SelectedAsset);
+                Assert.Equal(action == "undo" ? 1 : 0, main.OpenPropertiesWindow.CurrentJson!["properties"]!.Int("model_type"));
+                Assert.Equal(doc.PreviewDocument.Assets.Count, doc.Assets.Count);
+                Assert.Equal(originalBytesText, ((TextBox)main.FindName("RawText")).Text);
+            }
+            await Job("select_asset", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Material", ["index"] = 1 });
+            Assert.Equal("New record: no original source bytes.", ((TextBox)main.FindName("RawText")).Text);
+            Assert.Equal(1, main.OpenPropertiesWindow.CurrentJson!.Int("index")); // Selection did not retarget the pinned model.
+            Assert.Equal("Model", main.OpenPropertiesWindow.CurrentJson!["kind"]!.GetValue<string>());
+            await Call("properties_open", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Material", ["index"] = 1 });
+            await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
+            Assert.NotNull(main.OpenPropertiesWindow.CurrentJson!["unavailable"]); Assert.DoesNotContain(doc.Assets, a => a.Record.Kind == AssetKind.Material && a.Index == 1);
+            await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "redo" });
+            Assert.Equal("Material", main.OpenPropertiesWindow.CurrentJson!["kind"]!.GetValue<string>());
+            var newInspection = await Call("inspect_asset", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "TextureReference", ["index"] = 0 });
+            Assert.Null(newInspection["source"]); Assert.Equal("new_shell", newInspection["edited"]!["name"]!.GetValue<string>());
             await Job("save_document",new() { ["document"] = doc.SessionId.ToString(),["revision"] = doc.Revision }); Assert.False(doc.IsDirty); Assert.False(doc.ModelEdits!.HasExternalChanges());
             var saved = await FormatRegistry.Default.OpenAsync(source,token); Assert.Equal(0,saved.Scene!.Models[1].Metadata.Int("model_type"));
             var png = await FormatRegistry.Default.OpenAsync(texture,token); Assert.Single(png.Assets);

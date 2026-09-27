@@ -16,7 +16,7 @@ public partial class MainWindow
         var modelSnapshot = doc.ResourceEdits?.Current.Document ?? doc.ModelEdits?.Current.World;
         try
         {
-            var original = doc.ResourceEdits is { } resources ? resources.OriginalAsset(resources.Current.Members[asset.Index]) : doc.Document.Assets.SingleOrDefault(a => a.Kind == asset.Kind && a.Index == asset.Index);
+            var original = doc.OriginalAsset(asset);
             var source = original == null ? null : await LoadAssetPropertiesAsync(doc.Document, original, cancellation.Token);
             ValidateContext();
             var edited = editedEntry == null ? null : await Task.Run(() => editedEntry.ToJson(cancellation.Token), cancellation.Token);

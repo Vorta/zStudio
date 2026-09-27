@@ -41,7 +41,7 @@
         "zstudio_resource_select",
         "zstudio_export"
       ],
-      "note": "Dynamic Edit/Archive members and Assets context menus share the resource session. Member UUIDs survive rename, reorder and undo; imported known payloads are validated off-thread. Raw export uses the edited snapshot."
+      "note": "Dynamic Edit/Archive members and Assets context menus share the resource session. Member UUIDs survive rename, reorder and undo; imported known payloads are validated off-thread. Aliased payload ranges share immutable decoding but retain independent member edits. Malformed embedded ZRD remains raw with a warning and supports member repair. Raw export uses the edited snapshot."
     },
     {
       "gui": "MainWindow.Resources:ZrdNodes",
@@ -50,12 +50,13 @@
         "zstudio_zrd_edit",
         "zstudio_resource_select"
       ],
-      "note": "Typed Data tree and dynamic context/Edit menus use ordered node UUIDs. Complete structural decoding retains ZRD editing after member rename/save/reopen, without relying on extensions. Add/type/duplicate/delete/move use shared validation and one undo step. Selection keeps Properties pinned. GUI labels and zrd_nodes bound string prefixes before JSON escaping; MCP marks valueTruncated at 4096 characters. Paging retains only the returned page; ZRD filtering runs off-thread with cancellation/revision checks."
+      "note": "Typed Data tree and dynamic context/Edit menus use ordered node UUIDs. Standalone ZRD requires complete bounded decoding before edit/save controls are enabled. Complete structural decoding retains ZRD editing after member rename/save/reopen, without relying on extensions. Add/type/duplicate/delete/move use shared validation and one undo step; type replaces existing children even when choosing Array again, while set accepts scalars. Selection keeps Properties pinned. GUI labels and zrd_nodes bound string prefixes before JSON escaping; MCP marks valueTruncated at 4096 characters. Paging retains only the returned page; ZRD filtering runs off-thread with cancellation/revision checks."
     },
     {
       "gui": "ResourcePropertiesEditor:Fields",
       "tools": [
         "zstudio_resource_properties",
+        "zstudio_properties_state",
         "zstudio_drafts",
         "zstudio_resolve_drafts",
         "zstudio_undo_redo",
@@ -433,9 +434,12 @@
     {
       "gui": "MainWindow.xaml:AssetSelectionChanged",
       "tools": [
-        "zstudio_select_asset"
+        "zstudio_select_asset",
+        "zstudio_assets",
+        "zstudio_inspect_asset",
+        "zstudio_source_bytes"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "Model rows expose accepted AssetRecords and appended material/texture references while retaining kind/index identity through undo/redo. Asset offsets describe edited ranges; nullable sourceOffset/sourceLength and GUI Bytes retain original source ranges. New records have no original bytes."
     },
     {
       "gui": "MainWindow.xaml:AudioSeekChanged",
@@ -924,7 +928,7 @@
       "tools": [
         "zstudio_model_replace"
       ],
-      "note": "Validate explicit source-fingerprinted OBJ/PNG mappings as one shared document undo step, with native model and texture save support. Shared ownership claims all prepared source/current/destination paths before acceptance or save. Conflicts preserve revision/history, claims survive undo/save until close, and oversized model/texture outputs fail before allocation."
+      "note": "Validate explicit source-fingerprinted OBJ/PNG mappings as one shared document undo step, with native model and texture save support. Shared ownership claims all prepared source/current/destination paths before acceptance or save. Conflicts preserve revision/history, claims survive undo/save until close, and oversized model/texture outputs fail before allocation. Assets, Document scene and pinned asset Properties refresh accepted records by identity; Undo/Redo removes/restores appended records without retargeting Properties."
     }
   ]
 }

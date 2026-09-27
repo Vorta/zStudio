@@ -59,6 +59,8 @@ public partial class MainWindow
             await replacement.ShowAsync(doc.PreviewDocument, asset, resolver, requested.Pack?.Path, requested.Lod, token, requested.Horizon, mission);
             token.ThrowIfCancellationRequested();
             if (!OwnsRequest()) return null;
+            await RefreshAssetInspectionAsync(doc, asset, token);
+            if (!OwnsRequest()) return null;
 
             var view = previous.CaptureView();
             int? selection = selectedNode, isolate = isolatedNode;
@@ -79,7 +81,7 @@ public partial class MainWindow
             selectedNode = mission != null && previous.Mission != null
                 ? RemapPickupSelection(pickup, mission) ?? (selection is int oldSelection && mission.RemapNodeFrom(previous.Mission, oldSelection) is >= 0 and int mappedSelection ? mappedSelection : null)
                 : selection;
-            if (selectedNode is int node) InspectNode(node); else SetProperties(doc.Document.Metadata);
+            if (selectedNode is int node) InspectNode(node);
             publishedStaticOptions = requested; previewId = Guid.NewGuid();
             PreviewInfo.Text = scene.PreviewSummary; PreviewInfo.ToolTip = scene.PreviewSummary;
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;

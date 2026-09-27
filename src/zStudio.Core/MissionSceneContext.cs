@@ -82,7 +82,7 @@ public static partial class MissionSceneLoader
         var requested = MissionLayoutSelection.For(difficulty);
         string directory = Path.GetDirectoryName(world.Path)!;
         var files = ResourceFiles(world.Path, resolver);
-        string key = difficulty + "|" + string.Join('|', files.Select(p => p + FileStamp.Read(p))) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package))));
+        string key = difficulty + "|" + resolver.SnapshotRevision + "|" + string.Join('|', files.Select(p => p + FileStamp.Read(p))) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package))));
         var cache = Cache.GetOrCreateValue(world);
         if (cache.TryGetValue(key, out var cached)) return cached;
         List<string> diagnostics = []; Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> resources = new(StringComparer.OrdinalIgnoreCase);

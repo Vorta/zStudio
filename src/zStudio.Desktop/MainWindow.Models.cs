@@ -71,8 +71,10 @@ public partial class MainWindow
     private async Task RefreshModelDependentsAsync(DocumentModel doc)
     {
         foreach (var open in ViewModel.Documents) open.InvalidateMissionContext();
+        if (propertiesWindow?.Document == doc) await propertiesWindow.AssetRefreshWork;
+        await previewWork;
         if (animation != null) await animation.RefreshModelContextAsync();
-        else if (shownDocument == doc && scene != null && shownAsset != null) await RefreshStaticSceneAsync(doc, shownAsset);
+        else if (shownDocument == doc) await ShowAsset(doc, doc.SelectedAsset?.Record);
         UpdateDocumentCommands();
     }
     private async Task<ModelSaveResult> SaveModelsAsync(DocumentModel doc, string? directory, CancellationToken token)

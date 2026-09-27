@@ -187,10 +187,11 @@ public partial class MainWindow : Window
     {
         if (shutdownToken.IsCancellationRequested) return;
         if (animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
+        asset = asset == null ? null : doc.PreviewDocument.Assets.SingleOrDefault(a => a.Id == asset.Id);
         bool differentAsset = shownAsset?.Id != asset?.Id;
         if (!differentAsset && asset != null && shownDocument == doc && scene?.PreviewScene != null &&
             animation == null && SceneHost.Visibility == Visibility.Visible && publishedStaticOptions != null && ViewModel.Resolver != null)
-        { await RefreshStaticSceneAsync(doc, asset); return; }
+        { shownAsset = asset; await RefreshStaticSceneAsync(doc, asset); return; }
         // Entering the animation viewer starts at Sequences. Consecutive animation
         // selections (including asynchronous replacement) retain the chosen page.
         if (asset?.Kind == AssetKind.Animation && shownAsset?.Kind != AssetKind.Animation) Layout.InspectorTab = 0;
@@ -208,22 +209,8 @@ public partial class MainWindow : Window
         try
         {
             var snapshot = doc.PreviewDocument;
-            properties = asset == null ? (JsonObject)snapshot.Metadata.DeepClone() : await LoadAssetPropertiesAsync(snapshot, asset, token);
-            token.ThrowIfCancellationRequested(); SetProperties(properties);
-            if (asset?.Kind == AssetKind.Zrd && doc.ResourceEdits is { } resources)
-            {
-                var root = await ResourceTreeAsync(doc, resources.Current.Members[asset.Index].Id, token);
-                token.ThrowIfCancellationRequested(); var item = new ResourceTreeItem(root, 0, null, resourceExpansion);
-                Guid? retained = selectedResourceNode; CentralTree.ItemsSource = new[] { item };
-                if (retained is Guid id) SelectResourceNode(item, id);
-            }
-            else CentralTree.ItemsSource = asset?.Kind == AssetKind.Zrd && properties["tree"] is JsonNode hierarchy ? ZrdTree(doc,asset,hierarchy) : properties.Select(p => new InspectorNode(p.Key,p.Value)).ToArray();
-            ContentText.Text = asset?.Content is ScriptContent script ? script.Text : LimitedJson(properties);
+            await RefreshAssetInspectionAsync(doc, asset, token);
             var bytes = asset == null ? snapshot.Bytes : snapshot.Slice(asset.Offset, asset.Length);
-            var original = asset != null && doc.ResourceEdits is { } re ? re.OriginalAsset(re.Current.Members[asset.Index]) : asset;
-            var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);
-            RawText.Text = original == null && asset != null ? "New member: no original source bytes." : Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 original source bytes shown." : "");
-            RelatedList.ItemsSource = asset == null ? null : FindRelated(asset, doc).ToArray();
             if (asset?.Kind == AssetKind.Texture)
             {
                 var image = await Task.Run(() => TextureDecoder.Decode(doc.Document, asset, token), token);
@@ -305,12 +292,36 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { if (!token.IsCancellationRequested) { EmptyPreview.Text = "Preview unavailable: " + ex.Message; Report(ex); } }
     }
+    private async Task RefreshAssetInspectionAsync(DocumentModel doc, AssetRecord? asset, CancellationToken token)
+    {
+        long revision = doc.Revision; var snapshot = doc.PreviewDocument;
+        var json = asset == null ? (JsonObject)snapshot.Metadata.DeepClone() : await LoadAssetPropertiesAsync(snapshot, asset, token);
+        var root = asset?.Kind == AssetKind.Zrd && doc.ResourceEdits is { } resources
+            ? await ResourceTreeAsync(doc, resources.Current.Members[asset.Index].Id, token) : null;
+        token.ThrowIfCancellationRequested();
+        if (doc.IsDisposed || doc.Revision != revision || shownDocument != doc || shownAsset?.Id != asset?.Id)
+            throw new OperationCanceledException("Asset inspection was superseded.");
+        SetProperties(json);
+        if (root != null)
+        {
+            var item = new ResourceTreeItem(root, 0, null, resourceExpansion);
+            Guid? retained = selectedResourceNode; CentralTree.ItemsSource = new[] { item };
+            if (retained is Guid id) SelectResourceNode(item, id);
+        }
+        else CentralTree.ItemsSource = asset?.Kind == AssetKind.Zrd && json["tree"] is JsonNode hierarchy ? ZrdTree(doc, asset, hierarchy) : json.Select(p => new InspectorNode(p.Key, p.Value)).ToArray();
+        ContentText.Text = asset?.Content is ScriptContent script ? script.Text : LimitedJson(json);
+        var original = asset == null ? null : doc.OriginalAsset(asset);
+        var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);
+        RawText.Text = original == null && asset != null ? "New record: no original source bytes." : Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 original source bytes shown." : "");
+        PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} edited bytes" + (original == null ? " · new record" : $" · source 0x{original.Offset:X}");
+        RelatedList.ItemsSource = asset == null ? null : FindRelated(asset, doc).ToArray();
+    }
     private IEnumerable<SearchHit> FindRelated(AssetRecord asset, DocumentModel doc)
     {
         HashSet<string> names = new(StringComparer.OrdinalIgnoreCase) { asset.Name };
         foreach (string name in Strings(asset.Metadata)) names.Add(name);
         if (asset.Content is ScriptContent script) foreach (string argument in script.Instructions.SelectMany(i => i)) names.Add(argument);
-        if (asset.Content is GameModel model && doc.Document.Scene is { } sceneData)
+        if (asset.Content is GameModel model && doc.PreviewDocument.Scene is { } sceneData)
             foreach (int mat in model.Polygons.Select(p => p.MaterialIndex).Distinct()) if (mat >= 0 && mat < sceneData.Materials.Count) { int tex = sceneData.Materials[mat].Int("texture_index", -1); if (tex >= 0 && tex < sceneData.Textures.Count) names.Add(sceneData.Textures[tex].Text("name")); }
         return names.Where(n => n.Length > 1).SelectMany(n => ViewModel.Related(n, doc.Path)).Distinct().Take(300);
     }

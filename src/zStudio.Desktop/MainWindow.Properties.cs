@@ -86,18 +86,21 @@ public partial class MainWindow
         try
         {
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, doc.Lifetime.Token);
-            var json = await LoadAssetPropertiesAsync(doc.Document, asset, cancellation.Token);
+            long revision = doc.Revision; var snapshot = doc.PreviewDocument;
+            asset = snapshot.Assets.SingleOrDefault(a => a.Id == asset.Id) ?? throw new StudioCommandException("stale_asset", "This record is absent from the current edit.");
+            var json = await LoadAssetPropertiesAsync(snapshot, asset, cancellation.Token);
             if (doc.IsDisposed || request != propertyRequest) return null;
             cancellation.Token.ThrowIfCancellationRequested();
+            if (doc.Revision != revision) throw new StudioCommandException("revision_conflict", "The document changed while loading Properties. Open the current record again.");
             if (automation && propertiesWindow?.HasPendingDrafts == true)
                 throw new StudioCommandException("pending_drafts", "Properties input changed while loading. Resolve drafts before retargeting.");
-            var window = GetPropertiesWindow(); bool accepted = window.SetReadOnly(doc, $"{asset.Name} · {asset.Kind} #{asset.Index}", json);
+            var window = GetPropertiesWindow(); bool accepted = window.SetAsset(doc, asset, json);
             PresentProperties(window, accepted);
             return accepted && request == propertyRequest && propertiesWindow == window && window.Document == doc ? window : null;
         }
         catch (OperationCanceledException) when (doc.IsDisposed || request != propertyRequest) { return null; }
         catch (OperationCanceledException) when (!automation) { }
-        catch (Exception ex) when (!automation && ex is IOException or InvalidDataException or ArgumentException) { Report(ex); }
+        catch (Exception ex) when (!automation && ex is IOException or InvalidDataException or ArgumentException or StudioCommandException) { Report(ex); }
         return null;
     }
     private void PropertiesClick(object sender, RoutedEventArgs e) => OpenCurrentProperties();
@@ -108,7 +111,7 @@ public partial class MainWindow
         if (CentralTree.IsKeyboardFocusWithin && CentralTree.SelectedItem is ResourceTreeItem resource && doc.SelectedAsset?.ResourceId is Guid member)
         { await OpenResourcePropertiesAsync(doc, member, resource.Node.Id); return; }
         if (AssetGrid.IsKeyboardFocusWithin && doc.SelectedAsset is { } asset) { await OpenAssetPropertiesAsync(doc, asset.Record); return; }
-        if (inspectedSceneSource is { } item) { OpenSceneProperties(doc, item); return; }
+        if (inspectedSceneSource is { } item) { await OpenScenePropertiesAsync(doc, item); return; }
         if (animation is { } editor)
         {
             var target = editor.PropertySelection; OpenAnimationProperties(doc, editor.EntryIndex, target.Sequence, target.Event); return;
@@ -126,12 +129,8 @@ public partial class MainWindow
         else if (doc.SelectedAsset is { } selected) await OpenAssetPropertiesAsync(doc, selected.Record);
         else PresentProperties(window, window.SetReadOnly(doc, "Archive", doc.Document.Metadata));
     }
-    private void OpenSceneProperties(DocumentModel doc, SceneTreeItem item)
-    {
-        ++propertyRequest;
-        var window = GetPropertiesWindow();
-        PresentProperties(window, window.SetReadOnly(doc, $"{item.Node.Name} · node #{item.Node.Index}", item.Node.Metadata));
-    }
+    private Task<PropertiesWindow?> OpenScenePropertiesAsync(DocumentModel doc, SceneTreeItem item)
+        => OpenAssetPropertiesAsync(doc, doc.PreviewDocument.Assets.Single(a => a.Kind == AssetKind.Node && a.Index == item.Node.Index));
     private void AssetContextTarget(object sender, MouseButtonEventArgs e)
     {
         contextAsset = PropertyContext.FindAncestor<DataGridRow>(e.OriginalSource as DependencyObject)?.Item as AssetItem;
@@ -159,5 +158,5 @@ public partial class MainWindow
         scenePointerContext = false; ScenePropertiesMenu.IsEnabled = contextScene != null;
     }
     private async void ScenePropertiesClick(object sender, RoutedEventArgs e)
-    { if (contextScene is { } item && sceneContextDocument is { IsDisposed: false } doc && await ResolvePropertiesDraftsAsync()) OpenSceneProperties(doc, item); }
+    { if (contextScene is { } item && sceneContextDocument is { IsDisposed: false } doc && await ResolvePropertiesDraftsAsync()) await OpenScenePropertiesAsync(doc, item); }
 }

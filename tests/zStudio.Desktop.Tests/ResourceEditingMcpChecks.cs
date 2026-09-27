@@ -131,6 +131,8 @@ internal static class ResourceEditingMcpChecks
             var valueField = largeFields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Value")!;
             Assert.True(valueField["readOnly"]!.GetValue<bool>()); Assert.Equal(16384, valueField["value"]!.GetValue<string>().Length);
             await Job("resource_properties", Args(("action", "open"), ("member", member), ("node", largeNodeId)));
+            var pinnedState = await Call("properties_state", new());
+            Assert.Contains(pinnedState["fields"]!["fields"]!.AsArray(), f => f!["Label"]!.GetValue<string>() == "Value" && f["readOnly"]!.GetValue<bool>());
             Assert.DoesNotContain(Descendants(main.OpenPropertiesWindow!.ResourceFields!).OfType<TextBox>(), b => !b.IsReadOnly);
             Assert.False(main.OpenPropertiesWindow.ResourceFields!.HasPendingDrafts);
             var inspected = await Call("inspect_asset", Args(("kind", "Zrd"), ("index", 0)));
@@ -147,6 +149,23 @@ internal static class ResourceEditingMcpChecks
             var matching = Enumerable.Range(0, 10000).Where(i => i.ToString(System.Globalization.CultureInfo.InvariantCulture).Contains('9')).ToArray();
             Assert.Equal(2, projections); Assert.Equal(matching.Length, paged["total"]!.GetValue<int>());
             Assert.Equal(matching[10], paged["items"]![0]!["index"]!.GetValue<int>()); Assert.Equal(12, paged["nextOffset"]!.GetValue<int>());
+            await Call("close_document", Args());
+            string malformedPath = Path.Combine(rootPath, "malformed.zrd"); await File.WriteAllBytesAsync(malformedPath, [1,0,0,0], token);
+            await Job("open_document", new() { ["path"] = malformedPath }); doc = main.ViewModel.Documents.Single();
+            Assert.Null(doc.ResourceEdits); Assert.Equal(AssetKind.Raw, Assert.Single(doc.Assets).Record.Kind);
+            Assert.False(((MenuItem)main.FindName("SaveMenu")).IsEnabled); Assert.False(((Button)main.FindName("DocumentSave")).IsEnabled);
+            Assert.Contains(doc.Document.Diagnostics, d => d.Severity == "Error");
+            Assert.Equal("unsupported", (await Job("zrd_nodes", Args(("member", Guid.NewGuid())), "failed"))["code"]!.GetValue<string>());
+            Assert.Equal("unsupported", (await Job("save_document", Args(), "failed"))["code"]!.GetValue<string>());
+            Assert.Equal(new byte[] { 1,0,0,0 }, await File.ReadAllBytesAsync(malformedPath, token));
+            await Call("close_document", Args());
+            var deep = ZrdNode.Create(ZrdKind.Int, "42");
+            for (int i = 0; i < 128; i++) deep = ZrdNode.Create(ZrdKind.Array) with { Children = [deep] };
+            string deepPath = Path.Combine(rootPath, "deep.zrd"); await File.WriteAllBytesAsync(deepPath, ZrdWriter.Write(deep, token), token);
+            await Job("open_document", new() { ["path"] = deepPath }); doc = main.ViewModel.Documents.Single();
+            Assert.NotNull(doc.ResourceEdits); Assert.IsType<ResourceTreeItem>(tree.Items[0]);
+            var deepInspection = await Call("inspect_asset", Args(("kind", "Zrd"), ("index", 0)));
+            Assert.Contains("children_truncated", deepInspection.ToJsonString());
             await CheckSharedPickupOwnerAsync(rootPath, token);
 
             Dictionary<string, object?> Args(params (string Key, object Value)[] values)

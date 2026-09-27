@@ -14,6 +14,8 @@ ZAR containers and typed ZRD resources now have shared GUI/MCP editors. These ar
 
 Unchanged payload bytes, original payload padding, and untouched directory metadata are retained. Changed/new payloads are appended before the rebuilt directory. Deleting a member removes its directory entry but does not compact the original payload region. A no-op serialization is byte-identical. Archives remain subject to the 512 MiB document limit.
 
+Members that share one payload range reuse its immutable decoded tree; edits still belong to each member UUID and never change another alias. An incomplete embedded ZRD is shown as raw data with a warning, allowing archive replacement/deletion to repair it. Standalone ZRD must pass the complete bounded decoder before editing or saving is enabled; malformed files retain raw inspection and an error diagnostic.
+
 ## Typed ZRD data
 
 1. Select a ZRD member in Assets, or open a standalone `.zrd` file. **Data** shows the actual typed root and ordered array children, labelled with their child indices.
@@ -21,12 +23,12 @@ Unchanged payload bytes, original payload padding, and untouched directory metad
 3. Edit an integer, float or string in Properties. **Enter** or an intentional field boundary applies one undoable change; **Escape** restores the committed value. Invalid input stays in place with an inline diagnostic. Navigation that retargets Properties, saving, and closing explicitly resolve pending input.
 4. Integers are signed 32-bit values. Floats accept finite invariant decimal text or explicit `0xXXXXXXXX` bits, preserving nonfinite values and signed zero. Strings use JSON quotes/escapes and Latin-1 characters, for example `"text"`, `"line\nnext"`, or `"embedded\u0000byte"`.
 5. Use the node's context menu or **Edit → ZRD nodes** to add children, change type, duplicate, delete, reorder, or **Move to array**. Moving selects the destination in a tree and uses a zero-based final child index measured after removing the moved node. Cycles are rejected. The root can change type but cannot be deleted or duplicated.
-6. Changing type replaces the old scalar/children. Undo restores the previous data and node identities. Properties shows a deleted-record notice if its pinned node/member is removed, and reconnects when Undo restores it.
+6. Changing type replaces the old scalar/children, including choosing Array again to create an empty array. Undo restores the previous data and node identities. Properties shows a deleted-record notice if its pinned node/member is removed, and reconnects when Undo restores it.
 7. Save the owning archive or standalone ZRD with the normal document controls. Embedded resource changes share the archive's undo history and save transaction.
 
 ZRD is generic typed data: arrays are ordered containers, not inferred name/value dictionaries. The editor does not automatically repair script references, resource names or game-specific record shapes after structural changes. Successful parse/save verification establishes format integrity, not original-game compatibility.
 
-Properties values longer than 16,384 displayed characters show a read-only prefix, with no editable truncated draft. Use **Change type** with the existing type to replace the complete value, or export the resource for external editing. JSON inspection is limited to 1,024 nodes, 4,096 characters per string and 65,536 string characters in total; truncation markers retain the stored counts. Exports retain complete data. MCP `resource_properties` and `inspect_asset` share these limits; `zrd_edit` can explicitly replace the complete value within the normal request limit. Node paging formats only the returned page when no query is supplied, and filtering runs off the UI thread with cancellation and revision checks.
+Properties values longer than 16,384 displayed characters show a read-only prefix, with no editable truncated draft. Use **Change type** with the existing type to replace the complete value, or export the resource for external editing. JSON inspection is limited to 1,024 nodes, 24 child levels, 4,096 characters per string and 65,536 string characters in total; truncation markers retain the stored counts. Exports retain complete data, including the supported maximum of 128 ZRD child levels. MCP `resource_properties` and `inspect_asset` share these limits; `zrd_edit` can explicitly replace the complete value within the normal request limit. Node paging formats only the returned page when no query is supplied, and filtering runs off the UI thread with cancellation and revision checks.
 
 **Reload / F5** uses the current Save As destination. It retains the existing document if the destination is already open, unavailable, malformed or changed during reload.
 
@@ -34,13 +36,15 @@ Properties values longer than 16,384 displayed characters show a read-only prefi
 
 The first accepted archive edit or pickup move claims its source archives in the visible workspace. That ownership lasts through undo history until the owning document closes, including after saving. Another editor may inspect the data but cannot concurrently mutate the same archive. Save/discard and close the first owner before switching editing paths.
 
-Accepted resource snapshots feed the existing dependency resolver. Dependent mission and animation contexts are invalidated; the visible dependent preview refreshes using its retained camera/playhead. Audio refresh uses the existing asynchronous preparation and warm output. Clean cached pickup sessions are rebuilt when their resource snapshot changes. Original-source **Bytes** and the original half of MCP inspection remain separate from edited data, including after member reordering. New members have no original source byte range.
+Accepted resource snapshots feed the existing dependency resolver. Dependent mission and animation contexts are invalidated; mission cache keys include the workspace snapshot revision even when disk files are unchanged, and invalidation includes an edited GameZ snapshot. The visible dependent preview refreshes using its retained camera/playhead. Audio refresh uses the existing asynchronous preparation and warm output. Clean cached pickup sessions are rebuilt when their resource snapshot changes. Original-source **Bytes** and the original half of MCP inspection remain separate from edited data, including after member reordering. New members have no original source byte range.
 
 Preparation and serialization run off the UI thread. Publication checks document lifetime/revision; canceled or superseded preparation cannot publish. History is bounded to 128 snapshots and a 256 MiB serialized-snapshot budget per direction, retaining at least the newest undo step. Saved bytes are reparsed and checked before replacement, and content hashes detect external changes. Save As can recover accepted edits when the old destination has changed externally.
 
 ## MCP
 
 All tools use the existing opted-in, same-user workspace connection. Discovery stays windowless. Operations return handles read through `zstudio_operation`.
+
+`properties_state` includes the pinned resource's generated fields and read-only flags. `zrd_edit` with `action="set"` accepts scalar nodes; array changes use structural operations or `action="type"`.
 
 | Tool | Purpose |
 | --- | --- |

@@ -87,10 +87,15 @@ public sealed class FormatRegistry
         try
         {
             if (readers.TryGetValue(probe.Family, out var reader)) reader.Read(doc, token);
+            else if (probe.Family == FormatFamily.Zrd)
+                doc.Add(AssetKind.Zrd, 0, System.IO.Path.GetFileName(path), 0, bytes.Length, content: ZrdDecoder.Read(bytes, token));
             else doc.Add(probe.Family switch { FormatFamily.Zrd => AssetKind.Zrd, FormatFamily.Wave => AssetKind.Sound, _ => AssetKind.Raw }, 0, System.IO.Path.GetFileName(path), 0, bytes.Length);
         }
         catch (Exception ex) when (ex is InvalidDataException or OverflowException or ArgumentOutOfRangeException)
-        { doc.Diagnostics.Add(new("Error", $"Parsing stopped: {ex.Message}")); }
+        {
+            doc.Diagnostics.Add(new("Error", $"Parsing stopped: {ex.Message}"));
+            if (probe.Family == FormatFamily.Zrd) doc.Add(AssetKind.Raw, 0, System.IO.Path.GetFileName(path), 0, bytes.Length);
+        }
         return doc;
     }
 }

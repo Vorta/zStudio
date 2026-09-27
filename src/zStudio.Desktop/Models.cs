@@ -44,12 +44,15 @@ public sealed partial class FolderNode(string name, string path, FileEntry? file
 public sealed partial class AssetItem(AssetRecord record) : ObservableObject
 {
     public Guid? ResourceId { get; init; }
-    private string? editedSummary;
-    public AssetRecord Record { get; } = record;
+    public AssetRecord Record { get; private set; } = record;
     public string Name => Record.Name;
     public string Kind => Record.Kind.ToString();
-    public string Summary => editedSummary ?? (Record.Summary.Length > 0 ? Record.Summary : $"{Record.Length:N0} bytes");
-    internal void SetEditedSummary(string value) { editedSummary = value.Length > 0 ? value : null; OnPropertyChanged(nameof(Summary)); }
+    public string Summary => Record.Summary.Length > 0 ? Record.Summary : $"{Record.Length:N0} bytes";
+    internal void UpdateRecord(AssetRecord value)
+    {
+        if (Record.Id != value.Id) throw new InvalidOperationException("An asset row must retain its identity.");
+        Record = value; OnPropertyChanged(nameof(Record)); OnPropertyChanged(nameof(Name)); OnPropertyChanged(nameof(Summary));
+    }
     public int Index => Record.Index;
     public string Identity => $"{Record.Kind} #{Record.Index}";
     public string SequenceCount => Record.Content is AnimationEntry entry ? entry.Sequences.Count.ToString() : "";
@@ -68,6 +71,9 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public ResourceEditSession? ResourceEdits { get; }
     public event Action? ResourceEditsChanged;
     public ZbdDocument PreviewDocument => ResourceEdits?.Current.Document ?? ModelEdits?.Current.World ?? Document;
+    public AssetRecord? OriginalAsset(AssetRecord asset) => ResourceEdits is { } resources
+        ? resources.OriginalAsset(resources.Current.Members[asset.Index])
+        : Document.Assets.SingleOrDefault(a => a.Kind == asset.Kind && a.Index == asset.Index);
     public event Action? ModelEditsChanged;
     private readonly Stack<bool> sceneUndo = [], sceneRedo = [];
     private AssetResolver? workspaceResolver;
@@ -136,7 +142,11 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         }
         return edits;
     }
-    public void InvalidateMissionContext() { contextLoading?.Cancel(); animationContext = null; MissionSceneLoader.Invalidate(Document); }
+    public void InvalidateMissionContext()
+    {
+        contextLoading?.Cancel(); animationContext = null; MissionSceneLoader.Invalidate(Document);
+        if (!ReferenceEquals(PreviewDocument, Document)) MissionSceneLoader.Invalidate(PreviewDocument);
+    }
     public string? LastSavedCopy { get; set; }
     private Task<AnimationPreviewContext>? animationContext;
     private string? animationWorldPath;
@@ -184,7 +194,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ResourceEditsChanged?.Invoke();
             };
         }
-        if (doc.GameZLayout != null && doc.Probe.Version == 15)
+        if (doc.GameZLayout != null && doc.Probe.Version == 15 && !doc.Diagnostics.Any(d => d.Severity == "Error"))
         {
             ModelEdits = new(doc);
             ModelEdits.BeforeEdit += ClaimResourcePaths;
@@ -192,8 +202,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             ModelEdits.Changed += () =>
             {
                 Revision++; workspaceResolver?.SetWorkspaceSnapshots(SessionId, ModelEdits.Documents);
-                var records = ModelEdits.Current.World.Assets.ToDictionary(a => (a.Kind, a.Index));
-                foreach (var item in Assets) if (records.TryGetValue((item.Record.Kind, item.Index), out var current)) item.SetEditedSummary(current.Summary);
+                RebuildModelAssets();
                 InvalidateMissionContext(); OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ModelEditsChanged?.Invoke();
             };
         }
@@ -209,6 +218,26 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         }
         if (doc.Scene is GameScene scene)
             foreach (var root in scene.Nodes.Where(n => n.Class == "world")) SceneRoots.Add(new(scene, root.Index, []));
+    }
+    private void RebuildModelAssets()
+    {
+        var current = ModelEdits!.Current.World;
+        var selected = SelectedAsset?.Record.Id;
+        var existing = Assets.ToDictionary(a => a.Record.Id);
+        var records = current.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).ToArray();
+        var retained = records.Select(a => a.Id).ToHashSet();
+        foreach (var row in Assets.Where(a => !retained.Contains(a.Record.Id)).ToArray()) Assets.Remove(row);
+        for (int i = 0; i < records.Length; i++)
+        {
+            var record = records[i];
+            if (existing.TryGetValue(record.Id, out var row)) row.UpdateRecord(record);
+            else { row = new(record); Assets.Insert(i, row); }
+        }
+        Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()]; OnPropertyChanged(nameof(Kinds));
+        if (!Kinds.Contains(KindFilter)) KindFilter = "All types";
+        SelectedAsset = Assets.FirstOrDefault(a => a.Record.Id == selected) ?? (selected == null ? null : Assets.FirstOrDefault());
+        foreach (var root in SceneRoots) root.UpdateScene(current.Scene!);
+        OnPropertyChanged(nameof(Description));
     }
     private void RebuildResourceAssets()
     {
@@ -256,8 +285,15 @@ public sealed partial class InspectorNode : ObservableObject
     }
     public string FullText => node?.ToJsonString(JsonData.Options) ?? "null";
 }
-public sealed class SceneTreeItem(GameScene scene, int index, HashSet<int> ancestors)
+public sealed class SceneTreeItem(GameScene scene, int index, HashSet<int> ancestors) : INotifyPropertyChanged
 {
+    public event PropertyChangedEventHandler? PropertyChanged;
+    internal void UpdateScene(GameScene value)
+    {
+        scene = value;
+        foreach (var child in children ?? []) child.UpdateScene(value);
+        PropertyChanged?.Invoke(this, new(nameof(Node))); PropertyChanged?.Invoke(this, new(nameof(Label)));
+    }
     public GameNode Node => scene.Nodes[index];
     public string Label => $"{Node.Name}  ·  {Node.Class}  #{index}";
     private IReadOnlyList<SceneTreeItem>? children;

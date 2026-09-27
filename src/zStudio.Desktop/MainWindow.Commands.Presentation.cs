@@ -59,7 +59,7 @@ public partial class MainWindow
             }
             return Result(new { state=WindowState.ToString(),Width,Height,closing=action=="close" });
         });
-        Register(r,"properties_open","Open the reusable Properties window for an explicit asset or animation sequence/event; current pending drafts must be resolved first.",true,
+        Register(r,"properties_open","Open the reusable Properties window for an explicit edited asset or animation sequence/event; current pending drafts must be resolved first. Model records remain pinned by identity through replacement and undo/redo. Concurrent edits reject stale loads.",true,
             [..AssetParameters,P("sequence","string","Animation sequence GUID."),P("event","string","Animation event GUID.")],async (a,token)=>
         {
             if(propertiesWindow?.HasPendingDrafts==true) throw new StudioCommandException("pending_drafts","Resolve Properties drafts before retargeting.");
@@ -85,7 +85,7 @@ public partial class MainWindow
             ++propertyRequest; propertiesWindow?.CloseResolved(); return Result(new { closed=true });
         });
         Register(r,"properties_state","Read the pinned Properties window identity, content and current editable fields.",false,[],_ =>
-            Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.AnimationFields ?? propertiesWindow?.PickupFields)?.DescribeAutomationFields() }));
+            Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? propertiesWindow?.ResourceFields)?.DescribeAutomationFields() }));
         Register(r,"scene_properties","Inspect a scene node or open its Properties window, including editable mission pickups.",true,
             [PreviewParameter,P("node","integer","Scene node index.",true),P("open","boolean","Open the pinned Properties window.")],a=>
         {

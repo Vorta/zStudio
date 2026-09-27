@@ -12,6 +12,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Add eight shared MCP tools for model bundles/replacement and archive/ZRD editing, bringing the discovery catalog to 60 tools. Extend typed schemas, GUI parity mappings and real named-pipe regression coverage.
 - Bound large ZRD string formatting before JSON escaping in node listings and Data tree labels, and follow only current model/texture destinations when checking external changes after Save As.
 - Guard shared model/texture ownership before edits and saves, enforce output size limits before allocation, and retain typed ZRD editing across member renames and reopening. Keep resolver publication atomic, bound large Properties/inspection and paged results, and reload current Save As destinations.
+- Validate standalone ZRD before enabling edits, share decoding for aliased archive payloads, and keep edited model records synchronized across Assets, inspection, Document scene and pinned Properties. Preserve original byte ranges separately; expose new records through GUI/MCP and restore them correctly through undo/redo.
 - Document supported import/editing formats and limits, and keep the latest validated portable build in `artifacts/zStudio-win-x64` for local use.
 
 ## 0.5.2 — 2026-09-26

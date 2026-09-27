@@ -32,7 +32,8 @@ public sealed class ResourceEditSession
     {
         if (document.Probe.Family is not (FormatFamily.Archive or FormatFamily.Zrd) || document.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact ZAR archive or standalone ZRD is required.");
         source = document; TargetPath = document.Path; TargetStamp = document.Stamp;
-        var members = document.Assets.Select(a => new ResourceMember(Guid.NewGuid(), a.Index, a.Name, document.Slice(a.Offset, a.Length), IsArchive ? document.Slice(document.ArchiveDirectoryOffset!.Value + a.Index * 148L, 148) : ReadOnlyMemory<byte>.Empty, a.Content as ZrdNode)).ToArray();
+        var standalone = IsArchive ? null : (document.Assets.SingleOrDefault()?.Content as ZrdNode ?? ZrdDecoder.Read(document.Bytes));
+        var members = document.Assets.Select(a => new ResourceMember(Guid.NewGuid(), a.Index, a.Name, document.Slice(a.Offset, a.Length), IsArchive ? document.Slice(document.ArchiveDirectoryOffset!.Value + a.Index * 148L, 148) : ReadOnlyMemory<byte>.Empty, standalone ?? a.Content as ZrdNode)).ToArray();
         Current = saved = new(members, document, Hash(document.Bytes));
     }
     public ResourceMember Member(Guid id) => Current.Members.SingleOrDefault(m => m.Id == id) ?? throw new InvalidDataException("The archive member no longer exists.");
@@ -101,8 +102,10 @@ public sealed class ResourceEditSession
             }
             switch (action)
             {
-                case "set": root = Change(root, node, n => ZrdNode.Set(n, n.Kind, value)); break;
-                case "type": root = Change(root, node, n => ZrdNode.Set(n, kind, value)); break;
+                case "set":
+                    if (selected.Kind == ZrdKind.Array) throw new InvalidDataException("Use structural operations to edit array children, or change type to replace the complete array.");
+                    root = Change(root, node, n => ZrdNode.Set(n, n.Kind, value)); break;
+                case "type": root = Change(root, node, n => ZrdNode.Set(n with { Children = [] }, kind, value)); break;
                 case "add": root = Insert(root, node, ZrdNode.Create(kind, value), position < 0 ? selected.Children.Count : position); break;
                 case "delete": if (node == root.Id) throw new InvalidDataException("The root cannot be deleted; change its type instead."); root = Remove(root, node); break;
                 case "duplicate":

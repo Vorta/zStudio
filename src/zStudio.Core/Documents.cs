@@ -79,7 +79,8 @@ public sealed class GameScene
 }
 public static class JsonData
 {
-    public static JsonSerializerOptions Options { get; } = new() { WriteIndented = true, MaxDepth = 256 };
+    // A supported 128-level ZRD uses both an object and a children array per level, plus export wrappers.
+    public static JsonSerializerOptions Options { get; } = new() { WriteIndented = true, MaxDepth = 512 };
     public static long Integer(JsonNode? node, long fallback = 0)
     {
         if (node is not JsonValue v) return fallback;

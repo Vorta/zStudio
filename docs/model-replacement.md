@@ -67,6 +67,8 @@ After Save As, **Reload / F5** opens the saved GameZ destination and its local d
 
 ## MCP
 
+- Assets, Data inspection and Document scene read the accepted model snapshot, including appended materials/texture references. Existing asset rows and selection retain kind/index identity through replacement and undo/redo. Pinned asset Properties refreshes that same identity; a record removed by Undo shows an unavailable notice until Redo restores it.
+- Original-source Bytes always uses the original record range. Newly appended records have no original bytes. `zstudio_assets` exposes current `Offset`/`Length` separately from nullable `sourceOffset`/`sourceLength`; use the latter with `zstudio_source_bytes`.
 - `zstudio_model_bundle_export(document, kind, index, destination, rootNode?, texturePack?)` returns an operation handle and then the bundle directory/manifest and model/placement counts.
 - `zstudio_model_replace(document, revision, manifest)` returns an operation handle. It validates off-thread, rechecks lifetime/revision/drafts, accepts one batch and rebuilds the visible preview.
 - `zstudio_inspect_asset` keeps original `source` separate from a frozen `edited` snapshot.

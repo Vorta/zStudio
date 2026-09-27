@@ -9,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Export;
 
 namespace Recoil.Zbd.Desktop;
 
@@ -22,6 +23,9 @@ public sealed class PropertiesWindow : Window
     private readonly Button redo = HistoryButton("Redo", "\uE7A6", "Ctrl+Y");
     private readonly TextBlock notice = new() { TextWrapping = TextWrapping.Wrap, Margin = new(12, 0, 12, 8), Opacity = .7 };
     private JsonObject? snapshot;
+    private AssetId? readOnlyAsset;
+    private long assetRefreshGeneration;
+    internal Task AssetRefreshWork { get; private set; } = Task.CompletedTask;
     private string label = "";
     private bool closingResolved, resolvingClose;
     public DocumentModel? Document { get; private set; }
@@ -100,6 +104,28 @@ public sealed class PropertiesWindow : Window
         label = title; snapshot = (JsonObject)json.DeepClone();
         ReadOnlyPropertySheet sheet = new(); sheet.Show(snapshot, false); body.Content = sheet; Refresh(); return true;
     }
+    internal bool SetAsset(DocumentModel document, AssetRecord asset, JsonObject json)
+    {
+        if (!SetReadOnly(document, $"{asset.Name} · {asset.Kind} #{asset.Index}", json)) return false;
+        readOnlyAsset = asset.Id; return true;
+    }
+    private void ModelAssetsChanged() => AssetRefreshWork = RefreshAssetAsync();
+    private async Task RefreshAssetAsync()
+    {
+        if (Document is not { } doc || readOnlyAsset is not { } id) return;
+        long generation = ++assetRefreshGeneration, revision = doc.Revision;
+        var token = doc.Lifetime.Token;
+        var current = doc.PreviewDocument;
+        var asset = current.Assets.SingleOrDefault(a => a.Id == id);
+        try
+        {
+            var json = asset == null ? new JsonObject { ["unavailable"] = "This record is absent from the current edit. Redo can restore it.", ["kind"] = id.Kind.ToString(), ["index"] = id.Index }
+                : await Task.Run(() => ExportService.AssetJson(current, asset, token, boundedZrd: true), token);
+            if (generation != assetRefreshGeneration || Document != doc || doc.IsDisposed || doc.Revision != revision || readOnlyAsset != id) return;
+            snapshot = json; ReadOnlyPropertySheet sheet = new(); sheet.Show(json, false); body.Content = sheet; Refresh();
+        }
+        catch (OperationCanceledException) when (doc.IsDisposed) { }
+    }
     public bool SetPickup(DocumentModel document, MissionPickupSource source, string title, JsonObject json)
     {
         if (!BeginTarget(document)) return false;
@@ -118,6 +144,7 @@ public sealed class PropertiesWindow : Window
         document.Disposing += DocumentDisposing; document.PropertyChanged += DocumentChanged;
         if (document.AnimationEdits is { } edits) edits.Changed += Refresh;
         document.PickupEditsChanged += Refresh;
+        document.ModelEditsChanged += ModelAssetsChanged;
         return true;
     }
     private void Detach()
@@ -127,9 +154,10 @@ public sealed class PropertiesWindow : Window
             doc.Disposing -= DocumentDisposing; doc.PropertyChanged -= DocumentChanged;
             if (doc.AnimationEdits is { } edits) edits.Changed -= Refresh;
             doc.PickupEditsChanged -= Refresh;
+            doc.ModelEditsChanged -= ModelAssetsChanged;
         }
         AnimationFields?.Dispose(); PickupFields?.Dispose(); ResourceFields?.Dispose();
-        AnimationFields = null; PickupFields = null; ResourceFields = null; Document = null; snapshot = null; body.Content = null;
+        AnimationFields = null; PickupFields = null; ResourceFields = null; Document = null; snapshot = null; body.Content = null; readOnlyAsset = null; ++assetRefreshGeneration;
     }
     private void DocumentDisposing() => CloseResolved();
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e) => Refresh();

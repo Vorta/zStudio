@@ -63,9 +63,14 @@ public partial class MainWindow
             if (doc.IsDisposed || ViewModel.SelectedDocument != doc) throw new StudioCommandException("context_changed","The active document changed while opening.");
             return Result(DocumentState(doc));
         });
-        Register(r, "assets", "List assets by stable kind/index in an open document.", false, [DocumentParameter, .. PageParameters], a =>
+        Register(r, "assets", "List current edited assets by stable kind/index. Offset/Length describe the edited snapshot; sourceOffset/sourceLength identify original bytes, or are null for newly added records.", false, [DocumentParameter, .. PageParameters], a =>
         {
-            var doc = TargetDocument(a); return Page(doc.Assets.Where(x => x.Name.Contains(Text(a, "query"), StringComparison.OrdinalIgnoreCase)).Select(x => new { x.Record.Kind, x.Index, x.Name, x.Record.Offset, x.Record.Length, x.Summary, member = x.ResourceId }), a);
+            var doc = TargetDocument(a);
+            return Page(doc.Assets, a, x => x.Name, x =>
+            {
+                var source = doc.OriginalAsset(x.Record);
+                return new { x.Record.Kind, x.Index, x.Name, x.Record.Offset, x.Record.Length, x.Summary, member = x.ResourceId, sourceOffset = source?.Offset, sourceLength = source?.Length };
+            });
         });
         RegisterJob(r, "select_asset", "Select an asset in the GUI and await its preview; does not retarget Properties.", AssetParameters, false, async (a, token) =>
         {
