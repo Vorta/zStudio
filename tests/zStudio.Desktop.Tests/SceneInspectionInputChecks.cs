@@ -168,7 +168,10 @@ internal static class SceneInspectionInputChecks
                     card.SetDraft(card.DraftToken, ["-", "2", "3"]); input.Focus(); input.Select(0, 1);
                     await Idle(); scroll.ScrollToVerticalOffset(scrollOffset); await Idle();
                     string draftToken = card.DraftToken; long revision = document.Revision;
-                    await Resize(-40); await Resize(40);
+                    // Windows can constrain the scaled fixture to the desktop's
+                    // work area. Cancel restores the preferred height; moving
+                    // back by 40 would instead accept its smaller effective cap.
+                    await Resize(-40, canceled: true);
                     Assert.Equal(draftToken, card.DraftToken); Assert.Equal(revision, document.Revision);
                     Assert.Equal("-", input.Text); Assert.Equal(0, input.SelectionStart); Assert.Equal(1, input.SelectionLength);
                     Application.Current.ThemeMode = theme == ThemeMode.Dark ? ThemeMode.Light : ThemeMode.Dark;
