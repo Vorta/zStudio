@@ -123,7 +123,8 @@ internal static class BlenderNavigationCheck
                         view.SetAxisView(axis); Require(view.TryFrame("all"), "Axis framing failed"); await Task.Delay(180, timeout.Token);
                         var pose = view.CaptureView(); var camera = (ProjectionCamera)viewport.Camera!;
                         Require(pose.AxisView == axis && pose.Projection == "orthographic", "Axis state changed on render");
-                        var cubePoint = new Point(viewport.ActualWidth * (1 + viewport.ViewCubeHorizontalPosition) / 2, viewport.ActualHeight * (1 - viewport.ViewCubeVerticalPosition) / 2);
+                        var cubeBounds = view.NavigationCubeBounds;
+                        var cubePoint = new Point(cubeBounds.Left + cubeBounds.Width / 2, cubeBounds.Top + cubeBounds.Height / 2);
                         Require(view.NavigateCubeAt(cubePoint) && view.CaptureView().AxisView == axis, "View-cube face disagrees with named view: " + axis);
                         Require(camera.NearPlaneDistance > 0 && camera.FarPlaneDistance > camera.NearPlaneDistance, "Invalid orthographic clipping");
                         var image = Presented(viewport); Save(image, Path.Combine(output, label + "-" + axis + ".png"));
@@ -344,23 +345,26 @@ internal static class BlenderNavigationCheck
         var viewport = (Viewport3DX)view.RenderSurface;
         var instances = mesh.Instances; var pose = view.CaptureView();
         var previousInspection = view.InspectionContent;
+        var window = Window.GetWindow(view); double previousHeight = window.Height;
         var card = new SceneInspectionCard(view, _ => new JsonObject { ["Node"] = "Cube input fixture", ["Editable"] = false }, _ => { }, _ => { });
         view.InspectionContent = card;
         mesh.Instances = [System.Numerics.Matrix4x4.CreateScale(1000, 1000, 1) * System.Numerics.Matrix4x4.CreateTranslation(0, 0, -100)];
         try
         {
+            foreach (double height in new[] { 650d, 300d })
             foreach (bool locked in new[] { true, false })
             {
+                window.Height = height;
                 view.SetPickupLocked(true); view.SetPickupLocked(locked);
                 view.SetAxisView("front"); view.SetProjection("perspective");
                 view.RestoreView(view.CaptureView() with { AxisView = null, AutoPerspective = false }); await Task.Delay(150);
-                var cubePoint = new Point(viewport.ActualWidth * (1 + viewport.ViewCubeHorizontalPosition) / 2,
-                    viewport.ActualHeight * (1 - viewport.ViewCubeVerticalPosition) / 2);
+                var cubeBounds = view.NavigationCubeBounds;
+                var cubePoint = new Point(cubeBounds.Left + cubeBounds.Width / 2, cubeBounds.Top + cubeBounds.Height / 2);
                 Require(view.ProbeInspection(cubePoint) != null, "Cube regression needs geometry behind the cube");
                 Require(view.CaptureView().AxisView == null, "Cube regression needs an unnamed perspective view");
                 var click = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left);
                 Require(view.HandleScenePointerDown(cubePoint, click) && view.CaptureView().AxisView == "front",
-                    $"Scene input swallowed view-cube navigation while locked={locked}");
+                    $"Scene input swallowed view-cube navigation while locked={locked}, height={height}, cube={cubeBounds}, axis={view.CaptureView().AxisView}");
                 Require(view.SelectedInspection == null && !view.SelectionBoundsVisible && !viewport.IsMouseCaptured,
                     "Cube input selected geometry or captured the mouse");
                 // Outside the cube the lock still consumes scene clicks without
@@ -375,7 +379,13 @@ internal static class BlenderNavigationCheck
                 Require(!panelBounds.IntersectsWith(view.NavigationCubeBounds), "Pinned inspection panel overlaps the view cube");
                 Require(Math.Abs(panelBounds.Top - 10) < .01 && Math.Abs(panelBounds.Right - (view.ActualWidth - 10)) < .01,
                     "Rendered inspection panel is not anchored at the top right");
-                Require(view.InputHitTest(cubePoint) is DependencyObject input && !IsInPanel(input), "Pinned panel intercepts native cube input");
+                var currentCube = view.NavigationCubeBounds;
+                var currentCubePoint = new Point(currentCube.Left + currentCube.Width / 2, currentCube.Top + currentCube.Height / 2);
+                Require(view.InputHitTest(currentCubePoint) is DependencyObject input && !IsInPanel(input), "Pinned panel intercepts native cube input");
+                var selected = view.SelectedInspection;
+                Require(view.HandleScenePointerDown(currentCubePoint, new(Mouse.PrimaryDevice, 0, MouseButton.Left)) && view.CaptureView().AxisView == "front",
+                    "Relocated cube lost its navigation hit target");
+                Require(view.SelectedInspection == selected, "Relocated cube changed selection");
 
                 bool IsInPanel(DependencyObject input)
                 {
@@ -386,7 +396,7 @@ internal static class BlenderNavigationCheck
             }
             Console.WriteLine("PASS: shared pointer input prioritizes the view cube over geometry in locked/unlocked worlds, retaining the scene selection lock");
         }
-        finally { view.SetPickupLocked(true); view.InspectionContent = previousInspection; mesh.Instances = instances; view.RestoreView(pose); }
+        finally { view.SetPickupLocked(true); view.InspectionContent = previousInspection; window.Height = previousHeight; mesh.Instances = instances; view.RestoreView(pose); }
     }
     private static async Task CheckPointerZoom(SceneViewport view, MeshGeometryModel3D mesh, SceneViewport.ViewPose initial)
     {

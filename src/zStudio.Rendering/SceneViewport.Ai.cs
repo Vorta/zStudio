@@ -51,11 +51,11 @@ public sealed partial class SceneViewport
     }
     public bool SelectAiNode(string? id)
     {
-        if (id != null && (IsPickupDragging || IsFlyActive)) return false;
+        if (id != null && (!InspectionSelectionEnabled || IsPickupDragging || IsFlyActive)) return false;
         if (id != null && (!AiVisible || AiNetworks.Find(id) is not { } found || AiNetworkFilter != null && found.Network.Id != AiNetworkFilter)) return false;
         if (id != null && CanChangeInspection?.Invoke() == false) return false;
         SelectedAiNode = id;
-        if (id != null) SelectedInspection = InspectionSelectionEnabled ? InspectAi(id) : null;
+        if (id != null) SelectedInspection = InspectAi(id);
         else if (SelectedInspection?.AiNode != null) SelectedInspection = null;
         InspectionChanged?.Invoke();
         if (id != null) { FramingSelection = null; SelectPickup(null, false, true); }

@@ -93,8 +93,19 @@ internal static class SceneInspectionMcpChecks
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: deadline.Token);
             await Card("select", new() { ["target"] = target }, "locked");
             Assert.Null(viewport.SelectedInspection);
+            string aiId = graph.Networks[0].Nodes[0].Id;
+            Assert.False(viewport.SelectAiNode(aiId)); Assert.Null(viewport.SelectedAiNode);
+            await Call("ai_selection", new() { ["preview"] = preview, ["snapshot"] = graph.Id, ["action"] = "select", ["node"] = aiId }, "locked");
+            Assert.Null(viewport.SelectedAiNode); Assert.Null(viewport.SelectedInspection);
+            Assert.False(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible);
+            await Call("ai_selection", new() { ["preview"] = preview, ["snapshot"] = graph.Id, ["action"] = "properties", ["node"] = aiId });
+            Assert.Equal(aiId, main.OpenPropertiesWindow!.CurrentJson!["node_id"]!.GetValue<string>());
+            main.OpenPropertiesWindow.Close(); Assert.Null(viewport.SelectedAiNode);
             await Lock(false);
-            Assert.Null(viewport.SelectedInspection); // Unlock alone never selects.
+            Assert.Null(viewport.SelectedInspection); Assert.Null(viewport.SelectedAiNode); // Unlock alone never selects.
+            Assert.False(viewport.SelectionBoundsVisible);
+            await Call("ai_selection", new() { ["preview"] = preview, ["snapshot"] = graph.Id, ["action"] = "select", ["node"] = aiId });
+            Assert.Equal(aiId, viewport.SelectedAiNode); Assert.NotNull(viewport.SelectedInspection);
             await Card("select", new() { ["target"] = target });
             Assert.True(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible);
             var inspectionCard = (SceneInspectionCard)viewport.InspectionContent!;

@@ -11,23 +11,44 @@ namespace Recoil.Zbd.Rendering;
 
 public sealed partial class SceneViewport
 {
+    private double cubeHomeX, cubeHomeY, cubeHomeSize;
     /// <summary>The screen-space cube viewport in DIPs, reserved by the inspection overlay.</summary>
-    public Rect NavigationCubeBounds
+    public Rect NavigationCubeBounds => CubeBounds(viewport.ViewCubeHorizontalPosition, viewport.ViewCubeVerticalPosition, viewport.ViewCubeSize);
+    public Rect NavigationCubeHomeBounds => CubeBounds(cubeHomeX, cubeHomeY, cubeHomeSize);
+    private Rect CubeBounds(double horizontal, double vertical, double scale)
     {
-        get
+        if (!viewport.ShowViewCube) return Rect.Empty;
+        double size = 100;
+        if (viewport.Template?.FindName("PART_ViewCube", viewport) is ScreenSpacedElement3D cube &&
+            cube.SceneNode.RenderCore is HelixToolkit.SharpDX.Core.ScreenSpacedMeshRenderCore core) size = core.Size;
+        size *= scale;
+        // Helix clamps its small screen-space viewport at the surface edges.
+        // Relative center alone is wrong in short/narrow render surfaces.
+        return new(Math.Clamp(viewport.ActualWidth * (1 + horizontal) / 2 - size / 2, 0, Math.Max(0, viewport.ActualWidth - size)),
+            Math.Clamp(viewport.ActualHeight * (1 - vertical) / 2 - size / 2, 0, Math.Max(0, viewport.ActualHeight - size)), size, size);
+    }
+    /// <summary>Keep cube navigation accessible beside a tall panel in a short viewport.</summary>
+    public void ReserveInspectionPanel(Rect bounds)
+    {
+        var home = NavigationCubeHomeBounds;
+        double x = cubeHomeX, y = cubeHomeY, scale = cubeHomeSize;
+        if (!bounds.IsEmpty && !home.IsEmpty && home.IntersectsWith(bounds) && viewport.ActualWidth > 0 && viewport.ActualHeight > 0)
         {
-            if (!viewport.ShowViewCube) return Rect.Empty;
-            double size = 100;
-            if (viewport.Template?.FindName("PART_ViewCube", viewport) is ScreenSpacedElement3D cube &&
-                cube.SceneNode.RenderCore is HelixToolkit.SharpDX.Core.ScreenSpacedMeshRenderCore core) size = core.Size;
-            size *= viewport.ViewCubeSize;
-            return new(viewport.ActualWidth * (1 + viewport.ViewCubeHorizontalPosition) / 2 - size / 2,
-                viewport.ActualHeight * (1 - viewport.ViewCubeVerticalPosition) / 2 - size / 2, size, size);
+            double size = Math.Min(home.Width, Math.Max(0, bounds.Left - 20));
+            // The panel reserves at least a 60-DIP side slot at constrained
+            // widths. Keep this cube above the bottom-left coordinate axes.
+            scale *= size / home.Width;
+            x = 2 * (bounds.Left - 10 - size / 2) / viewport.ActualWidth - 1;
+            y = 1 - 2 * (10 + size / 2) / viewport.ActualHeight;
         }
+        if (viewport.ViewCubeHorizontalPosition != x) viewport.ViewCubeHorizontalPosition = x;
+        if (viewport.ViewCubeVerticalPosition != y) viewport.ViewCubeVerticalPosition = y;
+        if (viewport.ViewCubeSize != scale) viewport.ViewCubeSize = scale;
     }
 
     private void ConfigureNavigationCube()
     {
+        cubeHomeX = viewport.ViewCubeHorizontalPosition; cubeHomeY = viewport.ViewCubeVerticalPosition; cubeHomeSize = viewport.ViewCubeSize;
         // Helix's Y-up face order is +Z, -Z, +X, -X, +Y, -Y.
         // Recoil's front is -Z; explicitly label the same axes used by numpad views.
         const int size = 96;

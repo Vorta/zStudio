@@ -37,7 +37,12 @@ public sealed partial class SceneViewport
     public UIElement? InspectionContent
     {
         get => inspectionHost.Children.Count > 1 ? inspectionHost.Children[1] : null;
-        set { while (inspectionHost.Children.Count > 1) inspectionHost.Children.RemoveAt(1); if (value != null) inspectionHost.Children.Add(value); }
+        set
+        {
+            while (inspectionHost.Children.Count > 1) inspectionHost.Children.RemoveAt(1);
+            ReserveInspectionPanel(Rect.Empty);
+            if (value != null) inspectionHost.Children.Add(value);
+        }
     }
 
     private void ConfigureInspection()

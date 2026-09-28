@@ -44,7 +44,7 @@ The whole option batch is validated before changing controls. AI settings publis
 
 - `zstudio_ai_networks`: paginated discovery with `preview`, optional `offset`, `limit` and `query`. Rows include snapshot and source identity.
 - `zstudio_ai_nodes`: paginated inspection with `preview`, `snapshot`, optional `network` (`all` by default), `offset`, `limit` and `query`.
-- `zstudio_ai_selection`: `preview`, `snapshot`, `action` (`select`, `clear`, `properties`) and a node ID except for clear. Selecting requires visible AI and a matching filter. Properties shares GUI draft guards.
+- `zstudio_ai_selection`: `preview`, `snapshot`, `action` (`select`, `clear`, `properties`) and a node ID except for clear. Selecting requires unlocked Whole world editing, visible AI and a matching filter; locked selection returns `locked` without retaining a hidden marker. Read-only Properties remains available while locked and shares GUI draft guards.
 - `zstudio_camera` with `action: frame`, `target: selected` frames the selected AI node without changing source selection.
 - `zstudio_scene_inspect` and `zstudio_scene_card` share the floating card, coordinate copy and explicit XYZ draft workflow. Read the current revision and draft token before confirming edits; accepted movement changes the graph snapshot.
 

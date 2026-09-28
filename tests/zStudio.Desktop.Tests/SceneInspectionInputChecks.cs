@@ -155,10 +155,21 @@ internal static class SceneInspectionInputChecks
             finally { Application.Current.ThemeMode = originalTheme; scene.LayoutTransform = Transform.Identity; window.Width = 900; window.Height = 600; }
 #pragma warning restore WPF0001
             await Idle(); card.Refresh(); await Idle(); scroll.ScrollToTop(); await Idle();
-            window.Height = 400; await Idle(); card.Refresh(); await Idle();
-            Assert.True(Bounds(panel, card).Bottom <= scene.NavigationCubeBounds.Top - 10);
-            Assert.True(scroll.ViewportHeight > 0); Assert.Equal(116, hover.ActualHeight);
-            Capture(panel, "short-viewport"); window.Height = 600; await Idle(); card.Refresh(); await Idle();
+            foreach (double width in new[] { 900d, 320d })
+            {
+                window.Width = width; window.Height = 300; await Idle(); card.Refresh(); await Idle();
+                Assert.False(Bounds(panel, card).IntersectsWith(scene.NavigationCubeBounds));
+                Assert.True(scroll.ViewportHeight >= 30, "Short viewport lost its scrollable details area"); Assert.Equal(90, hover.ActualHeight);
+                Assert.NotEqual(scene.NavigationCubeHomeBounds, scene.NavigationCubeBounds);
+                foreach (var button in new[] { confirm, cancel })
+                {
+                    Assert.True(Bounds(button, frame).Bottom < frame.ActualHeight);
+                    Assert.True(Bounds(button, frame).Right <= frame.ActualWidth);
+                }
+                Capture(panel, $"short-viewport-{width}");
+            }
+            window.Width = 900; window.Height = 600; await Idle(); card.Refresh(); await Idle();
+            Assert.Equal(scene.NavigationCubeHomeBounds, scene.NavigationCubeBounds);
 
             card.StartDraft(document, new("fixture.zbd", 0, "fixture", 0), new(1, 2, 3));
             card.Refresh(); await Idle();

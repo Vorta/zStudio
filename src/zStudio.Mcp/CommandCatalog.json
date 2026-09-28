@@ -2116,7 +2116,7 @@
   },
   {
     "Name": "zstudio_ai_selection",
-    "Description": "Select/clear an AI marker or open its pinned read-only Properties. Selection requires enabled visualization and a matching filter. Frame it with camera action=frame,target=selected.",
+    "Description": "Select/clear an AI marker or open its pinned read-only Properties. Selection requires unlocked Whole world editing, enabled visualization and a matching filter. Read-only Properties remains available while locked. Frame a selected marker with camera action=frame,target=selected.",
     "Mutates": true,
     "Parameters": [
       {
