@@ -164,6 +164,13 @@ internal static class SceneInspectionMcpChecks
             await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" }, "pending_drafts");
             await Call("close_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["discard"] = true }, "pending_drafts");
             await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray(new string('1', 65), "6", "7") }, "invalid_argument");
+            var outOfRange = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("2000000000000", "2", "3") });
+            token = outOfRange["draft"]!["token"]!.GetValue<string>();
+            var confirm = (Button)typeof(SceneInspectionCard).GetField("edit", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(inspectionCard)!;
+            confirm.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(inspectionCard.HasDraft); Assert.False(doc.IsDirty);
+            var validation = (TextBlock)typeof(SceneInspectionCard).GetField("error", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(inspectionCard)!;
+            Assert.Equal(Visibility.Visible, validation.Visibility); Assert.Contains("preview range", validation.Text);
             await Edit("set", new() { ["token"] = token, ["transformMode"] = "rotate" }, "read_only");
             await Edit("set", new() { ["token"] = token, ["headingDegrees"] = "90" }, "read_only");
             await Edit("set", new() { ["token"] = "old", ["position"] = new JsonArray("5", "6", "7") }, "draft_conflict");

@@ -511,7 +511,7 @@
         "zstudio_inspect_asset",
         "zstudio_source_bytes"
       ],
-      "note": "Model rows expose accepted AssetRecords and appended material/texture references while retaining kind/index identity through undo/redo. Asset offsets describe edited ranges; nullable sourceOffset/sourceLength and GUI Bytes retain original source ranges. New records have no original bytes."
+      "note": "Model rows expose accepted AssetRecords and appended material/texture references while retaining kind/index identity through undo/redo. Asset offsets describe edited ranges; nullable sourceOffset/sourceLength and GUI Bytes retain original source ranges. New records have no original bytes. Model replacement snapshots are restricted to GameZ and texture packs before acceptance/history; mission coordinates publish separate ZAR archives. Mixed model/placement edits share chronological undo and publish all snapshots without bypassing duplicate-owner protection."
     },
     {
       "gui": "MainWindow.xaml:AudioSeekChanged",

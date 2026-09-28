@@ -5,6 +5,7 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 ## 0.6.3 — 2026-09-28
 
 - Gate Whole world cards and bounds with **Unlock editing**. Show whole-instance selection bounds before Edit; enable Move/Rotate handles only in the card's shared draft. Add pickup XYZ rotation and AIV vehicle Y heading in degrees, preserving native units and untouched bytes. Typed transforms and handle drags preview until one combined confirmation, with drag-only Escape and full-draft Cancel. Extend the shared MCP draft schema and verified archive saves to rotation.
+- Keep out-of-range coordinate errors inline, require coordinate provenance when remapping vehicles without a verified counterpart scope, and reject cross-family model snapshots before acceptance. Cover mixed model/placement edits, publication, undo/redo and saves in both edit orders.
 - Keep inspection-card Edit/Confirm, Copy all and Close in a fixed header. Enable persistent authored XYZ fields in place, retain read-only world origins, and reserve a separate scrollbar gutter so it cannot overlap copy buttons.
 
 - Keep wheel scrolling and native controls inside floating inspection cards separate from camera navigation, including at scroll limits.

@@ -87,7 +87,7 @@ internal sealed partial class SceneInspectionCard : Grid
         button.Click += (_, _) => action(); return button;
     }
     private void Try(Action action)
-    { try { action(); error.Text = ""; error.Visibility = Visibility.Collapsed; } catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or System.IO.IOException or StudioCommandException or System.Runtime.InteropServices.ExternalException) { error.Text = ex.Message; error.Visibility = Visibility.Visible; } }
+    { try { action(); error.Text = ""; error.Visibility = Visibility.Collapsed; } catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or System.IO.IOException or System.IO.InvalidDataException or StudioCommandException or System.Runtime.InteropServices.ExternalException) { error.Text = ex.Message; error.Visibility = Visibility.Visible; } }
     internal void StartDraft(DocumentModel document, MissionPickupSource source, Vector3 position)
     {
         Refresh();

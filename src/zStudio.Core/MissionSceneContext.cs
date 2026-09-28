@@ -41,8 +41,8 @@ public sealed class MissionSceneContext
             {
                 bool Matches(MissionActor a) => a.SourceRoot == actor.SourceRoot &&
                     (actor.Pickup is { } pickup ? a.Pickup?.Source == pickup.Source :
-                     actor.CoordinateSource != null && coordinateMatches != null ? a.CoordinateSource is { } source && coordinateMatches.Contains(source) :
-                     a.Pickup == null && a.Name == actor.Name);
+                     actor.CoordinateSource is { } coordinate ? a.CoordinateSource is { } source && (coordinateMatches?.Contains(source) ?? source == coordinate) :
+                     a.Pickup == null && a.CoordinateSource == null && a.Name == actor.Name);
                 if (previous.Actors.Count(Matches) != 1) return -1;
                 var matches = Actors.Where(Matches).ToArray();
                 if (matches.Length != 1) return -1;

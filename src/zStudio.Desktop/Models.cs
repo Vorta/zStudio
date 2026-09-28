@@ -167,6 +167,9 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (workspaceResolver == null) return;
         var coordinates = PickupEdits is { CanUndo: true } or { CanRedo: true } or { IsDirty: true } ? PickupEdits.WorkingArchives(Lifetime.Token) : [];
         var models = ModelEdits is { CanUndo: true } or { CanRedo: true } or { IsDirty: true } ? ModelEdits.Documents : [];
+        // The format families are disjoint: models publish GameZ/texture packs,
+        // coordinates publish ZAR archives. Keep the resolver's duplicate-owner
+        // protection; a name-based merge would hide an invalid cross-family edit.
         workspaceResolver.SetWorkspaceSnapshots(SessionId, models.Concat(coordinates));
     }
     public string? LastSavedCopy { get; set; }
