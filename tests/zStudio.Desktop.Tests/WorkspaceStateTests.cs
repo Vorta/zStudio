@@ -9,6 +9,20 @@ namespace Recoil.Zbd.Desktop.Tests;
 public sealed class WorkspaceStateTests
 {
     [Fact]
+    public void InspectionPanelPreferenceDefaultsAndSurvivesSettingsRoundTrip()
+    {
+        var layout = JsonSerializer.Deserialize<WorkspaceLayout>("""{"Version":4,"ToolsHeight":260}""")!;
+        layout.Normalize(); Assert.Equal(432, layout.InspectionPanelHeight); Assert.Equal(260, layout.ToolsHeight);
+        layout.InspectionPanelHeight = 620;
+        var restored = JsonSerializer.Deserialize<WorkspaceLayout>(JsonSerializer.Serialize(layout))!;
+        restored.Normalize(); Assert.Equal(620, restored.InspectionPanelHeight);
+        restored.InspectionPanelHeight = 12; restored.Normalize(); Assert.Equal(216, restored.InspectionPanelHeight);
+        foreach (double invalid in new[] { double.NaN, double.NegativeInfinity, double.PositiveInfinity })
+        {
+            restored.InspectionPanelHeight = invalid; restored.Normalize(); Assert.Equal(432, restored.InspectionPanelHeight);
+        }
+    }
+    [Fact]
     public void InvalidDraftNeverBecomesTheCommittedBaseline()
     {
         float stored = 1.2345678f; int commits = 0;

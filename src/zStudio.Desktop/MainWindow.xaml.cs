@@ -560,6 +560,7 @@ public partial class MainWindow : Window
         try
         {
             var defaults = new WorkspaceLayout(); ViewModel.Settings.Workspace = defaults;
+            CurrentInspectionCard?.SetPanelHeight(defaults.InspectionPanelHeight);
             previousPreset = defaults.Preset;
             navigatorTemporary = inspectorTemporary = toolsMaximized = false;
             SelectNavigatorSection(defaults.BrowserTab);

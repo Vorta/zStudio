@@ -121,6 +121,11 @@
       "note": "Shared triangle/instance picking supplies independent hover and selection in the fixed top-right panel. The permanent hover readout clears to placeholders over empty space; scene_card select expands details below it and clear collapses details only. Explicit point queries do not move or capture the physical pointer."
     },
     {
+      "gui": "SceneInspectionCard:Resize",
+      "tools": ["zstudio_workspace_view", "zstudio_scene_inspect"],
+      "note": "The bottom grip and Up/Down/Home/End set the shared inspectionPanelHeight preference without accepting drafts. Total expanded height defaults to 432 DIP, has a normal minimum of 216 DIP and a maximum of 80% of the viewport. Short viewports lower the effective minimum; automatic clamping never overwrites the saved preference. scene_inspect.panel returns preferred/effective heights, current limits and expanded state. Reset layout restores the default; collapsed details retain the preferred expanded height. Explicit height/reset requests supersede active resizing so stale drag updates or cancellation cannot overwrite the newer preference."
+    },
+    {
       "gui": "SceneInspectionCard:Actions",
       "tools": [
         "zstudio_scene_card",
@@ -129,7 +134,7 @@
         "zstudio_undo_redo",
         "zstudio_save_document"
       ],
-      "note": "Whole world cards and selection bounds require unlocked editing; source/tree inspection and hover remain available while locked. Fixed-header Edit/Confirm, Cancel, Copy all and Close share scene_card revisions, draft lifetimes, archive ownership, history and verified saves. AuthoredPosition, AuthoredRotation and AuthoredHeading bindings enable persistent fields in place. Move/Rotate buttons are hidden with reserved space until a draft begins, then appear alongside world-axis handles using the same draft as scene_card set position/rotationDegrees/headingDegrees/transformMode. Pickups support XYZ radians displayed as degrees; vehicles support native Y heading degrees; AI rotation is disabled. Drags preview until explicit confirmation creates one combined undo step; Escape during a drag restores that gesture only. Invalid inputs retain the last valid preview and hide handles. Field/all copy returns accepted values with labels. World-origin readouts, animation poses and ambiguous actor ownership remain read-only. Header spacing, scrolling and gutter do not change camera or document state. Short viewports automatically place the navigation cube beside the panel, restoring its normal corner when space permits or details close; axis commands remain shared and no physical input is captured."
+      "note": "Whole world cards and selection bounds require unlocked editing; source/tree inspection and hover remain available while locked. Fixed-header Edit/Confirm, Cancel, Copy all and Close share scene_card revisions, draft lifetimes, archive ownership, history and verified saves. AuthoredPosition, AuthoredRotation and AuthoredHeading bindings enable persistent fields in place. Move/Rotate buttons are hidden with reserved space until a draft begins, then appear alongside world-axis handles using the same draft as scene_card set position/rotationDegrees/headingDegrees/transformMode. Pickups support XYZ radians displayed as degrees; vehicles support native Y heading degrees; Rotate stays hidden for placements without authored rotation. Drags preview until explicit confirmation creates one combined undo step; Escape during a drag restores that gesture only. Invalid inputs retain the last valid preview and hide handles. Field/all copy returns accepted values with labels. World-origin readouts, animation poses and ambiguous actor ownership remain read-only. Header spacing, scrolling and gutter do not change camera or document state. Short viewports automatically place the navigation cube beside the panel, restoring its normal corner when space permits or details close; axis commands remain shared and no physical input is captured."
     },
     {
       "gui": "DocumentSceneTree:Hierarchy",

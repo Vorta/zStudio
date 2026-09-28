@@ -100,6 +100,15 @@ internal static class McpLiveCheck
                     else if (label == "tank")
                         draft = await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), headingDegrees = "132.5", transformMode = "rotate" });
                     else await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), transformMode = "rotate" }, "read_only");
+                    foreach (double height in new[] { 216d, 620d })
+                    {
+                        await Call("workspace_view", new { changes = new { inspectionPanelHeight = height } });
+                        var resized = await Call("scene_inspect", new { preview });
+                        Equal(height, resized["panel"]!["preferredHeight"]!.GetValue<double>(), label + " preferred panel height");
+                        Equal(true, resized["panel"]!["effectiveHeight"]!.GetValue<double>() <= resized["panel"]!["maximumHeight"]!.GetValue<double>(), label + " bounded panel height");
+                        Equal(draft["draft"]!["token"]!.GetValue<string>(), resized["draft"]!["token"]!.GetValue<string>(), label + " resizing retains draft");
+                        Equal(revision, resized["revision"]!.GetValue<long>(), label + " resizing leaves revision unchanged");
+                    }
                     await Call("pickup_lock", new { document = worldId, revision, locked = true }, "pending_drafts");
                     await Task.Delay(200);
                     await Call("capture", new { target = "window", width = 1400, height = 900 });
@@ -277,7 +286,7 @@ internal static class McpLiveCheck
             var state = await Call("state", new { });
             foreach (var doc in state["documents"]!.AsArray())
                 await Call("close_document", new { document = doc!["id"]!.GetValue<string>(), revision = doc["Revision"]!.GetValue<long>(), discard = true });
-            await Call("workspace_view", new { changes = new { theme = originalLayout["theme"]!.GetValue<string>() } });
+            await Call("workspace_view", new { changes = new { theme = originalLayout["theme"]!.GetValue<string>(), inspectionPanelHeight = originalLayout["layout"]!["InspectionPanelHeight"]!.GetValue<double>() } });
         }
 
         async Task CheckSceneTree(string document, string preview)

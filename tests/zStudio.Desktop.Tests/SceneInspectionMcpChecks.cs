@@ -150,6 +150,7 @@ internal static class SceneInspectionMcpChecks
             Assert.True(viewport.TransformHandlesVisible);
             Assert.Equal(Visibility.Visible, ((StackPanel)moveMode.Parent).Visibility);
             Assert.True(moveMode.IsEnabled); Assert.False(rotateMode.IsEnabled);
+            Assert.Equal(Visibility.Hidden, rotateMode.Visibility);
             Assert.Same(inlinePosition, Fields(inspectionCard).Single(f => f.Binding == SceneInspectionBinding.AuthoredPosition));
             Assert.All(inlinePosition.Inputs, input => Assert.False(input.IsReadOnly));
             Assert.All(Fields(inspectionCard).Where(f => f.Binding == SceneInspectionBinding.None).SelectMany(f => f.Inputs), input => Assert.True(input.IsReadOnly));
@@ -208,6 +209,26 @@ internal static class SceneInspectionMcpChecks
             Assert.False(viewport.TransformHandlesVisible); Assert.True(viewport.SelectionBoundsVisible);
             inspectionCard.Refresh();
             Assert.Equal(new[] { "-", "6", "7" }, inlinePosition.Inputs.Select(input => input.Text).ToArray());
+            long resizeRevision = doc.Revision;
+            var cameraBeforeResize = viewport.CaptureView();
+            var resizeGrip = (Thumb)typeof(SceneInspectionCard).GetField("resizeGrip", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(inspectionCard)!;
+            foreach (double height in new[] { 620d, 1d, 432d })
+            {
+                // Exercise gesture arbitration without capturing the physical pointer.
+                resizeGrip.RaiseEvent(new DragStartedEventArgs(0, 0) { RoutedEvent = Thumb.DragStartedEvent });
+                resizeGrip.RaiseEvent(new DragDeltaEventArgs(0, -10) { RoutedEvent = Thumb.DragDeltaEvent });
+                await Call("workspace_view", new() { ["changes"] = new JsonObject { ["inspectionPanelHeight"] = height } });
+                resizeGrip.RaiseEvent(new DragDeltaEventArgs(0, -30) { RoutedEvent = Thumb.DragDeltaEvent });
+                resizeGrip.RaiseEvent(new DragCompletedEventArgs(0, -40, true) { RoutedEvent = Thumb.DragCompletedEvent });
+                var resized = await Call("scene_inspect", new() { ["preview"] = preview });
+                Assert.Equal(Math.Max(216, height), resized["panel"]!["preferredHeight"]!.GetValue<double>());
+                Assert.True(resized["panel"]!["expanded"]!.GetValue<bool>());
+                Assert.True(resized["panel"]!["effectiveHeight"]!.GetValue<double>() <= resized["panel"]!["maximumHeight"]!.GetValue<double>());
+                Assert.Equal(token, inspectionCard.DraftToken); Assert.Equal(resizeRevision, doc.Revision); Assert.False(doc.IsDirty);
+                Assert.Equal(new[] { "-", "6", "7" }, inlinePosition.Inputs.Select(input => input.Text).ToArray());
+                Assert.Equal(cameraBeforeResize, viewport.CaptureView());
+                Assert.Equal(Math.Max(216, height), StudioSettings.Load().GetWorkspace().InspectionPanelHeight);
+            }
             Assert.Equal(copy["text"]!.GetValue<string>(), (await Card("copy", new() { ["field"] = "Authored placement XYZ" }))["text"]!.GetValue<string>());
             await Edit("apply", new() { ["token"] = token }, "invalid_argument"); Assert.False(doc.IsDirty);
             var valid = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("5.125", "6", "7") });
@@ -248,6 +269,7 @@ internal static class SceneInspectionMcpChecks
             begun = await Edit("begin"); token = begun["draft"]!["token"]!.GetValue<string>();
             var rotated = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("4", "5", "6"), ["rotationDegrees"] = new JsonArray("10", "40", "-20"), ["transformMode"] = "rotate" });
             Assert.True(rotateMode.IsEnabled); Assert.Equal("XYZ", rotated["draft"]!["rotationAxes"]!.GetValue<string>());
+            Assert.Equal(Visibility.Visible, rotateMode.Visibility);
             token = rotated["draft"]!["token"]!.GetValue<string>();
             Assert.True(viewport.TransformHandlesVisible); Assert.Equal("rotate", viewport.TransformMode);
             Assert.False(doc.IsDirty); Assert.Equal(record.OriginalPosition, edits.Position(record.Source));
@@ -281,6 +303,21 @@ internal static class SceneInspectionMcpChecks
             finally { typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsFlyActive))!.SetValue(viewport, false); }
             await Card("clear", new());
             Assert.Null(viewport.SelectedInspection);
+
+            await Call("workspace_view", new() { ["changes"] = new JsonObject { ["inspectionPanelHeight"] = 620 } });
+            using (var nextViewport = new SceneViewport())
+            {
+                Invoke("AttachInspection", nextViewport);
+                var nextPanel = System.Text.Json.JsonSerializer.SerializeToNode(((SceneInspectionCard)nextViewport.InspectionContent!).DescribePanel())!;
+                Assert.Equal(620, nextPanel["preferredHeight"]!.GetValue<double>());
+                Assert.False(nextPanel["expanded"]!.GetValue<bool>());
+            }
+            resizeGrip.RaiseEvent(new DragStartedEventArgs(0, 0) { RoutedEvent = Thumb.DragStartedEvent });
+            await Call("workspace_view", new() { ["changes"] = new JsonObject { ["resetLayout"] = true } });
+            resizeGrip.RaiseEvent(new DragCompletedEventArgs(0, 0, true) { RoutedEvent = Thumb.DragCompletedEvent });
+            var resetPanel = (await Call("scene_inspect", new() { ["preview"] = preview }))["panel"]!;
+            Assert.Equal(432, resetPanel["preferredHeight"]!.GetValue<double>());
+            Assert.False(resetPanel["expanded"]!.GetValue<bool>());
 
             Task<JsonNode> Card(string action, JsonObject args, string? error = null) { args["preview"] = preview; args["action"] = action; return Call("scene_card", args, error); }
             Task<JsonNode> Lock(bool locked, string? error = null) => Call("pickup_lock", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["locked"] = locked }, error);

@@ -51,7 +51,7 @@ internal sealed partial class SceneInspectionCard : Grid
         this.viewport = viewport; this.describe = describe; this.begin = begin; this.apply = apply;
         Background = null;
         InitializeTransformControls();
-        Grid layout = new(); layout.RowDefinitions.Add(new() { Height = GridLength.Auto }); layout.RowDefinitions.Add(new() { Height = GridLength.Auto }); layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
+        Grid layout = new(); layout.RowDefinitions.Add(new() { Height = GridLength.Auto }); layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
         DockPanel title = new(); var close = Button("×", "Close node card", () => { if (ResolvePending()) viewport.SelectInspection(null, false); });
         DockPanel.SetDock(close, Dock.Right); title.Children.Add(close);
         var copyDetails = Button("⧉", "Copy selected node details", () => Try(() => Copy(null, true)));
@@ -61,12 +61,11 @@ internal sealed partial class SceneInspectionCard : Grid
         cancel = Button("↶", "Discard transform draft", CancelDraft); cancel.Visibility = Visibility.Hidden;
         DockPanel.SetDock(cancel, Dock.Right); title.Children.Add(cancel); title.Children.Add(heading);
         layout.Children.Add(title);
-        SetRow(modes, 1); layout.Children.Add(modes);
-        StackPanel body = new(); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(rows);
+        StackPanel body = new(); body.Children.Add(modes); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(rows);
         error.Visibility = Visibility.Collapsed;
         ScrollViewer scroll = new() { Name = "InspectionScroll", Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0) };
         scroll.SetResourceReference(Control.TemplateProperty, "InspectionScrollTemplate");
-        SetRow(scroll, 2); layout.Children.Add(scroll);
+        SetRow(scroll, 1); layout.Children.Add(scroll);
         card = Box(layout); card.Name = "InspectionCard";
         card.BorderBrush = new SolidColorBrush(Color.FromArgb(96, 128, 128, 128)); card.BorderThickness = new(0, 1, 0, 0);
         card.Visibility = Visibility.Collapsed;

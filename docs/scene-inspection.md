@@ -10,6 +10,8 @@ The card has a fixed header with Edit/Confirm, Copy all and Close at the top rig
 
 The mouse wheel scrolls the floating card when the pointer is over its contents or scrollbar, including coordinate fields. Reaching a scroll limit does not zoom the scene. Camera gestures begin on the scene outside the card; native card buttons, fields and scrollbar retain their own input.
 
+Drag the expanded panel's bottom grip to resize it vertically. Its normal minimum is 216 DIP, half its default total height of 432 DIP; its maximum is 80% of the 3D viewer's height. In shorter viewers the maximum takes precedence over the minimum. The pointer readout and action header remain fixed while the remaining content scrolls. The grip also supports Up/Down (10 DIP) and Home/End (current limits). Resizing does not move the camera or commit draft input. One preferred height is saved for all three 3D viewers; automatic shrinking and closing the details retain it. Reset layout restores 432 DIP.
+
 Closing the card clears its tree selection and Frame selected target and collapses only the details section; the permanent hover readout remains. Compatible preview refreshes restore a retained source row's framing and inspection without selecting an arbitrary runtime copy. Isolating a pickup child from the tree keeps the complete placed pickup, consistently through the toolbar and MCP. Geometry shared by multiple mission actors has no uniquely editable placement and stays read-only.
 
 Details include model/material/stored texture and LOD, node/parent identity, soil, CanModify and ClipTo. AI cards retain ordered directed links, negative sentinels and the raw node integer. Pickups include placement identity, amount and respawn metadata. Tanks include their AIV placement, template, heading and difficulty scope. Scene local, rendered world and authored placement coordinates are labeled separately.
@@ -24,7 +26,7 @@ Select a row to inspect it and make it the Frame selected target. Selection does
 
 ## Editing transforms
 
-The map toggle starts off for each new document. After selecting an object, click the header **Edit** icon to enable its authored fields and movement handles. **Move / Rotate** controls are invisible and inactive before Edit, retaining their space so fields do not shift. They appear during the draft and hide again after confirmation or cancellation. Pickups support XYZ position and Euler XYZ rotation; supported AIV vehicles (including tanks) support position and Y heading. AI navigation nodes support position only, with Rotate disabled and an explanatory tooltip. Other geometry and runtime animation poses remain read-only. Tank templates must resolve unambiguously. Actors without an AIV placement remain inspectable without inventing a placement record.
+The map toggle starts off for each new document. After selecting an object, click the header **Edit** icon to enable its authored fields and movement handles. **Move / Rotate** controls are invisible and inactive before Edit, retaining their space so fields do not shift. Supported controls appear during the draft and hide again after confirmation or cancellation. Pickups support XYZ position and Euler XYZ rotation; supported AIV vehicles (including tanks) support position and Y heading. AI navigation nodes support position only; Rotate stays hidden for placements without rotation. Other geometry and runtime animation poses remain read-only. Tank templates must resolve unambiguously. Actors without an AIV placement remain inspectable without inventing a placement record.
 
 AIV placement records contain one heading scalar, not XYZ angles. The inspected reconstruction of retail `Player::CreateFromNamesAtPose` (0x421AB0) applies `(0, heading × π/180, 0)` after reading that scalar. Pitch and roll cannot be authored for an individual vehicle through this placement format. Pickup records already contain all three rotation components; these are exposed without changing shared model templates or inventing source fields.
 
@@ -39,6 +41,10 @@ The map document owns these edits. Its Undo/Redo/Save commands handle them chron
 ## MCP
 
 `zstudio_scene_inspect` requires the current `preview` UUID and accepts either an opaque `target` or `screenPoint: [x,y]` in viewport DIP. By default it reads the selected card, falling back to hover; hover state is also returned separately. Results include document/revision, target and draft state. Queries never move/capture the physical pointer. Targets expire with their render instance or AI snapshot.
+
+`zstudio_workspace_view` accepts `changes.inspectionPanelHeight` in DIP for the shared preferred total expanded height (default 432, normalized to at least 216). `scene_inspect.panel` reports `preferredHeight`, `effectiveHeight`, `minimumHeight`, `maximumHeight` and `expanded`. Effective limits depend on the current viewport; they do not overwrite the stored preference. These presentation operations require no document revision or draft resolution. They preserve partial fields, draft tokens, selection and history.
+
+An explicit height request or Reset layout supersedes an ongoing resize gesture. Ending or canceling that older gesture cannot overwrite the newer preference. Ordinary viewport resizing only clamps presentation and retains the preferred height.
 
 `zstudio_scene_card` provides these actions:
 

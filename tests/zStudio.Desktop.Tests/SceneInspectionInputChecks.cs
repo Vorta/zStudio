@@ -54,11 +54,37 @@ internal static class SceneInspectionInputChecks
             var surfaceX = Descendants(hover).OfType<TextBlock>().Single(t => t.Name == "InspectionSurfaceX");
             var originZ = Descendants(hover).OfType<TextBlock>().Single(t => t.Name == "InspectionOriginZ");
             var modes = Descendants(card).OfType<ToggleButton>().Where(b => AutomationProperties.GetName(b) is "Move object" or "Rotate object").ToArray();
+            var resize = Descendants(card).OfType<Thumb>().Single(t => t.Name == "InspectionResize");
+            double savedHeight = 432; card.PanelHeightChanged += height => savedHeight = height;
+            async Task Resize(double delta, bool canceled = false)
+            {
+                resize.RaiseEvent(new DragStartedEventArgs(0, 0) { RoutedEvent = Thumb.DragStartedEvent });
+                resize.RaiseEvent(new DragDeltaEventArgs(0, delta) { RoutedEvent = Thumb.DragDeltaEvent });
+                resize.RaiseEvent(new DragCompletedEventArgs(0, delta, canceled) { RoutedEvent = Thumb.DragCompletedEvent });
+                await Idle();
+            }
             Assert.Equal(2, modes.Length); Assert.All(modes, b => { Assert.False(b.IsVisible); Assert.False(b.IsEnabled); });
             Assert.True(hover.IsVisible); Assert.Equal("X —", surfaceX.Text);
             Assert.Equal(10, Bounds(panel, card).Top, 5);
             Assert.Equal(card.ActualWidth - 10, Bounds(panel, card).Right, 5);
             Assert.True(Bounds(panel, card).Bottom <= scene.NavigationCubeBounds.Top - 10);
+            Assert.Equal(432, panel.ActualHeight, 5); Assert.True(resize.IsVisible);
+            double panelWidth = panel.ActualWidth;
+            await Resize(-1000); Assert.Equal(216, panel.ActualHeight, 5); Assert.Equal(216, savedHeight);
+            Assert.Equal(panelWidth, panel.ActualWidth); Assert.Equal(90, hover.ActualHeight);
+            Capture(panel, "minimum-height");
+            await Resize(10000); Assert.Equal(scene.ActualHeight * .8, panel.ActualHeight, 5);
+            Assert.False(Bounds(panel, card).IntersectsWith(scene.NavigationCubeBounds));
+            Assert.Equal(panelWidth, panel.ActualWidth);
+            double preferred = savedHeight; await Resize(-80, canceled: true);
+            Assert.Equal(preferred, savedHeight); Assert.Equal(preferred, panel.ActualHeight, 5);
+            foreach (var key in new[] { Key.Home, Key.Down, Key.Up, Key.End })
+            {
+                var keyEvent = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(resize), 0, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+                resize.RaiseEvent(keyEvent); await Idle(); Assert.True(keyEvent.Handled);
+                Assert.Equal(key switch { Key.Home or Key.Up => 216, Key.Down => 226, _ => scene.ActualHeight * .8 }, panel.ActualHeight, 5);
+            }
+            card.SetPanelHeight(432); await Idle();
             var pinned = Bounds(panel, card); var hoverBounds = Bounds(hover, card);
             var hoverItem = selected with { Target = "hover", Surface = new(1.2345678f, -20.25f, 300.5f), Origin = new(11, 22, -33) };
             typeof(SceneViewport).GetProperty(nameof(SceneViewport.HoverInspection))!.SetValue(scene, hoverItem);
@@ -74,6 +100,7 @@ internal static class SceneInspectionInputChecks
             Assert.Equal(pinned, Bounds(panel, card)); scene.RestoreView(before);
             Assert.True(scene.SelectInspection(null, false)); card.Refresh(); await Idle();
             Assert.True(hover.IsVisible); Assert.False(frame.IsVisible); Assert.Equal(hoverBounds, Bounds(hover, card));
+            Assert.False(resize.IsVisible);
             Assert.Equal(pinned.Top, Bounds(panel, card).Top); Assert.Equal(pinned.Right, Bounds(panel, card).Right);
             Assert.True(Bounds(panel, card).Height < pinned.Height);
             typeof(SceneViewport).GetProperty(nameof(SceneViewport.SelectedInspection))!.SetValue(scene, selected);
@@ -107,7 +134,10 @@ internal static class SceneInspectionInputChecks
                 foreach (var theme in new[] { ThemeMode.Dark, ThemeMode.Light })
                 foreach (double scale in new[] { 1d, 1.5d })
                 foreach (double width in new[] { 900d, 320d })
+                foreach (double controlSize in new[] { 32d, 40d })
                 {
+                    window.Resources["PreviewControlSize"] = controlSize;
+                    window.Resources["PreviewIconSize"] = controlSize == 40 ? 20d : 16d;
                     Application.Current.ThemeMode = theme;
                     scene.LayoutTransform = new ScaleTransform(scale, scale);
                     window.Width = width * scale; window.Height = 600 * scale;
@@ -118,11 +148,12 @@ internal static class SceneInspectionInputChecks
                     var rectangles = stableControls.Select(c => Bounds(c, frame)).ToArray();
                     var frameBounds = Bounds(frame, card);
                     double scrollOffset = scroll.VerticalOffset;
-                    scroll.ScrollToTop(); await Idle(); Capture(panel, $"{theme}-{width}-{scale}-read"); scroll.ScrollToVerticalOffset(scrollOffset); await Idle();
+                    scroll.ScrollToTop(); await Idle(); Capture(panel, $"{theme}-{width}-{scale}-{controlSize}-read"); scroll.ScrollToVerticalOffset(scrollOffset); await Idle();
                     card.StartDraft(document, new("fixture.zbd", 0, "fixture", 0), new(1, 2, 3));
                     await Idle();
                     Assert.False(input.IsReadOnly); Assert.Equal(Visibility.Visible, cancel.Visibility);
-                    Assert.All(modes, b => Assert.True(b.IsVisible));
+                    Assert.True(modes.Single(b => AutomationProperties.GetName(b) == "Move object").IsVisible);
+                    Assert.False(modes.Single(b => AutomationProperties.GetName(b) == "Rotate object").IsVisible);
                     Assert.False(modes.Single(b => AutomationProperties.GetName(b) == "Rotate object").IsEnabled);
                     Assert.Equal(frameBounds, Bounds(frame, card));
                     Assert.Equal(scrollOffset, scroll.VerticalOffset);
@@ -133,9 +164,13 @@ internal static class SceneInspectionInputChecks
                     double barLeft = Bounds(bar, frame).Left;
                     foreach (var button in Descendants(scroll).OfType<Button>().Where(b => AutomationProperties.GetName(b).StartsWith("Copy ")))
                         Assert.True(Bounds(button, frame).Right <= barLeft - 4, "The scrollbar overlaps a field copy button");
-                    scroll.ScrollToTop(); await Idle(); Capture(panel, $"{theme}-{width}-{scale}-edit"); scroll.ScrollToVerticalOffset(scrollOffset); await Idle();
+                    scroll.ScrollToTop(); await Idle(); Capture(panel, $"{theme}-{width}-{scale}-{controlSize}-edit"); scroll.ScrollToVerticalOffset(scrollOffset); await Idle();
                     card.SetDraft(card.DraftToken, ["-", "2", "3"]); input.Focus(); input.Select(0, 1);
                     await Idle(); scroll.ScrollToVerticalOffset(scrollOffset); await Idle();
+                    string draftToken = card.DraftToken; long revision = document.Revision;
+                    await Resize(-40); await Resize(40);
+                    Assert.Equal(draftToken, card.DraftToken); Assert.Equal(revision, document.Revision);
+                    Assert.Equal("-", input.Text); Assert.Equal(0, input.SelectionStart); Assert.Equal(1, input.SelectionLength);
                     Application.Current.ThemeMode = theme == ThemeMode.Dark ? ThemeMode.Light : ThemeMode.Dark;
                     await Idle();
                     Assert.All(authored.Inputs, c => Assert.True(c.Template.FindName("DeleteButton", c) is not UIElement clear || clear.Visibility == Visibility.Collapsed));
@@ -159,6 +194,7 @@ internal static class SceneInspectionInputChecks
             {
                 window.Width = width; window.Height = 300; await Idle(); card.Refresh(); await Idle();
                 Assert.False(Bounds(panel, card).IntersectsWith(scene.NavigationCubeBounds));
+                Assert.Equal(scene.ActualHeight * .8, panel.ActualHeight, 5);
                 Assert.True(scroll.ViewportHeight >= 30, "Short viewport lost its scrollable details area"); Assert.Equal(90, hover.ActualHeight);
                 Assert.NotEqual(scene.NavigationCubeHomeBounds, scene.NavigationCubeBounds);
                 foreach (var button in new[] { confirm, cancel })
@@ -169,6 +205,7 @@ internal static class SceneInspectionInputChecks
                 Capture(panel, $"short-viewport-{width}");
             }
             window.Width = 900; window.Height = 600; await Idle(); card.Refresh(); await Idle();
+            Assert.Equal(432, panel.ActualHeight, 5); // Automatic clamping never overwrites the preference.
             Assert.Equal(scene.NavigationCubeHomeBounds, scene.NavigationCubeBounds);
 
             card.StartDraft(document, new("fixture.zbd", 0, "fixture", 0), new(1, 2, 3));

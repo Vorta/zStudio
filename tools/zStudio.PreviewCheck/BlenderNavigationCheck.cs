@@ -353,8 +353,10 @@ internal static class BlenderNavigationCheck
         {
             foreach (double height in new[] { 650d, 300d })
             foreach (bool locked in new[] { true, false })
+            foreach (double panelHeight in new[] { 216d, 432d, 2000d })
             {
                 window.Height = height;
+                card.SetPanelHeight(panelHeight);
                 view.SetPickupLocked(true); view.SetPickupLocked(locked);
                 view.SetAxisView("front"); view.SetProjection("perspective");
                 view.RestoreView(view.CaptureView() with { AxisView = null, AutoPerspective = false }); await Task.Delay(150);
@@ -376,6 +378,7 @@ internal static class BlenderNavigationCheck
                 card.Refresh(); await Task.Delay(50);
                 var panel = (Border)typeof(SceneInspectionCard).GetField("panel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(card)!;
                 var panelBounds = new Rect(panel.TranslatePoint(new(), view), panel.RenderSize);
+                Require(panelBounds.Height <= view.ActualHeight * .8 + .01, "Inspection panel exceeds 80% of the viewport");
                 Require(!panelBounds.IntersectsWith(view.NavigationCubeBounds), "Pinned inspection panel overlaps the view cube");
                 Require(Math.Abs(panelBounds.Top - 10) < .01 && Math.Abs(panelBounds.Right - (view.ActualWidth - 10)) < .01,
                     "Rendered inspection panel is not anchored at the top right");

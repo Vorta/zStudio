@@ -17,6 +17,8 @@ public partial class MainWindow
     private void AttachInspection(SceneViewport viewport)
     {
         var card = new SceneInspectionCard(viewport, item => DescribeInspection(viewport, item), BeginInspectionEdit, ApplyInspectionEdit);
+        card.SetPanelHeight(Layout.InspectionPanelHeight);
+        card.PanelHeightChanged += height => Layout.InspectionPanelHeight = height;
         card.DraftClosed += () => { if (ReferenceEquals(inspectionDraft, card)) inspectionDraft = null; };
         viewport.InspectionContent = card;
         viewport.CanChangeInspection = () => ResolveInspectionDrafts();
@@ -157,7 +159,7 @@ public partial class MainWindow
 
     private void RegisterInspectionCommands(StudioCommands commands)
     {
-        Register(commands, "scene_inspect", "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions.", false,
+        Register(commands, "scene_inspect", "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Panel state includes preferred/effective heights, viewport limits and expanded state.", false,
             [PreviewParameter, P("target", "string", "Opaque target from a previous inspection."), new("screenPoint", "array", "Viewport DIP [x,y].", Items: new("", "number", "Coordinate.", NumberMinimum: 0), MinItems: 2, MaxItems: 2)], a =>
         {
             var viewport = TargetViewport(a); SceneInspection? item;
@@ -173,9 +175,10 @@ public partial class MainWindow
             return Result(new { preview = previewId, document = shownDocument?.SessionId, revision = shownDocument?.Revision,
                 inspection = item == null ? null : DescribeInspection(viewport, item), selected = viewport.SelectedInspection?.Target,
                 hover = viewport.HoverInspection == null ? null : DescribeInspection(viewport, viewport.HoverInspection),
-                draft = (viewport.InspectionContent as SceneInspectionCard)?.DescribeDraft() });
+                draft = (viewport.InspectionContent as SceneInspectionCard)?.DescribeDraft(),
+                panel = (viewport.InspectionContent as SceneInspectionCard)?.DescribePanel() });
         });
-        Register(commands, "scene_card", "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared position/rotation draft. Whole world selection requires unlocked editing. Move/Rotate controls and handles appear only during an edit draft; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.", true,
+        Register(commands, "scene_card", "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared position/rotation draft. Whole world selection requires unlocked editing. Move and supported Rotate controls and handles appear only during an edit draft; unsupported Rotate stays hidden; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.", true,
             [PreviewParameter, P("action", "string", "Card action.", true, "select", "clear", "copy", "begin", "set", "apply", "cancel"),
                 P("target", "string", "Opaque inspection target for select."), P("node", "integer", "Alternative scene node for selection."),
                 P("runtime", "string", "Optional runtime instance ID with node."), P("field", "string", "Copy field label; omitted copies all details."), P("clipboard", "boolean", "Write copy text to clipboard; default false."),
