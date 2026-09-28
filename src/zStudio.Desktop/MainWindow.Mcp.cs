@@ -100,6 +100,8 @@ public partial class MainWindow
     }
     private void RequireNoDrafts(DocumentModel? doc = null)
     {
+        if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc))
+            throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
         if ((doc == null || propertiesWindow?.Document == doc) && propertiesWindow?.HasPendingDrafts == true || (doc == null || shownDocument == doc) && animation?.HasAutomationDrafts == true)
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
         if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "A pickup drag is in progress.");
@@ -136,12 +138,14 @@ public partial class MainWindow
             version = typeof(MainWindow).Assembly.GetName().Version?.ToString(), ViewModel.HasRoot, ViewModel.RootPath, ViewModel.Status, ViewModel.IsBusy,
             documents = ViewModel.Documents.Select(DocumentState).ToArray(), activeDocument = ViewModel.SelectedDocument?.SessionId,
             preview = previewId, selectedAsset = shownAsset?.Id, animationTime = animation?.CurrentFrame?.Time, animationPlaying = animation?.IsPlaying,
-            pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true
+            pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft
         }));
         Register(registry, "capabilities", "Read all capability schemas. Unsupported formats remain read-only; MCP does not add binary patching.", false, [], _ => new(registry.Describe()));
         RegisterWorkspaceCommands(registry);
         RegisterPreviewCommands(registry);
         RegisterAiCommands(registry);
+        RegisterInspectionCommands(registry);
+        RegisterSceneTreeCommand(registry);
         RegisterEditCommands(registry);
         RegisterModelCommands(registry);
         RegisterResourceCommands(registry);

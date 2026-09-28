@@ -2,6 +2,27 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.6.3 — 2026-09-28
+
+- Resize the top-right inspection panel from its bottom grip or keyboard, with a saved shared height, a normal minimum of 216 DIP and a maximum of 80% of the viewport. Keep fixed readout/action headers and scrollable details; hide Rotate for placements without rotation. Share height control/readback through MCP, preserving transform drafts and newer layout choices when an older resize gesture ends.
+- Anchor inspection at the top right with a permanent live hover readout and selected-object details expanding below it. Clear hit coordinates to placeholders over empty space, preserve independent selection/drafts and keep the view cube clear. Hide Move/Rotate icons until Edit while retaining their layout space; show all supported pickup XYZ axes and vehicle Y heading.
+- Gate Whole world cards and bounds with **Unlock editing**. Show whole-instance selection bounds before Edit; enable Move/Rotate handles only in the card's shared draft. Add pickup XYZ rotation and AIV vehicle Y heading in degrees, preserving native units and untouched bytes. Typed transforms and handle drags preview until one combined confirmation, with drag-only Escape and full-draft Cancel. Extend the shared MCP draft schema and verified archive saves to rotation.
+- Keep out-of-range coordinate errors inline, require coordinate provenance when remapping vehicles without a verified counterpart scope, and reject cross-family model snapshots before acceptance. Cover mixed model/placement edits, publication, undo/redo and saves in both edit orders.
+- Keep inspection-card Edit/Confirm, Copy all and Close in a fixed header. Enable persistent authored XYZ fields in place, retain read-only world origins, and reserve a separate scrollbar gutter so it cannot overlap copy buttons.
+
+- Keep wheel scrolling and native controls inside floating inspection cards separate from camera navigation, including at scroll limits.
+- Rename the map lock to **Unlock editing** and share it across pickup, AI-node and supported AIV tank coordinates, preserving draft guards and the existing MCP command/state identities.
+- Add an expandable Document scene hierarchy for active previews, including mission placements, shared/partition references and unlinked nodes. Synchronize viewport selection, preserve expansion by provenance, retain stable animation scene structure, and expose the same hierarchy through `zstudio_scene_tree`.
+- Add shared 3D hover information and floating node cards to Whole world, model and animation previews. Show exact surface coordinates separately from object origins, source node/model/material identities, soil and region flags, AI links and mission metadata, with full-precision copy actions.
+- Add explicit XYZ editing for mission pickups, AI navigation nodes and supported AIV tanks. Preserve source identities, linked unique difficulty counterparts, pending drafts, chronological undo and verified coordinate-only archive saves.
+- Expose inspection, card selection/copy, coordinate drafts and the node hierarchy through three shared MCP tools, with typed validation, revision/draft checks and windowless discovery for all 73 tools.
+- Retain all requested destinations after partial coordinate Save As. Ordinary Save retries unpublished copies as new files, keeping source archives and competing files protected.
+- Keep ambiguous or shadowed tank records read-only and match difficulty counterparts by original placement and template provenance.
+- Frame the selected animation copy, expire inspection targets when runtime slots change source/model, and respect later source-tree selections. Update camera-facing sprite hit transforms before immediate camera queries.
+- Restore source framing and inspection after compatible hierarchy refreshes, clear stale tree selection when closing a card, and keep pickup-child isolation consistent between the toolbar and MCP.
+- Give reopened XYZ drafts new conflict tokens, reject scene-selection changes during Fly, and keep geometry shared by multiple mission actors read-only instead of choosing an arbitrary editable instance.
+- Clear unrelated rendered cards when selecting nodes without geometry, and open Properties for the current source after viewport selection while retaining independently pinned windows until explicitly retargeted.
+
 ## 0.6.1 — 2026-09-27
 
 - Base perspective zoom speed on the scene surface under the pointer while moving toward the pointer. Refresh that distance during zoom, retain the last speed over empty space, and continue past the old target without needing a small pan/orbit to restore speed. Wheel, Ctrl + middle drag, numpad and MCP share the behavior and smooth inertia, independently of clipping planes.

@@ -18,7 +18,7 @@ using Recoil.Zbd.Rendering;
 /// <summary>Captures only this harness's visible window, including the native caption and GPU surfaces.</summary>
 internal static class GuiReviewCapture
 {
-    public static int Run(string root,bool headerOnly = false,bool menusOnly = false,bool desktopCorners = true)
+    public static int Run(string root,bool headerOnly = false,bool menusOnly = false,bool desktopCorners = true,bool sceneTreeOnly = false)
     {
         string output = Path.Combine(Path.GetTempPath(), "zstudio-gui-review-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
         Directory.CreateDirectory(output); Console.WriteLine("Screenshots: " + output);
@@ -37,6 +37,7 @@ internal static class GuiReviewCapture
 #pragma warning disable WPF0001
                 app.ThemeMode = ThemeMode.Dark;
 #pragma warning restore WPF0001
+                if (sceneTreeOnly) { await SceneTreeLayoutCheck.Run(window, root, output, timeout.Token); return; }
                 await Capture("00-startup");
                 if (headerOnly)
                 {
@@ -207,7 +208,7 @@ internal static class GuiReviewCapture
                 ((TabControl)window.FindName("ToolTabs")).SelectedIndex = 4;
                 var actor = scene.Mission!.Actors.Single(a => a.Pickup?.Source.RecordIndex == 49);
                 Console.WriteLine("Nanite matched save scope: " + string.Join("; ",world.PickupEdits!.Scope(actor.Pickup!.Source).Sources.Select(s => $"{Path.GetFileName(s.ArchivePath)}/{s.ResourceName} asset#{s.AssetIndex} record#{s.RecordIndex}")));
-                var viewport = (Viewport3DX)scene.Content;
+                var viewport = (Viewport3DX)scene.RenderSurface;
                 var camera = (HelixToolkit.Wpf.SharpDX.PerspectiveCamera)viewport.Camera!;
                 var vertices = SceneBuilder.Assemble(scene.Mission.Scene).Placements.Where(p => scene.PickupAt(p.NodeIndex)?.Root == actor.Root)
                     .SelectMany(p => scene.Mission.Scene.Models[p.ModelIndex].Vertices.Select(v => Vector3.Transform(v, p.Transform))).ToArray();
@@ -227,7 +228,7 @@ internal static class GuiReviewCapture
                         selected = scene.SelectedPickupRoot == actor.Root;
                     }
                 Require(selected, "Could not select Nanite for review");
-                ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("PickupLocked")).IsChecked = false; await Capture("09-pickup");
+                ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("EditingUnlocked")).IsChecked = true; await Capture("09-pickup");
                 await Select(world, world.Assets.First(a => a.Record.Kind == AssetKind.Model && a.Record.Content is GameModel m && m.Vertices.Length > 100));
                 await Capture("10-model");
                 ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("DocumentSceneTab");
@@ -436,7 +437,7 @@ internal static class GuiReviewCapture
     {
         var browser = (TabControl)window.FindName("NavigationTabs");
         bool hasDocument = window.ViewModel.SelectedDocument != null;
-        bool hasScene = window.ViewModel.SelectedDocument?.SceneRoots.Count > 0;
+        bool hasScene = ((TreeView)window.FindName("DocumentSceneTree")).Items.Count > 0;
         string[] expectedTabs = hasScene ? ["Files", "Assets", "Search", "Document scene"] : hasDocument ? ["Files", "Assets", "Search"] : ["Files", "Search"];
         if (window.NavigatorMode == "split") expectedTabs = expectedTabs.Where(t => t != "Files").ToArray();
         Require(browser.Items.OfType<TabItem>().Where(t => t.Visibility == Visibility.Visible).Select(t => t.Header.ToString()).SequenceEqual(expectedTabs),"Navigator exposes tabs without available content");

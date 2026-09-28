@@ -72,15 +72,16 @@ public partial class MainWindow
         RegisterCameraCommand(r);
         Register(r, "scene_nodes", "List active assembled scene nodes by index, including instance metadata.", false, [PreviewParameter, .. PageParameters], a =>
         {
-            var viewport = TargetViewport(a); return Page((viewport.PreviewScene?.Nodes ?? []).Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)).Select(n => new { n.Index,n.Name,n.Class,n.Metadata }), a);
+            var viewport = TargetViewport(a); return Page((viewport.PreviewScene?.Nodes ?? []).Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)), a,
+                project: n => new { n.Index,n.Name,n.Class,n.Metadata, actor = viewport.ActorAt(n.Index) });
         });
-        Register(r, "scene_selection", "Select/inspect a scene node. Isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
+        Register(r, "scene_selection", "Select/inspect a scene node. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
-            var viewport = TargetViewport(a); string action = Text(a,"action");
+            RequireNoDrafts(); var viewport = TargetViewport(a); string action = Text(a,"action");
             if (animation != null && action is "isolate" or "show_all")
                 throw new StudioCommandException("unsupported", "Isolation is available only in model and Whole world previews. Animation scenes remain fully visible.");
-            if (viewport.IsPickupDragging)
-                throw new StudioCommandException("busy", "A pickup drag is in progress. Finish or cancel the drag before changing scene selection.");
+            if (viewport.IsPickupDragging || viewport.IsFlyActive)
+                throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing scene selection.");
             if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; }
             else
             {
@@ -91,6 +92,15 @@ public partial class MainWindow
                     // matching the GUI's selection and subsequent Isolate command.
                     node = viewport.PickupAt(node)?.Root ?? node;
                     InspectNode(node);
+                }
+                if (action == "select")
+                {
+                    // Clearing an unrelated geometry card is part of selecting
+                    // this source, not an explicit deselection of the source row.
+                    bool previous = changingSceneTree; changingSceneTree = true;
+                    try { if (!viewport.SelectInspectionNode(node)) viewport.SelectInspection(null, false); }
+                    finally { changingSceneTree = previous; }
+                    RevealSceneNode(node);
                 }
                 viewport.SelectFramingNode(node);
                 if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; }

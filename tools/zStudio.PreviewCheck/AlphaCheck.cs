@@ -34,7 +34,7 @@ internal static class AlphaCheck
                 var context = new AnimationPreviewContext { Package = new() { Prefix = [], Tail = [] }, World = new("alpha", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, ""), ReadOnlyMemory<byte>.Empty) { Scene = scene } };
                 AnimationFrame frame = new(0, [new(1,0,0,Matrix4x4.Identity,true,1,-1,0,0), new(2,1,0,Matrix4x4.CreateTranslation(0,0,-.1f),true,1,-1,0,0)], [], [], [], null,null,Vector4.Zero,Vector4.Zero,[],[],[]);
                 await preview.ShowAnimationAsync(context, frame, resolver, false, CancellationToken.None);
-                var viewport = (Viewport3DX)preview.Content; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false;
+                var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false;
                 var camera = (HCamera)viewport.Camera!; camera.Position = new(0,0,3); camera.LookDirection = new(0,0,-3); camera.UpDirection = new(0,1,0);
                 var group = viewport.Items.OfType<SortingGroupModel3D>().Single(); var surfaces = group.Children.OfType<MeshGeometryModel3D>().ToArray();
                 foreach (var mesh in surfaces) mesh.IsTransparent = true;

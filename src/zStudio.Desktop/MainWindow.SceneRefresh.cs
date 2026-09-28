@@ -28,6 +28,7 @@ public partial class MainWindow
 
     private Task<Guid?> RefreshStaticSceneAsync(DocumentModel doc, AssetRecord asset)
     {
+        if (!ResolveInspectionDrafts(doc)) { if (publishedStaticOptions != null) RestoreStaticSceneOptions(publishedStaticOptions); return Task.FromResult<Guid?>(null); }
         long generation = ++staticRefreshGeneration;
         var work = RefreshStaticSceneCoreAsync(doc, asset);
         // A synchronous status/binding callback may already have started a newer
@@ -41,6 +42,7 @@ public partial class MainWindow
         var previous = scene!;
         var retainedOptions = publishedStaticOptions!;
         var requested = ReadStaticSceneOptions();
+        long inspectionRevision = doc.Revision;
         var resolver = ViewModel.Resolver!;
         staticRefresh?.Cancel();
         using var request = PreviewOperation.Link(preview.Token);
@@ -63,11 +65,19 @@ public partial class MainWindow
             if (!OwnsRequest()) return null;
             await RefreshAssetInspectionAsync(doc, asset, token);
             if (!OwnsRequest()) return null;
+            if (doc.Revision != inspectionRevision || HasInspectionDraft)
+                throw new InvalidOperationException("Preview refresh retained the current scene because a new edit or position draft arrived.");
 
             var view = previous.CaptureView();
             string? aiSelection = previous.SelectedAiNode;
             int? selection = selectedNode, isolate = isolatedNode;
             var pickup = selection is int s ? previous.PickupAt(s)?.Pickup?.Source : null;
+            int Remap(int oldNode)
+            {
+                var source = previous.ActorAt(oldNode)?.CoordinateSource;
+                var matches = source != null && doc.PickupEdits?.Coordinate(source) != null ? doc.PickupEdits.Scope(source).Sources.ToHashSet() : null;
+                return mission!.RemapNodeFrom(previous.Mission!, oldNode, matches);
+            }
             previous.CancelPickupDrag(); DetachPickupEditor();
             flyRequest++;
             scene = replacement; replacement = null;
@@ -77,21 +87,24 @@ public partial class MainWindow
             ConfigurePickupScene(scene); ConfigureFlyScene(scene);
             SceneHost.Content = scene;
             ApplySceneOptions();
-            if (mission != null) AttachPickupEditor(doc);
+            if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
             scene.RestoreView(view);
             isolatedNode = mission != null && previous.Mission != null && isolate is int oldIsolate
-                ? mission.RemapNodeFrom(previous.Mission, oldIsolate) is >= 0 and int mapped ? mapped : null : isolate;
+                ? Remap(oldIsolate) is >= 0 and int mapped ? mapped : null : isolate;
             if (isolatedNode != null) scene.Isolate(isolatedNode);
             selectedNode = mission != null && previous.Mission != null
-                ? RemapPickupSelection(pickup, mission) ?? (selection is int oldSelection && mission.RemapNodeFrom(previous.Mission, oldSelection) is >= 0 and int mappedSelection ? mappedSelection : null)
+                ? RemapPickupSelection(pickup, mission) ?? (selection is int oldSelection && Remap(oldSelection) is >= 0 and int mappedSelection ? mappedSelection : null)
                 : selection;
-            if (selectedNode is int node) InspectNode(node);
-            if (aiSelection != null && previous.AiNetworks.Id == scene.AiNetworks.Id) scene.SelectAiNode(aiSelection);
+            if (selectedNode is int node) { InspectNode(node); scene.SelectInspectionNode(node); }
+            if (aiSelection != null && previous.AiNetworks.Find(aiSelection) is { } oldAi && scene.AiNetworks.Find(aiSelection) is { } newAi &&
+                oldAi.Node.SourceOffset == newAi.Node.SourceOffset) scene.SelectAiNode(aiSelection);
             publishedStaticOptions = requested; previewId = Guid.NewGuid();
             PreviewInfo.Text = scene.PreviewSummary; PreviewInfo.ToolTip = scene.PreviewSummary;
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
             ShowStaticPreviewProblems(doc, asset);
             EmptyPreview.Visibility = Visibility.Collapsed;
+            RefreshSceneTree();
+            if (selectedNode is int retainedNode) RevealSceneNode(retainedNode);
             previous.Dispose(); SynchronizeFly();
             ViewModel.Status = mission?.Layout.Description ?? scene.PreviewSummary;
             return previewId;

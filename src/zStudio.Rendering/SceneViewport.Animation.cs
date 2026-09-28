@@ -42,7 +42,7 @@ public sealed partial class SceneViewport
         else { Clear(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects; }
         token.ThrowIfCancellationRequested();
         animationContext = context; animationResolver = resolver; animationToken = token;
-        Mission = context.Mission; PreviewScene = context.Scene; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
+        Mission = context.Mission; PreviewScene = context.Scene; InspectionSourcePath = context.World.Path; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
         // Helix 3.1.2's OIT paths drop the unlit DiffuseMaterial effect cards.
         // Standard alpha blending with a sorted group renders their actual alpha.
         previousTransparency = viewport.OITRenderMode; viewport.OITRenderMode = OITRenderType.None;
@@ -62,13 +62,14 @@ public sealed partial class SceneViewport
     public void UpdateAnimationFrame(AnimationFrame frame, bool followCamera = false, bool effectLighting = true)
     {
         if (animationContext == null || animationToken.IsCancellationRequested || updatingAnimation) return;
-        updatingAnimation = true; animationFrame = frame; animationEffectLighting = effectLighting;
+        updatingAnimation = true; animationFrame = frame; animationEffectLighting = effectLighting; ++inspectionSerial;
         try
         {
-        var scene = animationContext.Scene; var ids = frame.Nodes.Select(p => p.Id).ToHashSet();
-        foreach (long expired in animatedMeshes.Keys.Where(id => !ids.Contains(id)).ToArray())
+        var scene = animationContext.Scene; var poses = frame.Nodes.ToDictionary(p => p.Id);
+        foreach (long expired in animatedMeshes.Where(pair => !poses.TryGetValue(pair.Key, out var pose) ||
+            pair.Value.Any(item => !inspectionMeshes.TryGetValue(item.Mesh, out var meta) || meta.Node != pose.SourceNode || meta.Model != pose.Model)).Select(pair => pair.Key).ToArray())
         {
-            foreach (var item in animatedMeshes[expired]) { animationGroup?.Children.Remove(item.Mesh); item.Mesh.Dispose(); }
+            foreach (var item in animatedMeshes[expired]) { inspectionMeshes.Remove(item.Mesh); animationGroup?.Children.Remove(item.Mesh); item.Mesh.Dispose(); }
             animatedMeshes.Remove(expired);
         }
         // Shared world poses replace their baseline instance. Owned animation
@@ -94,6 +95,7 @@ public sealed partial class SceneViewport
                     bool horizon = IsHorizon(pose.SourceNode);
                     var material = PreviewMaterials.Create(horizon); material.EnableUnLit = true;
                     var mesh = new MeshGeometryModel3D { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, IsThrowingShadow = false, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
+                    RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
                     int source = pose.SourceNode; mesh.MouseDown3D += (_, e) =>
                     {
                         if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: System.Windows.Input.MouseButtonEventArgs { ChangedButton: System.Windows.Input.MouseButton.Left } })
@@ -191,7 +193,7 @@ public sealed partial class SceneViewport
         rgb = Vector3.Clamp(rgb, Vector3.Zero, Vector3.One);
         return new(rgb.X, rgb.Y, rgb.Z, pose.Opacity * color.Alpha);
     }
-    private void RefreshAnimationCamera()
+    private void RefreshAnimationCamera(bool updateHitTests = false)
     {
         if (animationFrame is not { } frame || animationContext == null || updatingAnimation) return;
         var scene = animationContext.Scene;
@@ -204,7 +206,11 @@ public sealed partial class SceneViewport
             bool facade = pose.Texture != null || model.Metadata.Int("model_type") == 1;
             foreach (var item in items)
             {
-                if (facade) item.Mesh.Transform = new MatrixTransform3D(ToWpf(HorizonTransform(pose.SourceNode, CameraFacingTransform(pose, model))));
+                if (facade)
+                {
+                    item.Mesh.Transform = new MatrixTransform3D(ToWpf(HorizonTransform(pose.SourceNode, CameraFacingTransform(pose, model))));
+                    if (updateHitTests) item.Mesh.SceneNode.UpdateAllTransformMatrix();
+                }
                 if (animationEffectLighting && frame.Fog is { Enabled: true })
                 {
                     JsonMaterial(scene, item.Part.MaterialIndex, out var color, out _);

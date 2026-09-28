@@ -80,6 +80,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     private AssetResolver? workspaceResolver;
     public bool CanUndoScene => sceneUndo.Count > 0;
     public bool CanRedoScene => sceneRedo.Count > 0;
+    internal bool NextSceneEditIsModel(bool redo) => (redo ? sceneRedo : sceneUndo).TryPeek(out bool model) && model;
     private void RecordSceneEdit(bool model) { sceneUndo.Push(model); sceneRedo.Clear(); }
     public void UndoScene(bool redo)
     {
@@ -138,6 +139,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (PickupEdits == null)
         {
             PickupEdits = edits;
+            if (PreviewDocument.Scene is { } templateScene) edits.BindCoordinateTemplates(templateScene);
             edits.BeforeEdit += () =>
             {
                 if (pickupSnapshotRevision != resolver.SnapshotRevision && !edits.CanUndo && !edits.CanRedo)
@@ -145,7 +147,13 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
                 ClaimResourcePaths(edits.ArchivePaths.Concat(edits.ArchivePaths.Select(edits.TargetPath)));
             };
             edits.EditAccepted += () => RecordSceneEdit(false);
-            edits.Changed += () => { Revision++; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); PickupEditsChanged?.Invoke(); };
+            edits.Changed += () =>
+            {
+                Revision++;
+                PublishSceneSnapshots(); pickupSnapshotRevision = resolver.SnapshotRevision;
+                InvalidateMissionContext();
+                OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); PickupEditsChanged?.Invoke();
+            };
         }
         return edits;
     }
@@ -153,6 +161,16 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     {
         contextLoading?.Cancel(); animationContext = null; MissionSceneLoader.Invalidate(Document);
         if (!ReferenceEquals(PreviewDocument, Document)) MissionSceneLoader.Invalidate(PreviewDocument);
+    }
+    private void PublishSceneSnapshots()
+    {
+        if (workspaceResolver == null) return;
+        var coordinates = PickupEdits is { CanUndo: true } or { CanRedo: true } or { IsDirty: true } ? PickupEdits.WorkingArchives(Lifetime.Token) : [];
+        var models = ModelEdits is { CanUndo: true } or { CanRedo: true } or { IsDirty: true } ? ModelEdits.Documents : [];
+        // The format families are disjoint: models publish GameZ/texture packs,
+        // coordinates publish ZAR archives. Keep the resolver's duplicate-owner
+        // protection; a name-based merge would hide an invalid cross-family edit.
+        workspaceResolver.SetWorkspaceSnapshots(SessionId, models.Concat(coordinates));
     }
     public string? LastSavedCopy { get; set; }
     private Task<AnimationPreviewContext>? animationContext;
@@ -177,6 +195,13 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public ObservableCollection<AssetItem> Assets { get; }
     public ICollectionView FilteredAssets { get; }
     public ObservableCollection<SceneTreeItem> SceneRoots { get; } = [];
+    internal SceneTreeModel? StoredSceneTree { get; private set; }
+    private readonly SceneTreeState storedSceneState = new();
+    private void ResetStoredSceneTree(GameScene scene)
+    {
+        StoredSceneTree = new(scene, Path, false, storedSceneState);
+        SceneRoots.Clear(); foreach (var root in StoredSceneTree.Roots) SceneRoots.Add(root);
+    }
     public CancellationTokenSource Lifetime { get; } = new();
     [ObservableProperty] private string query = "";
     [ObservableProperty] private string kindFilter = "All types";
@@ -209,7 +234,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             ModelEdits.EditAccepted += () => RecordSceneEdit(true);
             ModelEdits.Changed += () =>
             {
-                Revision++; workspaceResolver?.SetWorkspaceSnapshots(SessionId, ModelEdits.Documents);
+                Revision++; PublishSceneSnapshots();
                 RebuildModelAssets();
                 InvalidateMissionContext(); OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ModelEditsChanged?.Invoke();
             };
@@ -224,8 +249,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             AnimationEdits = new(working);
             AnimationEdits.Changed += () => { Revision++; contextLoading?.Cancel(); animationContext = null; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); };
         }
-        if (doc.Scene is GameScene scene)
-            foreach (var root in scene.Nodes.Where(n => n.Class == "world")) SceneRoots.Add(new(scene, root.Index, []));
+        if (doc.Scene is GameScene scene) ResetStoredSceneTree(scene);
     }
     private void RebuildModelAssets()
     {
@@ -244,7 +268,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()]; OnPropertyChanged(nameof(Kinds));
         if (!Kinds.Contains(KindFilter)) KindFilter = "All types";
         SelectedAsset = Assets.FirstOrDefault(a => a.Record.Id == selected) ?? (selected == null ? null : Assets.FirstOrDefault());
-        foreach (var root in SceneRoots) root.UpdateScene(current.Scene!);
+        ResetStoredSceneTree(current.Scene!);
         OnPropertyChanged(nameof(Description));
     }
     private void RebuildResourceAssets()
@@ -292,20 +316,6 @@ public sealed partial class InspectorNode : ObservableObject
         if (Value.Length > 240) Value = Value[..240] + "…";
     }
     public string FullText => node?.ToJsonString(JsonData.Options) ?? "null";
-}
-public sealed class SceneTreeItem(GameScene scene, int index, HashSet<int> ancestors) : INotifyPropertyChanged
-{
-    public event PropertyChangedEventHandler? PropertyChanged;
-    internal void UpdateScene(GameScene value)
-    {
-        scene = value;
-        foreach (var child in children ?? []) child.UpdateScene(value);
-        PropertyChanged?.Invoke(this, new(nameof(Node))); PropertyChanged?.Invoke(this, new(nameof(Label)));
-    }
-    public GameNode Node => scene.Nodes[index];
-    public string Label => $"{Node.Name}  ·  {Node.Class}  #{index}";
-    private IReadOnlyList<SceneTreeItem>? children;
-    public IReadOnlyList<SceneTreeItem> Children => children ??= ancestors.Contains(index) || ancestors.Count > 128 ? [] : SceneBuilder.Children(Node).Where(i => i >= 0 && i < scene.Nodes.Count).Select(i => new SceneTreeItem(scene, i, [.. ancestors, index])).ToArray();
 }
 public sealed record SearchHit(string File, AssetKind Kind, int Index, string Name)
 {

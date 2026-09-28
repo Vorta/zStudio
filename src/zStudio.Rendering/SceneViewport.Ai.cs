@@ -51,15 +51,20 @@ public sealed partial class SceneViewport
     }
     public bool SelectAiNode(string? id)
     {
-        if (id != null && (IsPickupDragging || IsFlyActive)) return false;
+        if (id != null && (!InspectionSelectionEnabled || IsPickupDragging || IsFlyActive)) return false;
         if (id != null && (!AiVisible || AiNetworks.Find(id) is not { } found || AiNetworkFilter != null && found.Network.Id != AiNetworkFilter)) return false;
+        if (id != null && CanChangeInspection?.Invoke() == false) return false;
         SelectedAiNode = id;
+        if (id != null) SelectedInspection = InspectAi(id);
+        else if (SelectedInspection?.AiNode != null) SelectedInspection = null;
+        InspectionChanged?.Invoke();
         if (id != null) { FramingSelection = null; SelectPickup(null, false, true); }
-        RefreshAiSelection(); AiNodeSelected?.Invoke(id); return true;
+        RefreshPickupSelection(); RefreshAiSelection(); AiNodeSelected?.Invoke(id); return true;
     }
     private IEnumerable<AiNetwork> VisibleAiNetworks => AiVisible ? AiNetworks.Networks.Where(n => AiNetworkFilter == null || n.Id == AiNetworkFilter) : [];
     private void RebuildAiOverlay()
     {
+        ++inspectionSerial;
         ClearAiDrawables();
         if (!AiVisible) { PublishAiLabel(); return; }
         aiOverlay = new(); viewport.Items.Add(aiOverlay);
@@ -159,7 +164,7 @@ public sealed partial class SceneViewport
         if (aiSelectionMarker != null)
         {
             var selected = SelectedAiNode == null ? null : AiNetworks.Find(SelectedAiNode);
-            aiSelectionMarker.Visibility = selected == null ? Visibility.Collapsed : Visibility.Visible;
+            aiSelectionMarker.Visibility = !InspectionSelectionEnabled || selected == null ? Visibility.Collapsed : Visibility.Visible;
             if (selected is { } target) aiSelectionMarker.Instances = [Matrix4x4.CreateScale(AiScale(target.Node.Position, 5.5)) * Matrix4x4.CreateTranslation(target.Node.Position)];
         }
         PublishAiLabel(); viewport.InvalidateRender();

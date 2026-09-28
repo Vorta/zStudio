@@ -13,12 +13,10 @@ public partial class MainWindow
     private DocumentModel? pickupDocument;
     private void ConfigurePickupScene(SceneViewport viewport)
     {
-        viewport.CanStartPickupEdit = () => ResolvePropertiesDrafts(pickupDocument);
-        viewport.PickupMoveCommitted += (root, position) =>
-        {
-            if (pickupDocument?.PickupEdits is { } edits && viewport.PickupAt(root)?.Pickup is { } pickup)
-                CommitPickupPosition(edits, pickup.Source, position);
-        };
+        viewport.CanStartPickupEdit = () => CurrentInspectionCard is { HasDraft: true } card &&
+            pickupDocument is { PickupsLocked: false } doc && card.DraftDocument == doc && card.DraftRevision == doc.Revision &&
+            doc.PickupEdits?.HasExternalChanges() == false &&
+            (propertiesWindow == null || propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts()) && card.DraftRevision == doc.Revision;
     }
     private void DetachPickupEditor()
     {
@@ -30,7 +28,7 @@ public partial class MainWindow
     private void AttachPickupEditor(DocumentModel document)
     {
         pickupDocument = document; document.PickupEditsChanged += PickupEditsChanged;
-        updating = true; PickupLocked.IsChecked = document.PickupsLocked; updating = false;
+        SetSceneEditingLocked(document, document.PickupsLocked);
         PickupTools.Visibility = Visibility.Visible; PickupEditsChanged();
         if (!document.PickupDiagnosticsReported && document.PickupEdits is { } edits)
         {
@@ -41,7 +39,8 @@ public partial class MainWindow
     private void PickupEditsChanged()
     {
         if (pickupDocument?.PickupEdits is not { } edits || scene?.Mission is not { } mission) return;
-        scene.SetPickupPositions(edits.PreviewPositions(mission));
+        scene.SetMissionCoordinates(edits);
+        if (aiPropertiesArchive != null && propertiesWindow?.Document == pickupDocument) propertiesWindow.MarkAiSnapshotStale();
         UpdateDocumentCommands();
         if (selectedNode is int node && scene.PickupAt(node) != null && properties != null)
         {
@@ -49,27 +48,29 @@ public partial class MainWindow
             SetProperties(properties);
         }
     }
-    private void PickupLockedChanged(object sender, RoutedEventArgs e)
+    private void EditingUnlockedChanged(object sender, RoutedEventArgs e)
     {
         if (!ready || updating || pickupDocument == null) return;
-        if (!ResolvePropertiesDrafts(pickupDocument)) { updating = true; PickupLocked.IsChecked = pickupDocument.PickupsLocked; updating = false; return; }
-        pickupDocument.PickupsLocked = PickupLocked.IsChecked == true;
-        scene?.SetPickupLocked(pickupDocument.PickupsLocked);
+        if (!ResolvePropertiesDrafts(pickupDocument)) { updating = true; EditingUnlocked.IsChecked = !pickupDocument.PickupsLocked; updating = false; return; }
+        SetSceneEditingLocked(pickupDocument, EditingUnlocked.IsChecked != true);
     }
-    private void CommitPickupPosition(PickupPlacementEditSession edits, MissionPickupSource source, Vector3 position)
+    private void SetSceneEditingLocked(DocumentModel document, bool locked)
     {
-        try
-        {
-            if (edits.MoveTo(source, position)) ViewModel.Status = $"Moved {edits.Find(source)!.Type} · {edits.Scope(source).Description} · unsaved";
-        }
-        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException) { Report(ex); PickupEditsChanged(); }
+        // Keep the existing document/MCP lock identity; the visible option is
+        // positively named Unlock editing, so its checked state is the inverse.
+        document.PickupsLocked = locked;
+        if (pickupDocument != document) return;
+        bool previous = updating; updating = true;
+        try { EditingUnlocked.IsChecked = !locked; }
+        finally { updating = previous; }
+        scene?.SetPickupLocked(locked);
     }
     private async void SaveCurrentClick(object sender, RoutedEventArgs e)
     { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc); }
     private async void SaveCurrentAsClick(object sender, RoutedEventArgs e)
     { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc, true); }
     private Task<bool> SaveCurrentAsync(DocumentModel document, bool saveAs = false) => document.ContentEdits != null ? SaveContentDocumentAsync(document, saveAs) : document.ResourceEdits != null ? SaveResourceDocumentAsync(document, saveAs) : document.ModelEdits?.IsDirty == true || saveAs && document.ModelEdits?.HasModelImports == true
-        ? SaveModelDocumentAsync(document, saveAs) : document.PickupEdits is { Records.Count: > 0 }
+        ? SaveModelDocumentAsync(document, saveAs) : document.PickupEdits is { } coordinates && (coordinates.Records.Count > 0 || coordinates.OtherCoordinates.Count > 0)
         ? SavePickupsAsync(document, saveAs) : SaveAnimationAsync(document);
     private void BackupOnSaveChanged(object sender, RoutedEventArgs e)
     {

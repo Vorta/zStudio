@@ -49,6 +49,12 @@ public sealed class ModelEditSession
     {
         if (saving) throw new InvalidOperationException("A model save is in progress.");
         var baselines = snapshot.Baselines ?? throw new InvalidOperationException("Missing prepared source snapshot.");
+        // Model replacements own GameZ and texture packs. ZAR resources belong
+        // to the coordinate/resource services; never accept a cross-family
+        // snapshot that could alias their publication or save baselines.
+        if (snapshot.World.Probe.Family != FormatFamily.GameZ || snapshot.Textures.Values.Any(d => d.Probe.Family != FormatFamily.TexturePack) ||
+            baselines.Values.Any(d => d.Probe.Family != FormatFamily.TexturePack))
+            throw new InvalidDataException("Model replacement snapshots require GameZ and texture-pack documents only.");
         BeforeEdit?.Invoke(snapshot.Textures.Keys.Append(snapshot.World.Path).Concat(saved.Values.Select(s => s.Target)));
         foreach (var doc in baselines.Values)
             if (!saved.ContainsKey(doc.Path)) { saved[doc.Path] = (doc.Path, doc.Bytes.ToArray()); originalTextures[doc.Path] = doc; observedStamps[doc.Path] = doc.Stamp; }

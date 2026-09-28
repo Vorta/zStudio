@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
@@ -47,9 +48,13 @@ internal static class BlenderNavigationCheck
                 await Preview(); var scene = (SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
                 await CheckViews(scene, "world");
                 var pickup = scene.Mission!.Actors.First(a => a.Pickup != null);
+                ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
                 scene.SelectFramingNode(pickup.Root); scene.SelectPickup(pickup.Root, true, false);
+                var child = scene.Mission.Scene.Nodes.First(n => scene.PickupAt(n.Index)?.Root == pickup.Root && scene.SelectInspectionNode(n.Index));
+                var card = (SceneInspectionCard)scene.InspectionContent!;
+                typeof(MainWindow).GetMethod("BeginInspectionEdit", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(main, [card]);
                 scene.SetAxisView("top"); Require(scene.TryFrame("selected"), "Pickup framing unavailable"); await Task.Delay(200);
-                var surface = (Viewport3DX)scene.Content;
+                var surface = (Viewport3DX)scene.RenderSurface;
                 var gizmo = (TransformManipulator3D)typeof(SceneViewport).GetField("pickupManipulator", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(scene)!;
                 Require(gizmo.Visibility == Visibility.Visible, "Orthographic pickup gizmo hidden");
                 double gizmoSize = gizmo.SizeScale; scene.DollyBy(-50); await Task.Delay(150);
@@ -57,6 +62,7 @@ internal static class BlenderNavigationCheck
                 Save(Presented(surface), Path.Combine(output, "pickup-top.png"));
                 var point = surface.Project(new Point3D(scene.PickupPosition(pickup.Root).X, scene.PickupPosition(pickup.Root).Y, scene.PickupPosition(pickup.Root).Z));
                 Require(double.IsFinite(point.X) && double.IsFinite(point.Y), "Pickup projection invalid");
+                card.CancelDraft();
                 Require(scene.SetOrbitPivot(scene.CaptureView().Position + scene.CaptureView().LookDirection * .8 + new Vector3D(1, 0, 2)), "World off-center pivot unavailable");
                 var saved = scene.CaptureView();
                 ((ComboBox)main.FindName("WorldDifficulty")).SelectedItem = MissionDifficulty.Hard;
@@ -109,7 +115,7 @@ internal static class BlenderNavigationCheck
                 async Task Preview() => await ((Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(timeout.Token);
                 async Task CheckViews(SceneViewport view, string label)
                 {
-                    var viewport = (Viewport3DX)view.Content;
+                    var viewport = (Viewport3DX)view.RenderSurface;
                     await CheckSurfaceNavigation(view, label);
                     Require(view.TryFrame("all"), label + " has no frameable geometry");
                     foreach (string axis in new[] { "front", "back", "left", "right", "top", "bottom" })
@@ -117,7 +123,8 @@ internal static class BlenderNavigationCheck
                         view.SetAxisView(axis); Require(view.TryFrame("all"), "Axis framing failed"); await Task.Delay(180, timeout.Token);
                         var pose = view.CaptureView(); var camera = (ProjectionCamera)viewport.Camera!;
                         Require(pose.AxisView == axis && pose.Projection == "orthographic", "Axis state changed on render");
-                        var cubePoint = new Point(viewport.ActualWidth * (1 + viewport.ViewCubeHorizontalPosition) / 2, viewport.ActualHeight * (1 - viewport.ViewCubeVerticalPosition) / 2);
+                        var cubeBounds = view.NavigationCubeBounds;
+                        var cubePoint = new Point(cubeBounds.Left + cubeBounds.Width / 2, cubeBounds.Top + cubeBounds.Height / 2);
                         Require(view.NavigateCubeAt(cubePoint) && view.CaptureView().AxisView == axis, "View-cube face disagrees with named view: " + axis);
                         Require(camera.NearPlaneDistance > 0 && camera.FarPlaneDistance > camera.NearPlaneDistance, "Invalid orthographic clipping");
                         var image = Presented(viewport); Save(image, Path.Combine(output, label + "-" + axis + ".png"));
@@ -138,7 +145,7 @@ internal static class BlenderNavigationCheck
                 }
                 async Task CheckSurfaceNavigation(SceneViewport view, string label)
                 {
-                    var viewport = (Viewport3DX)view.Content;
+                    var viewport = (Viewport3DX)view.RenderSurface;
                     var staticMeshes = label == "animation"
                         ? ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!).ToDictionary(mesh => mesh, mesh => mesh.Visibility)
                         : new Dictionary<MeshGeometryModel3D, Visibility>();
@@ -222,10 +229,10 @@ internal static class BlenderNavigationCheck
         try { app.Run(); } finally { if (previous != null) File.WriteAllBytes(settings, previous); else if (File.Exists(settings)) File.Delete(settings); }
         return exit;
     }
-    private static async Task CheckPickingFixture()
+    internal static async Task CheckPickingFixture()
     {
         using var effects = new HelixToolkit.SharpDX.DefaultEffectsManager();
-        using var view = new SceneViewport(); var viewport = (Viewport3DX)view.Content;
+        using var view = new SceneViewport(); var viewport = (Viewport3DX)view.RenderSurface;
         viewport.EffectsManager = effects;
         var window = new Window { Content = view, Width = 900, Height = 650, Left = 20, Top = 20, ShowInTaskbar = false, ShowActivated = false };
         const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -245,6 +252,7 @@ internal static class BlenderNavigationCheck
         ScenePlacement[] placements = [new(0, 0, "front", mesh.Instances[0]), new(1, 0, "rear", mesh.Instances[1])];
         foreach (string name in new[] { "placements", "visiblePlacements" })
             ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField(name, fields)!.GetValue(view)!).Add(mesh, placements);
+        typeof(SceneViewport).GetMethod("RegisterInspectionMesh", fields)!.Invoke(view, [mesh, -1, null, -1, -1]);
         viewport.Items.Add(mesh); viewport.Items.Add(helper); window.Show();
         try
         {
@@ -252,8 +260,22 @@ internal static class BlenderNavigationCheck
             foreach (string projection in new[] { "perspective", "orthographic" })
             {
                 view.RestoreView(initial with { Projection = projection, OrthographicWidth = projection == "orthographic" ? 20 : null });
-                await Task.Delay(200);
-                var screen = viewport.Project(new Point3D(3, 1, 0));
+                Point screen = default; SceneInspection? info = null;
+                for (int attempt = 0; attempt < 100; attempt++)
+                {
+                    await Task.Delay(25);
+                    if (!view.IsOrbitPickingReady) continue;
+                    screen = viewport.Project(new Point3D(3, 1, 0)); info = view.ProbeInspection(screen);
+                    if (info is { Node: 0, Surface: not null } && (info.Surface.Value - new System.Numerics.Vector3(3, 1, 0)).Length() < .04f) break;
+                }
+                Require(info is { Node: 0, Surface: not null, Origin: not null } && (info.Surface.Value - new System.Numerics.Vector3(3, 1, 0)).Length() < .04f &&
+                    (info.Origin.Value - new System.Numerics.Vector3(3, 1, 0)).Length() < .04f, "Inspection did not preserve transformed surface and instance origin");
+                Require(view.SelectInspection(info!.Target), "Could not select inspected instance");
+                Require(view.ProbeInspection(new(1, 1)) == null && view.SelectedInspection?.Target == info.Target, "Empty space changed pinned inspection");
+                var visibleMap = (Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField("visiblePlacements", fields)!.GetValue(view)!;
+                visibleMap[mesh] = [placements[1]]; mesh.Instances = [placements[1].Transform];
+                Require(view.InspectTarget(info.Target)?.Active == false, "Isolation rebound the front target to the rear instance");
+                visibleMap[mesh] = placements; mesh.Instances = placements.Select(p => p.Transform).ToArray();
                 bool hit = view.PickOrbitPivot(screen);
                 Require(hit && (view.CaptureView().OrbitPivot!.Value - new Point3D(3, 1, 0)).Length < .04,
                     $"Pick did not choose nearest transformed scene instance through a helper: {projection}, hit={hit}, pivot={view.CaptureView().OrbitPivot}, point={screen}, ready={view.IsOrbitPickingReady}");
@@ -284,14 +306,105 @@ internal static class BlenderNavigationCheck
                 view.StopCameraMotion();
             }
             await CheckPointerZoom(view, mesh, initial);
+            // Exercise world selection and rotation pointer math without any
+            // physical input, CaptureMouse or native synthetic pointer events.
+            typeof(SceneViewport).GetMethod("ConfigurePickups", fields)!.Invoke(view, []);
+            await CheckLockedCubeInput(view, mesh);
+            view.SetPickupLocked(true);
+            Require(!view.SelectInspectionNode(0), "Locked world accepted a card");
+            view.SetPickupLocked(false); Require(view.SelectedInspection == null, "Unlock selected an object");
+            Require(view.SelectInspectionNode(0) && view.SelectionBoundsVisible && !view.TransformHandlesVisible, "Unlocked selection needs bounds without handles");
+            view.RestoreView(new(new(10, 8, 12), new(-10, -8, -12), new(0, 1, 0), 60)); await Task.Delay(100);
+            var source = new MissionPickupSource("fixture", 0, "puppies.zrd", 0);
+            var authored = new PlacementTransform(System.Numerics.Vector3.Zero, new(.2f, -.3f, .1f));
+            PlacementTransform? dragged = null;
+            view.TransformDraftChanged += changed => dragged = changed;
+            view.PreviewTransformDraft(source, authored, PlacementRotationKind.EulerRadians, "rotate", true);
+            Require(view.TransformHandlesVisible, "Edit did not show rotation handles");
+            foreach (var axis in new[] { System.Numerics.Vector3.UnitX, System.Numerics.Vector3.UnitY, System.Numerics.Vector3.UnitZ })
+            {
+                var radial = (axis == System.Numerics.Vector3.UnitY ? System.Numerics.Vector3.UnitZ : System.Numerics.Vector3.UnitY) * 2;
+                var finish = System.Numerics.Vector3.Transform(radial, System.Numerics.Matrix4x4.CreateFromAxisAngle(axis, .2f));
+                Point Project(System.Numerics.Vector3 v) => viewport.Project(new Point3D(v.X, v.Y, v.Z));
+                typeof(SceneViewport).GetField("transformDragStart", fields)!.SetValue(view, authored);
+                typeof(SceneViewport).GetMethod("BeginRotationPointer", fields)!.Invoke(view, [Project(radial), axis, radial]);
+                typeof(SceneViewport).GetMethod("MoveRotationPointer", fields)!.Invoke(view, [Project(finish)]);
+                Require(dragged != null, "Rotation pointer did not publish a draft");
+                var expected = PlacementTransform.Orientation(PlacementRotationKind.EulerRadians, authored.RotateWorld(PlacementRotationKind.EulerRadians, axis, .2f).Rotation);
+                var actual = PlacementTransform.Orientation(PlacementRotationKind.EulerRadians, dragged!.Value.Rotation);
+                Require(Math.Abs(System.Numerics.Quaternion.Dot(expected, actual)) > .99999f, "Ring pointer changed the wrong rotation axis or angle");
+            }
+            view.EndTransformDraft(); Require(!view.TransformHandlesVisible && view.SelectionBoundsVisible, "Cancel did not hide handles while retaining selection");
+            view.SetPickupLocked(true); Require(!view.SelectionBoundsVisible && view.SelectedInspection == null && !viewport.IsMouseCaptured, "Lock did not close selection");
             Console.WriteLine("PASS: rendered perspective/orthographic transformed instances, nearest surface, helper/horizon/hidden exclusions, empty-space fallback and orbit inertia");
         }
         finally { viewport.Items.Remove(helper); helper.Dispose(); window.Close(); }
     }
+    private static async Task CheckLockedCubeInput(SceneViewport view, MeshGeometryModel3D mesh)
+    {
+        var viewport = (Viewport3DX)view.RenderSurface;
+        var instances = mesh.Instances; var pose = view.CaptureView();
+        var previousInspection = view.InspectionContent;
+        var window = Window.GetWindow(view); double previousHeight = window.Height;
+        var card = new SceneInspectionCard(view, _ => new JsonObject { ["Node"] = "Cube input fixture", ["Editable"] = false }, _ => { }, _ => { });
+        view.InspectionContent = card;
+        mesh.Instances = [System.Numerics.Matrix4x4.CreateScale(1000, 1000, 1) * System.Numerics.Matrix4x4.CreateTranslation(0, 0, -100)];
+        try
+        {
+            foreach (double height in new[] { 650d, 300d })
+            foreach (bool locked in new[] { true, false })
+            foreach (double panelHeight in new[] { 216d, 432d, 2000d })
+            {
+                window.Height = height;
+                card.SetPanelHeight(panelHeight);
+                view.SetPickupLocked(true); view.SetPickupLocked(locked);
+                view.SetAxisView("front"); view.SetProjection("perspective");
+                view.RestoreView(view.CaptureView() with { AxisView = null, AutoPerspective = false }); await Task.Delay(150);
+                var cubeBounds = view.NavigationCubeBounds;
+                var cubePoint = new Point(cubeBounds.Left + cubeBounds.Width / 2, cubeBounds.Top + cubeBounds.Height / 2);
+                Require(view.ProbeInspection(cubePoint) != null, "Cube regression needs geometry behind the cube");
+                Require(view.CaptureView().AxisView == null, "Cube regression needs an unnamed perspective view");
+                var click = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left);
+                Require(view.HandleScenePointerDown(cubePoint, click) && view.CaptureView().AxisView == "front",
+                    $"Scene input swallowed view-cube navigation while locked={locked}, height={height}, cube={cubeBounds}, axis={view.CaptureView().AxisView}");
+                Require(view.SelectedInspection == null && !view.SelectionBoundsVisible && !viewport.IsMouseCaptured,
+                    "Cube input selected geometry or captured the mouse");
+                // Outside the cube the lock still consumes scene clicks without
+                // opening a card; unlocking selects the same underlying object.
+                var center = new Point(viewport.ActualWidth / 2, viewport.ActualHeight / 2);
+                Require(view.HandleScenePointerDown(center, new(Mouse.PrimaryDevice, 0, MouseButton.Left)), "Scene click was not consumed");
+                Require((view.SelectedInspection != null) == !locked && view.SelectionBoundsVisible == !locked,
+                    "Cube input routing bypassed the scene selection lock");
+                card.Refresh(); await Task.Delay(50);
+                var panel = (Border)typeof(SceneInspectionCard).GetField("panel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(card)!;
+                var panelBounds = new Rect(panel.TranslatePoint(new(), view), panel.RenderSize);
+                Require(panelBounds.Height <= view.ActualHeight * .8 + .01, "Inspection panel exceeds 80% of the viewport");
+                Require(!panelBounds.IntersectsWith(view.NavigationCubeBounds), "Pinned inspection panel overlaps the view cube");
+                Require(Math.Abs(panelBounds.Top - 10) < .01 && Math.Abs(panelBounds.Right - (view.ActualWidth - 10)) < .01,
+                    "Rendered inspection panel is not anchored at the top right");
+                var currentCube = view.NavigationCubeBounds;
+                var currentCubePoint = new Point(currentCube.Left + currentCube.Width / 2, currentCube.Top + currentCube.Height / 2);
+                Require(view.InputHitTest(currentCubePoint) is DependencyObject input && !IsInPanel(input), "Pinned panel intercepts native cube input");
+                var selected = view.SelectedInspection;
+                Require(view.HandleScenePointerDown(currentCubePoint, new(Mouse.PrimaryDevice, 0, MouseButton.Left)) && view.CaptureView().AxisView == "front",
+                    "Relocated cube lost its navigation hit target");
+                Require(view.SelectedInspection == selected, "Relocated cube changed selection");
+
+                bool IsInPanel(DependencyObject input)
+                {
+                    for (DependencyObject? current = input; current != null; current = VisualTreeHelper.GetParent(current))
+                        if (ReferenceEquals(current, card)) return true;
+                    return false;
+                }
+            }
+            Console.WriteLine("PASS: shared pointer input prioritizes the view cube over geometry in locked/unlocked worlds, retaining the scene selection lock");
+        }
+        finally { view.SetPickupLocked(true); view.InspectionContent = previousInspection; window.Height = previousHeight; mesh.Instances = instances; view.RestoreView(pose); }
+    }
     private static async Task CheckPointerZoom(SceneViewport view, MeshGeometryModel3D mesh, SceneViewport.ViewPose initial)
     {
         const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
-        var viewport = (Viewport3DX)view.Content;
+        var viewport = (Viewport3DX)view.RenderSurface;
         mesh.Transform = Transform3D.Identity;
         mesh.Instances = [System.Numerics.Matrix4x4.CreateScale(30, 30, 1) * System.Numerics.Matrix4x4.CreateTranslation(0, 0, -100),
             System.Numerics.Matrix4x4.CreateScale(.2f, .2f, 1) * System.Numerics.Matrix4x4.CreateTranslation(-.5f, 0, 11)];

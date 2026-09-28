@@ -57,7 +57,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         viewport.CameraChanged += (_, _) => CameraChanged();
         ConfigurePickupInput(); ConfigureNavigation();
         viewport.RenderExceptionOccurred += (_, e) => { Information?.Invoke("3D preview unavailable: " + e.Exception.Message); e.Handled = true; };
-        Content = viewport;
+        ConfigureInspection();
     }
     public async Task ShowAsync(ZbdDocument doc, AssetRecord asset, AssetResolver resolver, string? pack, int lod, CancellationToken token, bool showBackdrop = false, MissionSceneContext? mission = null)
     {
@@ -95,7 +95,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         }, token);
         token.ThrowIfCancellationRequested(); if (current != generation) return;
         ClearMeshes(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects;
-        Mission = mission; PreviewScene = scene;
+        Mission = mission; PreviewScene = scene; InspectionSourcePath = doc.Path;
         if (asset.Kind == AssetKind.World) SetAiNetworks(mission?.AiNetworks ?? AiNetworkSnapshot.Empty);
         if (asset.Kind == AssetKind.World) ConfigureHorizon(scene);
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
@@ -149,7 +149,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     };
                     mesh.MouseDown3D += (_, e) =>
                     {
-                        if (!IsFlyActive && !IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
+                        if (InspectionSelectionEnabled && !IsFlyActive && !IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: MouseButtonEventArgs { ChangedButton: MouseButton.Left } } args && args.HitTestResult is { } hit && visiblePlacements.TryGetValue(mesh, out var found))
                         {
                             int at = hit.Tag is int instance ? instance : 0;
                             if (at >= 0 && at < found.Length && found[at].NodeIndex >= 0)
@@ -157,6 +157,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         }
                     };
                     meshes.Add(mesh); placements[mesh] = visiblePlacements[mesh] = batch;
+                    RegisterInspectionMesh(mesh, part.MaterialIndex);
                     if (asset.Kind == AssetKind.World)
                     {
                         JsonMaterial(scene, part.MaterialIndex, out _, out int texture);
@@ -274,7 +275,18 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     public void SetBounds(bool enabled) { foreach (var box in bounds) box.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed; }
     public void Isolate(int? node)
     {
-        foreach (var mesh in meshes) { var shown = placements[mesh].Where(p => node == null || p.NodeIndex == node || pickupRoots.GetValueOrDefault(p.NodeIndex, -1) == node).ToArray(); visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToList(); mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible; }
+        ++inspectionSerial;
+        HashSet<int> included = [];
+        if (node is int root)
+        {
+            Stack<int> pending = new([root]);
+            while (pending.TryPop(out int current))
+            {
+                if (!included.Add(current) || PreviewScene == null || current < 0 || current >= PreviewScene.Nodes.Count) continue;
+                foreach (int child in SceneBuilder.Children(PreviewScene.Nodes[current])) pending.Push(child);
+            }
+        }
+        foreach (var mesh in meshes) { var shown = placements[mesh].Where(p => node == null || included.Contains(p.NodeIndex) || pickupRoots.GetValueOrDefault(p.NodeIndex, -1) == node).ToArray(); visiblePlacements[mesh] = shown; mesh.Instances = shown.Select(p => p.Transform).ToList(); mesh.Visibility = shown.Length == 0 ? Visibility.Collapsed : Visibility.Visible; }
         foreach (var box in bounds) box.Visibility = Visibility.Collapsed;
         RecalculateSceneBounds(); RefreshPickupSelection(); FrameAll();
     }
@@ -289,6 +301,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     }
     private void ClearMeshes()
     {
+        ClearInspection();
         CancelNavigation(); FramingSelection = null;
         orbitPivot = null; navigationReferenceDistance = null;
         SetFly(false); flySpeedInitialized = false;

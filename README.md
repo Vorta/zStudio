@@ -4,11 +4,15 @@
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse and edit game archives, typed data, texture packs and prepared scripts, inspect and export assets, replace supported 3D models, preview assembled worlds, move mission pickups, and edit supported animation programs. This source tree targets **v0.6.1**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse and edit game archives, typed data, texture packs and prepared scripts, inspect and export assets, replace supported 3D models, preview assembled worlds, edit mission coordinates, and edit supported animation programs. This source tree targets **v0.6.3**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
 Texture PNG import and the prepared-script instruction editor are described in the [texture and script editing guide](docs/texture-script-editing.md). Both share undo, verified save and MCP support.
+
+[3D inspection cards](docs/scene-inspection.md) show pointed surface coordinates, node identities and animation instances. In Whole world, use explicit XYZ drafts to move pickups, AI navigation nodes and supported AIV tanks, with shared undo and verified archive saves.
+
+**Document scene** shows the active preview's parent-child hierarchy, including mission placements, shared references and disconnected nodes. Viewport selections reveal their node in the tree. Animation playback keeps the bound scene hierarchy stable while cards identify individual runtime copies.
 
 ## Compatible games
 
@@ -82,6 +86,7 @@ If a workspace call reports `access_disabled`, enable access in **Tools → MCP 
 | Animation/effects | Edit events, sequences, references and keyframes; scrub motion/effects/audio previews in isolation or mission context | Verified new ZBD with Save As; edited JSON |
 | GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties; replace supported v15 models and textures | OBJ/MTL/PNG component bundles, JSON; verified model/texture Save and Save As |
 | Mission pickups | Select pickups in Whole world, show bounds, unlock XYZ arrows or enter coordinates, undo/redo; matching difficulties move together | Save coordinates to their owning ZBD archive; Save As; optional backups |
+| AI nodes and AIV tanks | Inspect source identities and placements in 3D cards; edit XYZ with explicit confirmation and undo; uniquely matched tank difficulties move together | Coordinate-only patches to owning archives; verified Save and Save As |
 
 The workspace uses resizable navigation, preview and tool panes, with Properties in a separate window. The Navigator tabs are Files, Assets, Search and Document scene. On wide windows, Files automatically becomes its own resizable column to the left of the remaining tabs, leaving at least 600 DIP for the central preview and room for the animation Inspector. At smaller widths it returns to the first tab. Both column widths, tree state and the active section are retained. Assets appears only while a file is open; Document scene appears only when the active file contains a scene hierarchy. Files marks open documents with a blue dot and bold filename, underlines the active document, adds an asterisk for unsaved changes, and provides a close button on each open file row. Double-click a file or press Enter to open it and switch to Assets; use Search for root-wide asset searches. Related references navigate to matching assets. Files changed externally get a reload banner. Settings retain theme, pane widths, window size, and recent roots.
 
@@ -136,7 +141,7 @@ The solution separates binary readers/exporters (`zStudio.Core`), Direct3D previ
 
 ## Current limits
 
-Animation version 28 supports editing existing entries and Save As to a new file. Mission pickups stored in `puppies*.zrd` resources support position editing from Whole world; see [the pickup editor guide](docs/pickup-editor.md). Vehicles, turrets, scenery, directly authored GameZ pickups and creation of whole animation entries remain outside the supported editing tools. Texture packs support PNG import/replacement, and prepared scripts support entry/instruction editing; neither feature executes arbitrary game behavior. AI networks provide authored-data visualization and inspection. Animation preview approximates physics, beams, lighting, fog, camera parameters, screen effects and audio; game callbacks are trace-only. LOD selection is manual; camera-distance fades are not simulated. Edited files have not yet been tested in the original game. Missing textures are reported; unresolved animation texture cards stay hidden. Six 1999 missions reference some textures absent from their own packs.
+Animation version 28 supports editing existing entries and Save As to a new file. Mission pickups stored in `puppies*.zrd` resources support position editing from Whole world; see [the pickup editor guide](docs/pickup-editor.md). Supported AIV vehicle placements and AI navigation nodes also support [explicit XYZ editing](docs/scene-inspection.md). General vehicle/turret behavior, scenery transforms, directly authored GameZ pickup placements, AI link editing and creation of whole animation entries remain outside the supported editing tools. Texture packs support PNG import/replacement, and prepared scripts support entry/instruction editing; neither feature executes arbitrary game behavior. Animation preview approximates physics, beams, lighting, fog, camera parameters, screen effects and audio; game callbacks are trace-only. LOD selection is manual; camera-distance fades are not simulated. Edited files have not yet been tested in the original game. Missing textures are reported; unresolved animation texture cards stay hidden. Six 1999 missions reference some textures absent from their own packs.
 
 Unknown versions remain available for raw inspection. The snapshot reader limits individual files to 512 MiB. JSON exports are intended for inspection and external tools; they are not the Python CLI repack schema. The portable build is unsigned and has not yet been checked on an independent clean Windows machine.
 

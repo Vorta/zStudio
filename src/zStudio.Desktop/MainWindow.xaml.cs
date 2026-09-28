@@ -63,7 +63,7 @@ public partial class MainWindow : Window
         {
             RequireAutomationMutationAvailable();
             if (closesDocuments) RequireNoDrafts();
-            else if (animation?.HasAutomationDrafts == true)
+            else if (animation?.HasAutomationDrafts == true || HasInspectionDraft)
                 throw new Recoil.Zbd.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
         };
         ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
@@ -98,7 +98,7 @@ public partial class MainWindow : Window
     });
     private async Task RunUi(Func<Task> work)
     {
-        try { if (animation?.ResolvePendingDrafts() == false) return; await work(); }
+        try { if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) return; await work(); }
         catch (Recoil.Zbd.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
@@ -158,7 +158,7 @@ public partial class MainWindow : Window
     {
         if (!ready || e.PropertyName != nameof(MainViewModel.SelectedDocument)) return;
         var doc = ViewModel.SelectedDocument; if (doc == shownDocument) return;
-        if (animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
+        if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
         shownDocument = doc; Workspace.Visibility = doc == null ? Visibility.Collapsed : Visibility.Visible; Welcome.Visibility = doc == null ? Visibility.Visible : Visibility.Collapsed;
         updating = true;
         TexturePackCombo.ItemsSource = doc?.Document.Scene != null ? ViewModel.Resolver?.TexturePacks(doc.Path).Select(p => new PackChoice(Path.GetFileName(p), p)).Prepend(new("Automatic texture variant", null)).ToArray() : null;
@@ -182,12 +182,13 @@ public partial class MainWindow : Window
         EndImagePan();
         animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
         preview.Cancel(); preview.Dispose(); preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
+        RefreshSceneTree();
     }
     private Task ShowAsset(DocumentModel doc, AssetRecord? asset) => previewWork = ShowAssetCore(doc, asset);
     private async Task ShowAssetCore(DocumentModel doc, AssetRecord? asset)
     {
         if (shutdownToken.IsCancellationRequested) return;
-        if (animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
+        if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         asset = asset == null ? null : doc.PreviewDocument.Assets.SingleOrDefault(a => a.Id == asset.Id);
         bool differentAsset = shownAsset?.Id != asset?.Id;
         if (!differentAsset && asset != null && shownDocument == doc && HasPublishedStaticScene && ViewModel.Resolver != null)
@@ -242,9 +243,9 @@ public partial class MainWindow : Window
                 if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
                 await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
                 publishedStaticOptions = ReadStaticSceneOptions() with { Difficulty = mission?.Layout.Difficulty ?? ViewModel.Difficulty };
+                if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
                 if (mission != null)
                 {
-                    AttachPickupEditor(doc);
                     if (previousMission != null && previousView != null)
                     {
                         isolatedNode = previousIsolate is int oldIsolate && mission.RemapNodeFrom(previousMission, oldIsolate) is >= 0 and int mappedIsolate ? mappedIsolate : null;
@@ -277,6 +278,7 @@ public partial class MainWindow : Window
                 else StructuredPanel.SelectedIndex = asset?.Content is ScriptContent ? 1 : 0;
             }
             token.ThrowIfCancellationRequested(); EmptyPreview.Visibility = Visibility.Collapsed;
+            RefreshSceneTree();
         }
         catch (OperationCanceledException)
         {
@@ -449,13 +451,18 @@ public partial class MainWindow : Window
     private void ApplySceneOptions() { scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions(); }
     private void SceneOptionsChanged(object sender, RoutedEventArgs e) { if (ready) ApplySceneOptions(); }
     private void FrameSceneClick(object sender, RoutedEventArgs e) => RunCameraNavigation("frameAsset");
-    private void IsolateClick(object sender, RoutedEventArgs e) { if (selectedNode != null) { isolatedNode = selectedNode; scene?.Isolate(selectedNode); } else ViewModel.Status = "Select a node in the scene or scene tree first"; }
+    private void IsolateClick(object sender, RoutedEventArgs e)
+    {
+        if (selectedNode is not int node) { ViewModel.Status = "Select a node in the scene or scene tree first"; return; }
+        isolatedNode = scene?.PickupAt(node)?.Root ?? node;
+        scene?.Isolate(isolatedNode);
+    }
     private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); }
-    private void SceneTreeSelected(object sender, RoutedPropertyChangedEventArgs<object> e) { if (e.NewValue is SceneTreeItem item) { InspectNode(item.Node.Index); inspectedSceneSource = item; } }
     private void InspectNode(int index)
     {
         inspectedSceneSource = null;
         if ((scene?.PreviewScene ?? ViewModel.SelectedDocument?.Document.Scene) is not { } data || index < 0 || index >= data.Nodes.Count) return;
+        RevealSceneNode(index);
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
         scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.PickupsLocked ?? true);
@@ -553,6 +560,7 @@ public partial class MainWindow : Window
         try
         {
             var defaults = new WorkspaceLayout(); ViewModel.Settings.Workspace = defaults;
+            CurrentInspectionCard?.SetPanelHeight(defaults.InspectionPanelHeight);
             previousPreset = defaults.Preset;
             navigatorTemporary = inspectorTemporary = toolsMaximized = false;
             SelectNavigatorSection(defaults.BrowserTab);
@@ -565,7 +573,7 @@ public partial class MainWindow : Window
         SaveWorkspacePreferences();
     }
     private void CopyPropertiesClick(object sender, RoutedEventArgs e) { if (animation?.ResolvePendingDrafts() == false) return; if (properties != null) Clipboard.SetText(properties.ToJsonString(JsonData.Options)); }
-    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Open the root containing image.zbd and mission folders. Double-click a file to open it. Filter assets within a tab or search across the whole root.\n\nTextures open at 1:1 (one texture pixel per screen pixel). Wheel zooms; left or middle drag pans. Fit and 1:1 reset the scale. Choose channels or inspect the palette.\n3D (models, Whole world and animations): middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Shift/Ctrl can be pressed or released during a middle drag in either order. Smooth inertia remains enabled. Numpad 1/3/7 selects front/right/top; hold Ctrl for the opposite views. Numpad 5 toggles perspective/orthographic. Axis views are orthographic; orbit returns them to perspective unless orthographic was explicitly selected. Home frames all visible geometry; Numpad decimal frames the selection. View > 3D Navigation provides menu equivalents. Manual navigation exits animation Follow camera; Numpad 0 toggles it. Pick a node or use the Scene tree, then Isolate. LOD 0 selects the highest detail for each object. Higher LOD numbers show lower-detail variants. In models and Whole world, Fly captures the viewer: WASD moves along the view, Space/C moves up/down, mouse movement looks around, and the wheel changes speed. Escape releases controls without changing the pose. Switching away also exits. Flight has no terrain collision and is available only for models and Whole world.\nWhole world pickups: click a pickup to select its bounds. Turn off the lock icon to reveal XYZ movement arrows and editable coordinates. Drag an arrow, or open View > Properties (Alt+Enter), type a coordinate and press Enter. Escape cancels a drag. Moves include unambiguously matching difficulty records. Ctrl+Z/Ctrl+Y undo/redo. Ctrl+S saves to the owning archive (often zrdr.zbd); Ctrl+Shift+S saves a new copy and retargets subsequent saves. Reference datasets require Save As. File > Create backup on Save is optional and off by default. Other map objects remain inspectable.\nAudio: Play/pause, seek using waveform or slider; double-click a cue.\nAnimation: Space plays/pauses immediately after selecting an asset. Transport icons and the seek bar share one row. The range follows the calculated duration; indefinite animations show a labeled preview range. The Dispatched events graphic sits below the player. The Sequences tab on the right selects entries, sequences and events. The right tabs are Sequences, Settings and References. Sequences opens first; switching animations retains the selected tab. Right-click an entry, sequence or event and choose Properties, or press Alt+Enter. Properties opens in a separate resizable window and stays on that item while you browse. The same window inspects assets and scene objects. Accepted edits enter the document undo history; Close keeps them and Save writes them to disk. Draft fields validate inline; Escape restores a value. View offers workspace presets, density and Reset layout. Bottom tools contain Dispatch, Event log, Problems, Runtime, Related and original source Bytes. Ctrl+wheel zooms Dispatch. Reset / stop previews cleanup separately. The LOD picker applies to animation and mission context. Sprite textures cycle automatically. Map shows context; Bind chooses a root. Show grid and Flat-ground collision are independent, both enabled by default. Height offsets the animation above or below the plane (−999 to 999). Mute controls audio. Problems and Event log distinguish approximation and unavailable game behavior.\n\nExports create a new folder outside the source tree. Ctrl+E exports selected records. Animation edits support Ctrl+Z/Ctrl+Y and Ctrl+S Save As to a new file. Animation Save As and exports preserve source files. Edit offers texture PNG import, script instructions, archive members and typed ZRD nodes. These share undo and verified save; protected reference datasets require Save As. F5 reloads; Escape cancels an active export or validation; Ctrl+W closes a file.", "Controls and formats");
+    private void HelpClick(object sender, RoutedEventArgs e) => MessageBox.Show(this, "Open the root containing image.zbd and mission folders. Double-click a file to open it. Filter assets within a tab or search across the whole root.\n\nTextures open at 1:1 (one texture pixel per screen pixel). Wheel zooms; left or middle drag pans. Fit and 1:1 reset the scale. Choose channels or inspect the palette.\n3D (models, Whole world and animations): middle drag orbits; Shift+middle drag pans; Ctrl+middle drag or the wheel zooms toward the pointer (orthographic views scale about it); Ctrl+Shift+middle drag dollies. Shift/Ctrl can be pressed or released during a middle drag in either order. Smooth inertia remains enabled. Numpad 1/3/7 selects front/right/top; hold Ctrl for the opposite views. Numpad 5 toggles perspective/orthographic. Axis views are orthographic; orbit returns them to perspective unless orthographic was explicitly selected. Home frames all visible geometry; Numpad decimal frames the selection. View > 3D Navigation provides menu equivalents. Manual navigation exits animation Follow camera; Numpad 0 toggles it. Pick a node or use the Scene tree, then Isolate. LOD 0 selects the highest detail for each object. Higher LOD numbers show lower-detail variants. In models and Whole world, Fly captures the viewer: WASD moves along the view, Space/C moves up/down, mouse movement looks around, and the wheel changes speed. Escape releases controls without changing the pose. Switching away also exits. Flight has no terrain collision and is available only for models and Whole world.\nWhole world pickups: click a pickup to select its bounds. Enable Unlock editing to reveal XYZ movement arrows and editable coordinates. This also unlocks AI-node and supported tank coordinates in their floating cards. Drag an arrow, or open View > Properties (Alt+Enter), type a coordinate and press Enter. Escape cancels a drag. Moves include unambiguously matching difficulty records. Ctrl+Z/Ctrl+Y undo/redo. Ctrl+S saves to the owning archive (often zrdr.zbd); Ctrl+Shift+S saves a new copy and retargets subsequent saves. Reference datasets require Save As. File > Create backup on Save is optional and off by default. Other map objects remain inspectable.\nAudio: Play/pause, seek using waveform or slider; double-click a cue.\nAnimation: Space plays/pauses immediately after selecting an asset. Transport icons and the seek bar share one row. The range follows the calculated duration; indefinite animations show a labeled preview range. The Dispatched events graphic sits below the player. The Sequences tab on the right selects entries, sequences and events. The right tabs are Sequences, Settings and References. Sequences opens first; switching animations retains the selected tab. Right-click an entry, sequence or event and choose Properties, or press Alt+Enter. Properties opens in a separate resizable window and stays on that item while you browse. The same window inspects assets and scene objects. Accepted edits enter the document undo history; Close keeps them and Save writes them to disk. Draft fields validate inline; Escape restores a value. View offers workspace presets, density and Reset layout. Bottom tools contain Dispatch, Event log, Problems, Runtime, Related and original source Bytes. Ctrl+wheel zooms Dispatch. Reset / stop previews cleanup separately. The LOD picker applies to animation and mission context. Sprite textures cycle automatically. Map shows context; Bind chooses a root. Show grid and Flat-ground collision are independent, both enabled by default. Height offsets the animation above or below the plane (−999 to 999). Mute controls audio. Problems and Event log distinguish approximation and unavailable game behavior.\n\nExports create a new folder outside the source tree. Ctrl+E exports selected records. Animation edits support Ctrl+Z/Ctrl+Y and Ctrl+S Save As to a new file. Animation Save As and exports preserve source files. Edit offers texture PNG import, script instructions, archive members and typed ZRD nodes. These share undo and verified save; protected reference datasets require Save As. F5 reloads; Escape cancels an active export or validation; Ctrl+W closes a file.", "Controls and formats");
     private void AboutClick(object sender, RoutedEventArgs e)
     {
         var assembly = typeof(MainWindow).Assembly;
@@ -605,14 +613,14 @@ public partial class MainWindow : Window
         flyRequest++; flyCamera?.End();
         scene?.CancelNavigation(); animation?.Viewport.CancelNavigation();
         if (resolvingClose) { e.Cancel = true; return; }
-        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
         {
             automationCloseRequested = false; e.Cancel = true;
             ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
             return;
         }
         System.Windows.Input.Keyboard.ClearFocus();
-        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
+        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
             e.Cancel = true; resolvingClose = true;
             try

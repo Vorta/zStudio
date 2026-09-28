@@ -15,11 +15,25 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--inspection-fixture")
+        {
+            using var settings = new SettingsSnapshot();
+            var app = new App { ProcessCommandLine = false, ShutdownMode = ShutdownMode.OnExplicitShutdown }; app.InitializeComponent();
+            int code = 0;
+            app.Startup += async (_, _) =>
+            {
+                try { await BlenderNavigationCheck.CheckPickingFixture(); await InspectionRuntimeCheck.Run(); Console.WriteLine("PASS: transformed inspection, instance identity, helper exclusions and shared navigation"); }
+                catch (Exception ex) { code = 1; Console.Error.WriteLine(ex); }
+                finally { app.Shutdown(); }
+            };
+            app.Run(); return code;
+        }
         if (args.Length == 2 && args[0] == "--mcp") return McpPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--mcp-stdio") return McpStdioCheck.Run(args[1]);
         if (args.Length == 3 && args[0] == "--mcp-stdio") return McpStdioCheck.Run(args[1], args[2]);
         if (args.Length == 2 && args[0] == "--mcp-catalog")
         {
+            using var settings = new SettingsSnapshot();
             var app = new App { ProcessCommandLine = false, ShutdownMode = ShutdownMode.OnExplicitShutdown };
             app.InitializeComponent();
             var window = new MainWindow();
@@ -35,6 +49,7 @@ internal static class Program
         if (args.Length == 2 && args[0] == "--header-layout") return GuiReviewCapture.Run(args[1],headerOnly:true);
         if (args.Length == 2 && args[0] == "--responsive-files") return GuiReviewCapture.Run(args[1],headerOnly:true,desktopCorners:false);
         if (args.Length == 2 && args[0] == "--gui-review") return GuiReviewCapture.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--scene-tree") return GuiReviewCapture.Run(args[1], sceneTreeOnly: true);
         if (args.Length == 2 && args[0] == "--workspace-performance") return WorkspacePerformanceCheck.Run(args[1]);
         if (args.Length == 2 && args[0] is "--pickup-editor" or "--pickup-pointer") return PickupEditorCheck.Run(args[1], args[0] == "--pickup-pointer");
         if (args.Length == 2 && args[0] == "--placements") return MissionPlacementPreviewCheck.Run(args[1]);

@@ -86,7 +86,7 @@ public sealed partial class SceneViewport
                 RefreshHorizon();
                 cameraPoseDirty = false; authoredCameraPose = false;
             }
-            UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers();
+            UpdatePickupGizmoSize(); UpdateClipPlanes(); UpdateAiMarkers(); RefreshInspection();
         }
         finally { preparingCamera = false; }
     }

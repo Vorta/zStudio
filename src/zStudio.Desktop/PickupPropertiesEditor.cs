@@ -54,11 +54,11 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
             DockPanel panel = new(); Content = panel;
             StackPanel form = new() { Margin = new(12) }; DockPanel.SetDock(form, Dock.Top); panel.Children.Add(form);
             Label(form, record.Type + " · placement #" + source.RecordIndex, true);
-            Label(form, locked == true ? "Turn off the lock icon in Whole world to edit this placement." : "Position in game units · Enter to apply · Escape to restore");
+            Label(form, locked == true ? "Enable Unlock editing in Whole world to edit this placement." : "Position in game units · Enter to apply · Escape to restore");
             string Read() { var pos = edits.Position(source); return string.Join(", ", new[] { pos.X, pos.Y, pos.Z }.Select(v => v.ToEditorText())); }
             Input(form, "Position", Read(), text =>
             {
-                if (document.PickupsLocked) throw new InvalidOperationException("This document's pickup placements are locked.");
+                if (document.PickupsLocked) throw new InvalidOperationException("This document's coordinate editing is locked.");
                 string[] parts = text.Split([',', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != 3) throw new FormatException("Enter finite X, Y and Z coordinates.");
                 float[] values = parts.Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();

@@ -24,7 +24,7 @@
       "tools": [
         "zstudio_camera"
       ],
-      "note": "Middle orbit picks a visible scene surface once using rotate screenPoint [x,y] in viewport DIP; empty space retains the pivot. Shift-middle screen pan and Ctrl-Shift-middle dolly use camera pan/dolly. GUI modifier press/release changes the active drag mode regardless of input order, rebasing motion and clearing prior inertia; orbit picking waits for first movement. Wheel/Ctrl-middle zoom refreshes speed from the current pointed surface while moving along the pointer ray; orthographic zoom scales about that point; camera zoom screenPoint matches this, defaulting to viewport center. Misses retain the last speed; pan/orbit do not reset it. Inertia retains the final screen point and resamples from the current camera. Camera reads expose projection, exact axis state, OrbitPivot and NavigationReferenceDistance; automation never captures physical input. Camera-dependent horizons and animation effects refresh after inertial motion at the frame boundary."
+      "note": "Middle orbit picks a visible scene surface once using rotate screenPoint [x,y] in viewport DIP; empty space retains the pivot. Shift-middle screen pan and Ctrl-Shift-middle dolly use camera pan/dolly. GUI modifier press/release changes the active drag mode regardless of input order, rebasing motion and clearing prior inertia; orbit picking waits for first movement. Wheel/Ctrl-middle zoom refreshes speed from the current pointed surface while moving along the pointer ray; orthographic zoom scales about that point; camera zoom screenPoint matches this, defaulting to viewport center. Misses retain the last speed; pan/orbit do not reset it. Inertia retains the final screen point and resamples from the current camera. Camera reads expose projection, exact axis state, OrbitPivot and NavigationReferenceDistance; automation never captures physical input. Camera-dependent horizons and animation effects refresh after inertial motion at the frame boundary. Floating-card input is excluded from camera wheel handling and gesture starts; native scrolling is presentation-only and complete contents remain available through scene_inspect/scene_card."
     },
     {
       "gui": "SceneViewport.NavigationCube:NavigateCubeAt",
@@ -110,7 +110,36 @@
         "zstudio_ai_selection",
         "zstudio_camera"
       ],
-      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Hover/selection labels derive from the same node data. Malformed node value types are diagnosed individually while valid neighbors remain visible; malformed duplicate indices remain ambiguous. Frame selected uses camera; normal scene framing excludes the overlay."
+      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Marker selection requires unlocked Whole world editing; locked selection is rejected before retaining a hidden marker/card. Explicit read-only Properties remains available while locked. Hover/selection labels derive from the same node data. Malformed node value types are diagnosed individually while valid neighbors remain visible; malformed duplicate indices remain ambiguous. Frame selected uses camera; normal scene framing excludes the overlay."
+    },
+    {
+      "gui": "SceneViewport.Inspection:Pointer",
+      "tools": [
+        "zstudio_scene_inspect",
+        "zstudio_scene_card"
+      ],
+      "note": "Shared triangle/instance picking supplies independent hover and selection in the fixed top-right panel. The permanent hover readout clears to placeholders over empty space; scene_card select expands details below it and clear collapses details only. Explicit point queries do not move or capture the physical pointer."
+    },
+    {
+      "gui": "SceneInspectionCard:Resize",
+      "tools": ["zstudio_workspace_view", "zstudio_scene_inspect"],
+      "note": "The bottom grip and Up/Down/Home/End set the shared inspectionPanelHeight preference without accepting drafts. Total expanded height defaults to 432 DIP, has a normal minimum of 216 DIP and a maximum of 80% of the viewport. Short viewports lower the effective minimum; automatic clamping never overwrites the saved preference. scene_inspect.panel returns preferred/effective heights, current limits and expanded state. Reset layout restores the default; collapsed details retain the preferred expanded height. Explicit height/reset requests supersede active resizing so stale drag updates or cancellation cannot overwrite the newer preference."
+    },
+    {
+      "gui": "SceneInspectionCard:Actions",
+      "tools": [
+        "zstudio_scene_card",
+        "zstudio_drafts",
+        "zstudio_resolve_drafts",
+        "zstudio_undo_redo",
+        "zstudio_save_document"
+      ],
+      "note": "Whole world cards and selection bounds require unlocked editing; source/tree inspection and hover remain available while locked. Fixed-header Edit/Confirm, Cancel, Copy all and Close share scene_card revisions, draft lifetimes, archive ownership, history and verified saves. AuthoredPosition, AuthoredRotation and AuthoredHeading bindings enable persistent fields in place. Move/Rotate buttons are hidden with reserved space until a draft begins, then appear alongside world-axis handles using the same draft as scene_card set position/rotationDegrees/headingDegrees/transformMode. Pickups support XYZ radians displayed as degrees; vehicles support native Y heading degrees; Rotate stays hidden for placements without authored rotation. Drags preview until explicit confirmation creates one combined undo step; Escape during a drag restores that gesture only. Invalid inputs retain the last valid preview and hide handles. Field/all copy returns accepted values with labels. World-origin readouts, animation poses and ambiguous actor ownership remain read-only. Header spacing, scrolling and gutter do not change camera or document state. Short viewports automatically place the navigation cube beside the panel, restoring its normal corner when space permits or details close; axis commands remain shared and no physical input is captured."
+    },
+    {
+      "gui": "DocumentSceneTree:Hierarchy",
+      "tools": ["zstudio_scene_tree", "zstudio_scene_properties", "zstudio_properties_open"],
+      "note": "Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Preview hierarchy is stable during animation; stored nodes are the fallback. Expand/collapse/reveal only change presentation."
     }
   ],
   "handlers": [
@@ -487,7 +516,7 @@
         "zstudio_inspect_asset",
         "zstudio_source_bytes"
       ],
-      "note": "Model rows expose accepted AssetRecords and appended material/texture references while retaining kind/index identity through undo/redo. Asset offsets describe edited ranges; nullable sourceOffset/sourceLength and GUI Bytes retain original source ranges. New records have no original bytes."
+      "note": "Model rows expose accepted AssetRecords and appended material/texture references while retaining kind/index identity through undo/redo. Asset offsets describe edited ranges; nullable sourceOffset/sourceLength and GUI Bytes retain original source ranges. New records have no original bytes. Model replacement snapshots are restricted to GameZ and texture packs before acceptance/history; mission coordinates publish separate ZAR archives. Mixed model/placement edits share chronological undo and publish all snapshots without bypassing duplicate-owner protection."
     },
     {
       "gui": "MainWindow.xaml:AudioSeekChanged",
@@ -768,11 +797,11 @@
       "note": "GUI and MCP inspect the same current edited or mirrored texture snapshot, including moved private palettes, added records, undo/redo and Save As aliases."
     },
     {
-      "gui": "MainWindow.xaml:PickupLockedChanged",
+      "gui": "MainWindow.xaml:EditingUnlockedChanged",
       "tools": [
         "zstudio_pickup_lock"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "Unlock editing gates all Whole world object cards, selection bounds and pickup/AI-node/AIV-tank transforms. Unlocking alone selects nothing. Locking closes selection after draft resolution; GUI Cancel preserves drafts and the unlocked state. Source/tree inspection, read-only point queries and hover remain available while locked. The compatibility-named pickup_lock and PickupsLocked identities are retained; MCP lock transitions require resolved drafts."
     },
     {
       "gui": "MainWindow.xaml:PlayAudioClick",
@@ -806,7 +835,8 @@
       "gui": "MainWindow.xaml:PropertiesClick",
       "tools": [
         "zstudio_properties_open",
-        "zstudio_resource_properties"
+        "zstudio_resource_properties",
+        "zstudio_scene_tree"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -862,7 +892,7 @@
     {
       "gui": "MainWindow.xaml:ScenePropertiesClick",
       "tools": [
-        "zstudio_scene_properties"
+        "zstudio_scene_tree", "zstudio_scene_properties", "zstudio_properties_open"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -876,7 +906,7 @@
     {
       "gui": "MainWindow.xaml:SceneTreeSelected",
       "tools": [
-        "zstudio_scene_selection"
+        "zstudio_scene_tree"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },

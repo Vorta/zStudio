@@ -49,6 +49,7 @@ public partial class MainWindow
     }
     private void UpdateDocumentCommands()
     {
+        RefreshSceneTree();
         var doc = ViewModel.SelectedDocument;
         ObserveDocumentCommands(doc);
         bool hasDocument = doc != null;
@@ -105,6 +106,8 @@ public partial class MainWindow
     }
     private void AttachAnimationWorkspace(AnimationEditor editor)
     {
+        AttachInspection(editor.Viewport);
+        editor.SceneHierarchyChanged += RefreshSceneTree;
         int preferredTool = Layout.ToolTab, preferredInspector = Layout.InspectorTab; detachingWorkspace = true;
         ProgramHost.Content = editor.ProgramView;
         editor.PropertiesRequested += async (sequence, ev) => { var document = shownDocument; if (document != null && await ResolvePropertiesDraftsAsync() && !document.IsDisposed) OpenAnimationProperties(document, editor.EntryIndex, sequence, ev); };

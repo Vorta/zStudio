@@ -243,8 +243,8 @@ public sealed partial class SceneViewport
         // Parent tunneling precedes Helix's class-level hit testing and view-cube handler.
         PreviewMouseDown += (_, e) =>
         {
-            if (e.Handled || IsFlyActive || IsPickupDragging) return;
-            if (e.ChangedButton == MouseButton.Left && NavigateCubeAt(e.GetPosition(viewport))) { e.Handled = true; return; }
+            if (e.Handled || IsFlyActive || IsPickupDragging ||
+                InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
             var gesture = Gesture(e.ChangedButton, Keyboard.Modifiers);
             if (gesture == NavigationGesture.None) return;
             BeginNavigationDrag(gesture, e.GetPosition(viewport));
@@ -265,7 +265,10 @@ public sealed partial class SceneViewport
         };
         PreviewMouseWheel += (_, e) =>
         {
-            if (IsFlyActive) return;
+            // The card is a sibling of the render surface. Let its native controls
+            // process the wheel before any camera motion or inertia is started.
+            if (e.Handled || IsFlyActive ||
+                InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
             if (!IsPickupDragging)
             {
                 StopCameraMotion(); ZoomAt(e.GetPosition(viewport), e.Delta);

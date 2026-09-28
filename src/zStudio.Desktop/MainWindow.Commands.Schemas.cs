@@ -31,6 +31,7 @@ public partial class MainWindow
         P("theme","string","Theme.",false,"System","Light","Dark"), P("density","string","Density.",false,"Compact","Comfortable"),
         P("preset","string","Workspace preset.",false,"Inspect","Edit","Debug","Focus preview"),
         P("filesWidth","number","Preferred detached Files width in DIP, clamped to 200–650; automatic layout does not overwrite it."),
+        P("inspectionPanelHeight","number","Preferred total expanded inspection-panel height in DIP; default 432, minimum 216. Effective height is limited to 80% of the viewport without overwriting this preference; shorter viewports lower the effective minimum. Does not commit drafts."),
         .. new[] { "navigatorWidth", "inspectorWidth", "toolsHeight" }.Select(n=>P(n,"number","Preferred dimension in DIP; clamped to supported layout limits. Navigator width is the content tabs width in split mode, or the combined tab group width otherwise.")),
         P("navigatorTab","integer","Stable section index: 0 Files (also when detached), 1 Assets, 2 Search, 3 Document scene. Unavailable document sections are rejected."),
         .. new[] { "inspectorTab", "toolsTab" }.Select(n=>P(n,"integer","Zero-based visible tab index."))

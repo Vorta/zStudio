@@ -49,7 +49,7 @@ internal static class WorldHighlightCheck
                     var preview = (SceneViewport)host.Content;
                     preview.RestoreView(SceneViewport.UprightPose(preview.CaptureView()));
                     var pose = preview.CaptureView(); var data = preview.PreviewScene;
-                    var meshIds = Meshes((Viewport3DX)preview.Content).ToArray();
+                    var meshIds = Meshes((Viewport3DX)preview.RenderSurface).ToArray();
                     var buttons = new[] { "HighlightSoils", "HighlightCanModify", "HighlightClipTo" }.Select(n => (ToggleButton)main.FindName(n)).ToArray();
                     Require(((FrameworkElement)main.FindName("WorldHighlights")).IsVisible, "Whole world highlight controls missing");
                     for (int i = 0; i < buttons.Length; i++)
@@ -58,8 +58,8 @@ internal static class WorldHighlightCheck
                         await Task.Delay(150, deadline.Token);
                         Require(buttons.Count(b => b.IsChecked == true) == 1, "Highlight controls are not exclusive");
                         Require(preview.CaptureView() == pose && ReferenceEquals(host.Content, preview) && ReferenceEquals(data, preview.PreviewScene), "Highlight replaced scene/camera");
-                        Require(meshIds.SequenceEqual(Meshes((Viewport3DX)preview.Content)), "Highlight rebuilt geometry");
-                        Save(Presented((Viewport3DX)preview.Content), Path.Combine(output, mission + "-" + preview.HighlightMode + ".png"));
+                        Require(meshIds.SequenceEqual(Meshes((Viewport3DX)preview.RenderSurface)), "Highlight rebuilt geometry");
+                        Save(Presented((Viewport3DX)preview.RenderSurface), Path.Combine(output, mission + "-" + preview.HighlightMode + ".png"));
                         Console.WriteLine($"PASS: {mission} {preview.HighlightMode}, retained geometry/camera and exclusive GUI state");
                     }
                     Save(StudioCapture.Window(main), Path.Combine(output, mission + "-controls.png"));
@@ -75,7 +75,7 @@ internal static class WorldHighlightCheck
                         var state = (await main.Commands.ExecuteAsync("zstudio_state", new())).Data;
                         string id = state["preview"]!.GetValue<string>();
                         await main.Commands.ExecuteAsync("zstudio_scene_selection", new() { ["preview"] = id, ["action"] = "select", ["node"] = pickup.Root });
-                        ((ToggleButton)main.FindName("PickupLocked")).IsChecked = false;
+                        ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
                         main.OpenCurrentProperties();
                         await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                         var popup = main.OpenPropertiesWindow!; var fields = popup.PickupFields!;
@@ -91,7 +91,7 @@ internal static class WorldHighlightCheck
                         }
                         Require(operation["State"]!.GetValue<string>() == "failed" && operation["result"]!["code"]!.GetValue<string>() == "pending_drafts", "MCP highlight bypassed Properties draft guard");
                         input.Text = original; popup.Close();
-                        ((ToggleButton)main.FindName("PickupLocked")).IsChecked = true;
+                        ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = false;
                     }
                     // Native overflow, theme and density retain the selected mode.
                     main.Width = 740;
@@ -163,7 +163,7 @@ internal static class WorldHighlightCheck
             var asset = doc.Add(AssetKind.World, 0, "Whole world", 0, 0);
             string before = Snapshot(scene);
             await preview.ShowAsync(doc, asset, resolver, null, 0, default, mission: MissionSceneLoader.Build(doc, null, null, null, null));
-            var viewport = (Viewport3DX)preview.Content; viewport.ShowCoordinateSystem = viewport.ShowViewCube = viewport.IsInertiaEnabled = false;
+            var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = viewport.IsInertiaEnabled = false;
             preview.RestoreView(new(new(0,0,12), new(0,0,-12), new(0,1,0), 50));
             await Task.Delay(250);
             var meshes = Meshes(viewport).ToArray(); var materials = meshes.Select(m => m.Material).ToArray(); var pose = preview.CaptureView();

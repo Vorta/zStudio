@@ -33,13 +33,14 @@ public partial class MainWindow
             return Page(graph.Networks.Where(n => network == "all" || n.Id == network).SelectMany(n => n.Nodes
                 .Where(p => $"{n.Member} {n.Name} node_{p.Index:00}".Contains(Text(args, "query"), StringComparison.OrdinalIgnoreCase)).Select(p => (Network: n, Node: p))), args, project: p => graph.Describe(p.Network, p.Node));
         });
-        Register(registry, "ai_selection", "Select/clear an AI marker or open its pinned read-only Properties. Selection requires enabled visualization and a matching filter. Frame it with camera action=frame,target=selected.", true,
+        Register(registry, "ai_selection", "Select/clear an AI marker or open its pinned read-only Properties. Selection requires unlocked Whole world editing, enabled visualization and a matching filter. Read-only Properties remains available while locked. Frame a selected marker with camera action=frame,target=selected.", true,
             [PreviewParameter, AiSnapshotParameter, P("action", "string", "Selection action.", true, "select", "clear", "properties"), P("node", "string", "Snapshot-scoped node ID; required except for clear.")], async (args, token) =>
         {
-            var graph = TargetAiGraph(args); string action = Text(args, "action"), id = Text(args, "node");
+            RequireNoDrafts(); var graph = TargetAiGraph(args); string action = Text(args, "action"), id = Text(args, "node");
             if (scene!.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing AI inspection.");
             if (action == "clear") { scene.SelectAiNode(null); return Result(new { selectedNode = scene.SelectedAiNode }); }
             var target = graph.Find(id) ?? throw new StudioCommandException("stale_record", "AI node unavailable.");
+            if (action == "select" && !scene.InspectionSelectionEnabled) throw new StudioCommandException("locked", "Unlock editing before selecting an AI marker.");
             if (action == "select" && !scene.SelectAiNode(id)) throw new StudioCommandException("not_ready", "Enable AI nodes and choose All networks or this node's network before selecting it.");
             if (action == "properties")
             {

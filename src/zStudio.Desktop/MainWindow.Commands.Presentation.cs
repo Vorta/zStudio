@@ -35,6 +35,7 @@ public partial class MainWindow
                     case "filesWidth": Layout.FilesWidth=value!.GetValue<double>(); break;
                     case "inspectorWidth": Layout.InspectorWidth=value!.GetValue<double>(); break;
                     case "toolsHeight": Layout.ToolsHeight=value!.GetValue<double>(); break;
+                    case "inspectionPanelHeight": Layout.InspectionPanelHeight=value!.GetValue<double>(); break;
                     case "navigatorTab": SelectNavigatorSection(value!.GetValue<int>()); break;
                     case "inspectorTab": SetTab(InspectorTabs,value!.GetValue<int>()); break;
                     case "toolsTab": SetTab(ToolTabs,value!.GetValue<int>()); break;
@@ -42,7 +43,13 @@ public partial class MainWindow
                     default: throw new StudioCommandException("unknown_option",key);
                 }
             }
-            if (a.ContainsKey("changes")) { Layout.Normalize(); ArrangeWorkspace(); SaveWorkspacePreferences(); ViewModel.Settings.Save(); }
+            if (a.ContainsKey("changes"))
+            {
+                Layout.Normalize();
+                if (a["changes"] is JsonObject changes && changes.ContainsKey("inspectionPanelHeight"))
+                    CurrentInspectionCard?.SetPanelHeight(Layout.InspectionPanelHeight);
+                ArrangeWorkspace(); SaveWorkspacePreferences(); ViewModel.Settings.Save();
+            }
             return Result(new { theme=ViewModel.Settings.Theme,layout=Layout,navigatorMode=NavigatorMode,ViewModel.Settings.CreateBackupOnSave });
         });
         Register(r,"window","Read or change zStudio window state; close requires clean documents and resolved drafts.",true,

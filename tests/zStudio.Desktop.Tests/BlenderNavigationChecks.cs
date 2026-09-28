@@ -28,7 +28,7 @@ internal static class BlenderNavigationChecks
     internal static async Task Run()
     {
         using var scene = new SceneViewport();
-        var surface = (Viewport3DX)scene.Content;
+        var surface = (Viewport3DX)scene.RenderSurface;
         scene.Measure(new(900, 600)); scene.Arrange(new(0, 0, 900, 600));
         Assert.False(surface.UseDefaultGestures);
         Assert.Empty(surface.InputBindings);
@@ -98,7 +98,7 @@ internal static class BlenderNavigationChecks
     }
     private static void CheckPointerAnchoring(SceneViewport scene, SceneViewport.ViewPose initial)
     {
-        var surface = (Viewport3DX)scene.Content;
+        var surface = (Viewport3DX)scene.RenderSurface;
         var point = new Point3D(2, 1, 0);
         foreach (string projection in new[] { "perspective", "orthographic" })
         {
@@ -158,7 +158,7 @@ internal static class BlenderNavigationChecks
     private static void CheckLiveModifiers(SceneViewport scene, SceneViewport.ViewPose initial)
     {
         Point start = new(300, 200), finish = new(330, 220);
-        var surface = (Viewport3DX)scene.Content;
+        var surface = (Viewport3DX)scene.RenderSurface;
         foreach (var (key, modifiers) in new[] { (Key.LeftShift, ModifierKeys.Shift), (Key.RightShift, ModifierKeys.Shift),
             (Key.LeftCtrl, ModifierKeys.Control), (Key.RightCtrl, ModifierKeys.Control),
             (Key.LeftShift, ModifierKeys.Control | ModifierKeys.Shift), (Key.RightCtrl, ModifierKeys.Control | ModifierKeys.Shift) })
@@ -221,7 +221,7 @@ internal static class BlenderNavigationChecks
     }
     private static void CheckContinuousZoomAndPivot(SceneViewport scene, SceneViewport.ViewPose initial)
     {
-        var surface = (Viewport3DX)scene.Content;
+        var surface = (Viewport3DX)scene.RenderSurface;
         scene.RestoreView(initial); scene.ZoomBy(100); var batch = scene.CaptureView();
         Assert.True(batch.Position.Z < 0, "Zoom must travel past the original target");
         Assert.Equal(.01, batch.LookDirection.Length, 10);

@@ -40,7 +40,7 @@ internal static class SceneDepthCheck
                     await Task.Delay(50, timeout.Token);
                 }
                 var scene = (SceneViewport)((ContentControl)window.FindName("SceneHost")).Content;
-                var viewport = (Viewport3DX)scene.Content;
+                var viewport = (Viewport3DX)scene.RenderSurface;
                 var camera = viewport.Camera as HCamera ?? throw new InvalidOperationException("No perspective camera.");
                 viewport.IsInertiaEnabled = false;
                 Point3D center = camera.Position + camera.LookDirection;

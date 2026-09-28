@@ -21,8 +21,8 @@ Dependency alerts/security update PRs and confidential vulnerability reporting a
    ```powershell
    git switch main
    git pull --ff-only
-   git tag -a v0.6.1 -m 'zStudio 0.6.1'
-   git push origin v0.6.1
+   git tag -a v0.6.3 -m 'zStudio 0.6.3'
+   git push origin v0.6.3
    ```
 
 4. The Release workflow checks tag/version equality and main ancestry, restores locked dependencies, builds, tests and packages. A separate job with release-write permission uploads the verified ZIP and `SHA256SUMS` to GitHub Releases. Changelog text supplies the notes. Prerelease version suffixes create prereleases; ordinary versions become the latest release.
@@ -41,7 +41,7 @@ The executable remains the SDK apphost bound to `dependencies/Recoil.Zbd.Studio.
 The package verifier can be run independently:
 
 ```powershell
-./tools/verify-package.ps1 -Directory artifacts/zStudio-win-x64 -Archive artifacts/zStudio-0.6.1-win-x64.zip -ExpectedVersion 0.6.1
+./tools/verify-package.ps1 -Directory artifacts/zStudio-win-x64 -Archive artifacts/zStudio-0.6.3-win-x64.zip -ExpectedVersion 0.6.3
 ```
 
 ## Maintenance checks

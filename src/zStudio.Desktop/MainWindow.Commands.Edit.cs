@@ -86,11 +86,11 @@ public partial class MainWindow
             token.ThrowIfCancellationRequested();
             if (d.IsDisposed || !ViewModel.Documents.Contains(d)) throw new StudioCommandException("stale_document", "The pickup document is no longer open. Read zstudio_state before retrying.");
             cancellation.Token.ThrowIfCancellationRequested();
-            return Page(edits.Records.Select(p => new { source = p.Source, p.Type, position = edits.Position(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) }), a, p => p.Type + " " + p.source.ResourceName + " " + p.target);
+            return Page(edits.Records.Select(p => new { source = p.Source, p.Type, position = edits.Position(p.Source), rotationRadians = edits.Rotation(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) }), a, p => p.Type + " " + p.source.ResourceName + " " + p.target);
         });
-        Register(r, "pickup_lock", "Set this document's pickup editing lock; new documents are locked by default.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether placements are locked.", true)], a =>
+        Register(r, "pickup_lock", "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked. Pending drafts require explicit resolution.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.", true)], a =>
         {
-            var d = TargetDocument(a, true); d.PickupsLocked = Flag(a, "locked"); if (pickupDocument == d) { updating = true; PickupLocked.IsChecked = d.PickupsLocked; updating = false; scene?.SetPickupLocked(d.PickupsLocked); } return Result(DocumentState(d));
+            var d = TargetDocument(a, true); SetSceneEditingLocked(d, Flag(a, "locked")); return Result(DocumentState(d));
         });
         Register(r, "pickup_move", "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements.", true,
             [DocumentParameter, RevisionParameter, new("source", "object", "Exact source identity returned by pickups; field names are case-sensitive.", true, Properties:
@@ -100,7 +100,7 @@ public partial class MainWindow
                  new("RecordIndex", "integer", "Placement record index returned by pickups.", true, Minimum: 0, Maximum: int.MaxValue)]),
              P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)], a =>
         {
-            var d = TargetDocument(a, true); if (d.PickupsLocked) throw new StudioCommandException("locked", "Unlock pickup editing first.");
+            var d = TargetDocument(a, true); if (d.PickupsLocked) throw new StudioCommandException("locked", "Unlock editing first.");
             var source = System.Text.Json.JsonSerializer.Deserialize<MissionPickupSource>(a["source"]!.ToJsonString()) ?? throw new StudioCommandException("invalid_argument", "Missing pickup identity.");
             var edits = d.PickupEdits ?? throw new StudioCommandException("not_ready", "Load pickups first.");
             if (edits.Find(source) == null) throw new StudioCommandException("stale_record", "Pickup source no longer exists.");
@@ -108,14 +108,22 @@ public partial class MainWindow
             if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)) throw new StudioCommandException("invalid_argument", "Coordinates must fit finite game floats.");
             edits.MoveTo(source, position); return Result(DocumentState(d));
         });
-        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus.", false, [P("target", "string", "Draft owner.", true, "properties", "preview")], a =>
+        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus.", false, [P("target", "string", "Draft owner.", true, "properties", "preview", "scene")], a =>
         {
+            if (Text(a, "target") == "scene") return Result(new { document = inspectionDraft?.DraftDocument?.SessionId ?? shownDocument?.SessionId, drafts = (HasInspectionDraft ? inspectionDraft : CurrentInspectionCard)?.DescribeDraft() });
             var fields = DraftOwner(Text(a, "target")); return Result(new { document = Text(a, "target") == "properties" ? propertiesWindow?.Document?.SessionId : shownDocument?.SessionId, drafts = fields?.DescribeDrafts() });
         });
         Register(r, "resolve_drafts", "Explicitly apply or discard current GUI drafts. Invalid input is retained and returned as an error, without modal dialogs.", true,
-            [DocumentParameter, P("target", "string", "Draft owner.", true, "properties", "preview"), P("token", "string", "Current draft token.", true), P("action", "string", "Resolution.", true, "apply", "discard")], async (a, token) =>
+            [DocumentParameter, P("target", "string", "Draft owner.", true, "properties", "preview", "scene"), P("token", "string", "Current draft token.", true), P("action", "string", "Resolution.", true, "apply", "discard")], async (a, token) =>
         {
             var d = TargetDocument(a); string target = Text(a, "target");
+            if (target == "scene")
+            {
+                if (!HasInspectionDraft || inspectionDraft!.DraftDocument != d) throw new StudioCommandException("context_changed", "Scene draft owner changed.");
+                inspectionDraft.RequireDraft(Text(a, "token"));
+                if (Text(a, "action") == "apply") ApplyInspectionEdit(inspectionDraft); else inspectionDraft.CancelDraft();
+                return Result(DocumentState(d));
+            }
             if ((target == "properties" ? propertiesWindow?.Document : shownDocument) != d) throw new StudioCommandException("context_changed", "Draft owner changed.");
             var owner = DraftOwner(target) ?? throw new StudioCommandException("not_ready", "No field editor is open."); await owner.ResolveAutomationDraftsAsync(Text(a, "token"), Text(a, "action") == "apply");
             if (owner is AnimationEditor editor) await editor.AwaitOptionWorkAsync();

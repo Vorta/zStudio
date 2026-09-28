@@ -70,9 +70,10 @@ internal static class ResponsiveNavigatorChecks
             Assert.Equal(0,main.ViewModel.Settings.GetWorkspace().BrowserTab);
             rootItem = (TreeViewItem)tree.ItemContainerGenerator.ContainerFromIndex(0);
             first = (TreeViewItem)rootItem.ItemContainerGenerator.ContainerFromIndex(0);
-            main.Activate(); first.Focus(); await Idle(); Assert.True(tree.IsKeyboardFocusWithin);
-            await Resize(1080,"tabbed"); Assert.True(tree.IsKeyboardFocusWithin);
-            await Resize(1600,"split"); Assert.True(tree.IsKeyboardFocusWithin);
+            bool activated = main.Activate(), focused = first.Focus(); await Idle(); Assert.True(tree.IsKeyboardFocusWithin, FocusState());
+            await Resize(1080,"tabbed"); Assert.True(tree.IsKeyboardFocusWithin, FocusState());
+            await Resize(1600,"split"); Assert.True(tree.IsKeyboardFocusWithin, FocusState());
+            string FocusState() => $"activate={activated}; focus={focused}; active={main.IsActive}; focused={Keyboard.FocusedElement}; logical={FocusManager.GetFocusedElement(main)}; tree visible={tree.IsVisible}";
             await Changes(new() { ["navigatorTab"] = 2 });
             ((TextBox)main.FindName("GlobalSearch")).Text = "file";
             await Resize(1080,"tabbed"); Assert.Equal(2,tabs.SelectedIndex);

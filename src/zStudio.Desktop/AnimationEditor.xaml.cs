@@ -311,6 +311,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private void Render()
     {
         if (frame == null || disposed) return;
+        if (publishedHierarchy != context?.Scene) { publishedHierarchy = context?.Scene; SceneHierarchyChanged?.Invoke(); }
         MissionLayoutLabel.Text = context?.Mission?.Layout.Label ?? "Mission start";
         MissionLayoutLabel.ToolTip = context?.Mission?.Layout.Description;
         int root = context?.ResolveRoot(Entry) ?? -1;

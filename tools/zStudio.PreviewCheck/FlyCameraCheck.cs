@@ -40,7 +40,7 @@ internal static class FlyCameraCheck
                 var document = await window.ViewModel.OpenFileAsync(path) ?? throw new InvalidDataException("Missing map");
                 await Ready();
                 scene = (SceneViewport)((ContentControl)window.FindName("SceneHost")).Content;
-                var viewport = (Viewport3DX)scene.Content;
+                var viewport = (Viewport3DX)scene.RenderSurface;
                 var camera = (HCamera)viewport.Camera!;
                 var fly = (ToggleButton)window.FindName("FlyEnabled");
                 var toolbar = (ToolBar)window.FindName("SceneToolbar");

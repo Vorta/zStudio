@@ -6,11 +6,13 @@ namespace Recoil.Zbd.Desktop;
 /// <summary>Presentation preferences only. Automatic collapse never overwrites preferred dimensions.</summary>
 public sealed class WorkspaceLayout
 {
+    internal const double DefaultInspectionPanelHeight = 432, MinimumInspectionPanelHeight = 216;
     public int Version { get; set; } = 4;
     public double NavigatorWidth { get; set; } = 294;
     public double FilesWidth { get; set; } = 240;
     public double InspectorWidth { get; set; } = 352;
     public double ToolsHeight { get; set; } = 180;
+    public double InspectionPanelHeight { get; set; } = DefaultInspectionPanelHeight;
     public PropertyWindowBounds PropertiesWindow { get; set; } = new();
     public bool NavigatorVisible { get; set; } = true;
     public bool InspectorVisible { get; set; } = true;
@@ -30,6 +32,7 @@ public sealed class WorkspaceLayout
         FilesWidth = Bound(FilesWidth, 240, 200, 650);
         InspectorWidth = Bound(InspectorWidth, 352, 320, 650);
         ToolsHeight = Bound(ToolsHeight, 180, 100, 700);
+        InspectionPanelHeight = NormalizeInspectionPanelHeight(InspectionPanelHeight);
         BrowserTab = Math.Clamp(BrowserTab, 0, 3); InspectorTab = Math.Clamp(InspectorTab, 0, 2); ToolTab = Math.Clamp(ToolTab, 0, 5);
         if (Version < 4 || ContentBrowserTab < 1) ContentBrowserTab = BrowserTab > 0 ? BrowserTab : 1;
         ContentBrowserTab = Math.Clamp(ContentBrowserTab, 1, 3);
@@ -39,6 +42,8 @@ public sealed class WorkspaceLayout
         PropertiesWindow ??= new(); PropertiesWindow.Normalize();
     }
     private static double Bound(double value, double fallback, double min, double max) => double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
+    internal static double NormalizeInspectionPanelHeight(double value) => double.IsFinite(value)
+        ? Math.Max(MinimumInspectionPanelHeight, value) : DefaultInspectionPanelHeight;
 }
 
 public sealed class PropertyWindowBounds
