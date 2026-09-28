@@ -157,7 +157,7 @@ public partial class MainWindow
 
     private void RegisterInspectionCommands(StudioCommands commands)
     {
-        Register(commands, "scene_inspect", "Read hover/selection information or query an explicit viewport point/target without moving the mouse. Coordinates distinguish triangle hits, object origins and authored placement positions.", false,
+        Register(commands, "scene_inspect", "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions.", false,
             [PreviewParameter, P("target", "string", "Opaque target from a previous inspection."), new("screenPoint", "array", "Viewport DIP [x,y].", Items: new("", "number", "Coordinate.", NumberMinimum: 0), MinItems: 2, MaxItems: 2)], a =>
         {
             var viewport = TargetViewport(a); SceneInspection? item;
@@ -175,7 +175,7 @@ public partial class MainWindow
                 hover = viewport.HoverInspection == null ? null : DescribeInspection(viewport, viewport.HoverInspection),
                 draft = (viewport.InspectionContent as SceneInspectionCard)?.DescribeDraft() });
         });
-        Register(commands, "scene_card", "Select/close the floating card, copy fields, or begin/set/apply/cancel its shared position/rotation draft. Whole world selection requires unlocked editing. Typed values and Move/Rotate handles preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.", true,
+        Register(commands, "scene_card", "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared position/rotation draft. Whole world selection requires unlocked editing. Move/Rotate controls and handles appear only during an edit draft; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.", true,
             [PreviewParameter, P("action", "string", "Card action.", true, "select", "clear", "copy", "begin", "set", "apply", "cancel"),
                 P("target", "string", "Opaque inspection target for select."), P("node", "integer", "Alternative scene node for selection."),
                 P("runtime", "string", "Optional runtime instance ID with node."), P("field", "string", "Copy field label; omitted copies all details."), P("clipboard", "boolean", "Write copy text to clipboard; default false."),

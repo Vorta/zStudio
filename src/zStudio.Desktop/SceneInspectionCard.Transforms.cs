@@ -39,9 +39,12 @@ internal sealed partial class SceneInspectionCard
     }
     private void RefreshModeControls()
     {
-        modes.Visibility = values.ContainsKey(AuthoredPlacement) ? Visibility.Visible : Visibility.Collapsed;
+        modes.Visibility = !values.ContainsKey(AuthoredPlacement) ? Visibility.Collapsed : HasDraft ? Visibility.Visible : Visibility.Hidden;
         moveMode.IsEnabled = HasDraft;
         rotateMode.IsEnabled = HasDraft && rotationKind != PlacementRotationKind.None;
+        rotateMode.ToolTip = rotationKind == PlacementRotationKind.None ? "This placement has no authored rotation" :
+            rotationKind == PlacementRotationKind.HeadingDegrees ? "Rotate object · Y heading only" : "Rotate object · X, Y and Z";
+        ToolTipService.SetShowOnDisabled(rotateMode, true);
         moveMode.IsChecked = transformMode == "move"; rotateMode.IsChecked = transformMode == "rotate";
     }
     internal PlacementTransform DraftTransform()

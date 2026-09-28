@@ -13,14 +13,14 @@ using Recoil.Zbd.Automation;
 
 namespace Recoil.Zbd.Desktop;
 
-/// <summary>Presentation and an explicit XYZ draft. All accepted edits are delegated to the document service.</summary>
+/// <summary>Fixed hover/selection presentation and a shared transform draft delegated to the document service.</summary>
 internal sealed partial class SceneInspectionCard : Grid
 {
     private readonly SceneViewport viewport;
     private readonly Func<SceneInspection, JsonObject> describe;
     private readonly Action<SceneInspectionCard> begin, apply;
     private readonly Border card;
-    private readonly TextBlock hover = new() { Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap, MaxWidth = 390 };
+    private readonly Border panel;
     private readonly TextBlock heading = new() { FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock error = new() { Foreground = Brushes.LightSalmon, TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock scope = new() { Opacity = .75, TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new(0, 3, 0, 3) };
@@ -50,8 +50,6 @@ internal sealed partial class SceneInspectionCard : Grid
     {
         this.viewport = viewport; this.describe = describe; this.begin = begin; this.apply = apply;
         Background = null;
-        var hoverBox = Box(hover); hoverBox.HorizontalAlignment = HorizontalAlignment.Right; hoverBox.VerticalAlignment = VerticalAlignment.Top;
-        hoverBox.Margin = new(10); hoverBox.IsHitTestVisible = false; Children.Add(hoverBox);
         InitializeTransformControls();
         Grid layout = new(); layout.RowDefinitions.Add(new() { Height = GridLength.Auto }); layout.RowDefinitions.Add(new() { Height = GridLength.Auto }); layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
         DockPanel title = new(); var close = Button("×", "Close node card", () => { if (ResolvePending()) viewport.SelectInspection(null, false); });
@@ -70,16 +68,13 @@ internal sealed partial class SceneInspectionCard : Grid
         scroll.SetResourceReference(Control.TemplateProperty, "InspectionScrollTemplate");
         SetRow(scroll, 2); layout.Children.Add(scroll);
         card = Box(layout); card.Name = "InspectionCard";
-        card.SetResourceReference(Border.BackgroundProperty, "ApplicationBackgroundBrush");
-        card.BorderBrush = new SolidColorBrush(Color.FromArgb(96, 128, 128, 128)); card.BorderThickness = new(1);
-        // Native scrolling runs first; wheel input at the card's padding or
-        // scroll limits still belongs to the card, never the surrounding scene.
-        card.MouseWheel += (_, e) => e.Handled = true;
-        card.Width = 350; card.HorizontalAlignment = HorizontalAlignment.Left; card.VerticalAlignment = VerticalAlignment.Top;
-        card.Visibility = Visibility.Collapsed; Children.Add(card);
+        card.BorderBrush = new SolidColorBrush(Color.FromArgb(96, 128, 128, 128)); card.BorderThickness = new(0, 1, 0, 0);
+        card.Visibility = Visibility.Collapsed;
+        panel = CreatePanel(); Children.Add(panel);
         viewport.InspectionChanged += Refresh; SizeChanged += (_, _) => Refresh();
+        Refresh();
     }
-    private static Border Box(UIElement child) => new() { Child = child, Background = new SolidColorBrush(Color.FromArgb(242, 32, 37, 44)), CornerRadius = new(6), Padding = new(10) };
+    private static Border Box(UIElement child) => new() { Child = child, Padding = new(10) };
     private static Button Button(string text, string tooltip, Action action)
     {
         Button button = new() { Content = text, ToolTip = tooltip, Width = 30, Height = 30, Padding = new(0), Margin = new(2), VerticalAlignment = VerticalAlignment.Center };
@@ -153,20 +148,10 @@ internal sealed partial class SceneInspectionCard : Grid
     }
     internal void Refresh()
     {
-        var hovered = viewport.HoverInspection;
         var selected = Selection;
-        var shown = hovered ?? selected;
-        if (shown == null) hover.Text = "";
-        else
-        {
-            var info = describe(shown);
-            hover.Text = (hovered == null ? "Selected · " : "") + Display(info["Node"]) +
-                (hovered?.Surface is { } surface ? "\nSurface XYZ · " + Vector(surface) : "") +
-                (shown.Origin is { } origin ? "\nObject origin XYZ · " + Vector(origin) : "\nInactive / offscreen");
-        }
-        // The pinned card itself is the selection fallback. Avoid duplicating it behind the card.
-        ((Border)hover.Parent).Visibility = hovered == null ? Visibility.Collapsed : Visibility.Visible;
+        RefreshHover();
         card.Visibility = selected == null && !HasDraft ? Visibility.Collapsed : Visibility.Visible;
+        ArrangePanel();
         if (selected == null) return;
         details = describe(selected);
         heading.Text = Display(details["Node"]); heading.ToolTip = heading.Text;
@@ -216,11 +201,5 @@ internal sealed partial class SceneInspectionCard : Grid
         if (!HasDraft) edit.ToolTip = Display(details["Editing"]);
         var anchor = viewport.InspectionAnchor(selected); bool offscreen = !double.IsFinite(anchor.X) || !double.IsFinite(anchor.Y) || anchor.X < 0 || anchor.X > ActualWidth || anchor.Y < 0 || anchor.Y > ActualHeight;
         if (offscreen) heading.Text += selected.Active ? " · offscreen" : " · inactive";
-        card.Width = Math.Max(120, Math.Min(350, ActualWidth - 20));
-        card.Height = Math.Max(80, Math.Min(340, ActualHeight - 20));
-        double x = offscreen ? ActualWidth - card.Width - 12 : anchor.X + 18;
-        double y = offscreen ? 100 : anchor.Y + 12;
-        card.Margin = new(Math.Clamp(x, 10, Math.Max(10, ActualWidth - card.Width - 10)), Math.Clamp(y, 10, Math.Max(10, ActualHeight - card.Height - 10)), 0, 0);
     }
-    private static string Vector(Vector3 v) => string.Join(", ", new[] { v.X, v.Y, v.Z }.Select(x => x.ToString("R", CultureInfo.InvariantCulture)));
 }

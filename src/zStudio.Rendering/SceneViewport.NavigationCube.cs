@@ -11,6 +11,21 @@ namespace Recoil.Zbd.Rendering;
 
 public sealed partial class SceneViewport
 {
+    /// <summary>The screen-space cube viewport in DIPs, reserved by the inspection overlay.</summary>
+    public Rect NavigationCubeBounds
+    {
+        get
+        {
+            if (!viewport.ShowViewCube) return Rect.Empty;
+            double size = 100;
+            if (viewport.Template?.FindName("PART_ViewCube", viewport) is ScreenSpacedElement3D cube &&
+                cube.SceneNode.RenderCore is HelixToolkit.SharpDX.Core.ScreenSpacedMeshRenderCore core) size = core.Size;
+            size *= viewport.ViewCubeSize;
+            return new(viewport.ActualWidth * (1 + viewport.ViewCubeHorizontalPosition) / 2 - size / 2,
+                viewport.ActualHeight * (1 - viewport.ViewCubeVerticalPosition) / 2 - size / 2, size, size);
+        }
+    }
+
     private void ConfigureNavigationCube()
     {
         // Helix's Y-up face order is +Z, -Z, +X, -X, +Y, -Y.

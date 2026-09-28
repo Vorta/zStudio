@@ -2159,7 +2159,7 @@
   },
   {
     "Name": "zstudio_scene_inspect",
-    "Description": "Read hover/selection information or query an explicit viewport point/target without moving the mouse. Coordinates distinguish triangle hits, object origins and authored placement positions.",
+    "Description": "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions.",
     "Mutates": false,
     "Parameters": [
       {
@@ -2201,7 +2201,7 @@
   },
   {
     "Name": "zstudio_scene_card",
-    "Description": "Select/close the floating card, copy fields, or begin/set/apply/cancel its shared position/rotation draft. Whole world selection requires unlocked editing. Typed values and Move/Rotate handles preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.",
+    "Description": "Expand/clear selected-object details below the permanent top-right hover readout, copy fields, or begin/set/apply/cancel the shared position/rotation draft. Whole world selection requires unlocked editing. Move/Rotate controls and handles appear only during an edit draft; transforms preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.",
     "Mutates": true,
     "Parameters": [
       {

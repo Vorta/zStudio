@@ -343,6 +343,9 @@ internal static class BlenderNavigationCheck
     {
         var viewport = (Viewport3DX)view.RenderSurface;
         var instances = mesh.Instances; var pose = view.CaptureView();
+        var previousInspection = view.InspectionContent;
+        var card = new SceneInspectionCard(view, _ => new JsonObject { ["Node"] = "Cube input fixture", ["Editable"] = false }, _ => { }, _ => { });
+        view.InspectionContent = card;
         mesh.Instances = [System.Numerics.Matrix4x4.CreateScale(1000, 1000, 1) * System.Numerics.Matrix4x4.CreateTranslation(0, 0, -100)];
         try
         {
@@ -366,10 +369,24 @@ internal static class BlenderNavigationCheck
                 Require(view.HandleScenePointerDown(center, new(Mouse.PrimaryDevice, 0, MouseButton.Left)), "Scene click was not consumed");
                 Require((view.SelectedInspection != null) == !locked && view.SelectionBoundsVisible == !locked,
                     "Cube input routing bypassed the scene selection lock");
+                card.Refresh(); await Task.Delay(50);
+                var panel = (Border)typeof(SceneInspectionCard).GetField("panel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(card)!;
+                var panelBounds = new Rect(panel.TranslatePoint(new(), view), panel.RenderSize);
+                Require(!panelBounds.IntersectsWith(view.NavigationCubeBounds), "Pinned inspection panel overlaps the view cube");
+                Require(Math.Abs(panelBounds.Top - 10) < .01 && Math.Abs(panelBounds.Right - (view.ActualWidth - 10)) < .01,
+                    "Rendered inspection panel is not anchored at the top right");
+                Require(view.InputHitTest(cubePoint) is DependencyObject input && !IsInPanel(input), "Pinned panel intercepts native cube input");
+
+                bool IsInPanel(DependencyObject input)
+                {
+                    for (DependencyObject? current = input; current != null; current = VisualTreeHelper.GetParent(current))
+                        if (ReferenceEquals(current, card)) return true;
+                    return false;
+                }
             }
             Console.WriteLine("PASS: shared pointer input prioritizes the view cube over geometry in locked/unlocked worlds, retaining the scene selection lock");
         }
-        finally { view.SetPickupLocked(true); mesh.Instances = instances; view.RestoreView(pose); }
+        finally { view.SetPickupLocked(true); view.InspectionContent = previousInspection; mesh.Instances = instances; view.RestoreView(pose); }
     }
     private static async Task CheckPointerZoom(SceneViewport view, MeshGeometryModel3D mesh, SceneViewport.ViewPose initial)
     {
