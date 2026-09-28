@@ -63,8 +63,8 @@ internal static class SceneInspectionInputChecks
 
             var authored = Descendants(card).OfType<SceneInspectionField>().Single(f => f.Binding == SceneInspectionBinding.AuthoredPosition);
             var input = authored.Inputs[0];
-            var confirm = Descendants(card).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Edit authored XYZ position");
-            var cancel = Descendants(card).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Discard position draft");
+            var confirm = Descendants(card).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Edit object transform");
+            var cancel = Descendants(card).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Discard transform draft");
             var stableControls = Descendants(card).OfType<ValueTextBox>().Cast<FrameworkElement>().Concat(Descendants(card).OfType<Button>()).ToArray();
             // The same controls and positions must survive mode switches, themes,
             // constrained viewport widths and effective 150% display scaling.

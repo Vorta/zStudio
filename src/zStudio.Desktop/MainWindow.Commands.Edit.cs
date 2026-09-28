@@ -86,9 +86,9 @@ public partial class MainWindow
             token.ThrowIfCancellationRequested();
             if (d.IsDisposed || !ViewModel.Documents.Contains(d)) throw new StudioCommandException("stale_document", "The pickup document is no longer open. Read zstudio_state before retrying.");
             cancellation.Token.ThrowIfCancellationRequested();
-            return Page(edits.Records.Select(p => new { source = p.Source, p.Type, position = edits.Position(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) }), a, p => p.Type + " " + p.source.ResourceName + " " + p.target);
+            return Page(edits.Records.Select(p => new { source = p.Source, p.Type, position = edits.Position(p.Source), rotationRadians = edits.Rotation(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) }), a, p => p.Type + " " + p.source.ResourceName + " " + p.target);
         });
-        Register(r, "pickup_lock", "Set this document's mission coordinate editing lock for pickups, AI nodes and supported AIV tanks. The legacy command/state names are retained for compatibility; new documents are locked by default.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether all supported mission coordinate edits are locked; inverse of the GUI Unlock editing toggle.", true)], a =>
+        Register(r, "pickup_lock", "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked. Pending drafts require explicit resolution.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.", true)], a =>
         {
             var d = TargetDocument(a, true); SetSceneEditingLocked(d, Flag(a, "locked")); return Result(DocumentState(d));
         });

@@ -60,8 +60,9 @@ public sealed partial class PickupPlacementEditSession
                         if (entries.ContainsKey(source)) continue;
                         archives.TryAdd(archive, new(doc));
                         // The common coordinate store uses the existing archive-key identity.
-                        entries.Add(source, new(new(source, name, position, rotation, difficulties), offsets));
+                        entries.Add(source, new(new(source, name, position, rotation, difficulties), offsets, ai ? [] : [ReadScalarOffset(row[2], doc, asset)]));
                         positions.Add(source, position); savedPositions.Add(source, position); otherCoordinates.Add(source, record);
+                        rotations.Add(source, rotation); savedRotations.Add(source, rotation);
                     }
                     catch (Exception ex) when (ex is InvalidDataException or FormatException or OverflowException)
                     { diagnostics.Add($"{asset.Name} record {i / 2}: {ex.Message}"); }
@@ -105,16 +106,19 @@ public sealed partial class PickupPlacementEditSession
             yield return FormatRegistry.Default.OpenBytes(archive.Original.Path, EncodeArchive(path), archive.Original.Stamp, token);
     }
 
-    public AiNetworkSnapshot ApplyAiPositions(AiNetworkSnapshot snapshot)
+    public AiNetworkSnapshot ApplyAiPositions(AiNetworkSnapshot snapshot, IReadOnlyDictionary<MissionPickupSource, PlacementTransform>? preview = null)
     {
         bool changed = false;
         var networks = snapshot.Networks.Select(n => n with { Nodes = n.Nodes.Select(node =>
         {
             var key = new MissionPickupSource(Path.GetFullPath(n.Archive).ToUpperInvariant(), n.MemberIndex, n.Member.ToUpperInvariant(), checked((int)node.SourceOffset));
-            if (!positions.TryGetValue(key, out var p) || p == node.Position) return node;
+            if (!positions.TryGetValue(key, out var p)) return node;
+            if (preview?.TryGetValue(key, out var pending) == true) p = pending.Position;
+            if (p == node.Position) return node;
             changed = true; return node with { Position = p };
         }).ToArray() }).ToArray();
         if (!changed) return snapshot;
+        if (preview != null) return new(snapshot.Id, networks); // A draft does not replace accepted source identities.
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         hash.AppendData(System.Text.Encoding.UTF8.GetBytes(snapshot.Id));
         foreach (var node in networks.SelectMany(n => n.Nodes))

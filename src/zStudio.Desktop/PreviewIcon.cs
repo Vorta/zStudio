@@ -18,6 +18,8 @@ public sealed class PreviewIcon : FrameworkElement
     private static readonly Typeface Symbols = new("Segoe Fluent Icons");
     private static readonly IReadOnlyDictionary<string, Geometry> Shapes = new Dictionary<string, string>
     {
+        ["Move"] = "M8,1 V15 M1,8 H15 M5,4 L8,1 11,4 M5,12 L8,15 11,12 M4,5 L1,8 4,11 M12,5 L15,8 12,11",
+        ["Rotate"] = "M13,6 A5.5,5.5 0 1 0 13,11 M10,6 H14 V2",
         ["AiNodes"] = "M3,3 L12,5 6,12 Z M1,1 H5 V5 H1 Z M10,3 H14 V7 H10 Z M4,10 H8 V14 H4 Z",
         ["AiThrough"] = "M1,8 Q8,0 15,8 Q8,16 1,8 M6,8 A2,2 0 1 0 10,8 A2,2 0 1 0 6,8 M2,2 L14,14",
         ["Frame"] = "M1,5 V1 H5 M11,1 H15 V5 M15,11 V15 H11 M5,15 H1 V11 M5,6 L8,4 11,6 11,10 8,12 5,10 Z M5,6 L8,8 11,6 M8,8 V12",

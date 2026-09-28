@@ -28,6 +28,8 @@ internal static class McpLiveCheck
             string preview = (await Call("state", new { }))["preview"]!.GetValue<string>();
             await Call("scene_options", new { preview, changes = new { lod = 1, horizon = false } });
             preview = (await Call("state", new { }))["preview"]!.GetValue<string>();
+            await Call("scene_card", new { preview, action = "select", node = 0 }, "locked");
+            await Call("pickup_lock", new { document = worldId, revision = 0, locked = false });
             await CheckSceneTree(worldId, preview);
             var graph = await Call("ai_networks", new { preview, limit = 1 });
             Equal(91, graph["total"]!.GetValue<int>(), "AI network count");
@@ -43,7 +45,9 @@ internal static class McpLiveCheck
             async Task CheckInspection()
             {
                 var inspected = await Call("scene_inspect", new { preview });
-                Equal(false, inspected["inspection"]!["Editable"]!.GetValue<bool>(), "AI XYZ editor starts locked");
+                Equal(true, inspected["inspection"]!["Editable"]!.GetValue<bool>(), "AI editor unlocked");
+                Equal(false, inspected["draft"]!["handlesVisible"]!.GetValue<bool>(), "selection has no handles before Edit");
+                Equal(true, inspected["draft"]!["boundsVisible"]!.GetValue<bool>(), "selection bounds");
                 var copied = await Call("scene_card", new { preview, action = "copy", field = "Authored placement XYZ" });
                 Equal(true, copied["text"]!.GetValue<string>().Contains("XYZ"), "copy coordinate space");
                 await Call("capture", new { target = "window", width = 1400, height = 900 });
@@ -75,17 +79,27 @@ internal static class McpLiveCheck
                 async Task EditSelected(string label)
                 {
                     var before = await Call("scene_inspect", new { preview }); long revision = before["revision"]!.GetValue<long>();
+                    string target = before["inspection"]!["Target"]!.GetValue<string>();
                     var locked = await Call("pickup_lock", new { document = worldId, revision, locked = true });
                     Equal(true, locked["PickupsLocked"]!.GetValue<bool>(), label + " lock state");
-                    Equal(false, (await Call("scene_inspect", new { preview }))["inspection"]!["Editable"]!.GetValue<bool>(), label + " locked card");
+                    Equal(true, (await Call("scene_inspect", new { preview }))["selected"] == null, label + " locked card closes");
+                    await Call("scene_card", new { preview, action = "select", target }, "locked");
                     await Call("scene_card", new { preview, action = "begin", document = worldId, revision }, "locked");
                     await Call("pickup_lock", new { document = worldId, revision, locked = false });
+                    await Call("scene_card", new { preview, action = "select", target });
                     Equal(true, (await Call("scene_inspect", new { preview }))["inspection"]!["Editable"]!.GetValue<bool>(), label + " unlocked card");
                     var p = before["inspection"]!["Authored placement XYZ"]!;
                     string[] xyz = new[] { p["x"]!.GetValue<float>() + 1.25f, p["y"]!.GetValue<float>(), p["z"]!.GetValue<float>() }
                         .Select(v => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).ToArray();
                     var draft = await Call("scene_card", new { preview, action = "begin", document = worldId, revision });
+                    Equal(true, draft["draft"]!["handlesVisible"]!.GetValue<bool>(), label + " handles after Edit");
                     draft = await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), position = xyz });
+                    string? rotationField = label == "pickup" ? "Authored rotation XYZ (degrees)" : label == "tank" ? "Heading degrees" : null;
+                    if (label == "pickup")
+                        draft = await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), rotationDegrees = new[] { "17.5", "45", "-12" }, transformMode = "rotate" });
+                    else if (label == "tank")
+                        draft = await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), headingDegrees = "132.5", transformMode = "rotate" });
+                    else await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), transformMode = "rotate" }, "read_only");
                     await Call("pickup_lock", new { document = worldId, revision, locked = true }, "pending_drafts");
                     await Task.Delay(200);
                     await Call("capture", new { target = "window", width = 1400, height = 900 });
@@ -94,10 +108,11 @@ internal static class McpLiveCheck
                     Equal(revision + 1, applied["revision"]!.GetValue<long>(), label + " one revision per move");
                     var changed = await Call("scene_inspect", new { preview });
                     Equal(float.Parse(xyz[0], System.Globalization.CultureInfo.InvariantCulture), changed["inspection"]!["Authored placement XYZ"]!["x"]!.GetValue<float>(), label + " applied XYZ");
-                    await Call("pickup_lock", new { document = worldId, revision = revision + 1, locked = true });
+                    if (rotationField != null) Equal(false, JsonNode.DeepEquals(before["inspection"]![rotationField], changed["inspection"]![rotationField]), label + " applied rotation");
                     await Call("undo_redo", new { document = worldId, revision = revision + 1, action = "undo" });
                     var undone = await Call("scene_inspect", new { preview });
                     Equal(true, JsonNode.DeepEquals(p, undone["inspection"]!["Authored placement XYZ"]), label + " undo restores XYZ");
+                    if (rotationField != null) Equal(true, JsonNode.DeepEquals(before["inspection"]![rotationField], undone["inspection"]![rotationField]), label + " same undo restores rotation");
                     await Call("undo_redo", new { document = worldId, revision = undone["revision"]!.GetValue<long>(), action = "redo" });
                     var redone = await Call("scene_inspect", new { preview });
                     string source = redone["inspection"]!["Source archive"]!.GetValue<string>();
@@ -113,6 +128,8 @@ internal static class McpLiveCheck
                     var expected = new System.Numerics.Vector3(float.Parse(xyz[0], System.Globalization.CultureInfo.InvariantCulture), p["y"]!.GetValue<float>(), p["z"]!.GetValue<float>());
                     Equal(true, label == "pickup" ? coordinates.Records.Any(c => c.OriginalPosition == expected)
                         : coordinates.OtherCoordinates.Any(c => c.Kind == label && c.OriginalPosition == expected), label + " persisted XYZ survives reopen");
+                    if (label == "pickup") Equal(true, coordinates.Records.Any(c => c.OriginalPosition == expected && Math.Abs(c.Rotation.Y - Math.PI / 4) < 1e-6), "pickup radians survive reopen");
+                    if (label == "tank") Equal(true, coordinates.OtherCoordinates.Any(c => c.Kind == "tank" && c.OriginalPosition == expected && c.Rotation.Y == 132.5f), "tank heading survives reopen");
                     var afterSave = await Call("scene_inspect", new { preview });
                     Equal(copy, afterSave["inspection"]!["Save archive"]!.GetValue<string>(), label + " save target retargeted");
                     await Call("undo_redo", new { document = worldId, revision = afterSave["revision"]!.GetValue<long>(), action = "undo" });

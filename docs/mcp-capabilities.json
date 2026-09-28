@@ -129,7 +129,7 @@
         "zstudio_undo_redo",
         "zstudio_save_document"
       ],
-      "note": "Fixed-header Edit/Confirm, Cancel, Copy all and Close plus persistent field rows share scene_card revisions, unique draft lifetimes, archive ownership, history and verified saves. The explicit AuthoredPosition binding enables Authored placement XYZ inputs in place; Object world origin XYZ and other readouts remain read-only. MCP partial strings and GUI input use the same controls. Field/all copy returns accepted values with labels, independently of native draft-text selection. Reserved header slots and a separate scrollbar gutter are presentation-only; scrolling never initiates camera zoom. Closing selection clears the hierarchy/framing target. Animation poses and ambiguous actor ownership remain read-only. All supported mission coordinates require the shared editing lock to be unlocked."
+      "note": "Whole world cards and selection bounds require unlocked editing; source/tree inspection and hover remain available while locked. Fixed-header Edit/Confirm, Cancel, Copy all and Close share scene_card revisions, draft lifetimes, archive ownership, history and verified saves. AuthoredPosition, AuthoredRotation and AuthoredHeading bindings enable persistent fields in place. Move/Rotate buttons and world-axis handles use the same draft as scene_card set position/rotationDegrees/headingDegrees/transformMode. Pickups support XYZ radians displayed as degrees; vehicles support native Y heading degrees; AI rotation is disabled. Drags preview until explicit confirmation creates one combined undo step; Escape during a drag restores that gesture only. Invalid inputs retain the last valid preview and hide handles. Field/all copy returns accepted values with labels. World-origin readouts, animation poses and ambiguous actor ownership remain read-only. Header spacing, scrolling and gutter do not change camera or document state."
     },
     {
       "gui": "DocumentSceneTree:Hierarchy",
@@ -796,7 +796,7 @@
       "tools": [
         "zstudio_pickup_lock"
       ],
-      "note": "Unlock editing is checked when the shared pickup/AI-node/AIV-tank coordinate lock is off. The compatibility-named pickup_lock and PickupsLocked state retain their identities. GUI cancellation preserves drafts and lock state; MCP lock transitions require resolved drafts."
+      "note": "Unlock editing gates all Whole world object cards, selection bounds and pickup/AI-node/AIV-tank transforms. Unlocking alone selects nothing. Locking closes selection after draft resolution; GUI Cancel preserves drafts and the unlocked state. Source/tree inspection, read-only point queries and hover remain available while locked. The compatibility-named pickup_lock and PickupsLocked identities are retained; MCP lock transitions require resolved drafts."
     },
     {
       "gui": "MainWindow.xaml:PlayAudioClick",

@@ -47,7 +47,11 @@ internal static class BlenderNavigationCheck
                 await Preview(); var scene = (SceneViewport)((ContentControl)main.FindName("SceneHost")).Content;
                 await CheckViews(scene, "world");
                 var pickup = scene.Mission!.Actors.First(a => a.Pickup != null);
+                ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
                 scene.SelectFramingNode(pickup.Root); scene.SelectPickup(pickup.Root, true, false);
+                var child = scene.Mission.Scene.Nodes.First(n => scene.PickupAt(n.Index)?.Root == pickup.Root && scene.SelectInspectionNode(n.Index));
+                var card = (SceneInspectionCard)scene.InspectionContent!;
+                typeof(MainWindow).GetMethod("BeginInspectionEdit", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(main, [card]);
                 scene.SetAxisView("top"); Require(scene.TryFrame("selected"), "Pickup framing unavailable"); await Task.Delay(200);
                 var surface = (Viewport3DX)scene.RenderSurface;
                 var gizmo = (TransformManipulator3D)typeof(SceneViewport).GetField("pickupManipulator", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(scene)!;
@@ -57,6 +61,7 @@ internal static class BlenderNavigationCheck
                 Save(Presented(surface), Path.Combine(output, "pickup-top.png"));
                 var point = surface.Project(new Point3D(scene.PickupPosition(pickup.Root).X, scene.PickupPosition(pickup.Root).Y, scene.PickupPosition(pickup.Root).Z));
                 Require(double.IsFinite(point.X) && double.IsFinite(point.Y), "Pickup projection invalid");
+                card.CancelDraft();
                 Require(scene.SetOrbitPivot(scene.CaptureView().Position + scene.CaptureView().LookDirection * .8 + new Vector3D(1, 0, 2)), "World off-center pivot unavailable");
                 var saved = scene.CaptureView();
                 ((ComboBox)main.FindName("WorldDifficulty")).SelectedItem = MissionDifficulty.Hard;
@@ -299,6 +304,35 @@ internal static class BlenderNavigationCheck
                 view.StopCameraMotion();
             }
             await CheckPointerZoom(view, mesh, initial);
+            // Exercise world selection and rotation pointer math without any
+            // physical input, CaptureMouse or native synthetic pointer events.
+            typeof(SceneViewport).GetMethod("ConfigurePickups", fields)!.Invoke(view, []);
+            view.SetPickupLocked(true);
+            Require(!view.SelectInspectionNode(0), "Locked world accepted a card");
+            view.SetPickupLocked(false); Require(view.SelectedInspection == null, "Unlock selected an object");
+            Require(view.SelectInspectionNode(0) && view.SelectionBoundsVisible && !view.TransformHandlesVisible, "Unlocked selection needs bounds without handles");
+            view.RestoreView(new(new(10, 8, 12), new(-10, -8, -12), new(0, 1, 0), 60)); await Task.Delay(100);
+            var source = new MissionPickupSource("fixture", 0, "puppies.zrd", 0);
+            var authored = new PlacementTransform(System.Numerics.Vector3.Zero, new(.2f, -.3f, .1f));
+            PlacementTransform? dragged = null;
+            view.TransformDraftChanged += changed => dragged = changed;
+            view.PreviewTransformDraft(source, authored, PlacementRotationKind.EulerRadians, "rotate", true);
+            Require(view.TransformHandlesVisible, "Edit did not show rotation handles");
+            foreach (var axis in new[] { System.Numerics.Vector3.UnitX, System.Numerics.Vector3.UnitY, System.Numerics.Vector3.UnitZ })
+            {
+                var radial = (axis == System.Numerics.Vector3.UnitY ? System.Numerics.Vector3.UnitZ : System.Numerics.Vector3.UnitY) * 2;
+                var finish = System.Numerics.Vector3.Transform(radial, System.Numerics.Matrix4x4.CreateFromAxisAngle(axis, .2f));
+                Point Project(System.Numerics.Vector3 v) => viewport.Project(new Point3D(v.X, v.Y, v.Z));
+                typeof(SceneViewport).GetField("transformDragStart", fields)!.SetValue(view, authored);
+                typeof(SceneViewport).GetMethod("BeginRotationPointer", fields)!.Invoke(view, [Project(radial), axis, radial]);
+                typeof(SceneViewport).GetMethod("MoveRotationPointer", fields)!.Invoke(view, [Project(finish)]);
+                Require(dragged != null, "Rotation pointer did not publish a draft");
+                var expected = PlacementTransform.Orientation(PlacementRotationKind.EulerRadians, authored.RotateWorld(PlacementRotationKind.EulerRadians, axis, .2f).Rotation);
+                var actual = PlacementTransform.Orientation(PlacementRotationKind.EulerRadians, dragged!.Value.Rotation);
+                Require(Math.Abs(System.Numerics.Quaternion.Dot(expected, actual)) > .99999f, "Ring pointer changed the wrong rotation axis or angle");
+            }
+            view.EndTransformDraft(); Require(!view.TransformHandlesVisible && view.SelectionBoundsVisible, "Cancel did not hide handles while retaining selection");
+            view.SetPickupLocked(true); Require(!view.SelectionBoundsVisible && view.SelectedInspection == null && !viewport.IsMouseCaptured, "Lock did not close selection");
             Console.WriteLine("PASS: rendered perspective/orthographic transformed instances, nearest surface, helper/horizon/hidden exclusions, empty-space fallback and orbit inertia");
         }
         finally { viewport.Items.Remove(helper); helper.Dispose(); window.Close(); }

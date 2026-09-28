@@ -87,7 +87,7 @@ public partial class MainWindow
             ConfigurePickupScene(scene); ConfigureFlyScene(scene);
             SceneHost.Content = scene;
             ApplySceneOptions();
-            if (mission != null) AttachPickupEditor(doc);
+            if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
             scene.RestoreView(view);
             isolatedNode = mission != null && previous.Mission != null && isolate is int oldIsolate
                 ? Remap(oldIsolate) is >= 0 and int mapped ? mapped : null : isolate;

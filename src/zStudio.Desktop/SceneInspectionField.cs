@@ -7,7 +7,7 @@ using Recoil.Zbd.Core;
 
 namespace Recoil.Zbd.Desktop;
 
-internal enum SceneInspectionBinding { None, AuthoredPosition }
+internal enum SceneInspectionBinding { None, AuthoredPosition, AuthoredRotation, AuthoredHeading }
 
 /// <summary>A persistent readout which can participate in the card's explicit draft.</summary>
 internal sealed class SceneInspectionField : Grid
@@ -63,7 +63,9 @@ internal sealed class SceneInspectionField : Grid
         for (int i = 0; i < Inputs.Length; i++)
         {
             string text = Inputs.Length == 3 && value is JsonObject vector
-                ? JsonData.Scalar(vector["xyz"[i].ToString()], float.NaN).ToString("R", CultureInfo.InvariantCulture) : display;
+                ? Binding == SceneInspectionBinding.AuthoredRotation
+                    ? vector["xyz"[i].ToString()]!.GetValue<double>().ToString("R", CultureInfo.InvariantCulture)
+                    : JsonData.Scalar(vector["xyz"[i].ToString()], float.NaN).ToString("R", CultureInfo.InvariantCulture) : display;
             if (Inputs[i].Text != text) Inputs[i].Text = text;
             Inputs[i].ToolTip = text;
         }

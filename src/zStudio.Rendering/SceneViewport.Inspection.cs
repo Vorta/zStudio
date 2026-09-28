@@ -114,12 +114,12 @@ public sealed partial class SceneViewport
     public bool SelectInspection(string? target, bool guard = true)
     {
         var next = target == null ? null : InspectTarget(target);
-        if (target != null && next == null || IsFlyActive || IsPickupDragging || guard && CanChangeInspection?.Invoke() == false) return false;
+        if (target != null && (!InspectionSelectionEnabled || next == null) || IsFlyActive || IsPickupDragging || guard && CanChangeInspection?.Invoke() == false) return false;
         SelectedInspection = next;
         if (next == null) { SelectAiNode(null); SelectPickup(null, false, true); FramingSelection = null; InspectionSelectionCleared?.Invoke(); }
         else if (next.AiNode is { } ai) SelectAiNode(ai);
         else if (next is { Node: >= 0 } node) { SelectFramingNode(PickupAt(node.Node)?.Root ?? node.Node); NodeSelected?.Invoke(node.Node); }
-        InspectionChanged?.Invoke(); return true;
+        RefreshPickupSelection(); InspectionChanged?.Invoke(); return true;
     }
     public bool SelectInspectionNode(int node, long? runtime = null)
     {
@@ -135,6 +135,7 @@ public sealed partial class SceneViewport
     private bool HandleInspectionClick(Point point, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left || IsFlyActive || IsPickupDragging) return false;
+        if (!InspectionSelectionEnabled) return true;
         // Consume the scene click even when a draft vetoes selection, before Helix's callbacks.
         var hit = ProbeInspection(point);
         if (hit == null) return false;
@@ -154,7 +155,10 @@ public sealed partial class SceneViewport
             HoverInspection = ProbeInspection(p);
         else HoverInspection = null;
         if (SelectedInspection is { } selected)
+        {
             SelectedInspection = InspectTarget(selected.Target) ?? selected with { Active = false, Origin = null, Surface = null, Normal = null };
+            if (selected.AiNode != null) RefreshPickupSelection();
+        }
         if (inspectionPointer != null || SelectedInspection != null) InspectionChanged?.Invoke();
     }
     public Point InspectionAnchor(SceneInspection inspection)
@@ -186,17 +190,7 @@ public sealed partial class SceneViewport
     }
     public void SetMissionCoordinates(PickupPlacementEditSession edits)
     {
-        if (Mission == null) return;
-        tankPositions.Clear(); foreach (var item in edits.TankPreviewPositions(Mission)) tankPositions.Add(item.Key, item.Value);
-        SetPickupPositions(edits.PreviewPositions(Mission));
-        var changed = edits.ApplyAiPositions(Mission.AiNetworks);
-        if (!changed.Networks.SelectMany(n => n.Nodes).Select(n => n.Position).SequenceEqual(AiNetworks.Networks.SelectMany(n => n.Nodes).Select(n => n.Position)))
-        {
-            var selectedAi = SelectedInspection?.AiNode;
-            AiNetworks = changed; RebuildAiOverlay();
-            if (selectedAi != null) SelectedInspection = InspectAi(selectedAi);
-        }
-        RefreshInspection();
+        placementEdits = edits; UpdateMissionTransformPreview();
     }
     private void ClearInspection()
     {

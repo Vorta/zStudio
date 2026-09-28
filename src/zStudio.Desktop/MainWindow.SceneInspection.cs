@@ -109,17 +109,25 @@ public partial class MainWindow
             info["Source archive"] = Short(source!.ArchivePath); info["Source resource"] = source.ResourceName + $" · member #{source.AssetIndex} · record #{source.RecordIndex}";
             info["Save archive"] = Short(edits.TargetPath(source.ArchivePath));
             info["Edit scope"] = edits.Scope(source).Description;
-            if (edits.Coordinate(source) is { Kind: "tank" } tank) { info["Template"] = tank.Template; info["Heading degrees"] = tank.Rotation.Y; }
+            var rotation = edits.Rotation(source);
+            if (edits.RotationKind(source) == PlacementRotationKind.EulerRadians)
+            {
+                info["Rotation radians"] = JsonData.Vector(rotation);
+                info[SceneInspectionCard.AuthoredRotation] = new JsonObject { ["x"] = rotation.X * (180 / Math.PI), ["y"] = rotation.Y * (180 / Math.PI), ["z"] = rotation.Z * (180 / Math.PI) };
+            }
+            if (edits.Coordinate(source) is { Kind: "tank" } tank) { info["Template"] = tank.Template; info[SceneInspectionCard.AuthoredHeading] = rotation.Y; }
         }
         if (known && edits!.Coordinate(source!) is { Kind: "tank" } vehicle && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0)) known = false;
         bool locked = known && shownDocument!.PickupsLocked;
         info["Editable"] = known && !locked;
-        info["Editing"] = locked ? "Unlock editing to change XYZ" : known ? "XYZ position; confirmation creates one undo step" : "Read-only inspection";
+        info["Rotation axes"] = known ? edits!.RotationKind(source!) switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "None" } : "None";
+        info["Editing"] = locked ? "Unlock editing to select and edit objects" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";
         info["Document revision"] = shownDocument?.Revision;
         return info;
     }
     private void BeginInspectionEdit(SceneInspectionCard card)
     {
+        if (scene != null && shownDocument?.PickupsLocked == true) throw new StudioCommandException("locked", "Unlock editing first.");
         if (card != CurrentInspectionCard || scene == null || shownDocument is not { IsDisposed: false } doc || card.Selection is not { } selection)
             throw new StudioCommandException("not_ready", "Select a mission placement first.");
         if (!ResolvePropertiesDrafts(doc)) return;
@@ -135,6 +143,7 @@ public partial class MainWindow
     }
     private void ApplyInspectionEdit(SceneInspectionCard card)
     {
+        if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "Finish or cancel the active transform drag before confirming.");
         var doc = card.DraftDocument;
         if (!card.HasDraft || doc == null || doc.IsDisposed || doc != shownDocument || card != CurrentInspectionCard || card.Selection?.Target != card.DraftTarget)
             throw new StudioCommandException("stale_record", "The draft's document or selected instance is no longer available.");
@@ -142,7 +151,7 @@ public partial class MainWindow
         var edits = doc.PickupEdits!;
         if (doc.PickupsLocked) throw new StudioCommandException("locked", "Coordinate editing is locked.");
         if (edits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed outside zStudio.");
-        var position = card.DraftPosition(); edits.MoveTo(card.DraftSource!, position);
+        edits.TransformTo(card.DraftSource!, card.DraftTransform());
         card.CancelDraft(); UpdateDocumentCommands();
     }
 
@@ -166,17 +175,20 @@ public partial class MainWindow
                 hover = viewport.HoverInspection == null ? null : DescribeInspection(viewport, viewport.HoverInspection),
                 draft = (viewport.InspectionContent as SceneInspectionCard)?.DescribeDraft() });
         });
-        Register(commands, "scene_card", "Select/close the floating card, copy fields, or explicitly begin/set/apply/cancel its XYZ draft. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy returns the same text as the GUI and optionally writes the clipboard.", true,
+        Register(commands, "scene_card", "Select/close the floating card, copy fields, or begin/set/apply/cancel its shared position/rotation draft. Whole world selection requires unlocked editing. Typed values and Move/Rotate handles preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.", true,
             [PreviewParameter, P("action", "string", "Card action.", true, "select", "clear", "copy", "begin", "set", "apply", "cancel"),
                 P("target", "string", "Opaque inspection target for select."), P("node", "integer", "Alternative scene node for selection."),
                 P("runtime", "string", "Optional runtime instance ID with node."), P("field", "string", "Copy field label; omitted copies all details."), P("clipboard", "boolean", "Write copy text to clipboard; default false."),
                 P("document", "string", "Owning document ID for edits."), new("revision", "integer", "Expected document revision for edits.", Minimum: 0, Maximum: long.MaxValue),
-                P("token", "string", "Current draft lifetime and input token. Reopening a draft creates a new token."), new("position", "array", "Three coordinate input strings for set; permits temporary incomplete drafts.", Items: new("", "string", "Coordinate input."), MinItems: 3, MaxItems: 3)], a =>
+                P("token", "string", "Current draft lifetime and input token. Reopening a draft creates a new token."), new("position", "array", "Three coordinate input strings for set; maximum 64 characters each; permits temporary incomplete drafts.", Items: new("", "string", "Coordinate input."), MinItems: 3, MaxItems: 3),
+                new("rotationDegrees", "array", "Pickup XYZ Euler input strings in degrees; maximum 64 characters each.", Items: new("", "string", "Angle input."), MinItems: 3, MaxItems: 3),
+                new("headingDegrees", "string", "Vehicle Y heading input in degrees; maximum 64 characters."), P("transformMode", "string", "Draft handle mode; rotate requires supported axes.", false, "move", "rotate")], a =>
         {
             var viewport = TargetViewport(a); var card = viewport.InspectionContent as SceneInspectionCard ?? throw new StudioCommandException("not_ready", "Inspection card unavailable.");
             string action = Text(a, "action");
             if (action is "select" or "clear")
             {
+                if (action == "select" && !viewport.InspectionSelectionEnabled) throw new StudioCommandException("locked", "Unlock editing before opening a Whole world object card.");
                 if (action == "select" && (a["target"] != null && a["node"] != null || a["runtime"] != null && (a["node"] == null || a["target"] != null)))
                     throw new StudioCommandException("invalid_argument", "Select by target, or by node with an optional runtime instance.");
                 RequireNoDrafts(); bool selected;
@@ -200,7 +212,8 @@ public partial class MainWindow
                 else
                 {
                     card.RequireDraft(Text(a, "token"));
-                    if (action == "set") card.SetDraft(Text(a, "token"), (a["position"] as JsonArray ?? throw new StudioCommandException("invalid_argument", "Position required.")).Select(p => p!.GetValue<string>()).ToArray());
+                    if (action == "set") card.SetDraft(Text(a, "token"), (a["position"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(),
+                        (a["rotationDegrees"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(), a["headingDegrees"]?.GetValue<string>(), a["transformMode"]?.GetValue<string>());
                     else if (action == "apply") ApplyInspectionEdit(card);
                     else card.CancelDraft();
                 }

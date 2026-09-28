@@ -8,7 +8,7 @@ using Recoil.Zbd.Core.Formats;
 
 namespace Recoil.Zbd.Core;
 
-public sealed record MissionActor(int Root, int SourceRoot, string Name, string PlacementSource, MissionPickup? Pickup = null, MissionPickupSource? CoordinateSource = null, Vector3? PlacementPosition = null);
+public sealed record MissionActor(int Root, int SourceRoot, string Name, string PlacementSource, MissionPickup? Pickup = null, MissionPickupSource? CoordinateSource = null, Vector3? PlacementPosition = null, Vector3? PlacementRotation = null);
 public sealed record HorizonBinding(int Root, bool FollowHeight);
 
 /// <summary>A published, read-only preview baseline. Its nodes never alias serialized node data.</summary>
@@ -191,7 +191,7 @@ public static partial class MissionSceneLoader
                     if (!scene.Nodes[root].Parents.Contains(worldRoot)) scene.Nodes[root] = scene.Nodes[root] with { Parents = [worldRoot] };
                     scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Append(root).Distinct().ToArray() };
                     positioned.Add(root); actors.Add(new(root, sources[root], name, $"{selection.AivResource} · {selection.Difficulty}", CoordinateSource: aivSource == null ? null :
-                        new(Path.GetFullPath(aivSource.ArchivePath).ToUpperInvariant(), aivSource.AssetIndex, aivSource.ResourceName.ToUpperInvariant(), recordIndex), PlacementPosition: position));
+                        new(Path.GetFullPath(aivSource.ArchivePath).ToUpperInvariant(), aivSource.AssetIndex, aivSource.ResourceName.ToUpperInvariant(), recordIndex), PlacementPosition: position, PlacementRotation: new(0, Number(data[2]), 0)));
                 }
                 catch (InvalidDataException ex) { notes.Add($"Mission actor {name}: {ex.Message}"); }
             }

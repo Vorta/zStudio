@@ -13,12 +13,10 @@ public partial class MainWindow
     private DocumentModel? pickupDocument;
     private void ConfigurePickupScene(SceneViewport viewport)
     {
-        viewport.CanStartPickupEdit = () => ResolvePropertiesDrafts(pickupDocument);
-        viewport.PickupMoveCommitted += (root, position) =>
-        {
-            if (pickupDocument?.PickupEdits is { } edits && viewport.PickupAt(root)?.Pickup is { } pickup)
-                CommitPickupPosition(edits, pickup.Source, position);
-        };
+        viewport.CanStartPickupEdit = () => CurrentInspectionCard is { HasDraft: true } card &&
+            pickupDocument is { PickupsLocked: false } doc && card.DraftDocument == doc && card.DraftRevision == doc.Revision &&
+            doc.PickupEdits?.HasExternalChanges() == false &&
+            (propertiesWindow == null || propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts()) && card.DraftRevision == doc.Revision;
     }
     private void DetachPickupEditor()
     {
@@ -66,14 +64,6 @@ public partial class MainWindow
         try { EditingUnlocked.IsChecked = !locked; }
         finally { updating = previous; }
         scene?.SetPickupLocked(locked);
-    }
-    private void CommitPickupPosition(PickupPlacementEditSession edits, MissionPickupSource source, Vector3 position)
-    {
-        try
-        {
-            if (edits.MoveTo(source, position)) ViewModel.Status = $"Moved {edits.Find(source)!.Type} · {edits.Scope(source).Description} · unsaved";
-        }
-        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException) { Report(ex); PickupEditsChanged(); }
     }
     private async void SaveCurrentClick(object sender, RoutedEventArgs e)
     { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc); }

@@ -17,6 +17,7 @@ internal static class Program
     {
         if (args.Length == 1 && args[0] == "--inspection-fixture")
         {
+            using var settings = new SettingsSnapshot();
             var app = new App { ProcessCommandLine = false, ShutdownMode = ShutdownMode.OnExplicitShutdown }; app.InitializeComponent();
             int code = 0;
             app.Startup += async (_, _) =>
@@ -32,6 +33,7 @@ internal static class Program
         if (args.Length == 3 && args[0] == "--mcp-stdio") return McpStdioCheck.Run(args[1], args[2]);
         if (args.Length == 2 && args[0] == "--mcp-catalog")
         {
+            using var settings = new SettingsSnapshot();
             var app = new App { ProcessCommandLine = false, ShutdownMode = ShutdownMode.OnExplicitShutdown };
             app.InitializeComponent();
             var window = new MainWindow();

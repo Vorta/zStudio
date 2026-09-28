@@ -243,9 +243,9 @@ public partial class MainWindow : Window
                 if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
                 await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
                 publishedStaticOptions = ReadStaticSceneOptions() with { Difficulty = mission?.Layout.Difficulty ?? ViewModel.Difficulty };
+                if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
                 if (mission != null)
                 {
-                    AttachPickupEditor(doc);
                     if (previousMission != null && previousView != null)
                     {
                         isolatedNode = previousIsolate is int oldIsolate && mission.RemapNodeFrom(previousMission, oldIsolate) is >= 0 and int mappedIsolate ? mappedIsolate : null;

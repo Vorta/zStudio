@@ -19,6 +19,8 @@ using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Mcp;
 using Recoil.Zbd.Rendering;
 using Xunit;
+using HelixToolkit;
+using HelixToolkit.Wpf.SharpDX;
 
 namespace Recoil.Zbd.Desktop.Tests;
 
@@ -30,12 +32,19 @@ internal static class SceneInspectionMcpChecks
         string root = Path.Combine(Path.GetTempPath(), "zstudio-inspection-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
         string archivePath = Path.Combine(root, "resources.zbd");
         var value = A(S("node_00"), A(I(12), A(F(1), F(2), F(3)), A(I(-7), I(-1), I(0))));
-        byte[] zrd = ZrdWriter.Write(value);
+        var pickupRow = A(S("HEMORTAR_AMMO"), I(1), A(F(1), F(2), F(3)), A(F(.125f), F(.3f), F(-.2f)), F(12.5f));
+        var members = new[] { ("net_01.zrd", ZrdWriter.Write(value)), ("puppies.zrd", ZrdWriter.Write(A(A(pickupRow)))) };
         using (var data = new MemoryStream())
         {
-            using var writer = new BinaryWriter(data, Encoding.Latin1, true); writer.Write(zrd);
-            writer.Write(0); writer.Write(zrd.Length); byte[] entry = new byte[140]; Encoding.Latin1.GetBytes("net_01.zrd").CopyTo(entry, 0); writer.Write(entry);
-            writer.Write(1); writer.Write(1); File.WriteAllBytes(archivePath, data.ToArray());
+            using var writer = new BinaryWriter(data, Encoding.Latin1, true);
+            foreach (var member in members) writer.Write(member.Item2);
+            int offset = 0;
+            foreach (var (name, bytes) in members)
+            {
+                writer.Write(offset); writer.Write(bytes.Length); offset += bytes.Length;
+                byte[] entry = new byte[140]; Encoding.Latin1.GetBytes(name).CopyTo(entry, 0); writer.Write(entry);
+            }
+            writer.Write(1); writer.Write(members.Length); File.WriteAllBytes(archivePath, data.ToArray());
         }
         byte[] original = File.ReadAllBytes(archivePath);
         using var resolver = new AssetResolver(root);
@@ -43,6 +52,9 @@ internal static class SceneInspectionMcpChecks
         using var viewport = new SceneViewport();
         var world = new ZbdDocument(Path.Combine(root, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = new() };
         world.Scene.Nodes.Add(new(0, "world", "world", null, [], [], new(), new()));
+        world.Scene.Nodes.Add(new(1, "pickup", "object3d", null, [], [2, 3], new(), new() { ["flags"] = 8 }));
+        world.Scene.Nodes.Add(new(2, "pickup child", "object3d", null, [1], [], new(), new() { ["flags"] = 8 }));
+        world.Scene.Nodes.Add(new(3, "pickup second child", "object3d", null, [1], [], new(), new() { ["flags"] = 8 }));
         var asset = world.Add(AssetKind.World, 0, "Whole world", 0, 0);
         // Real GameZ documents also have a model-edit session. Coordinate undo must
         // not take its model-replacement refresh path or expire the preview.
@@ -52,10 +64,21 @@ internal static class SceneInspectionMcpChecks
         var edits = await doc.GetPickupEditsAsync(resolver, deadline.Token);
         var archive = await resolver.OpenCachedAsync(archivePath, deadline.Token);
         var graph = MissionAiNetworks.Read(archive.Assets.Select(a => (archive, a)));
-        var mission = MissionSceneLoader.Build(world, null, null, null, null);
+        var record = Assert.Single(edits.Records);
+        var pickup = new MissionPickup(1, record.Type, 1, 1, record.OriginalPosition, record.Rotation, 12.5f, record.Source);
+        var mission = new MissionSceneContext(world.Scene, [0, 1, 2, 3], [new(1, 1, "pickup", "fixture", pickup)], [], [], MissionLayoutSelection.For(MissionDifficulty.Medium), 4);
         typeof(MissionSceneContext).GetProperty("AiNetworks")!.SetValue(mission, graph);
         typeof(SceneViewport).GetProperty("Mission")!.SetValue(viewport, mission);
         typeof(SceneViewport).GetProperty(nameof(SceneViewport.PreviewScene))!.SetValue(viewport, mission.Scene);
+        var baseTransform = Matrix4x4.CreateFromQuaternion(PlacementTransform.Orientation(PlacementRotationKind.EulerRadians, record.Rotation)) * Matrix4x4.CreateTranslation(record.OriginalPosition);
+        ScenePlacement[] instances = [new(2, -1, "first", Matrix4x4.CreateScale(2, 3, 4) * baseTransform), new(3, -1, "second", Matrix4x4.CreateTranslation(8, 0, 0) * baseTransform)];
+        var mesh = new MeshGeometryModel3D { Geometry = new HelixToolkit.SharpDX.MeshGeometry3D { Positions = new Vector3Collection([new(0, 0, 0), new(1, 0, 0), new(0, 1, 0)]), Indices = new IntCollection([0, 1, 2]) }, Instances = instances.Select(p => p.Transform).ToArray() };
+        ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!).Add(mesh);
+        foreach (string key in new[] { "placements", "visiblePlacements" })
+            ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField(key, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!).Add(mesh, instances);
+        typeof(SceneViewport).GetMethod("RegisterInspectionMesh", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(viewport, [mesh, -1, null, -1, -1]);
+        typeof(SceneViewport).GetMethod("ConfigurePickups", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(viewport, []);
+        viewport.RestoreView(new(new(0, 0, 20), new(0, 0, -20), new(0, 1, 0), 60));
         viewport.SetAiNetworks(graph); viewport.SetAiOptions(true, true, null);
         Set("shownDocument", doc); Set("shownAsset", asset); Set("scene", viewport);
         ((ContentControl)main.FindName("SceneHost")).Content = viewport; ((ContentControl)main.FindName("SceneHost")).Visibility = Visibility.Visible;
@@ -68,32 +91,42 @@ internal static class SceneInspectionMcpChecks
             await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             await pipe.ConnectAsync(deadline.Token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: deadline.Token);
+            await Card("select", new() { ["target"] = target }, "locked");
+            Assert.Null(viewport.SelectedInspection);
+            await Lock(false);
+            Assert.Null(viewport.SelectedInspection); // Unlock alone never selects.
             await Card("select", new() { ["target"] = target });
+            Assert.True(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible);
             var inspectionCard = (SceneInspectionCard)viewport.InspectionContent!;
             inspectionCard.Measure(new(800, 600)); inspectionCard.Arrange(new Rect(0, 0, 800, 600)); inspectionCard.UpdateLayout();
             var inlinePosition = Fields(inspectionCard).Single(f => f.Binding == SceneInspectionBinding.AuthoredPosition);
             Assert.All(inlinePosition.Inputs, input => Assert.True(input.IsReadOnly));
             await Card("select", new() { ["target"] = target, ["node"] = 0 }, "invalid_argument");
             var inspected = await Call("scene_inspect", new() { ["preview"] = preview });
-            Assert.False(inspected["inspection"]!["Editable"]!.GetValue<bool>());
+            Assert.True(inspected["inspection"]!["Editable"]!.GetValue<bool>());
             var unlock = (ToggleButton)main.FindName("EditingUnlocked");
+            await Lock(true); Assert.Null(viewport.SelectedInspection);
             Assert.False(unlock.IsChecked); Assert.True(doc.PickupsLocked);
             Assert.Equal("Unlock editing", AutomationProperties.GetName(unlock));
             Assert.Equal("Unlock", ((PreviewIcon)unlock.Content).Kind);
             await Edit("begin", error: "locked");
             await Lock(false);
+            await Card("select", new() { ["target"] = target });
             Assert.True(unlock.IsChecked); Assert.True(((PreviewIcon)unlock.Content).IsChecked);
             Assert.True((await Call("scene_inspect", new() { ["preview"] = preview }))["inspection"]!["Editable"]!.GetValue<bool>());
             unlock.IsChecked = false; Assert.True(doc.PickupsLocked);
             await Edit("begin", error: "locked");
             unlock.IsChecked = true; Assert.False(doc.PickupsLocked);
+            await Card("select", new() { ["target"] = target });
             var copy = await Card("copy", new() { ["field"] = "Authored placement XYZ" }); Assert.Contains("1", copy["text"]!.GetValue<string>());
             var tree = await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString() });
             var begun = await Edit("begin"); string token = begun["draft"]!["token"]!.GetValue<string>();
+            Assert.True(viewport.TransformHandlesVisible);
             Assert.Same(inlinePosition, Fields(inspectionCard).Single(f => f.Binding == SceneInspectionBinding.AuthoredPosition));
             Assert.All(inlinePosition.Inputs, input => Assert.False(input.IsReadOnly));
             Assert.All(Fields(inspectionCard).Where(f => f.Binding == SceneInspectionBinding.None).SelectMany(f => f.Inputs), input => Assert.True(input.IsReadOnly));
             await Edit("cancel", new() { ["token"] = token });
+            Assert.False(viewport.TransformHandlesVisible); Assert.True(viewport.SelectionBoundsVisible);
             Assert.All(inlinePosition.Inputs, input => Assert.True(input.IsReadOnly));
             var restarted = await Edit("begin");
             Assert.NotEqual(token, restarted["draft"]!["token"]!.GetValue<string>());
@@ -109,7 +142,7 @@ internal static class SceneInspectionMcpChecks
             answer.Tick += (_, _) => EnumThreadWindows(GetCurrentThreadId(), (handle, _) =>
             {
                 var title = new StringBuilder(256); GetWindowText(handle, title, title.Capacity);
-                if (title.ToString() != "Node position draft") return true;
+                if (title.ToString() != "Node transform draft") return true;
                 canceled = true; SendMessage(handle, 0x0111, 2, 0); return false; // WM_COMMAND, IDCANCEL
             }, 0);
             answer.Start();
@@ -131,15 +164,21 @@ internal static class SceneInspectionMcpChecks
             await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" }, "pending_drafts");
             await Call("close_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["discard"] = true }, "pending_drafts");
             await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray(new string('1', 65), "6", "7") }, "invalid_argument");
+            await Edit("set", new() { ["token"] = token, ["transformMode"] = "rotate" }, "read_only");
+            await Edit("set", new() { ["token"] = token, ["headingDegrees"] = "90" }, "read_only");
             await Edit("set", new() { ["token"] = "old", ["position"] = new JsonArray("5", "6", "7") }, "draft_conflict");
             var partial = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("-", "6", "7") });
             token = partial["draft"]!["token"]!.GetValue<string>();
+            Assert.False(viewport.TransformHandlesVisible); Assert.True(viewport.SelectionBoundsVisible);
             inspectionCard.Refresh();
             Assert.Equal(new[] { "-", "6", "7" }, inlinePosition.Inputs.Select(input => input.Text).ToArray());
             Assert.Equal(copy["text"]!.GetValue<string>(), (await Card("copy", new() { ["field"] = "Authored placement XYZ" }))["text"]!.GetValue<string>());
             await Edit("apply", new() { ["token"] = token }, "invalid_argument"); Assert.False(doc.IsDirty);
             var valid = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("5.125", "6", "7") });
             token = valid["draft"]!["token"]!.GetValue<string>();
+            Assert.False(doc.IsDirty); Assert.Equal(new Vector3(1, 2, 3), edits.Position(edits.OtherCoordinates[0].Source));
+            Assert.Equal(new Vector3(5.125f, 6, 7), viewport.AiNetworks.Networks[0].Nodes[0].Position);
+            Assert.Equal(graph.Id, viewport.AiNetworks.Id); // Drafts do not expire source identities.
             await Edit("apply", new() { ["token"] = token });
             Assert.All(inlinePosition.Inputs, input => Assert.True(input.IsReadOnly));
             Assert.Equal(new[] { "5.125", "6", "7" }, inlinePosition.Inputs.Select(input => input.Text).ToArray());
@@ -154,12 +193,55 @@ internal static class SceneInspectionMcpChecks
             Assert.Equal(preview, ((Guid)Get("previewId")!).ToString());
             Assert.False(doc.IsDirty); Assert.Equal(new Vector3(1, 2, 3), viewport.AiNetworks.Networks[0].Nodes[0].Position);
             await Lock(false);
+            await Card("select", new() { ["target"] = target });
             begun = await Edit("begin"); token = begun["draft"]!["token"]!.GetValue<string>();
             File.WriteAllBytes(archivePath, [.. original, 1]);
             await Edit("apply", new() { ["token"] = token }, "external_change");
             Assert.True((viewport.InspectionContent as SceneInspectionCard)!.HasDraft);
             await Edit("cancel", new() { ["token"] = token });
             File.WriteAllBytes(archivePath, original); File.SetLastWriteTimeUtc(archivePath, archive.Stamp.LastWriteUtc);
+            await Card("select", new() { ["node"] = 2 });
+            Assert.True(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible);
+            var box = (LineGeometryModel3D)typeof(SceneViewport).GetField("selectionBox", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!;
+            var boxMax = box.Geometry!.Positions!.Aggregate(Vector3.Max);
+            Assert.True(boxMax.X > 8); // Both children belong to this instance's bounds.
+            var unchanged = await Edit("begin");
+            token = unchanged["draft"]!["token"]!.GetValue<string>();
+            await Edit("apply", new() { ["token"] = token });
+            Assert.False(doc.IsDirty); Assert.Equal(record.Rotation, edits.Rotation(record.Source));
+            begun = await Edit("begin"); token = begun["draft"]!["token"]!.GetValue<string>();
+            var rotated = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("4", "5", "6"), ["rotationDegrees"] = new JsonArray("10", "40", "-20"), ["transformMode"] = "rotate" });
+            token = rotated["draft"]!["token"]!.GetValue<string>();
+            Assert.True(viewport.TransformHandlesVisible); Assert.Equal("rotate", viewport.TransformMode);
+            Assert.False(doc.IsDirty); Assert.Equal(record.OriginalPosition, edits.Position(record.Source));
+            var pending = inspectionCard.DraftTransform();
+            var expectedDelta = pending.DeltaFrom(new(record.OriginalPosition, record.Rotation), PlacementRotationKind.EulerRadians);
+            Assert.Equal(instances.Select(p => p.Transform * expectedDelta), mesh.Instances);
+            // Exercise the same drag publication/cancel path without capturing the physical mouse.
+            typeof(SceneViewport).GetField("transformDragStart", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(viewport, pending);
+            typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsPickupDragging))!.SetValue(viewport, true);
+            typeof(SceneViewport).GetMethod("PublishTransformDrag", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(viewport, [pending.RotateWorld(PlacementRotationKind.EulerRadians, Vector3.UnitY, .2f)]);
+            Assert.False(doc.IsDirty); Assert.True(viewport.CancelPickupDrag());
+            Assert.True(Vector3.Distance(pending.Rotation, inspectionCard.DraftTransform().Rotation) < 1e-6);
+            var draftPositions = mesh.Instances.ToArray();
+            token = inspectionCard.DraftToken;
+            rotated = await Edit("set", new() { ["token"] = token, ["rotationDegrees"] = new JsonArray("-", "40", "-20") });
+            Assert.False(viewport.TransformHandlesVisible); Assert.Equal(draftPositions, mesh.Instances);
+            await Edit("apply", new() { ["token"] = rotated["draft"]!["token"]!.GetValue<string>() }, "invalid_argument");
+            await Edit("cancel", new() { ["token"] = rotated["draft"]!["token"]!.GetValue<string>() });
+            Assert.Equal(instances.Select(p => p.Transform), mesh.Instances); Assert.False(doc.IsDirty);
+            begun = await Edit("begin"); token = begun["draft"]!["token"]!.GetValue<string>();
+            rotated = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("4", "5", "6"), ["rotationDegrees"] = new JsonArray("10", "40", "-20") });
+            long revision = doc.Revision;
+            await Edit("apply", new() { ["token"] = rotated["draft"]!["token"]!.GetValue<string>() });
+            Assert.Equal(revision + 1, doc.Revision); Assert.True(doc.IsDirty);
+            Assert.Equal(new Vector3(4, 5, 6), edits.Position(record.Source));
+            await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
+            Assert.False(doc.IsDirty); Assert.Equal(record.Rotation, edits.Rotation(record.Source));
+            Assert.Equal(instances.Select(p => p.Transform), mesh.Instances);
+            typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsFlyActive))!.SetValue(viewport, true);
+            try { await Lock(true); Assert.Null(viewport.SelectedInspection); Assert.False(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible); }
+            finally { typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsFlyActive))!.SetValue(viewport, false); }
             await Card("clear", new());
             Assert.Null(viewport.SelectedInspection);
 

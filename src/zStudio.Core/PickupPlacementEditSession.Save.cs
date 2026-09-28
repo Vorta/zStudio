@@ -87,7 +87,8 @@ public sealed partial class PickupPlacementEditSession
                     output.Archive.PendingCopy = false;
                     output.Archive.Stamp = FileStamp.Read(output.Destination);
                     if (output.Destination.Equals(output.Archive.Original.Path, StringComparison.OrdinalIgnoreCase)) output.Archive.SourceStamp = output.Archive.Stamp;
-                    foreach (var source in positions.Keys.Where(s => s.ArchivePath == output.Source)) savedPositions[source] = positions[source];
+                    foreach (var source in positions.Keys.Where(s => s.ArchivePath == output.Source))
+                    { savedPositions[source] = positions[source]; savedRotations[source] = rotations[source]; }
                     saved.Add(output.Destination);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
@@ -112,20 +113,20 @@ public sealed partial class PickupPlacementEditSession
         if (bytes.Length != original.Bytes.Length) throw new InvalidDataException("Pickup patch changed the archive length.");
         HashSet<int> permitted = [];
         foreach (var entry in entries.Values.Where(e => e.Record.Source.ArchivePath == source))
-            for (int axis = 0; axis < 3; axis++)
-                if (positions[entry.Record.Source][axis] != entry.Record.OriginalPosition[axis])
-                    for (int i = 0; i < 8; i++) permitted.Add(entry.Offsets[axis] + i);
+            foreach (var scalar in Scalars(entry))
+                if (scalar.Value != scalar.Original)
+                    for (int i = 0; i < 8; i++) permitted.Add(scalar.Offset + i);
         for (int i = 0; i < bytes.Length; i++)
             if (bytes[i] != original.Bytes.Span[i] && !permitted.Contains(i)) throw new InvalidDataException($"Pickup patch changed unrelated byte 0x{i:X}.");
         var reopened = FormatRegistry.Default.OpenBytes(original.Path, bytes, token: token);
         if (reopened.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("Saved pickup archive could not be parsed completely.");
         foreach (var entry in entries.Values.Where(e => e.Record.Source.ArchivePath == source))
-            for (int axis = 0; axis < 3; axis++)
+            foreach (var expected in Scalars(entry))
             {
-                var scalar = ZrdDecoder.Read(reopened.Slice(entry.Offsets[axis], 8), token);
+                var scalar = ZrdDecoder.Read(reopened.Slice(expected.Offset, 8), token);
                 float value = scalar.Kind == ZrdKind.Float ? BitConverter.UInt32BitsToSingle(scalar.Bits) : scalar.Kind == ZrdKind.Int ? unchecked((int)scalar.Bits) : float.NaN;
-                if (value != positions[entry.Record.Source][axis])
-                    throw new InvalidDataException($"Saved coordinate {entry.Record.Source.ResourceName} #{entry.Record.Source.RecordIndex} has an unexpected position.");
+                if (value != expected.Value)
+                    throw new InvalidDataException($"Saved transform {entry.Record.Source.ResourceName} #{entry.Record.Source.RecordIndex} has an unexpected component at 0x{expected.Offset:X}.");
             }
     }
     private static async Task CheckBaselineAsync(ArchiveState archive, CancellationToken token)

@@ -2201,7 +2201,7 @@
   },
   {
     "Name": "zstudio_scene_card",
-    "Description": "Select/close the floating card, copy fields, or explicitly begin/set/apply/cancel its XYZ draft. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy returns the same text as the GUI and optionally writes the clipboard.",
+    "Description": "Select/close the floating card, copy fields, or begin/set/apply/cancel its shared position/rotation draft. Whole world selection requires unlocked editing. Typed values and Move/Rotate handles preview until apply creates one undo step. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy optionally writes the clipboard.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2299,7 +2299,7 @@
       {
         "Name": "position",
         "Type": "array",
-        "Description": "Three coordinate input strings for set; permits temporary incomplete drafts.",
+        "Description": "Three coordinate input strings for set; maximum 64 characters each; permits temporary incomplete drafts.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -2313,6 +2313,43 @@
         },
         "MinItems": 3,
         "MaxItems": 3
+      },
+      {
+        "Name": "rotationDegrees",
+        "Type": "array",
+        "Description": "Pickup XYZ Euler input strings in degrees; maximum 64 characters each.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Angle input.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 3,
+        "MaxItems": 3
+      },
+      {
+        "Name": "headingDegrees",
+        "Type": "string",
+        "Description": "Vehicle Y heading input in degrees; maximum 64 characters.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "transformMode",
+        "Type": "string",
+        "Description": "Draft handle mode; rotate requires supported axes.",
+        "Required": false,
+        "Choices": [
+          "move",
+          "rotate"
+        ],
+        "Properties": null
       }
     ]
   },
@@ -2929,7 +2966,7 @@
   },
   {
     "Name": "zstudio_pickup_lock",
-    "Description": "Set this document\u0027s mission coordinate editing lock for pickups, AI nodes and supported AIV tanks. The legacy command/state names are retained for compatibility; new documents are locked by default.",
+    "Description": "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked. Pending drafts require explicit resolution.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2953,7 +2990,7 @@
       {
         "Name": "locked",
         "Type": "boolean",
-        "Description": "Whether all supported mission coordinate edits are locked; inverse of the GUI Unlock editing toggle.",
+        "Description": "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.",
         "Required": true,
         "Choices": null,
         "Properties": null
