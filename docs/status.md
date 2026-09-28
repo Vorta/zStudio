@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## Inline inspection card — 0.6.3 (2026-09-28)
+
+The floating card now has a fixed header with Edit/Confirm, Copy all and Close, plus a reserved Cancel slot. A native ScrollViewer template gives its scrollbar a permanent separate gutter. Values use persistent, selectable read-only fields; supported **Authored placement XYZ** inputs become editable in place. **Object world origin XYZ** remains read-only, because selected child geometry can have a different origin from its entire placement. The reusable field row has an explicit edit binding for future capabilities. Fixed 340 DIP card height (bounded by the viewport), stable row instances and unchanged text assignments preserve layout, scroll position, partial input and text selection across presentation refreshes. Native ValueTextBox clear-button suppression applies after theme/template changes.
+
+Release build passes with zero warnings/errors. All **365 tests pass** (273 Core, 92 Desktop), including fixed header/card/field geometry before/during/after editing, scrollbar clearance, dark/light themes, constrained widths and effective 100/150% scaling. Active-field theme replacement preserves partial input and selection. Review reproduced and fixed a native caret-reveal scroll jump when ending a focused draft; focus now returns to the fixed Edit action before restoring accepted values. Direct WPF card PNGs were inspected in both themes. Native card wheel/scrollbar/field routing remains covered, without physical mouse capture. Named-pipe tests verify the same inline read-only/edit state, partial strings, cancellation, confirmation and accepted-value copying. Existing lock, revision, identity, undo and verified save protections remain shared; no command/schema changes were needed, and full discovery parity still passes. Packaged live validation is pending.
+
 ## Floating-card input and shared editing lock — 0.6.3 (2026-09-28)
 
 Inspection cards now receive native wheel/scrollbar input before camera navigation. Card controls cannot start camera gestures; wheel input at their scroll limits or padding stays in the card. Scene navigation outside the card remains available. The routed-input regression reproduced the previous zero-scroll-offset failure before the fix.

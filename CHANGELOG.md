@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.6.3 — 2026-09-28
 
+- Keep inspection-card Edit/Confirm, Copy all and Close in a fixed header. Enable persistent authored XYZ fields in place, retain read-only world origins, and reserve a separate scrollbar gutter so it cannot overlap copy buttons.
+
 - Keep wheel scrolling and native controls inside floating inspection cards separate from camera navigation, including at scroll limits.
 - Rename the map lock to **Unlock editing** and share it across pickup, AI-node and supported AIV tank coordinates, preserving draft guards and the existing MCP command/state identities.
 - Add an expandable Document scene hierarchy for active previews, including mission placements, shared/partition references and unlinked nodes. Synchronize viewport selection, preserve expansion by provenance, retain stable animation scene structure, and expose the same hierarchy through `zstudio_scene_tree`.

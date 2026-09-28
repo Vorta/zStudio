@@ -129,7 +129,7 @@
         "zstudio_undo_redo",
         "zstudio_save_document"
       ],
-      "note": "Dynamic coordinate/identifier copy buttons, selection close, XYZ drafts, Edit/Confirm and Cancel share document revisions, unique draft lifetimes, archive ownership, history and verified saves. Closing selection clears the hierarchy/framing target. Animation poses and ambiguous actor ownership remain read-only. All supported mission coordinates require the shared editing lock to be unlocked. Native card scrolling never initiates camera zoom."
+      "note": "Fixed-header Edit/Confirm, Cancel, Copy all and Close plus persistent field rows share scene_card revisions, unique draft lifetimes, archive ownership, history and verified saves. The explicit AuthoredPosition binding enables Authored placement XYZ inputs in place; Object world origin XYZ and other readouts remain read-only. MCP partial strings and GUI input use the same controls. Field/all copy returns accepted values with labels, independently of native draft-text selection. Reserved header slots and a separate scrollbar gutter are presentation-only; scrolling never initiates camera zoom. Closing selection clears the hierarchy/framing target. Animation poses and ambiguous actor ownership remain read-only. All supported mission coordinates require the shared editing lock to be unlocked."
     },
     {
       "gui": "DocumentSceneTree:Hierarchy",

@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Automation;
 using System.Windows.Threading;
+using System.Windows.Media;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Core;
@@ -68,6 +69,10 @@ internal static class SceneInspectionMcpChecks
             await pipe.ConnectAsync(deadline.Token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: deadline.Token);
             await Card("select", new() { ["target"] = target });
+            var inspectionCard = (SceneInspectionCard)viewport.InspectionContent!;
+            inspectionCard.Measure(new(800, 600)); inspectionCard.Arrange(new Rect(0, 0, 800, 600)); inspectionCard.UpdateLayout();
+            var inlinePosition = Fields(inspectionCard).Single(f => f.Binding == SceneInspectionBinding.AuthoredPosition);
+            Assert.All(inlinePosition.Inputs, input => Assert.True(input.IsReadOnly));
             await Card("select", new() { ["target"] = target, ["node"] = 0 }, "invalid_argument");
             var inspected = await Call("scene_inspect", new() { ["preview"] = preview });
             Assert.False(inspected["inspection"]!["Editable"]!.GetValue<bool>());
@@ -85,7 +90,11 @@ internal static class SceneInspectionMcpChecks
             var copy = await Card("copy", new() { ["field"] = "Authored placement XYZ" }); Assert.Contains("1", copy["text"]!.GetValue<string>());
             var tree = await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString() });
             var begun = await Edit("begin"); string token = begun["draft"]!["token"]!.GetValue<string>();
+            Assert.Same(inlinePosition, Fields(inspectionCard).Single(f => f.Binding == SceneInspectionBinding.AuthoredPosition));
+            Assert.All(inlinePosition.Inputs, input => Assert.False(input.IsReadOnly));
+            Assert.All(Fields(inspectionCard).Where(f => f.Binding == SceneInspectionBinding.None).SelectMany(f => f.Inputs), input => Assert.True(input.IsReadOnly));
             await Edit("cancel", new() { ["token"] = token });
+            Assert.All(inlinePosition.Inputs, input => Assert.True(input.IsReadOnly));
             var restarted = await Edit("begin");
             Assert.NotEqual(token, restarted["draft"]!["token"]!.GetValue<string>());
             await Edit("cancel", new() { ["token"] = token }, "draft_conflict");
@@ -125,10 +134,15 @@ internal static class SceneInspectionMcpChecks
             await Edit("set", new() { ["token"] = "old", ["position"] = new JsonArray("5", "6", "7") }, "draft_conflict");
             var partial = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("-", "6", "7") });
             token = partial["draft"]!["token"]!.GetValue<string>();
+            inspectionCard.Refresh();
+            Assert.Equal(new[] { "-", "6", "7" }, inlinePosition.Inputs.Select(input => input.Text).ToArray());
+            Assert.Equal(copy["text"]!.GetValue<string>(), (await Card("copy", new() { ["field"] = "Authored placement XYZ" }))["text"]!.GetValue<string>());
             await Edit("apply", new() { ["token"] = token }, "invalid_argument"); Assert.False(doc.IsDirty);
             var valid = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("5.125", "6", "7") });
             token = valid["draft"]!["token"]!.GetValue<string>();
             await Edit("apply", new() { ["token"] = token });
+            Assert.All(inlinePosition.Inputs, input => Assert.True(input.IsReadOnly));
+            Assert.Equal(new[] { "5.125", "6", "7" }, inlinePosition.Inputs.Select(input => input.Text).ToArray());
             Assert.Null(Get("inspectionDraft")); // Finished drafts must not retain a replaced viewport.
             Assert.True(doc.IsDirty); Assert.Equal(new Vector3(5.125f, 6, 7), edits.Position(edits.OtherCoordinates[0].Source));
             Assert.Equal(original, File.ReadAllBytes(archivePath));
@@ -167,6 +181,15 @@ internal static class SceneInspectionMcpChecks
         void Invoke(string name, params object[] args) => typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, args);
     }
     private static ZrdNode A(params ZrdNode[] children) => ZrdNode.Create(ZrdKind.Array) with { Children = children };
+    private static IEnumerable<SceneInspectionField> Fields(DependencyObject parent)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is SceneInspectionField field) yield return field;
+            foreach (var nested in Fields(child)) yield return nested;
+        }
+    }
     private delegate bool WindowCallback(nint handle, nint parameter);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] private static extern bool EnumThreadWindows(uint thread, WindowCallback callback, nint parameter);

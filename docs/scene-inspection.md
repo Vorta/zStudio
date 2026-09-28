@@ -4,6 +4,8 @@ Whole world, model and animation previews share an inspection overlay. The top-r
 
 Left-click a surface or AI marker to pin a floating card. It follows the selected object and stays inside the viewport, with offscreen/inactive labels when appropriate. Copy buttons preserve numeric round-trip precision and coordinate-space labels. Animation cards distinguish runtime instance IDs from original source nodes; expired instances do not silently bind to another copy. Inspection does not change animation events or playback.
 
+The card has a fixed header with Edit/Confirm, Copy all and Close at the top right; Cancel has a reserved slot beside Edit while a draft is open. The title trims with a full-name tooltip. Its body has a separate scrollbar gutter, keeping per-field copy buttons clear of the scrollbar. Readouts use subdued, selectable fields, with stacked X/Y/Z components for vectors. The card keeps the same size and field positions when editing starts or ends.
+
 The mouse wheel scrolls the floating card when the pointer is over its contents or scrollbar, including coordinate fields. Reaching a scroll limit does not zoom the scene. Camera gestures begin on the scene outside the card; native card buttons, fields and scrollbar retain their own input.
 
 Closing the card clears its tree selection and Frame selected target. Compatible preview refreshes restore a retained source row's framing and inspection without selecting an arbitrary runtime copy. Isolating a pickup child from the tree keeps the complete placed pickup, consistently through the toolbar and MCP. Geometry shared by multiple mission actors has no uniquely editable placement and stays read-only.
@@ -22,7 +24,7 @@ Select a row to inspect it and make it the Frame selected target. Selection does
 
 In Whole world, enable **Unlock editing**, then use **Edit** for supported pickup, AI navigation node and AIV vehicle coordinates, including AI tanks. The toggle starts off for each new map document; checked means editing is enabled and the padlock is open. Turn it off to lock all these coordinate edits. Inspection, selection, copying, framing, undo/redo and saving remain available while locked. Resolve any pending draft before changing the lock; Cancel retains the draft and previous lock state. Other geometry and runtime animation poses remain read-only. Tank templates must resolve unambiguously. Actors without an AIV placement remain inspectable without inventing a placement record.
 
-Enter numbers with a decimal point, then click **✓** or press Enter to apply all three coordinates as one undo step. Cancel or Escape in a coordinate field discards the draft. Incomplete/non-finite values remain uncommitted. Navigation, selection, scene refresh, save and close explicitly resolve pending input; focus loss does not confirm it. Existing Properties remains independently pinned.
+The header's **Edit** icon enables the existing **Authored placement XYZ** fields in place. **Object world origin XYZ** stays read-only: a selected child mesh can have a different world origin from the entire placed unit. Other fields stay read-only until their own editing capability is supported. Enter numbers with a decimal point, then click **✓** or press Enter to apply all three coordinates as one undo step. Cancel or Escape in a coordinate field discards the draft. Incomplete/non-finite values remain uncommitted. Refreshes preserve pending text, selection and scroll position. Field/Copy all buttons copy accepted values with coordinate-space labels; native text selection can copy draft input. Navigation, selection, scene refresh, save and close explicitly resolve pending input; focus loss does not confirm it. Existing Properties remains independently pinned.
 
 Pickup counterparts retain the existing original-type/position/rotation matching. Tanks require a unique original template and starting XYZ/heading in each effective difficulty resource. Links survive movement; the same displacement applies to linked records, shared fallback resources move once, and ambiguous/missing counterparts stay unchanged. The card shows affected difficulties before confirmation. AI edits affect one exact source record.
 
@@ -36,7 +38,7 @@ The map document owns these edits. Its Undo/Redo/Save commands handle them chron
 
 - `select`: supply `target`, or scene `node` with optional string `runtime` ID. `clear` closes the selection.
 - `copy`: optional `field` label; omitted copies all details. Returns GUI copy text; `clipboard: true` also writes the clipboard.
-- `begin`: requires owning `document` and expected `revision`.
+- `begin`: requires owning `document` and expected `revision`; enables the same inline authored placement fields as the header Edit icon.
 - `set`: requires document/revision, current `token` and three `position` strings, including temporary incomplete numeric input.
 - `apply` / `cancel`: require document/revision and current draft token. Apply additionally checks the revision captured at draft creation.
 
