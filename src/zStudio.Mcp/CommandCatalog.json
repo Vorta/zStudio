@@ -753,7 +753,7 @@
   },
   {
     "Name": "zstudio_camera",
-    "Description": "Read or navigate the shared 3D camera. Supports Blender-style orbit/pan/centered zoom/dolly, exact axis views, perspective/orthographic projection and framing. Valid manual navigation exits animation Follow camera. Never captures physical input.",
+    "Description": "Read or navigate the shared 3D camera. Supports Blender-style surface-pivot orbit, pan, continuous pointer-directed zoom with pointed-surface speed and orthographic pointer anchoring, dolly, exact axis views, perspective/orthographic projection and framing. Valid manual navigation exits animation Follow camera. Never captures physical input.",
     "Mutates": true,
     "Parameters": [
       {
@@ -880,9 +880,28 @@
         "NumberMaximum": 36000
       },
       {
+        "Name": "screenPoint",
+        "Type": "array",
+        "Description": "Optional [x,y] viewport DIP for rotate or zoom. Rotate picks an orbit pivot once without recentering; perspective zoom moves along the pointer ray and refreshes speed from the pointed scene surface; orthographic zoom scales about that point. Misses retain the pivot or last zoom speed. Zoom defaults to viewport center.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Viewport coordinate.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null,
+          "NumberMinimum": 0
+        },
+        "MinItems": 2,
+        "MaxItems": 2
+      },
+      {
         "Name": "steps",
         "Type": "number",
-        "Description": "Wheel-equivalent zoom steps; positive zooms in around the view target.",
+        "Description": "Wheel-equivalent zoom steps; positive moves forward along the pointer ray at a speed based on the pointed surface, independently of the orbit target, or magnifies orthographic views about the pointer. Camera readback NavigationReferenceDistance retains the last surface distance or initial framing/pose fallback.",
         "Required": false,
         "Choices": null,
         "Properties": null,

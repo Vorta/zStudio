@@ -2,6 +2,15 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.6.1 — 2026-09-27
+
+- Base perspective zoom speed on the scene surface under the pointer while moving toward the pointer. Refresh that distance during zoom, retain the last speed over empty space, and continue past the old target without needing a small pan/orbit to restore speed. Wheel, Ctrl + middle drag, numpad and MCP share the behavior and smooth inertia, independently of clipping planes.
+- Anchor orthographic zoom at the pointer, including axis views, wheel/drag/keyboard zoom and inertia.
+- Preserve rendered viewing direction with short look vectors on large maps, keeping pointer zoom stable after passing the old target.
+- Switch middle-button gestures as Shift/Ctrl are pressed or released, regardless of input order, without jumps or stale inertia. Defer orbit picking until movement begins so a middle-first pan keeps the same scale.
+- Orbit around the visible scene surface beneath the initial middle-button press without recentering the camera. Retain that world-space point through dragging, inertia and preview refreshes; empty space keeps the previous pivot. Exclude horizon, grid, AI overlays and editing handles.
+- Expose surface-pivot picking, pointer-directed zoom and orthographic anchoring through the optional `zstudio_camera` rotate/zoom `screenPoint` parameter, with pivot and zoom-reference readback, typed validation and shared GUI/MCP behavior.
+
 ## 0.6.0 — 2026-09-27
 
 - Add direct PNG replacement and addition in texture packs, with explicit sibling variants, original dimensions/storage, alpha-safe resampling and private palette quantization. Keep batch undo, ownership, mirrored views and verified saves consistent across GUI and MCP.

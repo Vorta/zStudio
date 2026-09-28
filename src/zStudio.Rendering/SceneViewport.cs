@@ -42,7 +42,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     {
         viewport = new FrameViewport(PrepareCameraFrame)
         {
-            Camera = new HCamera { Position = new(10, 8, 15), LookDirection = new(-10, -8, -15), UpDirection = new(0, 1, 0), FarPlaneDistance = 100000, NearPlaneDistance = 0.1 },
+            Camera = new NavigationPerspectiveCamera { Position = new(10, 8, 15), LookDirection = new(-10, -8, -15), UpDirection = new(0, 1, 0), FarPlaneDistance = 100000, NearPlaneDistance = 0.1 },
             BackgroundColor = Color.FromRgb(26, 31, 38),
             ShowCoordinateSystem = true,
             ShowViewCube = true,
@@ -260,7 +260,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     /// <summary>Orbit zoom using standard mouse-wheel deltas. Captured Fly uses speed adjustment instead.</summary>
     public void ZoomAt(Point position, int wheelDelta)
     {
-        ZoomBy(wheelDelta / 120.0);
+        ZoomBy(wheelDelta / 120.0, position);
     }
     public void SetWireframe(bool enabled) { foreach (var mesh in meshes) mesh.FillMode = enabled ? FillMode.Wireframe : FillMode.Solid; }
     public void SetTextured(bool enabled)
@@ -290,6 +290,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private void ClearMeshes()
     {
         CancelNavigation(); FramingSelection = null;
+        orbitPivot = null; navigationReferenceDistance = null;
         SetFly(false); flySpeedInitialized = false;
         ClearPickupEditing();
         groundGrid?.Dispose(); groundGrid = null;

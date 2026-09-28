@@ -88,7 +88,7 @@ public sealed partial class SceneViewport
         double distance = Math.Max(1, halfDepth + Math.Max(halfHeight / tangent, halfWidth / (tangent * Aspect)) * 1.1);
         double width = Math.Max(.01, Math.Max(halfWidth, halfHeight * Aspect) * 2.2);
         RestoreView(view with { Position = center - forward * distance, LookDirection = forward * distance,
-            OrthographicWidth = view.Projection == "orthographic" ? width : null });
+            OrthographicWidth = view.Projection == "orthographic" ? width : null, OrbitPivot = center, NavigationReferenceDistance = distance });
         UpdateClipPlanes();
         return true;
     }

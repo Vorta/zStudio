@@ -49,7 +49,7 @@ public partial class MainWindow
         if (sender is MenuItem { Tag: string action }) RunCameraNavigation(action);
         e.Handled = true;
     }
-    internal bool RunCameraNavigation(string action)
+    internal bool RunCameraNavigation(string action, Point? zoomPoint = null)
     {
         var active = ActiveNavigationViewport;
         if (active == null || active.IsPickupDragging || active.IsFlyActive) return false;
@@ -74,7 +74,7 @@ public partial class MainWindow
                 active.PanBy(action == "panLeft" ? surface.ActualWidth * .1 : action == "panRight" ? -surface.ActualWidth * .1 : 0,
                     action == "panUp" ? surface.ActualHeight * .1 : action == "panDown" ? -surface.ActualHeight * .1 : 0);
                 break;
-            case "zoomIn": case "zoomOut": active.StopCameraMotion(); active.ZoomBy(action == "zoomIn" ? 1 : -1); break;
+            case "zoomIn": case "zoomOut": active.StopCameraMotion(); active.ZoomBy(action == "zoomIn" ? 1 : -1, zoomPoint); break;
             default: return false;
         }
         return true;
@@ -109,6 +109,7 @@ public partial class MainWindow
         if (action == null) return false;
         if (e.IsRepeat && !(action.StartsWith("orbit", StringComparison.Ordinal) || action.StartsWith("pan", StringComparison.Ordinal) || action.StartsWith("zoom", StringComparison.Ordinal)))
         { e.Handled = true; return true; }
-        return e.Handled = RunCameraNavigation(action);
+        Point? zoomPoint = action is "zoomIn" or "zoomOut" && active.IsMouseOver ? Mouse.GetPosition((FrameworkElement)active.Content) : null;
+        return e.Handled = RunCameraNavigation(action, zoomPoint);
     }
 }

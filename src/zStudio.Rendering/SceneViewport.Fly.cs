@@ -36,6 +36,7 @@ public sealed partial class SceneViewport
         {
             viewport.IsInertiaEnabled = savedFlyInertia; viewport.IsMoveEnabled = savedFlyMove;
             viewport.IsPanEnabled = savedFlyPan; viewport.IsRotationEnabled = savedFlyRotate; viewport.IsZoomEnabled = savedFlyZoom;
+            orbitPivot = null; navigationReferenceDistance = null;
         }
         IsFlyActive = enabled;
         viewport.CameraMode = enabled ? CameraMode.WalkAround : CameraMode.Inspect;

@@ -1,10 +1,18 @@
 # 3D navigation
 
-Models, Whole world and animation previews share Blender-style navigation. Smooth camera inertia remains enabled. Zoom uses the current view center/orbit target, independent of the surface under the pointer.
+Models, Whole world and animation previews share Blender-style navigation. Smooth camera inertia remains enabled. Perspective zoom moves along the ray from the camera through the pointer without rotating the view, with speed determined by the visible scene surface under the pointer. Point at distant geometry to travel faster or nearby geometry for close inspection. Empty space retains the last surface-based speed; framing or an explicit camera pose supplies the initial speed before a surface is sampled. Zoom can continue past the old view target, and a tiny pan or orbit does not reset its speed. Orthographic zoom changes the view width and shifts the camera so the pointed location stays at the same screen position, including in Front/Top/Side views.
+
+Wheel and Ctrl + middle drag refresh the surface distance at the current pointer position. Numpad zoom uses the pointer when it is inside the viewport, otherwise the view center. Zoom inertia keeps the final input's screen position and updates the surface distance as the camera moves. Geometry beside or behind the camera does not control speed unless it lies under that point.
+
+Press the middle button over a visible object to orbit around the surface beneath the pointer. Picking does not move or recenter the camera: an off-center point stays at the same screen position as you orbit. The point remains fixed in world space through the drag and its inertia, even if the object animates. Picking is deferred until orbit movement actually begins. A press over empty space keeps the existing pivot. Hidden objects, the horizon, grid, bounds, AI overlays and editing handles do not supply orbit points. Picking uses scene triangles, including transparent materials, without per-texel alpha testing.
+
+Hold the middle button and press or release Shift/Ctrl to switch among orbit, pan, zoom and dolly without starting a new drag. Either input order and either left/right modifier key works. Each transition resets movement sampling and inertia; only movement in the final mode can continue after release. Returning to orbit picks once at the start of that orbit segment. Unsupported modifier combinations suspend movement until released. Captured zoom drags beyond the viewport use its nearest edge.
+
+Pan and dolly translate the pivot along with the camera. Framing, explicit camera positioning and named views establish a view-center pivot. Perspective zoom retains the pivot while approaching its view target; further forward travel advances it with the view target. Picking a new orbit point does not reset the zoom-speed reference. Snapshots preserve both the pivot and the last zoom reference through preview refreshes.
 
 | Input | Action |
 |---|---|
-| Middle-button drag | Orbit |
+| Middle-button drag | Pick the surface under the initial press, then orbit around it |
 | Shift + middle-button drag | Pan in the screen plane |
 | Ctrl + middle-button drag | Zoom; down zooms in, up zooms out |
 | Wheel / Numpad + or − | Zoom in/out |
@@ -40,11 +48,14 @@ Fly remains an explicitly activated mode for models and Whole world. Entering it
 Additional actions:
 
 - `pan`: `horizontal` and `vertical` screen deltas in DIP.
-- `zoom`: signed wheel-equivalent `steps`, positive to zoom in.
+- `rotate`: `horizontal` and `vertical` deltas, with optional `screenPoint: [x, y]` in viewport DIP to pick an orbit surface once before rotating. Omit it to keep the current pivot. Empty-space picks keep the pivot; coordinates outside the viewport are rejected. The preview must be rendered before picking.
+- `zoom`: signed wheel-equivalent `steps`, positive to move forward, with optional `screenPoint: [x, y]` viewport DIP coordinates for perspective direction and surface-based speed, or orthographic anchoring. Omit it to query the viewport center. Perspective movement follows the pointer ray; orthographic scaling keeps the pointed location fixed on screen. Empty space retains the last speed. Explicit coordinates require a rendered preview and must be inside the viewport; MCP never reads the physical mouse.
 - `dolly`: signed `distance` in game units, positive forward.
 - `view`: `front`, `back`, `left`, `right`, `top`, `bottom`, or `opposite`.
 - `projection`: `perspective` or `orthographic`, with optional positive orthographic `width` in game units.
 
-`set` also accepts projection and orthographic width. Readback retains Position, LookDirection, UpDirection and FieldOfView and adds Projection, OrthographicWidth, AxisView, AutoPerspective and FramingSelection. FieldOfView retains the perspective camera setting while orthographic is active. `preview_state` includes the expanded camera state and `framingSelection`. Animation camera following uses the existing `animation_options.changes.followCamera`.
+`set` also accepts projection and orthographic width. Readback includes Position, LookDirection, UpDirection, FieldOfView, Projection, OrthographicWidth, AxisView, AutoPerspective, OrbitPivot, NavigationReferenceDistance and FramingSelection. FieldOfView retains the perspective camera setting while orthographic is active. `preview_state` includes the expanded camera state and `framingSelection`. Animation camera following uses the existing `animation_options.changes.followCamera`.
+
+NavigationReferenceDistance is the most recently sampled camera-to-surface distance, or the initial framing/pose distance until a hit is available. Perspective travel is `0.12 * max(reference distance, 0.01) * steps` game units. Inputs larger than one wheel step refresh the query between substeps of at most one step. This speed is independent of the orbit target and near/far clipping. Reversing zoom moves backward using the same pointed-surface rule. The 0.01-unit minimum reference allows crossing a surface instead of approaching it indefinitely.
 
 Invalid arguments are rejected before changing navigation/follow state. Camera mutations return `busy` during pickup drags; reads remain available. MCP uses semantic operations and never captures physical input. Discovery remains windowless.
