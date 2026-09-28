@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
@@ -307,6 +308,7 @@ internal static class BlenderNavigationCheck
             // Exercise world selection and rotation pointer math without any
             // physical input, CaptureMouse or native synthetic pointer events.
             typeof(SceneViewport).GetMethod("ConfigurePickups", fields)!.Invoke(view, []);
+            await CheckLockedCubeInput(view, mesh);
             view.SetPickupLocked(true);
             Require(!view.SelectInspectionNode(0), "Locked world accepted a card");
             view.SetPickupLocked(false); Require(view.SelectedInspection == null, "Unlock selected an object");
@@ -336,6 +338,38 @@ internal static class BlenderNavigationCheck
             Console.WriteLine("PASS: rendered perspective/orthographic transformed instances, nearest surface, helper/horizon/hidden exclusions, empty-space fallback and orbit inertia");
         }
         finally { viewport.Items.Remove(helper); helper.Dispose(); window.Close(); }
+    }
+    private static async Task CheckLockedCubeInput(SceneViewport view, MeshGeometryModel3D mesh)
+    {
+        var viewport = (Viewport3DX)view.RenderSurface;
+        var instances = mesh.Instances; var pose = view.CaptureView();
+        mesh.Instances = [System.Numerics.Matrix4x4.CreateScale(1000, 1000, 1) * System.Numerics.Matrix4x4.CreateTranslation(0, 0, -100)];
+        try
+        {
+            foreach (bool locked in new[] { true, false })
+            {
+                view.SetPickupLocked(true); view.SetPickupLocked(locked);
+                view.SetAxisView("front"); view.SetProjection("perspective");
+                view.RestoreView(view.CaptureView() with { AxisView = null, AutoPerspective = false }); await Task.Delay(150);
+                var cubePoint = new Point(viewport.ActualWidth * (1 + viewport.ViewCubeHorizontalPosition) / 2,
+                    viewport.ActualHeight * (1 - viewport.ViewCubeVerticalPosition) / 2);
+                Require(view.ProbeInspection(cubePoint) != null, "Cube regression needs geometry behind the cube");
+                Require(view.CaptureView().AxisView == null, "Cube regression needs an unnamed perspective view");
+                var click = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left);
+                Require(view.HandleScenePointerDown(cubePoint, click) && view.CaptureView().AxisView == "front",
+                    $"Scene input swallowed view-cube navigation while locked={locked}");
+                Require(view.SelectedInspection == null && !view.SelectionBoundsVisible && !viewport.IsMouseCaptured,
+                    "Cube input selected geometry or captured the mouse");
+                // Outside the cube the lock still consumes scene clicks without
+                // opening a card; unlocking selects the same underlying object.
+                var center = new Point(viewport.ActualWidth / 2, viewport.ActualHeight / 2);
+                Require(view.HandleScenePointerDown(center, new(Mouse.PrimaryDevice, 0, MouseButton.Left)), "Scene click was not consumed");
+                Require((view.SelectedInspection != null) == !locked && view.SelectionBoundsVisible == !locked,
+                    "Cube input routing bypassed the scene selection lock");
+            }
+            Console.WriteLine("PASS: shared pointer input prioritizes the view cube over geometry in locked/unlocked worlds, retaining the scene selection lock");
+        }
+        finally { view.SetPickupLocked(true); mesh.Instances = instances; view.RestoreView(pose); }
     }
     private static async Task CheckPointerZoom(SceneViewport view, MeshGeometryModel3D mesh, SceneViewport.ViewPose initial)
     {

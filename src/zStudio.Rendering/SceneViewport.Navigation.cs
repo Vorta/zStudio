@@ -245,7 +245,6 @@ public sealed partial class SceneViewport
         {
             if (e.Handled || IsFlyActive || IsPickupDragging ||
                 InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
-            if (e.ChangedButton == MouseButton.Left && NavigateCubeAt(e.GetPosition(viewport))) { e.Handled = true; return; }
             var gesture = Gesture(e.ChangedButton, Keyboard.Modifiers);
             if (gesture == NavigationGesture.None) return;
             BeginNavigationDrag(gesture, e.GetPosition(viewport));

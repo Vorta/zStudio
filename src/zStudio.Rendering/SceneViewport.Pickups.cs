@@ -49,8 +49,7 @@ public sealed partial class SceneViewport
         // Pick overlay handles on the parent, before Helix's viewport class handler picks the scene.
         PreviewMouseDown += (_, e) =>
         {
-            if (InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
-            if (HandlePickupPointerDown(e.GetPosition(viewport), e) || HandleInspectionClick(e.GetPosition(viewport), e) || HandleAiPointerDown(e.GetPosition(viewport), e)) e.Handled = true;
+            if (HandleScenePointerDown(e.GetPosition(viewport), e)) e.Handled = true;
         };
         PreviewMouseMove += (_, e) =>
         {
@@ -65,6 +64,16 @@ public sealed partial class SceneViewport
         MouseLeave += (_, _) => { CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); };
         viewport.LostMouseCapture += (_, _) => { if (IsPickupDragging) CancelPickupDrag(); };
         viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && CancelPickupDrag()) e.Handled = true; };
+    }
+    internal bool HandleScenePointerDown(Point point, MouseButtonEventArgs e)
+    {
+        if (e.Handled ||
+            InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return false;
+        if (IsFlyActive || IsPickupDragging) return true;
+        // The screen-space cube owns its clicks, even over scene geometry or
+        // handles. Resolve it before the editing lock can consume a scene click.
+        if (e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
+        return HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
     }
     private void ConfigurePickups()
     {
