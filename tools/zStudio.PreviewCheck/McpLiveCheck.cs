@@ -106,10 +106,13 @@ internal static class McpLiveCheck
                     Equal(0, saved["result"]!["Errors"]!.AsArray().Count, label + " coordinate Save As");
                     var reopened = FormatRegistry.Default.OpenBytes(copy, await File.ReadAllBytesAsync(copy));
                     Equal(false, reopened.Diagnostics.Any(d => d.Severity == "Error"), label + " saved archive reparses");
-                    var coordinates = PickupPlacementEditSession.Create([]);
+                    var coordinates = PickupPlacementEditSession.Create(Enum.GetValues<MissionDifficulty>().SelectMany(difficulty =>
+                        reopened.Assets.Where(a => a.Name.Equals(MissionLayoutSelection.For(difficulty).PickupResource, StringComparison.OrdinalIgnoreCase))
+                            .Select(a => new PickupPlacementResource(difficulty, reopened, a))));
                     coordinates.AddCoordinates(reopened.Assets.Select(a => (reopened, a)));
                     var expected = new System.Numerics.Vector3(float.Parse(xyz[0], System.Globalization.CultureInfo.InvariantCulture), p["y"]!.GetValue<float>(), p["z"]!.GetValue<float>());
-                    Equal(true, coordinates.OtherCoordinates.Any(c => c.Kind == label && c.OriginalPosition == expected), label + " persisted XYZ survives reopen");
+                    Equal(true, label == "pickup" ? coordinates.Records.Any(c => c.OriginalPosition == expected)
+                        : coordinates.OtherCoordinates.Any(c => c.Kind == label && c.OriginalPosition == expected), label + " persisted XYZ survives reopen");
                     var afterSave = await Call("scene_inspect", new { preview });
                     Equal(copy, afterSave["inspection"]!["Save archive"]!.GetValue<string>(), label + " save target retargeted");
                     await Call("undo_redo", new { document = worldId, revision = afterSave["revision"]!.GetValue<long>(), action = "undo" });
