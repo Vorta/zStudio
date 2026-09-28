@@ -41,8 +41,10 @@ public sealed class FormatRegistry
             uint expected = family switch { FormatFamily.Scripts => 7, FormatFamily.Animation => 28, _ => 15 };
             int minimum = family == FormatFamily.GameZ ? 36 : 12;
             if (prefix.Length < minimum) return new(family, version, Recognition.Malformed, "Truncated header");
-            return new(family, version, version == expected ? Recognition.Supported : Recognition.UnsupportedVersion,
-                version == expected ? $"{family} · version {version}" : $"Unsupported {family} version {version} (expected {expected})");
+            bool supported = version == expected || family == FormatFamily.GameZ && version == 27 || family == FormatFamily.Animation && version == 39;
+            string versions = family switch { FormatFamily.GameZ => "15 or 27", FormatFamily.Animation => "28 or 39", _ => expected.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            return new(family, version, supported ? Recognition.Supported : Recognition.UnsupportedVersion,
+                supported ? $"{family} · version {version}" : $"Unsupported {family} version {version} (expected {versions})");
         }
         if (prefix.Length >= 24 && magic == 0 && version == 1)
         {
@@ -96,6 +98,7 @@ public sealed class FormatRegistry
             doc.Diagnostics.Add(new("Error", $"Parsing stopped: {ex.Message}"));
             if (probe.Family == FormatFamily.Zrd) doc.Add(AssetKind.Raw, 0, System.IO.Path.GetFileName(path), 0, bytes.Length);
         }
+        doc.Metadata["game"] = doc.Game.ToString();
         return doc;
     }
 }

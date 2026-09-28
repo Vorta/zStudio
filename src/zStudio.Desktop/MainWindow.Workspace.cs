@@ -63,7 +63,7 @@ public partial class MainWindow
         ExportSelectedMenu.IsEnabled = ExportAllMenu.IsEnabled = ExportJsonMenu.IsEnabled = CloseDocumentMenu.IsEnabled = ValidateMenu.IsEnabled = ReloadMenu.IsEnabled = hasDocument;
         BackupOnSave.IsEnabled = doc?.PickupEdits != null;
         ExportModelsMenu.IsEnabled = doc?.SelectedAsset?.Record.Kind is Recoil.Zbd.Core.AssetKind.Animation or Recoil.Zbd.Core.AssetKind.Node or Recoil.Zbd.Core.AssetKind.Model;
-        ReplaceModelsMenu.IsEnabled = doc?.ModelEdits != null;
+        ReplaceModelsMenu.IsEnabled = doc?.ModelEdits != null || doc?.SelectedAsset?.Record.Content is Recoil.Zbd.Core.Formats.MechAssembly;
         WelcomeTitle.Text = ViewModel.HasRoot ? "Choose a file to inspect" : "Explore Recoil’s assets";
         WelcomeDescription.Text = ViewModel.HasRoot ? "Open a ZBD file from Files, or search for an asset across this folder." : "Textures, worlds, models, audio, scripts, and animation sequences — together in one workspace.";
         WelcomeOpen.Visibility = ViewModel.HasRoot ? Visibility.Collapsed : Visibility.Visible;

@@ -227,7 +227,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ResourceEditsChanged?.Invoke();
             };
         }
-        if (doc.GameZLayout != null && doc.Probe.Version == 15 && !doc.Diagnostics.Any(d => d.Severity == "Error"))
+        if (doc.GameZLayout != null && doc.Probe.Version is 15 or 27 && !doc.Diagnostics.Any(d => d.Severity == "Error"))
         {
             ModelEdits = new(doc);
             ModelEdits.BeforeEdit += ClaimResourcePaths;
@@ -354,6 +354,7 @@ public sealed class StudioSettings
     public bool CreateBackupOnSave { get; set; }
     private MissionDifficulty difficulty = MissionDifficulty.Medium;
     public MissionDifficulty Difficulty { get => difficulty; set => difficulty = Enum.IsDefined(value) ? value : MissionDifficulty.Medium; }
+    public Dictionary<string, string> Mw3Missions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public double Width { get; set; } = 1560;
     public double Height { get; set; } = 940;
     public double FilesWidth { get; set; } = 215;

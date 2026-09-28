@@ -31,7 +31,7 @@ public partial class MainWindow
         }
         PreviewNotices.Content = $"{staticPreviewProblems.Count} preview notices";
         PreviewNotices.Visibility = staticPreviewProblems.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        PreviewInfo.Text = (scene.Mission is { } mission ? mission.Layout.Difficulty + " · " : "") + scene.PreviewSummary;
+        PreviewInfo.Text = (scene.Mission is { } mission ? mission.Layout.Label + " · " : "") + scene.PreviewSummary;
         PreviewInfo.ToolTip = scene.Mission?.Layout.Description ?? scene.PreviewSummary;
     }
     private void PreviewNoticesClick(object sender, RoutedEventArgs e)

@@ -11,7 +11,7 @@ public partial class MainWindow
 {
     private readonly MenuItem cameraNavigationMenu = new() { Header = "3D Navigation" };
     private SceneViewport? ActiveNavigationViewport => EmptyPreview.Visibility == Visibility.Visible ? null
-        : animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null);
+        : motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null);
     private void InitializeCameraNavigation()
     {
         var viewMenu = (MenuItem)PropertiesMenu.Parent;

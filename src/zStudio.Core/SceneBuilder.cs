@@ -5,7 +5,8 @@ namespace Recoil.Zbd.Core;
 
 public sealed record ScenePlacement(int NodeIndex, int ModelIndex, string Name, Matrix4x4 Transform);
 public sealed record SceneView(IReadOnlyList<ScenePlacement> Placements, IReadOnlyList<Diagnostic> Diagnostics);
-public sealed record MeshPart(int MaterialIndex, Vector3[] Positions, Vector3[] Normals, Vector2[] TextureCoordinates, int[] Indices);
+public sealed record MeshPart(int MaterialIndex, Vector3[] Positions, Vector3[] Normals, Vector2[] TextureCoordinates, int[] Indices)
+{ public Vector4[] Colors { get; init; } = []; }
 
 public static class SceneBuilder
 {
@@ -94,7 +95,7 @@ public static class GeometryBuilder
 {
     public static IReadOnlyList<MeshPart> Build(GameModel model, IList<Diagnostic>? diagnostics = null, CancellationToken token = default)
     {
-        Dictionary<int, (List<Vector3> Positions, List<Vector3> Normals, List<Vector2> Uvs, List<int> Indices)> groups = [];
+        Dictionary<int, (List<Vector3> Positions, List<Vector3> Normals, List<Vector2> Uvs, List<int> Indices, List<Vector4> Colors)> groups = [];
         for (int p = 0; p < model.Polygons.Length; p++)
         {
             token.ThrowIfCancellationRequested(); Polygon polygon = model.Polygons[p];
@@ -102,22 +103,30 @@ public static class GeometryBuilder
             if (polygon.Vertices.Any(i => i < 0 || i >= model.Vertices.Length)) { diagnostics?.Add(new("Warning", $"Model {model.Index}, polygon {p}: invalid vertex indices.")); continue; }
             Vector3[] vertices = polygon.Vertices.Select(i => model.Vertices[i]).ToArray();
             if (vertices.Any(v => !float.IsFinite(v.X) || !float.IsFinite(v.Y) || !float.IsFinite(v.Z))) { diagnostics?.Add(new("Warning", $"Model {model.Index}, polygon {p}: nonfinite vertices.")); continue; }
-            int[] triangles = Triangulate(vertices);
+            int[] triangles = (polygon.Flags & 1024) != 0 ? TriangleStrip(vertices.Length) : Triangulate(vertices);
             if (triangles.Length == 0) { diagnostics?.Add(new("Warning", $"Model {model.Index}, polygon {p}: degenerate polygon.")); continue; }
-            if (!groups.TryGetValue(polygon.MaterialIndex, out var group)) { group = ([], [], [], []); groups.Add(polygon.MaterialIndex, group); }
+            if (!groups.TryGetValue(polygon.MaterialIndex, out var group)) { group = ([], [], [], [], []); groups.Add(polygon.MaterialIndex, group); }
             int offset = group.Positions.Count;
             Vector3 normal = Vector3.Cross(vertices[triangles[1]] - vertices[triangles[0]], vertices[triangles[2]] - vertices[triangles[0]]);
             normal = normal.LengthSquared() > 1e-12f ? Vector3.Normalize(normal) : Vector3.UnitY;
             for (int i = 0; i < vertices.Length; i++)
             {
                 group.Positions.Add(vertices[i]);
+                var color = polygon.Colors.Length == vertices.Length ? polygon.Colors[i] / 255f : Vector3.One;
+                group.Colors.Add(new Vector4(float.IsFinite(color.LengthSquared()) ? Vector3.Clamp(color, Vector3.Zero, Vector3.One) : Vector3.One, 1));
                 Vector3 n = polygon.Normals.Length == vertices.Length && polygon.Normals[i] >= 0 && polygon.Normals[i] < model.Normals.Length ? model.Normals[polygon.Normals[i]] : normal;
                 group.Normals.Add(n.LengthSquared() > 1e-12f && float.IsFinite(n.LengthSquared()) ? Vector3.Normalize(n) : normal);
                 group.Uvs.Add(polygon.Uvs.Length == vertices.Length ? polygon.Uvs[i] : Vector2.Zero);
             }
             foreach (int i in triangles) group.Indices.Add(offset + i);
         }
-        return groups.Select(g => new MeshPart(g.Key, g.Value.Positions.ToArray(), g.Value.Normals.ToArray(), g.Value.Uvs.ToArray(), g.Value.Indices.ToArray())).ToArray();
+        return groups.Select(g => new MeshPart(g.Key, g.Value.Positions.ToArray(), g.Value.Normals.ToArray(), g.Value.Uvs.ToArray(), g.Value.Indices.ToArray()) { Colors = model.Polygons.Any(p => p.Colors.Length != 0) ? g.Value.Colors.ToArray() : [] }).ToArray();
+    }
+    public static int[] TriangleStrip(int count)
+    {
+        List<int> indices = [];
+        for (int i = 2; i < count; i++) indices.AddRange(i % 2 == 0 ? [i - 2, i - 1, i] : [i - 1, i - 2, i]);
+        return indices.ToArray();
     }
     public static int[] Triangulate(IReadOnlyList<Vector3> points)
     {

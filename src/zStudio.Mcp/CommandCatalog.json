@@ -557,7 +557,8 @@
                 "World",
                 "Node",
                 "Material",
-                "TextureReference"
+                "TextureReference",
+                "Motion"
               ],
               "Properties": null
             },
@@ -2022,7 +2023,7 @@
   },
   {
     "Name": "zstudio_ai_networks",
-    "Description": "List authored AI networks with distinct source identities, counts and diagnostics. Does not simulate activation or change visualization.",
+    "Description": "List authored AI networks with distinct source identities, counts, diagnostics and attack_strategy (stored value, status, key, character count, truncation and RGB hex color shared by nodes/arrows). Does not simulate activation or change visualization.",
     "Mutates": false,
     "Parameters": [
       {
@@ -2065,7 +2066,7 @@
   },
   {
     "Name": "zstudio_ai_nodes",
-    "Description": "List authored AI nodes, XYZ, raw integer and all three directed link slots. Negative indices mean no link; unresolved targets retain diagnostics.",
+    "Description": "List authored AI nodes, XYZ, raw integer, network attack_strategy metadata/color and ordered directed link slots (three for RECOIL; variable for MW3). Negative indices mean no link; unresolved targets retain diagnostics.",
     "Mutates": false,
     "Parameters": [
       {
@@ -2090,6 +2091,17 @@
         "Description": "Network ID, or all/omitted for all networks.",
         "Required": false,
         "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "section",
+        "Type": "string",
+        "Description": "Spatial nodes (default) or MW3 edge constraints, which have no authored position.",
+        "Required": false,
+        "Choices": [
+          "nodes",
+          "constraints"
+        ],
         "Properties": null
       },
       {
@@ -2167,7 +2179,7 @@
   },
   {
     "Name": "zstudio_scene_inspect",
-    "Description": "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Panel state includes preferred/effective heights, viewport limits and expanded state.",
+    "Description": "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits and expanded state.",
     "Mutates": false,
     "Parameters": [
       {
@@ -2579,9 +2591,20 @@
   },
   {
     "Name": "zstudio_event_catalog",
-    "Description": "Describe supported event types, fields and preview limitations.",
+    "Description": "Describe supported event types, fields and preview limitations for the requested animation format version.",
     "Mutates": false,
-    "Parameters": []
+    "Parameters": [
+      {
+        "Name": "version",
+        "Type": "integer",
+        "Description": "Animation version: 28 (Recoil, default) or 39 (MechWarrior 3).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
   },
   {
     "Name": "zstudio_property_fields",
@@ -3596,14 +3619,15 @@
         "Choices": [
           "fields",
           "open",
-          "edit"
+          "edit",
+          "invoke"
         ],
         "Properties": null
       },
       {
         "Name": "revision",
         "Type": "integer",
-        "Description": "Required current revision for edit.",
+        "Description": "Required current revision for edit/invoke.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -3613,7 +3637,7 @@
       {
         "Name": "field",
         "Type": "string",
-        "Description": "Current field ID for edit.",
+        "Description": "Current field ID for edit or action ID for invoke.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -3623,6 +3647,430 @@
         "Type": "string",
         "Description": "Invariant field editor text for edit.",
         "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "part",
+        "Type": "integer",
+        "Description": "Motion part index; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "frame",
+        "Type": "integer",
+        "Description": "Motion frame index; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_motion_records",
+    "Description": "Inspect a version 4 motion clip by stable archive member identity. Omit part for tracks; supply part for paged authored frames including the retained closing sample.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "part",
+        "Type": "integer",
+        "Description": "Optional zero-based part index.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_motion_edit",
+    "Description": "Edit authored motion timing or a frame, or insert/delete a frame across all parts. One shared archive undo transaction. Does not save; use the existing verified document save operation. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Edit operation.",
+        "Required": true,
+        "Choices": [
+          "timing",
+          "set",
+          "insert",
+          "delete"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "part",
+        "Type": "integer",
+        "Description": "Part index required for set.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "frame",
+        "Type": "integer",
+        "Description": "Frame index required for set/insert/delete; insert occurs after it.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "loopSeconds",
+        "Type": "number",
+        "Description": "Positive finite loop duration for timing.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "translation",
+        "Type": "array",
+        "Description": "XYZ for set.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "component",
+          "Type": "number",
+          "Description": "Finite component.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 3,
+        "MaxItems": 3
+      },
+      {
+        "Name": "quaternionWxyz",
+        "Type": "array",
+        "Description": "Nonzero finite WXYZ quaternion for set.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "component",
+          "Type": "number",
+          "Description": "Finite component.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 4,
+        "MaxItems": 4
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_motion_preview",
+    "Description": "Control the visible motion viewer: play/pause, seek, choose an explicit library member or LOD, frame the model, or inspect available bindings. Shares GUI playback and camera. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Preview operation.",
+        "Required": true,
+        "Choices": [
+          "state",
+          "play",
+          "pause",
+          "seek",
+          "assembly",
+          "lod",
+          "frame"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "seconds",
+        "Type": "number",
+        "Description": "Time within the clip for seek.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "memberIndex",
+        "Type": "integer",
+        "Description": "Library member index from motion preview state.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "lod",
+        "Type": "integer",
+        "Description": "Available LOD rank.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_missions",
+    "Description": "List the current MW3 map\u0027s authored mission readers, or select one for the visible world/animation. Selection retains archive edit history, playhead and camera. Shared resources remain available; other mission readers do not contribute actors or AI networks. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "archive",
+        "Type": "string",
+        "Description": "Optional full reader path returned by this tool. Omit to list.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_mech_models",
+    "Description": "Inspect a mech archive member\u0027s local model identities and shared materials. Node names may repeat across members. Replacement retains the hierarchy and uses explicit member/local model indices.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "section",
+        "Type": "string",
+        "Description": "List section; default models.",
+        "Required": false,
+        "Choices": [
+          "models",
+          "materials"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_mech_model_replace",
+    "Description": "Replace one member-local mech mesh from a triangulated local-coordinate OBJ with UVs/normals and optional RGB vertex colors. Explicit shared material index; textures use texture_import. One archive undo step, with hierarchy and unrelated members preserved. Save through save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "localModel",
+        "Type": "integer",
+        "Description": "Local model index from mech_models.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "material",
+        "Type": "integer",
+        "Description": "Shared material index from mech_models materials.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "path",
+        "Type": "string",
+        "Description": "OBJ file path.",
+        "Required": true,
         "Choices": null,
         "Properties": null
       }

@@ -54,7 +54,11 @@ public sealed partial class PickupPlacementEditSession
         Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> found = new(StringComparer.OrdinalIgnoreCase);
         List<(ZbdDocument Archive, AssetRecord Asset)> coordinateResources = [];
         List<string> notes = [];
-        foreach (string file in MissionSceneLoader.ResourceFiles(worldPath, resolver))
+        bool mw3 = FormatRegistry.Probe(worldPath) is { Family: FormatFamily.GameZ, Version: 27 };
+        // Load the coordinate store once for every reader in this map. Preview selection
+        // filters by archive identity; changing mission must never discard accepted history.
+        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver);
+        foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
             try
@@ -68,7 +72,7 @@ public sealed partial class PickupPlacementEditSession
             { notes.Add($"Pickup editing: {Path.GetFileName(file)}: {ex.Message}"); }
         }
         List<PickupPlacementResource> resources = [];
-        foreach (var difficulty in Enum.GetValues<MissionDifficulty>())
+        foreach (var difficulty in mw3 ? Array.Empty<MissionDifficulty>() : Enum.GetValues<MissionDifficulty>())
         {
             string requested = MissionLayoutSelection.For(difficulty).PickupResource;
             string effective = found.ContainsKey(requested) ? requested : "puppies.zrd";
@@ -78,7 +82,7 @@ public sealed partial class PickupPlacementEditSession
         return await Task.Run(() =>
         {
             var result = Create(resources, notes, token);
-            result.AddCoordinates(coordinateResources, token);
+            result.AddCoordinates(coordinateResources, token, mw3);
             return result;
         }, token).ConfigureAwait(false);
     }
@@ -189,7 +193,7 @@ public sealed partial class PickupPlacementEditSession
             kind == PlacementRotationKind.HeadingDegrees && (transform.Rotation.X != 0 || transform.Rotation.Z != 0))
             throw new InvalidDataException("This placement does not support the requested rotation axes.");
         if (otherCoordinates.TryGetValue(source, out var vehicle) && vehicle.Kind == "tank" &&
-            (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))
+            (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0)))
             throw new InvalidDataException("The tank placement has no unambiguous active template binding.");
         if (otherCoordinates.TryGetValue(source, out var record) && record.Kind == "ai" &&
             (Math.Abs(position.X) > 1e12 || Math.Abs(position.Y) > 1e12 || Math.Abs(position.Z) > 1e12))

@@ -70,7 +70,7 @@ public sealed partial class SceneViewport
         aiOverlay = new(); viewport.Items.Add(aiOverlay);
         foreach (var network in VisibleAiNetworks)
         {
-            var color = AiColor(network.Id); var nodes = network.Nodes.ToArray();
+            var color = AiNetworkColors.Color(network.AttackStrategy); var nodes = network.Nodes.ToArray();
             if (nodes.Length == 0) continue;
             var markers = AiMesh(AiOctahedron(), color);
             aiMarkers.Add((markers, nodes));
@@ -128,13 +128,6 @@ public sealed partial class SceneViewport
         var mesh = new MeshGeometryModel3D { Geometry = geometry, Material = material, IsTransparent = true, IsHitTestVisible = false,
             CullMode = SharpDX.Direct3D11.CullMode.None, RenderOrder = 10, IsDepthClipEnabled = !AiThroughGeometry };
         aiDrawables.Add(mesh); aiOverlay!.Children.Add(mesh); return mesh;
-    }
-    private static Color4 AiColor(string id)
-    {
-        // Stable source identity, independent of filtering and enumeration order.
-        uint hash = 2166136261; foreach (char c in id) hash = (hash ^ c) * 16777619;
-        return (hash % 6) switch { 0 => new(.2f, .85f, 1, 1), 1 => new(1, .65f, .25f, 1), 2 => new(.7f, .5f, 1, 1),
-            3 => new(.3f, 1, .65f, 1), 4 => new(1, .4f, .7f, 1), _ => new(.95f, .95f, .3f, 1) };
     }
     private static MeshGeometry3D AiOctahedron() => new()
     {

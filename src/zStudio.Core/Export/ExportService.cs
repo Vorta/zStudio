@@ -68,6 +68,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             result["polygons"] = JsonData.Array(model.Polygons, p =>
             {
                 JsonObject j = (JsonObject)JsonData.Clone(p.Metadata, token)!;
+                if (p.Colors.Length != 0) j["vertex_colors_rgb"] = JsonData.Vectors(p.Colors, token);
                 j["vertex_indices"] = JsonData.Integers(p.Vertices, token);
                 j["normal_indices"] = JsonData.Integers(p.Normals, token);
                 j["uvs"] = JsonData.Array(p.Uvs, v => new JsonObject { ["u"] = JsonData.Number(v.X), ["v"] = JsonData.Number(v.Y) }, token);
@@ -115,7 +116,12 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
             foreach (var part in parts)
             {
                 usedMaterials.Add(part.MaterialIndex); obj.AppendLine($"usemtl material_{part.MaterialIndex}");
-                foreach (Vector3 v in part.Positions) { Vector3 p = Vector3.Transform(v, placement.Transform); obj.AppendLine(FormattableString.Invariant($"v {p.X:R} {p.Y:R} {p.Z:R}")); }
+                for (int i = 0; i < part.Positions.Length; i++)
+                {
+                    Vector3 p = Vector3.Transform(part.Positions[i], placement.Transform);
+                    string color = part.Colors.Length == part.Positions.Length ? FormattableString.Invariant($" {part.Colors[i].X:R} {part.Colors[i].Y:R} {part.Colors[i].Z:R}") : "";
+                    obj.AppendLine(FormattableString.Invariant($"v {p.X:R} {p.Y:R} {p.Z:R}") + color);
+                }
                 foreach (Vector2 uv in part.TextureCoordinates) obj.AppendLine(FormattableString.Invariant($"vt {uv.X:R} {1 - uv.Y:R}"));
                 foreach (Vector3 v in part.Normals) { Vector3 n = Vector3.TransformNormal(v, normalMatrix); if (n.LengthSquared() > 1e-12) n = Vector3.Normalize(n); obj.AppendLine(FormattableString.Invariant($"vn {n.X:R} {n.Y:R} {n.Z:R}")); }
                 bool reverse = placement.Transform.GetDeterminant() < 0;
@@ -132,7 +138,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         {
             mtl.AppendLine($"newmtl material_{index}");
             JsonObject? material = index >= 0 && index < scene.Materials.Count ? scene.Materials[index] : null;
-            var color = material?["color"]; float r = color.Float("r", 1), g = color.Float("g", 1), b = color.Float("b", 1);
+            var color = material?["color"]; float r = color.Float("r", 255) / 255, g = color.Float("g", 255) / 255, b = color.Float("b", 255) / 255;
             mtl.AppendLine(FormattableString.Invariant($"Kd {r:R} {g:R} {b:R}")); mtl.AppendLine("illum 1");
             int texture = material.Int("texture_index", -1);
             if (texture >= 0 && texture < scene.Textures.Count)

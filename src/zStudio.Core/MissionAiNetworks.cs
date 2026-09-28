@@ -9,8 +9,14 @@ namespace Recoil.Zbd.Core;
 
 public sealed record AiLink(int Slot, int TargetIndex, string? Target, string? Problem);
 public sealed record AiNode(string Id, int Index, int RawValue, Vector3 Position, long SourceOffset, IReadOnlyList<AiLink> Links);
+public sealed record AiConstraint(int Index, int FromNode, int ToNode, string Kind, long SourceOffset, JsonObject Parameters)
+{ public int AttributeIndex { get; init; } }
 public sealed record AiNetwork(string Id, string Archive, int MemberIndex, string Member, string Name, string Type,
-    float PathWidth, IReadOnlyList<AiNode> Nodes, IReadOnlyList<Diagnostic> Diagnostics);
+    float PathWidth, IReadOnlyList<AiNode> Nodes, IReadOnlyList<Diagnostic> Diagnostics)
+{
+    public AiAttackStrategy AttackStrategy { get; init; } = AiAttackStrategy.Missing;
+    public IReadOnlyList<AiConstraint> Constraints { get; init; } = [];
+}
 
 /// <summary>Authored navigation data; no AI activation or pathfinding simulation. IDs are snapshot-scoped.</summary>
 public sealed record AiNetworkSnapshot(string Id, IReadOnlyList<AiNetwork> Networks)
@@ -29,6 +35,8 @@ public sealed record AiNetworkSnapshot(string Id, IReadOnlyList<AiNetwork> Netwo
         ["source_archive"] = network.Archive, ["source_member_index"] = network.MemberIndex, ["source_member"] = network.Member,
         ["source_offset"] = node.SourceOffset, ["network"] = Bounded(network.Name), ["stored_type"] = Bounded(network.Type),
         ["stored_name_characters"] = network.Name.Length, ["stored_type_characters"] = network.Type.Length,
+        ["attack_strategy"] = network.AttackStrategy.Describe(),
+        ["network_constraint_count"] = network.Constraints.Count,
         ["path_width"] = network.PathWidth, ["node_index"] = node.Index, ["raw_node_integer"] = node.RawValue,
         ["position"] = JsonData.Vector(node.Position), ["links"] = new JsonArray(node.Links.Select(l => (JsonNode)new JsonObject
         { ["slot"] = l.Slot, ["target_index"] = l.TargetIndex, ["target_id"] = l.Target, ["problem"] = l.Problem }).ToArray()),
@@ -99,20 +107,34 @@ public static partial class MissionAiNetworks
             return matches.FirstOrDefault().Value;
         }
         var version = Field("version");
-        if (version != null && (version.Children.Count != 1 || Integer(version.Children[0]) != 105)) throw new InvalidDataException("Unsupported AI network version (expected 105 or absent).");
+        if (version != null && (version.Children.Count != 1 || Integer(version.Children[0]) is not (105 or 106))) throw new InvalidDataException("Unsupported AI network version (expected 105, 106 or absent).");
+        bool mw3 = version?.Children.Count == 1 && Integer(version.Children[0]) == 106;
         string TextField(string name, string fallback)
         {
             var field = Field(name); if (field == null) return fallback;
             if (field.Children.Count == 1 && field.Children[0].Kind == ZrdKind.String) return field.Children[0].Text;
             Note($"Invalid {name}; expected one string.", field.SourceOffset); return fallback;
         }
+        AiAttackStrategy ReadAttackStrategy()
+        {
+            var matches = pairs.Where(p => p.Key == "attack_strategy").ToArray();
+            if (matches.Length == 0) return AiAttackStrategy.Missing;
+            var value = matches[0].Value;
+            if (matches.Length != 1 || value.Kind != ZrdKind.Array || value.Children.Count != 1 || value.Children[0].Kind != ZrdKind.String)
+            {
+                Note(matches.Length != 1 ? "Ambiguous repeated attack_strategy field." : "Invalid attack_strategy; expected an array containing one string.", value.SourceOffset);
+                return AiAttackStrategy.Invalid;
+            }
+            return AiAttackStrategy.Stored(value.Children[0].Text);
+        }
+        var attackStrategy = ReadAttackStrategy();
         float width = 10;
         if (Field("path_width") is { } pathWidth)
         {
             if (pathWidth.Children.Count == 1 && pathWidth.Children[0].Kind == ZrdKind.Float && float.IsFinite(Float(pathWidth.Children[0]))) width = Float(pathWidth.Children[0]);
             else Note("Invalid path_width; displaying the default width 10.", pathWidth.SourceOffset);
         }
-        List<AiNode> nodes = [];
+        List<AiNode> nodes = []; List<AiConstraint> constraints = [];
         // A malformed duplicate still makes a numeric target ambiguous. Never
         // silently bind to the other record after rejecting the malformed one.
         var declared = pairs.Select(p => NodeName().Match(p.Key)).Where(m => m.Success)
@@ -127,8 +149,17 @@ public static partial class MissionAiNetworks
             try
             {
                 var c = value.Children;
-                if (value.Kind != ZrdKind.Array || c.Count != 3 || c[1].Kind != ZrdKind.Array || c[1].Children.Count != 3 || c[2].Kind != ZrdKind.Array || c[2].Children.Count != 3)
-                    throw new InvalidDataException("Expected raw integer, XYZ and three link slots.");
+                if (mw3 && c.Count >= 3 && c.Count % 2 == 1 && c[0].Kind == ZrdKind.Array && c[0].Children.Count == 2)
+                {
+                    int from = Integer(c[0].Children[0]), to = Integer(c[0].Children[1]);
+                    for (int attribute = 1; attribute < c.Count; attribute += 2)
+                        if (c[attribute].Kind != ZrdKind.String || c[attribute + 1].Kind != ZrdKind.Array) throw new InvalidDataException("Expected ordered constraint name/parameter pairs.");
+                    for (int attribute = 1; attribute < c.Count; attribute += 2)
+                        constraints.Add(new(index, from, to, c[attribute].Text, value.SourceOffset, c[attribute + 1].ToPreviewJson(token)) { AttributeIndex = (attribute - 1) / 2 });
+                    continue;
+                }
+                if (value.Kind != ZrdKind.Array || (mw3 ? c.Count < 3 : c.Count != 3) || c[1].Kind != ZrdKind.Array || c[1].Children.Count != 3 || c[2].Kind != ZrdKind.Array || (!mw3 && c[2].Children.Count != 3))
+                    throw new InvalidDataException("Expected raw integer, XYZ and supported link slots.");
                 var p = c[1].Children; Vector3 position = new(Float(p[0]), Float(p[1]), Float(p[2]));
                 if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)) throw new InvalidDataException("Non-finite node coordinates.");
                 if (Math.Abs(position.X) > 1e12 || Math.Abs(position.Y) > 1e12 || Math.Abs(position.Z) > 1e12) throw new InvalidDataException("Coordinates outside the supported ±1e12 preview range.");
@@ -148,7 +179,7 @@ public static partial class MissionAiNetworks
             Note($"node_{n.Index:00} slot {link.Slot}: {problem} {link.TargetIndex}.", n.SourceOffset);
             return link with { Problem = problem };
         }).ToArray() }).ToArray();
-        return new(id, archive, memberIndex, member, TextField("name", member), TextField("type", ""), width, Array.AsReadOnly(resolved), notes.AsReadOnly());
+        return new(id, archive, memberIndex, member, TextField("name", member), TextField("type", ""), width, Array.AsReadOnly(resolved), notes.AsReadOnly()) { AttackStrategy = attackStrategy, Constraints = constraints.AsReadOnly() };
     }
     private static int Integer(ZrdNode node) => node.Kind == ZrdKind.Int ? unchecked((int)node.Bits) : throw new InvalidDataException("Expected an integer.");
     private static float Float(ZrdNode node) => node.Kind == ZrdKind.Float ? BitConverter.UInt32BitsToSingle(node.Bits) : throw new InvalidDataException("Expected a float.");

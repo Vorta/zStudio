@@ -52,8 +52,17 @@ public sealed partial class SceneViewport
     // Helix updates inertia here, immediately before copying the camera to the
     // render context. Preparing in CameraChanged instead observes partial poses
     // and recursively changes projection while another property is still updating.
-    private sealed class FrameViewport(Action<TimeSpan> prepare) : Viewport3DX, IViewport3DX
+    private sealed class FrameViewport : Viewport3DX, IViewport3DX
     {
+        private readonly Action<TimeSpan> prepare;
+        private readonly Action resize;
+        public FrameViewport(Action<TimeSpan> prepare, Action resize)
+        {
+            this.prepare = prepare; this.resize = resize;
+            Loaded += (_, _) => resize();
+        }
+        public override void OnApplyTemplate() { base.OnApplyTemplate(); resize(); }
+        protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo) { base.OnRenderSizeChanged(sizeInfo); resize(); }
         void IViewport3DX.Update(TimeSpan timeStamp) { base.Update(timeStamp); prepare(timeStamp); }
         public void DrainNavigation(TimeSpan timestamp) => base.Update(timestamp);
     }

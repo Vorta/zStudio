@@ -20,7 +20,7 @@ public partial class MainWindow
     private readonly HashSet<SceneTreeItem> collapsingSceneRows = [];
     private readonly ConditionalWeakTable<DocumentModel, Dictionary<string, SceneTreeState>> sceneTreeStates = new();
     private SceneViewport? TreeViewport => EmptyPreview.Visibility == Visibility.Collapsed ?
-        animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) : null;
+        motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) : null;
 
     private void RefreshSceneTree()
     {

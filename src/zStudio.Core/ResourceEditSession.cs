@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Export;
 
 namespace Recoil.Zbd.Core;
 
@@ -37,6 +38,36 @@ public sealed class ResourceEditSession
         Current = saved = new(members, document, Hash(document.Bytes));
     }
     public ResourceMember Member(Guid id) => Current.Members.SingleOrDefault(m => m.Id == id) ?? throw new InvalidDataException("The archive member no longer exists.");
+    public Task<PreparedResourceEdit> PrepareMechModelAsync(Guid member, int localModel, ImportedMesh mesh, int material, CancellationToken token = default)
+    {
+        var before = Current;
+        return Task.Run(() =>
+        {
+            var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
+            if (index < 0) throw new InvalidDataException("The mech member no longer exists.");
+            byte[] bytes = ModelReplacementWriter.ReplaceMechMember(before.Document, index, localModel, mesh, material, token);
+            list[index] = list[index] with { Data = bytes, Tree = null };
+            var after = Build(list, token);
+            if (after.Document.Assets[index].Content is not MechAssembly assembly || !after.Document.Scene!.Models[assembly.FirstModel + localModel].Vertices.SequenceEqual(mesh.Positions))
+                throw new InvalidDataException("Mech replacement failed shared-reader verification.");
+            for (int i = 0; i < list.Count; i++) if (i != index && !after.Document.Slice(after.Document.Assets[i].Offset, after.Document.Assets[i].Length).Span.SequenceEqual(before.Members[i].Data.Span))
+                throw new InvalidDataException("Mech replacement changed an unrelated archive member.");
+            return new PreparedResourceEdit(before, after);
+        }, token);
+    }
+    public Task<PreparedResourceEdit> PrepareMotionAsync(Guid member, string action, int part = -1, int frame = -1, MotionFrame? value = null, float? loopTime = null, CancellationToken token = default)
+    {
+        var before = Current;
+        return Task.Run(() =>
+        {
+            var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
+            if (index < 0) throw new InvalidDataException("The motion member no longer exists.");
+            var clip = MotionClip.Read(list[index].Data, token).Edit(action, part, frame, value, loopTime);
+            byte[] bytes = clip.Write(token); _ = MotionClip.Read(bytes, token);
+            list[index] = list[index] with { Data = bytes, Tree = null };
+            return new PreparedResourceEdit(before, Build(list, token));
+        }, token);
+    }
     public ZrdNode Tree(ResourceMember member, CancellationToken token = default) => member.Tree ?? trees.GetOrAdd((member.Id, member.Data), _ => ZrdDecoder.Read(member.Data, token));
     public AssetRecord? OriginalAsset(ResourceMember member) => member.SourceIndex is int i ? source.Assets.Single(a => a.Index == i) : null;
     public async Task<PreparedResourceEdit> PrepareArchiveAsync(string action, Guid member, string name = "", string? path = null, int position = -1, CancellationToken token = default)

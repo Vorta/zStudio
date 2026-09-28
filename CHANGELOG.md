@@ -2,6 +2,17 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.7.0 — 2026-09-29
+
+- Add MechWarrior 3 base-game support through the shared format library: version-27 worlds and mech hierarchies, version-4 motion clips, and version-39 compiled animations. Preserve version-specific layouts, record identities and opaque data, with byte-exact animation/motion no-op writes.
+- Preview authored MW3 mission layouts with an explicit mission reader picker, independent actor instances, AI networks and mission-scoped coordinate editing. Retain camera, playhead, draft guards and edit history while switching missions. Keep non-spatial AI edge constraints as ordered metadata.
+- Export mech assemblies as assembled and local OBJ/MTL/PNG bundles, including vertex colors and member/local mesh identities. Replace explicit member-local meshes or supported version-27 world models through shared undo and verified saves, preserving unrelated members and hierarchy bounds.
+- Play and seek motion clips against explicit mech assemblies; edit loop timing, frame translations and WXYZ quaternions through pinned Properties. Insert/delete frames across all tracks with shared archive history. Retain the stored pose for ambiguous motion bindings, including duplicate tracks.
+- Edit version-39 animation sequences, events and keyframes with a versioned catalog, retaining spline bytes and water/lava sequence references. Document approximate preview behavior and reject cross-game world bindings; mission scripts, combat, particles, spline interpolation and gait/IK are not simulated.
+- Show authored attack strategy in AI node inspection, Properties and copy actions. Keep the card field among its scrolling details immediately above Status. Share a fixed network color palette between nodes, connections, the tooltip and MCP: absent attack_strategy is red, while empty, unrecognized and invalid values remain grey. Selected markers stay white.
+- Add six typed MCP tools for mission selection, motion inspection/editing/playback and mech inspection/replacement, bringing windowless discovery to 79 tools. Preserve shared GUI identities, revision/draft checks, asynchronous operations and verified saves.
+- Multiply authored vertex RGB by textures while preserving alpha depth behavior. Correct initial and resized render-buffer dimensions under a busy render queue, and keep retained-world rendering from starving preview replacement.
+
 ## 0.6.3 — 2026-09-28
 
 - Resize the top-right inspection panel from its bottom grip or keyboard, with a saved shared height, a normal minimum of 216 DIP and a maximum of 80% of the viewport. Keep fixed readout/action headers and scrollable details; hide Rotate for placements without rotation. Share height control/readback through MCP, preserving transform drafts and newer layout choices when an older resize gesture ends.

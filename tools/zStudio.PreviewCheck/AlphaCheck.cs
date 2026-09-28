@@ -28,6 +28,7 @@ internal static class AlphaCheck
             try
             {
                 window.Content = preview;
+                window.UpdateLayout(); await Task.Delay(400);
                 var scene = new GameScene();
                 scene.Materials.Add(new JsonObject { ["alpha"] = 255 });
                 scene.Models.Add(new(0, [new(-1,-1,0), new(1,-1,0), new(1,1,0), new(-1,1,0)], [], [], [new(0, 4, [0,1,2,3], [], [Vector2.Zero, Vector2.UnitX, Vector2.One, Vector2.UnitY], [])], []));
@@ -45,12 +46,23 @@ internal static class AlphaCheck
                 group.EnableSorting = false;
                 front.DiffuseMap = new TextureModel(new byte[] { 255,0,0,0 }, SharpDX.DXGI.Format.R8G8B8A8_UNorm,1,1);
                 await Task.Delay(200); var clearPixel = Pixel(preview.RenderImage(128,128));
+                if (viewport.RenderException != null) throw new InvalidOperationException("Renderer failed.", viewport.RenderException);
                 if (clearPixel[0] < 140 || clearPixel[2] > 20) throw new InvalidDataException($"Alpha-zero texels mask the surface behind: BGR {string.Join(',',clearPixel)}.");
                 group.EnableSorting = true;
                 front.DiffuseMap = new TextureModel(new byte[] { 255,0,0,128 }, SharpDX.DXGI.Format.R8G8B8A8_UNorm,1,1);
                 await Task.Delay(200); var halfPixel = Pixel(preview.RenderImage(128,128));
                 if (Math.Abs(halfPixel[2]-134)>3 || Math.Abs(halfPixel[1]-8)>3 || Math.Abs(halfPixel[0]-73)>3) throw new InvalidDataException($"Half-alpha composition incorrect: BGR {string.Join(',',halfPixel)}.");
                 Console.WriteLine($"PASS: alpha zero preserves rear geometry; half-alpha red over half-alpha blue renders RGB ({halfPixel[2]},{halfPixel[1]},{halfPixel[0]}).");
+                var model = scene.Models[0];
+                scene.Models[0] = model with { Polygons = [model.Polygons[0] with { Colors = Enumerable.Repeat(new Vector3(127.5f), 4).ToArray() }] };
+                await preview.ShowAnimationAsync(context, frame with { Nodes = [frame.Nodes[0]] }, resolver, false, CancellationToken.None);
+                camera = (HCamera)viewport.Camera!; camera.Position = new(0,0,3); camera.LookDirection = new(0,0,-3); camera.UpDirection = new(0,1,0);
+                var tinted = viewport.Items.OfType<SortingGroupModel3D>().Single().Children.OfType<MeshGeometryModel3D>().Single();
+                ((DiffuseMaterial)tinted.Material!).DiffuseMap = new TextureModel(new byte[] { 255,128,64,255 }, SharpDX.DXGI.Format.R8G8B8A8_UNorm,1,1);
+                await Task.Delay(200); var tintPixel = Pixel(preview.RenderImage(128,128));
+                if (Math.Abs(tintPixel[2]-128)>3 || Math.Abs(tintPixel[1]-64)>3 || Math.Abs(tintPixel[0]-32)>3)
+                    throw new InvalidDataException($"Vertex colors did not modulate the texture: BGR {string.Join(',',tintPixel)}.");
+                Console.WriteLine("PASS: authored vertex tint multiplies diffuse texture RGB without replacing the texture.");
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
             finally { window.Close(); app.Shutdown(exit); }

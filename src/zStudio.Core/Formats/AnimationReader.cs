@@ -11,6 +11,18 @@ internal sealed class AnimationReader : IZbdFormatReader
     {
         doc.Animations = AnimationPackage.Read(doc.Bytes, token);
         doc.Diagnostics.AddRange(doc.Animations.Diagnostics);
+        if (doc.Animations.Version == 39)
+        {
+            BinaryCursor header = new(doc.Bytes); header.Skip(8); int stampCount = header.Count(header.U32(), 84); JsonArray mwStamps = [];
+            for (int i = 0; i < stampCount; i++) { token.ThrowIfCancellationRequested(); mwStamps.Add(FieldLayouts.Read(header, 84, "ANIM_STAMP_LAYOUT")); }
+            doc.Metadata["stamps"] = mwStamps; doc.Metadata["globals_raw"] = Convert.ToHexStringLower(header.Take(68).Span);
+            foreach (var e in doc.Animations.Entries)
+            {
+                var a = doc.Add(AssetKind.Animation, e.Index, string.IsNullOrWhiteSpace(e.Name) ? $"Animation {e.Index}" : e.Name, e.SourceOffset, e.SourceLength, e.ToJson(token), e);
+                a.Summary = $"{e.Sequences.Count + 1} sequences · {e.References[1].Count} node references";
+            }
+            doc.Metadata["game"] = "MechWarrior 3"; return;
+        }
         BinaryCursor c = new(doc.Bytes); c.Skip(8); int stamps = c.Count(c.U32(), 84); JsonArray stampList = [];
         for (int i = 0; i < stamps; i++) stampList.Add(FieldLayouts.Read(c, 84, "ANIM_STAMP_LAYOUT"));
         doc.Metadata["stamps"] = stampList;

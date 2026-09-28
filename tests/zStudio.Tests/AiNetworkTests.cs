@@ -17,6 +17,77 @@ public sealed class AiNetworkTests
     private static ZbdDocument Archive(params ZrdNode[] roots) => FormatRegistry.Default.OpenBytes("ai-test.zbd",
         ResourceEditingTests.Archive(roots.Select(root => ("net_01.zrd", ZrdWriter.Write(root, TestContext.Current.CancellationToken))).ToArray()), token: TestContext.Current.CancellationToken);
     private static AiNetworkSnapshot Read(ZbdDocument doc) => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), TestContext.Current.CancellationToken);
+    [Fact]
+    public void Version106EdgeConstraintsRetainAllOrderedAttributesWithoutInventingPositions()
+    {
+        var network = Decode(A(S("version"), A(I(106)), S("node_00"), Node(1), S("node_01"), Node(0),
+            S("node_46"), A(A(I(0), I(1)), S("canleave"), A(I(1), I(1)), S("scan_time"), A(I(2), I(3)))));
+        Assert.Equal(2, network.Nodes.Count); Assert.Empty(network.Diagnostics);
+        Assert.Equal(["canleave", "scan_time"], network.Constraints.Select(c => c.Kind)); Assert.Equal([0, 1], network.Constraints.Select(c => c.AttributeIndex));
+        Assert.All(network.Constraints, c => { Assert.Equal(46, c.Index); Assert.Equal(0, c.FromNode); Assert.Equal(1, c.ToNode); });
+        var malformed = Decode(A(S("version"), A(I(106)), S("node_46"), A(A(I(0), I(1)), S("canleave"), A(I(1)), I(9), A())));
+        Assert.Empty(malformed.Constraints); Assert.Empty(malformed.Nodes); Assert.Single(malformed.Diagnostics);
+    }
+
+    [Theory]
+    [InlineData("Head-on", AiAttackStrategyKind.HEA)]
+    [InlineData("cIrClE", AiAttackStrategyKind.CIR)]
+    [InlineData("BAC", AiAttackStrategyKind.BAC)]
+    [InlineData("follow", AiAttackStrategyKind.FOL)]
+    [InlineData("zigzag", AiAttackStrategyKind.ZIG)]
+    [InlineData("SIT", AiAttackStrategyKind.SIT)]
+    [InlineData("", AiAttackStrategyKind.Unknown)]
+    [InlineData("new-strategy", AiAttackStrategyKind.Unknown)]
+    [InlineData(" HEA", AiAttackStrategyKind.Unknown)]
+    [InlineData("HE", AiAttackStrategyKind.Unknown)]
+    public void AttackStrategyPreservesAuthoredTextAndClassifiesOnlyVerifiedPrefixes(string text, AiAttackStrategyKind kind)
+    {
+        var network = Decode(A(S("attack_strategy"), A(S(text)), S("node_00"), Node()));
+        Assert.Equal(text, network.AttackStrategy.Value); Assert.Equal(kind, network.AttackStrategy.Kind);
+        Assert.Equal(AiAttackStrategyState.Stored, network.AttackStrategy.State); Assert.Empty(network.Diagnostics);
+        var info = new AiNetworkSnapshot("snapshot", [network]).Describe(network, network.Nodes[0])["attack_strategy"]!;
+        Assert.Equal(text, info["value"]!.GetValue<string>()); Assert.Equal(text.Length, info["characters"]!.GetValue<int>());
+        Assert.False(info["truncated"]!.GetValue<bool>());
+    }
+    [Fact]
+    public void MissingInvalidAndDuplicateStrategiesRetainValidGraphAndBoundInspection()
+    {
+        var missing = Decode(A(S("node_00"), Node()));
+        Assert.Equal(AiAttackStrategyState.Missing, missing.AttackStrategy.State); Assert.Empty(missing.Diagnostics);
+        foreach (var value in new[] { I(4), S("HEA"), A(), A(I(1)), A(S("HEA"), S("CIR")) })
+        {
+            var invalid = Decode(A(S("attack_strategy"), value, S("node_00"), Node(0)));
+            Assert.Equal(AiAttackStrategyState.Invalid, invalid.AttackStrategy.State);
+            Assert.Single(invalid.Nodes); Assert.Equal(invalid.Nodes[0].Id, invalid.Nodes[0].Links[0].Target);
+            Assert.Single(invalid.Diagnostics); Assert.Contains("attack_strategy", invalid.Diagnostics[0].Message);
+        }
+        var duplicate = Decode(A(S("attack_strategy"), A(S("HEA")), S("attack_strategy"), I(3), S("node_00"), Node()));
+        Assert.Single(duplicate.Nodes); Assert.Equal(AiAttackStrategyState.Invalid, duplicate.AttackStrategy.State);
+        Assert.Contains("Ambiguous", Assert.Single(duplicate.Diagnostics).Message);
+        string longText = "CIR" + new string('x', 100_000);
+        var large = Decode(A(S("attack_strategy"), A(S(longText)), S("node_00"), Node()));
+        var info = large.AttackStrategy.Describe();
+        Assert.Equal(longText, large.AttackStrategy.Value); Assert.Equal(AiAttackStrategyKind.CIR, large.AttackStrategy.Kind);
+        Assert.Equal(longText.Length, info["characters"]!.GetValue<int>()); Assert.True(info["truncated"]!.GetValue<bool>());
+        Assert.True(info["value"]!.GetValue<string>().Length < 4200);
+    }
+    [Fact]
+    public async Task StrategyEditsAndUndoPublishNewSnapshotsWithoutTouchingSources()
+    {
+        var doc = Archive(A(S("attack_strategy"), A(S("Head-on")), S("node_00"), Node()));
+        byte[] original = doc.Bytes.ToArray(); var before = Read(doc); var edits = new ResourceEditSession(doc);
+        var member = edits.Current.Members[0]; var node = edits.Tree(member, TestContext.Current.CancellationToken).Children[1].Children[0];
+        edits.Accept(await edits.PrepareZrdAsync(member.Id, node.Id, "set", value: "\"circle\"", token: TestContext.Current.CancellationToken));
+        using AssetResolver resolver = new(Path.GetTempPath()); Guid owner = Guid.NewGuid();
+        async Task<AiNetworkSnapshot> Current()
+        { resolver.SetWorkspaceSnapshots(owner, [edits.Current.Document]); return Read(await resolver.OpenCachedAsync(doc.Path, TestContext.Current.CancellationToken)); }
+        var changed = await Current();
+        Assert.NotEqual(before.Id, changed.Id); Assert.Equal(AiAttackStrategyKind.CIR, changed.Networks[0].AttackStrategy.Kind);
+        Assert.Equal(before.Networks[0].Nodes[0].Id, changed.Networks[0].Nodes[0].Id);
+        edits.UndoRedo(false); Assert.Equal(before.Id, (await Current()).Id);
+        edits.UndoRedo(true); Assert.Equal(changed.Id, (await Current()).Id);
+        Assert.Equal(original, doc.Bytes.ToArray());
+    }
 
     [Fact]
     public void DirectedSlotsRetainOrderAndAllNegativeSentinelsWithoutInventingReverseEdges()
@@ -48,7 +119,7 @@ public sealed class AiNetworkTests
         Assert.Single(graph.Nodes); Assert.Equal(2, graph.Nodes[0].Index);
         Assert.Contains(graph.Diagnostics, d => d.Message.Contains("Non-finite"));
         Assert.All(graph.Nodes[0].Links.Take(2), l => Assert.Equal("Missing target", l.Problem));
-        Assert.Throws<InvalidDataException>(() => Decode(A(S("version"), A(I(106)), S("node_00"), Node())));
+        Assert.Throws<InvalidDataException>(() => Decode(A(S("version"), A(I(107)), S("node_00"), Node())));
         Assert.Throws<InvalidDataException>(() => Decode(A(S("version"), A(I(105)), S("version"), A(I(105)))));
         Assert.Throws<InvalidDataException>(() => Decode(A(S("node_00"))));
         Assert.Throws<InvalidDataException>(() => Decode(I(1)));

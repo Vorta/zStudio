@@ -13,10 +13,11 @@ internal static class AnimationFieldPresentation
         19 or >= 22 and <= 34 => "Launch and control flow",
         _ => "Game callbacks and markers"
     };
-    public static string Group(byte type, AnimationField field)
+    public static string Group(byte type, AnimationField field, uint version = 28)
     {
         int o = field.Offset;
         if (field.ReadOnly) return "Serialized state / provenance";
+        if (version == 39 && type == 10 && o >= 248) return o == 328 ? "Completion" : o < 288 ? "Water impact actions · stored" : "Lava impact actions · stored";
         if (type == 10) return o switch
         {
             12 or 16 => "Target and modes", >= 32 and <= 60 => "Launch ranges",
@@ -27,10 +28,10 @@ internal static class AnimationFieldPresentation
         if (type == 11) return o switch { 12 or 16 => "Target and channels", >= 20 and <= 28 => "Morph", >= 32 and <= 56 => "Position", >= 68 and <= 92 => "Rotation · engine radians", >= 104 and <= 128 => "Scale", 140 => "Duration", _ => "Additional stored fields" };
         if (field.ReferenceTable >= 0) return "Targets and references";
         if (field.Kind == AnimationFieldKind.Flags) return "Modes and fields";
-        if (AnimationCatalog.Find(type)?.DurationOffset == o) return "Duration";
+        if (AnimationCatalog.Find(type, version)?.DurationOffset == o) return "Duration";
         return type switch
         {
-            1 or 2 or 3 => "Sound / effect placement", 4 => o < 72 ? "Light configuration" : o < 96 ? "Placement and rotation" : "Ranges and color",
+            1 or 2 or 3 => "Sound / effect placement", 4 => o < (version == 39 ? 80 : 72) ? "Light configuration" : o < (version == 39 ? 104 : 96) ? "Placement and rotation" : "Ranges and color",
             5 => o < 48 ? "Light" : o < 72 ? "Ranges · start and rate" : "Color · start and rate",
             7 => "Position · game units", 8 => "Scale", 9 => "Rotation · engine radians",
             13 or 14 => "Inherited alpha override", 18 => o < 48 ? "Endpoints" : "Fractions and length",

@@ -110,7 +110,7 @@
         "zstudio_ai_selection",
         "zstudio_camera"
       ],
-      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Marker selection requires unlocked Whole world editing; locked selection is rejected before retaining a hidden marker/card. Explicit read-only Properties remains available while locked. Hover/selection labels derive from the same node data. Malformed node value types are diagnosed individually while valid neighbors remain visible; malformed duplicate indices remain ambiguous. Frame selected uses camera; normal scene framing excludes the overlay."
+      "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Nodes/arrows use a fixed attack-strategy palette shared with the AI tooltip; the selected marker is white. Network/node/selection/Properties results expose attack_strategy value/status/key/characters/truncated/color, with missing strategies red (#FF6666) and empty/unknown/invalid strategies gray (#A0A0A0). Malformed or duplicate strategy fields retain valid graph geometry and produce diagnostics. Marker selection requires unlocked Whole world editing; locked selection is rejected before retaining a hidden marker/card. Explicit read-only Properties remains available while locked. Hover/selection labels derive from the same node data. Malformed node value types are diagnosed individually while valid neighbors remain visible; malformed duplicate indices remain ambiguous. Frame selected uses camera; normal scene framing excludes the overlay."
     },
     {
       "gui": "SceneViewport.Inspection:Pointer",
@@ -118,11 +118,14 @@
         "zstudio_scene_inspect",
         "zstudio_scene_card"
       ],
-      "note": "Shared triangle/instance picking supplies independent hover and selection in the fixed top-right panel. The permanent hover readout clears to placeholders over empty space; scene_card select expands details below it and clear collapses details only. Explicit point queries do not move or capture the physical pointer."
+      "note": "Shared triangle/instance picking supplies independent hover and selection in the fixed top-right panel. AI marker cards display read-only Attack strategy among the scrolling details below This AI network node, immediately above Status, and include it once in field/Copy all actions; scene_inspect returns structured attackStrategy/hoverAttackStrategy metadata including stored value and network color. The permanent hover readout clears to placeholders over empty space; scene_card select expands details below it and clear collapses details only. Explicit point queries do not move or capture the physical pointer."
     },
     {
       "gui": "SceneInspectionCard:Resize",
-      "tools": ["zstudio_workspace_view", "zstudio_scene_inspect"],
+      "tools": [
+        "zstudio_workspace_view",
+        "zstudio_scene_inspect"
+      ],
       "note": "The bottom grip and Up/Down/Home/End set the shared inspectionPanelHeight preference without accepting drafts. Total expanded height defaults to 432 DIP, has a normal minimum of 216 DIP and a maximum of 80% of the viewport. Short viewports lower the effective minimum; automatic clamping never overwrites the saved preference. scene_inspect.panel returns preferred/effective heights, current limits and expanded state. Reset layout restores the default; collapsed details retain the preferred expanded height. Explicit height/reset requests supersede active resizing so stale drag updates or cancellation cannot overwrite the newer preference."
     },
     {
@@ -138,8 +141,40 @@
     },
     {
       "gui": "DocumentSceneTree:Hierarchy",
-      "tools": ["zstudio_scene_tree", "zstudio_scene_properties", "zstudio_properties_open"],
+      "tools": [
+        "zstudio_scene_tree",
+        "zstudio_scene_properties",
+        "zstudio_properties_open"
+      ],
       "note": "Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Preview hierarchy is stable during animation; stored nodes are the fallback. Expand/collapse/reveal only change presentation."
+    },
+    {
+      "gui": "MotionEditor:Controls",
+      "tools": [
+        "zstudio_motion_preview",
+        "zstudio_camera",
+        "zstudio_scene_inspect",
+        "zstudio_capture"
+      ],
+      "note": "Dynamic assembly and LOD pickers, transport, seeker and frame button share the motion sampler and visible viewport. No physical mouse capture."
+    },
+    {
+      "gui": "ResourcePropertiesEditor:MotionFields",
+      "tools": [
+        "zstudio_motion_records",
+        "zstudio_motion_edit",
+        "zstudio_resource_properties"
+      ],
+      "note": "Generated timing/part/frame/translation/quaternion fields and insert/delete actions share archive identities, draft guards and undo. All tracks change together on insertion/deletion."
+    },
+    {
+      "gui": "MainWindow.MechModels:ReplaceMechModelDialogAsync",
+      "tools": [
+        "zstudio_mech_models",
+        "zstudio_mech_model_replace",
+        "zstudio_texture_import"
+      ],
+      "note": "Explicit member-local mesh and shared material picker plus OBJ selection use the same resource transaction as MCP. Texture replacement uses the existing texture editor."
     }
   ],
   "handlers": [
@@ -892,7 +927,9 @@
     {
       "gui": "MainWindow.xaml:ScenePropertiesClick",
       "tools": [
-        "zstudio_scene_tree", "zstudio_scene_properties", "zstudio_properties_open"
+        "zstudio_scene_tree",
+        "zstudio_scene_properties",
+        "zstudio_properties_open"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -1004,7 +1041,9 @@
     {
       "gui": "MainWindow.xaml:ReplaceModelsClick",
       "tools": [
-        "zstudio_model_replace"
+        "zstudio_model_replace",
+        "zstudio_mech_models",
+        "zstudio_mech_model_replace"
       ],
       "note": "Validate explicit source-fingerprinted OBJ/PNG mappings as one shared document undo step, with native model and texture save support. Shared ownership claims all prepared source/current/destination paths before acceptance or save. Conflicts preserve revision/history, claims survive undo/save until close, and oversized model/texture outputs fail before allocation. Assets, Document scene and pinned asset Properties refresh accepted records by identity; Undo/Redo removes/restores appended records without retargeting Properties."
     },
@@ -1015,6 +1054,20 @@
         "zstudio_preview_state"
       ],
       "note": "Whole world AI visibility, network filter and through-geometry drawing share scene options and preview state. AI controls form one native overflow group and coexist with surface highlights."
+    },
+    {
+      "gui": "MainWindow.xaml:WorldMissionChanged",
+      "tools": [
+        "zstudio_missions"
+      ],
+      "note": "Selects one MW3 reader in the shared visible workspace; keeps coordinate history, camera and source identity."
+    },
+    {
+      "gui": "AnimationEditor.xaml:MissionChanged",
+      "tools": [
+        "zstudio_missions"
+      ],
+      "note": "Selects an authored MW3 mission while retaining animation playhead, custom range, camera and playback intent."
     }
   ]
 }

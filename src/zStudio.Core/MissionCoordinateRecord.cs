@@ -9,6 +9,7 @@ public sealed record MissionCoordinateRecord(MissionPickupSource Source, string 
     IReadOnlyList<MissionDifficulty> Difficulties)
 {
     public int? TemplateSourceNode { get; init; }
+    public bool MissionSpecific { get; init; }
 }
 
 public sealed partial class PickupPlacementEditSession
@@ -16,7 +17,7 @@ public sealed partial class PickupPlacementEditSession
     private static bool IsCoordinateResource(string name) => MissionAiNetworks.IsCandidate(name) ||
         name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd";
 
-    public void AddCoordinates(IEnumerable<(ZbdDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default)
+    public void AddCoordinates(IEnumerable<(ZbdDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default, bool mw3 = false)
     {
         if (CanUndo || CanRedo || IsDirty) throw new InvalidOperationException("Coordinate sources must be loaded before editing.");
         var inputs = resources.Where(r => IsCoordinateResource(r.Asset.Name)).ToArray();
@@ -47,7 +48,7 @@ public sealed partial class PickupPlacementEditSession
                     try
                     {
                         string name = fields[i].Text("value");
-                        if (fields[i].Text("type") != "string" || fields[i + 1]?["children"] is not JsonArray { Count: 3 } row) continue;
+                        if (fields[i].Text("type") != "string" || fields[i + 1]?["children"] is not JsonArray { Count: >= 3 } row || !mw3 && !ai && row.Count != 3) continue;
                         long offset = Convert.ToInt64(fields[i + 1].Text("offset")[2..], 16);
                         if (ai && graph!.Nodes.All(n => n.SourceOffset != offset)) continue;
                         var (position, offsets) = ReadVector(row[1], doc, asset);
@@ -56,7 +57,7 @@ public sealed partial class PickupPlacementEditSession
                         var difficulties = ai ? Array.Empty<MissionDifficulty>() : effective.Where(p => p.Value.Asset?.Index == asset.Index &&
                             p.Value.Archive.Path.Equals(doc.Path, StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray();
                         var record = new MissionCoordinateRecord(source, ai ? "ai" : "tank", name, position, rotation,
-                            ai ? "" : MissionSceneLoader.VehicleTemplateName(name), offset, difficulties);
+                            ai ? "" : MissionSceneLoader.VehicleTemplateName(name), offset, difficulties) { MissionSpecific = mw3 };
                         if (entries.ContainsKey(source)) continue;
                         archives.TryAdd(archive, new(doc));
                         // The common coordinate store uses the existing archive-key identity.
@@ -75,6 +76,7 @@ public sealed partial class PickupPlacementEditSession
     private PickupPlacementScope CoordinateScope(MissionCoordinateRecord selected)
     {
         if (selected.Kind == "ai") return new([selected.Source], "This AI network node");
+        if (selected.MissionSpecific) return new([selected.Source], "This authored mission actor only");
         if (selected.Difficulties.Count == 0) return new([selected.Source], "Read-only: shadowed tank resource");
         if (selected.TemplateSourceNode == null) return new([selected.Source], "Read-only: missing or ambiguous tank template");
         var candidates = otherCoordinates.Values.Where(r => r.Kind == "tank" && r.Template == selected.Template && r.TemplateSourceNode == selected.TemplateSourceNode &&

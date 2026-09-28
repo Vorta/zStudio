@@ -6,7 +6,7 @@ using Recoil.Zbd.Core.Formats;
 namespace Recoil.Zbd.Desktop;
 
 /// <summary>Properties stay attached to a member/node identity across reordering and undo.</summary>
-public sealed class ResourcePropertiesEditor : FieldEditor, IDisposable
+public sealed partial class ResourcePropertiesEditor : FieldEditor, IDisposable
 {
     private const int MaximumFieldCharacters = 16384;
     private readonly DocumentModel document;
@@ -35,9 +35,11 @@ public sealed class ResourcePropertiesEditor : FieldEditor, IDisposable
             return new() { ["member"] = memberId.ToString(), ["node"] = nodeId?.ToString(), ["name"] = Member?.Name, ["kind"] = node?.Kind.ToString(), ["value"] = preview?.Value, ["value_truncated"] = preview?.Truncated ?? false, ["bytes"] = Member?.Data.Length, ["save_destination"] = document.ResourceEdits!.TargetPath };
         }
     }
-    public ResourcePropertiesEditor(DocumentModel document, Guid member, Guid? node, Func<string, string, Task> edit)
+    public ResourcePropertiesEditor(DocumentModel document, Guid member, Guid? node, Func<string, string, Task> edit,
+        Func<string, int, int, MotionFrame?, float?, Task>? motionEdit = null, int part = 0, int frame = 0)
     {
         this.document = document; memberId = member; nodeId = node; this.edit = edit;
+        this.motionEdit = motionEdit; motionPart = part; motionFrame = frame;
         document.ResourceEditsChanged += RefreshProperties; RefreshProperties();
     }
     protected override void RefreshProperties()
@@ -46,6 +48,11 @@ public sealed class ResourcePropertiesEditor : FieldEditor, IDisposable
         var member = Member; var node = Node;
         var preview = node?.PreviewValue(MaximumFieldCharacters);
         string next = member == null ? "missing-member" : nodeId != null && node == null ? "missing-node" : node?.Kind.ToString() ?? "member";
+        if (Motion is { } motion)
+        {
+            motionPart = Math.Clamp(motionPart, 0, motion.Parts.Count - 1); motionFrame = Math.Clamp(motionFrame, 0, motion.FrameCount - 1);
+            next += $"/motion/{motionPart}/{motionFrame}/{motion.Parts.Count}/{motion.FrameCount}";
+        }
         if (preview?.Truncated == true) next += "-large";
         if (form != next && !HasPendingDrafts)
         {
@@ -56,7 +63,10 @@ public sealed class ResourcePropertiesEditor : FieldEditor, IDisposable
             {
                 Label(panel, "Enter to apply · Escape to restore. Changes remain unsaved until Save.");
                 if (nodeId == null)
+                {
                     Input(panel, "Name", member.Name, _ => { }, !document.ResourceEdits!.IsArchive, getter: () => Member?.Name ?? "", asyncCommit: value => edit("rename", value));
+                    if (Motion != null) BuildMotionFields(panel);
+                }
                 else
                 {
                     Input(panel, "Type", node!.Kind.ToString(), _ => { }, true);

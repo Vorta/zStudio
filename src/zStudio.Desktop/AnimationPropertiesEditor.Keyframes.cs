@@ -46,9 +46,7 @@ public sealed partial class AnimationPropertiesEditor
             Input(contents, "End (s)", segment.End.ToEditorText(), text => EditKeyframes("Edit keyframe end", list => list[index].End = float.Parse(text, CultureInfo.InvariantCulture)),getter: () => CurrentSegment(index).End.ToEditorText());
             Choice(contents, "Channels", Enumerable.Range(1,7).Select(f => new ChoiceValue(f, string.Join(" + ", new[] { (1,"Position"),(2,"Rotation"),(4,"Scale") }.Where(c => (f & c.Item1) != 0).Select(c => c.Item2)))), segment.Flags & 7, flags => EditKeyframes("Change keyframe channels", list =>
             {
-                var old = list[index]; var next = AnimationKeyframe.Create(flags); next.SetInt(0, (old.Flags & ~7) | flags); next.Start = old.Start; next.End = old.End;
-                for (int c = 0; c < 3; c++) if (old.ChannelOffset(c) is int from && from >= 0 && next.ChannelOffset(c) is int to && to >= 0) old.Bytes.AsSpan(from,28).CopyTo(next.Bytes.AsSpan(to));
-                list[index] = next;
+                list[index] = list[index].WithChannels(flags, Event!.Version);
             }),getter: () => CurrentSegment(index).Flags & 7,fullWidth:true);
             for (int channel = 0; channel < 3; channel++)
             {

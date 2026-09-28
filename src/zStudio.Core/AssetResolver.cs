@@ -8,6 +8,15 @@ public sealed class AssetResolver(string root) : IDisposable
 {
     public ResourceEditOwnership EditOwnership { get; } = new();
     public string Root { get; } = Path.GetFullPath(root);
+    private readonly Dictionary<string, string> missions = new(StringComparer.OrdinalIgnoreCase);
+    public string? SelectedMission(string worldPath) { lock (missions) return missions.GetValueOrDefault(Path.GetDirectoryName(worldPath)!); }
+    public void SelectMission(string worldPath, string archive)
+    {
+        string directory = Path.GetDirectoryName(Path.GetFullPath(worldPath))!;
+        if (!Path.GetDirectoryName(Path.GetFullPath(archive))!.Equals(directory, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("A mission reader must belong to the selected map directory.");
+        lock (missions) missions[directory] = Path.GetFullPath(archive);
+    }
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, (ZbdDocument Document, long Used)> cache = new(StringComparer.OrdinalIgnoreCase);
     private long clock;
@@ -44,7 +53,7 @@ public sealed class AssetResolver(string root) : IDisposable
         string directory = Path.GetDirectoryName(context)!;
         var paths = ResourceDirectories(context).SelectMany(Directory.EnumerateFiles);
         return paths.Where(p => Path.GetExtension(p).Equals(".zbd", StringComparison.OrdinalIgnoreCase))
-            .Where(p => Path.GetDirectoryName(p)!.Equals(directory, StringComparison.OrdinalIgnoreCase) || Path.GetFileName(p).Contains("image", StringComparison.OrdinalIgnoreCase))
+            .Where(p => Path.GetDirectoryName(p)!.Equals(directory, StringComparison.OrdinalIgnoreCase) || Path.GetFileName(p).Contains("image", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(p).Contains("mechtex", StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase).Where(p => FormatRegistry.Probe(p).Family == FormatFamily.TexturePack)
             .OrderByDescending(p => PackPriority(Path.GetFileNameWithoutExtension(p))).ThenBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
     }

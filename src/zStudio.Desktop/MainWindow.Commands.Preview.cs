@@ -23,7 +23,7 @@ public partial class MainWindow
     {
         RequirePreview(a);
         if (EmptyPreview.Visibility == Visibility.Visible) throw new StudioCommandException("not_ready", EmptyPreview.Text);
-        return animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("unsupported", "No 3D viewport is active.");
+        return motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("unsupported", "No 3D viewport is active.");
     }
     private AnimationEditor TargetAnimation(JsonObject a)
     { RequirePreview(a); return animation ?? throw new StudioCommandException("unsupported", "Select an animation first."); }
@@ -56,11 +56,13 @@ public partial class MainWindow
         });
         Register(r, "preview_state", "Read active preview options, camera and playback state.", false, [PreviewParameter], a =>
         {
-            RequirePreview(a); return Result(new { preview = previewId, asset = shownAsset?.Id, animation = animation?.PreviewState(),
-                camera = animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? scene?.CaptureView() : null),
-                framingSelection = animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
+            RequirePreview(a); return Result(new { preview = previewId, asset = shownAsset?.Id, animation = animation?.PreviewState(), motion = motion?.State,
+                camera = motion?.Viewport.CaptureView() ?? animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? scene?.CaptureView() : null),
+                framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 ai = AiPreviewState(),
-                lod = animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = ViewModel.Difficulty.ToString(), texturePacks = animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>().ToArray() : [],
+                lod = motion?.Lod ?? animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = MissionWorldPath != null || motion != null ? null : ViewModel.Difficulty.ToString(),
+                mission = animation?.MissionArchive ?? scene?.Mission?.Layout.MissionArchive,
+                texturePacks = animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>().ToArray() : [],
                 textured = animation != null ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
                 wireframe = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
                 bounds = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? BoundsEnabled.IsChecked : null,
@@ -78,7 +80,7 @@ public partial class MainWindow
         Register(r, "scene_selection", "Select/inspect a scene node. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
             RequireNoDrafts(); var viewport = TargetViewport(a); string action = Text(a,"action");
-            if (animation != null && action is "isolate" or "show_all")
+            if ((animation != null || motion != null) && action is "isolate" or "show_all")
                 throw new StudioCommandException("unsupported", "Isolation is available only in model and Whole world previews. Animation scenes remain fully visible.");
             if (viewport.IsPickupDragging || viewport.IsFlyActive)
                 throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing scene selection.");
@@ -110,7 +112,7 @@ public partial class MainWindow
         });
         RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
-            RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null) throw new StudioCommandException("unsupported","Use animation_options.");
+            RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             TargetViewport(a); var doc = shownDocument!; var asset = shownAsset!;
             var changes = (JsonObject)a["changes"]!;
             bool changesAi = changes.Any(p => p.Key is "aiNodes" or "aiThroughGeometry" or "aiNetwork" or "aiSnapshot");
@@ -240,7 +242,7 @@ public partial class MainWindow
             if (target == "preview") RequirePreview(a);
             if(target=="window" || target=="properties") image=StudioCapture.Window(target=="window" ? this : propertiesWindow ?? throw new StudioCommandException("not_ready","Properties is closed."));
             else if(decoded!=null) image=MakeBitmap(decoded,ChannelCombo.SelectedIndex);
-            else { int w=Int(a,"width",1280),h=Int(a,"height",720); if(w is <1 or >4096 || h is <1 or >4096) throw new StudioCommandException("invalid_argument","Capture dimensions must be 1–4096."); image=(animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("not_ready","No image/3D preview is loaded. Use target=window for other viewers.")).RenderImage(w,h,preserveAspect:true); }
+            else { int w=Int(a,"width",1280),h=Int(a,"height",720); if(w is <1 or >4096 || h is <1 or >4096) throw new StudioCommandException("invalid_argument","Capture dimensions must be 1–4096."); image=(motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("not_ready","No image/3D preview is loaded. Use target=window for other viewers.")).RenderImage(w,h,preserveAspect:true); }
             using MemoryStream bytes=new(); PngBitmapEncoder encoder=new(); encoder.Frames.Add(BitmapFrame.Create(image)); encoder.Save(bytes);
             return new(Result(new { image.PixelWidth,image.PixelHeight,mimeType="image/png", preview = target == "preview" ? (Guid?)previewId : null, asset = target == "preview" ? shownAsset?.Id : null }).Data,bytes.ToArray());
         });

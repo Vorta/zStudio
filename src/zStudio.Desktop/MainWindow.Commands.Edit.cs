@@ -44,7 +44,13 @@ public partial class MainWindow
             if(table is <0 or >7) throw new StudioCommandException("invalid_argument","Table must be 0–7.");
             return Result(new { d.Revision,table,records=Page(e.References[table].Select((v,i)=>new { index=i,name=v.Text(0,Math.Min(32,v.Bytes.Length)),readOnly=table is 0 or 6 or 7 || i==0,hex=Convert.ToHexString(v.Bytes) }),a, v => v.name).Data });
         });
-        Register(r, "event_catalog", "Describe supported event types, fields and preview limitations.", false, [], _ => Result(AnimationCatalog.Events.Select(e => new { e.Type, e.Name, e.Size, e.Support, fields = e.Fields.Select(f => new { f.Name, f.Kind, f.Offset, f.Size, f.ReadOnly, f.ReferenceTable, f.Hint }) })));
+        Register(r, "event_catalog", "Describe supported event types, fields and preview limitations for the requested animation format version.", false,
+            [P("version", "integer", "Animation version: 28 (Recoil, default) or 39 (MechWarrior 3).")], a =>
+        {
+            int version = Int(a, "version", 28);
+            if (version is not (28 or 39)) throw new StudioCommandException("unsupported", "Supported animation versions are 28 and 39.");
+            return Result(AnimationCatalog.ForVersion((uint)version).Select(e => new { e.Type, e.Name, e.Size, e.Support, fields = e.Fields.Select(f => new { f.Name, f.Kind, f.Offset, f.Size, f.ReadOnly, f.ReferenceTable, f.Hint }) }));
+        });
         Register(r, "property_fields", "Read the same fields, choices, validation hints and actions as animation Properties, without opening or retargeting its window. IDs apply to this target/segment/revision.", false, AnimationTargetParameters, a =>
         {
             var d = TargetDocument(a); using var fields = PropertyAdapter(d, a); return Result(new { d.Revision, fields = fields.DescribeAutomationFields() });
@@ -66,7 +72,7 @@ public partial class MainWindow
             if (action != "add_sequence" && !target.AllSequences.Any(s => s.Id == sequence && (ev == Guid.Empty || s.Events.Any(v => v.Id == ev))))
                 throw new StudioCommandException("stale_record", "Sequence/event is unavailable; read animation_records again.");
             if (action == "add_sequence") edits.AddSequence(entry);
-            else if (action == "add_event") { int type = Int(a, "eventType", -1); if (type < 0 || type > 255 || AnimationCatalog.Find((byte)type) == null) throw new StudioCommandException("invalid_argument", "Choose an event type from event_catalog."); edits.InsertEvent(entry, sequence, (byte)type, ev); }
+            else if (action == "add_event") { int type = Int(a, "eventType", -1); if (type < 0 || type > 255 || AnimationCatalog.Find((byte)type, target.Version) == null) throw new StudioCommandException("invalid_argument", "Choose an event type from event_catalog for this document version."); edits.InsertEvent(entry, sequence, (byte)type, ev); }
             else if (ev != Guid.Empty) edits.ChangeEventStructure(entry, sequence, ev, action);
             else if (action == "duplicate") edits.AddSequence(entry, sequence);
             else if (action == "delete") edits.DeleteSequence(entry, sequence);

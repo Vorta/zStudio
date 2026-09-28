@@ -17,21 +17,23 @@ public partial class MainWindow
     }
     private void RegisterAiCommands(StudioCommands registry)
     {
-        Register(registry, "ai_networks", "List authored AI networks with distinct source identities, counts and diagnostics. Does not simulate activation or change visualization.", false,
+        Register(registry, "ai_networks", "List authored AI networks with distinct source identities, counts, diagnostics and attack_strategy (stored value, status, key, character count, truncation and RGB hex color shared by nodes/arrows). Does not simulate activation or change visualization.", false,
             [PreviewParameter, .. PageParameters], args =>
         {
             var graph = TargetAiGraph(args, false);
             return Page(graph.Networks.Where(n => (n.Member + " " + n.Name + " " + n.Type + " " + n.Archive).Contains(Text(args, "query"), StringComparison.OrdinalIgnoreCase))
                 , args, project: n => new { snapshot = graph.Id, n.Id, n.Archive, n.MemberIndex, n.Member, Name = ShortAiText(n.Name), Type = ShortAiText(n.Type), n.PathWidth,
-                    nodes = n.Nodes.Count, links = n.Nodes.Sum(p => p.Links.Count(l => l.Target != null)), diagnostics = n.Diagnostics.Take(32).ToArray(), diagnosticCount = n.Diagnostics.Count });
+                    attack_strategy = DescribeAiStrategy(n),
+                    nodes = n.Nodes.Count, constraints = n.Constraints.Count, links = n.Nodes.Sum(p => p.Links.Count(l => l.Target != null)), diagnostics = n.Diagnostics.Take(32).ToArray(), diagnosticCount = n.Diagnostics.Count });
         });
-        Register(registry, "ai_nodes", "List authored AI nodes, XYZ, raw integer and all three directed link slots. Negative indices mean no link; unresolved targets retain diagnostics.", false,
-            [PreviewParameter, AiSnapshotParameter, P("network", "string", "Network ID, or all/omitted for all networks."), .. PageParameters], args =>
+        Register(registry, "ai_nodes", "List authored AI nodes, XYZ, raw integer, network attack_strategy metadata/color and ordered directed link slots (three for RECOIL; variable for MW3). Negative indices mean no link; unresolved targets retain diagnostics.", false,
+            [PreviewParameter, AiSnapshotParameter, P("network", "string", "Network ID, or all/omitted for all networks."), P("section", "string", "Spatial nodes (default) or MW3 edge constraints, which have no authored position.", false, "nodes", "constraints"), .. PageParameters], args =>
         {
             var graph = TargetAiGraph(args); string network = Text(args, "network", "all");
             if (network != "all" && !graph.Networks.Any(n => n.Id == network)) throw new StudioCommandException("stale_record", "AI network unavailable.");
+            if (Text(args, "section") == "constraints") return Page(graph.Networks.Where(n => network == "all" || n.Id == network).SelectMany(n => n.Constraints.Select(c => new { network = n.Id, constraint = c })), args);
             return Page(graph.Networks.Where(n => network == "all" || n.Id == network).SelectMany(n => n.Nodes
-                .Where(p => $"{n.Member} {n.Name} node_{p.Index:00}".Contains(Text(args, "query"), StringComparison.OrdinalIgnoreCase)).Select(p => (Network: n, Node: p))), args, project: p => graph.Describe(p.Network, p.Node));
+                .Where(p => $"{n.Member} {n.Name} node_{p.Index:00}".Contains(Text(args, "query"), StringComparison.OrdinalIgnoreCase)).Select(p => (Network: n, Node: p))), args, project: p => DescribeAiNode(graph, p.Network, p.Node));
         });
         Register(registry, "ai_selection", "Select/clear an AI marker or open its pinned read-only Properties. Selection requires unlocked Whole world editing, enabled visualization and a matching filter. Read-only Properties remains available while locked. Frame a selected marker with camera action=frame,target=selected.", true,
             [PreviewParameter, AiSnapshotParameter, P("action", "string", "Selection action.", true, "select", "clear", "properties"), P("node", "string", "Snapshot-scoped node ID; required except for clear.")], async (args, token) =>
@@ -47,7 +49,7 @@ public partial class MainWindow
                 var window = await OpenAiPropertiesAsync(id, true); token.ThrowIfCancellationRequested();
                 if (window == null) throw new StudioCommandException("context_changed", "Properties target was not published.");
             }
-            return Result(graph.Describe(target.Network, target.Node));
+            return Result(DescribeAiNode(graph, target.Network, target.Node));
         });
     }
 }

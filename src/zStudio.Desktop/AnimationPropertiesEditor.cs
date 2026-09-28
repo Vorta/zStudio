@@ -83,7 +83,7 @@ public sealed partial class AnimationPropertiesEditor : FieldEditor, IDisposable
                 if (ev.Spec != null)
                 {
                     CheckBox showAll = new() { Content = "Show all stored fields", Margin = new(0,4,0,6), ToolTip = "Expand inactive parameter groups without changing their values" }; panel.Children.Add(showAll);
-                    foreach (var grouping in ev.Spec.Fields.Where(f => f.Offset + f.Size <= ev.Bytes.Length).GroupBy(f => AnimationFieldPresentation.Group(ev.Type, f)))
+                    foreach (var grouping in ev.Spec.Fields.Where(f => f.Offset + f.Size <= ev.Bytes.Length).GroupBy(f => AnimationFieldPresentation.Group(ev.Type, f, ev.Version)))
                     {
                         uint relevance = AnimationFieldPresentation.RelevanceBit(ev.Type, grouping.Key);
                         bool inactive = relevance != 0 && (ev.U32(12) & relevance) == 0;

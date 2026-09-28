@@ -64,6 +64,7 @@ internal static class Program
         if (args.Length == 2 && args[0] == "--animation") return AnimationCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--mission") return MissionPreviewCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--alpha") return AlphaCheck.Run(args[1]);
+        if (args.Length == 2 && args[0] == "--viewport-size") return ViewportSizeCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--lod") return LodCheck.Run(args[1]);
         if (args.Length == 2 && args[0] == "--overview") { Overview(args[1]); return 0; }
         if (args.Length == 2 && args[0] == "--lifecycle") return Lifecycle(args[1]);

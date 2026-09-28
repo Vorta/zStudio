@@ -69,10 +69,13 @@ public sealed partial class AnimationPreviewContext
         if (worldPath == null) throw new InvalidDataException("Select the matching mission GameZ file to bind this animation.");
         var world = await resolver.OpenCachedAsync(worldPath, token).ConfigureAwait(false);
         if (world.Scene == null) throw new InvalidDataException("The selected file has no GameZ scene.");
+        if (package.Version == 39 && world.Probe.Version != 27 || package.Version == 28 && world.Probe.Version != 15)
+            throw new InvalidDataException("The animation and world formats belong to different games. Choose the matching world.");
         var context = new AnimationPreviewContext { Package = package, World = world };
         context.Mission = await MissionSceneLoader.LoadAsync(world, resolver, package, token, difficulty).ConfigureAwait(false);
         context.Diagnostics.AddRange(context.Mission.Diagnostics);
-        var files = resolver.ResourceDirectories(world.Path).SelectMany(d => Directory.EnumerateFiles(d,"*.zbd")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var files = world.Game == GameVariant.MechWarrior3 ? await MissionSceneLoader.Mw3ResourceFilesAsync(world.Path, resolver, token, context.Mission.Layout.MissionArchive).ConfigureAwait(false) :
+            resolver.ResourceDirectories(world.Path).SelectMany(d => Directory.EnumerateFiles(d,"*.zbd")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         List<(string Name, string File, bool Loop)> aliases = []; List<ZbdDocument> soundArchives = [];
         foreach (string file in files)
         {
@@ -82,7 +85,7 @@ public sealed partial class AnimationPreviewContext
             foreach (var asset in archive.Assets.Where(a => a.Kind == AssetKind.Zrd && (a.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase) || a.Name.Equals("sounds.zrd", StringComparison.OrdinalIgnoreCase))))
             {
                 var tree = ZrdDecoder.Decode(archive.Slice(asset.Offset, asset.Length), token);
-                if (asset.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase)) ReadEffects(tree);
+                if (asset.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase)) { if (world.Game != GameVariant.MechWarrior3) ReadEffects(tree); }
                 else ReadSounds(tree);
             }
         }
@@ -106,8 +109,11 @@ public sealed partial class AnimationPreviewContext
         }
         foreach (var (name, wave) in waves) context.Sounds.TryAdd(Path.GetFileNameWithoutExtension(name), new(name, name, false, wave.Bytes));
         context.BindMaterialCycles();
-        await context.LoadScriptCyclesAsync(files, resolver, token).ConfigureAwait(false);
-        context.BindEffectCycles();
+        if (world.Game != GameVariant.MechWarrior3)
+        {
+            await context.LoadScriptCyclesAsync(files, resolver, token).ConfigureAwait(false);
+            context.BindEffectCycles();
+        }
         return context;
 
         void ReadEffects(JsonNode? tree)
@@ -151,6 +157,7 @@ public sealed partial class AnimationPreviewContext
         if (roots.TryGetValue(entry.Index, out int root)) return root;
         var matches = Scene.Nodes.Where(n => n.Name == entry.RootName).ToArray();
         if (matches.Length == 0) return roots[entry.Index] = -1;
+        if (World.Game == GameVariant.MechWarrior3 && matches.Length != 1) return roots[entry.Index] = -1;
         // LoadZbd advances FindNextByName for consecutive entries sharing a root.
         int occurrence = 0; for (int i = entry.Index - 1; i >= 0 && Package.Entries[i].RootName == entry.RootName; i--) occurrence++;
         return roots[entry.Index] = matches[occurrence % matches.Length].Index;
@@ -163,6 +170,14 @@ public sealed partial class AnimationPreviewContext
         if (reference < 0 || reference >= entry.References[1].Count) return -1;
         string name = entry.References[1][reference].Text(0, 36);
         if (name == entry.RootName) return root;
+        if (World.Game == GameVariant.MechWarrior3)
+        {
+            var local = Descendants(root).Where(i => Scene.Nodes[i].Name == name).ToArray();
+            if (local.Length == 1) return local[0];
+            if (local.Length > 1) return -1;
+            var global = Scene.Nodes.Where(n => n.Name == name).ToArray();
+            return global.Length == 1 ? global[0].Index : -1;
+        }
         int attachment = FindBelow(root, entry.AttachName);
         int found = FindBelow(attachment, name); if (found < 0) found = FindBelow(root, name);
         return found >= 0 ? found : Scene.Nodes.FirstOrDefault(n => n.Name == name)?.Index ?? -1;

@@ -9,7 +9,7 @@ public static class AnimationWriter
     {
         if (package.Entries.Count > ushort.MaxValue) throw new InvalidDataException("Animation entry count exceeds 65535.");
         using MemoryStream output = new(); byte[] prefix = (byte[])package.Prefix.Clone();
-        int counts = prefix.Length - 60 + 8; uint original = BinaryPrimitives.ReadUInt32LittleEndian(prefix.AsSpan(counts));
+        int counts = prefix.Length - (package.Version == 39 ? 68 : 60) + 8; uint original = BinaryPrimitives.ReadUInt32LittleEndian(prefix.AsSpan(counts));
         BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(counts), (original & 65535) | ((uint)package.Entries.Count << 16)); output.Write(prefix);
         foreach (var entry in package.Entries) { token.ThrowIfCancellationRequested(); output.Write(WriteEntry(entry)); }
         output.Write(package.Tail); return output.ToArray();
@@ -17,17 +17,22 @@ public static class AnimationWriter
     internal static byte[] WriteEntry(AnimationEntry entry)
     {
         if (entry.Sequences.Count > 255 || entry.References.Any(t => t.Count > 255)) throw new InvalidDataException("Sequence/reference counts are limited to 255.");
-        using MemoryStream output = new(); byte[] header = (byte[])entry.Bytes.Clone(); header[260] = (byte)entry.Sequences.Count;
-        for (int i = 0; i < 8; i++) header[260 + AnimationPackage.ReferenceLanes[i]] = (byte)entry.References[i].Count;
+        using MemoryStream output = new(); byte[] header = (byte[])entry.Bytes.Clone(); header[entry.CountsOffset] = (byte)entry.Sequences.Count;
+        for (int i = 0; i < 8; i++) header[entry.CountsOffset + entry.ReferenceLanes[i]] = (byte)entry.References[i].Count;
         byte[] primary = SequenceBytes(entry.Primary);
         // The loader overwrites the inline copy. Preserve it on a no-op save, but
         // update both copies when the canonical header or payload length changes.
-        if (!primary.AsSpan(0, 64).SequenceEqual(entry.OriginalPrimaryHeader)) primary.AsSpan(0, 64).CopyTo(header.AsSpan(196));
+        if (!primary.AsSpan(0, 64).SequenceEqual(entry.OriginalPrimaryHeader)) primary.AsSpan(0, 64).CopyTo(header.AsSpan(entry.Version == 39 ? 200 : 196));
+        if (entry.Version == 39) header[268] = checked((byte)entry.Puffers.Count);
         output.Write(header);
-        for (int table = 0; table < 8; table++) foreach (var reference in entry.References[table])
+        for (int table = 0; table < 8; table++)
+        {
+            if (entry.Version == 39 && table == 3) foreach (var puffer in entry.Puffers) { if (puffer.Bytes.Length != 44) throw new InvalidDataException("Invalid puffer reference size."); output.Write(puffer.Bytes); }
+            foreach (var reference in entry.References[table])
         {
             if (reference.Bytes.Length != AnimationPackage.ReferenceSizes[table]) throw new InvalidDataException("Invalid reference record size.");
             output.Write(reference.Bytes);
+        }
         }
         output.Write(primary); foreach (var sequence in entry.Sequences) output.Write(SequenceBytes(sequence)); return output.ToArray();
     }
@@ -81,7 +86,7 @@ public sealed class AnimationEditSession(AnimationPackage package)
     public event Action? Changed;
     public Guid InsertEvent(int entry, Guid sequence, byte type, Guid after = default)
     {
-        var ev = AnimationCatalog.Create(type);
+        var ev = AnimationCatalog.Create(type, Package.Version);
         var owner = Package.Entries[entry];
         foreach (var field in ev.Spec!.Fields.Where(f => f.ReferenceTable >= 0 && owner.References[f.ReferenceTable].Count > 1 && (f.Name == "Target node" || f.ReferenceTable is 4 or 5))) field.Write(ev, "1");
         Apply(entry, "Insert event", e =>
@@ -141,7 +146,7 @@ public sealed class AnimationEditSession(AnimationPackage package)
             }
             if (field.Kind == AnimationFieldKind.Text && record.Type is 22 or 23 or 25 or 26 or 27) record.SetInt(44, -1);
             if (field.Kind == AnimationFieldKind.Text && record.Type is 19 or 24) record.SetShort(48, -1);
-            if (field.Kind == AnimationFieldKind.Text && record.Type == 10 && field.Offset == 208) record.SetShort(240, -1);
+            if (field.Kind == AnimationFieldKind.Text && record.Type == 10 && (field.Offset == 208 || record.Version == 39 && field.Offset is 248 or 288)) record.SetShort(field.Offset + 32, -1);
         }
     });
     public static AnimationSequence FindSequence(AnimationEntry entry, Guid id) => entry.AllSequences.Single(s => s.Id == id);
@@ -164,8 +169,8 @@ public sealed class AnimationEditSession(AnimationPackage package)
             string old = sequence.Name;
             foreach (var ev in sequence.Events)
             {
-                var reference = SequenceReference(ev);
-                if (reference is { } r && (ev.Text(r.Name) == old || GetCache(r) == e.Sequences.FindIndex(s => s.Id == duplicate))) { ev.SetText(r.Name, name); SetCache(r, -1); }
+                foreach (var r in SequenceReferences(ev))
+                    if (ev.Text(r.Name) == old || GetCache(r) == e.Sequences.FindIndex(s => s.Id == duplicate)) { ev.SetText(r.Name, name); SetCache(r, -1); }
             }
         }
         sequence.Name = name; e.Sequences.Add(sequence);
@@ -194,13 +199,16 @@ public sealed class AnimationEditSession(AnimationPackage package)
             SetCache(reference, -1);
         }
     }
-    private static IEnumerable<(AnimationEvent Event, int Name, int Cache, bool Narrow)> SequenceReferences(AnimationEntry entry) => entry.AllSequences.SelectMany(s => s.Events).Select(SequenceReference).Where(r => r.HasValue).Select(r => r!.Value);
-    private static (AnimationEvent Event, int Name, int Cache, bool Narrow)? SequenceReference(AnimationEvent ev) => ev.Type switch
+    private static IEnumerable<(AnimationEvent Event, int Name, int Cache, bool Narrow)> SequenceReferences(AnimationEntry entry) => entry.AllSequences.SelectMany(s => s.Events).SelectMany(SequenceReferences);
+    private static IEnumerable<(AnimationEvent Event, int Name, int Cache, bool Narrow)> SequenceReferences(AnimationEvent ev)
     {
-        22 or 23 when ev.Bytes.Length >= 48 => (ev,12,44,false),
-        10 when ev.Bytes.Length >= 252 && (ev.U32(12) & 0x800) != 0 => (ev,208,240,true),
-        _ => null
-    };
+        if (ev.Type is 22 or 23 && ev.Bytes.Length >= 48) yield return (ev, 12, 44, false);
+        if (ev.Type != 10 || ev.Bytes.Length < (ev.Version == 39 ? 332 : 252)) yield break;
+        if ((ev.U32(12) & 0x800) != 0) yield return (ev, 208, 240, true);
+        if (ev.Version == 39)
+            foreach (int offset in new[] { 248, 288 })
+                if (ev.Text(offset).Length != 0 || ev.I16(offset + 32) >= 0) yield return (ev, offset, offset + 32, true);
+    }
     private static int GetCache((AnimationEvent Event, int Name, int Cache, bool Narrow) r) => r.Narrow ? r.Event.I16(r.Cache) : r.Event.I32(r.Cache);
     private static void SetCache((AnimationEvent Event, int Name, int Cache, bool Narrow) r, int value) { if (r.Narrow) r.Event.SetShort(r.Cache, checked((short)value)); else r.Event.SetInt(r.Cache,value); }
     private static void EnsureStructuralEdit(AnimationEntry entry)

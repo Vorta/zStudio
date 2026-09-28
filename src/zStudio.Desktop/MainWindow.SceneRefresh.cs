@@ -6,7 +6,7 @@ namespace Recoil.Zbd.Desktop;
 
 public partial class MainWindow
 {
-    private sealed record StaticSceneOptions(int Lod, bool Horizon, PackChoice? Pack, MissionDifficulty Difficulty);
+    private sealed record StaticSceneOptions(int Lod, bool Horizon, PackChoice? Pack, MissionDifficulty Difficulty, string? Mission);
     private bool restoringStaticOptions;
     private StaticSceneOptions? publishedStaticOptions;
     private CancellationTokenSource? staticRefresh;
@@ -14,14 +14,19 @@ public partial class MainWindow
     private long staticRefreshGeneration;
     private bool HasPublishedStaticScene => animation == null && scene?.PreviewScene != null && publishedStaticOptions != null &&
         SceneHost.Visibility == Visibility.Visible && shownAsset != null;
-    private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty);
+    private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty, shownDocument == null ? null : ViewModel.Resolver?.SelectedMission(shownDocument.Path));
     private void RestoreStaticSceneOptions(StaticSceneOptions options)
     {
         bool wasUpdating = updating; updating = true; restoringStaticOptions = true;
         try
         {
             LodCombo.SelectedIndex = options.Lod; BackdropEnabled.IsChecked = options.Horizon; TexturePackCombo.SelectedItem = options.Pack;
-            if (scene?.Mission != null) ViewModel.Difficulty = options.Difficulty;
+            if (scene?.Mission != null && options.Mission == null) ViewModel.Difficulty = options.Difficulty;
+            if (options.Mission != null && shownDocument != null)
+            {
+                ViewModel.Resolver?.SelectMission(shownDocument.Path, options.Mission);
+                WorldMission.SelectedItem = WorldMission.Items.Cast<MissionVariant>().FirstOrDefault(m => m.Archive == options.Mission);
+            }
         }
         finally { updating = wasUpdating; restoringStaticOptions = false; }
     }

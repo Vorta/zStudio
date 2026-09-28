@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json.Nodes;
 using System.Windows;
 using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core;
@@ -16,13 +17,14 @@ public partial class MainWindow
     private bool IsAiWorld => animation == null && shownAsset?.Kind == AssetKind.World && scene != null && SceneHost.Visibility == Visibility.Visible;
     private void ConfigureAiScene(SceneViewport viewport)
     {
+        AiEnabled.Tag = "Show authored AI node markers and directed connections.\n" + AiNetworkColors.Legend;
         AttachInspection(viewport);
         viewport.AiNodeSelected += id =>
         {
             if (scene != viewport || id == null) return;
             selectedNode = null; inspectedSceneSource = null;
             if (viewport.AiNetworks.Find(id) is not { } target) return;
-            SetProperties(viewport.AiNetworks.Describe(target.Network, target.Node));
+            SetProperties(DescribeAiNode(viewport.AiNetworks, target.Network, target.Node));
             ViewModel.Status = $"AI {target.Network.Member} · node_{target.Node.Index:00} · {target.Node.Position}";
         };
         viewport.AiPropertiesRequested += async () =>
@@ -96,7 +98,7 @@ public partial class MainWindow
         if (!IsAiWorld || shownDocument != doc || scene!.AiNetworks.Id != snapshot.Id || doc.IsDisposed)
             throw new StudioCommandException("context_changed", "AI preview changed while opening Properties.");
         ++propertyRequest;
-        var data = snapshot.Describe(target.Network, target.Node); data["ai_snapshot"] = snapshot.Id;
+        var data = DescribeAiNode(snapshot, target.Network, target.Node); data["ai_snapshot"] = snapshot.Id;
         data["snapshot_status"] = "Pinned preview snapshot. Reopen after editing or reloading the source resource.";
         var window = GetPropertiesWindow();
         bool accepted = window.SetReadOnly(doc, $"{target.Network.Member} #{target.Network.MemberIndex} · node_{target.Node.Index:00} · {AiSourceLabel(target.Network.Archive)}", data);
@@ -107,6 +109,22 @@ public partial class MainWindow
     {
         if (propertiesWindow?.CurrentJson?["ai_snapshot"] != null && aiPropertiesArchive != null && aiPropertiesStamp != ReadAiStamp(aiPropertiesArchive)) propertiesWindow.MarkAiSnapshotStale();
     }
+    private static JsonObject DescribeAiStrategy(AiNetwork network)
+    {
+        var result = network.AttackStrategy.Describe();
+        result["color"] = AiNetworkColors.Hex(network.AttackStrategy);
+        return result;
+    }
+    private static JsonObject DescribeAiNode(AiNetworkSnapshot graph, AiNetwork network, AiNode node)
+    {
+        var result = graph.Describe(network, node); result["attack_strategy"] = DescribeAiStrategy(network); return result;
+    }
+    private static string AiStrategyText(AiAttackStrategy strategy) => strategy.State switch
+    {
+        AiAttackStrategyState.Missing => "Not stored",
+        AiAttackStrategyState.Invalid => "Unavailable (invalid data)",
+        _ => strategy.Value == "" ? "\"\" (empty)" : strategy.BoundedValue(2048)!
+    };
     private static FileStamp? ReadAiStamp(string path)
     {
         try { return FileStamp.Read(path); }

@@ -141,7 +141,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var doc in Documents) doc.Dispose(); Documents.Clear(); SelectedDocument = null;
         // A previous asynchronous operation may still hold its resolver; its
         // canceled task owns that short remaining lifetime, not the new workspace.
-        Resolver = new AssetResolver(root); Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
+        Resolver = new AssetResolver(root);
+        foreach (var (map, mission) in (Settings.Mw3Missions ?? []).Take(128))
+            try { if (File.Exists(map) && File.Exists(mission) && Path.GetFullPath(map).StartsWith(Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) Resolver.SelectMission(map, mission); }
+            catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException) { }
+        Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
         RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";
         Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
         try

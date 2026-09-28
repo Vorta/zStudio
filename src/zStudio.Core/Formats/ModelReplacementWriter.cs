@@ -5,23 +5,25 @@ using Recoil.Zbd.Core.Export;
 
 namespace Recoil.Zbd.Core.Formats;
 
-/// <summary>Edits v15 ranges recorded by GameZReader. Never serializes unknown records or stored pointers.</summary>
-public static class ModelReplacementWriter
+/// <summary>Edits versioned world ranges recorded by GameZReader. Never serializes unknown records or stored pointers.</summary>
+public static partial class ModelReplacementWriter
 {
     public static byte[] Replace(ZbdDocument source, IReadOnlyDictionary<int, ImportedMesh> replacements, string textureName, CancellationToken token = default)
     {
         if (replacements.Count == 0) return source.Bytes.ToArray();
-        var layout = source.GameZLayout ?? throw new InvalidDataException("Model replacement requires GameZ v15.");
+        var layout = source.GameZLayout ?? throw new InvalidDataException("Model replacement requires GameZ v15 or v27.");
         var scene = source.Scene!;
-        if (source.Probe.Version != 15 || source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact GameZ v15 document is required.");
+        if (source.Probe.Version is not (15 or 27) || source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact GameZ v15 or v27 document is required.");
+        var dialect = GameZLayouts.For(source.Probe.Version);
+        int modelStride = dialect.ModelSize + 4, nodeStride = dialect.NodeSize + 4;
         var sourceModels = source.Assets.Where(a => a.Kind == AssetKind.Model).ToDictionary(a => a.Index);
-        long outputLength = source.Bytes.Length + 36L;
+        long outputLength = source.Bytes.Length + (long)dialect.TextureSize;
         foreach (var (index, mesh) in replacements)
         {
             token.ThrowIfCancellationRequested();
             if (!sourceModels.TryGetValue(index, out var original)) throw new InvalidDataException("Missing model index.");
             mesh.Validate();
-            outputLength += mesh.Positions.Length * 24L + mesh.Triangles.Length / 3L * 76 - original.Length;
+            outputLength += mesh.Positions.Length * 24L + mesh.Triangles.Length / 3L * (dialect.HasVertexColors ? 120 : 76) - original.Length;
         }
         FormatRegistry.ValidateDocumentSize(outputLength);
         ValidateName(textureName);
@@ -44,37 +46,24 @@ public static class ModelReplacementWriter
         Put16(materials, slot + 40, -1); Put16(materials, slot + 42, activeHead);
         ValidatePool(materials, material + 1, layout.MaterialCapacity);
 
-        byte[] table = source.Slice(layout.ModelOffset, 12L + layout.ModelCapacity * 88L).ToArray();
-        int newModelOffset = layout.ModelOffset + 36;
+        byte[] table = source.Slice(layout.ModelOffset, 12L + layout.ModelCapacity * (long)modelStride).ToArray();
+        int newModelOffset = layout.ModelOffset + dialect.TextureSize;
         using MemoryStream dynamics = new();
         foreach (var model in scene.Models)
         {
             token.ThrowIfCancellationRequested();
-            int header = 12 + model.Index * 88;
+            int header = 12 + model.Index * modelStride;
             var originalAsset = sourceModels[model.Index];
-            if (I32(table, header + 84) != originalAsset.Offset) throw new InvalidDataException($"Model {model.Index} has a noncanonical data offset; refusing relocation.");
-            Put(table, header + 84, checked(newModelOffset + table.Length + (int)dynamics.Length));
+            if (I32(table, header + dialect.ModelSize) != originalAsset.Offset) throw new InvalidDataException($"Model {model.Index} has a noncanonical data offset; refusing relocation.");
+            Put(table, header + dialect.ModelSize, checked(newModelOffset + table.Length + (int)dynamics.Length));
             if (!replacements.TryGetValue(model.Index, out var mesh))
             {
                 dynamics.Write(source.Slice(originalAsset.Offset, originalAsset.Length).Span); continue;
             }
             if (model.Morphs.Length != 0 || model.Metadata.Int("light_count") != 0) throw new InvalidDataException($"Model {model.Index} has morphs or lights; replacement is not supported.");
-            Put(table, header, 0); // Ordinary mesh; facade rotation must no longer apply.
-            Put(table, header + 12, mesh.Triangles.Length / 3); Put(table, header + 16, mesh.Positions.Length);
-            Put(table, header + 20, mesh.Normals.Length); Put(table, header + 24, 0); Put(table, header + 28, 0);
-            Put(table, header + 48, 1); Put(table, header + 52, 1); Put(table, header + 56, 0); Put(table, header + 60, 0); Put(table, header + 64, 1);
-            var (center, radius) = DisplayInstanceSphere(mesh.Bounds.Min, mesh.Bounds.Max); Vector(table, header + 68, center); Float(table, header + 80, radius);
-            using BinaryWriter w = new(dynamics, Encoding.UTF8, true);
-            foreach (var v in mesh.Positions) { w.Write(v.X); w.Write(v.Y); w.Write(v.Z); }
-            foreach (var v in mesh.Normals) { w.Write(v.X); w.Write(v.Y); w.Write(v.Z); }
-            for (int i = 0; i < mesh.Triangles.Length; i += 3)
-            { w.Write(0x203u); w.Write(0); w.Write(1); w.Write(1); w.Write(1); w.Write(material); w.Write(0); }
-            for (int i = 0; i < mesh.Triangles.Length; i += 3)
-            {
-                for (int j = 0; j < 3; j++) w.Write(mesh.Triangles[i + j]);
-                for (int j = 0; j < 3; j++) w.Write(mesh.Triangles[i + j]);
-                for (int j = 0; j < 3; j++) { var uv = mesh.Uvs[mesh.Triangles[i + j]]; w.Write(uv.X); w.Write(uv.Y); }
-            }
+            byte[] modelHeader = table.AsSpan(header, dialect.ModelSize).ToArray();
+            dynamics.Write(EncodeMesh(modelHeader, source.Probe.Version, mesh, material, token));
+            modelHeader.CopyTo(table, header);
         }
         if (replacements.Keys.Any(i => i < 0 || i >= scene.Models.Count)) throw new InvalidDataException("Missing model index.");
         // Preserve padding between the last dynamic model and the node table.
@@ -84,21 +73,21 @@ public static class ModelReplacementWriter
         byte[] nodes = source.Bytes.Span[layout.NodeOffset..].ToArray();
         for (int i = 0; i < scene.Nodes.Count; i++)
         {
-            var node = scene.Nodes[i]; int header = i * 196;
+            var node = scene.Nodes[i]; int header = i * nodeStride;
             // Class-none slots use this word for a parent index, not an offset.
             if (node.Class != "none")
             {
-                if (I32(nodes, header + 192) != layout.NodeDataOffsets[i]) throw new InvalidDataException($"Node {i} has a noncanonical data offset; refusing relocation.");
-                Put(nodes, header + 192, checked((int)layout.NodeDataOffsets[i] + newNodeOffset - layout.NodeOffset));
+                if (I32(nodes, header + dialect.NodeSize) != layout.NodeDataOffsets[i]) throw new InvalidDataException($"Node {i} has a noncanonical data offset; refusing relocation.");
+                Put(nodes, header + dialect.NodeSize, checked((int)layout.NodeDataOffsets[i] + newNodeOffset - layout.NodeOffset));
             }
         }
-        UpdateNodeBounds(scene, nodes, replacements, token);
+        UpdateNodeBounds(scene, nodes, replacements, nodeStride, token);
         using MemoryStream output = new();
         byte[] prefix = source.Bytes.Span[..layout.MaterialOffset].ToArray();
-        Put(prefix, 8, scene.Textures.Count + 1); Put(prefix, 16, layout.MaterialOffset + 36); Put(prefix, 20, newModelOffset); Put(prefix, 32, newNodeOffset);
-        int insertion = layout.TextureOffset + scene.Textures.Count * 36;
+        Put(prefix, 8, scene.Textures.Count + 1); Put(prefix, 16, layout.MaterialOffset + dialect.TextureSize); Put(prefix, 20, newModelOffset); Put(prefix, 32, newNodeOffset);
+        int insertion = layout.TextureOffset + scene.Textures.Count * dialect.TextureSize;
         output.Write(prefix.AsSpan(0, insertion));
-        byte[] texture = new byte[36]; Encoding.ASCII.GetBytes(textureName).CopyTo(texture, 8); Put(texture, 28, 2); Put(texture, 32, -1);
+        byte[] texture = new byte[dialect.TextureSize]; Encoding.ASCII.GetBytes(textureName).CopyTo(texture, 8); Put(texture, 28, 2); Put(texture, dialect.TextureSize - 4, -1);
         output.Write(texture); output.Write(prefix.AsSpan(insertion)); output.Write(materials); output.Write(table); dynamics.Position = 0; dynamics.CopyTo(output); output.Write(nodes);
         if (output.Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException("Replacement exceeds the document size limit.");
         byte[] bytes = output.ToArray();
@@ -130,13 +119,13 @@ public static class ModelReplacementWriter
     // loads them verbatim, so replaced nodes receive solid-model boxes here and ancestors expand only
     // when a new box no longer fits, keeping stored envelopes valid supersets. +0x64/+0x70 is a
     // render-time world-sphere cache and stays unchanged. World partitions are never re-gridded.
-    private static void UpdateNodeBounds(GameScene scene, byte[] nodes, IReadOnlyDictionary<int, ImportedMesh> replacements, CancellationToken token)
+    internal static void UpdateNodeBounds(GameScene scene, byte[] nodes, IReadOnlyDictionary<int, ImportedMesh> replacements, int nodeStride, CancellationToken token)
     {
         Queue<int> grown = [];
         for (int i = 0; i < scene.Nodes.Count; i++)
         {
             if (scene.Nodes[i].ModelIndex is not int model || !replacements.TryGetValue(model, out var mesh)) continue;
-            int header = i * 196; uint flags = U32(nodes, header + 36);
+            int header = i * nodeStride; uint flags = U32(nodes, header + 36);
             if ((flags & 0x300) != 0x300) throw new InvalidDataException($"Node {i} has no valid cached/model bounds; replacement is not supported.");
             var box = mesh.Bounds; WriteBox(nodes, header + 140, box);
             if ((flags & 0x400) != 0) box = Union(box, ReadBox(nodes, header + 164));
@@ -153,11 +142,11 @@ public static class ModelReplacementWriter
         {
             token.ThrowIfCancellationRequested();
             if (steps > scene.Nodes.Count * 8) throw new InvalidDataException("Cyclic node bounds hierarchy.");
-            var node = scene.Nodes[i]; var moved = Transform(ReadBox(nodes, i * 196 + 116), SceneBuilder.LocalTransform(node));
+            var node = scene.Nodes[i]; var moved = Transform(ReadBox(nodes, i * nodeStride + 116), SceneBuilder.LocalTransform(node));
             foreach (int parent in node.Parents)
             {
                 if (parent < 0 || parent >= scene.Nodes.Count) throw new InvalidDataException($"Node {i} has a missing parent.");
-                int header = parent * 196; var child = ReadBox(nodes, header + 164);
+                int header = parent * nodeStride; var child = ReadBox(nodes, header + 164);
                 if (Contains(child, moved)) continue;
                 if (IsWorld(scene, parent)) throw new InvalidDataException($"Node {i} would exceed its world-partition bounds; spatial re-partitioning is not supported.");
                 if ((U32(nodes, header + 36) & 0x500) != 0x500) throw new InvalidDataException($"Node {parent} has no valid child bounds to expand.");

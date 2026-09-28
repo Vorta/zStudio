@@ -8,6 +8,7 @@ namespace Recoil.Zbd.Core.Export;
 
 public sealed record ImportedMesh(Vector3[] Positions, Vector3[] Normals, Vector2[] Uvs, int[] Triangles)
 {
+    public Vector3[] Colors { get; init; } = [];
     public (Vector3 Min, Vector3 Max) Bounds => (Positions.Aggregate(Vector3.Min), Positions.Aggregate(Vector3.Max));
     public void Validate()
     {
@@ -16,6 +17,8 @@ public sealed record ImportedMesh(Vector3[] Positions, Vector3[] Normals, Vector
         if (Positions.Any(v => !Finite(v) || Math.Max(Math.Abs(v.X), Math.Max(Math.Abs(v.Y), Math.Abs(v.Z))) > 1_000_000) || Normals.Any(v => !Finite(v) || v.LengthSquared() < .5f || v.LengthSquared() > 1.5f) || Uvs.Any(v => !float.IsFinite(v.X) || !float.IsFinite(v.Y) || Math.Abs(v.X) > 1000 || Math.Abs(v.Y) > 1000))
             throw new InvalidDataException("Mesh contains invalid coordinates, UVs or normals.");
         if (Triangles.Any(i => i < 0 || i >= Positions.Length)) throw new InvalidDataException("Triangle index is out of range.");
+        if (Colors.Length != 0 && (Colors.Length != Positions.Length || Colors.Any(c => !Finite(c) || c.X < 0 || c.Y < 0 || c.Z < 0 || c.X > 1 || c.Y > 1 || c.Z > 1)))
+            throw new InvalidDataException("Optional vertex colors require one RGB value in 0–1 for every vertex.");
         for (int i = 0; i < Triangles.Length; i += 3)
             if (Vector3.Cross(Positions[Triangles[i + 1]] - Positions[Triangles[i]], Positions[Triangles[i + 2]] - Positions[Triangles[i]]).LengthSquared() < 1e-16)
                 throw new InvalidDataException($"Triangle {i / 3} is degenerate.");
@@ -84,6 +87,7 @@ public static class ModelImport
     public static ImportedMesh ReadObj(string text, CancellationToken token = default)
     {
         List<Vector3> vertices = [], normals = [], positions = [], outputNormals = []; List<Vector2> uvs = [], outputUvs = []; List<int> triangles = [];
+        List<Vector3> colors = [], outputColors = []; bool colored = false;
         Dictionary<(int V, int T, int N), int> indices = []; int lineNumber = 0;
         foreach (string raw in text.Split('\n'))
         {
@@ -92,7 +96,8 @@ public static class ModelImport
             if (p.Length == 0) continue;
             try
             {
-                if (p[0] == "v" && p.Length == 4) vertices.Add(new(F(p[1]), F(p[2]), F(p[3])));
+                if (p[0] == "v" && p.Length is 4 or 7)
+                { vertices.Add(new(F(p[1]), F(p[2]), F(p[3]))); colors.Add(p.Length == 7 ? new(F(p[4]), F(p[5]), F(p[6])) : Vector3.One); colored |= p.Length == 7; }
                 else if (p[0] == "vn" && p.Length == 4) { var n = new Vector3(F(p[1]), F(p[2]), F(p[3])); if (n.LengthSquared() < 1e-12) throw new FormatException("Zero normal."); normals.Add(Vector3.Normalize(n)); }
                 else if (p[0] == "vt" && p.Length is 3 or 4) uvs.Add(new(F(p[1]), 1 - F(p[2])));
                 else if (p[0] == "f")
@@ -103,7 +108,7 @@ public static class ModelImport
                         var fields = corner.Split('/'); if (fields.Length != 3) throw new FormatException("Each face corner requires vertex/UV/normal indices.");
                         var key = (V: Index(fields[0], vertices.Count), T: Index(fields[1], uvs.Count), N: Index(fields[2], normals.Count));
                         if (!indices.TryGetValue(key, out int index))
-                        { index = positions.Count; indices.Add(key, index); positions.Add(vertices[key.V]); outputUvs.Add(uvs[key.T]); outputNormals.Add(normals[key.N]); }
+                        { index = positions.Count; indices.Add(key, index); positions.Add(vertices[key.V]); outputUvs.Add(uvs[key.T]); outputNormals.Add(normals[key.N]); outputColors.Add(colors[key.V]); }
                         triangles.Add(index);
                     }
                 }
@@ -112,7 +117,7 @@ public static class ModelImport
             }
             catch (Exception ex) when (ex is FormatException or OverflowException) { throw new InvalidDataException($"OBJ line {lineNumber}: {ex.Message}", ex); }
         }
-        ImportedMesh mesh = new(positions.ToArray(), outputNormals.ToArray(), outputUvs.ToArray(), triangles.ToArray()); mesh.Validate(); return mesh;
+        ImportedMesh mesh = new(positions.ToArray(), outputNormals.ToArray(), outputUvs.ToArray(), triangles.ToArray()) { Colors = colored ? outputColors.ToArray() : [] }; mesh.Validate(); return mesh;
         static float F(string s) { float f = float.Parse(s, CultureInfo.InvariantCulture); if (!float.IsFinite(f)) throw new FormatException("Nonfinite value."); return f; }
         static int Index(string s, int count) { int v = int.Parse(s, CultureInfo.InvariantCulture); int i = v < 0 ? count + v : v - 1; if (i < 0 || i >= count) throw new FormatException("Missing index."); return i; }
     }

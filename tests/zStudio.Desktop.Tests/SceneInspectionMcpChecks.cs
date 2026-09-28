@@ -31,7 +31,7 @@ internal static class SceneInspectionMcpChecks
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         string root = Path.Combine(Path.GetTempPath(), "zstudio-inspection-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
         string archivePath = Path.Combine(root, "resources.zbd");
-        var value = A(S("node_00"), A(I(12), A(F(1), F(2), F(3)), A(I(-7), I(-1), I(0))));
+        var value = A(S("node_00"), A(I(12), A(F(1), F(2), F(3)), A(I(-7), I(-1), I(0))), S("attack_strategy"), A(S("Head-on")));
         var pickupRow = A(S("HEMORTAR_AMMO"), I(1), A(F(1), F(2), F(3)), A(F(.125f), F(.3f), F(-.2f)), F(12.5f));
         var members = new[] { ("net_01.zrd", ZrdWriter.Write(value)), ("puppies.zrd", ZrdWriter.Write(A(A(pickupRow)))) };
         using (var data = new MemoryStream())
@@ -112,6 +112,11 @@ internal static class SceneInspectionMcpChecks
             inspectionCard.Measure(new(800, 600)); inspectionCard.Arrange(new Rect(0, 0, 800, 600)); inspectionCard.UpdateLayout();
             var panel = (Border)typeof(SceneInspectionCard).GetField("panel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(inspectionCard)!;
             var detailPanel = (Border)typeof(SceneInspectionCard).GetField("card", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(inspectionCard)!;
+            var strategyReadout = Fields(inspectionCard).Single(f => f.Inputs.Any(i => AutomationProperties.GetName(i) == "Attack strategy"));
+            Assert.Equal(Visibility.Visible, strategyReadout.Visibility);
+            var detailRows = (StackPanel)strategyReadout.Parent;
+            var statusReadout = Fields(inspectionCard).Single(f => f.Inputs.Any(i => AutomationProperties.GetName(i) == "Status"));
+            Assert.Equal(detailRows.Children.IndexOf(strategyReadout) + 1, detailRows.Children.IndexOf(statusReadout));
             var moveMode = (ToggleButton)typeof(SceneInspectionCard).GetField("moveMode", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(inspectionCard)!;
             var rotateMode = (ToggleButton)typeof(SceneInspectionCard).GetField("rotateMode", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(inspectionCard)!;
             Assert.Equal(Visibility.Visible, panel.Visibility); Assert.Equal(Visibility.Visible, detailPanel.Visibility);
@@ -122,6 +127,7 @@ internal static class SceneInspectionMcpChecks
             var hoverRead = await Call("scene_inspect", new() { ["preview"] = preview });
             Assert.Null(hoverRead["selected"]); Assert.NotNull(hoverRead["hover"]);
             Assert.Equal(Visibility.Visible, panel.Visibility); Assert.Equal(Visibility.Collapsed, detailPanel.Visibility);
+            Assert.False(strategyReadout.IsVisible);
             await Card("select", new() { ["target"] = target });
             Assert.Equal(Visibility.Visible, detailPanel.Visibility);
             Assert.Same(hovered, viewport.HoverInspection);
@@ -154,6 +160,11 @@ internal static class SceneInspectionMcpChecks
             Assert.Same(inlinePosition, Fields(inspectionCard).Single(f => f.Binding == SceneInspectionBinding.AuthoredPosition));
             Assert.All(inlinePosition.Inputs, input => Assert.False(input.IsReadOnly));
             Assert.All(Fields(inspectionCard).Where(f => f.Binding == SceneInspectionBinding.None).SelectMany(f => f.Inputs), input => Assert.True(input.IsReadOnly));
+            var strategyField = Fields(inspectionCard).Single(f => f.Inputs.Any(i => AutomationProperties.GetName(i) == "Attack strategy"));
+            Assert.True(strategyField.Inputs[0].IsReadOnly); Assert.Equal("Head-on", strategyField.Inputs[0].Text);
+            Assert.Same(strategyReadout, strategyField); Assert.Equal(Visibility.Visible, strategyField.Visibility);
+            Assert.Equal("Attack strategy: Head-on", (await Card("copy", new() { ["field"] = "Attack strategy" }))["text"]!.GetValue<string>());
+            Assert.Single((await Card("copy", new()))["text"]!.GetValue<string>().Split(Environment.NewLine), line => line.StartsWith("Attack strategy: "));
             await Edit("cancel", new() { ["token"] = token });
             Assert.False(viewport.TransformHandlesVisible); Assert.True(viewport.SelectionBoundsVisible);
             Assert.Equal(Visibility.Hidden, ((StackPanel)moveMode.Parent).Visibility);
@@ -258,6 +269,8 @@ internal static class SceneInspectionMcpChecks
             await Edit("cancel", new() { ["token"] = token });
             File.WriteAllBytes(archivePath, original); File.SetLastWriteTimeUtc(archivePath, archive.Stamp.LastWriteUtc);
             await Card("select", new() { ["node"] = 2 });
+            Assert.DoesNotContain(strategyReadout, Fields(inspectionCard));
+            Assert.Null((await Call("scene_inspect", new() { ["preview"] = preview }))["attackStrategy"]);
             Assert.True(viewport.SelectionBoundsVisible); Assert.False(viewport.TransformHandlesVisible);
             var box = (LineGeometryModel3D)typeof(SceneViewport).GetField("selectionBox", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!;
             var boxMax = box.Geometry!.Positions!.Aggregate(Vector3.Max);

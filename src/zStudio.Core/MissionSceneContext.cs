@@ -50,7 +50,10 @@ public sealed class MissionSceneContext
                 HashSet<int> nodes = []; Stack<int> pending = new(); pending.Push(matches[0].Root);
                 while (pending.TryPop(out int node))
                     if (node >= 0 && node < Scene.Nodes.Count && nodes.Add(node)) foreach (int child in SceneBuilder.Children(Scene.Nodes[node])) pending.Push(child);
-                int[] candidates = nodes.Where(n => SourceNodes[n] == source).ToArray();
+                var provenance = previous.Scene.Nodes[index].Metadata;
+                int[] candidates = nodes.Where(n => source >= 0 ? SourceNodes[n] == source :
+                    Scene.Nodes[n].Metadata.Text("source_library") == provenance.Text("source_library") &&
+                    Scene.Nodes[n].Metadata.Int("source_node", -1) == provenance.Int("source_node", -2)).ToArray();
                 return candidates.Length == 1 ? candidates[0] : -1;
             }
             ancestor = previous.Scene.Nodes[ancestor].Parents.FirstOrDefault(-1);
@@ -82,6 +85,7 @@ public static partial class MissionSceneLoader
     public static async Task<MissionSceneContext> LoadAsync(ZbdDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium)
     {
         token.ThrowIfCancellationRequested();
+        if (world.Game == GameVariant.MechWarrior3) return await LoadMw3Async(world, resolver, token).ConfigureAwait(false);
         var requested = MissionLayoutSelection.For(difficulty);
         string directory = Path.GetDirectoryName(world.Path)!;
         var files = ResourceFiles(world.Path, resolver);
