@@ -30,7 +30,7 @@ public partial class MainWindow
     private void AttachPickupEditor(DocumentModel document)
     {
         pickupDocument = document; document.PickupEditsChanged += PickupEditsChanged;
-        updating = true; PickupLocked.IsChecked = document.PickupsLocked; updating = false;
+        SetSceneEditingLocked(document, document.PickupsLocked);
         PickupTools.Visibility = Visibility.Visible; PickupEditsChanged();
         if (!document.PickupDiagnosticsReported && document.PickupEdits is { } edits)
         {
@@ -50,12 +50,22 @@ public partial class MainWindow
             SetProperties(properties);
         }
     }
-    private void PickupLockedChanged(object sender, RoutedEventArgs e)
+    private void EditingUnlockedChanged(object sender, RoutedEventArgs e)
     {
         if (!ready || updating || pickupDocument == null) return;
-        if (!ResolvePropertiesDrafts(pickupDocument)) { updating = true; PickupLocked.IsChecked = pickupDocument.PickupsLocked; updating = false; return; }
-        pickupDocument.PickupsLocked = PickupLocked.IsChecked == true;
-        scene?.SetPickupLocked(pickupDocument.PickupsLocked);
+        if (!ResolvePropertiesDrafts(pickupDocument)) { updating = true; EditingUnlocked.IsChecked = !pickupDocument.PickupsLocked; updating = false; return; }
+        SetSceneEditingLocked(pickupDocument, EditingUnlocked.IsChecked != true);
+    }
+    private void SetSceneEditingLocked(DocumentModel document, bool locked)
+    {
+        // Keep the existing document/MCP lock identity; the visible option is
+        // positively named Unlock editing, so its checked state is the inverse.
+        document.PickupsLocked = locked;
+        if (pickupDocument != document) return;
+        bool previous = updating; updating = true;
+        try { EditingUnlocked.IsChecked = !locked; }
+        finally { updating = previous; }
+        scene?.SetPickupLocked(locked);
     }
     private void CommitPickupPosition(PickupPlacementEditSession edits, MissionPickupSource source, Vector3 position)
     {

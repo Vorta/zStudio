@@ -44,7 +44,7 @@ internal static class PickupEditorCheck
                 byte[] worldHash = SHA256.HashData(doc.Document.Bytes.Span);
                 var actor = scene.Mission!.Actors.Single(a => a.Pickup?.Source.RecordIndex == 49);
                 var pickup = actor.Pickup!; Vector3 originalPosition = pickup.Position;
-                var lockBox = (System.Windows.Controls.Primitives.ToggleButton)window.FindName("PickupLocked"); Require(lockBox.IsChecked == true, "Map did not start locked");
+                var unlock = (System.Windows.Controls.Primitives.ToggleButton)window.FindName("EditingUnlocked"); Require(unlock.IsChecked == false, "Map did not start locked");
                 viewport.IsInertiaEnabled = false;
                 var pickupPoints = SceneBuilder.Assemble(scene.Mission.Scene).Placements.Where(p => scene.PickupAt(p.NodeIndex)?.Root == actor.Root)
                     .SelectMany(p => scene.Mission.Scene.Models[p.ModelIndex].Vertices.Select(v => Vector3.Transform(v, p.Transform))).ToArray();
@@ -67,7 +67,7 @@ internal static class PickupEditorCheck
                 window.OpenCurrentProperties(); await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
                 Require(window.OpenPropertiesWindow?.PickupFields != null, "Pickup coordinates are missing");
                 await Capture("locked");
-                lockBox.IsChecked = false; await Task.Delay(150, token); manipulator = Manipulator();
+                unlock.IsChecked = true; await Task.Delay(150, token); manipulator = Manipulator();
                 Require(manipulator.Visibility == Visibility.Visible, "Unlock did not reveal arrows");
                 await Capture("unlocked");
                 var placementPanel = window.OpenPropertiesWindow!.PickupFields!;
@@ -224,8 +224,8 @@ internal static class PickupEditorCheck
                 scene.CancelPickupDrag();
                 Require(scene.PickupPosition(actor.Root) == edits.Position(pickup.Source), "Canceled drag reverted a preceding numeric edit");
                 edits.Undo(); Require(scene.PickupPosition(actor.Root) == committed, "Pending numeric input did not retain independent undo");
-                lockBox.IsChecked = true; Require(Manipulator().Visibility == Visibility.Collapsed, "Lock retained arrows");
-                Require(!scene.HandlePickupPointerDown(pendingPoint, LeftButton()), "Locked handles intercepted a click"); lockBox.IsChecked = false;
+                unlock.IsChecked = false; Require(Manipulator().Visibility == Visibility.Collapsed, "Lock retained arrows");
+                Require(!scene.HandlePickupPointerDown(pendingPoint, LeftButton()), "Locked handles intercepted a click"); unlock.IsChecked = true;
                 var pose = scene.CaptureView(); var picker = (ComboBox)window.FindName("WorldDifficulty"); picker.SelectedItem = MissionDifficulty.Easy;
                 scene = await Ready(MissionDifficulty.Easy);
                 Require(scene.SelectedPickupRoot is int && scene.PickupPosition(scene.SelectedPickupRoot.Value) == committed, "Difficulty lost edited position or counterpart selection");

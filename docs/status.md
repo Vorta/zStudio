@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## Floating-card input and shared editing lock — 0.6.3 (2026-09-28)
+
+Inspection cards now receive native wheel/scrollbar input before camera navigation. Card controls cannot start camera gestures; wheel input at their scroll limits or padding stays in the card. Scene navigation outside the card remains available. The routed-input regression reproduced the previous zero-scroll-offset failure before the fix.
+
+The **Unlock editing** toggle starts unchecked and now gates pickup, AI-node and supported AIV tank position edits. Checked means unlocked, with matching padlock artwork. GUI and MCP share the lock transition and immediately refresh inspection eligibility. The compatibility-named `pickup_lock` command and `PickupsLocked` state are retained with updated schema/catalog documentation. Pending drafts require resolution before locking; canceling a GUI decision restores the toggle, and MCP rejects unresolved drafts. Inspection, copying, framing, undo/redo and verified saves remain available while locked. Release build passes with zero warnings/errors and all **365 tests pass** (273 Core, 92 Desktop). New checks exercise native card scrolling, scroll limits/padding, coordinate fields, camera gesture exclusion, unchanged selection/inertia, normal scene zoom, GUI/MCP lock state and native Cancel preserving a draft. The rendered world/model/animation navigation suite also passes with unchanged source hashes. Embedded catalog and GUI capability parity remain current.
+
 ## Version 0.6.3 PR preparation (2026-09-28)
 
 Version 0.6.3 includes the inspection cards, mission coordinate editing, Document scene hierarchy and reviewed fixes described below. The prior 0.6.2 designation was a local development build; this work targets 0.6.3 for its PR. The version property, README, changelog and packaging examples are aligned. Historical validation entries retain the versions and results actually tested. The latest user request authorizes a PR; merging and publishing a release remain separate steps after required CI and review.

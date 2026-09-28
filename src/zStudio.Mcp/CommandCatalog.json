@@ -2929,7 +2929,7 @@
   },
   {
     "Name": "zstudio_pickup_lock",
-    "Description": "Set this document\u0027s pickup editing lock; new documents are locked by default.",
+    "Description": "Set this document\u0027s mission coordinate editing lock for pickups, AI nodes and supported AIV tanks. The legacy command/state names are retained for compatibility; new documents are locked by default.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2953,7 +2953,7 @@
       {
         "Name": "locked",
         "Type": "boolean",
-        "Description": "Whether placements are locked.",
+        "Description": "Whether all supported mission coordinate edits are locked; inverse of the GUI Unlock editing toggle.",
         "Required": true,
         "Choices": null,
         "Properties": null

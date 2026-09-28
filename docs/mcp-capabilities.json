@@ -24,7 +24,7 @@
       "tools": [
         "zstudio_camera"
       ],
-      "note": "Middle orbit picks a visible scene surface once using rotate screenPoint [x,y] in viewport DIP; empty space retains the pivot. Shift-middle screen pan and Ctrl-Shift-middle dolly use camera pan/dolly. GUI modifier press/release changes the active drag mode regardless of input order, rebasing motion and clearing prior inertia; orbit picking waits for first movement. Wheel/Ctrl-middle zoom refreshes speed from the current pointed surface while moving along the pointer ray; orthographic zoom scales about that point; camera zoom screenPoint matches this, defaulting to viewport center. Misses retain the last speed; pan/orbit do not reset it. Inertia retains the final screen point and resamples from the current camera. Camera reads expose projection, exact axis state, OrbitPivot and NavigationReferenceDistance; automation never captures physical input. Camera-dependent horizons and animation effects refresh after inertial motion at the frame boundary."
+      "note": "Middle orbit picks a visible scene surface once using rotate screenPoint [x,y] in viewport DIP; empty space retains the pivot. Shift-middle screen pan and Ctrl-Shift-middle dolly use camera pan/dolly. GUI modifier press/release changes the active drag mode regardless of input order, rebasing motion and clearing prior inertia; orbit picking waits for first movement. Wheel/Ctrl-middle zoom refreshes speed from the current pointed surface while moving along the pointer ray; orthographic zoom scales about that point; camera zoom screenPoint matches this, defaulting to viewport center. Misses retain the last speed; pan/orbit do not reset it. Inertia retains the final screen point and resamples from the current camera. Camera reads expose projection, exact axis state, OrbitPivot and NavigationReferenceDistance; automation never captures physical input. Camera-dependent horizons and animation effects refresh after inertial motion at the frame boundary. Floating-card input is excluded from camera wheel handling and gesture starts; native scrolling is presentation-only and complete contents remain available through scene_inspect/scene_card."
     },
     {
       "gui": "SceneViewport.NavigationCube:NavigateCubeAt",
@@ -129,7 +129,7 @@
         "zstudio_undo_redo",
         "zstudio_save_document"
       ],
-      "note": "Dynamic coordinate/identifier copy buttons, selection close, XYZ drafts, Edit/Confirm and Cancel share document revisions, unique draft lifetimes, archive ownership, history and verified saves. Closing selection clears the hierarchy/framing target. Animation poses and ambiguous actor ownership remain read-only."
+      "note": "Dynamic coordinate/identifier copy buttons, selection close, XYZ drafts, Edit/Confirm and Cancel share document revisions, unique draft lifetimes, archive ownership, history and verified saves. Closing selection clears the hierarchy/framing target. Animation poses and ambiguous actor ownership remain read-only. All supported mission coordinates require the shared editing lock to be unlocked. Native card scrolling never initiates camera zoom."
     },
     {
       "gui": "DocumentSceneTree:Hierarchy",
@@ -792,11 +792,11 @@
       "note": "GUI and MCP inspect the same current edited or mirrored texture snapshot, including moved private palettes, added records, undo/redo and Save As aliases."
     },
     {
-      "gui": "MainWindow.xaml:PickupLockedChanged",
+      "gui": "MainWindow.xaml:EditingUnlockedChanged",
       "tools": [
         "zstudio_pickup_lock"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "Unlock editing is checked when the shared pickup/AI-node/AIV-tank coordinate lock is off. The compatibility-named pickup_lock and PickupsLocked state retain their identities. GUI cancellation preserves drafts and lock state; MCP lock transitions require resolved drafts."
     },
     {
       "gui": "MainWindow.xaml:PlayAudioClick",

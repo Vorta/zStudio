@@ -73,6 +73,9 @@ internal sealed class SceneInspectionCard : Grid
         body.Children.Clear(); body.Children.Add(title); body.Children.Add(scope); body.Children.Add(actions); body.Children.Add(draftRows); body.Children.Add(error);
         body.Children.Add(rows);
         card = Box(new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        // Native scrolling runs first; wheel input at the card's padding or
+        // scroll limits still belongs to the card, never the surrounding scene.
+        card.MouseWheel += (_, e) => e.Handled = true;
         card.Width = 350; card.HorizontalAlignment = HorizontalAlignment.Left; card.VerticalAlignment = VerticalAlignment.Top;
         card.Visibility = Visibility.Collapsed; Children.Add(card);
         viewport.InspectionChanged += Refresh; SizeChanged += (_, _) => Refresh();

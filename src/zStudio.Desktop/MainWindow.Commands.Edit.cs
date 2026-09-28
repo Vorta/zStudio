@@ -88,9 +88,9 @@ public partial class MainWindow
             cancellation.Token.ThrowIfCancellationRequested();
             return Page(edits.Records.Select(p => new { source = p.Source, p.Type, position = edits.Position(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) }), a, p => p.Type + " " + p.source.ResourceName + " " + p.target);
         });
-        Register(r, "pickup_lock", "Set this document's pickup editing lock; new documents are locked by default.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether placements are locked.", true)], a =>
+        Register(r, "pickup_lock", "Set this document's mission coordinate editing lock for pickups, AI nodes and supported AIV tanks. The legacy command/state names are retained for compatibility; new documents are locked by default.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether all supported mission coordinate edits are locked; inverse of the GUI Unlock editing toggle.", true)], a =>
         {
-            var d = TargetDocument(a, true); d.PickupsLocked = Flag(a, "locked"); if (pickupDocument == d) { updating = true; PickupLocked.IsChecked = d.PickupsLocked; updating = false; scene?.SetPickupLocked(d.PickupsLocked); } return Result(DocumentState(d));
+            var d = TargetDocument(a, true); SetSceneEditingLocked(d, Flag(a, "locked")); return Result(DocumentState(d));
         });
         Register(r, "pickup_move", "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements.", true,
             [DocumentParameter, RevisionParameter, new("source", "object", "Exact source identity returned by pickups; field names are case-sensitive.", true, Properties:
@@ -100,7 +100,7 @@ public partial class MainWindow
                  new("RecordIndex", "integer", "Placement record index returned by pickups.", true, Minimum: 0, Maximum: int.MaxValue)]),
              P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)], a =>
         {
-            var d = TargetDocument(a, true); if (d.PickupsLocked) throw new StudioCommandException("locked", "Unlock pickup editing first.");
+            var d = TargetDocument(a, true); if (d.PickupsLocked) throw new StudioCommandException("locked", "Unlock editing first.");
             var source = System.Text.Json.JsonSerializer.Deserialize<MissionPickupSource>(a["source"]!.ToJsonString()) ?? throw new StudioCommandException("invalid_argument", "Missing pickup identity.");
             var edits = d.PickupEdits ?? throw new StudioCommandException("not_ready", "Load pickups first.");
             if (edits.Find(source) == null) throw new StudioCommandException("stale_record", "Pickup source no longer exists.");

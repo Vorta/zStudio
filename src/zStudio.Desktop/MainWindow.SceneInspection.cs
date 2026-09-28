@@ -112,9 +112,9 @@ public partial class MainWindow
             if (edits.Coordinate(source) is { Kind: "tank" } tank) { info["Template"] = tank.Template; info["Heading degrees"] = tank.Rotation.Y; }
         }
         if (known && edits!.Coordinate(source!) is { Kind: "tank" } vehicle && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0)) known = false;
-        bool locked = known && edits!.Find(source!) != null && shownDocument!.PickupsLocked;
+        bool locked = known && shownDocument!.PickupsLocked;
         info["Editable"] = known && !locked;
-        info["Editing"] = locked ? "Unlock pickup editing to change XYZ" : known ? "XYZ position; confirmation creates one undo step" : "Read-only inspection";
+        info["Editing"] = locked ? "Unlock editing to change XYZ" : known ? "XYZ position; confirmation creates one undo step" : "Read-only inspection";
         info["Document revision"] = shownDocument?.Revision;
         return info;
     }
@@ -129,7 +129,7 @@ public partial class MainWindow
             throw new StudioCommandException("read_only", "This node has no verified editable placement.");
         if (edits.Coordinate(source) is { Kind: "tank" } vehicle && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))
             throw new StudioCommandException("read_only", "The tank template is missing or ambiguous.");
-        if (edits.Find(source) != null && doc.PickupsLocked) throw new StudioCommandException("locked", "Unlock pickup editing first.");
+        if (doc.PickupsLocked) throw new StudioCommandException("locked", "Unlock editing first.");
         if (edits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed. Reload or preserve your existing edits with Save As.");
         inspectionDraft = card; card.StartDraft(doc, source, edits.Position(source));
     }
@@ -140,7 +140,7 @@ public partial class MainWindow
             throw new StudioCommandException("stale_record", "The draft's document or selected instance is no longer available.");
         if (doc.Revision != card.DraftRevision) throw new StudioCommandException("revision_conflict", "The document changed. Discard this draft and start again.");
         var edits = doc.PickupEdits!;
-        if (edits.Find(card.DraftSource!) != null && doc.PickupsLocked) throw new StudioCommandException("locked", "Pickup editing is locked.");
+        if (doc.PickupsLocked) throw new StudioCommandException("locked", "Coordinate editing is locked.");
         if (edits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed outside zStudio.");
         var position = card.DraftPosition(); edits.MoveTo(card.DraftSource!, position);
         card.CancelDraft(); UpdateDocumentCommands();

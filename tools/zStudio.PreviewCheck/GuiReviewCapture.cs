@@ -228,7 +228,7 @@ internal static class GuiReviewCapture
                         selected = scene.SelectedPickupRoot == actor.Root;
                     }
                 Require(selected, "Could not select Nanite for review");
-                ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("PickupLocked")).IsChecked = false; await Capture("09-pickup");
+                ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("EditingUnlocked")).IsChecked = true; await Capture("09-pickup");
                 await Select(world, world.Assets.First(a => a.Record.Kind == AssetKind.Model && a.Record.Content is GameModel m && m.Vertices.Length > 100));
                 await Capture("10-model");
                 ((TabControl)window.FindName("NavigationTabs")).SelectedItem = window.FindName("DocumentSceneTab");

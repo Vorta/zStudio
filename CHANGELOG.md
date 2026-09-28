@@ -4,6 +4,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.6.3 — 2026-09-28
 
+- Keep wheel scrolling and native controls inside floating inspection cards separate from camera navigation, including at scroll limits.
+- Rename the map lock to **Unlock editing** and share it across pickup, AI-node and supported AIV tank coordinates, preserving draft guards and the existing MCP command/state identities.
 - Add an expandable Document scene hierarchy for active previews, including mission placements, shared/partition references and unlinked nodes. Synchronize viewport selection, preserve expansion by provenance, retain stable animation scene structure, and expose the same hierarchy through `zstudio_scene_tree`.
 - Add shared 3D hover information and floating node cards to Whole world, model and animation previews. Show exact surface coordinates separately from object origins, source node/model/material identities, soil and region flags, AI links and mission metadata, with full-precision copy actions.
 - Add explicit XYZ editing for mission pickups, AI navigation nodes and supported AIV tanks. Preserve source identities, linked unique difficulty counterparts, pending drafts, chronological undo and verified coordinate-only archive saves.

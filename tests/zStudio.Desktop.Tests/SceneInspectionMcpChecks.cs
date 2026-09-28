@@ -2,10 +2,14 @@ using System.IO;
 using System.IO.Pipes;
 using System.Numerics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Automation;
+using System.Windows.Threading;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Core;
@@ -66,7 +70,18 @@ internal static class SceneInspectionMcpChecks
             await Card("select", new() { ["target"] = target });
             await Card("select", new() { ["target"] = target, ["node"] = 0 }, "invalid_argument");
             var inspected = await Call("scene_inspect", new() { ["preview"] = preview });
-            Assert.True(inspected["inspection"]!["Editable"]!.GetValue<bool>());
+            Assert.False(inspected["inspection"]!["Editable"]!.GetValue<bool>());
+            var unlock = (ToggleButton)main.FindName("EditingUnlocked");
+            Assert.False(unlock.IsChecked); Assert.True(doc.PickupsLocked);
+            Assert.Equal("Unlock editing", AutomationProperties.GetName(unlock));
+            Assert.Equal("Unlock", ((PreviewIcon)unlock.Content).Kind);
+            await Edit("begin", error: "locked");
+            await Lock(false);
+            Assert.True(unlock.IsChecked); Assert.True(((PreviewIcon)unlock.Content).IsChecked);
+            Assert.True((await Call("scene_inspect", new() { ["preview"] = preview }))["inspection"]!["Editable"]!.GetValue<bool>());
+            unlock.IsChecked = false; Assert.True(doc.PickupsLocked);
+            await Edit("begin", error: "locked");
+            unlock.IsChecked = true; Assert.False(doc.PickupsLocked);
             var copy = await Card("copy", new() { ["field"] = "Authored placement XYZ" }); Assert.Contains("1", copy["text"]!.GetValue<string>());
             var tree = await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString() });
             var begun = await Edit("begin"); string token = begun["draft"]!["token"]!.GetValue<string>();
@@ -75,6 +90,28 @@ internal static class SceneInspectionMcpChecks
             Assert.NotEqual(token, restarted["draft"]!["token"]!.GetValue<string>());
             await Edit("cancel", new() { ["token"] = token }, "draft_conflict");
             token = restarted["draft"]!["token"]!.GetValue<string>();
+            await Lock(true, "pending_drafts");
+            Assert.False(doc.PickupsLocked); Assert.True(unlock.IsChecked);
+            Assert.Equal(token, ((SceneInspectionCard)viewport.InspectionContent!).DraftToken);
+            // Answer only this fixture thread's native XYZ prompt, without
+            // moving/capturing the physical mouse or synthesizing keyboard input.
+            bool canceled = false;
+            var answer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(20) };
+            answer.Tick += (_, _) => EnumThreadWindows(GetCurrentThreadId(), (handle, _) =>
+            {
+                var title = new StringBuilder(256); GetWindowText(handle, title, title.Capacity);
+                if (title.ToString() != "Node position draft") return true;
+                canceled = true; SendMessage(handle, 0x0111, 2, 0); return false; // WM_COMMAND, IDCANCEL
+            }, 0);
+            answer.Start();
+            try { unlock.IsChecked = false; }
+            finally { answer.Stop(); }
+            Assert.True(canceled); Assert.False(doc.PickupsLocked); Assert.True(unlock.IsChecked);
+            Assert.Equal(token, ((SceneInspectionCard)viewport.InspectionContent!).DraftToken);
+            // Applying rechecks the lock even if it changed outside the GUI/MCP guard.
+            doc.PickupsLocked = true;
+            await Edit("apply", new() { ["token"] = token }, "locked");
+            Assert.False(doc.IsDirty); doc.PickupsLocked = false;
             JsonObject TreeArgs(string action) => new() { ["document"] = doc.SessionId.ToString(), ["context"] = tree["context"]!.GetValue<string>(),
                 ["preview"] = preview, ["action"] = action, ["node"] = 0 };
             await Call("scene_tree", TreeArgs("select"), "pending_drafts");
@@ -96,10 +133,13 @@ internal static class SceneInspectionMcpChecks
             Assert.True(doc.IsDirty); Assert.Equal(new Vector3(5.125f, 6, 7), edits.Position(edits.OtherCoordinates[0].Source));
             Assert.Equal(original, File.ReadAllBytes(archivePath));
             Assert.Equal(new Vector3(5.125f, 6, 7), viewport.AiNetworks.Networks[0].Nodes[0].Position);
+            await Lock(true); Assert.False(unlock.IsChecked);
+            await Edit("begin", error: "locked");
             await Call("scene_inspect", new() { ["preview"] = preview, ["target"] = target }, "stale_record");
             await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
             Assert.Equal(preview, ((Guid)Get("previewId")!).ToString());
             Assert.False(doc.IsDirty); Assert.Equal(new Vector3(1, 2, 3), viewport.AiNetworks.Networks[0].Nodes[0].Position);
+            await Lock(false);
             begun = await Edit("begin"); token = begun["draft"]!["token"]!.GetValue<string>();
             File.WriteAllBytes(archivePath, [.. original, 1]);
             await Edit("apply", new() { ["token"] = token }, "external_change");
@@ -110,6 +150,7 @@ internal static class SceneInspectionMcpChecks
             Assert.Null(viewport.SelectedInspection);
 
             Task<JsonNode> Card(string action, JsonObject args, string? error = null) { args["preview"] = preview; args["action"] = action; return Call("scene_card", args, error); }
+            Task<JsonNode> Lock(bool locked, string? error = null) => Call("pickup_lock", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["locked"] = locked }, error);
             Task<JsonNode> Edit(string action, JsonObject? args = null, string? error = null)
             { args ??= new(); args["document"] = doc.SessionId.ToString(); args["revision"] = doc.Revision; return Card(action, args, error); }
             async Task<JsonNode> Call(string name, JsonObject args, string? error = null)
@@ -126,6 +167,11 @@ internal static class SceneInspectionMcpChecks
         void Invoke(string name, params object[] args) => typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, args);
     }
     private static ZrdNode A(params ZrdNode[] children) => ZrdNode.Create(ZrdKind.Array) with { Children = children };
+    private delegate bool WindowCallback(nint handle, nint parameter);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] private static extern bool EnumThreadWindows(uint thread, WindowCallback callback, nint parameter);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(nint handle, StringBuilder text, int count);
+    [DllImport("user32.dll")] private static extern nint SendMessage(nint handle, uint message, nint wParam, nint lParam);
     private static ZrdNode S(string value) => ZrdNode.Create(ZrdKind.String) with { Text = value };
     private static ZrdNode I(int value) => ZrdNode.Create(ZrdKind.Int, value.ToString());
     private static ZrdNode F(float value) => ZrdNode.Create(ZrdKind.Float, value.ToString(System.Globalization.CultureInfo.InvariantCulture));

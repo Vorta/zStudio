@@ -37,7 +37,7 @@ public sealed class PreviewIcon : FrameworkElement
         base.OnRender(drawing);
         var brush = (Brush)GetValue(ForegroundProperty);
         drawing.PushTransform(new ScaleTransform(ActualWidth / 16, ActualHeight / 16));
-        string? glyph = Kind switch { "Map" => "\uE81E", "Effects" => "\uE794", "Camera" => "\uE714", "Fly" => "\uE709", "Lock" => IsChecked ? "\uE72E" : "\uE785", _ => null };
+        string? glyph = Kind switch { "Map" => "\uE81E", "Effects" => "\uE794", "Camera" => "\uE714", "Fly" => "\uE709", "Lock" => IsChecked ? "\uE72E" : "\uE785", "Unlock" => IsChecked ? "\uE785" : "\uE72E", _ => null };
         if (glyph != null)
         {
             var text = new FormattedText(glyph, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Symbols, 16, brush, VisualTreeHelper.GetDpi(this).PixelsPerDip);

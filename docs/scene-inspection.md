@@ -4,6 +4,8 @@ Whole world, model and animation previews share an inspection overlay. The top-r
 
 Left-click a surface or AI marker to pin a floating card. It follows the selected object and stays inside the viewport, with offscreen/inactive labels when appropriate. Copy buttons preserve numeric round-trip precision and coordinate-space labels. Animation cards distinguish runtime instance IDs from original source nodes; expired instances do not silently bind to another copy. Inspection does not change animation events or playback.
 
+The mouse wheel scrolls the floating card when the pointer is over its contents or scrollbar, including coordinate fields. Reaching a scroll limit does not zoom the scene. Camera gestures begin on the scene outside the card; native card buttons, fields and scrollbar retain their own input.
+
 Closing the card clears its tree selection and Frame selected target. Compatible preview refreshes restore a retained source row's framing and inspection without selecting an arbitrary runtime copy. Isolating a pickup child from the tree keeps the complete placed pickup, consistently through the toolbar and MCP. Geometry shared by multiple mission actors has no uniquely editable placement and stays read-only.
 
 Details include model/material/stored texture and LOD, node/parent identity, soil, CanModify and ClipTo. AI cards retain ordered directed links, negative sentinels and the raw node integer. Pickups include placement identity, amount and respawn metadata. Tanks include their AIV placement, template, heading and difficulty scope. Scene local, rendered world and authored placement coordinates are labeled separately.
@@ -18,7 +20,7 @@ Select a row to inspect it and make it the Frame selected target. Selection does
 
 ## Editing positions
 
-In Whole world, **Edit** enables XYZ for supported pickups, AI navigation nodes and AIV vehicles, including AI tanks. Unlock pickups with the existing pickup lock first. Other geometry and runtime animation poses remain read-only. Tank templates must resolve unambiguously. Actors without an AIV placement remain inspectable without inventing a placement record.
+In Whole world, enable **Unlock editing**, then use **Edit** for supported pickup, AI navigation node and AIV vehicle coordinates, including AI tanks. The toggle starts off for each new map document; checked means editing is enabled and the padlock is open. Turn it off to lock all these coordinate edits. Inspection, selection, copying, framing, undo/redo and saving remain available while locked. Resolve any pending draft before changing the lock; Cancel retains the draft and previous lock state. Other geometry and runtime animation poses remain read-only. Tank templates must resolve unambiguously. Actors without an AIV placement remain inspectable without inventing a placement record.
 
 Enter numbers with a decimal point, then click **✓** or press Enter to apply all three coordinates as one undo step. Cancel or Escape in a coordinate field discards the draft. Incomplete/non-finite values remain uncommitted. Navigation, selection, scene refresh, save and close explicitly resolve pending input; focus loss does not confirm it. Existing Properties remains independently pinned.
 
@@ -38,7 +40,9 @@ The map document owns these edits. Its Undo/Redo/Save commands handle them chron
 - `set`: requires document/revision, current `token` and three `position` strings, including temporary incomplete numeric input.
 - `apply` / `cancel`: require document/revision and current draft token. Apply additionally checks the revision captured at draft creation.
 
-`drafts` and `resolve_drafts` accept `target: "scene"`; resolution requires the exact draft token. Existing `undo_redo` and `save_document` handle accepted edits. Stale targets/revisions/drafts, locked pickups and conflicting archive owners are rejected. Discovery remains windowless; local MCP stays opt-in.
+`drafts` and `resolve_drafts` accept `target: "scene"`; resolution requires the exact draft token. Existing `undo_redo` and `save_document` handle accepted edits. Stale targets/revisions/drafts, locked coordinate edits and conflicting archive owners are rejected. Discovery remains windowless; local MCP stays opt-in.
+
+The compatibility-named `zstudio_pickup_lock` command controls the shared lock for pickups, AI nodes and supported AIV tanks. Pass `locked: false` to enable the GUI's **Unlock editing** toggle, or `true` to turn it off. The existing `PickupsLocked` document-state field reports this shared lock. Lock changes require the current document revision and explicitly resolved drafts. Card scrolling is presentation-only; MCP inspection/copy already exposes its complete contents.
 
 Tokens identify both the draft lifetime and its input: canceling and reopening identical coordinates produces a new token. Old requests cannot apply, change or cancel the new draft. Scene selection and isolation reject active Fly or pickup-drag interactions before changing selection or the camera.
 

@@ -75,7 +75,7 @@ internal static class WorldHighlightCheck
                         var state = (await main.Commands.ExecuteAsync("zstudio_state", new())).Data;
                         string id = state["preview"]!.GetValue<string>();
                         await main.Commands.ExecuteAsync("zstudio_scene_selection", new() { ["preview"] = id, ["action"] = "select", ["node"] = pickup.Root });
-                        ((ToggleButton)main.FindName("PickupLocked")).IsChecked = false;
+                        ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
                         main.OpenCurrentProperties();
                         await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                         var popup = main.OpenPropertiesWindow!; var fields = popup.PickupFields!;
@@ -91,7 +91,7 @@ internal static class WorldHighlightCheck
                         }
                         Require(operation["State"]!.GetValue<string>() == "failed" && operation["result"]!["code"]!.GetValue<string>() == "pending_drafts", "MCP highlight bypassed Properties draft guard");
                         input.Text = original; popup.Close();
-                        ((ToggleButton)main.FindName("PickupLocked")).IsChecked = true;
+                        ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = false;
                     }
                     // Native overflow, theme and density retain the selected mode.
                     main.Width = 740;

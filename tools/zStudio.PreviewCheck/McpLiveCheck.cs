@@ -43,40 +43,50 @@ internal static class McpLiveCheck
             async Task CheckInspection()
             {
                 var inspected = await Call("scene_inspect", new { preview });
-                Equal(true, inspected["inspection"]!["Editable"]!.GetValue<bool>(), "AI XYZ editor available");
+                Equal(false, inspected["inspection"]!["Editable"]!.GetValue<bool>(), "AI XYZ editor starts locked");
                 var copied = await Call("scene_card", new { preview, action = "copy", field = "Authored placement XYZ" });
                 Equal(true, copied["text"]!.GetValue<string>().Contains("XYZ"), "copy coordinate space");
                 await Call("capture", new { target = "window", width = 1400, height = 900 });
                 File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, "ai-card.png"), true);
                 await EditSelected("ai");
-                bool foundTank = false;
-                for (int offset = 0; !foundTank; offset += 200)
+                foreach (string label in new[] { "tank", "pickup" })
                 {
-                    var nodes = await Call("scene_nodes", new { preview, offset, limit = 200 });
-                    foreach (var node in nodes["items"]!.AsArray().Where(n => n?["actor"]?["CoordinateSource"] != null && n?["Metadata"]?["model_index"] != null))
+                    bool found = false;
+                    for (int offset = 0; !found; offset += 200)
                     {
-                        try { await Call("scene_card", new { preview, action = "select", node = node!["Index"]!.GetValue<int>() }); }
-                        catch (InvalidDataException ex) when (ex.Message.Contains("stale_record")) { continue; }
-                        var details = (await Call("scene_inspect", new { preview }))["inspection"]!;
-                        if (details["Editable"]?.GetValue<bool>() != true) continue;
-                        await Call("camera", new { preview, action = "frame", target = "selected" });
-                        await Call("capture", new { target = "window", width = 1400, height = 900 });
-                        File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, "tank-card.png"), true);
-                        await EditSelected("tank"); foundTank = true; break;
+                        var nodes = await Call("scene_nodes", new { preview, offset, limit = 200 });
+                        foreach (var node in nodes["items"]!.AsArray().Where(n => n?["actor"]?[label == "tank" ? "CoordinateSource" : "Pickup"] != null && n?["Metadata"]?["model_index"] != null))
+                        {
+                            try { await Call("scene_card", new { preview, action = "select", node = node!["Index"]!.GetValue<int>() }); }
+                            catch (InvalidDataException ex) when (ex.Message.Contains("stale_record")) { continue; }
+                            var details = (await Call("scene_inspect", new { preview }))["inspection"]!;
+                            if (details["Editable"]?.GetValue<bool>() != true) continue;
+                            await Call("camera", new { preview, action = "frame", target = "selected" });
+                            await Call("capture", new { target = "window", width = 1400, height = 900 });
+                            File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, label + "-card.png"), true);
+                            await EditSelected(label); found = true; break;
+                        }
+                        if (nodes["nextOffset"] == null) break;
                     }
-                    if (nodes["nextOffset"] == null) break;
+                    Equal(true, found, "rendered " + label + " was selectable and editable");
                 }
-                Equal(true, foundTank, "rendered AIV tank was selectable and editable");
                 await Call("ai_selection", new { preview, snapshot = (await Call("preview_state", new { preview }))["ai"]!["snapshot"]!.GetValue<string>(), action = "select", node = aiNode });
                 await Call("camera", new { preview, action = "frame", target = "selected" });
                 async Task EditSelected(string label)
                 {
                     var before = await Call("scene_inspect", new { preview }); long revision = before["revision"]!.GetValue<long>();
+                    var locked = await Call("pickup_lock", new { document = worldId, revision, locked = true });
+                    Equal(true, locked["PickupsLocked"]!.GetValue<bool>(), label + " lock state");
+                    Equal(false, (await Call("scene_inspect", new { preview }))["inspection"]!["Editable"]!.GetValue<bool>(), label + " locked card");
+                    await Call("scene_card", new { preview, action = "begin", document = worldId, revision }, "locked");
+                    await Call("pickup_lock", new { document = worldId, revision, locked = false });
+                    Equal(true, (await Call("scene_inspect", new { preview }))["inspection"]!["Editable"]!.GetValue<bool>(), label + " unlocked card");
                     var p = before["inspection"]!["Authored placement XYZ"]!;
                     string[] xyz = new[] { p["x"]!.GetValue<float>() + 1.25f, p["y"]!.GetValue<float>(), p["z"]!.GetValue<float>() }
                         .Select(v => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture)).ToArray();
                     var draft = await Call("scene_card", new { preview, action = "begin", document = worldId, revision });
                     draft = await Call("scene_card", new { preview, action = "set", document = worldId, revision, token = draft["draft"]!["token"]!.GetValue<string>(), position = xyz });
+                    await Call("pickup_lock", new { document = worldId, revision, locked = true }, "pending_drafts");
                     await Task.Delay(200);
                     await Call("capture", new { target = "window", width = 1400, height = 900 });
                     File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, label + "-edit.png"), true);
@@ -84,6 +94,7 @@ internal static class McpLiveCheck
                     Equal(revision + 1, applied["revision"]!.GetValue<long>(), label + " one revision per move");
                     var changed = await Call("scene_inspect", new { preview });
                     Equal(float.Parse(xyz[0], System.Globalization.CultureInfo.InvariantCulture), changed["inspection"]!["Authored placement XYZ"]!["x"]!.GetValue<float>(), label + " applied XYZ");
+                    await Call("pickup_lock", new { document = worldId, revision = revision + 1, locked = true });
                     await Call("undo_redo", new { document = worldId, revision = revision + 1, action = "undo" });
                     var undone = await Call("scene_inspect", new { preview });
                     Equal(true, JsonNode.DeepEquals(p, undone["inspection"]!["Authored placement XYZ"]), label + " undo restores XYZ");
@@ -107,6 +118,8 @@ internal static class McpLiveCheck
                     Equal(0, saved["result"]!["Errors"]!.AsArray().Count, label + " ordinary Save after Save As");
                     byte[] originalBytes = await File.ReadAllBytesAsync(source), copyBytes = await File.ReadAllBytesAsync(copy);
                     Equal(true, originalBytes.SequenceEqual(copyBytes), label + " undo/save restores byte-exact archive at copy");
+                    var finalState = await Call("scene_inspect", new { preview });
+                    await Call("pickup_lock", new { document = worldId, revision = finalState["revision"]!.GetValue<long>(), locked = false });
                 }
             }
             var cameraBefore = await Call("camera", new { preview, action = "read" });
@@ -276,13 +289,19 @@ internal static class McpLiveCheck
             Equal(false, collapsed["row"]!["IsExpanded"]!.GetValue<bool>(), "tree collapse retained");
         }
 
-        async Task<JsonNode> Call(string name, object arguments)
+        async Task<JsonNode> Call(string name, object arguments, string? expectedError = null)
         {
             exercised.Add(name);
             using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
             var args = JsonSerializer.SerializeToNode(arguments)!.AsObject().ToDictionary(p => p.Key, p => (object?)JsonSerializer.SerializeToElement(p.Value));
             var reply = await client.CallToolAsync("zstudio_" + name, args, cancellationToken: deadline.Token);
             var data = JsonNode.Parse(reply.Content.OfType<TextContentBlock>().First().Text)!;
+            if (expectedError != null)
+            {
+                Equal(true, reply.IsError == true, name + " expected rejection");
+                Equal(expectedError, data["code"]!.GetValue<string>(), name + " rejection code");
+                return data;
+            }
             if (reply.IsError == true) throw new InvalidDataException(name + ": " + data);
             foreach (var image in reply.Content.OfType<ImageContentBlock>()) File.WriteAllBytes(Path.Combine(output, "preview.png"), image.DecodedData.ToArray());
             if (name != "operation" && data is JsonObject o && o.ContainsKey("State"))
