@@ -11,6 +11,8 @@ Open a mission's `gamez.zbd`, select **Whole world**, and turn on **AI nodes** i
 
 AI visualization coexists with soil, CanModify and ClipTo highlights. It does not change source data, document revisions or undo history. Navigation remains Blender-style. Pickup handles take priority; AI picking is inactive during a pickup drag or captured Fly navigation.
 
+Selecting a marker also opens its [floating inspection card](scene-inspection.md). **Edit** starts an explicit XYZ draft; **✓** or Enter confirms one undoable move, while Cancel/Escape discards it. The map's Save command verifies a coordinate-only patch to the owning archive. Links, raw node values and other metadata remain unchanged. The separate Properties window retains read-only snapshot inspection.
+
 Visibility and depth choices last for the application session. Filtering and selection survive LOD, difficulty, texture and horizon refreshes when the graph is unchanged. Changed resource graphs clear the affected selection/filter. Properties retains its original snapshot and is marked stale when its source changes; reopen the node to inspect current data. It is owned by the map document and closes with that document.
 
 ## Interpretation and limits
@@ -44,6 +46,7 @@ The whole option batch is validated before changing controls. AI settings publis
 - `zstudio_ai_nodes`: paginated inspection with `preview`, `snapshot`, optional `network` (`all` by default), `offset`, `limit` and `query`.
 - `zstudio_ai_selection`: `preview`, `snapshot`, `action` (`select`, `clear`, `properties`) and a node ID except for clear. Selecting requires visible AI and a matching filter. Properties shares GUI draft guards.
 - `zstudio_camera` with `action: frame`, `target: selected` frames the selected AI node without changing source selection.
+- `zstudio_scene_inspect` and `zstudio_scene_card` share the floating card, coordinate copy and explicit XYZ draft workflow. Read the current revision and draft token before confirming edits; accepted movement changes the graph snapshot.
 
 Pages have at most 200 records. Handles are snapshot-scoped; rediscover after stale-snapshot/record/preview errors. Discovery never enables visualization or captures input.
 

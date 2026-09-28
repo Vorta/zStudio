@@ -42,7 +42,7 @@ internal static class AiNetworkCheck
                 var choice = (ComboBox)main.FindName("AiNetworkCombo"); choice.SelectedIndex = 1;
                 var network = scene.AiNetworks.Networks.Single(n => n.Id == scene.AiNetworkFilter); var node = network.Nodes[0];
                 Require(scene.SelectAiNode(node.Id) && scene.TryFrame("selected"), "AI selection/frame");
-                await Task.Delay(300); Save(Presented((Viewport3DX)scene.Content), Path.Combine(output, "m1-network.png"));
+                await Task.Delay(300); Save(Presented((Viewport3DX)scene.RenderSurface), Path.Combine(output, "m1-network.png"));
                 Save(StudioCapture.Window(main), Path.Combine(output, "m1-controls.png"));
                 var pose = scene.CaptureView(); string snapshot = scene.AiNetworks.Id;
                 ((ToggleButton)main.FindName("HighlightSoils")).IsChecked = true;
@@ -85,7 +85,7 @@ internal static class AiNetworkCheck
             var doc = new ZbdDocument(Path.Combine(output, "gamez.zbd"), new(0, DateTime.MinValue), new(FormatFamily.GameZ,15,Recognition.Supported,"fixture"), ReadOnlyMemory<byte>.Empty) { Scene = data };
             var asset = doc.Add(AssetKind.World, 0, "Whole world", 0, 0);
             await scene.ShowAsync(doc, asset, resolver, null, 0, default, mission: MissionSceneLoader.Build(doc, null, null, null, null));
-            var view = (Viewport3DX)scene.Content; view.ShowCoordinateSystem = view.ShowViewCube = view.IsInertiaEnabled = false;
+            var view = (Viewport3DX)scene.RenderSurface; view.ShowCoordinateSystem = view.ShowViewCube = view.IsInertiaEnabled = false;
             scene.RestoreView(new(new(0, 0, 20), new(0, 0, -20), new(0, 1, 0), 50));
             AiNode a = new("a", 0, 12, new(-6, 0, -2), 0, [new(0, 1, "b", null)]);
             AiNode b = new("b", 1, 12, new(6, 0, -2), 0, [new(0, 0, "a", null)]);

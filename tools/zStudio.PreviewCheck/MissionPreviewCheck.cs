@@ -33,7 +33,7 @@ internal static class MissionPreviewCheck
                 var context = new AnimationPreviewContext { Package = new() { Prefix=[],Tail=[] }, World = new("fixture",new(0,DateTime.MinValue),new(FormatFamily.GameZ,15,Recognition.Supported,""),ReadOnlyMemory<byte>.Empty) { Scene=scene } };
                 AnimationFrame frame = new(0,[new(1,1,1,Matrix4x4.Identity,true,1,-1,0,0),new(2,2,0,Matrix4x4.Identity,true,1,-1,0,0)],[],[],[],null,null,Vector4.Zero,Vector4.Zero,[],[],[]);
                 await preview.ShowAnimationAsync(context,frame,resolver,false,CancellationToken.None);
-                var viewport = (Viewport3DX)preview.Content; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false; viewport.IsInertiaEnabled = false;
+                var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false; viewport.IsInertiaEnabled = false;
                 var camera = (HCamera)viewport.Camera!; camera.Position = new(0,0,1000); camera.LookDirection = new(0,0,-1000); camera.UpDirection = new(0,1,0);
                 await Task.Delay(200);
                 var rendered = preview.RenderImage(300,200);

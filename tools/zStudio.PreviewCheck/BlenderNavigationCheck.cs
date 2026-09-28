@@ -49,7 +49,7 @@ internal static class BlenderNavigationCheck
                 var pickup = scene.Mission!.Actors.First(a => a.Pickup != null);
                 scene.SelectFramingNode(pickup.Root); scene.SelectPickup(pickup.Root, true, false);
                 scene.SetAxisView("top"); Require(scene.TryFrame("selected"), "Pickup framing unavailable"); await Task.Delay(200);
-                var surface = (Viewport3DX)scene.Content;
+                var surface = (Viewport3DX)scene.RenderSurface;
                 var gizmo = (TransformManipulator3D)typeof(SceneViewport).GetField("pickupManipulator", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(scene)!;
                 Require(gizmo.Visibility == Visibility.Visible, "Orthographic pickup gizmo hidden");
                 double gizmoSize = gizmo.SizeScale; scene.DollyBy(-50); await Task.Delay(150);
@@ -109,7 +109,7 @@ internal static class BlenderNavigationCheck
                 async Task Preview() => await ((Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).WaitAsync(timeout.Token);
                 async Task CheckViews(SceneViewport view, string label)
                 {
-                    var viewport = (Viewport3DX)view.Content;
+                    var viewport = (Viewport3DX)view.RenderSurface;
                     await CheckSurfaceNavigation(view, label);
                     Require(view.TryFrame("all"), label + " has no frameable geometry");
                     foreach (string axis in new[] { "front", "back", "left", "right", "top", "bottom" })
@@ -138,7 +138,7 @@ internal static class BlenderNavigationCheck
                 }
                 async Task CheckSurfaceNavigation(SceneViewport view, string label)
                 {
-                    var viewport = (Viewport3DX)view.Content;
+                    var viewport = (Viewport3DX)view.RenderSurface;
                     var staticMeshes = label == "animation"
                         ? ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!).ToDictionary(mesh => mesh, mesh => mesh.Visibility)
                         : new Dictionary<MeshGeometryModel3D, Visibility>();
@@ -222,10 +222,10 @@ internal static class BlenderNavigationCheck
         try { app.Run(); } finally { if (previous != null) File.WriteAllBytes(settings, previous); else if (File.Exists(settings)) File.Delete(settings); }
         return exit;
     }
-    private static async Task CheckPickingFixture()
+    internal static async Task CheckPickingFixture()
     {
         using var effects = new HelixToolkit.SharpDX.DefaultEffectsManager();
-        using var view = new SceneViewport(); var viewport = (Viewport3DX)view.Content;
+        using var view = new SceneViewport(); var viewport = (Viewport3DX)view.RenderSurface;
         viewport.EffectsManager = effects;
         var window = new Window { Content = view, Width = 900, Height = 650, Left = 20, Top = 20, ShowInTaskbar = false, ShowActivated = false };
         const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -245,6 +245,7 @@ internal static class BlenderNavigationCheck
         ScenePlacement[] placements = [new(0, 0, "front", mesh.Instances[0]), new(1, 0, "rear", mesh.Instances[1])];
         foreach (string name in new[] { "placements", "visiblePlacements" })
             ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField(name, fields)!.GetValue(view)!).Add(mesh, placements);
+        typeof(SceneViewport).GetMethod("RegisterInspectionMesh", fields)!.Invoke(view, [mesh, -1, null, -1, -1]);
         viewport.Items.Add(mesh); viewport.Items.Add(helper); window.Show();
         try
         {
@@ -252,8 +253,22 @@ internal static class BlenderNavigationCheck
             foreach (string projection in new[] { "perspective", "orthographic" })
             {
                 view.RestoreView(initial with { Projection = projection, OrthographicWidth = projection == "orthographic" ? 20 : null });
-                await Task.Delay(200);
-                var screen = viewport.Project(new Point3D(3, 1, 0));
+                Point screen = default; SceneInspection? info = null;
+                for (int attempt = 0; attempt < 100; attempt++)
+                {
+                    await Task.Delay(25);
+                    if (!view.IsOrbitPickingReady) continue;
+                    screen = viewport.Project(new Point3D(3, 1, 0)); info = view.ProbeInspection(screen);
+                    if (info is { Node: 0, Surface: not null } && (info.Surface.Value - new System.Numerics.Vector3(3, 1, 0)).Length() < .04f) break;
+                }
+                Require(info is { Node: 0, Surface: not null, Origin: not null } && (info.Surface.Value - new System.Numerics.Vector3(3, 1, 0)).Length() < .04f &&
+                    (info.Origin.Value - new System.Numerics.Vector3(3, 1, 0)).Length() < .04f, "Inspection did not preserve transformed surface and instance origin");
+                Require(view.SelectInspection(info!.Target), "Could not select inspected instance");
+                Require(view.ProbeInspection(new(1, 1)) == null && view.SelectedInspection?.Target == info.Target, "Empty space changed pinned inspection");
+                var visibleMap = (Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField("visiblePlacements", fields)!.GetValue(view)!;
+                visibleMap[mesh] = [placements[1]]; mesh.Instances = [placements[1].Transform];
+                Require(view.InspectTarget(info.Target)?.Active == false, "Isolation rebound the front target to the rear instance");
+                visibleMap[mesh] = placements; mesh.Instances = placements.Select(p => p.Transform).ToArray();
                 bool hit = view.PickOrbitPivot(screen);
                 Require(hit && (view.CaptureView().OrbitPivot!.Value - new Point3D(3, 1, 0)).Length < .04,
                     $"Pick did not choose nearest transformed scene instance through a helper: {projection}, hit={hit}, pivot={view.CaptureView().OrbitPivot}, point={screen}, ready={view.IsOrbitPickingReady}");
@@ -291,7 +306,7 @@ internal static class BlenderNavigationCheck
     private static async Task CheckPointerZoom(SceneViewport view, MeshGeometryModel3D mesh, SceneViewport.ViewPose initial)
     {
         const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
-        var viewport = (Viewport3DX)view.Content;
+        var viewport = (Viewport3DX)view.RenderSurface;
         mesh.Transform = Transform3D.Identity;
         mesh.Instances = [System.Numerics.Matrix4x4.CreateScale(30, 30, 1) * System.Numerics.Matrix4x4.CreateTranslation(0, 0, -100),
             System.Numerics.Matrix4x4.CreateScale(.2f, .2f, 1) * System.Numerics.Matrix4x4.CreateTranslation(-.5f, 0, 11)];

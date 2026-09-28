@@ -50,10 +50,12 @@ public sealed partial class SceneViewport
         // Pick overlay handles on the parent, before Helix's viewport class handler picks the scene.
         PreviewMouseDown += (_, e) =>
         {
-            if (HandlePickupPointerDown(e.GetPosition(viewport), e) || HandleAiPointerDown(e.GetPosition(viewport), e)) e.Handled = true;
+            if (InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
+            if (HandlePickupPointerDown(e.GetPosition(viewport), e) || HandleInspectionClick(e.GetPosition(viewport), e) || HandleAiPointerDown(e.GetPosition(viewport), e)) e.Handled = true;
         };
         PreviewMouseMove += (_, e) =>
         {
+            if (InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
             if (HandlePickupPointerMove(e.GetPosition(viewport))) e.Handled = true;
             else HandleAiPointerMove(e.GetPosition(viewport));
         };
@@ -127,6 +129,7 @@ public sealed partial class SceneViewport
     public void SetPickupLocked(bool locked)
     {
         if (locked) CancelPickupDrag(); pickupLocked = locked; RefreshPickupSelection();
+        ++inspectionSerial; InspectionChanged?.Invoke(); viewport.InvalidateRender();
     }
     public void SetPickupPositions(IReadOnlyDictionary<int, Vector3> positions)
     {
@@ -137,16 +140,22 @@ public sealed partial class SceneViewport
     public Vector3 PickupPosition(int root) => pickupPositions[root];
     private void UpdatePickupInstances()
     {
+        ++inspectionSerial;
         if (Mission == null) return;
         ScenePlacement Adjust(ScenePlacement p)
         {
-            if (!pickupRoots.TryGetValue(p.NodeIndex, out int root)) return p;
+            if (!pickupRoots.TryGetValue(p.NodeIndex, out int root))
+            {
+                if (ActorAt(p.NodeIndex) is { } actor && tankPositions.TryGetValue(actor.Root, out var position))
+                { var tank = p.Transform; tank.Translation += position - (actor.PlacementPosition ?? WorldTransform(Mission.Scene, actor.Root).Translation); return p with { Transform = tank }; }
+                return p;
+            }
             var matrix = p.Transform; matrix.Translation += pickupPositions[root] - WorldTransform(Mission.Scene, root).Translation;
             return p with { Transform = matrix };
         }
         foreach (var (mesh, original) in pickupBasePlacements)
         {
-            if (!original.Any(p => pickupRoots.ContainsKey(p.NodeIndex))) continue;
+            if (!original.Any(p => pickupRoots.ContainsKey(p.NodeIndex) || ActorAt(p.NodeIndex)?.CoordinateSource != null)) continue;
             var visible = visiblePlacements[mesh].Select(p => p.NodeIndex).ToHashSet();
             var changed = original.Select(Adjust).ToArray(); placements[mesh] = changed;
             var shown = changed.Where(p => visible.Contains(p.NodeIndex)).ToArray(); visiblePlacements[mesh] = shown;

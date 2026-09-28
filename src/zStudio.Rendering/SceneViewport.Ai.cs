@@ -53,13 +53,18 @@ public sealed partial class SceneViewport
     {
         if (id != null && (IsPickupDragging || IsFlyActive)) return false;
         if (id != null && (!AiVisible || AiNetworks.Find(id) is not { } found || AiNetworkFilter != null && found.Network.Id != AiNetworkFilter)) return false;
+        if (id != null && CanChangeInspection?.Invoke() == false) return false;
         SelectedAiNode = id;
+        if (id != null) SelectedInspection = InspectAi(id);
+        else if (SelectedInspection?.AiNode != null) SelectedInspection = null;
+        InspectionChanged?.Invoke();
         if (id != null) { FramingSelection = null; SelectPickup(null, false, true); }
         RefreshAiSelection(); AiNodeSelected?.Invoke(id); return true;
     }
     private IEnumerable<AiNetwork> VisibleAiNetworks => AiVisible ? AiNetworks.Networks.Where(n => AiNetworkFilter == null || n.Id == AiNetworkFilter) : [];
     private void RebuildAiOverlay()
     {
+        ++inspectionSerial;
         ClearAiDrawables();
         if (!AiVisible) { PublishAiLabel(); return; }
         aiOverlay = new(); viewport.Items.Add(aiOverlay);

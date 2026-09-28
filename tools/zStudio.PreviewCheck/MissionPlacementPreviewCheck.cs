@@ -28,7 +28,7 @@ internal static class MissionPlacementPreviewCheck
                 var document = await resolver.OpenCachedAsync(Path.Combine(root, "m1", "anim.zbd"), timeout.Token);
                 var context = await AnimationPreviewContext.LoadAsync(document.Animations!, document.Path, resolver, token: timeout.Token);
                 var worldAsset = context.World.Assets.First(a => a.Kind == AssetKind.World);
-                var viewport = (Viewport3DX)preview.Content; viewport.IsInertiaEnabled = false; viewport.ShowViewCube = viewport.ShowCoordinateSystem = false;
+                var viewport = (Viewport3DX)preview.RenderSurface; viewport.IsInertiaEnabled = false; viewport.ShowViewCube = viewport.ShowCoordinateSystem = false;
                 var camera = (HCamera)viewport.Camera!;
                 var scene = context.Scene; var baseline = SceneBuilder.Assemble(scene).Placements;
                 var sky = new HashSet<int>(); foreach (var horizon in context.Mission!.Horizons) sky.UnionWith(context.Descendants(horizon.Root));

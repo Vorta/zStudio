@@ -39,7 +39,7 @@ internal static class PickupEditorCheck
                 var doc = await window.ViewModel.OpenFileAsync(Path.Combine(root, "m1", "gamez.zbd")) ?? throw new InvalidDataException("Missing m1 world");
                 var scene = await Ready(MissionDifficulty.Medium);
                 var edits = doc.PickupEdits ?? throw new InvalidDataException("Missing pickup editor");
-                var viewport = (Viewport3DX)scene.Content; var camera = (HCamera)viewport.Camera!;
+                var viewport = (Viewport3DX)scene.RenderSurface; var camera = (HCamera)viewport.Camera!;
                 byte[] original = await File.ReadAllBytesAsync(Path.Combine(root, "m1", "zrdr.zbd"), token);
                 byte[] worldHash = SHA256.HashData(doc.Document.Bytes.Span);
                 var actor = scene.Mission!.Actors.Single(a => a.Pickup?.Source.RecordIndex == 49);

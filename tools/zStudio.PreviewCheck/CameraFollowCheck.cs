@@ -32,7 +32,7 @@ internal static class CameraFollowCheck
                 }
                 ((CheckBox)editor.FindName("Mute")).IsChecked = true;
                 var follow = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("FollowCamera");
-                var camera = (HCamera)((Viewport3DX)editor.Viewport.Content).Camera!;
+                var camera = (HCamera)((Viewport3DX)editor.Viewport.RenderSurface).Camera!;
                 await editor.SeekAsync(.1);
                 follow.IsChecked = true; await Task.Delay(150);
                 CheckPose(editor.CurrentFrame!.Camera!);

@@ -108,14 +108,22 @@ public partial class MainWindow
             if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)) throw new StudioCommandException("invalid_argument", "Coordinates must fit finite game floats.");
             edits.MoveTo(source, position); return Result(DocumentState(d));
         });
-        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus.", false, [P("target", "string", "Draft owner.", true, "properties", "preview")], a =>
+        Register(r, "drafts", "Read pending GUI drafts and their conflict token without committing or changing focus.", false, [P("target", "string", "Draft owner.", true, "properties", "preview", "scene")], a =>
         {
+            if (Text(a, "target") == "scene") return Result(new { document = inspectionDraft?.DraftDocument?.SessionId ?? shownDocument?.SessionId, drafts = (HasInspectionDraft ? inspectionDraft : CurrentInspectionCard)?.DescribeDraft() });
             var fields = DraftOwner(Text(a, "target")); return Result(new { document = Text(a, "target") == "properties" ? propertiesWindow?.Document?.SessionId : shownDocument?.SessionId, drafts = fields?.DescribeDrafts() });
         });
         Register(r, "resolve_drafts", "Explicitly apply or discard current GUI drafts. Invalid input is retained and returned as an error, without modal dialogs.", true,
-            [DocumentParameter, P("target", "string", "Draft owner.", true, "properties", "preview"), P("token", "string", "Current draft token.", true), P("action", "string", "Resolution.", true, "apply", "discard")], async (a, token) =>
+            [DocumentParameter, P("target", "string", "Draft owner.", true, "properties", "preview", "scene"), P("token", "string", "Current draft token.", true), P("action", "string", "Resolution.", true, "apply", "discard")], async (a, token) =>
         {
             var d = TargetDocument(a); string target = Text(a, "target");
+            if (target == "scene")
+            {
+                if (!HasInspectionDraft || inspectionDraft!.DraftDocument != d) throw new StudioCommandException("context_changed", "Scene draft owner changed.");
+                inspectionDraft.RequireDraft(Text(a, "token"));
+                if (Text(a, "action") == "apply") ApplyInspectionEdit(inspectionDraft); else inspectionDraft.CancelDraft();
+                return Result(DocumentState(d));
+            }
             if ((target == "properties" ? propertiesWindow?.Document : shownDocument) != d) throw new StudioCommandException("context_changed", "Draft owner changed.");
             var owner = DraftOwner(target) ?? throw new StudioCommandException("not_ready", "No field editor is open."); await owner.ResolveAutomationDraftsAsync(Text(a, "token"), Text(a, "action") == "apply");
             if (owner is AnimationEditor editor) await editor.AwaitOptionWorkAsync();

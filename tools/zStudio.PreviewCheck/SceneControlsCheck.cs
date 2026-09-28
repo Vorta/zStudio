@@ -42,7 +42,7 @@ internal static class SceneControlsCheck
                     await Task.Delay(50, timeout.Token);
                 }
                 var scene = (SceneViewport)((ContentControl)window.FindName("SceneHost")).Content;
-                var viewport = (Viewport3DX)scene.Content;
+                var viewport = (Viewport3DX)scene.RenderSurface;
                 var camera = viewport.Camera as HCamera ?? throw new InvalidOperationException("No perspective camera attached.");
                 Point3D sceneCenter = camera.Position + camera.LookDirection;
                 viewport.IsInertiaEnabled = false;

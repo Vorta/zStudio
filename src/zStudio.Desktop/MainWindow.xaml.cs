@@ -63,7 +63,7 @@ public partial class MainWindow : Window
         {
             RequireAutomationMutationAvailable();
             if (closesDocuments) RequireNoDrafts();
-            else if (animation?.HasAutomationDrafts == true)
+            else if (animation?.HasAutomationDrafts == true || HasInspectionDraft)
                 throw new Recoil.Zbd.Automation.StudioCommandException("pending_drafts", "Resolve unfinished preview input before changing documents.");
         };
         ViewModel.ValidateReload = doc => { RequireAutomationMutationAvailable(); RequireNoDrafts(doc); };
@@ -98,7 +98,7 @@ public partial class MainWindow : Window
     });
     private async Task RunUi(Func<Task> work)
     {
-        try { if (animation?.ResolvePendingDrafts() == false) return; await work(); }
+        try { if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) return; await work(); }
         catch (Recoil.Zbd.Automation.StudioCommandException ex) when (ex.Code == "context_changed") { }
         catch (OperationCanceledException) { ViewModel.Status = "Operation canceled"; }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); }
@@ -158,7 +158,7 @@ public partial class MainWindow : Window
     {
         if (!ready || e.PropertyName != nameof(MainViewModel.SelectedDocument)) return;
         var doc = ViewModel.SelectedDocument; if (doc == shownDocument) return;
-        if (animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
+        if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
         shownDocument = doc; Workspace.Visibility = doc == null ? Visibility.Collapsed : Visibility.Visible; Welcome.Visibility = doc == null ? Visibility.Visible : Visibility.Collapsed;
         updating = true;
         TexturePackCombo.ItemsSource = doc?.Document.Scene != null ? ViewModel.Resolver?.TexturePacks(doc.Path).Select(p => new PackChoice(Path.GetFileName(p), p)).Prepend(new("Automatic texture variant", null)).ToArray() : null;
@@ -182,12 +182,13 @@ public partial class MainWindow : Window
         EndImagePan();
         animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
         preview.Cancel(); preview.Dispose(); preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
+        RefreshSceneTree();
     }
     private Task ShowAsset(DocumentModel doc, AssetRecord? asset) => previewWork = ShowAssetCore(doc, asset);
     private async Task ShowAssetCore(DocumentModel doc, AssetRecord? asset)
     {
         if (shutdownToken.IsCancellationRequested) return;
-        if (animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
+        if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         asset = asset == null ? null : doc.PreviewDocument.Assets.SingleOrDefault(a => a.Id == asset.Id);
         bool differentAsset = shownAsset?.Id != asset?.Id;
         if (!differentAsset && asset != null && shownDocument == doc && HasPublishedStaticScene && ViewModel.Resolver != null)
@@ -277,6 +278,7 @@ public partial class MainWindow : Window
                 else StructuredPanel.SelectedIndex = asset?.Content is ScriptContent ? 1 : 0;
             }
             token.ThrowIfCancellationRequested(); EmptyPreview.Visibility = Visibility.Collapsed;
+            RefreshSceneTree();
         }
         catch (OperationCanceledException)
         {
@@ -449,13 +451,18 @@ public partial class MainWindow : Window
     private void ApplySceneOptions() { scene?.SetWireframe(Wireframe.IsChecked == true); scene?.SetTextured(TexturesEnabled.IsChecked == true); scene?.SetBounds(BoundsEnabled.IsChecked == true); ApplyWorldHighlight(); ApplyAiOptions(); }
     private void SceneOptionsChanged(object sender, RoutedEventArgs e) { if (ready) ApplySceneOptions(); }
     private void FrameSceneClick(object sender, RoutedEventArgs e) => RunCameraNavigation("frameAsset");
-    private void IsolateClick(object sender, RoutedEventArgs e) { if (selectedNode != null) { isolatedNode = selectedNode; scene?.Isolate(selectedNode); } else ViewModel.Status = "Select a node in the scene or scene tree first"; }
+    private void IsolateClick(object sender, RoutedEventArgs e)
+    {
+        if (selectedNode is not int node) { ViewModel.Status = "Select a node in the scene or scene tree first"; return; }
+        isolatedNode = scene?.PickupAt(node)?.Root ?? node;
+        scene?.Isolate(isolatedNode);
+    }
     private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); }
-    private void SceneTreeSelected(object sender, RoutedPropertyChangedEventArgs<object> e) { if (e.NewValue is SceneTreeItem item) { InspectNode(item.Node.Index); inspectedSceneSource = item; } }
     private void InspectNode(int index)
     {
         inspectedSceneSource = null;
         if ((scene?.PreviewScene ?? ViewModel.SelectedDocument?.Document.Scene) is not { } data || index < 0 || index >= data.Nodes.Count) return;
+        RevealSceneNode(index);
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
         scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.PickupsLocked ?? true);
@@ -605,14 +612,14 @@ public partial class MainWindow : Window
         flyRequest++; flyCamera?.End();
         scene?.CancelNavigation(); animation?.Viewport.CancelNavigation();
         if (resolvingClose) { e.Cancel = true; return; }
-        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
+        if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
         {
             automationCloseRequested = false; e.Cancel = true;
             ViewModel.Status = "Close canceled: the workspace has new edits or unfinished input. Resolve them before closing.";
             return;
         }
         System.Windows.Input.Keyboard.ClearFocus();
-        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
+        if (!allowClose && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || animation?.HasPendingDrafts == true || propertiesWindow?.HasPendingDrafts == true))
         {
             e.Cancel = true; resolvingClose = true;
             try

@@ -46,7 +46,7 @@ internal static class RenderStabilityCheck
                         await preview.ShowAsync(context.World, new() { Id = new("fixture", AssetKind.Node, 0), Name = "world", Content = scene.Nodes[0] }, resolver, null, 0, default);
                     }
                     else await preview.ShowAnimationAsync(context, frame, resolver, false, default);
-                    var viewport = (Viewport3DX)preview.Content; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false;
+                    var viewport = (Viewport3DX)preview.RenderSurface; viewport.ShowCoordinateSystem = viewport.ShowViewCube = false;
                     var camera = (HCamera)viewport.Camera!;
                     camera.Position = new(2041, 32, 1893); camera.LookDirection = new(0, 0, -200); camera.UpDirection = new(0, 1, 0);
                     await Task.Delay(300);
@@ -63,7 +63,7 @@ internal static class RenderStabilityCheck
                     Require(viewport.RenderHost.ActualWidth == width && viewport.RenderHost.ActualHeight == height && camera.Position == position, "Capturing resized the live viewport or moved its camera.");
                 }
                 Console.WriteLine("PASS: inside-world opaque depth, animated/instanced, both draw orders, inertia, 2/10-second idle and repeated DPI captures.");
-                var view = (Viewport3DX)preview.Content; var cam = (HCamera)view.Camera!;
+                var view = (Viewport3DX)preview.RenderSurface; var cam = (HCamera)view.Camera!;
                 foreach (bool fly in new[] { false, true })
                 {
                     preview.SetFly(fly); cam.Position = new(4, 5, 6); cam.LookDirection = new(0, 0, -10);

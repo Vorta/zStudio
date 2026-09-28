@@ -43,7 +43,7 @@ internal static class GroundPreviewCheck
                 ((TabControl)window.FindName("InspectorTabs")).SelectedItem = window.FindName("PreviewSetupTab");
                 Require(grid.IsChecked == true, "Grid must default checked");
                 ((CheckBox)editor.FindName("Mute")).IsChecked = true;
-                var viewport = (Viewport3DX)editor.Viewport.Content;
+                var viewport = (Viewport3DX)editor.Viewport.RenderSurface;
                 var camera = (HCamera)viewport.Camera!;
                 var plane = viewport.Items.OfType<AxisPlaneGridModel3D>().Single();
                 Require(plane.Offset == 0 && !plane.IsHitTestVisible && plane.PlaneColor.A == 0 && plane.GridPattern == HelixToolkit.SharpDX.GridPattern.Grid, "Grid configuration invalid");

@@ -8,6 +8,11 @@ public sealed record PickupPlacementSaveResult(IReadOnlyList<string> SavedPaths,
 public sealed partial class PickupPlacementEditSession
 {
     private sealed record StagedArchive(string Source, ArchiveState Archive, string Destination, string Temporary, byte[] Bytes, bool Replace);
+    internal Action<string, string, bool, string?> PublishFile { get; set; } = (temporary, destination, replace, backup) =>
+    {
+        if (replace) File.Replace(temporary, destination, backup);
+        else File.Move(temporary, destination, false);
+    };
 
     /// <summary>Checks both the supplied and resolved destination. Throws if its location cannot be verified.</summary>
     public static bool IsProtectedPath(string path)
@@ -35,16 +40,19 @@ public sealed partial class PickupPlacementEditSession
             foreach (var (source, archive) in archives)
             {
                 bool explicitDestination = destinations?.ContainsKey(source) == true;
-                if (!explicitDestination && !positions.Any(p => p.Key.ArchivePath == source && p.Value != savedPositions[p.Key])) continue;
+                if (!explicitDestination && !IsArchiveDirty(source)) continue;
                 string destination = Path.GetFullPath(explicitDestination ? destinations![source] : archive.Target);
                 ValidateDestination(destination);
                 if (!targets.Add(destination)) throw new IOException("Two pickup archives cannot be saved to the same file.");
                 // Explicit destinations are Save As, including copies requested by protected-source Save.
                 // Only ordinary Save may replace the active target.
-                bool replace = !explicitDestination;
+                bool replace = !explicitDestination && !archive.PendingCopy;
                 if (replace) await CheckBaselineAsync(archive, token);
-                else if (destination.Equals(Path.GetFullPath(archive.Target), StringComparison.OrdinalIgnoreCase) || File.Exists(destination))
+                else if (explicitDestination && destination.Equals(Path.GetFullPath(archive.Target), StringComparison.OrdinalIgnoreCase) || File.Exists(destination) || Directory.Exists(destination))
                     throw new IOException($"Save As requires a new file: {destination}");
+                if (!replace && archives.Any(a => destination.Equals(a.Value.Original.Path, StringComparison.OrdinalIgnoreCase) ||
+                    a.Key != source && destination.Equals(a.Value.Target, StringComparison.OrdinalIgnoreCase)))
+                    throw new IOException($"Save As cannot alias a coordinate source or another archive destination: {destination}");
                 byte[] bytes = await Task.Run(() => EncodeArchive(source), token);
                 await Task.Run(() => Verify(source, bytes, token), token);
                 string directory = Path.GetDirectoryName(destination)!;
@@ -58,6 +66,10 @@ public sealed partial class PickupPlacementEditSession
                 if (!EqualBytes(bytes, reopened)) throw new IOException($"Written pickup archive verification failed: {destination}");
                 await Task.Run(() => Verify(source, reopened, token), token);
             }
+            // Once staging succeeds, preserve every requested copy even when later
+            // publication fails. Ordinary Save retries the new path without replacement.
+            foreach (var output in staged.Where(s => !s.Replace))
+            { output.Archive.Target = output.Destination; output.Archive.PendingCopy = true; }
             foreach (var output in staged)
             {
                 try
@@ -68,10 +80,11 @@ public sealed partial class PickupPlacementEditSession
                     {
                         await CheckBaselineAsync(output.Archive, token);
                         string? backup = createBackup ? output.Destination + "." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8] + ".bak" : null;
-                        File.Replace(output.Temporary, output.Destination, backup);
+                        PublishFile(output.Temporary, output.Destination, true, backup);
                     }
-                    else File.Move(output.Temporary, output.Destination, false);
+                    else PublishFile(output.Temporary, output.Destination, false, null);
                     output.Archive.Target = output.Destination; output.Archive.SavedBytes = output.Bytes;
+                    output.Archive.PendingCopy = false;
                     output.Archive.Stamp = FileStamp.Read(output.Destination);
                     if (output.Destination.Equals(output.Archive.Original.Path, StringComparison.OrdinalIgnoreCase)) output.Archive.SourceStamp = output.Archive.Stamp;
                     foreach (var source in positions.Keys.Where(s => s.ArchivePath == output.Source)) savedPositions[source] = positions[source];
@@ -106,12 +119,14 @@ public sealed partial class PickupPlacementEditSession
             if (bytes[i] != original.Bytes.Span[i] && !permitted.Contains(i)) throw new InvalidDataException($"Pickup patch changed unrelated byte 0x{i:X}.");
         var reopened = FormatRegistry.Default.OpenBytes(original.Path, bytes, token: token);
         if (reopened.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("Saved pickup archive could not be parsed completely.");
-        var resources = entries.Values.Where(e => e.Record.Source.ArchivePath == source).Select(e => e.Record.Source.AssetIndex).Distinct()
-            .Select(i => new PickupPlacementResource(MissionDifficulty.Medium, reopened, reopened.Assets.Single(a => a.Index == i)));
-        var check = Create(resources, token: token);
         foreach (var entry in entries.Values.Where(e => e.Record.Source.ArchivePath == source))
-            if (!check.positions.TryGetValue(entry.Record.Source, out var position) || position != positions[entry.Record.Source])
-                throw new InvalidDataException($"Saved pickup {entry.Record.Source.ResourceName} #{entry.Record.Source.RecordIndex} has an unexpected position.");
+            for (int axis = 0; axis < 3; axis++)
+            {
+                var scalar = ZrdDecoder.Read(reopened.Slice(entry.Offsets[axis], 8), token);
+                float value = scalar.Kind == ZrdKind.Float ? BitConverter.UInt32BitsToSingle(scalar.Bits) : scalar.Kind == ZrdKind.Int ? unchecked((int)scalar.Bits) : float.NaN;
+                if (value != positions[entry.Record.Source][axis])
+                    throw new InvalidDataException($"Saved coordinate {entry.Record.Source.ResourceName} #{entry.Record.Source.RecordIndex} has an unexpected position.");
+            }
     }
     private static async Task CheckBaselineAsync(ArchiveState archive, CancellationToken token)
     {

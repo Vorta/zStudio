@@ -18,11 +18,15 @@ public sealed partial class PickupPlacementEditSession
     {
         public ZbdDocument Original { get; } = document;
         public string Target { get; set; } = document.Path;
+        public bool PendingCopy { get; set; }
         public byte[] SavedBytes { get; set; } = document.Bytes.ToArray();
         public FileStamp Stamp { get; set; } = document.Stamp;
         public FileStamp SourceStamp { get; set; } = document.Stamp;
     }
     private sealed record Entry(PickupPlacementRecord Record, int[] Offsets);
+    // All mission coordinates share these archive baselines and one save transaction.
+    // Pickup behavior remains in this session; AI/vehicle records use typed adapters.
+    private readonly Dictionary<MissionPickupSource, MissionCoordinateRecord> otherCoordinates = [];
     private sealed record Move(Dictionary<MissionPickupSource, Vector3> Before, Dictionary<MissionPickupSource, Vector3> After);
     private readonly Dictionary<string, ArchiveState> archives = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<MissionPickupSource, Entry> entries = [];
@@ -35,9 +39,10 @@ public sealed partial class PickupPlacementEditSession
     public event Action? EditAccepted;
     public event Action? BeforeEdit;
     public IReadOnlyList<string> Diagnostics => diagnostics.AsReadOnly();
-    public IReadOnlyList<PickupPlacementRecord> Records => entries.Values.Select(e => e.Record).ToArray();
-    public bool IsDirty => positions.Any(p => p.Value != savedPositions[p.Key]);
-    public bool IsArchiveDirty(string path) => positions.Any(p => p.Key.ArchivePath.Equals(path, StringComparison.OrdinalIgnoreCase) && p.Value != savedPositions[p.Key]);
+    public IReadOnlyList<PickupPlacementRecord> Records => entries.Values.Where(e => !otherCoordinates.ContainsKey(e.Record.Source)).Select(e => e.Record).ToArray();
+    public IReadOnlyList<MissionCoordinateRecord> OtherCoordinates => otherCoordinates.Values.ToArray();
+    public bool IsDirty => archives.Values.Any(a => a.PendingCopy) || positions.Any(p => p.Value != savedPositions[p.Key]);
+    public bool IsArchiveDirty(string path) => archives[path].PendingCopy || positions.Any(p => p.Key.ArchivePath.Equals(path, StringComparison.OrdinalIgnoreCase) && p.Value != savedPositions[p.Key]);
     public bool CanUndo => !saving && undo.Count > 0;
     public bool CanRedo => !saving && redo.Count > 0;
     public IReadOnlyList<string> ArchivePaths => archives.Values.Select(a => a.Original.Path).ToArray();
@@ -46,6 +51,7 @@ public sealed partial class PickupPlacementEditSession
     public static async Task<PickupPlacementEditSession> LoadAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
     {
         Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> found = new(StringComparer.OrdinalIgnoreCase);
+        List<(ZbdDocument Archive, AssetRecord Asset)> coordinateResources = [];
         List<string> notes = [];
         foreach (string file in MissionSceneLoader.ResourceFiles(worldPath, resolver))
         {
@@ -54,7 +60,8 @@ public sealed partial class PickupPlacementEditSession
             {
                 if (FormatRegistry.Probe(file).Family != FormatFamily.Archive) continue;
                 var archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
-                foreach (var asset in archive.Assets.Where(a => IsPickupResource(a.Name))) found.TryAdd(asset.Name, (archive, asset));
+                coordinateResources.AddRange(archive.Assets.Where(a => IsCoordinateResource(a.Name)).Select(a => (archive, a)));
+                foreach (var asset in archive.Assets.Where(a => IsPickupResource(a.Name) || IsCoordinateResource(a.Name))) found.TryAdd(asset.Name, (archive, asset));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
             { notes.Add($"Pickup editing: {Path.GetFileName(file)}: {ex.Message}"); }
@@ -67,7 +74,12 @@ public sealed partial class PickupPlacementEditSession
             if (found.TryGetValue(effective, out var resource)) resources.Add(new(difficulty, resource.Archive, resource.Asset));
             else notes.Add($"{difficulty}: pickup resource unavailable.");
         }
-        return await Task.Run(() => Create(resources, notes, token), token).ConfigureAwait(false);
+        return await Task.Run(() =>
+        {
+            var result = Create(resources, notes, token);
+            result.AddCoordinates(coordinateResources, token);
+            return result;
+        }, token).ConfigureAwait(false);
     }
     private static bool IsPickupResource(string name) => name.ToLowerInvariant() is "puppies.zrd" or "puppies_easy.zrd" or "puppies_hard.zrd";
 
@@ -134,12 +146,13 @@ public sealed partial class PickupPlacementEditSession
             throw new InvalidDataException("Expected a finite numeric coordinate.");
         return number;
     }
-    public PickupPlacementRecord? Find(MissionPickupSource source) => entries.GetValueOrDefault(source)?.Record;
+    public PickupPlacementRecord? Find(MissionPickupSource source) => otherCoordinates.ContainsKey(source) ? null : entries.GetValueOrDefault(source)?.Record;
     public Vector3 Position(MissionPickupSource source) => positions[source];
     public PickupPlacementScope Scope(MissionPickupSource source)
     {
+        if (otherCoordinates.TryGetValue(source, out var coordinate)) return CoordinateScope(coordinate);
         var selected = entries[source].Record;
-        var same = entries.Values.Select(e => e.Record).Where(r => r.Type == selected.Type && r.OriginalPosition == selected.OriginalPosition && r.Rotation == selected.Rotation).ToArray();
+        var same = Records.Where(r => r.Type == selected.Type && r.OriginalPosition == selected.OriginalPosition && r.Rotation == selected.Rotation).ToArray();
         var groups = same.GroupBy(r => (r.Source.ArchivePath, r.Source.AssetIndex)).ToArray();
         bool uniqueSource = groups.Single(g => g.Key == (source.ArchivePath, source.AssetIndex)).Count() == 1;
         var matches = uniqueSource ? groups.Where(g => g.Count() == 1).Select(g => g.Single()).ToArray() : [selected];
@@ -153,6 +166,12 @@ public sealed partial class PickupPlacementEditSession
     {
         if (saving) throw new InvalidOperationException("Wait for the current save to finish.");
         RequireFinite(position);
+        if (otherCoordinates.TryGetValue(source, out var vehicle) && vehicle.Kind == "tank" &&
+            (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))
+            throw new InvalidDataException("The tank placement has no unambiguous active template binding.");
+        if (otherCoordinates.TryGetValue(source, out var record) && record.Kind == "ai" &&
+            (Math.Abs(position.X) > 1e12 || Math.Abs(position.Y) > 1e12 || Math.Abs(position.Z) > 1e12))
+            throw new InvalidDataException("AI coordinates must stay within the supported ±1e12 preview range.");
         Vector3 delta = position - positions[source]; RequireFinite(delta);
         if (delta == Vector3.Zero) return false;
         var before = Scope(source).Sources.ToDictionary(s => s, s => positions[s]);
@@ -196,7 +215,7 @@ public sealed partial class PickupPlacementEditSession
     public bool HasExternalChanges()
     {
         foreach (var archive in archives.Values)
-            try { if (FileStamp.Read(archive.Target) != archive.Stamp) return true; }
+            try { if (archive.PendingCopy ? File.Exists(archive.Target) || Directory.Exists(archive.Target) : FileStamp.Read(archive.Target) != archive.Stamp) return true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }
         return HasSourceChanges();
     }

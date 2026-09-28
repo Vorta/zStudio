@@ -16,6 +16,7 @@ public partial class MainWindow
     private bool IsAiWorld => animation == null && shownAsset?.Kind == AssetKind.World && scene != null && SceneHost.Visibility == Visibility.Visible;
     private void ConfigureAiScene(SceneViewport viewport)
     {
+        AttachInspection(viewport);
         viewport.AiNodeSelected += id =>
         {
             if (scene != viewport || id == null) return;
@@ -33,12 +34,13 @@ public partial class MainWindow
         viewport.AiLabelChanged += text =>
         {
             if (scene != viewport) return;
-            AiLabelText.Text = text ?? ""; AiLabel.Visibility = text == null ? Visibility.Collapsed : Visibility.Visible;
+            AiLabel.Visibility = Visibility.Collapsed;
         };
     }
     private void AiOptionsChanged(object sender, RoutedEventArgs e)
     {
         if (!ready || synchronizingAi) return;
+        if (!ResolveInspectionDrafts()) { ApplyAiOptions(); return; }
         SetAiOptions(AiEnabled.IsChecked == true, AiThroughGeometry.IsChecked == true, (AiNetworkCombo.SelectedItem as AiNetworkChoice)?.Id);
     }
     private void SetAiOptions(bool visible, bool throughGeometry, string? filter)

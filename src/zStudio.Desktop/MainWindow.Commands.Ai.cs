@@ -36,7 +36,7 @@ public partial class MainWindow
         Register(registry, "ai_selection", "Select/clear an AI marker or open its pinned read-only Properties. Selection requires enabled visualization and a matching filter. Frame it with camera action=frame,target=selected.", true,
             [PreviewParameter, AiSnapshotParameter, P("action", "string", "Selection action.", true, "select", "clear", "properties"), P("node", "string", "Snapshot-scoped node ID; required except for clear.")], async (args, token) =>
         {
-            var graph = TargetAiGraph(args); string action = Text(args, "action"), id = Text(args, "node");
+            RequireNoDrafts(); var graph = TargetAiGraph(args); string action = Text(args, "action"), id = Text(args, "node");
             if (scene!.IsPickupDragging || scene.IsFlyActive) throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing AI inspection.");
             if (action == "clear") { scene.SelectAiNode(null); return Result(new { selectedNode = scene.SelectedAiNode }); }
             var target = graph.Find(id) ?? throw new StudioCommandException("stale_record", "AI node unavailable.");

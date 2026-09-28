@@ -111,6 +111,30 @@
         "zstudio_camera"
       ],
       "note": "AI marker picking and its dynamic Properties context action share snapshot identities with AI discovery and selection. Hover/selection labels derive from the same node data. Malformed node value types are diagnosed individually while valid neighbors remain visible; malformed duplicate indices remain ambiguous. Frame selected uses camera; normal scene framing excludes the overlay."
+    },
+    {
+      "gui": "SceneViewport.Inspection:Pointer",
+      "tools": [
+        "zstudio_scene_inspect",
+        "zstudio_scene_card"
+      ],
+      "note": "Shared triangle/instance picking supplies hover and selected cards; explicit point queries do not move or capture the physical pointer."
+    },
+    {
+      "gui": "SceneInspectionCard:Actions",
+      "tools": [
+        "zstudio_scene_card",
+        "zstudio_drafts",
+        "zstudio_resolve_drafts",
+        "zstudio_undo_redo",
+        "zstudio_save_document"
+      ],
+      "note": "Dynamic coordinate/identifier copy buttons, selection close, XYZ drafts, Edit/Confirm and Cancel share document revisions, unique draft lifetimes, archive ownership, history and verified saves. Closing selection clears the hierarchy/framing target. Animation poses and ambiguous actor ownership remain read-only."
+    },
+    {
+      "gui": "DocumentSceneTree:Hierarchy",
+      "tools": ["zstudio_scene_tree", "zstudio_scene_properties", "zstudio_properties_open"],
+      "note": "Lazy hierarchy rows, bound expansion/selection and viewport reveal share context-scoped occurrence identities, source provenance and pending-draft guards. Preview hierarchy is stable during animation; stored nodes are the fallback. Expand/collapse/reveal only change presentation."
     }
   ],
   "handlers": [
@@ -806,7 +830,8 @@
       "gui": "MainWindow.xaml:PropertiesClick",
       "tools": [
         "zstudio_properties_open",
-        "zstudio_resource_properties"
+        "zstudio_resource_properties",
+        "zstudio_scene_tree"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -862,7 +887,7 @@
     {
       "gui": "MainWindow.xaml:ScenePropertiesClick",
       "tools": [
-        "zstudio_scene_properties"
+        "zstudio_scene_tree", "zstudio_scene_properties", "zstudio_properties_open"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },
@@ -876,7 +901,7 @@
     {
       "gui": "MainWindow.xaml:SceneTreeSelected",
       "tools": [
-        "zstudio_scene_selection"
+        "zstudio_scene_tree"
       ],
       "note": "Use the semantic tool with explicit identities and arguments."
     },

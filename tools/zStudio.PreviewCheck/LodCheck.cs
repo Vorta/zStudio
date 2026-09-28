@@ -42,7 +42,7 @@ internal static class LodCheck
                         HashSet<int> backdrop = []; Stack<int> pending = new(displayed.Nodes.Where(n => n.Name.Equals("horizon", StringComparison.OrdinalIgnoreCase)).Select(n => n.Index));
                         while (pending.TryPop(out int i)) { if (!backdrop.Add(i)) continue; foreach (int child in SceneBuilder.Children(displayed.Nodes[i])) pending.Push(child); }
                         int target = expected.Placements.Where(p => asset.Record.Kind != AssetKind.World || !backdrop.Contains(p.NodeIndex)).Sum(p => GeometryBuilder.Build(data.Models[p.ModelIndex]).Sum(part => part.Indices.Length/3));
-                        var viewport = (Viewport3DX)((SceneViewport)((ContentControl)window.FindName("SceneHost")).Content).Content;
+                        var viewport = (Viewport3DX)((SceneViewport)((ContentControl)window.FindName("SceneHost")).Content).RenderSurface;
                         var meshes = viewport.Items.OfType<MeshGeometryModel3D>().Concat(viewport.Items.OfType<SortingGroupModel3D>().SelectMany(g => g.Children.OfType<MeshGeometryModel3D>()));
                         int drawn = meshes.Where(m => m.Visibility == Visibility.Visible).Sum(m => m.Geometry!.Indices!.Count / 3 * (m.Instances?.Count ?? 1));
                         if (drawn != target) throw new InvalidDataException($"Rendered LOD triangle count {drawn} != {target}."); return drawn;

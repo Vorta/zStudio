@@ -13,6 +13,9 @@ public sealed partial class SceneViewport
     {
         if (target is not ("all" or "asset" or "selected")) throw new ArgumentException("Unknown framing target.", nameof(target));
         if (IsPickupDragging || IsFlyActive || viewport.Camera is not ProjectionCamera) return false;
+        long? selectedRuntime = target == "selected" && node == null && FramingSelection == SelectedInspection?.Node
+            ? SelectedInspection?.RuntimeInstance : null;
+        if (selectedRuntime != null && InspectTarget(SelectedInspection!.Target)?.Active != true) return false;
         if (target == "selected" && node == null && AiVisible && SelectedAiNode is { } ai && AiNetworks.Find(ai) is { } selectedAi)
         {
             Rect3D aiBounds = Rect3D.Empty;
@@ -36,7 +39,7 @@ public sealed partial class SceneViewport
         }
         bool assetOnly = animationFrame != null && node == null && target != "all";
         Rect3D bounds = Rect3D.Empty;
-        if (!assetOnly)
+        if (!assetOnly && selectedRuntime == null)
             foreach (var mesh in meshes)
             {
                 if (mesh.Visibility != Visibility.Visible || !mesh.IsRendering || !visiblePlacements.TryGetValue(mesh, out var items)) continue;
@@ -50,6 +53,7 @@ public sealed partial class SceneViewport
         if (animationFrame is { } frame)
             foreach (var pose in frame.Nodes)
             {
+                if (selectedRuntime != null && pose.Id != selectedRuntime) continue;
                 if (IsHorizon(pose.SourceNode) || selected != null && !selected.Contains(pose.SourceNode) || !animatedMeshes.TryGetValue(pose.Id, out var items)) continue;
                 foreach (var item in items)
                     if (item.Mesh.Visibility == Visibility.Visible && item.Mesh.IsRendering)

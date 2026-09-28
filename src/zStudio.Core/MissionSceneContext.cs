@@ -8,7 +8,7 @@ using Recoil.Zbd.Core.Formats;
 
 namespace Recoil.Zbd.Core;
 
-public sealed record MissionActor(int Root, int SourceRoot, string Name, string PlacementSource, MissionPickup? Pickup = null);
+public sealed record MissionActor(int Root, int SourceRoot, string Name, string PlacementSource, MissionPickup? Pickup = null, MissionPickupSource? CoordinateSource = null, Vector3? PlacementPosition = null);
 public sealed record HorizonBinding(int Root, bool FollowHeight);
 
 /// <summary>A published, read-only preview baseline. Its nodes never alias serialized node data.</summary>
@@ -30,7 +30,7 @@ public sealed class MissionSceneContext
         Diagnostics = diagnostics.Distinct(StringComparer.Ordinal).ToArray(); Horizons = FindHorizons(scene);
     }
     /// <summary>Match an instance and its source node; never carry clone indices between layouts.</summary>
-    public int RemapNodeFrom(MissionSceneContext previous, int index)
+    public int RemapNodeFrom(MissionSceneContext previous, int index, IReadOnlySet<MissionPickupSource>? coordinateMatches = null)
     {
         if (index < 0 || index >= previous.Scene.Nodes.Count) return -1;
         int ancestor = index; HashSet<int> visited = [];
@@ -40,7 +40,9 @@ public sealed class MissionSceneContext
             if (actor != null)
             {
                 bool Matches(MissionActor a) => a.SourceRoot == actor.SourceRoot &&
-                    (actor.Pickup is { } pickup ? a.Pickup?.Source == pickup.Source : a.Pickup == null && a.Name == actor.Name);
+                    (actor.Pickup is { } pickup ? a.Pickup?.Source == pickup.Source :
+                     actor.CoordinateSource != null && coordinateMatches != null ? a.CoordinateSource is { } source && coordinateMatches.Contains(source) :
+                     a.Pickup == null && a.Name == actor.Name);
                 if (previous.Actors.Count(Matches) != 1) return -1;
                 var matches = Actors.Where(Matches).ToArray();
                 if (matches.Length != 1) return -1;
@@ -115,7 +117,8 @@ public static partial class MissionSceneLoader
         var result = await Task.Run(() =>
         {
             var context = Build(world, package, Decode(aivName), Decode(vehicleName), Decode("startanims.zrd"), diagnostics, token, selection,
-                Decode("ai.zrd"), Decode(pickupName), pickupSource);
+                Decode("ai.zrd"), Decode(pickupName), pickupSource,
+                resources.TryGetValue(aivName, out var aivResource) ? new(aivResource.Archive.Path, aivResource.Asset.Index, aivResource.Asset.Name) : null);
             context.AiNetworks = MissionAiNetworks.Read(aiResources, token);
             return context;
         }, token).ConfigureAwait(false);
@@ -143,7 +146,7 @@ public static partial class MissionSceneLoader
     }
 
     public static MissionSceneContext Build(ZbdDocument world, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts, IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
-        JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null)
+        JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null)
     {
         selection ??= MissionLayoutSelection.For(MissionDifficulty.Medium);
         token.ThrowIfCancellationRequested();
@@ -166,7 +169,7 @@ public static partial class MissionSceneLoader
         if (vehicles == null) notes.Add($"Mission starting layout: {selection.VehicleResource} is unavailable; vehicle definitions could not be recovered.");
         if (aiv == null) notes.Add($"Mission starting layout: {selection.AivResource} is unavailable; vehicle spawn positions could not be recovered.");
         else if (worldRoot >= 0)
-            foreach (var (name, value) in Records(aiv))
+            foreach (var ((name, value), recordIndex) in Records(aiv).Select((record, index) => (record, index)))
             {
                 token.ThrowIfCancellationRequested();
                 if (value?["children"] is not JsonArray data || data.Count != 3 || data[1]?["children"] is not JsonArray xyz) continue;
@@ -187,7 +190,8 @@ public static partial class MissionSceneLoader
                     scene.Nodes[root].Metadata["flags"] = scene.Nodes[root].Metadata.UInt("flags") | 4;
                     if (!scene.Nodes[root].Parents.Contains(worldRoot)) scene.Nodes[root] = scene.Nodes[root] with { Parents = [worldRoot] };
                     scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Append(root).Distinct().ToArray() };
-                    positioned.Add(root); actors.Add(new(root, sources[root], name, $"{selection.AivResource} · {selection.Difficulty}"));
+                    positioned.Add(root); actors.Add(new(root, sources[root], name, $"{selection.AivResource} · {selection.Difficulty}", CoordinateSource: aivSource == null ? null :
+                        new(Path.GetFullPath(aivSource.ArchivePath).ToUpperInvariant(), aivSource.AssetIndex, aivSource.ResourceName.ToUpperInvariant(), recordIndex), PlacementPosition: position));
                 }
                 catch (InvalidDataException ex) { notes.Add($"Mission actor {name}: {ex.Message}"); }
             }

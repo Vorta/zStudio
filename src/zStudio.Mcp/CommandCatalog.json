@@ -443,7 +443,7 @@
   },
   {
     "Name": "zstudio_save_document",
-    "Description": "Verified save: animations require a NEW destination outside the source root; pickups save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Content batches return saved paths and errors; state.contentEdits lists affected paths and targets. A partial content Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batches return saved paths and errors; state.contentEdits lists affected content paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -483,7 +483,7 @@
       {
         "Name": "destinations",
         "Type": "object",
-        "Description": "Pickup or texture batch source path to new Save As path map; cover every affected file.",
+        "Description": "Mission coordinate or texture batch source path to new Save As path map; cover every affected file.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -499,7 +499,7 @@
       {
         "Name": "backup",
         "Type": "boolean",
-        "Description": "Pickup backup preference; defaults to app setting.",
+        "Description": "Mission coordinate backup preference; defaults to app setting.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -1024,7 +1024,7 @@
   },
   {
     "Name": "zstudio_scene_selection",
-    "Description": "Select/inspect a scene node. Isolate and show_all are available only in static model/Whole world previews, matching the GUI.",
+    "Description": "Select/inspect a scene node. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2158,6 +2158,257 @@
     ]
   },
   {
+    "Name": "zstudio_scene_inspect",
+    "Description": "Read hover/selection information or query an explicit viewport point/target without moving the mouse. Coordinates distinguish triangle hits, object origins and authored placement positions.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "Opaque target from a previous inspection.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "screenPoint",
+        "Type": "array",
+        "Description": "Viewport DIP [x,y].",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "number",
+          "Description": "Coordinate.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null,
+          "NumberMinimum": 0
+        },
+        "MinItems": 2,
+        "MaxItems": 2
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_scene_card",
+    "Description": "Select/close the floating card, copy fields, or explicitly begin/set/apply/cancel its XYZ draft. Edit actions require document/revision; set/apply/cancel require the current draft token. Copy returns the same text as the GUI and optionally writes the clipboard.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Card action.",
+        "Required": true,
+        "Choices": [
+          "select",
+          "clear",
+          "copy",
+          "begin",
+          "set",
+          "apply",
+          "cancel"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "target",
+        "Type": "string",
+        "Description": "Opaque inspection target for select.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Alternative scene node for selection.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "runtime",
+        "Type": "string",
+        "Description": "Optional runtime instance ID with node.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "field",
+        "Type": "string",
+        "Description": "Copy field label; omitted copies all details.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "clipboard",
+        "Type": "boolean",
+        "Description": "Write copy text to clipboard; default false.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Owning document ID for edits.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected document revision for edits.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "token",
+        "Type": "string",
+        "Description": "Current draft lifetime and input token. Reopening a draft creates a new token.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "position",
+        "Type": "array",
+        "Description": "Three coordinate input strings for set; permits temporary incomplete drafts.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Coordinate input.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 3,
+        "MaxItems": 3
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_scene_tree",
+    "Description": "Read the Document scene hierarchy, including stable preview placements, shared/partition references and disconnected nodes. Read returns roots or a row\u0027s direct children, optionally filtered before paging. Expand/collapse/reveal only change tree presentation; select shares scene inspection and draft guards. Runtime parenting is not represented.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Tree action; default read. Properties opens the same pinned window as the row context menu.",
+        "Required": false,
+        "Choices": [
+          "read",
+          "expand",
+          "collapse",
+          "reveal",
+          "select",
+          "properties"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "context",
+        "Type": "string",
+        "Description": "Current hierarchy context from read; required for all actions and row queries.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview ID from read; required for actions on a preview hierarchy.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "row",
+        "Type": "string",
+        "Description": "Opaque row ID for child queries or actions.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node index for reveal/select/properties instead of row.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
     "Name": "zstudio_animation_records",
     "Description": "List authored sequence identities; supply sequence to page its events with full edited fields. Cleanup is listed separately from runtime sequences.",
     "Mutates": false,
@@ -2815,7 +3066,8 @@
         "Required": true,
         "Choices": [
           "properties",
-          "preview"
+          "preview",
+          "scene"
         ],
         "Properties": null
       }
@@ -2841,7 +3093,8 @@
         "Required": true,
         "Choices": [
           "properties",
-          "preview"
+          "preview",
+          "scene"
         ],
         "Properties": null
       },

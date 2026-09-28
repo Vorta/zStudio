@@ -41,7 +41,8 @@ public partial class MainWindow
     private void PickupEditsChanged()
     {
         if (pickupDocument?.PickupEdits is not { } edits || scene?.Mission is not { } mission) return;
-        scene.SetPickupPositions(edits.PreviewPositions(mission));
+        scene.SetMissionCoordinates(edits);
+        if (aiPropertiesArchive != null && propertiesWindow?.Document == pickupDocument) propertiesWindow.MarkAiSnapshotStale();
         UpdateDocumentCommands();
         if (selectedNode is int node && scene.PickupAt(node) != null && properties != null)
         {
@@ -69,7 +70,7 @@ public partial class MainWindow
     private async void SaveCurrentAsClick(object sender, RoutedEventArgs e)
     { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc, true); }
     private Task<bool> SaveCurrentAsync(DocumentModel document, bool saveAs = false) => document.ContentEdits != null ? SaveContentDocumentAsync(document, saveAs) : document.ResourceEdits != null ? SaveResourceDocumentAsync(document, saveAs) : document.ModelEdits?.IsDirty == true || saveAs && document.ModelEdits?.HasModelImports == true
-        ? SaveModelDocumentAsync(document, saveAs) : document.PickupEdits is { Records.Count: > 0 }
+        ? SaveModelDocumentAsync(document, saveAs) : document.PickupEdits is { } coordinates && (coordinates.Records.Count > 0 || coordinates.OtherCoordinates.Count > 0)
         ? SavePickupsAsync(document, saveAs) : SaveAnimationAsync(document);
     private void BackupOnSaveChanged(object sender, RoutedEventArgs e)
     {

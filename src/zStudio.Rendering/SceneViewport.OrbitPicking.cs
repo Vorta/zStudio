@@ -25,8 +25,17 @@ public sealed partial class SceneViewport
     internal bool TryNavigationSurface(Point point, out Point3D surface)
     {
         surface = default;
+        if (!TrySceneSurface(point, out var hit)) return false;
+        surface = new(hit!.PointHit.X, hit.PointHit.Y, hit.PointHit.Z); return true;
+    }
+    private bool TrySceneSurface(Point point, out HitTestResult? surface)
+    {
+        surface = null;
         if (!IsOrbitPickingReady || viewport.Camera is not ProjectionCamera camera
             || !TryNavigationRay(point, out var origin, out var direction)) return false;
+        // A navigation query can precede the next render update. Facades must
+        // face this camera as well as the ray; simulation poses remain unchanged.
+        if (cameraPoseDirty) RefreshAnimationCamera(updateHitTests: true);
         var forward = camera.LookDirection; forward.Normalize();
         // Adaptive clipping is finalized on the next frame. Starting at the eye
         // keeps immediate/substep queries independent of the previous near plane.
@@ -41,7 +50,7 @@ public sealed partial class SceneViewport
             var candidate = new Point3D(hit.PointHit.X, hit.PointHit.Y, hit.PointHit.Z);
             if (!double.IsFinite(candidate.X) || !double.IsFinite(candidate.Y) || !double.IsFinite(candidate.Z)
                 || Vector3D.DotProduct(candidate - camera.Position, forward) < 1e-6) continue;
-            surface = candidate; return true;
+            surface = hit; return true;
         }
         return false;
     }
@@ -72,7 +81,7 @@ public sealed partial class SceneViewport
         if (!mesh.IsRendering || !mesh.IsHitTestVisible || mesh.Visibility != Visibility.Visible || !mesh.IsDepthClipEnabled) return false;
         if (visiblePlacements.TryGetValue(mesh, out var items))
             return instance is int index && index >= 0 && index < items.Length && !IsHorizon(items[index].NodeIndex);
-        return animatedMeshes.Values.Any(items => items.Any(item => ReferenceEquals(item.Mesh, mesh)));
+        return inspectionMeshes.TryGetValue(mesh, out var item) && item.Runtime != null && !IsHorizon(item.Node);
     }
 
     internal bool SetOrbitPivot(Point3D point)

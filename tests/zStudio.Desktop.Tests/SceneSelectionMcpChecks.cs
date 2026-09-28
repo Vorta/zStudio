@@ -93,6 +93,14 @@ internal static class SceneSelectionMcpChecks
             Assert.NotNull(mesh.Instances);
             Assert.Equal(2, mesh.Instances.Count);
 
+            // A tree row can identify a pickup child. The toolbar and MCP still
+            // isolate the same complete placed pickup, not different geometry.
+            typeof(MainWindow).GetField("selectedNode", flags)!.SetValue(main, 1);
+            typeof(MainWindow).GetMethod("IsolateClick", flags)!.Invoke(main, [main, new RoutedEventArgs()]);
+            Assert.Equal(0, typeof(MainWindow).GetField("isolatedNode", flags)!.GetValue(main));
+            Assert.Equal(2, mesh.Instances.Count);
+            typeof(MainWindow).GetField("selectedNode", flags)!.SetValue(main, 0);
+
             // Simulate the renderer's in-progress drag state without capturing the
             // physical mouse. Remote selection must not silently cancel that move.
             var drag = typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsPickupDragging))!;
@@ -112,9 +120,43 @@ internal static class SceneSelectionMcpChecks
                 Assert.Equal(0, doc.Revision);
             }
             finally { drag.SetValue(viewport, false); }
+            // Simulate renderer state only; never acquire the physical pointer.
+            var fly = typeof(SceneViewport).GetProperty(nameof(SceneViewport.IsFlyActive))!;
+            fly.SetValue(viewport, true);
+            try
+            {
+                foreach (string action in new[] { "select", "isolate", "show_all" }) AssertBusy(await Call(action, 1));
+                Assert.Equal(pose, viewport.CaptureView());
+            }
+            finally { fly.SetValue(viewport, false); }
             Assert.False((await Call("show_all")).IsError == true);
             Assert.False((await Camera("move")).IsError == true);
             Assert.NotEqual(pose.Position, viewport.CaptureView().Position);
+            // Flat MCP selection must not leave a different rendered node's card
+            // selected when the requested source has no visible mesh.
+            data.Nodes.Add(new(3, "unrendered source", "object3d", null, [], [], new(), new()));
+            typeof(SceneViewport).GetMethod("RegisterInspectionMesh", flags)!.Invoke(viewport, [mesh, 0, null, -1, -1]);
+            Assert.True(viewport.SelectInspectionNode(1)); Assert.NotNull(viewport.SelectedInspection);
+            Assert.False((await Call("select", 3)).IsError == true);
+            Assert.Null(viewport.SelectedInspection);
+            Assert.Equal(3, viewport.FramingSelection);
+            Assert.Equal(3, typeof(MainWindow).GetField("selectedNode", flags)!.GetValue(main));
+            // Ordinary hierarchy parents retain every descendant, even through
+            // shared/cyclic links, without relying on pickup instance metadata.
+            roots.Clear(); actors.Clear();
+            data.Nodes[0] = data.Nodes[0] with { Children = [1] };
+            data.Nodes[1] = data.Nodes[1] with { Children = [2] };
+            data.Nodes[2] = data.Nodes[2] with { Children = [0, 999] };
+            Assert.False((await Call("isolate", 0)).IsError == true);
+            Assert.Equal(2, mesh.Instances.Count);
+            // Shared geometry cannot identify which placed actor should be moved.
+            data.Nodes[0] = data.Nodes[0] with { Children = [2] };
+            data.Nodes[1] = data.Nodes[1] with { Children = [2] };
+            data.Nodes[2] = data.Nodes[2] with { Children = [] };
+            var mission = new MissionSceneContext(data, [0, 1, 2], [new(0, 0, "first actor", "fixture"), new(1, 1, "second actor", "fixture")], [], [], MissionLayoutSelection.For(MissionDifficulty.Medium), 3);
+            typeof(SceneViewport).GetProperty(nameof(SceneViewport.Mission))!.SetValue(viewport, mission);
+            Assert.Null(viewport.ActorAt(2));
+            Assert.Equal(0, viewport.ActorAt(0)?.Root); Assert.Equal(1, viewport.ActorAt(1)?.Root);
             typeof(MainWindow).GetField("scene", flags)!.SetValue(main, null);
 
             Task<CallToolResult> Call(string action, int node = 0) => client.CallToolAsync("zstudio_scene_selection",

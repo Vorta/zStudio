@@ -2,6 +2,19 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.6.3 — 2026-09-28
+
+- Add an expandable Document scene hierarchy for active previews, including mission placements, shared/partition references and unlinked nodes. Synchronize viewport selection, preserve expansion by provenance, retain stable animation scene structure, and expose the same hierarchy through `zstudio_scene_tree`.
+- Add shared 3D hover information and floating node cards to Whole world, model and animation previews. Show exact surface coordinates separately from object origins, source node/model/material identities, soil and region flags, AI links and mission metadata, with full-precision copy actions.
+- Add explicit XYZ editing for mission pickups, AI navigation nodes and supported AIV tanks. Preserve source identities, linked unique difficulty counterparts, pending drafts, chronological undo and verified coordinate-only archive saves.
+- Expose inspection, card selection/copy, coordinate drafts and the node hierarchy through three shared MCP tools, with typed validation, revision/draft checks and windowless discovery for all 73 tools.
+- Retain all requested destinations after partial coordinate Save As. Ordinary Save retries unpublished copies as new files, keeping source archives and competing files protected.
+- Keep ambiguous or shadowed tank records read-only and match difficulty counterparts by original placement and template provenance.
+- Frame the selected animation copy, expire inspection targets when runtime slots change source/model, and respect later source-tree selections. Update camera-facing sprite hit transforms before immediate camera queries.
+- Restore source framing and inspection after compatible hierarchy refreshes, clear stale tree selection when closing a card, and keep pickup-child isolation consistent between the toolbar and MCP.
+- Give reopened XYZ drafts new conflict tokens, reject scene-selection changes during Fly, and keep geometry shared by multiple mission actors read-only instead of choosing an arbitrary editable instance.
+- Clear unrelated rendered cards when selecting nodes without geometry, and open Properties for the current source after viewport selection while retaining independently pinned windows until explicitly retargeted.
+
 ## 0.6.1 — 2026-09-27
 
 - Base perspective zoom speed on the scene surface under the pointer while moving toward the pointer. Refresh that distance during zoom, retain the last speed over empty space, and continue past the old target without needing a small pan/orbit to restore speed. Wheel, Ctrl + middle drag, numpad and MCP share the behavior and smooth inertia, independently of clipping planes.

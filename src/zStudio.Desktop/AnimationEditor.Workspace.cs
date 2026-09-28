@@ -26,6 +26,8 @@ public partial class AnimationEditor
     { if (propertyContextTarget is { } target) PropertiesRequested?.Invoke(target.Sequence, target.Event); }
     public event Action? SourceSelectionChanged;
     public event Action? CommandsChanged;
+    internal event Action? SceneHierarchyChanged;
+    private GameScene? publishedHierarchy;
     public event Action? SetupRequested;
     public event Action<int,Guid,Guid>? SourceNavigationRequested;
     internal bool CanRunCommand(string command) => !disposed && command switch

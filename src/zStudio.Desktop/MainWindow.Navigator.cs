@@ -34,7 +34,7 @@ public partial class MainWindow
     {
         0 or 2 => true,
         1 => ViewModel.SelectedDocument != null,
-        3 => ViewModel.SelectedDocument?.SceneRoots.Count > 0,
+        3 => sceneTreeDocument == ViewModel.SelectedDocument && sceneTree?.Roots.Count > 0,
         _ => false
     };
     private void ValidateNavigatorSection(int index)
@@ -55,6 +55,7 @@ public partial class MainWindow
         if (!NavigatorSectionAvailable(index)) return;
         RememberNavigatorSection(index);
         UpdateNavigatorAvailability();
+        ScheduleSceneTreeReveal();
     }
     private void NavigatorSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -62,6 +63,7 @@ public partial class MainWindow
         int index = NavigationTabs.SelectedIndex;
         if (NavigatorSectionAvailable(index)) RememberNavigatorSection(index);
         UpdateNavigatorAvailability();
+        ScheduleSceneTreeReveal();
     }
     private void UpdateNavigatorAvailability()
     {
