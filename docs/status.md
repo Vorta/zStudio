@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR #14 edited mech binding identity (2026-09-29)
+
+Motion assembly selection now captures the stable archive member UUID from the same frozen resource snapshot as the geometry, including duplicated/imported members without an original SourceIndex. Rename, reorder, model replacement and Undo/Redo remap the bound member by UUID while retaining the camera and playback state. Successful selection replaces the binding identity; cancellation leaves the prior identity intact. A missing/deleted member clears the binding without selecting another member at its former index. Library refresh retains matching snapshot metadata and no longer overwrites a newly selected identity after asynchronous loading.
+
+The regression reproduced the reported loss on renaming a selected duplicate before the fix. Expanded real named-pipe/WPF checks cover duplicate and imported members with deliberately repeated names, loading an already-edited library, retained-viewer refresh, cancellation, rename/reorder/replacement/history, explicit member switching, deletion/index reuse and unchanged source bytes. Release build has zero warnings/errors; all 431 tests pass (338 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. MCP documentation/capability notes are updated; existing schemas/catalog remain unchanged and parity passes. Follow-up review found no further actionable defect in this change. Version remains 0.7.0.
+
 ## PR #14 cancellable motion binding and MW3 keyframe counts (2026-09-29)
 
 Motion binding builds one ordinal name index over the selected assembly, reducing matching from parts × nodes to nodes + parts while retaining member boundaries and duplicate-name ambiguity. Indexing/counting/binding observe cancellation. Assembly selection prepares bindings off the UI thread and checks request ownership before publication; edits accepted during loading trigger cancellable background rebinding until the current clip is ready. Existing playback intent, explicit pause/play, identity and source protections remain shared by GUI and MCP.

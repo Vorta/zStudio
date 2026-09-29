@@ -266,7 +266,8 @@ public partial class MainWindow : Window
             }
             else if (asset?.Kind == AssetKind.Motion && doc.ResourceEdits != null && ViewModel.Resolver != null)
             {
-                var editor = new MotionEditor(doc, doc.ResourceEdits.Current.Members[asset.Index].Id, ViewModel.Resolver, previewLifetime); motion = editor;
+                var editor = new MotionEditor(doc, doc.ResourceEdits.Current.Members[asset.Index].Id, ViewModel.Resolver, previewLifetime,
+                    library => ViewModel.Documents.Select(d => d.ResourceEdits?.Current).SingleOrDefault(s => ReferenceEquals(s?.Document, library))); motion = editor;
                 editor.SceneChanged += () => { AttachInspection(editor.Viewport); editor.Viewport.NodeSelected += InspectNode; RefreshSceneTree(); };
                 editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
                 AnimationHost.Content = editor; AnimationHost.Visibility = Visibility.Visible;

@@ -32,6 +32,8 @@ Open the motion archive and select a **Motion** asset. The viewer suggests a uni
 
 Assembly binding indexes the selected member's node names once, with ordinal matching and duplicate-name protection. Binding runs off the UI thread and observes cancellation while indexing and binding tracks; superseded requests cannot replace the current selection, including when edits require rebinding during a pending load.
 
+Bindings to edited libraries retain the selected member UUID from the same snapshot as its geometry, including duplicated/imported members with no original-file index. Renaming, reordering, model replacement and Undo/Redo keep that member bound with camera/playback retained. Selecting another member replaces the binding identity only after a successful load. Deleting the selected member clears the binding instead of selecting another member at its former index.
+
 Deleting the displayed motion or replacing it with non-motion data closes that motion viewer and shows the archive's resulting selection, or archive information when empty. Undo/Redo updates the preview as well, including when another Navigator tab is open. Renaming or reordering a surviving motion retains its viewer, playback and camera by member UUID; duplicate names and reused row indices do not identify the same clip. The separate Properties window keeps its pinned identity.
 
 Play/pause, the loop-time seeker, LOD and Frame use the shared renderer. Space works from Assets or passive preview content. Blender-style navigation, scene inspection and the tree apply to the visible posed geometry. Playback interpolates translations and normalized quaternions through the hierarchy; aiming, gait correction and inverse kinematics are not simulated.
