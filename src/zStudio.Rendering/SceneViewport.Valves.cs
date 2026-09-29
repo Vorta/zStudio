@@ -34,9 +34,16 @@ public sealed partial class SceneViewport
             remaining -= nodes.Length;
             Color4 color = ValveFilter == null ? new(.95f, .95f, .95f, 1) : new(1, .8f, .2f, 1);
             if (nodes.Length > 0) aiMarkers.Add((AiMesh(ValveCage(), color), nodes, 8));
-            var byIndex = network.Nodes.Where(n => !network.AmbiguousIndices.Contains(n.Index)).GroupBy(n => n.Index).Where(g => g.Count() == 1).ToDictionary(g => g.Key, g => g.Single());
-            var edges = MissionAiValves.EdgeAssignments(network, ValveFilter).Take(remainingEdges)
-                .Select(c => (From: byIndex[c.From!.Value].Position, To: byIndex[c.To!.Value].Position)).ToArray();
+            // Select the capped edges first, then resolve only their endpoints: toggling or filtering valves must
+            // not index every node. ValveEdgeSources retain only edges whose endpoint indices are unique.
+            var assignments = MissionAiValves.EdgeAssignments(network, ValveFilter).Take(remainingEdges).Select(c => (From: c.From!.Value, To: c.To!.Value)).ToArray();
+            Dictionary<int, Vector3> endpoints = new(Math.Min(assignments.Length * 2, 2048));
+            foreach (var (from, to) in assignments) { endpoints.TryAdd(from, default); endpoints.TryAdd(to, default); }
+            if (endpoints.Count > 0)
+                foreach (var node in network.Nodes)
+                    if (endpoints.ContainsKey(node.Index) && network.ResolvedIndices.Contains(node.Index)) endpoints[node.Index] = node.Position;
+            var edges = assignments.Where(e => network.ResolvedIndices.Contains(e.From) && network.ResolvedIndices.Contains(e.To))
+                .Select(e => (From: endpoints[e.From], To: endpoints[e.To])).ToArray();
             remainingEdges -= edges.Length;
             if (edges.Length > 0) { var mesh = AiMesh(Links(), color); aiLinks.Add(mesh, Links); }
             MeshGeometry3D Links()

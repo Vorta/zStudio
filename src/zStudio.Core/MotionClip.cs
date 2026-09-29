@@ -15,6 +15,15 @@ public sealed class MotionClip
     public required float LoopTime { get; init; }
     public required int FrameCount { get; init; }
     public required IReadOnlyList<MotionPart> Parts { get; init; }
+    /// <summary>Decoded samples one archive may materialize (two dense arrays per sample); retail motion.zbd holds about 200,000.</summary>
+    public const long MaximumArchiveSamples = 2_097_152;
+    /// <summary>The samples a version 4 header would materialize, or null when the header is not a supported motion header.</summary>
+    internal static long? HeaderSamples(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 24 || BinaryPrimitives.ReadUInt32LittleEndian(bytes) != 4) return null;
+        int frames = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]), parts = BinaryPrimitives.ReadInt32LittleEndian(bytes[12..]);
+        return frames is >= 1 and <= 100_000 && parts is >= 1 and <= 4096 ? (long)parts * (frames + 1) : null;
+    }
     public static MotionClip Read(ReadOnlyMemory<byte> bytes, CancellationToken token = default)
     {
         BinaryCursor c = new(bytes); var header = c.Take(24); BinaryCursor h = new(header);
@@ -22,6 +31,7 @@ public sealed class MotionClip
         float duration = h.F32(); int frames = h.I32(), parts = h.I32();
         if (!float.IsFinite(duration) || duration <= 0 || frames < 1 || frames > 100_000 || parts < 1 || parts > 4096 || h.F32() != -1 || h.F32() != 1)
             throw new InvalidDataException("Invalid motion duration, frame count, part count, or header.");
+        FormatRegistry.CheckEntries("Motion sample", (long)parts * (frames + 1), MaximumArchiveSamples);
         c.Count((uint)parts, checked(8 + (frames + 1) * 28));
         List<MotionPart> tracks = [];
         for (int p = 0; p < parts; p++)

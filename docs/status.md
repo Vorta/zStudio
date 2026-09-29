@@ -57,6 +57,15 @@ Codex's review of 13f99bc found six further P2s, now fixed with regressions that
 
 The PR watcher gained a Claude Code channel (`-Claude`). A foreground `listen` command, run through Claude Code's Monitor, reuses the durable one-shot claim, snapshots and acknowledgment. It waits until a burst of new comments stops changing, prints exactly one notification line, and runs from a private runtime copy so builds stay possible. Watcher tests: 67/67.
 
+Codex's review of 7dd7b05 raised five P2s. Four were fixed as reported. The fifth (MW3 difficulty) exposed a different real bug:
+- **Point-light vertices:** each light's vertices join the file's polygon/light budget before they are allocated and expanded into JSON. Material-cycle texture indices, a sibling path, now have their own per-file budget.
+- **Motion samples:** each archive decodes at most 2,097,152 samples. A member beyond that stays raw with a warning, and a motion edit that would exceed the total is rejected rather than silently demoting the clip.
+- **Valve overlay:** toggling or filtering valves resolves only the capped edges' endpoints instead of indexing every AI node.
+- **Animation node references:** resolutions are cached per entry object and bound root for both games. The cache is cleared when the mission scene is replaced.
+- **MW3 difficulty:** no retail MW3 reader contains `aiv_easy`/`aiv_hard`/`vehicle_*`/`puppies_*` variants, so difficulty stays unsupported for MW3. However, a map with no mission reader reported a Medium layout. That caused an extra world reload, and a failed refresh could reset the shared saved difficulty. It is now labelled as a stored world layout, and MW3 animation state reports no difficulty.
+
+Validation: 639/639 Release tests (471 Core, 101 Desktop, 67 watcher) with RECOIL1999 and MW3 corpora; Core 471/471 with RECOIL1998. Temporarily disabling each fix makes its regression fail.
+
 ## PR feedback watch and coordinate-path review (2026-09-29)
 
 Added optional local development tooling in `tools/pr-watch.ps1`. It observes a selected PR's conversation comments, published review summaries and inline comments, disarms on the first new feedback batch and queues one follow-up into the owning Codex conversation. Explicit snapshot acknowledgment preserves later arrivals; validated fix pushes re-arm against the remote head. Separate approval monitoring checks a fresh review-bot reaction on the PR description and a completed current-head summary. The helper does not edit, merge or publish; any authorized release still requires the agent's current-head review, CI and repository checks. Durable claims prevent automatic duplicate submissions after crashes or uncertain delivery. See [PR watch setup and recovery](pr-watch.md).

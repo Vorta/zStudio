@@ -16,7 +16,7 @@ public partial class AnimationEditor
     internal object PreviewState() => new
     {
         entry = entryIndex, playing, time = frame?.Time, duration, range = SeekSlider.Maximum, customRange,
-        options = Options, height = appliedHeight, lod = Lod.SelectedIndex, difficulty = SelectedDifficulty.ToString(), mission = MissionArchive,
+        options = Options, height = appliedHeight, lod = Lod.SelectedIndex, difficulty = Mw3WorldPath == null ? SelectedDifficulty.ToString() : null, mission = MissionArchive,
         speed = new[] { .25, .5, 1, 2, 4 }[Math.Clamp(Speed.SelectedIndex, 0, 4)], replay = Loop.IsChecked == true,
         mute = Mute.IsChecked == true, volume = Volume.Value, phase = Phase.SelectedIndex == 0 ? "runtime" : "cleanup", seed = appliedSeed,
         condition = Condition.SelectedIndex, activationStart, activationTarget, root = context?.ResolveRoot(Entry),

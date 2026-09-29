@@ -68,7 +68,11 @@ public sealed class ResourceEditSession
             var clip = MotionClip.Read(list[index].Data, token).Edit(action, part, frame, value, loopTime);
             byte[] bytes = clip.Write(token); _ = MotionClip.Read(bytes, token);
             list[index] = list[index] with { Data = bytes, Tree = null };
-            return new PreparedResourceEdit(before, Build(list, token));
+            var after = Build(list, token);
+            // The archive-wide decoded sample budget must not silently demote the edited clip to a raw member.
+            if (after.Document.Assets[index].Content is not MotionClip)
+                throw new InvalidDataException($"The edited archive would exceed the supported {MotionClip.MaximumArchiveSamples:N0} decoded motion samples.");
+            return new PreparedResourceEdit(before, after);
         }, token);
     }
     public ZrdNode Tree(ResourceMember member, CancellationToken token = default) => member.Tree ?? trees.GetOrAdd((member.Id, member.Data), _ => ZrdDecoder.Read(member.Data, token));

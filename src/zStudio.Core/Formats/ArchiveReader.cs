@@ -11,6 +11,7 @@ internal sealed class ArchiveReader : IZbdFormatReader
         long table = doc.Bytes.Length - 8L - records * 148L; BinaryCursor.CheckRange(doc.Bytes.Length, table, records * 148L);
         doc.ArchiveDirectoryOffset = table;
         Dictionary<(uint Offset, uint Size), (ZrdNode? Tree, MotionClip? Motion)> typedRanges = [];
+        long motionSamples = 0;
         c.Seek((int)table);
         for (int i = 0; i < records; i++)
         {
@@ -26,8 +27,15 @@ internal sealed class ArchiveReader : IZbdFormatReader
                 // Members may alias the same payload. Decode that immutable range only once.
                 if (!typedRanges.TryGetValue((offset, size), out var decoded))
                 {
-                    var typed = ZrdDecoder.TryRead(bytes, token);
-                    typedRanges[(offset, size)] = decoded = (typed, typed == null ? MotionClip.TryRead(bytes, token) : null);
+                    var typed = ZrdDecoder.TryRead(bytes, token); MotionClip? clip = null;
+                    // Every distinct motion payload materializes dense samples; bound the archive total before decoding.
+                    if (typed == null && MotionClip.HeaderSamples(bytes.Span) is long samples)
+                    {
+                        if (motionSamples + samples > MotionClip.MaximumArchiveSamples)
+                            doc.Diagnostics.Add(new("Warning", $"Archive member {i} ({name}) would exceed the supported {MotionClip.MaximumArchiveSamples:N0} decoded motion samples per archive; raw inspection and member replacement remain available.", i, offset));
+                        else if ((clip = MotionClip.TryRead(bytes, token)) != null) motionSamples += samples;
+                    }
+                    typedRanges[(offset, size)] = decoded = (typed, clip);
                 }
                 var (tree, motion) = decoded;
                 if (tree != null) kind = AssetKind.Zrd;

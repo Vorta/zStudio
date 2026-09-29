@@ -48,38 +48,41 @@ internal sealed class GameZReader : IZbdFormatReader
             scene.Materials.Add(material); doc.Add(AssetKind.Material, i, $"Material {i}", offset, 44, material).Summary = $"Texture {material.Int("texture_index", -1)}";
         }
         c.Skip(checked((int)(capacity - count) * 44));
+        // Every cycle texture index becomes metadata; bound the document total before each list is read.
+        RecordBudget cycleIndices = new("material cycle texture index");
         foreach (var material in scene.Materials)
             if ((material.UInt("flags") & 4) != 0 || material.Text("cycle_ptr") != "0x00000000")
             {
-                var cycle = FieldLayouts.Read(c, 28, "GAMEZ_MATERIAL_CYCLE_LAYOUT"); cycle["texture_indices"] = JsonData.Integers(c.Indices(cycle.Int("tex_map_count"))); material["cycle"] = cycle;
+                token.ThrowIfCancellationRequested(); var cycle = FieldLayouts.Read(c, 28, "GAMEZ_MATERIAL_CYCLE_LAYOUT"); cycleIndices.Add(cycle.UInt("tex_map_count"));
+                cycle["texture_indices"] = JsonData.Integers(c.Indices(cycle.Int("tex_map_count"))); material["cycle"] = cycle;
             }
     }
     private static void ReadModels(ZbdDocument doc, GameScene scene, BinaryCursor c, GameZLayouts layout, CancellationToken token)
     {
         uint capacity = c.U32(), count = c.U32(); c.Skip(4); if (count > capacity) throw new InvalidDataException("Model count exceeds capacity."); GameZLayouts.CheckEntries("model", count); c.Count(capacity, layout.ModelSize + 4);
-        List<JsonObject> infos = []; long geometry = 0;
+        List<JsonObject> infos = []; RecordBudget geometry = new("polygon/light record");
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested(); var info = layout.Read(c, layout.ModelSize, "GAMEZ_MODEL_INFO_LAYOUT"); info["data_offset"] = (long)c.U32(); infos.Add(info);
-            geometry += info.UInt("polygon_count") + (long)info.UInt("light_count");
+            geometry.Add(info.UInt("polygon_count") + (long)info.UInt("light_count"));
         }
-        // Each polygon/light becomes metadata; bound the document total before reading any model data.
-        GameZLayouts.CheckEntries("polygon/light record", geometry, GameZLayouts.MaximumGeometryRecords);
+        // Each polygon/light becomes metadata: the document total is bounded before any model data is read, and
+        // point-light vertices join the same total before they are allocated and expanded into JSON.
         c.Skip(checked((int)(capacity - count) * (layout.ModelSize + 4)));
         for (int index = 0; index < count; index++)
         {
             token.ThrowIfCancellationRequested(); long start = c.AbsolutePosition; var info = infos[index];
-            var model = ReadModelData(c, infos[index], index, layout, doc.Diagnostics, token); scene.Models.Add(model);
+            var model = ReadModelData(c, infos[index], index, layout, geometry, doc.Diagnostics, token); scene.Models.Add(model);
             var a = doc.Add(AssetKind.Model, index, $"Model {index}", start, c.AbsolutePosition - start, info, model); a.Summary = $"{model.Vertices.Length:N0} vertices · {model.Polygons.Length:N0} polygons";
         }
     }
-    internal static GameModel ReadModelData(BinaryCursor c, JsonObject info, int index, GameZLayouts layout, IList<Diagnostic>? diagnostics, CancellationToken token)
+    internal static GameModel ReadModelData(BinaryCursor c, JsonObject info, int index, GameZLayouts layout, RecordBudget geometry, IList<Diagnostic>? diagnostics, CancellationToken token)
     {
         long start = c.AbsolutePosition; token.ThrowIfCancellationRequested();
         Vector3[] vertices = c.Vectors(info.Int("vertex_count")), normals = c.Vectors(info.Int("normal_count")), morphs = c.Vectors(info.Int("morph_count"));
         int lightCount = c.Count(info.UInt("light_count"), 76); JsonArray lights = [];
         for (int i = 0; i < lightCount; i++) lights.Add(FieldLayouts.Read(c, 76, "GAMEZ_POINT_LIGHT_LAYOUT"));
-        foreach (var light in lights) light!["vertices"] = JsonData.Vectors(c.Vectors(light.Int("vertex_count")));
+        foreach (var light in lights) { geometry.Add(light!.Int("vertex_count")); light!["vertices"] = JsonData.Vectors(c.Vectors(light.Int("vertex_count")), token); }
         info["lights"] = lights;
         int polygonCount = c.Count(info.UInt("polygon_count"), layout.PolygonSize); List<JsonObject> polygonInfos = [];
         for (int i = 0; i < polygonCount; i++) { token.ThrowIfCancellationRequested(); polygonInfos.Add(layout.Read(c, layout.PolygonSize, "GAMEZ_POLYGON_INFO_LAYOUT")); }
@@ -107,7 +110,7 @@ internal sealed class GameZReader : IZbdFormatReader
             if (!free) entries.Add((layout.Decode(raw, "GAMEZ_NODE_BASE_LAYOUT"), offset, header));
         }
         string[] names = ["none", "camera", "world", "window", "display", "object3d", "lod", "unknown_7", "unknown_8", "light"];
-        ReferenceBudget references = new();
+        RecordBudget references = new("node reference");
         List<long> dataOffsets = [];
         for (int i = 0; i < entries.Count; i++)
         {
@@ -125,15 +128,16 @@ internal sealed class GameZReader : IZbdFormatReader
         if (c.Remaining > 0) doc.Diagnostics.Add(new("Warning", $"{c.Remaining} trailing node bytes preserved.", Offset: c.AbsolutePosition));
         return dataOffsets;
     }
-    /// <summary>Per-document running total of node index references, each of which becomes metadata; retail worlds use at most about 16,000.</summary>
-    internal sealed class ReferenceBudget
+    /// <summary>Per-document running total of records that each become metadata, checked before they are allocated.</summary>
+    /// <remarks>Retail worlds use at most about 16,000 node references.</remarks>
+    internal sealed class RecordBudget(string kind)
     {
         private long total;
-        internal void Add(long count) { total += Math.Max(0, count); GameZLayouts.CheckEntries("node reference", total, GameZLayouts.MaximumGeometryRecords); }
+        internal void Add(long count) { total += Math.Max(0, count); GameZLayouts.CheckEntries(kind, total, GameZLayouts.MaximumGeometryRecords); }
     }
-    internal static JsonObject ReadNodeData(BinaryCursor c, string kind, GameZLayouts version, ReferenceBudget? references = null)
+    internal static JsonObject ReadNodeData(BinaryCursor c, string kind, GameZLayouts version, RecordBudget? references = null)
     {
-        references ??= new();
+        references ??= new("node reference");
         (int size, string? layout) = kind switch
         {
             "none" => (0, null),

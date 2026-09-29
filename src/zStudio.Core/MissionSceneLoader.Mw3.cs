@@ -138,7 +138,8 @@ public static partial class MissionSceneLoader
                     if (!mechTemplates.TryGetValue(type, out var assemblies)) mechTemplates[type] = assemblies = [];
                     assemblies.Add(assembly);
                 }
-            var layout = new MissionLayoutSelection(MissionDifficulty.Medium, "aiv.zrd", "vehicle.zrd", "") { MissionArchive = chosen, UnavailableMission = resources.Unreadable ? null : resources.Unavailable };
+            // MW3 missions have no difficulty resource variants; the shared RECOIL preference neither selects nor reports a layout here.
+            var layout = new MissionLayoutSelection(MissionDifficulty.Medium, "aiv.zrd", "vehicle.zrd", "") { MissionArchive = chosen, UnavailableMission = resources.Unreadable ? null : resources.Unavailable, DifficultyApplies = false };
             int modelBase = scene.Models.Count;
             if (library?.Scene is { } mechs)
             {

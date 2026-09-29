@@ -19,7 +19,7 @@ internal static class MechLibraryReader
         GameScene scene = new(); var layout = GameZLayouts.For(27);
         var materialCursor = new BinaryCursor(doc.Slice(materials[0].Offset, materials[0].Length), materials[0].Offset);
         uint storedMaterials = materialCursor.U32(); GameZLayouts.CheckEntries("mech material", storedMaterials);
-        int count = materialCursor.Count(storedMaterials, 40); long geometry = 0;
+        int count = materialCursor.Count(storedMaterials, 40); GameZReader.RecordBudget geometry = new("mech polygon/light record");
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested();
@@ -69,11 +69,10 @@ internal static class MechLibraryReader
                     modelIndex = scene.Models.Count;
                     long header = c.AbsolutePosition;
                     var modelInfo = layout.Read(c, layout.ModelSize, "GAMEZ_MODEL_INFO_LAYOUT");
-                    geometry += modelInfo.UInt("polygon_count") + (long)modelInfo.UInt("light_count");
-                    GameZLayouts.CheckEntries("mech polygon/light record", geometry, GameZLayouts.MaximumGeometryRecords);
+                    geometry.Add(modelInfo.UInt("polygon_count") + (long)modelInfo.UInt("light_count"));
                     modelInfo["source_header_offset"] = header; modelInfo["member_index"] = asset.Index;
                     long modelStart = c.AbsolutePosition;
-                    var model = GameZReader.ReadModelData(c, modelInfo, modelIndex.Value, layout, doc.Diagnostics, token);
+                    var model = GameZReader.ReadModelData(c, modelInfo, modelIndex.Value, layout, geometry, doc.Diagnostics, token);
                     modelInfo["source_data_offset"] = modelStart; modelInfo["source_data_length"] = c.AbsolutePosition - modelStart;
                     scene.Models.Add(model);
                 }

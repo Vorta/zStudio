@@ -8,6 +8,8 @@ public sealed record MissionLayoutSelection(MissionDifficulty Difficulty, string
     public string? MissionArchive { get; init; }
     /// <summary>A remembered mission reader that no longer qualified; MissionArchive is the reported fallback.</summary>
     public string? UnavailableMission { get; init; }
+    /// <summary>False for MechWarrior 3, whose authored missions do not use RECOIL's difficulty resource variants.</summary>
+    public bool DifficultyApplies { get; init; } = true;
     public static MissionLayoutSelection For(MissionDifficulty difficulty) => difficulty switch
     {
         MissionDifficulty.Easy => new(difficulty, "aiv_easy.zrd", "vehicle_easy.zrd", "puppies_easy.zrd"),
@@ -15,6 +17,7 @@ public sealed record MissionLayoutSelection(MissionDifficulty Difficulty, string
         MissionDifficulty.Hard => new(difficulty, "aiv_hard.zrd", "vehicle_hard.zrd", "puppies_hard.zrd"),
         _ => throw new ArgumentOutOfRangeException(nameof(difficulty))
     };
-    public string Label => MissionArchive != null ? $"Authored mission · {Path.GetFileNameWithoutExtension(MissionArchive)}" : $"Mission start · {Difficulty}";
-    public string Description => MissionArchive != null ? $"{Label} · {MissionArchive} · gameplay activation is not simulated" : $"{Label} · {AivResource} · {VehicleResource} · {PickupResource} (all authored pickups)";
+    public string Label => MissionArchive != null ? $"Authored mission · {Path.GetFileNameWithoutExtension(MissionArchive)}" : DifficultyApplies ? $"Mission start · {Difficulty}" : "Stored world layout";
+    public string Description => MissionArchive != null ? $"{Label} · {MissionArchive} · gameplay activation is not simulated" :
+        DifficultyApplies ? $"{Label} · {AivResource} · {VehicleResource} · {PickupResource} (all authored pickups)" : $"{Label} · no MechWarrior 3 mission reader · gameplay activation is not simulated";
 }

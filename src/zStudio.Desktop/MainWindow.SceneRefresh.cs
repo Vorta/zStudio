@@ -21,7 +21,8 @@ public partial class MainWindow
         try
         {
             LodCombo.SelectedIndex = options.Lod; BackdropEnabled.IsChecked = options.Horizon; TexturePackCombo.SelectedItem = options.Pack;
-            if (scene?.Mission != null && options.Mission == null) ViewModel.Difficulty = options.Difficulty;
+            // Only a RECOIL layout restores the shared preference; an MW3 world without readers has no difficulty to restore.
+            if (scene?.Mission is { Layout.DifficultyApplies: true } && options.Mission == null) ViewModel.Difficulty = options.Difficulty;
             if (options.Mission != null && shownDocument != null)
             {
                 ViewModel.Resolver?.SelectMission(shownDocument.Path, options.Mission);

@@ -33,6 +33,20 @@ public sealed class Mw3MissionIsolationTests
     }
 
     [Fact]
+    public async Task WorldsWithoutMissionReadersReportNoDifficultyLayout()
+    {
+        using var fixture = new Mw3MissionFixture("actor_01");
+        File.Delete(fixture.ReaderPath);
+        // The shared RECOIL preference neither selects nor labels an MW3 layout.
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, token: Token, difficulty: MissionDifficulty.Hard);
+        Assert.Null(mission.Layout.MissionArchive); Assert.False(mission.Layout.DifficultyApplies); Assert.Empty(mission.Actors);
+        Assert.Equal("Stored world layout", mission.Layout.Label);
+        Assert.DoesNotContain("Medium", mission.Layout.Description, StringComparison.Ordinal);
+        Assert.DoesNotContain("aiv.zrd", mission.Layout.Description, StringComparison.Ordinal);
+        Assert.True(MissionLayoutSelection.For(MissionDifficulty.Hard).DifficultyApplies);
+    }
+
+    [Fact]
     public async Task RememberedMissionThatNoLongerQualifiesFallsBackWithADiagnostic()
     {
         using var fixture = new Mw3MissionFixture("actor_01");

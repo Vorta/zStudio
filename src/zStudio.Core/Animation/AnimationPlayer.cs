@@ -240,14 +240,7 @@ public sealed partial class AnimationPlayer
     private Node? NodeRef(Instance instance, int reference)
     {
         if (reference == 0) return null;
-        int index = reference is -100 or -200 ? instance.Root : context.ResolveNode(instance.Entry, reference, instance.Root);
-        // RECOIL's loader prefers the first match below the bound instance. MW3 names are
-        // not unique identities, so ResolveNode's unique-or-unresolved result stands.
-        if (context.World.Game != GameVariant.MechWarrior3 && reference > 0 && reference < instance.Entry.References[1].Count)
-        {
-            string name = instance.Entry.References[1][reference].Text(0, 36);
-            int local = name == instance.Entry.RootName ? instance.Root : context.FindBelow(instance.Root, name); if (local >= 0) index = local;
-        }
+        int index = context.ResolveInstanceNode(instance.Entry, reference, instance.Root);
         if (instance.Nodes.TryGetValue(index, out var node)) return node;
         AddNote($"{instance.Entry.Name}: unresolved node reference {reference}."); return null;
     }

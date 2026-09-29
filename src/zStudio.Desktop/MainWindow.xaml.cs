@@ -253,7 +253,7 @@ public partial class MainWindow : Window
                 if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
                 await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
                 var shownOptions = ReadStaticSceneOptions();
-                publishedStaticOptions = shownOptions with { Difficulty = mission?.Layout.Difficulty ?? ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission };
+                publishedStaticOptions = shownOptions with { Difficulty = mission is { Layout.DifficultyApplies: true } ? mission.Layout.Difficulty : ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission };
                 if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
                 if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
                 if (mission != null)
@@ -269,7 +269,7 @@ public partial class MainWindow : Window
                 }
                 ShowStaticPreviewProblems(doc, asset);
                 if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
-                if (mission != null && mission.Layout.MissionArchive == null && mission.Layout.Difficulty != ViewModel.Difficulty) await RefreshWorldDifficultyAsync();
+                if (mission != null && mission.Layout.DifficultyApplies && mission.Layout.MissionArchive == null && mission.Layout.Difficulty != ViewModel.Difficulty) await RefreshWorldDifficultyAsync();
             }
             else if (asset?.Kind == AssetKind.Motion && doc.ResourceEdits != null && ViewModel.Resolver != null)
             {

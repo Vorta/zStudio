@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Core.Formats;
 
@@ -15,7 +17,9 @@ public sealed partial class AnimationPreviewContext
 {
     public required AnimationPackage Package { get; init; }
     public required ZbdDocument World { get; init; }
-    public MissionSceneContext? Mission { get; set; }
+    private MissionSceneContext? mission;
+    /// <summary>Replacing the mission replaces <see cref="Scene"/>, so scene-derived lookups are rebuilt.</summary>
+    public MissionSceneContext? Mission { get => mission; set { mission = value; roots.Clear(); nodes.Clear(); lods = null; } }
     public IReadOnlySet<int>? InspectionNodes { get; init; }
     public GameScene Scene => Mission?.Scene ?? World.Scene!;
     public Dictionary<string, AnimationEffectTemplate> Effects { get; } = new(StringComparer.Ordinal);
@@ -25,7 +29,12 @@ public sealed partial class AnimationPreviewContext
     public SceneLods Lods => lods ??= new(Scene);
     public List<string> Diagnostics { get; } = [];
     public Dictionary<int, int> RootOverrides { get; } = [];
-    private readonly Dictionary<int, int> roots = [];
+    // Playback may advance off the UI thread while the dispatcher reads bindings.
+    private readonly ConcurrentDictionary<int, int> roots = new();
+    /// <summary>Resolved references per entry object and bound root. Edits replace entry objects, so a retargeted
+    /// reference is a new key and replaced entries are not retained; playback repeats the same lookups on every update.</summary>
+    private readonly ConditionalWeakTable<AnimationEntry, ConcurrentDictionary<(int Root, int Reference, bool Instance), int>> nodes = new();
+    private ConcurrentDictionary<(int Root, int Reference, bool Instance), int> References(AnimationEntry entry) => nodes.GetValue(entry, _ => new());
     /// <summary>Freeze editable programs before background analysis; scene and decoded resources are read-only.</summary>
     public AnimationPreviewContext Snapshot()
     {
@@ -187,6 +196,25 @@ public sealed partial class AnimationPreviewContext
         if (reference is -100 or -200) return root;
         if (reference == 0) return -1; // Reserved null reference, not the bound root.
         if (reference < 0 || reference >= entry.References[1].Count) return -1;
+        var cache = References(entry);
+        if (cache.TryGetValue((root, reference, false), out int cached)) return cached;
+        return cache[(root, reference, false)] = FindReference(entry, reference, root);
+    }
+    /// <summary>A runtime node reference of an instance bound at <paramref name="root"/>.</summary>
+    public int ResolveInstanceNode(AnimationEntry entry, int reference, int root)
+    {
+        if (reference is -100 or -200) return root;
+        if (World.Game == GameVariant.MechWarrior3 || reference <= 0 || reference >= entry.References[1].Count) return ResolveNode(entry, reference, root);
+        var cache = References(entry);
+        if (cache.TryGetValue((root, reference, true), out int cached)) return cached;
+        // RECOIL's loader prefers the first match below the bound instance. MW3 names are
+        // not unique identities, so ResolveNode's unique-or-unresolved result stands.
+        string name = entry.References[1][reference].Text(0, 36);
+        int local = name == entry.RootName ? root : FindBelow(root, name);
+        return cache[(root, reference, true)] = local >= 0 ? local : ResolveNode(entry, reference, root);
+    }
+    private int FindReference(AnimationEntry entry, int reference, int root)
+    {
         string name = entry.References[1][reference].Text(0, 36);
         if (name == entry.RootName) return root;
         if (World.Game == GameVariant.MechWarrior3)

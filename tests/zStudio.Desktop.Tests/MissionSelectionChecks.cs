@@ -153,6 +153,38 @@ internal static class MissionSelectionChecks
         finally { main.Close(); }
     }
 
+    /// <summary>An MW3 world without mission readers has no difficulty: showing it neither reloads for nor records the shared preference.</summary>
+    internal static async Task RunWithoutReaders()
+    {
+        using var fixture = new Mw3MissionFixture("actor_01");
+        File.Delete(fixture.ReaderPath);
+        var asset = fixture.World.Add(AssetKind.World, 0, "Whole world", 0, 0);
+        using var document = new DocumentModel(fixture.World);
+        var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        typeof(MainViewModel).GetProperty(nameof(MainViewModel.Resolver))!.SetValue(main.ViewModel, fixture.Resolver);
+        main.ViewModel.Documents.Add(document);
+        // Set the backing field so this check never saves the user's settings.
+        var preference = typeof(MainViewModel).GetField("difficulty", flags)!; object? saved = preference.GetValue(main.ViewModel);
+        preference.SetValue(main.ViewModel, MissionDifficulty.Hard);
+        try
+        {
+            typeof(MainWindow).GetField("shownDocument", flags)!.SetValue(main, document);
+            var generation = typeof(MainWindow).GetField("staticRefreshGeneration", flags)!; long before = (long)generation.GetValue(main)!;
+            await (Task)typeof(MainWindow).GetMethod("ShowAsset", flags)!.Invoke(main, [document, asset])!;
+            var current = (SceneViewport?)typeof(MainWindow).GetField("scene", flags)!.GetValue(main);
+            Assert.True(current?.Mission != null, main.ViewModel.Status);
+            Assert.False(current.Mission!.Layout.DifficultyApplies); Assert.Null(current.Mission.Layout.MissionArchive);
+            // Showing the world is the only refresh; a reported Medium layout would reload it and could later restore Medium.
+            Assert.Equal(before + 1, (long)generation.GetValue(main)!);
+            object published = typeof(MainWindow).GetField("publishedStaticOptions", flags)!.GetValue(main)!;
+            Assert.Equal(MissionDifficulty.Hard, published.GetType().GetProperty("Difficulty")!.GetValue(published));
+            typeof(MainWindow).GetMethod("RestoreStaticSceneOptions", flags)!.Invoke(main, [published]);
+            Assert.Equal(MissionDifficulty.Hard, main.ViewModel.Difficulty);
+        }
+        finally { preference.SetValue(main.ViewModel, saved); main.Close(); }
+    }
+
     /// <summary>A remembered reader that no longer qualifies falls back visibly; an explicit request for it is rejected.</summary>
     internal static async Task RunUnavailableSelection()
     {
