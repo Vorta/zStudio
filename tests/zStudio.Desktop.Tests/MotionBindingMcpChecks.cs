@@ -55,6 +55,21 @@ internal static class MotionBindingMcpChecks
                 var editor = Assert.IsType<MotionEditor>(typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main));
                 string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
                 await Job("motion_preview", new() { ["preview"] = preview, ["action"] = "assembly", ["memberIndex"] = Index(added) });
+                // The resolver can return a frozen library after a newer resource revision was accepted.
+                var pendingEdit = await edits.PrepareArchiveAsync("rename", added, "during_load.flt", token: token);
+                var gate = (SemaphoreSlim)typeof(AssetResolver).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main.ViewModel.Resolver)!;
+                await gate.WaitAsync(token); Task initialize;
+                try
+                {
+                    initialize = editor.InitializeAsync(token); Assert.False(initialize.IsCompleted);
+                    edits.Accept(pendingEdit);
+                }
+                finally { gate.Release(); }
+                await initialize;
+                await editor.SelectAssemblyAsync(Index(added), token);
+                await editor.RefreshLibraryAsync(edits);
+                Assert.Equal(Index(added), editor.AssemblyMember);
+                await History("undo");
                 editor.Seek(.5); editor.Viewport.RestoreView(new(new(0, 0, 100), new(0, 0, -100), new(0, 1, 0), 45));
                 var camera = editor.Viewport.CaptureView();
                 using (var canceled = new CancellationTokenSource())

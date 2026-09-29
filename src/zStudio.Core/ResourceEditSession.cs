@@ -38,6 +38,9 @@ public sealed class ResourceEditSession
         Current = saved = new(members, document, Hash(document.Bytes));
     }
     public ResourceMember Member(Guid id) => Current.Members.SingleOrDefault(m => m.Id == id) ?? throw new InvalidDataException("The archive member no longer exists.");
+    /// <summary>Resolve identities for the exact decoded snapshot, including a load overtaken by an edit or Undo/Redo.</summary>
+    public ResourceSnapshot? SnapshotFor(ZbdDocument document) => ReferenceEquals(Current.Document, document) ? Current :
+        undo.Concat(redo).Append(saved).FirstOrDefault(s => ReferenceEquals(s.Document, document));
     public Task<PreparedResourceEdit> PrepareMechModelAsync(Guid member, int localModel, ImportedMesh mesh, int material, CancellationToken token = default)
     {
         var before = Current;

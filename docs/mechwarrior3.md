@@ -34,6 +34,8 @@ Assembly binding indexes the selected member's node names once, with ordinal mat
 
 Bindings to edited libraries retain the selected member UUID from the same snapshot as its geometry, including duplicated/imported members with no original-file index. Renaming, reordering, model replacement and Undo/Redo keep that member bound with camera/playback retained. Selecting another member replaces the binding identity only after a successful load. Deleting the selected member clears the binding instead of selecting another member at its former index.
 
+If an edit or Undo/Redo overtakes library loading, identity lookup uses that exact decoded snapshot in retained edit history. A separately parsed document with identical names/bytes does not share those session identities.
+
 Deleting the displayed motion or replacing it with non-motion data closes that motion viewer and shows the archive's resulting selection, or archive information when empty. Undo/Redo updates the preview as well, including when another Navigator tab is open. Renaming or reordering a surviving motion retains its viewer, playback and camera by member UUID; duplicate names and reused row indices do not identify the same clip. The separate Properties window keeps its pinned identity.
 
 Play/pause, the loop-time seeker, LOD and Frame use the shared renderer. Space works from Assets or passive preview content. Blender-style navigation, scene inspection and the tree apply to the visible posed geometry. Playback interpolates translations and normalized quaternions through the hierarchy; aiming, gait correction and inverse kinematics are not simulated.
