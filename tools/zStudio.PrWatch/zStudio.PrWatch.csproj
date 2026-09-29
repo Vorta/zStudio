@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Recoil.Zbd.PrWatch</RootNamespace>
+    <AssemblyName>Recoil.Zbd.PrWatch</AssemblyName>
+  </PropertyGroup>
+</Project>

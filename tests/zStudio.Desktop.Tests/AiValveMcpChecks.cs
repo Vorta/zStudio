@@ -28,7 +28,8 @@ internal static class AiValveMcpChecks
             ZrdNode S(string s) => ZrdNode.Create(ZrdKind.String) with { Text = s };
             ZrdNode I(int i) => ZrdNode.Create(ZrdKind.Int) with { Bits = unchecked((uint)i) };
             ZrdNode F() => ZrdNode.Create(ZrdKind.Float);
-            var definitions = A(S("go"), A(S("sound"), A(S("sample"), I(1))), S("go"), A(S("all_nonzero"), S("namelist"), A(S("ready"))));
+            string longName = new string('x', 1_000_000) + "needle_tail";
+            var definitions = A(S("go"), A(S("sound"), A(S("sample"), I(1))), S("go"), A(S("all_nonzero"), S("namelist"), A(S("ready"))), S(longName), A(S("sound"), A(S("sample"), I(1))));
             var network = A([S("version"), A(I(106)), ..Enumerable.Range(0, 40).SelectMany(i => new[] { S("node_" + i.ToString("00")), A(I(1), A(F(), F(), F()), A(I(-1)), S("valve"), A(I(1), S("go"))) })]);
             var objectives = A(S("objective"), A(S("set_valve"), A(S("go"), I(1))));
             byte[] original = MotionFixture.Archive(("valves.zrd", ZrdWriter.Write(definitions, token)), ("net_01.zrd", ZrdWriter.Write(network, token)), ("objectives.zrd", ZrdWriter.Write(objectives, token)), ("unknown", new byte[] { 9, 3, 7 }));
@@ -43,7 +44,11 @@ internal static class AiValveMcpChecks
             Assert.Equal(0, doc.Revision); Assert.False(doc.IsDirty);
             Assert.Equal(original, edits.Current.Document.Bytes.ToArray());
             var page = await Job("ai_valves", Args(("member", member)));
-            var rows = page["records"]!["items"]!.AsArray(); Assert.Equal(2, rows.Count);
+            var rows = page["records"]!["items"]!.AsArray(); Assert.Equal(3, rows.Count);
+            var found = await Job("ai_valves", Args(("member", member), ("query", "NEEDLE_TAIL"), ("limit", 1)));
+            var longRow = Assert.Single(found["records"]!["items"]!.AsArray())!;
+            Assert.Equal(longName.Length, longRow["nameCharacters"]!.GetValue<int>());
+            Assert.True(longRow["name"]!.GetValue<string>().Length <= 257);
             Guid first = Guid.Parse(rows[0]!["record"]!.GetValue<string>()), second = Guid.Parse(rows[1]!["record"]!.GetValue<string>()); Assert.NotEqual(first, second);
             await Job("ai_valve_edit", Args(("member", member), ("record", first), ("action", "add_action"), ("kind", "delayupdate")));
             Assert.Equal(1, doc.Revision);

@@ -91,9 +91,11 @@ public sealed partial class AnimationPreviewContext
             if (archive.Assets.Any(a => a.Kind == AssetKind.Sound)) soundArchives.Add(archive);
             foreach (var asset in archive.Assets.Where(a => a.Kind == AssetKind.Zrd && (a.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase) || a.Name.Equals("sounds.zrd", StringComparison.OrdinalIgnoreCase))))
             {
-                var tree = ZrdDecoder.Decode(archive.Slice(asset.Offset, asset.Length), token);
-                if (asset.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase)) { if (world.Game != GameVariant.MechWarrior3) ReadEffects(tree); }
-                else ReadSounds(tree);
+                bool effects = asset.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase);
+                if (effects && world.Game == GameVariant.MechWarrior3) continue;
+                var tree = asset.Content as ZrdNode ?? ZrdDecoder.Read(archive.Slice(asset.Offset, asset.Length), token);
+                if (effects) ReadEffects(tree.ToJson(token));
+                else aliases.AddRange(ReadSoundAliases(tree, token));
             }
         }
         // Prefer the highest decoded quality, independent of the archive filename.
@@ -137,13 +139,18 @@ public sealed partial class AnimationPreviewContext
                 context.Effects.TryAdd(name, new(name, model, root, textures, speed, Value(array, "LOOPING").Text("value") == "ON"));
             }
         }
-        void ReadSounds(JsonNode? tree)
+    }
+    internal static IEnumerable<(string Name, string File, bool Loop)> ReadSoundAliases(ZrdNode tree, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (tree.Kind != ZrdKind.Array) yield break;
+        var row = tree.Children;
+        if (row.Count >= 2 && row[0].Kind == ZrdKind.String && row[1].Kind == ZrdKind.String && row[1].Text.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+            yield return (row[0].Text, Path.GetFileName(row[1].Text), row.Any(n => n.Kind == ZrdKind.String && n.Text == "LOOPED"));
+        foreach (var child in row)
         {
-            foreach (var array in Arrays(tree))
-            {
-                if (array.Count < 2) continue; string name = array[0].Text("value"), file = array[1].Text("value");
-                if (file.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)) aliases.Add((name, Path.GetFileName(file), array.Any(n => n.Text("value") == "LOOPED")));
-            }
+            token.ThrowIfCancellationRequested();
+            if (child.Kind == ZrdKind.Array) foreach (var alias in ReadSoundAliases(child, token)) yield return alias;
         }
     }
     private static IEnumerable<JsonArray> Arrays(JsonNode? node)

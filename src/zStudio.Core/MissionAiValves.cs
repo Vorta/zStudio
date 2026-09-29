@@ -25,13 +25,20 @@ public static class MissionAiValves
     public static AiNetworkSnapshot Attach(AiNetworkSnapshot graph, IEnumerable<ZbdDocument> archives, CancellationToken token)
     {
         List<AiValveSource> sources = []; using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Dictionary<string, Dictionary<int, ZrdNode?>> networkRoots = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var network in graph.Networks)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!networkRoots.TryGetValue(network.Archive, out var members)) networkRoots.Add(network.Archive, members = []);
+            members.TryAdd(network.MemberIndex, network.Source); // Preserve prior first-occurrence behavior for an identical source identity.
+        }
         hash.AppendData(Encoding.UTF8.GetBytes(graph.Id));
         foreach (var archive in archives) foreach (var asset in archive.Assets)
         {
             token.ThrowIfCancellationRequested();
             if (!IsResource(asset.Name) || asset.Content is not ZrdNode root) continue;
             var bytes = archive.Slice(asset.Offset, asset.Length);
-            var networkRoot = graph.Networks.FirstOrDefault(n => n.Archive.Equals(archive.Path, StringComparison.OrdinalIgnoreCase) && n.MemberIndex == asset.Index)?.Source;
+            var networkRoot = networkRoots.GetValueOrDefault(archive.Path)?.GetValueOrDefault(asset.Index);
             sources.Add(new(archive.Path, asset.Index, asset.Name, networkRoot ?? root, bytes));
             hash.AppendData(Encoding.UTF8.GetBytes(archive.Path + "|" + asset.Index + "|" + asset.Name));
             hash.AppendData(SHA256.HashData(bytes.Span));
@@ -43,6 +50,10 @@ public static class MissionAiValves
     public static bool IsResource(string name) => name.Equals("valves.zrd", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("objectives.zrd", StringComparison.OrdinalIgnoreCase) || MissionAiNetworks.IsCandidate(name);
     public static string Short(string text, int maximum = 256) => text.Length <= maximum ? text : text[..maximum] + "…";
+    public static bool MatchesSearch(AiValveRecord record, string query) => record.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+        (record.NodeIndex?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (record.From?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (record.To?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
     public static JsonObject Summary(AiValveRecord record)
     {
         var refs = References(record).Take(3).ToArray();

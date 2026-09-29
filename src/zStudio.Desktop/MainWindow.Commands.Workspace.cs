@@ -11,11 +11,15 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     private static readonly StudioParameter[] PageParameters = [P("offset", "integer", "Zero-based result offset."), P("limit", "integer", "Page size, 1–200; default 100."), P("query", "string", "Case-insensitive name/path or displayed-text filter, applied before pagination.")];
-    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null, Func<T, object>? project = null)
+    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null, Func<T, object>? project = null, Func<T, string, bool>? matches = null)
     {
         int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
-        if (search != null && Text(a, "query") is { Length: > 0 } query) source = source.Where(item => search(item).Contains(query, StringComparison.OrdinalIgnoreCase));
+        if (Text(a, "query") is { Length: > 0 } query)
+        {
+            if (matches != null) source = source.Where(item => matches(item, query));
+            else if (search != null) source = source.Where(item => search(item).Contains(query, StringComparison.OrdinalIgnoreCase));
+        }
         int total = 0; List<object?> items = [];
         foreach (var item in source)
         {

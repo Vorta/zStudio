@@ -187,7 +187,7 @@
         "zstudio_zrd_nodes",
         "zstudio_zrd_edit"
       ],
-      "note": "Generated typed fields/actions and paged records, operands, bindings, ordered actions/terms and exact-name references share resource history, draft guards and verified saves. Record UUIDs distinguish repeated names. Generic ZRD editing retains access to unknown fields."
+      "note": "Generated typed fields/actions and paged records, operands, bindings, ordered actions/terms and exact-name references share resource history, draft guards and verified saves. Record queries compare complete names and numeric references without concatenating source strings; bounded names disclose nameCharacters. Record UUIDs distinguish repeated names. Generic ZRD editing retains access to unknown fields."
     },
     {
       "gui": "SceneViewport:Valves",

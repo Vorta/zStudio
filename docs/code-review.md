@@ -55,6 +55,8 @@ Before reporting a complete local review cycle, verify all of the following:
 
 An open P1/P2 or material coverage gap makes the local gate incomplete. Reporting that finding is appropriate; calling the cycle clean is not. When the user requests review before pushing, finish this local gate before the next push. Then verify remote CI, re-read current review threads and resolve only findings whose implemented fixes were delivered. Passing CI is still required before merge. Guidance-only or other documentation-only work uses document/link/diff validation and does not constitute a completed code-fix cycle or resolve existing code findings.
 
+When a local [PR watch](pr-watch.md) is explicitly active, acknowledge the reviewed snapshot and re-arm against the verified remote head immediately after the validated fix push, before waiting for CI. Re-arming must retain unhandled comment identities. Informational feedback without a fix/push leaves comment notifications disarmed; the separate approval watch remains active. A bot-reaction notice never replaces the current-head review/CI/merge checks or the user's release authorization.
+
 Use precise reporting: “No further actionable P1/P2 found in [recorded scope] at [revision], with [limitations].” If the full requested scope was not covered, say the review is incomplete and continue the authorized work; do not silently narrow the scope in the final report.
 
 ## Local ledger template

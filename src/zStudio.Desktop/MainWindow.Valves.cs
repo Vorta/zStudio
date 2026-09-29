@@ -23,8 +23,7 @@ public partial class MainWindow
                     r => new { r.Id, name = MissionAiValves.Short(r.Name), r.SourceOffset, r.Spatial });
                 return Text(args, "section") == "references"
                     ? Page(records.SelectMany(r => MissionAiValves.References(r, token)), args, r => r.Name, r => new JsonObject { ["record"] = r.Record.ToString(), ["operand"] = r.Operand.ToString(), ["name"] = MissionAiValves.Short(r.Name), ["nameCharacters"] = r.Name.Length, ["role"] = r.Role })
-                    : Page(records, args, r => r.Name + " " + r.NodeIndex + " " + r.From + " " + r.To,
-                        r => MissionAiValves.Describe(r, token));
+                    : Page(records, args, project: r => MissionAiValves.Describe(r, token), matches: MissionAiValves.MatchesSearch);
             }, token);
             token.ThrowIfCancellationRequested(); CheckResourceContext(doc, revision); return Result(new { revision, records = page.Data });
         });

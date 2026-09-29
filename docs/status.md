@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR feedback watch and coordinate-path review (2026-09-29)
+
+Added optional local development tooling in `tools/pr-watch.ps1`. It observes a selected PR's conversation comments, published review summaries and inline comments, disarms on the first new feedback batch and queues one follow-up into the owning Codex conversation. Explicit snapshot acknowledgment preserves later arrivals; validated fix pushes re-arm against the remote head. Separate approval monitoring checks a fresh review-bot reaction on the PR description and a completed current-head summary. The helper does not edit, merge or publish; any authorized release still requires the agent's current-head review, CI and repository checks. Durable claims prevent automatic duplicate submissions after crashes or uncertain delivery. See [PR watch setup and recovery](pr-watch.md).
+
+Fixed five further PR findings: coordinate initialization reuses typed ZRD trees; edit diagnostics are bounded before Problems publication; valve queries compare full names without concatenation; valve-source attachment indexes network roots; and MW3 actor transform edits enforce the same ±1e12 bound as scene loading. The sibling-path challenge also removed repeated archive-baseline copies, indexed overlap protection, avoided unused MW3 effect expansion and moved sound-alias lookup to typed records. Source bytes, identities, undo and verified saves remain shared by GUI and MCP.
+
+Validation: **572 tests pass**, zero failed/skipped, with both game corpora enabled; the Release solution build has zero warnings/errors. Cases include burst/coalescing, late feedback, drafts, queue ownership, uncertain delivery, concurrency, failure recovery, fresh versus stale approval, allocation growth, source overlap, numeric rejection, and real named-pipe valve queries. Local queue add/read/remove and repeated detached polling were verified; these do not establish that the host will automatically start a future turn. The queue API is experimental; failures and delivery uncertainty remain visible. Package and live-workspace results are recorded in the local delivery ledger. Version remains 0.7.1.
+
 ## PR #14 optional data, semantic validation and inspection scope (2026-09-29)
 
 Fixed four further review findings: optional v27 polygon RGB arrays honor their stored presence word; sparse v28/v39 keyframe indexing validates flags, times and active base/rate values; valve highlighting/framing searches complete node, union and resolved edge sources before drawing limits; and motion inspection/tree/selection/Properties/node framing include only the selected assembly, retaining source indices. Shared GUI/MCP paths, discovery and capability documentation are updated.

@@ -102,6 +102,8 @@ Motion inspection metadata previews at most 32 parts and 128 characters per name
 
 ## Validation
 
+Whole world coordinate editing reuses typed AIV/network resources and one archive baseline, with indexed member-overlap checks. Editing diagnostics retain 256 messages plus an omitted-count summary. AI nodes and mission actors reject positions outside ±1e12 before preview/history; unsupported values cannot be saved through their transform controls. Valve-source attachment indexes archive/member identities, and queries match full names without constructing combined search strings. Animation sound aliases use the existing typed resources; MW3 animation setup does not expand unused effect definitions.
+
 Set `ZSTUDIO_MW3_CORPUS` to a base-game `zbd` folder for optional corpus checks with `dotnet test --solution zStudio.slnx`. They cover no-op preservation, malformed input, motion history, mission isolation, hierarchy sampling and member-local replacement. The portable live check is `dotnet run --project tools/zStudio.PreviewCheck -c Release -- --mcp-stdio artifacts/zStudio-win-x64/zStudio.exe <zbd-root>`; it requires existing user-enabled MCP access. Assets and reports are not checked in. Parsing, readback and preview checks do not establish original-game compatibility.
 
 The renderer's buffer-size regression is `dotnet run --project tools/zStudio.PreviewCheck -c Release -- --viewport-size <zbd-root>`. It checks first-load and resized GPU surfaces under a busy render queue, including display DPI and camera retention.

@@ -34,12 +34,14 @@ public sealed partial class PickupPlacementEditSession
     private readonly Dictionary<MissionPickupSource, Vector3> savedPositions = [];
     private readonly Dictionary<MissionPickupSource, Vector3> rotations = [], savedRotations = [];
     private readonly Stack<Move> undo = [], redo = [];
-    private readonly List<string> diagnostics = [];
+    private readonly PreviewNotes diagnostics = new();
+    private readonly Dictionary<ZbdDocument, HashSet<AssetRecord>> overlappingMembers = [];
     private bool saving;
     public event Action? Changed;
     public event Action? EditAccepted;
     public event Action? BeforeEdit;
-    public IReadOnlyList<string> Diagnostics => diagnostics.AsReadOnly();
+    public IReadOnlyList<string> Diagnostics => diagnostics;
+    public int DiagnosticCount => diagnostics.TotalCount;
     public IReadOnlyList<PickupPlacementRecord> Records => entries.Values.Where(e => !otherCoordinates.ContainsKey(e.Record.Source)).Select(e => e.Record).ToArray();
     public IReadOnlyList<MissionCoordinateRecord> OtherCoordinates => otherCoordinates.Values.ToArray();
     public bool IsDirty => archives.Keys.Any(IsArchiveDirty);
@@ -53,7 +55,7 @@ public sealed partial class PickupPlacementEditSession
     {
         Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> found = new(StringComparer.OrdinalIgnoreCase);
         List<(ZbdDocument Archive, AssetRecord Asset)> coordinateResources = [];
-        List<string> notes = [];
+        PreviewNotes notes = new();
         bool mw3 = FormatRegistry.Probe(worldPath) is { Family: FormatFamily.GameZ, Version: 27 };
         // Load the coordinate store once for every reader in this map. Preview selection
         // filters by archive identity; changing mission must never discard accepted history.
@@ -99,20 +101,21 @@ public sealed partial class PickupPlacementEditSession
             {
                 if (doc.Probe.Family != FormatFamily.Archive || doc.Diagnostics.Any(d => d.Severity == "Error") || !IsPickupResource(asset.Name))
                     throw new InvalidDataException("An intact ZAR pickup resource is required.");
-                if (doc.Assets.Any(a => a.Index != asset.Index && a.Offset < asset.Offset + asset.Length && asset.Offset < a.Offset + a.Length))
+                if (result.Overlaps(doc, asset, token))
                     throw new InvalidDataException("Pickup member overlaps another archive member.");
-                var tree = ZrdDecoder.Decode(doc.Slice(asset.Offset, asset.Length), token);
-                if (tree["children"] is not JsonArray { Count: 1 } root || root[0]?["children"] is not JsonArray rows)
+                var tree = asset.Content as ZrdNode ?? ZrdDecoder.Read(doc.Slice(asset.Offset, asset.Length), token);
+                if (tree.Kind != ZrdKind.Array || tree.Children is not { Count: 1 } root || root[0].Kind != ZrdKind.Array)
                     throw new InvalidDataException("Expected an ordered pickup placement list.");
-                result.archives.TryAdd(group.Key.Item1, new(doc));
+                var rows = root[0].Children;
+                if (!result.archives.ContainsKey(group.Key.Item1)) result.archives.Add(group.Key.Item1, new(doc));
                 for (int index = 0; index < rows.Count; index++)
                 {
                     token.ThrowIfCancellationRequested();
                     try
                     {
-                        if (rows[index]?["children"] is not JsonArray { Count: 5 } row || row[0].Text("type") != "string" || row[1].Text("type") != "int")
+                        if (rows[index].Kind != ZrdKind.Array || rows[index].Children is not { Count: 5 } row || row[0].Kind != ZrdKind.String || row[1].Kind != ZrdKind.Int)
                             throw new InvalidDataException("Invalid pickup record shape.");
-                        string type = row[0].Text("value");
+                        string type = row[0].Text;
                         if (!MissionPickupType.Catalog.Any(t => t.Name == type)) throw new InvalidDataException("Unknown pickup type.");
                         var (position, offsets) = ReadVector(row[2], doc, asset);
                         var (rotation, rotationOffsets) = ReadVector(row[3], doc, asset);
@@ -131,9 +134,9 @@ public sealed partial class PickupPlacementEditSession
         }
         return result;
     }
-    private static (Vector3 Vector, int[] Offsets) ReadVector(JsonNode? node, ZbdDocument doc, AssetRecord asset)
+    private static (Vector3 Vector, int[] Offsets) ReadVector(ZrdNode node, ZbdDocument doc, AssetRecord asset)
     {
-        if (node?["children"] is not JsonArray { Count: 3 } components) throw new InvalidDataException("Expected three position/rotation components.");
+        if (node.Kind != ZrdKind.Array || node.Children is not { Count: 3 } components) throw new InvalidDataException("Expected three position/rotation components.");
         float[] values = new float[3]; int[] offsets = new int[3];
         for (int i = 0; i < 3; i++)
         {
@@ -142,18 +145,33 @@ public sealed partial class PickupPlacementEditSession
         }
         return (new(values[0], values[1], values[2]), offsets);
     }
-    private static int ReadScalarOffset(JsonNode? node, ZbdDocument doc, AssetRecord asset)
+    private static int ReadScalarOffset(ZrdNode node, ZbdDocument doc, AssetRecord asset)
     {
-        string text = node.Text("offset");
-        if (!text.StartsWith("0x", StringComparison.Ordinal) || !int.TryParse(text.AsSpan(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int offset) || offset < 0 || offset > asset.Length - 8)
-            throw new InvalidDataException("Invalid transform source range.");
-        int absolute = checked((int)asset.Offset + offset); _ = doc.Slice(absolute, 8); return absolute;
+        long offset = node.SourceOffset;
+        if (offset < 0 || offset > asset.Length - 8) throw new InvalidDataException("Invalid transform source range.");
+        int absolute = checked((int)(asset.Offset + offset)); _ = doc.Slice(absolute, 8); return absolute;
     }
-    private static float ReadNumber(JsonNode? value)
+    private static float ReadNumber(ZrdNode value)
     {
-        if (value.Text("type") is not ("int" or "float") || !float.TryParse(value?["value"]?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out float number) || !float.IsFinite(number))
-            throw new InvalidDataException("Expected a finite numeric coordinate.");
+        float number = value.Kind switch { ZrdKind.Int => unchecked((int)value.Bits), ZrdKind.Float => BitConverter.UInt32BitsToSingle(value.Bits), _ => float.NaN };
+        if (!float.IsFinite(number)) throw new InvalidDataException("Expected a finite numeric coordinate.");
         return number;
+    }
+    private bool Overlaps(ZbdDocument doc, AssetRecord asset, CancellationToken token)
+    {
+        if (!overlappingMembers.TryGetValue(doc, out var overlaps))
+        {
+            overlaps = []; AssetRecord? furthest = null;
+            foreach (var member in doc.Assets.OrderBy(a => a.Offset).ThenBy(a => a.Length))
+            {
+                token.ThrowIfCancellationRequested();
+                if (furthest != null && furthest.Offset + furthest.Length > member.Offset && furthest.Offset < member.Offset + member.Length)
+                { overlaps.Add(furthest); overlaps.Add(member); }
+                if (furthest == null || member.Offset + member.Length > furthest.Offset + furthest.Length) furthest = member;
+            }
+            overlappingMembers.Add(doc, overlaps);
+        }
+        return overlaps.Contains(asset);
     }
     public PickupPlacementRecord? Find(MissionPickupSource source) => otherCoordinates.ContainsKey(source) ? null : entries.GetValueOrDefault(source)?.Record;
     public Vector3 Position(MissionPickupSource source) => positions[source];
@@ -195,9 +213,9 @@ public sealed partial class PickupPlacementEditSession
         if (otherCoordinates.TryGetValue(source, out var vehicle) && vehicle.Kind == "tank" &&
             (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0)))
             throw new InvalidDataException("The tank placement has no unambiguous active template binding.");
-        if (otherCoordinates.TryGetValue(source, out var record) && record.Kind == "ai" &&
+        if (otherCoordinates.TryGetValue(source, out var record) && (record.Kind == "ai" || record.MissionSpecific) &&
             (Math.Abs(position.X) > 1e12 || Math.Abs(position.Y) > 1e12 || Math.Abs(position.Z) > 1e12))
-            throw new InvalidDataException("AI coordinates must stay within the supported ±1e12 preview range.");
+            throw new InvalidDataException("Mission coordinates must stay within the supported ±1e12 preview range.");
         Vector3 delta = position - positions[source]; RequireFinite(delta);
         Vector3 rotationDelta = transform.Rotation - rotations[source]; RequireFinite(rotationDelta);
         var after = Scope(source).Sources.ToDictionary(s => s, s => s == source ? transform : new PlacementTransform(positions[s] + delta, rotations[s] + rotationDelta));

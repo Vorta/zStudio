@@ -17,6 +17,15 @@ public sealed class PreviewNotes : IReadOnlyList<string>
         TotalCount++;
         if (items.Count < MaximumItems) items.Add(message.Length <= 1024 ? message : message[..1024] + "…");
     }
+    public void AddRange(IEnumerable<string> messages)
+    {
+        if (messages is PreviewNotes notes)
+        {
+            foreach (string message in notes.items) Add(message);
+            TotalCount += notes.TotalCount - notes.items.Count;
+        }
+        else foreach (string message in messages) Add(message);
+    }
     public IEnumerator<string> GetEnumerator() { for (int i = 0; i < Count; i++) yield return this[i]; }
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable>
+    <RootNamespace>Recoil.Zbd.PrWatch.Tests</RootNamespace><AssemblyName>Recoil.Zbd.PrWatch.Tests</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio"><PrivateAssets>all</PrivateAssets></PackageReference>
+    <ProjectReference Include="../../tools/zStudio.PrWatch/zStudio.PrWatch.csproj" />
+  </ItemGroup>
+</Project>

@@ -6,8 +6,25 @@ using Xunit;
 
 namespace Recoil.Zbd.Tests;
 
+[Collection("Allocation-sensitive")]
 public sealed class AnimationWorldDiscoveryTests
 {
+    [Fact]
+    public async Task Mw3AnimationSetupDoesNotExpandUnusedEffects()
+    {
+        using var fixture = new Fixture(39, 27, 15);
+        var token = TestContext.Current.CancellationToken;
+        await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
+        var root = ZrdNode.Create(ZrdKind.Array) with { Children = [ZrdNode.Create(ZrdKind.String) with { Text = new string('x', 2_000_000) }] };
+        var resource = fixture.AddResource("effects.zrd", ZrdWriter.Write(root, token));
+        long before = GC.GetTotalAllocatedBytes(true);
+        var context = await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
+        long allocated = GC.GetTotalAllocatedBytes(true) - before;
+        Assert.Empty(context.Effects);
+        Assert.True(allocated < 1_000_000, $"Animation setup allocated {allocated:N0} bytes for unused effects.");
+        Assert.Equal(2_000_000, ((ZrdNode)resource.Assets[0].Content!).Children[0].Text.Length);
+    }
+
     [Theory]
     [InlineData(28, 15, 27)]
     [InlineData(39, 27, 15)]
@@ -38,6 +55,7 @@ public sealed class AnimationWorldDiscoveryTests
     private sealed class Fixture : IDisposable
     {
         private readonly string directory = Path.Combine(Path.GetTempPath(), "zstudio-world-discovery-" + Guid.NewGuid().ToString("N"));
+        private readonly Guid snapshotOwner = Guid.NewGuid();
         public AssetResolver Resolver { get; }
         public AnimationPackage Package { get; }
         public ZbdDocument MatchingWorld { get; }
@@ -54,11 +72,20 @@ public sealed class AnimationWorldDiscoveryTests
             OtherWorld = World(paths[0], otherVersion);
             MatchingWorld = World(paths[1], worldVersion);
             Resolver = new(directory);
-            Resolver.SetWorkspaceSnapshots(Guid.NewGuid(), [OtherWorld, MatchingWorld]);
+            Resolver.SetWorkspaceSnapshots(snapshotOwner, [OtherWorld, MatchingWorld]);
             byte[] prefix = new byte[animationVersion == 39 ? 80 : 72];
             BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616);
             BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(4), animationVersion);
             Package = new() { Prefix = prefix, Tail = [] };
+        }
+
+        public ZbdDocument AddResource(string name, byte[] bytes)
+        {
+            string path = Path.Combine(directory, "resources.zbd");
+            File.WriteAllBytes(path, ResourceEditingTests.Archive((name, bytes)));
+            var resource = FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), FileStamp.Read(path), TestContext.Current.CancellationToken);
+            Resolver.SetWorkspaceSnapshots(snapshotOwner, [OtherWorld, MatchingWorld, resource]);
+            return resource;
         }
 
         private static ZbdDocument World(string path, int version)
