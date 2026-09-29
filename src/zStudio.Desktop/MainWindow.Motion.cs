@@ -32,7 +32,7 @@ public partial class MainWindow
                 Page(clip.Parts.Select((p, i) => new { index = i, p.Name, p.Flags, closingSampleMatches = p.Frames[0] == p.Frames[^1] }), a, p => p.Name).Data;
             return Result(new { doc.Revision, clip.LoopTime, clip.FrameCount, partCount = clip.Parts.Count, rows });
         });
-        RegisterJob(registry, "motion_edit", "Edit authored motion timing or a frame, or insert/delete a frame across all parts. One shared archive undo transaction. Refreshes the active sampler while retaining camera/playback. Does not save; use the existing verified document save operation.",
+        RegisterJob(registry, "motion_edit", "Edit authored motion timing or a frame, or insert/delete a frame across all parts. The separate closing sample is preserved exactly, including edits to frame zero and structural changes. One shared archive undo transaction. Refreshes the active sampler while retaining camera/playback. Does not save; use the existing verified document save operation.",
             [DocumentParameter, RevisionParameter, MemberParameter, P("action", "string", "Edit operation.", true, "timing", "set", "insert", "delete"),
                 P("part", "integer", "Part index required for set."), P("frame", "integer", "Frame index required for set/insert/delete; insert occurs after it."),
                 new("loopSeconds", "number", "Positive finite loop duration for timing."),
@@ -50,10 +50,11 @@ public partial class MainWindow
             await ApplyMotionAsync(doc, GuidArg(a, "member"), action, Int(a, "part", -1), Int(a, "frame", -1), value, a["loopSeconds"]?.GetValue<float>(), token);
             return Result(DocumentState(doc));
         });
-        RegisterJob(registry, "motion_preview", "Control the visible motion viewer: play/pause, seek, choose an explicit library member or LOD, frame the model, or inspect available bindings. Shares GUI playback and camera. Superseded assembly loads retain playback intent; an explicit play/pause during loading takes precedence. State distinguishes actual playing, loading and playbackRequested.",
-            [PreviewParameter, P("action", "string", "Preview operation.", true, "state", "play", "pause", "seek", "assembly", "lod", "frame"), P("seconds", "number", "Time within the clip for seek."), P("memberIndex", "integer", "Library member index from motion preview state."), P("lod", "integer", "Available LOD rank.")], false, async (a, token) =>
+        RegisterJob(registry, "motion_preview", "Control visible motion playback, seek, assembly, LOD and framing. Superseded assembly loads retain playback intent; explicit play/pause during loading takes precedence. State distinguishes playing/loading/playbackRequested; previews 32 diagnostics (512 characters each) and 32 assemblies with diagnosticCount/diagnosticsTruncated and assemblyCount/assembliesTruncated. Use action assemblies for complete paged bindings; motion_records retains complete authored part names.",
+            [PreviewParameter, P("action", "string", "Preview operation; assemblies pages/filter bindings by name without changing selection.", true, "state", "assemblies", "play", "pause", "seek", "assembly", "lod", "frame"), P("seconds", "number", "Time within the clip for seek."), P("memberIndex", "integer", "Library member index from motion preview state or assemblies."), P("lod", "integer", "Available LOD rank."), .. PageParameters], false, async (a, token) =>
         {
             RequirePreview(a); var editor = motion ?? throw new StudioCommandException("unsupported", "Select a motion clip first.");
+            if (Text(a, "action") == "assemblies") return Page(editor.Assemblies, a, row => row.Name, row => new { member = row.Index, row.Name });
             if (Text(a, "action") != "state") RequireNoDrafts();
             switch (Text(a, "action"))
             {

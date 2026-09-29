@@ -1,5 +1,9 @@
 # AI networks in Whole world
 
+MW3 link visualization and node inspection preview the first 32 authored slots per node. `link_count` and `links_truncated` disclose the full count and omitted slots; the selection card and Problems also report the limit. Slot order and negative/unresolved targets are retained within the preview. Complete authored lists remain available through the ZRD editor, paged `zrd_nodes`, or resource export; visualization never changes those source records. Network/preview state distinguishes resolved preview `links` from authored `linkSlots` and reports `linksTruncated`.
+
+AI node queries match the first 70 characters of the network member/name or `node_NN`; network queries also match the type prefix or source archive path. Filtering precedes pagination and is skipped for an empty query. Node inspection caps displayed network name/type at 256 characters and exposes their original character counts and truncation flags.
+
 Open a mission's `gamez.zbd`, select **Whole world**, and turn on **AI nodes** in the viewport toolbar. At narrow widths, use its native overflow menu. The AI button, network picker and **Show AI through geometry** button move together.
 
 - Visualization starts off. When enabled, it initially shows all networks through geometry. Disable **Show AI through geometry** for normal depth occlusion.
@@ -69,7 +73,7 @@ The whole option batch is validated before changing controls. AI settings publis
 
 Pages have at most 200 records. Handles are snapshot-scoped; rediscover after stale-snapshot/record/preview errors. Discovery never enables visualization or captures input.
 
-Network rows, node rows, node selection and pinned Properties include `attack_strategy`: `{ value, status, key, characters, truncated, color }`. `status` is `stored`, `missing` or `invalid`; `key` is one of the six prefixes or `unknown`; `color` is the network's `#RRGGBB` color (the selected white marker does not change it). Absent/invalid values and character counts are null. Values retain at most 4096 original characters plus a truncation marker. `scene_inspect.attackStrategy` and `hoverAttackStrategy` return the same metadata for the queried/selected and hovered AI nodes, or null for non-AI targets. The readable card row uses the existing 2048-character presentation bound. Existing input schemas and tool names are unchanged.
+Network rows, node rows, node selection and pinned Properties include `attack_strategy`: `{ value, status, key, characters, truncated, color }`. `status` is `stored`, `missing` or `invalid`; `key` is one of the six prefixes or `unknown`; `color` is the network's `#RRGGBB` color (the selected white marker does not change it). Absent/invalid values and character counts are null. Values retain at most 1024 original characters plus a truncation marker. `scene_inspect.attackStrategy` and `hoverAttackStrategy` return the same metadata for the queried/selected and hovered AI nodes, or null for non-AI targets. The readable card row uses the existing 2048-character presentation bound. Network results preview 8 diagnostic messages of 128 characters each, retaining severity/source offsets and reporting `diagnosticCount`/`diagnosticsTruncated`. These limits also keep a full 200-row page bounded when authored strings require JSON escaping. Existing input schemas and tool names are unchanged.
 
 ## Verification
 

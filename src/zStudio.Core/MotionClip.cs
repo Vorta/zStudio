@@ -76,7 +76,8 @@ public sealed class MotionClip
             if (action == "set" && index == part) samples[frame] = value!;
             if (action == "insert") samples.Insert(frame + 1, samples[frame]);
             if (action == "delete") samples.RemoveAt(frame);
-            if (action != "set" || index == part && frame == 0) samples[^1] = samples[0];
+            // The final sample is authored separately; structural edits shift it
+            // with the track without implicitly replacing it with frame zero.
             return p with { Frames = samples.ToArray() };
         }).ToArray();
         return new() { Header = Header, LoopTime = LoopTime, FrameCount = FrameCount + (action == "insert" ? 1 : action == "delete" ? -1 : 0), Parts = tracks };

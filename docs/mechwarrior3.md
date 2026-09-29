@@ -34,7 +34,7 @@ Deleting the displayed motion or replacing it with non-motion data closes that m
 
 Play/pause, the loop-time seeker, LOD and Frame use the shared renderer. Space works from Assets or passive preview content. Blender-style navigation, scene inspection and the tree apply to the visible posed geometry. Playback interpolates translations and normalized quaternions through the hierarchy; aiming, gait correction and inverse kinematics are not simulated.
 
-Open **Properties** for a motion member to edit loop duration or a part/frame's translation and WXYZ quaternion. Indices are zero-based. Insertion/deletion changes every track together while retaining loop duration. The separate closing sample survives no-op writes and unrelated edits; editing the first frame or changing frame structure closes the loop against the first sample. Draft validation, pinned identity, undo/redo, external-change checks and verified Save As are shared with the archive editor.
+Open **Properties** for a motion member to edit loop duration or a part/frame's translation and WXYZ quaternion. Indices are zero-based. Insertion/deletion changes every track together while retaining loop duration. The separate closing sample is preserved exactly through edits to frame zero and insertion/deletion; it may intentionally differ from frame zero. It remains readable through motion records and is outside the editable frame range. Draft validation, pinned identity, undo/redo, external-change checks and verified Save As are shared with the archive editor.
 
 ## Compiled animations
 
@@ -45,6 +45,8 @@ Supported shared animation operations have explicit approximation notices. Store
 ## MCP
 
 GUI and MCP share the visible workspace, parser, identities, edit sessions, previews and saves.
+
+Motion state responses (`motion_preview` and `preview_state.motion`) show at most 32 diagnostics with 512-character prefixes plus `diagnosticCount`/`diagnosticsTruncated`. The GUI support notice also discloses shortened output; inspect `motion_records` for complete authored part names. State previews at most 32 assembly choices with `assemblyCount`/`assembliesTruncated`; `motion_preview action: "assemblies"` pages all choices using `offset`, `limit` and a case-insensitive name `query`.
 
 Motion inspection metadata previews at most 32 parts and 128 characters per name, with full counts and explicit truncation flags. Use `zstudio_motion_records` to page all parts with complete names; explicit JSON exports also retain the full part list. Model rows from `zstudio_mech_models` preview at most 32 node references and material indices, with `nodeCount`/`nodesTruncated` and `materialCount`/`materialsTruncated`. For the complete lists, supply `section: "nodes"` or `"materials"` and the member's `localModel`, then use `offset`/`limit`. Nodes require `localModel`; materials without it lists all shared materials. Queries match node names, `Model N` or `Material N` labels before pagination.
 

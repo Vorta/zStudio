@@ -106,6 +106,40 @@ internal static class AiNetworkMcpChecks
             constraints = await Call("ai_nodes", Args(("section", "constraints"), ("snapshot", "bounded-parameters")));
             Assert.Equal(3, constraints["total"]!.GetValue<int>()); Assert.True(constraints.ToJsonString().Length < 5000);
             Assert.All(constraints["items"]!.AsArray(), row => Assert.True(row!["constraint"]!["ParametersTruncated"]!.GetValue<bool>()));
+            string hugeName = new string('n', 100_000) + "only-in-omitted-name";
+            viewport.SetAiNetworks(new("large-names", [first with { Name = hugeName, Type = hugeName, Nodes = Enumerable.Range(0, 99).Select(i => a with { Id = "large-" + i, Index = i, Links = [] }).ToArray() }]));
+            foreach (var (query, count) in new[] { ("", 99), ("NNNN", 99), ("NODE_98", 1), ("only-in-omitted-name", 0) })
+            {
+                var args = Args(("snapshot", "large-names"), ("query", query)); args["limit"] = 1;
+                nodes = await Call("ai_nodes", args); Assert.Equal(count, nodes["total"]!.GetValue<int>());
+                Assert.True(nodes.ToJsonString().Length < 4000);
+            }
+            list = await Call("ai_networks", new() { ["preview"] = preview, ["query"] = "only-in-omitted-name" }); Assert.Equal(0, list["total"]!.GetValue<int>());
+            string escaped = new('\u0001', 100_000);
+            var pageNodes = Enumerable.Range(0, 99).Select(i => a with { Id = "page-" + i, Index = i, Links = Enumerable.Range(0, 32).Select(slot => new AiLink(slot, -1, null, null)).ToArray() }).ToArray();
+            var worst = first with { Name = escaped, Type = escaped, AttackStrategy = AiAttackStrategy.Stored(escaped), Nodes = pageNodes };
+            viewport.SetAiNetworks(new("full-node-page", Enumerable.Range(0, 3).Select(i => worst with { Id = "network-" + i }).ToArray()));
+            var fullPage = Args(("snapshot", "full-node-page")); fullPage["limit"] = 200;
+            nodes = await Call("ai_nodes", fullPage); Assert.Equal(200, nodes["items"]!.AsArray().Count); Assert.True(nodes.ToJsonString().Length < 3_000_000);
+            worst = worst with { Nodes = [], Diagnostics = Enumerable.Repeat(new Diagnostic("Warning", escaped), 32).ToArray() };
+            viewport.SetAiNetworks(new("full-network-page", Enumerable.Range(0, 200).Select(i => worst with { Id = "network-" + i }).ToArray()));
+            list = await Call("ai_networks", new() { ["preview"] = preview, ["limit"] = 200 });
+            Assert.Equal(200, list["items"]!.AsArray().Count); Assert.True(list.ToJsonString().Length < 3_000_000);
+            Assert.True(list["items"]![0]!["diagnosticsTruncated"]!.GetValue<bool>()); Assert.Equal(32, list["items"]![0]!["diagnosticCount"]!.GetValue<int>());
+            Assert.Equal(100_000, nodes["items"]![0]!["attack_strategy"]!["characters"]!.GetValue<int>());
+            var targets = Enumerable.Range(1, 98).Select(i => b with { Id = "target-" + i, Index = i, Position = new(30 + i, 0, 0), Links = [] }).ToArray();
+            var manyLinks = Enumerable.Range(0, 100_000).Select(i => new AiLink(i, i % 98 + 1, targets[i % 98].Id, null)).ToArray();
+            viewport.SetAiNetworks(new("large-links", [first with { Nodes = [a with { Links = manyLinks }, .. targets] }]));
+            nodes = await Call("ai_nodes", Args(("snapshot", "large-links"), ("query", "node_00")));
+            var limited = Assert.Single(nodes["items"]!.AsArray())!;
+            Assert.Equal(100_000, limited["link_count"]!.GetValue<int>()); Assert.True(limited["links_truncated"]!.GetValue<bool>()); Assert.Equal(32, limited["links"]!.AsArray().Count);
+            Assert.True(nodes.ToJsonString().Length < 10_000);
+            viewport.SetAiOptions(true, true, null);
+            var geometry = (System.Collections.IDictionary)typeof(SceneViewport).GetField("aiLinks", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!;
+            var linksMesh = Assert.Single(geometry.Keys.Cast<HelixToolkit.Wpf.SharpDX.MeshGeometryModel3D>());
+            Assert.Equal(32 * 9, linksMesh.Geometry!.Positions!.Count);
+            Assert.True((await State())["ai"]!["linksTruncated"]!.GetValue<bool>());
+            viewport.SetAiOptions(false, true, null);
             viewport.SetAiNetworks(new("graph1", [first, second]));
             await Select("select", "a", "not_ready");
             enabled.IsChecked = true; Assert.True((await State())["ai"]!["visible"]!.GetValue<bool>());

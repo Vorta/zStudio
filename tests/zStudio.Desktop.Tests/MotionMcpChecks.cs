@@ -29,7 +29,7 @@ internal static class MotionMcpChecks
             using MemoryStream stream = new(); using BinaryWriter writer = new(stream);
             writer.Write(4); writer.Write(2f); writer.Write(2); writer.Write(1); writer.Write(-1f); writer.Write(1f);
             writer.Write(4); writer.Write("body"u8); writer.Write(12);
-            for (int i = 0; i < 9; i++) writer.Write(0f);
+            for (int i = 0; i < 9; i++) writer.Write(i >= 6 ? i + 1f : 0f);
             for (int i = 0; i < 3; i++) { writer.Write(1f); writer.Write(0f); writer.Write(0f); writer.Write(0f); }
             byte[] payload = stream.ToArray(), archive = new byte[payload.Length + 156]; payload.CopyTo(archive, 0);
             BinaryPrimitives.WriteInt32LittleEndian(archive.AsSpan(payload.Length + 4), payload.Length); "test_motion"u8.CopyTo(archive.AsSpan(payload.Length + 8));
@@ -72,8 +72,12 @@ internal static class MotionMcpChecks
             await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
             Assert.Equal(2, ((MotionClip)doc.PreviewDocument.Assets[0].Content!).FrameCount);
             Assert.Equal(2, System.Text.Json.JsonSerializer.SerializeToNode(editor.State)!["frameCount"]!.GetValue<int>());
+            await Job("motion_edit", Args(("revision", doc.Revision), ("action", "set"), ("part", 0), ("frame", 0), ("translation", new[] { 10, 11, 12 }), ("quaternionWxyz", new[] { 1, 0, 0, 0 })));
+            Assert.Equal(new Vector3(7, 8, 9), ((MotionClip)doc.PreviewDocument.Assets[0].Content!).Parts[0].Frames[^1].Translation);
+            await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["destination"] = copy });
             Assert.False(doc.IsDirty); Assert.Equal(archive, await File.ReadAllBytesAsync(path, token));
+            Assert.Equal(new Vector3(7, 8, 9), ((MotionClip)(await FormatRegistry.Default.OpenAsync(copy, token)).Assets[0].Content!).Parts[0].Frames[^1].Translation);
             var catalog = await Call("event_catalog", new() { ["version"] = 39 }); Assert.Contains(catalog["items"]!.AsArray(), e => e!["Type"]!.GetValue<int>() == 42);
             await CheckMotionRemoval();
             await Job("open_document", new() { ["path"] = libraryPath });
@@ -89,6 +93,7 @@ internal static class MotionMcpChecks
             Assert.Equal(1, StaticViewport().PreviewScene!.Models[0].Vertices[1].X);
             await Call("undo_redo", new() { ["document"] = libraryDoc.SessionId.ToString(), ["revision"] = libraryDoc.Revision, ["action"] = "redo" });
             Assert.Equal(4, StaticViewport().PreviewScene!.Models[0].Vertices[1].X);
+            await CheckLargeMotionInspection();
             var libraryScene = libraryDoc.PreviewDocument.Scene!; var libraryAsset = libraryDoc.PreviewDocument.Assets[3];
             var assembly = (MechAssembly)libraryAsset.Content!;
             libraryScene.Nodes.Clear();
@@ -122,7 +127,6 @@ internal static class MotionMcpChecks
             Assert.Equal(38, sharedMaterials["materials"]!["items"]![0]!["index"]!.GetValue<int>());
             sharedMaterials = await Call("mech_models", MechArgs(("section", "materials"), ("query", "MATERIAL 39")));
             Assert.Equal(1, sharedMaterials["materials"]!["total"]!.GetValue<int>());
-            await CheckLargeMotionInspection();
             Recoil.Zbd.Rendering.SceneViewport StaticViewport() => (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             AnimationFrame Presented() => (AnimationFrame)typeof(Recoil.Zbd.Rendering.SceneViewport).GetField("animationFrame", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor.Viewport)!;
             MotionEditor? CurrentMotion() => (MotionEditor?)typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main);
@@ -210,6 +214,24 @@ internal static class MotionMcpChecks
                 var page = await Call("motion_records", new() { ["document"] = large.SessionId.ToString(), ["member"] = large.ResourceEdits!.Current.Members[0].Id.ToString(), ["offset"] = 4095, ["limit"] = 1 });
                 Assert.Equal(4096, page["rows"]!["total"]!.GetValue<int>()); Assert.Null(page["rows"]!["nextOffset"]);
                 Assert.Equal(name, Assert.Single(page["rows"]!["items"]!.AsArray())!["Name"]!.GetValue<string>());
+                await Job("select_asset", new() { ["document"] = large.SessionId.ToString(), ["kind"] = "Motion", ["index"] = 0 });
+                var active = Assert.IsType<MotionEditor>(CurrentMotion()); await active.SelectAssemblyAsync(3, token);
+                string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+                var state = await Job("motion_preview", new() { ["preview"] = preview, ["action"] = "state" });
+                Assert.Equal(4097, state["diagnosticCount"]!.GetValue<int>()); Assert.True(state["diagnosticsTruncated"]!.GetValue<bool>());
+                Assert.Equal(32, state["diagnostics"]!.AsArray().Count); Assert.All(state["diagnostics"]!.AsArray(), n => Assert.InRange(n!.GetValue<string>().Length, 1, 513));
+                Assert.True(state.ToJsonString().Length < 25_000);
+                var combined = await Call("preview_state", new() { ["preview"] = preview });
+                Assert.True(JsonNode.DeepEquals(state["diagnostics"], combined["motion"]!["diagnostics"]));
+                Assert.True(combined.ToJsonString().Length < 30_000);
+                var boundLibrary = (ZbdDocument)typeof(MotionEditor).GetField("library", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(active)!;
+                for (int i = 0; i < 40; i++) boundLibrary.Add(AssetKind.Model, boundLibrary.Assets.Count, $"extra_{i:D2}", 0, 0, content: new MechAssembly(0, 0, 1, 0, 1));
+                state = await Job("motion_preview", new() { ["preview"] = preview, ["action"] = "state" });
+                Assert.Equal(42, state["assemblyCount"]!.GetValue<int>()); Assert.True(state["assembliesTruncated"]!.GetValue<bool>()); Assert.Equal(32, state["assemblies"]!.AsArray().Count);
+                var bindings = await Job("motion_preview", new() { ["preview"] = preview, ["action"] = "assemblies", ["offset"] = 40, ["limit"] = 2 });
+                Assert.Equal(42, bindings["total"]!.GetValue<int>()); Assert.Null(bindings["nextOffset"]); Assert.Equal("extra_38", bindings["items"]![0]!["Name"]!.GetValue<string>());
+                bindings = await Job("motion_preview", new() { ["preview"] = preview, ["action"] = "assemblies", ["query"] = "EXTRA_39" });
+                Assert.Equal(1, bindings["total"]!.GetValue<int>());
             }
             async Task CheckAssemblyLoads()
             {

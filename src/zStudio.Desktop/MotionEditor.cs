@@ -44,8 +44,30 @@ public sealed class MotionEditor : UserControl, IDisposable
     public bool IsPlaying { get; private set; }
     internal Guid MemberId => member;
     public int? AssemblyMember => selectedMember;
-    public object State => new { member, seconds, playing = IsPlaying, loading = load != null, playbackRequested = pendingPlayback ?? IsPlaying, loopSeconds = clip?.LoopTime, frameCount = clip?.FrameCount, lod = Lod, library = library?.Path, assembly = AssemblyMember,
-        assemblies = library?.Assets.Where(a => a.Content is MechAssembly).Select(a => new { member = a.Index, a.Name }).ToArray(), diagnostics = sampler?.Diagnostics };
+    internal IEnumerable<AssetRecord> Assemblies => library?.Assets.Where(a => a.Content is MechAssembly) ?? [];
+    private (string[] Items, int Count, bool Truncated) DiagnosticPreview()
+    {
+        var all = sampler?.Diagnostics ?? [];
+        return (all.Take(32).Select(s => s.Length > 512 ? s[..512] + "…" : s).ToArray(), all.Count,
+            all.Count > 32 || all.Take(32).Any(s => s.Length > 512));
+    }
+    public object State
+    {
+        get
+        {
+            var notes = DiagnosticPreview(); int count = Assemblies.Count();
+            return new { member, seconds, playing = IsPlaying, loading = load != null, playbackRequested = pendingPlayback ?? IsPlaying,
+                loopSeconds = clip?.LoopTime, frameCount = clip?.FrameCount, lod = Lod, library = library?.Path, assembly = AssemblyMember,
+                assemblies = Assemblies.Take(32).Select(a => new { member = a.Index, a.Name }).ToArray(), assemblyCount = count, assembliesTruncated = count > 32,
+                diagnostics = notes.Items, diagnosticCount = notes.Count, diagnosticsTruncated = notes.Truncated };
+        }
+    }
+    private void RefreshSupport()
+    {
+        var notes = DiagnosticPreview();
+        support.Text = string.Join("\n", notes.Items.Take(4));
+        if (notes.Count > 4 || notes.Truncated) support.Text += $"\nDiagnostic preview · {notes.Count} notices; shortened text/list. Inspect motion parts for complete authored names.";
+    }
     public MotionEditor(DocumentModel document, Guid member, AssetResolver resolver, CancellationToken lifetime)
     {
         this.document = document; this.member = member; this.resolver = resolver; this.lifetime = lifetime;
@@ -112,7 +134,7 @@ public sealed class MotionEditor : UserControl, IDisposable
             if (selectedMember != index) selectedIdentity = null;
             selectedMember = index; clip = nextClip; sampler = next;
             syncing = true; assembly.SelectedItem = asset; lod.ItemsSource = choices; lod.SelectedIndex = nextLod; syncing = false;
-            support.Text = string.Join("\n", next.Diagnostics.Take(4)); Present(); SceneChanged?.Invoke();
+            RefreshSupport(); Present(); SceneChanged?.Invoke();
         }
         catch
         {
@@ -167,7 +189,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     {
         if (disposed) return;
         clip = CurrentClip(); seconds = Math.Min(seconds, clip.LoopTime);
-        if (library?.Assets.FirstOrDefault(a => a.Index == selectedMember)?.Content is MechAssembly selected) sampler = new(clip, library, selected);
+        if (library?.Assets.FirstOrDefault(a => a.Index == selectedMember)?.Content is MechAssembly selected) { sampler = new(clip, library, selected); RefreshSupport(); }
         startedAt = seconds; elapsed.Restart(); Present();
     }
     public void SetLod(int value)

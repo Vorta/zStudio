@@ -89,7 +89,9 @@ public partial class MainWindow
             info["Network"] = Short(ai.Network.Name); info["Network type"] = Short(ai.Network.Type);
             info["Attack strategy"] = AiStrategyText(ai.Network.AttackStrategy);
             info["Path width"] = ai.Network.PathWidth; info["Raw node value"] = ai.Node.RawValue;
-            info["Directed link slots"] = new JsonArray(ai.Node.Links.Select(l => (JsonNode)new JsonObject { ["slot"] = l.Slot, ["target"] = l.TargetIndex, ["problem"] = l.Problem }).ToArray());
+            info["Directed link slots"] = new JsonArray(ai.Node.PreviewLinks.Select(l => (JsonNode)new JsonObject { ["slot"] = l.Slot, ["target"] = l.TargetIndex, ["problem"] = l.Problem }).ToArray());
+            info["Authored link slot count"] = ai.Node.LinkCount;
+            if (ai.Node.LinksTruncated) info["Link preview"] = $"First {AiNode.MaximumPreviewLinks} slots shown. Inspect/export the ZRD resource for the complete list.";
         }
         var actor = viewport.ActorAt(item.Node);
         if (actor != null)

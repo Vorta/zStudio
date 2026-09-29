@@ -18,6 +18,22 @@ public sealed class AiNetworkTests
         ResourceEditingTests.Archive(roots.Select(root => ("net_01.zrd", ZrdWriter.Write(root, TestContext.Current.CancellationToken))).ToArray()), token: TestContext.Current.CancellationToken);
     private static AiNetworkSnapshot Read(ZbdDocument doc) => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), TestContext.Current.CancellationToken);
     [Fact]
+    public void Version106LinkPreviewIsBoundedWithoutChangingTheAuthoredTree()
+    {
+        var links = A(Enumerable.Range(0, 100_000).Select(_ => I(1)).ToArray());
+        var root = A(S("version"), A(I(106)), S("node_00"), A(I(12), A(F("0"), F("0"), F("0")), links), S("node_01"), Node());
+        byte[] source = ZrdWriter.Write(root, TestContext.Current.CancellationToken);
+        var network = Decode(root); var node = network.Nodes[0];
+        Assert.Equal(32, node.Links.Count);
+        var description = new AiNetworkSnapshot("fixture", [network]).Describe(network, node);
+        Assert.Equal(100_000, description["link_count"]!.GetValue<int>()); Assert.True(description["links_truncated"]!.GetValue<bool>());
+        Assert.Equal(32, description["links"]!.AsArray().Count); Assert.True(description.ToJsonString().Length < 10_000);
+        Assert.Equal(Enumerable.Range(0, 32), node.Links.Select(l => l.Slot));
+        Assert.All(node.Links, link => Assert.Equal(network.Nodes[1].Id, link.Target));
+        Assert.Contains(network.Diagnostics, d => d.Message.Contains("100000") && d.Message.Contains("32"));
+        Assert.Equal(source, ZrdWriter.Write(root, TestContext.Current.CancellationToken));
+    }
+    [Fact]
     public void Version106EdgeConstraintsRetainAllOrderedAttributesWithoutInventingPositions()
     {
         var network = Decode(A(S("version"), A(I(106)), S("node_00"), Node(1), S("node_01"), Node(0),
@@ -27,6 +43,23 @@ public sealed class AiNetworkTests
         Assert.All(network.Constraints, c => { Assert.Equal(46, c.Index); Assert.Equal(0, c.FromNode); Assert.Equal(1, c.ToNode); });
         var malformed = Decode(A(S("version"), A(I(106)), S("node_46"), A(A(I(0), I(1)), S("canleave"), A(I(1)), I(9), A())));
         Assert.Empty(malformed.Constraints); Assert.Empty(malformed.Nodes); Assert.Single(malformed.Diagnostics);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(32)]
+    [InlineData(33)]
+    public void Version106LinkBoundariesAndOmittedSlotsAreValidated(int count)
+    {
+        var links = A(Enumerable.Range(0, count).Select(_ => I(-1)).ToArray());
+        ZrdNode Root(ZrdNode slots) => A(S("version"), A(I(106)), S("node_00"), A(I(12), A(F("0"), F("0"), F("0")), slots));
+        var network = Decode(Root(links)); var node = Assert.Single(network.Nodes);
+        Assert.Equal(Math.Min(32, count), node.Links.Count); Assert.Equal(count, node.LinkCount); Assert.Equal(count > 32, node.LinksTruncated);
+        if (count > 32)
+        {
+            var invalid = Decode(Root(links with { Children = [.. links.Children.Take(count - 1), S("not an integer")] }));
+            Assert.Empty(invalid.Nodes); Assert.Contains(invalid.Diagnostics, d => d.Message.Contains("Expected an integer"));
+        }
     }
 
     [Theory]

@@ -2023,7 +2023,7 @@
   },
   {
     "Name": "zstudio_ai_networks",
-    "Description": "List authored AI networks with distinct source identities, counts, diagnostics and attack_strategy (stored value, status, key, character count, truncation and RGB hex color shared by nodes/arrows). Does not simulate activation or change visualization.",
+    "Description": "List authored AI networks with source identities, counts and attack_strategy metadata/color (1024-character value preview). Queries match member/name/type prefixes (70 characters) or source archive before pagination. links counts resolved preview links; linkSlots counts authored slots, with linksTruncated when capped. Diagnostics preview 8 messages at 128 characters with diagnosticCount/diagnosticsTruncated. Does not simulate activation or change visualization.",
     "Mutates": false,
     "Parameters": [
       {
@@ -2066,7 +2066,7 @@
   },
   {
     "Name": "zstudio_ai_nodes",
-    "Description": "List authored AI nodes, XYZ, raw integer, network attack_strategy metadata/color and ordered directed link slots (three for RECOIL; variable for MW3). Negative indices mean no link; unresolved targets retain diagnostics.",
+    "Description": "List authored AI nodes, XYZ, raw integer, attack_strategy and ordered link slots (three for RECOIL; MW3 preview capped at 32). link_count/links_truncated disclose full slot count and omission; inspect/export the source ZRD for all links. Network name/type previews use 256 characters with counts/truncation flags. Node queries match 70-character member/name prefixes or node_NN before pagination. Negative indices mean no link; unresolved targets retain diagnostics.",
     "Mutates": false,
     "Parameters": [
       {
@@ -3735,7 +3735,7 @@
   },
   {
     "Name": "zstudio_motion_edit",
-    "Description": "Edit authored motion timing or a frame, or insert/delete a frame across all parts. One shared archive undo transaction. Refreshes the active sampler while retaining camera/playback. Does not save; use the existing verified document save operation. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit authored motion timing or a frame, or insert/delete a frame across all parts. The separate closing sample is preserved exactly, including edits to frame zero and structural changes. One shared archive undo transaction. Refreshes the active sampler while retaining camera/playback. Does not save; use the existing verified document save operation. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3845,7 +3845,7 @@
   },
   {
     "Name": "zstudio_motion_preview",
-    "Description": "Control the visible motion viewer: play/pause, seek, choose an explicit library member or LOD, frame the model, or inspect available bindings. Shares GUI playback and camera. Superseded assembly loads retain playback intent; an explicit play/pause during loading takes precedence. State distinguishes actual playing, loading and playbackRequested. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Control visible motion playback, seek, assembly, LOD and framing. Superseded assembly loads retain playback intent; explicit play/pause during loading takes precedence. State distinguishes playing/loading/playbackRequested; previews 32 diagnostics (512 characters each) and 32 assemblies with diagnosticCount/diagnosticsTruncated and assemblyCount/assembliesTruncated. Use action assemblies for complete paged bindings; motion_records retains complete authored part names. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3859,10 +3859,11 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Preview operation.",
+        "Description": "Preview operation; assemblies pages/filter bindings by name without changing selection.",
         "Required": true,
         "Choices": [
           "state",
+          "assemblies",
           "play",
           "pause",
           "seek",
@@ -3883,7 +3884,7 @@
       {
         "Name": "memberIndex",
         "Type": "integer",
-        "Description": "Library member index from motion preview state.",
+        "Description": "Library member index from motion preview state or assemblies.",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -3899,6 +3900,34 @@
         "Properties": null,
         "Minimum": -2147483648,
         "Maximum": 2147483647
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
       }
     ]
   },

@@ -126,7 +126,7 @@ public sealed class MechWarrior3Tests
         Assert.Equal(new Vector3(1, 0, 0), clip.Sample(0, .5).Translation);
         Assert.Equal(clip.Sample(0, .25), clip.Sample(0, 2.25));
         var edited = clip.Edit("set", 0, 0, new(new(4, 5, 6), Quaternion.Identity));
-        Assert.Equal(edited.Parts[0].Frames[0], edited.Parts[0].Frames[^1]);
+        Assert.Equal(clip.Parts[0].Frames[^1], edited.Parts[0].Frames[^1]);
         Assert.Equal(Vector3.Zero, clip.Parts[0].Frames[0].Translation);
         Assert.Equal(edited.Write(TestContext.Current.CancellationToken), MotionClip.Read(edited.Write(TestContext.Current.CancellationToken), TestContext.Current.CancellationToken).Write(TestContext.Current.CancellationToken));
         var inserted = clip.Edit("insert", frame: 0); Assert.Equal(3, inserted.FrameCount);
@@ -136,6 +136,32 @@ public sealed class MechWarrior3Tests
         Assert.Throws<InvalidDataException>(() => MotionClip.Read(bytes.AsMemory(0, bytes.Length - 1), TestContext.Current.CancellationToken));
         byte[] enormous = bytes.ToArray(); System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(enormous.AsSpan(8), int.MaxValue);
         Assert.Throws<InvalidDataException>(() => MotionClip.Read(enormous, TestContext.Current.CancellationToken));
+    }
+    [Theory]
+    [InlineData("set", 0)]
+    [InlineData("set", 1)]
+    [InlineData("insert", 0)]
+    [InlineData("insert", 1)]
+    [InlineData("delete", 0)]
+    [InlineData("delete", 1)]
+    public void MotionEditsPreserveDistinctClosingSamplesOnEveryTrack(string action, int frame)
+    {
+        var token = TestContext.Current.CancellationToken; var seed = MotionClip.Read(MotionBytes(), token);
+        var first = seed.Parts[0] with { Frames = [.. seed.Parts[0].Frames.Take(2), new(new(7, 8, -0f), new(.25f, .5f, .75f, 2))] };
+        var second = first with { Frames = [first.Frames[0], first.Frames[1], new(new(-7, -8, -9), new(1, 2, 3, 4))] };
+        var clip = new MotionClip { Header = seed.Header, LoopTime = seed.LoopTime, FrameCount = seed.FrameCount, Parts = [first, second] };
+        byte[] original = clip.Write(token);
+        var edited = clip.Edit(action, 0, frame, new(new(4, 5, 6), Quaternion.Identity));
+        var readback = MotionClip.Read(edited.Write(token), token);
+        for (int p = 0; p < 2; p++)
+        {
+            Assert.Equal(Bits(clip.Parts[p].Frames[^1]), Bits(readback.Parts[p].Frames[^1]));
+            Assert.Equal(edited.FrameCount + 1, readback.Parts[p].Frames.Count);
+        }
+        if (action == "set") Assert.Equal(clip.Parts[1].Frames, readback.Parts[1].Frames);
+        if (action == "insert") Assert.Equal(original, edited.Edit("delete", frame: frame + 1).Write(token));
+        Assert.Equal(original, clip.Write(token));
+        static int[] Bits(MotionFrame f) => new[] { f.Translation.X, f.Translation.Y, f.Translation.Z, f.Rotation.W, f.Rotation.X, f.Rotation.Y, f.Rotation.Z }.Select(BitConverter.SingleToInt32Bits).ToArray();
     }
     [Fact]
     public void WorldVersionsHaveDistinctProbesAndTriangleStripsHaveAlternatingWinding()

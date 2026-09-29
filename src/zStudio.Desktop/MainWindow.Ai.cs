@@ -86,7 +86,8 @@ public partial class MainWindow
         snapshot = scene!.AiNetworks.Id, visible = scene.AiVisible, throughGeometry = scene.AiThroughGeometry,
         network = scene.AiNetworkFilter ?? "all", selectedNode = scene.SelectedAiNode,
         networks = scene.AiNetworks.Networks.Count, nodes = scene.AiNetworks.Networks.Sum(n => n.Nodes.Count),
-        links = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => p.Links.Count(l => l.Target != null)))
+        links = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => p.PreviewLinks.Count(l => l.Target != null))),
+        linkSlots = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => (long)p.LinkCount)), linksTruncated = scene.AiNetworks.Networks.Any(n => n.Nodes.Any(p => p.LinksTruncated))
     };
     private async Task<PropertiesWindow?> OpenAiPropertiesAsync(string id, bool automation)
     {

@@ -30,8 +30,8 @@ public sealed record AiAttackStrategy
     public string? BoundedValue(int limit) => Value is { } value && value.Length > limit ? value[..limit] + "… [truncated]" : Value;
     public JsonObject Describe() => new()
     {
-        ["value"] = BoundedValue(4096), ["status"] = State.ToString().ToLowerInvariant(),
+        ["value"] = BoundedValue(1024), ["status"] = State.ToString().ToLowerInvariant(),
         ["key"] = Kind == AiAttackStrategyKind.Unknown ? "unknown" : Kind.ToString(),
-        ["characters"] = Value?.Length, ["truncated"] = Value?.Length > 4096
+        ["characters"] = Value?.Length, ["truncated"] = Value?.Length > 1024
     };
 }

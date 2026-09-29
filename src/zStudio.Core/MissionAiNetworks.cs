@@ -8,7 +8,14 @@ using Recoil.Zbd.Core.Formats;
 namespace Recoil.Zbd.Core;
 
 public sealed record AiLink(int Slot, int TargetIndex, string? Target, string? Problem);
-public sealed record AiNode(string Id, int Index, int RawValue, Vector3 Position, long SourceOffset, IReadOnlyList<AiLink> Links);
+public sealed record AiNode(string Id, int Index, int RawValue, Vector3 Position, long SourceOffset, IReadOnlyList<AiLink> Links)
+{
+    public const int MaximumPreviewLinks = 32;
+    public int? AuthoredLinkCount { get; init; }
+    public int LinkCount => AuthoredLinkCount ?? Links.Count;
+    public bool LinksTruncated => LinkCount > Math.Min(Links.Count, MaximumPreviewLinks);
+    public IEnumerable<AiLink> PreviewLinks => Links.Take(MaximumPreviewLinks);
+}
 public sealed record AiConstraint(int Index, int FromNode, int ToNode, string Kind, long SourceOffset, JsonObject Parameters)
 { public int AttributeIndex { get; init; } }
 public sealed record AiNetwork(string Id, string Archive, int MemberIndex, string Member, string Name, string Type,
@@ -21,7 +28,7 @@ public sealed record AiNetwork(string Id, string Archive, int MemberIndex, strin
 /// <summary>Authored navigation data; no AI activation or pathfinding simulation. IDs are snapshot-scoped.</summary>
 public sealed record AiNetworkSnapshot(string Id, IReadOnlyList<AiNetwork> Networks)
 {
-    private static string Bounded(string text) => text.Length <= 4096 ? text : text[..4096] + "… [truncated]";
+    private static string Bounded(string text) => text.Length <= 256 ? text : text[..256] + "… [truncated]";
     public static AiNetworkSnapshot Empty { get; } = new("empty", []);
     public IEnumerable<Diagnostic> Diagnostics => Networks.SelectMany(n => n.Diagnostics);
     public (AiNetwork Network, AiNode Node)? Find(string id)
@@ -35,10 +42,12 @@ public sealed record AiNetworkSnapshot(string Id, IReadOnlyList<AiNetwork> Netwo
         ["source_archive"] = network.Archive, ["source_member_index"] = network.MemberIndex, ["source_member"] = network.Member,
         ["source_offset"] = node.SourceOffset, ["network"] = Bounded(network.Name), ["stored_type"] = Bounded(network.Type),
         ["stored_name_characters"] = network.Name.Length, ["stored_type_characters"] = network.Type.Length,
+        ["stored_name_truncated"] = network.Name.Length > 256, ["stored_type_truncated"] = network.Type.Length > 256,
         ["attack_strategy"] = network.AttackStrategy.Describe(),
         ["network_constraint_count"] = network.Constraints.Count,
         ["path_width"] = network.PathWidth, ["node_index"] = node.Index, ["raw_node_integer"] = node.RawValue,
-        ["position"] = JsonData.Vector(node.Position), ["links"] = new JsonArray(node.Links.Select(l => (JsonNode)new JsonObject
+        ["link_count"] = node.LinkCount, ["links_truncated"] = node.LinksTruncated,
+        ["position"] = JsonData.Vector(node.Position), ["links"] = new JsonArray(node.PreviewLinks.Select(l => (JsonNode)new JsonObject
         { ["slot"] = l.Slot, ["target_index"] = l.TargetIndex, ["target_id"] = l.Target, ["problem"] = l.Problem }).ToArray()),
         ["interpretation"] = "Authored AI network. Runtime activation and pathfinding are not simulated."
     };
@@ -163,8 +172,16 @@ public static partial class MissionAiNetworks
                 var p = c[1].Children; Vector3 position = new(Float(p[0]), Float(p[1]), Float(p[2]));
                 if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)) throw new InvalidDataException("Non-finite node coordinates.");
                 if (Math.Abs(position.X) > 1e12 || Math.Abs(position.Y) > 1e12 || Math.Abs(position.Z) > 1e12) throw new InvalidDataException("Coordinates outside the supported ±1e12 preview range.");
-                nodes.Add(new(id + ":" + nodes.Count, index, Integer(c[0]), position, value.SourceOffset,
-                    c[2].Children.Select((n, slot) => new AiLink(slot, Integer(n), null, null)).ToArray()));
+                int linkCount = c[2].Children.Count;
+                List<AiLink> links = [];
+                for (int slot = 0; slot < linkCount; slot++)
+                {
+                    if ((slot & 4095) == 0) token.ThrowIfCancellationRequested();
+                    int target = Integer(c[2].Children[slot]); // Validate omitted slots too.
+                    if (slot < AiNode.MaximumPreviewLinks) links.Add(new(slot, target, null, null));
+                }
+                if (linkCount > AiNode.MaximumPreviewLinks) Note($"{key}: showing the first {AiNode.MaximumPreviewLinks} of {linkCount} authored link slots. Inspect/export the ZRD resource for the complete list.", value.SourceOffset);
+                nodes.Add(new(id + ":" + nodes.Count, index, Integer(c[0]), position, value.SourceOffset, links.AsReadOnly()) { AuthoredLinkCount = linkCount });
             }
             catch (InvalidDataException ex) { Note($"{key}: {ex.Message}", value.SourceOffset); }
         }

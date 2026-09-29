@@ -1,5 +1,15 @@
 # Desktop implementation status
 
+## PR #14 closing-sample preservation and bounded preview fixes (2026-09-29)
+
+Motion frame-zero edits and frame insertion/deletion now preserve each separately authored closing sample exactly, including distinct translation/quaternion values; earlier notes describing automatic closure are superseded. The shared archive editor, generated Properties and MCP use this behavior through Undo/Redo and verified Save As. Closing samples remain readable outside the editable frame range.
+
+AI node/network query formatting uses bounded name/type prefixes and is skipped for empty queries. MW3 link previews retain the first 32 ordered slots per node, with full counts/truncation in node/network/preview state, card notes and source-specific diagnostics. Omitted slots are still type-validated; complete source trees remain available through ZRD paging and export. The renderer and all inspection paths share the cap. Node names/types, strategy metadata and network diagnostic previews also have explicit bounds so full 200-row pages stay below the protocol response limit even for JSON-escaped text.
+
+Both motion state tools cap diagnostics at 32 messages with 512-character prefixes and expose total/truncation fields; GUI support notices disclose shortened output. Assembly state previews cap 32 rows, with complete bindings available through the new paged motion_preview assemblies action. Typed schemas/descriptions, embedded discovery, capability mappings and guides are updated.
+
+Release build has zero warnings/errors. All 416 tests pass (323 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. Tests cover bit-preserved distinct closing samples on multiple tracks and edit boundaries, source/history/verified-save preservation, maximum-sized motion diagnostic state, complete assembly pages, oversized name filtering, 100000-link source preservation and bounded overlay geometry, limit boundaries/malformed omitted links, full escaped-text pages and catalog parity. The closing-sample regressions reproduced the defect before its fix. AI GPU checks pass strategy colors/arrows, filtering, selection, both depth modes, stable idle buffers and the real M1 map (91 networks, 592 nodes) with unchanged source. Follow-up review found no further actionable defect in these changes. Version remains 0.7.0.
+
 ## PR #14 active motion removal and identity fix (2026-09-29)
 
 Resource edits and Undo/Redo now reconcile the active preview with the resulting archive selection, including when Assets is hidden. Deleting the displayed motion or replacing it with non-motion data disposes the old viewer and displays the remaining selection or empty archive metadata; accepted edits no longer report failure while refreshing a missing member. Motion reuse checks the stable member UUID, so a different clip taking the old index creates its own viewer while rename/reorder retains the surviving clip's transport and camera. Preview headings refresh with the selected record. Pinned Properties retains its identity.

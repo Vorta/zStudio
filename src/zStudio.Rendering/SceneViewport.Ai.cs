@@ -81,7 +81,7 @@ public sealed partial class SceneViewport
                 List<Vector3> positions = []; List<int> indices = [];
                 var pose = CaptureView(); Vector3 forward = Vector3.Normalize(new((float)pose.LookDirection.X, (float)pose.LookDirection.Y, (float)pose.LookDirection.Z));
                 foreach (var node in nodes)
-                foreach (string target in node.Links.Where(l => l.Target != null).Select(l => l.Target!).Distinct())
+                foreach (string target in node.PreviewLinks.Where(l => l.Target != null).Select(l => l.Target!).Distinct())
                 {
                     var end = byId[target].Position; var start = node.Position;
                     if ((end - start).LengthSquared() < 1e-8f)
