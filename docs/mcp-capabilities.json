@@ -922,7 +922,7 @@
       "tools": [
         "zstudio_scene_options"
       ],
-      "note": "Use the semantic tool with explicit identities and arguments."
+      "note": "Shared GUI/MCP scene options and captures use the same renderer. Textured vertex-colored surfaces multiply texture RGBA by authored tint without preview lighting; untextured shaded mode retains view-dependent shading."
     },
     {
       "gui": "MainWindow.xaml:ScenePropertiesClick",

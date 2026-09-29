@@ -40,7 +40,10 @@ float4 PSMain(TintPixel input) : SV_TARGET
     // stock vertex-color blend instead replaces it, losing the texture entirely.
     float4 result = input.color;
     if (bHasDiffuseMap) result *= texDiffuseMap.Sample(samplerSurface, input.uv);
-    if (!bHasNormalMap)
+    // Textured mode displays the decoded texture times authored vertex tint.
+    // DiffuseMaterialVariables reuses bHasNormalMap for EnableUnLit (not a
+    // normal-map presence flag). Only untextured, lit preview mode shades.
+    if (!bHasDiffuseMap && !bHasNormalMap)
     {
         float3 normal = bRenderFlat ? normalize(cross(ddy(input.world.xyz), ddx(input.world.xyz))) : normalize(input.normal);
         result.rgb *= saturate(.5 + .5 * abs(dot(normalize(input.eye.xyz), normal)));

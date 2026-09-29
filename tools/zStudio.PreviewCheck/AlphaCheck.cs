@@ -63,6 +63,20 @@ internal static class AlphaCheck
                 if (Math.Abs(tintPixel[2]-128)>3 || Math.Abs(tintPixel[1]-64)>3 || Math.Abs(tintPixel[0]-32)>3)
                     throw new InvalidDataException($"Vertex colors did not modulate the texture: BGR {string.Join(',',tintPixel)}.");
                 Console.WriteLine("PASS: authored vertex tint multiplies diffuse texture RGB without replacing the texture.");
+                var tintMaterial = (DiffuseMaterial)tinted.Material!;
+                // Exercise the actual Helix material bindings from oblique views,
+                // including a texture paired with the shaded-mode material flag.
+                foreach (bool unlit in new[] { true, false })
+                {
+                    tintMaterial.EnableUnLit = unlit;
+                    camera.Position = new(3 * Math.Sqrt(3), 0, 3); camera.LookDirection = new(-3 * Math.Sqrt(3), 0, -3);
+                    await Task.Delay(200); var angledPixel = Pixel(preview.RenderImage(128,128));
+                    if (Math.Abs(angledPixel[2]-128)>3 || Math.Abs(angledPixel[1]-64)>3 || Math.Abs(angledPixel[0]-32)>3)
+                        throw new InvalidDataException($"Camera angle changed textured vertex tint (unlit={unlit}): BGR {string.Join(',',angledPixel)}.");
+                }
+                tintMaterial.EnableUnLit = true;
+                camera.Position = new(0,0,3); camera.LookDirection = new(0,0,-3);
+                Console.WriteLine("PASS: textured vertex RGB stays unchanged at oblique camera angles with either material lighting flag.");
                 var fogFrame = frame with { Nodes = [frame.Nodes[0]], Fog = new(true, Vector3.UnitZ, 3, 6) };
                 preview.UpdateAnimationFrame(fogFrame);
                 ((DiffuseMaterial)tinted.Material!).DiffuseMap = new TextureModel(new byte[] { 255,128,64,255 }, SharpDX.DXGI.Format.R8G8B8A8_UNorm,1,1);

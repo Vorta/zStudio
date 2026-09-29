@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR #14 explicit unlit textured vertex tint (2026-09-29)
+
+The vertex-tint shader now explicitly restricts preview lighting to untextured, lit mode. Textures multiply authored vertex RGBA independently of the material lighting flag, while untextured shaded mode retains its existing lighting. The Helix 3.1.2 DiffuseMaterialVariables binding reuses the ABI field named bHasNormalMap for EnableUnLit; the existing unlit path already honored that flag. A shader comment documents this alias without changing the buffer layout.
+
+Eight windowless Direct3D WARP cases execute the production shader over 72 texture/unlit/flat-normal/camera-angle/alpha combinations, checking rendered RGBA. Before the change, the two textured cases with lighting enabled failed at an oblique angle; all cases now pass. The live Helix check also verifies front/oblique textured pixels with both lighting flags, alpha-zero depth preservation, translucent composition and paused-camera fog/restoration. Release build has zero warnings/errors; all 440 tests pass (339 Core, 101 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. GUI/MCP share the renderer; capability notes and documentation are updated, with command schemas/catalog unchanged. Follow-up review found no further actionable defect in this change. Version remains 0.7.0.
+
 ## PR #14 edited mech binding identity (2026-09-29)
 
 Motion assembly selection now captures the stable archive member UUID from the same frozen resource snapshot as the geometry, including duplicated/imported members without an original SourceIndex. Identity lookup also includes retained edit history when a load is overtaken by a newer revision; separately parsed copies cannot borrow identities by matching names/bytes. Rename, reorder, model replacement and Undo/Redo remap the bound member by UUID while retaining the camera and playback state. Successful selection replaces the binding identity; cancellation leaves the prior identity intact. A missing/deleted member clears the binding without selecting another member at its former index. Library refresh retains matching snapshot metadata and no longer overwrites a newly selected identity after asynchronous loading.
