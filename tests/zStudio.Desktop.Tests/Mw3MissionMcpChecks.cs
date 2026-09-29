@@ -70,6 +70,18 @@ internal static class Mw3MissionMcpChecks
             Assert.Equal(names[0].Length, card["Authored name characters"]!.GetValue<int>());
             Assert.True(card.ToJsonString().Length < 10_000);
             Assert.Equal(0, document.Revision); Assert.False(document.IsDirty);
+            // Large nested metadata must be bounded for a full page, selection
+            // and pinned Properties, before anything is serialized to the pipe.
+            foreach (var item in mission.Actors)
+                mission.Scene.Nodes[item.Root].Metadata["large_fixture"] = new string('\u0001', 32768);
+            page = await Call("scene_nodes", new() { ["preview"] = preview, ["query"] = "actor_1", ["limit"] = 200 });
+            Assert.All(page["items"]!.AsArray(), row => Assert.True(row!["Metadata"]!["inspection_truncated"]!.GetValue<bool>()));
+            properties = await Call("scene_properties", new() { ["preview"] = preview, ["node"] = actor.Root, ["open"] = true });
+            Assert.True(properties["Metadata"]!["inspection_truncated"]!.GetValue<bool>());
+            pinned = await Call("properties_state", new());
+            Assert.True(pinned["content"]!["inspection_truncated"]!.GetValue<bool>());
+            selected = await Call("scene_selection", new() { ["preview"] = preview, ["action"] = "select", ["node"] = actor.Root });
+            Assert.True(selected["inspection_truncated"]!.GetValue<bool>());
             Assert.Equal(fixture.ReaderBytes, await File.ReadAllBytesAsync(fixture.ReaderPath, deadline.Token));
 
             async Task<JsonNode> Call(string command, JsonObject arguments)
@@ -77,7 +89,7 @@ internal static class Mw3MissionMcpChecks
                 var result = await client.CallToolAsync("zstudio_" + command, arguments.ToDictionary(p => p.Key, p => (object?)p.Value), cancellationToken: deadline.Token);
                 string json = result.Content.OfType<TextContentBlock>().Single().Text;
                 Assert.False(result.IsError == true, json);
-                Assert.True(Encoding.UTF8.GetByteCount(json) < 1_048_576, "Mission inspection must remain bounded even at the maximum page size.");
+                Assert.True(Encoding.UTF8.GetByteCount(json) < 3 * 1_048_576, "Mission inspection must retain headroom below the 4 MiB protocol cap, including a fully escaped metadata page.");
                 return JsonNode.Parse(json)!;
             }
         }

@@ -7,12 +7,26 @@ namespace Recoil.Zbd.Desktop;
 public sealed partial class AnimationPropertiesEditor
 {
     private int selectedSegment;
+    private AnimationEvent? keyframeSource;
+    private IReadOnlyList<AnimationKeyframe> inspectedKeyframes = [];
+    // Edits/history replace the event snapshot. All field getters for one snapshot
+    // share its decoded stream; reading one field must not copy every record again.
+    private IReadOnlyList<AnimationKeyframe> ReadKeyframes()
+    {
+        var source = Event!;
+        if (!ReferenceEquals(source, keyframeSource))
+        {
+            var frames = source.Keyframes();
+            inspectedKeyframes = frames; keyframeSource = source;
+        }
+        return inspectedKeyframes;
+    }
     internal void SelectAutomationSegment(int index)
     {
         int count = 0;
         if (Event?.Type == 12)
         {
-            try { count = Event.Keyframes().Count; }
+            try { count = ReadKeyframes().Count; }
             catch (InvalidDataException) { /* Scheduling/catalog fields remain inspectable, as in RefreshProperties. */ }
         }
         if (index < 0 || index >= Math.Max(1, count)) throw new StudioCommandException("invalid_argument", "Keyframe segment is unavailable; use segment 0 to inspect the record's available fields.");
@@ -21,10 +35,10 @@ public sealed partial class AnimationPropertiesEditor
     private string KeyframeShape()
     {
         if (Event?.Type != 12) return "";
-        try { return string.Join(',',Event.Keyframes().Select(f => f.Flags)); }
+        try { return string.Join(',',ReadKeyframes().Select(f => f.Flags)); }
         catch (InvalidDataException) { return "malformed"; }
     }
-    private AnimationKeyframe CurrentSegment(int index) => Event!.Keyframes()[index];
+    private AnimationKeyframe CurrentSegment(int index) => ReadKeyframes()[index];
     private void Keyframes(StackPanel panel, IReadOnlyList<AnimationKeyframe> segments)
     {
         Label(panel, "Keyframe segments", true); Label(panel, "Times are local to this event. XYZ channels store a base and rate per second. Rotation stores W, X, Y, Z and the engine rotation-vector rate.");
@@ -33,7 +47,7 @@ public sealed partial class AnimationPropertiesEditor
         var items = segments.Select((segment, index) => new KeyframeChoice(index, $"{index}: {segment.Start:R}–{segment.End:R} s · channels 0x{segment.Flags:X}")).ToArray();
         ListBox list = new() { ItemsSource = items, DisplayMemberPath = nameof(KeyframeChoice.Label), MaxHeight = 140, MinHeight = 48, SelectedIndex = Math.Clamp(selectedSegment, 0, Math.Max(0, items.Length - 1)) };
         panel.Children.Add(list);
-        valueRefresh.Add(() => { int at = list.SelectedIndex; list.ItemsSource = Event!.Keyframes().Select((f,i) => new KeyframeChoice(i,$"{i}: {f.Start:R}–{f.End:R} s · channels 0x{f.Flags:X}")).ToArray(); list.SelectedIndex = at; });
+        valueRefresh.Add(() => { int at = list.SelectedIndex; list.ItemsSource = ReadKeyframes().Select((f,i) => new KeyframeChoice(i,$"{i}: {f.Start:R}–{f.End:R} s · channels 0x{f.Flags:X}")).ToArray(); list.SelectedIndex = at; });
         list.SelectionChanged += (_, _) =>
         {
             if (refreshingFields || list.SelectedItem is not KeyframeChoice choice || choice.Index == selectedSegment) return;

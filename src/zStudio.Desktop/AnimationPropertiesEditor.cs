@@ -30,7 +30,7 @@ public sealed partial class AnimationPropertiesEditor : FieldEditor, IDisposable
     public event Action? Changed;
     public event Action? Editing;
     public string TargetLabel => Entry.Name + $" · #{entryIndex}" + (selectedSequence == Guid.Empty ? "" : " → " + (Sequence == null ? selectedSequence.ToString() : Sequence == Entry.Primary ? "Cleanup" : Sequence.Name)) + (selectedEvent == Guid.Empty ? "" : $" → {SelectedEventIndex}: {Event?.Name ?? selectedEvent.ToString()}");
-    public JsonObject Json => !TargetAvailable ? new JsonObject { ["unavailable"] = true } : Event?.ToJson() ?? (Sequence is { } sequence ? new JsonObject { ["name"] = sequence.Name, ["id"] = sequence.Id.ToString(), ["resetState"] = sequence.ResetMode, ["eventCount"] = sequence.Events.Count, ["sourceOffset"] = sequence.SourceOffset, ["headerHex"] = Convert.ToHexString(sequence.Bytes), ["opaqueTailHex"] = Convert.ToHexString(sequence.OpaqueTail), ["events"] = new JsonArray(sequence.Events.Select(e => (JsonNode)e.ToJson()).ToArray()) } : Entry.ToJson());
+    public JsonObject Json => !TargetAvailable ? new JsonObject { ["unavailable"] = true } : Event?.ToPreviewJson() ?? (Sequence?.ToPreviewJson() ?? Entry.ToPreviewJson());
     public AnimationPropertiesEditor(DocumentModel document, int entry, Guid sequence, Guid ev, MainViewModel? preferences = null)
     {
         edits = document.AnimationEdits!; entryIndex = entry;
@@ -120,7 +120,7 @@ public sealed partial class AnimationPropertiesEditor : FieldEditor, IDisposable
                     }
                     if (ev.Type == 12 && editable)
                     {
-                        try { Keyframes(Group(panel, "Keyframe segments"), ev.Keyframes()); }
+                        try { Keyframes(Group(panel, "Keyframe segments"), ReadKeyframes()); }
                         catch (InvalidDataException ex) { Input(panel, "Keyframe diagnostic", ex.Message + " Keyframe payload remains read-only.", _ => { }, readOnly: true); }
                     }
                 }

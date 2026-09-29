@@ -23,13 +23,15 @@ public partial class MainWindow
     }
     private void RegisterMotionCommands(StudioCommands registry)
     {
-        Register(registry, "motion_records", "Inspect a version 4 motion clip by stable archive member identity. Omit part for tracks; supply part for paged authored frames including the retained closing sample.", false,
+        Register(registry, "motion_records", "Inspect a version 4 motion clip by stable archive member identity. Omit part for tracks (512-character name preview, nameCharacters/nameTruncated; queries match full names); supply part for paged authored frames including the retained closing sample. JSON export retains complete names.", false,
             [DocumentParameter, MemberParameter, P("part", "integer", "Optional zero-based part index."), .. PageParameters], a =>
         {
             var doc = TargetDocument(a); var clip = ValidateMotionTarget(doc, GuidArg(a, "member"), a.ContainsKey("part") ? Int(a, "part") : null);
             object rows = a.ContainsKey("part") ? Page(clip.Parts[Int(a, "part")].Frames.Select((f, i) => new { index = i, closing = i == clip.FrameCount, seconds = i * (double)clip.LoopTime / clip.FrameCount,
                 translation = new[] { f.Translation.X, f.Translation.Y, f.Translation.Z }, quaternionWxyz = new[] { f.Rotation.W, f.Rotation.X, f.Rotation.Y, f.Rotation.Z } }), a).Data :
-                Page(clip.Parts.Select((p, i) => new { index = i, p.Name, p.Flags, closingSampleMatches = p.Frames[0] == p.Frames[^1] }), a, p => p.Name).Data;
+                Page(clip.Parts.Select((p, i) => (Part: p, Index: i)), a, row => row.Part.Name,
+                    row => new { index = row.Index, Name = row.Part.Name[..Math.Min(512, row.Part.Name.Length)], nameCharacters = row.Part.Name.Length, nameTruncated = row.Part.Name.Length > 512,
+                        row.Part.Flags, closingSampleMatches = row.Part.Frames[0] == row.Part.Frames[^1] }).Data;
             return Result(new { doc.Revision, clip.LoopTime, clip.FrameCount, partCount = clip.Parts.Count, rows });
         });
         RegisterJob(registry, "motion_edit", "Edit authored motion timing or a frame, or insert/delete a frame across all parts. The separate closing sample is preserved exactly, including edits to frame zero and structural changes. One shared archive undo transaction. Refreshes the active sampler while retaining camera/playback. Does not save; use the existing verified document save operation.",
@@ -50,7 +52,7 @@ public partial class MainWindow
             await ApplyMotionAsync(doc, GuidArg(a, "member"), action, Int(a, "part", -1), Int(a, "frame", -1), value, a["loopSeconds"]?.GetValue<float>(), token);
             return Result(DocumentState(doc));
         });
-        RegisterJob(registry, "motion_preview", "Control visible motion playback, seek, assembly, LOD and framing. Superseded assembly loads retain playback intent; explicit play/pause during loading takes precedence. State distinguishes playing/loading/playbackRequested; previews 32 diagnostics (512 characters each) and 32 assemblies with diagnosticCount/diagnosticsTruncated and assemblyCount/assembliesTruncated. Use action assemblies for complete paged bindings; motion_records retains complete authored part names.",
+        RegisterJob(registry, "motion_preview", "Control visible motion playback, seek, assembly, LOD and framing. Superseded assembly loads retain playback intent; explicit play/pause during loading takes precedence. State distinguishes playing/loading/playbackRequested; previews 32 diagnostics (512 characters each) and 32 assemblies with diagnosticCount/diagnosticsTruncated and assemblyCount/assembliesTruncated. Use action assemblies for complete paged bindings; motion_records pages authored tracks with bounded name previews.",
             [PreviewParameter, P("action", "string", "Preview operation; assemblies pages/filter bindings by name without changing selection.", true, "state", "assemblies", "play", "pause", "seek", "assembly", "lod", "frame"), P("seconds", "number", "Time within the clip for seek."), P("memberIndex", "integer", "Library member index from motion preview state or assemblies."), P("lod", "integer", "Available LOD rank."), .. PageParameters], false, async (a, token) =>
         {
             RequirePreview(a); var editor = motion ?? throw new StudioCommandException("unsupported", "Select a motion clip first.");

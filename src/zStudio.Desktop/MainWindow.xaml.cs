@@ -17,6 +17,8 @@ using Recoil.Zbd.Core.Export;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Rendering;
 
+using Recoil.Zbd.Core.Animation;
+
 namespace Recoil.Zbd.Desktop;
 
 public partial class MainWindow : Window
@@ -287,7 +289,7 @@ public partial class MainWindow : Window
             else
             {
                 StructuredPanel.Visibility = Visibility.Visible;
-                if (asset?.Kind == AssetKind.Animation) { EventsTab.Visibility = Visibility.Visible; EventGrid.ItemsSource = EventRows(asset.Metadata); StructuredPanel.SelectedIndex = 2; }
+                if (asset?.Content is AnimationEntry entry) { EventsTab.Visibility = Visibility.Visible; EventsTab.Header = entry.AllSequences.Sum(s => (long)s.Events.Count) > 200 ? "Events (first 200)" : "Events"; EventGrid.ItemsSource = EventRows(entry); StructuredPanel.SelectedIndex = 2; }
                 else if (doc.ScriptEdits != null && asset?.Content is ScriptContent) StructuredPanel.SelectedItem = scriptTab;
                 else StructuredPanel.SelectedIndex = asset?.Content is ScriptContent ? 1 : 0;
             }
@@ -481,7 +483,7 @@ public partial class MainWindow : Window
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
         scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.PickupsLocked ?? true);
-        selectedNode = index; scene?.SelectFramingNode(index); var properties = (JsonObject)data.Nodes[index].Metadata.DeepClone();
+        selectedNode = index; scene?.SelectFramingNode(index); var properties = JsonData.PreviewObject(data.Nodes[index].Metadata);
         if (scene?.Mission is { } mission)
         {
             properties["preview_instance"] = data.Nodes[index].Name;
@@ -491,10 +493,10 @@ public partial class MainWindow : Window
         }
         SetProperties(properties); ViewModel.Status = $"Selected node #{index}: {data.Nodes[index].Name}";
     }
-    private static EventRow[] EventRows(JsonObject entry)
+    private static EventRow[] EventRows(AnimationEntry entry)
     {
-        List<EventRow> rows = []; List<JsonNode?> surfaces = [entry["surface_primary"]]; if (entry["surface_runtimes"] is JsonArray others) surfaces.AddRange(others);
-        foreach (var surface in surfaces) if (surface?["events"] is JsonArray events) foreach (var ev in events.OfType<JsonObject>()) rows.Add(new(surface.Text("sequence_name"), ev.Text("type"), ev.Text("start_mode"), ev.Text("start_threshold"), ev)); return rows.ToArray();
+        return entry.AllSequences.SelectMany(s => s.Events.Select(e => (Sequence: s, Event: e))).Take(200)
+            .Select(p => { var data = p.Event.ToPreviewJson(); return new EventRow(p.Sequence.Name, p.Event.Name, data.Text("start_mode"), data.Text("start_threshold"), data); }).ToArray();
     }
     private void EventSelected(object sender, SelectionChangedEventArgs e) { if (EventGrid.SelectedItem is EventRow row) SetProperties(row.Data); }
     private void PlayAudioClick(object sender, RoutedEventArgs e)

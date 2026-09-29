@@ -4,8 +4,26 @@ using Xunit;
 
 namespace Recoil.Zbd.Tests;
 
+[Collection("Allocation-sensitive")]
 public sealed class Mw3MissionSceneTests
 {
+    [Fact]
+    public async Task ManyPlacementsPublishOrderedEdgesWithoutQuadraticArrayCopies()
+    {
+        using var fixture = new Mw3MissionFixture(Enumerable.Range(0, 4096).Select(i => $"actor_{i:0000}").ToArray());
+        var scene = fixture.World.Scene!;
+        scene.Nodes[0] = scene.Nodes[0] with { Children = [1, 1] };
+        long before = GC.GetTotalAllocatedBytes(precise: true);
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, token: TestContext.Current.CancellationToken);
+        long allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+        Assert.Equal(4096, mission.Actors.Count);
+        Assert.Equal(new[] { 1 }.Concat(mission.Actors.Select(a => a.Root)), mission.Scene.Nodes[0].Children);
+        Assert.Equal(new[] { 1, 1 }, scene.Nodes[0].Children);
+        Assert.All(mission.Actors, a => Assert.Equal(new[] { 0 }, mission.Scene.Nodes[a.Root].Parents));
+        // 4096 repeated Distinct/ToArray publications alone used hundreds of MiB.
+        Assert.True(allocated < 96L * 1024 * 1024, $"Placement allocated {allocated} bytes.");
+    }
+
     [Theory]
     [InlineData(float.MaxValue)]
     [InlineData(-float.MaxValue)]

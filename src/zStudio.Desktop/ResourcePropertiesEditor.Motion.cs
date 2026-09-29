@@ -42,7 +42,7 @@ public sealed partial class ResourcePropertiesEditor
             if (part < 0 || part >= Motion!.Parts.Count) throw new InvalidDataException("Part is outside this motion clip.");
             motionPart = part; form = null; return Task.CompletedTask;
         });
-        Input(panel, "Part name", clip.Parts[motionPart].Name, _ => { }, true);
+        Input(panel, "Part name", clip.Parts[motionPart].Name, _ => { }, true, getter: () => Motion!.Parts[motionPart].Name);
         Input(panel, "Frame index", motionFrame.ToString(CultureInfo.InvariantCulture), _ => { }, hint: $"Zero-based frame index, 0–{clip.FrameCount - 1}. The separate closing sample is retained.", getter: () => motionFrame.ToString(CultureInfo.InvariantCulture), asyncCommit: text =>
         {
             int frame = int.Parse(text, CultureInfo.InvariantCulture);

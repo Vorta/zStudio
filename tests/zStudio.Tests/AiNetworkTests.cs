@@ -8,6 +8,38 @@ namespace Recoil.Zbd.Tests;
 
 public sealed class AiNetworkTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Version106ConstraintsDoNotMakeSpatialTargetsAmbiguous(bool constraintFirst)
+    {
+        var constraint = A(A(I(0), I(1)), S("canleave"), A(I(1)), S("scan_time"), A(I(2)));
+        var node = Node(0);
+        var root = A(S("version"), A(I(106)), S("node_00"), Node(1),
+            S("node_01"), constraintFirst ? constraint : node, S("node_01"), constraintFirst ? node : constraint);
+        byte[] source = ZrdWriter.Write(root, TestContext.Current.CancellationToken);
+        var network = Decode(root);
+        Assert.Equal(2, network.Nodes.Count); Assert.Equal(2, network.Constraints.Count);
+        Assert.Empty(network.Diagnostics);
+        Assert.Equal(network.Nodes[1].Id, network.Nodes[0].Links[0].Target);
+        Assert.Equal(network.Nodes[0].Id, network.Nodes[1].Links[0].Target);
+        Assert.Equal(source, ZrdWriter.Write(root, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(105, false)]
+    [InlineData(106, false)]
+    [InlineData(106, true)]
+    public void OnlyValidVersion106ConstraintsAreExcludedFromDuplicateCounts(int version, bool malformedConstraint)
+    {
+        var duplicate = malformedConstraint ? A(A(I(0), I(1)), S("canleave"), I(1)) : Node(0);
+        var root = A(S("version"), A(I(version)), S("node_00"), Node(1), S("node_01"), Node(0),
+            S("node_01"), A(A(I(0), I(1)), S("canleave"), A(I(1))), S("node_01"), duplicate);
+        var network = Decode(root);
+        Assert.Null(network.Nodes[0].Links[0].Target);
+        Assert.Equal("Ambiguous target", network.Nodes[0].Links[0].Problem);
+    }
+
     private static ZrdNode I(int n) => ZrdNode.Create(ZrdKind.Int, n.ToString(System.Globalization.CultureInfo.InvariantCulture));
     private static ZrdNode F(string n) => ZrdNode.Create(ZrdKind.Float, n);
     private static ZrdNode S(string text) => ZrdNode.Create(ZrdKind.String) with { Text = text };

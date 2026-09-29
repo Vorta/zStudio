@@ -26,10 +26,12 @@ internal sealed class GameZReader : IZbdFormatReader
         var nodeDataOffsets = ReadNodes(doc, scene, new(doc.Slice(nodeOffset, doc.Bytes.Length - nodeOffset), nodeOffset), nodeCapacity, layout, token);
         doc.GameZLayout = new(checked((int)textureOffset), checked((int)materialOffset), checked((int)modelOffset), checked((int)nodeOffset),
             new BinaryCursor(doc.Slice(materialOffset, 4)).I32(), new BinaryCursor(doc.Slice(modelOffset, 4)).I32(), checked((int)nodeCapacity), nodeDataOffsets);
+        var modelNames = scene.Nodes.Where(n => n.ModelIndex != null).ToLookup(n => n.ModelIndex!.Value);
+        var modelAssets = doc.Assets.Where(a => a.Kind == AssetKind.Model).ToDictionary(a => a.Index);
         foreach (GameModel model in scene.Models)
         {
-            var node = scene.Nodes.FirstOrDefault(n => n.ModelIndex == model.Index);
-            if (node != null) doc.Assets.First(a => a.Kind == AssetKind.Model && a.Index == model.Index).Name = $"{node.Name} [model {model.Index}]";
+            token.ThrowIfCancellationRequested(); var node = modelNames[model.Index].FirstOrDefault();
+            if (node != null) modelAssets[model.Index].Name = $"{node.Name} [model {model.Index}]";
         }
         if (scene.Nodes.Any(n => n.Class == "world"))
             doc.Add(AssetKind.World, 0, "Whole world", 0, doc.Bytes.Length, new JsonObject { ["nodes"] = scene.Nodes.Count, ["models"] = scene.Models.Count, ["preview"] = "Static scene; no gameplay or effect simulation" }, scene);

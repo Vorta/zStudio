@@ -202,12 +202,13 @@ public partial class MainWindow
     }
     private JsonObject SceneTreeProperties(SceneTreeItem row)
     {
-        var node = row.Node!; var properties = (JsonObject)node.Metadata.DeepClone();
+        var node = row.Node!; var properties = JsonData.PreviewObject(node.Metadata);
         properties["node_index"] = node.Index; properties["source_node_index"] = row.Owner.Identity(node.Index).SourceNode;
         properties["scene_source"] = row.Owner.Source;
         properties["hierarchy"] = row.Owner.IsPreview ? "Bound preview scene (not runtime parenting)" : "Stored document scene";
-        properties["parent_indices"] = JsonData.Integers(node.Parents);
-        properties["child_indices"] = JsonData.Integers(node.Children);
+        properties["parent_indices"] = JsonData.Integers(node.Parents.Take(64)); properties["parent_count"] = node.Parents.Length;
+        properties["child_indices"] = JsonData.Integers(node.Children.Take(64)); properties["child_count"] = node.Children.Length;
+        if (node.Parents.Length > 64 || node.Children.Length > 64) properties["inspection_truncated"] = true;
         return properties;
     }
     private void ScheduleSceneTreeReveal(SceneTreeItem? reveal = null)

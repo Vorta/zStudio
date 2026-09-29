@@ -25,14 +25,14 @@ public partial class MainWindow
     }
     private void RegisterEditCommands(StudioCommands r)
     {
-        Register(r, "animation_records", "List authored sequence identities; supply sequence to page its events with full edited fields. Cleanup is listed separately from runtime sequences.", false, [DocumentParameter, P("entry", "integer", "Entry index.", true), P("sequence", "string", "Optional sequence UUID for event details."), .. PageParameters], a =>
+        Register(r, "animation_records", "List authored sequence identities; supply sequence to page its events with edited scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use property_fields with segment or JSON export. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences.", false, [DocumentParameter, P("entry", "integer", "Entry index.", true), P("sequence", "string", "Optional sequence UUID for event details."), .. PageParameters], a =>
         {
             var d = TargetDocument(a); var e = TargetEntry(d, a);
             Guid id = GuidArg(a,"sequence");
             if (id != Guid.Empty)
             {
                 var s = e.AllSequences.SingleOrDefault(s=>s.Id==id) ?? throw new StudioCommandException("stale_record","Sequence is unavailable.");
-                return Result(new { d.Revision, sequence=s.Id, events=Page(s.Events.Select(v=>new { id=v.Id, data=v.ToJson() }),a, v => System.Text.Json.JsonSerializer.Serialize(v.data)).Data });
+                return Result(new { d.Revision, sequence=s.Id, events=Page(s.Events,a, v => v.ToPreviewJson().ToJsonString(), v => new { id=v.Id, data=v.ToPreviewJson() }).Data });
             }
             return Result(new { d.Revision, entry = new { e.Index,e.Name,e.RootName,e.AttachName,e.SourceOffset,e.SourceLength,headerHex=Convert.ToHexString(e.Bytes) },
                 sequences = Page(e.AllSequences.Select(s => new { id = s.Id, s.Name, cleanup = s == e.Primary, s.IsEditable, eventCount=s.Events.Count,s.SourceOffset,headerHex=Convert.ToHexString(s.Bytes) }),a, s => s.Name).Data });

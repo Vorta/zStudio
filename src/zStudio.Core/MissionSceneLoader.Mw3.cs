@@ -73,6 +73,19 @@ public static partial class MissionSceneLoader
                 nodes.Add(node);
             }
             HashSet<int> placedWorldActors = [];
+            List<int> attachedRoots = [];
+            Dictionary<int, HashSet<int>> detachedChildren = [];
+            Dictionary<string, List<MechAssembly>> mechTemplates = new(StringComparer.Ordinal);
+            if (library?.Scene is { } libraryScene)
+                foreach (var asset in library.Assets)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (asset.Content is not MechAssembly assembly || !asset.Name.StartsWith("mech_", StringComparison.Ordinal) || !asset.Name.EndsWith(".flt", StringComparison.Ordinal) || asset.Name.Length < 9) continue;
+                    string type = asset.Name[5..^4];
+                    if (!libraryScene.Nodes[assembly.RootNode].Children.Any(c => libraryScene.Nodes[c].Name == type)) continue;
+                    if (!mechTemplates.TryGetValue(type, out var assemblies)) mechTemplates[type] = assemblies = [];
+                    assemblies.Add(assembly);
+                }
             var layout = new MissionLayoutSelection(MissionDifficulty.Medium, "aiv.zrd", "vehicle.zrd", "") { MissionArchive = chosen };
             int modelBase = scene.Models.Count;
             if (library?.Scene is { } mechs)
@@ -121,10 +134,9 @@ public static partial class MissionSceneLoader
                                 // Base assemblies are distinct from the lower-detail and HUD members.
                                 // Resolve the full member name and verify its root, never choose the first
                                 // similarly named part across those independent hierarchies.
-                                var candidates = library?.Assets.Where(a => a.Name.Length == type.Length + 9 && a.Name.StartsWith("mech_", StringComparison.Ordinal) && a.Name.EndsWith(".flt", StringComparison.Ordinal) &&
-                                    a.Name.AsSpan(5, type.Length).SequenceEqual(type) && a.Content is MechAssembly ma && library.Scene!.Nodes[ma.RootNode].Children.Any(c => library.Scene.Nodes[c].Name == type)).ToArray() ?? [];
-                                if (templates.Count > 1 || candidates.Length != 1) throw new InvalidDataException("No unique stored actor or mech template. Placement remains inspectable in the AIV resource.");
-                                var assembly = (MechAssembly)candidates[0].Content!;
+                                var candidates = mechTemplates.GetValueOrDefault(type) ?? [];
+                                if (templates.Count > 1 || candidates.Count != 1) throw new InvalidDataException("No unique stored actor or mech template. Placement remains inspectable in the AIV resource.");
+                                var assembly = candidates[0];
                                 root = Clone(library!.Scene!, assembly.RootNode, -1, 0, new(), true);
                             }
                         }
@@ -138,19 +150,15 @@ public static partial class MissionSceneLoader
                         foreach (int parent in scene.Nodes[root].Parents.Where(p => p != worldRoot))
                         {
                             if (parent < 0 || parent >= scene.Nodes.Count) continue;
-                            var owner = scene.Nodes[parent];
-                            scene.Nodes[parent] = owner with { Children = owner.Children.Where(c => c != root).ToArray() };
-                            if (owner.Class == "world" && owner.Data["partitions"] is JsonArray partitions)
-                                foreach (var cell in partitions.OfType<JsonArray>().SelectMany(r => r.OfType<JsonObject>()))
-                                    if (cell["node_indices"] is JsonArray indices)
-                                        for (int i = indices.Count - 1; i >= 0; i--) if (JsonData.Integer(indices[i]) == root) indices.RemoveAt(i);
+                            if (!detachedChildren.TryGetValue(parent, out var removed)) detachedChildren[parent] = removed = [];
+                            removed.Add(root);
                         }
                         // Matching above uses the complete authored string; only the
                         // published preview label is shortened. Record identity is unchanged.
                         scene.Nodes[root].Metadata["name_characters"] = name.Length;
                         scene.Nodes[root].Metadata["name_truncated"] = label.Length != name.Length;
                         scene.Nodes[root] = scene.Nodes[root] with { Name = label, Parents = [worldRoot] };
-                        scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Append(root).Distinct().ToArray() };
+                        attachedRoots.Add(root);
                         actors.Add(new(root, sources[root], label, layout.Description, CoordinateSource: new(Path.GetFullPath(selected!.Path).ToUpperInvariant(), aiv.Index, aiv.Name.ToUpperInvariant(), row / 2), PlacementPosition: position, PlacementRotation: new(0, heading, 0)) { NameCharacters = name.Length });
                     }
                     catch (InvalidDataException ex)
@@ -165,6 +173,23 @@ public static partial class MissionSceneLoader
                 }
             }
             else notes.Add("No mission AIV resource is available; showing stored world geometry.");
+            // Publish hierarchy edges once. Rebuilding the world's growing child
+            // array after every placement makes a valid large AIV quadratic.
+            foreach (var (parent, removed) in detachedChildren)
+            {
+                token.ThrowIfCancellationRequested(); var owner = scene.Nodes[parent];
+                scene.Nodes[parent] = owner with { Children = owner.Children.Where(c => !removed.Contains(c)).ToArray() };
+                if (owner.Class == "world" && owner.Data["partitions"] is JsonArray partitions)
+                    foreach (var cell in partitions.OfType<JsonArray>().SelectMany(r => r.OfType<JsonObject>()))
+                        if (cell["node_indices"] is JsonArray indices)
+                            for (int i = indices.Count - 1; i >= 0; i--)
+                            {
+                                token.ThrowIfCancellationRequested(); long child = JsonData.Integer(indices[i]);
+                                if (child is >= 0 and <= int.MaxValue && removed.Contains((int)child)) indices.RemoveAt(i);
+                            }
+            }
+            if (attachedRoots.Count > 0)
+                scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Concat(attachedRoots).Distinct().ToArray() };
             var context = new MissionSceneContext(scene, sources, actors, [], notes, layout, original.Nodes.Count);
             if (selected != null) context.AiNetworks = MissionAiNetworks.Read(selected.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (selected, a)), token);
             return context;

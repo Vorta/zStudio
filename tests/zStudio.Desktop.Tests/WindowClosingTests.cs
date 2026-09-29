@@ -49,6 +49,7 @@ public sealed class WindowClosingTests
                     await SceneTreeMcpChecks.Run();
                     await SceneSelectionMcpChecks.Run();
                     await Mw3MissionMcpChecks.Run();
+                    await MissionSelectionChecks.Run();
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();
                     await AiNetworkMcpChecks.Run();
@@ -169,7 +170,10 @@ public sealed class WindowClosingTests
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        await completion.Task.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+        // All workspace fixtures share one STA/Application and run serially.
+        // Allow the expanded suite (including large-input/race checks) to finish
+        // alongside corpus tests; individual operations retain their own deadlines.
+        await completion.Task.WaitAsync(TimeSpan.FromMinutes(3), TestContext.Current.CancellationToken);
     }
 
     private static DocumentModel DirtyDocument(int index)

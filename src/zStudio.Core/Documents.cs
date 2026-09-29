@@ -147,6 +147,46 @@ public static class JsonData
         }
         return node?.DeepClone();
     }
+    public static JsonObject PreviewObject(JsonObject source, int nodes = 512, int characters = 8192, CancellationToken token = default)
+    {
+        var preview = Preview(source, nodes, characters, token);
+        var result = (JsonObject)preview.Value!;
+        if (preview.Truncated) result["inspection_truncated"] = true;
+        return result;
+    }
+    /// <summary>Bound metadata before copying/serializing, including nested collections and escaped text.</summary>
+    public static (JsonNode? Value, bool Truncated) Preview(JsonNode? source, int nodes = 512, int characters = 8192, CancellationToken token = default)
+    {
+        bool truncated = false;
+        var result = Visit(source, 0); return (result, truncated);
+        JsonNode? Visit(JsonNode? node, int depth)
+        {
+            token.ThrowIfCancellationRequested();
+            if (nodes-- <= 0 || depth > 12) { truncated = true; return null; }
+            if (node is JsonObject obj)
+            {
+                JsonObject copy = new();
+                foreach (var (key, value) in obj)
+                {
+                    if (nodes <= 0 || key.Length > characters) { truncated = true; break; }
+                    characters -= key.Length; copy[key] = Visit(value, depth + 1);
+                }
+                return copy;
+            }
+            if (node is JsonArray array)
+            {
+                JsonArray copy = [];
+                foreach (var value in array) { if (nodes <= 0) { truncated = true; break; } copy.Add(Visit(value, depth + 1)); }
+                return copy;
+            }
+            if (node is JsonValue scalar && scalar.TryGetValue<string>(out var text))
+            {
+                int count = Math.Min(text.Length, Math.Min(characters, 1024)); characters -= count;
+                truncated |= count != text.Length; return JsonValue.Create(text[..count]);
+            }
+            return node?.DeepClone();
+        }
+    }
     public static string Hex(byte[] bytes, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();

@@ -87,6 +87,43 @@ internal static class McpWorkspaceChecks
             Assert.Equal(sequence.Id.ToString(), filtered["sequences"]!["items"]![0]!["id"]!.GetValue<string>());
             filtered = await Call("animation_records", new() { ["document"] = doc.SessionId.ToString(), ["entry"] = 0, ["query"] = "missing-sequence" });
             Assert.Equal(0, filtered["sequences"]!["total"]!.GetValue<int>());
+            // A maximum event page must fit the real protocol without expanding
+            // payloads in unreturned rows or keyframe streams in inspection.
+            foreach (uint version in new uint[] { 28, 39 })
+            {
+                var largeEntry = new AnimationEntry(new byte[version == 39 ? 316 : 308], 0, 0);
+                var largePackage = new AnimationPackage { Prefix = new byte[version == 39 ? 80 : 72], Tail = [] }; largePackage.Entries.Add(largeEntry);
+                for (int i = 0; i < 201; i++)
+                {
+                    byte[] payload = new byte[16384]; payload[0] = 254; payload[1] = 1;
+                    largeEntry.Primary.Events.Add(new(payload) { Version = version });
+                }
+                var largeSource = new ZbdDocument(Path.Combine(Path.GetTempPath(), $"inspection-{version}.zbd"), new(0, DateTime.MinValue), new(FormatFamily.Animation, version, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = largePackage };
+                largeSource.Add(AssetKind.Animation, 0, "large", 0, 0, largeEntry.ToPreviewJson(), largeEntry);
+                var largeDoc = new DocumentModel(largeSource); main.ViewModel.Documents.Add(largeDoc);
+                try
+                {
+                    string sequenceId = largeDoc.AnimationEdits!.Package.Entries[0].Primary.Id.ToString();
+                    foreach (string query in new[] { "", "Unknown event", "absent" })
+                    {
+                        var page = await Call("animation_records", new() { ["document"] = largeDoc.SessionId.ToString(), ["entry"] = 0, ["sequence"] = sequenceId, ["limit"] = 200, ["query"] = query });
+                        Assert.Equal(query == "absent" ? 0 : 201, page["events"]!["total"]!.GetValue<int>());
+                        if (query != "absent")
+                        {
+                            Assert.Equal(200, page["events"]!["items"]!.AsArray().Count);
+                            Assert.True(page["events"]!["items"]![0]!["data"]!["raw_hex_truncated"]!.GetValue<bool>());
+                        }
+                        Assert.True(page.ToJsonString().Length < 1024 * 1024);
+                    }
+                    var inspection = await Call("inspect_asset", new() { ["document"] = largeDoc.SessionId.ToString(), ["kind"] = "Animation", ["index"] = 0 });
+                    Assert.True(inspection.ToJsonString().Length < 65536);
+                    using var properties = new AnimationPropertiesEditor(largeDoc, 0, Guid.Parse(sequenceId), Guid.Empty);
+                    Assert.True(properties.Json["events_truncated"]!.GetValue<bool>());
+                    Assert.True(properties.Json.ToJsonString().Length < 32768);
+                    Assert.Equal(0, largeDoc.Revision);
+                }
+                finally { main.ViewModel.CloseResolved(largeDoc); }
+            }
             await Call("animation_structure", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["entry"] = 0, ["sequence"] = Guid.NewGuid().ToString(), ["action"] = "duplicate" }, "stale_record");
             Assert.Equal(0, doc.Revision);
             main.ViewModel.AddProblem("MCP search fixture", file: "fixture.zbd");

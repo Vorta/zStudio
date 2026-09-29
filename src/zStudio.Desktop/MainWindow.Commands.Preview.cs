@@ -72,12 +72,12 @@ public partial class MainWindow
                 sound = wave == null ? null : new { seconds = wave.CurrentTime.TotalSeconds, duration = wave.TotalTime.TotalSeconds, playing = player?.PlaybackState == PlaybackState.Playing } });
         });
         RegisterCameraCommand(r);
-        Register(r, "scene_nodes", "List active assembled scene nodes by index, including instance metadata. MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated disclose shortening. Full authored names remain in the source AIV resource.", false, [PreviewParameter, .. PageParameters], a =>
+        Register(r, "scene_nodes", "List active assembled scene nodes by index, including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.", false, [PreviewParameter, .. PageParameters], a =>
         {
             var viewport = TargetViewport(a); return Page((viewport.PreviewScene?.Nodes ?? []).Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)), a,
-                project: n => new { n.Index,n.Name,n.Class,n.Metadata, actor = viewport.ActorAt(n.Index) });
+                project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.ActorAt(n.Index) });
         });
-        Register(r, "scene_selection", "Select/inspect a scene node. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
+        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
             RequireNoDrafts(); var viewport = TargetViewport(a); string action = Text(a,"action");
             if ((animation != null || motion != null) && action is "isolate" or "show_all")
@@ -106,7 +106,7 @@ public partial class MainWindow
                 }
                 viewport.SelectFramingNode(node);
                 if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; }
-                return Result(viewport.PreviewScene!.Nodes[node].Metadata);
+                return Result(JsonData.PreviewObject(viewport.PreviewScene!.Nodes[node].Metadata));
             }
             return Result(new { visible = "all" });
         });

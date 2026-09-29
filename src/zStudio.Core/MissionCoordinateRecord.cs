@@ -42,6 +42,7 @@ public sealed partial class PickupPlacementEditSession
                 if (fields.Count == 1 && fields[0]?["children"] is JsonArray inner) fields = inner;
                 if (fields.Count % 2 != 0) throw new InvalidDataException("Incomplete mission record pair.");
                 var graph = ai ? MissionAiNetworks.Decode("coordinates", archive, asset.Index, asset.Name, ZrdDecoder.Read(doc.Slice(asset.Offset, asset.Length), token), token) : null;
+                var spatialOffsets = graph?.Nodes.Select(n => n.SourceOffset).ToHashSet();
                 for (int i = 0; i < fields.Count; i += 2)
                 {
                     token.ThrowIfCancellationRequested();
@@ -50,7 +51,7 @@ public sealed partial class PickupPlacementEditSession
                         string name = fields[i].Text("value");
                         if (fields[i].Text("type") != "string" || fields[i + 1]?["children"] is not JsonArray { Count: >= 3 } row || !mw3 && !ai && row.Count != 3) continue;
                         long offset = Convert.ToInt64(fields[i + 1].Text("offset")[2..], 16);
-                        if (ai && graph!.Nodes.All(n => n.SourceOffset != offset)) continue;
+                        if (ai && !spatialOffsets!.Contains(offset)) continue;
                         var (position, offsets) = ReadVector(row[1], doc, asset);
                         var source = new MissionPickupSource(archive, asset.Index, asset.Name.ToUpperInvariant(), ai ? checked((int)offset) : i / 2);
                         var rotation = ai ? Vector3.Zero : new Vector3(0, ReadNumber(row[2]), 0);
@@ -94,10 +95,11 @@ public sealed partial class PickupPlacementEditSession
 
     public void BindCoordinateTemplates(GameScene scene)
     {
+        var templates = scene.Nodes.Where(n => n.Class == "object3d").ToLookup(n => n.Name, StringComparer.Ordinal);
         foreach (var (key, record) in otherCoordinates.ToArray())
         {
             if (record.Kind != "tank") continue;
-            var matches = scene.Nodes.Where(n => n.Class == "object3d" && n.Name == record.Template).ToArray();
+            var matches = templates[record.Template].Take(2).ToArray();
             otherCoordinates[key] = record with { TemplateSourceNode = matches.Length == 1 ? matches[0].Index : null };
         }
     }

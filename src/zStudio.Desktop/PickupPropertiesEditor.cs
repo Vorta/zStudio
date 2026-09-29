@@ -37,7 +37,7 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
     public PickupPropertiesEditor(DocumentModel document, MissionPickupSource source, string label, JsonObject metadata)
     {
         this.document = document; this.source = source; this.label = label;
-        original = (JsonObject)metadata.DeepClone();
+        original = JsonData.PreviewObject(metadata);
         document.PickupEditsChanged += RefreshProperties; document.PropertyChanged += DocumentChanged;
         RefreshProperties();
     }

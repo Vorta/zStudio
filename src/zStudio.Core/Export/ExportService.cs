@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Core.Formats;
 
+using Recoil.Zbd.Core.Animation;
+
 namespace Recoil.Zbd.Core.Export;
 
 public sealed record ExportProgress(int Completed, int Total, string Name);
@@ -59,7 +61,9 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
     public static JsonObject AssetJson(ZbdDocument doc, AssetRecord a, CancellationToken token = default, bool boundedZrd = false)
     {
         token.ThrowIfCancellationRequested();
-        JsonObject result = new() { ["name"] = a.Name, ["kind"] = a.Kind.ToString(), ["index"] = a.Index, ["source_offset"] = a.Offset, ["source_length"] = a.Length, ["properties"] = JsonData.Clone(a.Metadata, token) };
+        var metadata = boundedZrd ? JsonData.Preview(a.Metadata, token: token) : (Value: JsonData.Clone(a.Metadata, token), Truncated: false);
+        JsonObject result = new() { ["name"] = a.Name, ["kind"] = a.Kind.ToString(), ["index"] = a.Index, ["source_offset"] = a.Offset, ["source_length"] = a.Length, ["properties"] = metadata.Value };
+        if (boundedZrd) result["properties_truncated"] = metadata.Truncated;
         if (a.Content is MotionClip motion)
         {
             // Archive metadata is always a small inspection preview; explicit exports retain the full part list.
@@ -67,12 +71,17 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         }
         else if (a.Content is GameModel model)
         {
-            result["vertices"] = JsonData.Vectors(model.Vertices, token);
-            result["normals"] = JsonData.Vectors(model.Normals, token);
-            result["morphs"] = JsonData.Vectors(model.Morphs, token);
-            result["polygons"] = JsonData.Array(model.Polygons, p =>
+            result["vertices"] = JsonData.Vectors(boundedZrd ? model.Vertices.Take(32) : model.Vertices, token);
+            result["normals"] = JsonData.Vectors(boundedZrd ? model.Normals.Take(32) : model.Normals, token);
+            result["morphs"] = JsonData.Vectors(boundedZrd ? model.Morphs.Take(32) : model.Morphs, token);
+            if (boundedZrd)
             {
-                JsonObject j = (JsonObject)JsonData.Clone(p.Metadata, token)!;
+                result["vertex_count"] = model.Vertices.Length; result["normal_count"] = model.Normals.Length; result["morph_count"] = model.Morphs.Length; result["polygon_count"] = model.Polygons.Length;
+                result["geometry_truncated"] = model.Vertices.Length > 32 || model.Normals.Length > 32 || model.Morphs.Length > 32 || model.Polygons.Length > 32;
+            }
+            result["polygons"] = JsonData.Array(boundedZrd ? model.Polygons.Take(32) : model.Polygons, p =>
+            {
+                JsonObject j = (JsonObject)MetadataRow(p.Metadata)!;
                 if (p.Colors.Length != 0) j["vertex_colors_rgb"] = JsonData.Vectors(p.Colors, token);
                 j["vertex_indices"] = JsonData.Integers(p.Vertices, token);
                 j["normal_indices"] = JsonData.Integers(p.Normals, token);
@@ -86,7 +95,7 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
                 JsonData.Array(boundedZrd ? instruction.Take(16) : instruction, word => JsonValue.Create(boundedZrd && word.Length > 128 ? word[..128] : word), token), token);
             if (boundedZrd) result["instructions_truncated"] = script.Instructions.Count > 64 || script.Instructions.Any(i => i.Length > 16 || i.Any(t => t.Length > 128));
         }
-        else if (a.Kind == AssetKind.Animation && doc.Animations is { } animations) result["properties"] = animations.Entries[a.Index].ToJson(token);
+        else if (a.Kind == AssetKind.Animation && doc.Animations is { } animations) result["properties"] = boundedZrd ? animations.Entries[a.Index].ToPreviewJson(token) : animations.Entries[a.Index].ToJson(token);
         else if (a.Kind == AssetKind.Zrd)
         {
             var tree = a.Content as ZrdNode ?? ZrdDecoder.Read(doc.Slice(a.Offset, a.Length), token);
@@ -96,16 +105,31 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         {
             var info = WaveDecoder.Read(doc.Slice(a.Offset, a.Length), token);
             var wave = JsonSerializer.SerializeToNode(info with { Cues = [] })!;
-            wave["Cues"] = JsonData.Array(info.Cues, cue => JsonSerializer.SerializeToNode(cue), token);
+            wave["Cues"] = JsonData.Array(boundedZrd ? info.Cues.Take(32) : info.Cues, cue => JsonSerializer.SerializeToNode(cue), token);
+            if (boundedZrd) { wave["cue_count"] = info.Cues.Count; wave["cues_truncated"] = info.Cues.Count > 32; }
             result["wave"] = wave;
         }
         else if (a.Kind == AssetKind.World && doc.Scene is GameScene scene)
         {
-            result["nodes"] = JsonData.Array(scene.Nodes, n => JsonData.Clone(n.Metadata, token), token);
-            result["materials"] = JsonData.Array(scene.Materials, m => JsonData.Clone(m, token), token);
+            if (boundedZrd)
+            {
+                result["node_count"] = scene.Nodes.Count; result["material_count"] = scene.Materials.Count;
+                result["nodes_truncated"] = scene.Nodes.Count > 32; result["materials_truncated"] = scene.Materials.Count > 32;
+            }
+            result["nodes"] = JsonData.Array(boundedZrd ? scene.Nodes.Take(32) : scene.Nodes, n => MetadataRow(n.Metadata), token);
+            result["materials"] = JsonData.Array(boundedZrd ? scene.Materials.Take(32) : scene.Materials, MetadataRow, token);
         }
         token.ThrowIfCancellationRequested();
         return result;
+        JsonNode? MetadataRow(JsonObject value)
+        {
+            if (!boundedZrd) return JsonData.Clone(value, token);
+            // A world may return 32 nodes and 32 materials, twice when original
+            // and edited snapshots are paired. Budget the aggregate, including escapes.
+            var preview = JsonData.Preview(value, nodes: 64, characters: 1024, token: token);
+            if (preview.Truncated) result["properties_truncated"] = true;
+            return preview.Value;
+        }
     }
     private async Task ExportObj(ZbdDocument doc, AssetRecord asset, string target, string name, string? preferred, int lod, CancellationToken token, SceneView? placements = null)
     {

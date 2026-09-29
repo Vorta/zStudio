@@ -281,7 +281,7 @@
   },
   {
     "Name": "zstudio_inspect_asset",
-    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Motion metadata previews 32 parts with 128-character names, totals and truncation flags; motion_records pages complete names. Export retains complete data. Closed or changed documents reject stale results.",
+    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews 32 parts with 128-character names; motion_records pages tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.",
     "Mutates": false,
     "Parameters": [
       {
@@ -982,7 +982,7 @@
   },
   {
     "Name": "zstudio_scene_nodes",
-    "Description": "List active assembled scene nodes by index, including instance metadata. MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated disclose shortening. Full authored names remain in the source AIV resource.",
+    "Description": "List active assembled scene nodes by index, including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1025,7 +1025,7 @@
   },
   {
     "Name": "zstudio_scene_selection",
-    "Description": "Select/inspect a scene node. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.",
+    "Description": "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.",
     "Mutates": true,
     "Parameters": [
       {
@@ -1990,7 +1990,7 @@
   },
   {
     "Name": "zstudio_scene_properties",
-    "Description": "Inspect a scene node or open its Properties window, including editable mission pickups. MW3 actor labels use 128-character prefixes with name_characters/name_truncated metadata; source AIV names remain intact.",
+    "Description": "Inspect a scene node or open its Properties window, including editable mission pickups. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",
     "Mutates": true,
     "Parameters": [
       {
@@ -2467,7 +2467,7 @@
   },
   {
     "Name": "zstudio_animation_records",
-    "Description": "List authored sequence identities; supply sequence to page its events with full edited fields. Cleanup is listed separately from runtime sequences.",
+    "Description": "List authored sequence identities; supply sequence to page its events with edited scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use property_fields with segment or JSON export. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences.",
     "Mutates": false,
     "Parameters": [
       {
@@ -3674,7 +3674,7 @@
   },
   {
     "Name": "zstudio_motion_records",
-    "Description": "Inspect a version 4 motion clip by stable archive member identity. Omit part for tracks; supply part for paged authored frames including the retained closing sample.",
+    "Description": "Inspect a version 4 motion clip by stable archive member identity. Omit part for tracks (512-character name preview, nameCharacters/nameTruncated; queries match full names); supply part for paged authored frames including the retained closing sample. JSON export retains complete names.",
     "Mutates": false,
     "Parameters": [
       {
@@ -3845,7 +3845,7 @@
   },
   {
     "Name": "zstudio_motion_preview",
-    "Description": "Control visible motion playback, seek, assembly, LOD and framing. Superseded assembly loads retain playback intent; explicit play/pause during loading takes precedence. State distinguishes playing/loading/playbackRequested; previews 32 diagnostics (512 characters each) and 32 assemblies with diagnosticCount/diagnosticsTruncated and assemblyCount/assembliesTruncated. Use action assemblies for complete paged bindings; motion_records retains complete authored part names. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Control visible motion playback, seek, assembly, LOD and framing. Superseded assembly loads retain playback intent; explicit play/pause during loading takes precedence. State distinguishes playing/loading/playbackRequested; previews 32 diagnostics (512 characters each) and 32 assemblies with diagnosticCount/diagnosticsTruncated and assemblyCount/assembliesTruncated. Use action assemblies for complete paged bindings; motion_records pages authored tracks with bounded name previews. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3933,7 +3933,7 @@
   },
   {
     "Name": "zstudio_missions",
-    "Description": "List the current MW3 map\u0027s authored mission readers, or select one for the visible world/animation. Selection retains archive edit history, playhead and camera. Shared resources remain available; other mission readers do not contribute actors or AI networks. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "List the current MW3 map\u0027s authored mission readers, or select one for the visible world/animation. Selection waits for the displayed preview, retains archive edit history, playhead and camera, and rejects superseded requests with context_changed. Shared resources remain available; other mission readers do not contribute actors or AI networks. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

@@ -44,6 +44,28 @@ internal static class MotionMcpChecks
             Dictionary<string, object?> Args(params (string Key, object Value)[] values)
             { var a = new Dictionary<string, object?> { ["document"] = doc.SessionId.ToString(), ["member"] = member.ToString() }; foreach (var (k, v) in values) a[k] = v; return a; }
             var tracks = await Call("motion_records", Args()); Assert.Equal(2, tracks["FrameCount"]!.GetValue<int>());
+            using (MemoryStream largeStream = new())
+            {
+                using BinaryWriter largeWriter = new(largeStream);
+                largeWriter.Write(4); largeWriter.Write(1f); largeWriter.Write(1); largeWriter.Write(200); largeWriter.Write(-1f); largeWriter.Write(1f);
+                for (int part = 0; part < 200; part++)
+                {
+                    largeWriter.Write(4096); largeWriter.Write(Enumerable.Repeat((byte)1, 4096).ToArray()); largeWriter.Write(12);
+                    for (int i = 0; i < 6; i++) largeWriter.Write(0f);
+                    for (int i = 0; i < 2; i++) { largeWriter.Write(1f); largeWriter.Write(0f); largeWriter.Write(0f); largeWriter.Write(0f); }
+                }
+                using var largeDoc = new DocumentModel(FormatRegistry.Default.OpenBytes(Path.Combine(folder, "large.zbd"), MotionFixture.Archive(("large", largeStream.ToArray())), token: token));
+                main.ViewModel.Documents.Add(largeDoc);
+                try
+                {
+                    var page = await Call("motion_records", new() { ["document"] = largeDoc.SessionId.ToString(), ["member"] = largeDoc.ResourceEdits!.Current.Members[0].Id.ToString(), ["limit"] = 200 });
+                    Assert.Equal(200, page["rows"]!["items"]!.AsArray().Count);
+                    Assert.True(page["rows"]!["items"]![0]!["nameTruncated"]!.GetValue<bool>());
+                    Assert.Equal(4096, page["rows"]!["items"]![0]!["nameCharacters"]!.GetValue<int>());
+                    Assert.True(page.ToJsonString().Length < 1024 * 1024);
+                }
+                finally { main.ViewModel.CloseResolved(largeDoc); }
+            }
             var frames = await Call("motion_records", Args(("part", 0))); Assert.Equal(3, frames["rows"]!["items"]!.AsArray().Count);
             var editor = (MotionEditor)typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             Assert.NotNull(editor); await editor.SelectAssemblyAsync(3, token); editor.Seek(1);
@@ -52,6 +74,15 @@ internal static class MotionMcpChecks
             var view = editor.Viewport.CaptureView();
             await Job("resource_properties", Args(("action", "open"), ("part", 0), ("frame", 1)));
             var pinned = main.OpenPropertiesWindow!.ResourceFields!; Assert.Equal(1, pinned.MotionFrameIndex);
+            string renamedPart = Path.Combine(folder, "renamed-part.bin");
+            byte[] renamedPayload = (byte[])payload.Clone(); "head"u8.CopyTo(renamedPayload.AsSpan(28)); File.WriteAllBytes(renamedPart, renamedPayload);
+            await Job("archive_edit", Args(("action", "replace"), ("revision", doc.Revision), ("path", renamedPart)));
+            var retainedFields = System.Text.Json.JsonSerializer.SerializeToNode(pinned.DescribeAutomationFields())!;
+            Assert.Equal("head", retainedFields["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Part name")!["value"]!.GetValue<string>());
+            Assert.Same(pinned, main.OpenPropertiesWindow.ResourceFields);
+            await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
+            retainedFields = System.Text.Json.JsonSerializer.SerializeToNode(pinned.DescribeAutomationFields())!;
+            Assert.Equal("body", retainedFields["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Part name")!["value"]!.GetValue<string>());
             var fields = await Job("resource_properties", Args(("action", "fields"), ("part", 0), ("frame", 1)));
             string translation = fields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Translation")!["Id"]!.GetValue<string>();
             await Job("resource_properties", Args(("action", "edit"), ("revision", doc.Revision), ("part", 0), ("frame", 1), ("field", translation), ("value", "1, 2, 3")));
@@ -213,7 +244,10 @@ internal static class MotionMcpChecks
                 Assert.True(inspected.ToJsonString().Length < 40_000);
                 var page = await Call("motion_records", new() { ["document"] = large.SessionId.ToString(), ["member"] = large.ResourceEdits!.Current.Members[0].Id.ToString(), ["offset"] = 4095, ["limit"] = 1 });
                 Assert.Equal(4096, page["rows"]!["total"]!.GetValue<int>()); Assert.Null(page["rows"]!["nextOffset"]);
-                Assert.Equal(name, Assert.Single(page["rows"]!["items"]!.AsArray())!["Name"]!.GetValue<string>());
+                var row = Assert.Single(page["rows"]!["items"]!.AsArray())!;
+                Assert.Equal(name[..512], row["Name"]!.GetValue<string>());
+                Assert.Equal(name.Length, row["nameCharacters"]!.GetValue<int>()); Assert.True(row["nameTruncated"]!.GetValue<bool>());
+                Assert.Equal(name, ((MotionClip)large.PreviewDocument.Assets[0].Content!).Parts[^1].Name);
                 await Job("select_asset", new() { ["document"] = large.SessionId.ToString(), ["kind"] = "Motion", ["index"] = 0 });
                 var active = Assert.IsType<MotionEditor>(CurrentMotion()); await active.SelectAssemblyAsync(3, token);
                 string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();

@@ -34,8 +34,9 @@ internal static class MechLibraryReader
             scene.Materials.Add(material);
         }
         if (materialCursor.Remaining != 0) throw new InvalidDataException("Mech material table has trailing bytes.");
-        foreach (var asset in doc.Assets.ToArray())
+        for (int assetIndex = 0; assetIndex < doc.Assets.Count; assetIndex++)
         {
+            var asset = doc.Assets[assetIndex];
             if (asset == versions[0] || asset == formats[0] || asset == materials[0]) continue;
             token.ThrowIfCancellationRequested();
             var c = new BinaryCursor(doc.Slice(asset.Offset, asset.Length), asset.Offset);
@@ -48,7 +49,7 @@ internal static class MechLibraryReader
                 Summary = $"Mech assembly · {assembly.NodeCount} nodes · {assembly.ModelCount} models" };
             replacement.Metadata["root_node"] = root;
             replacement.Metadata["member_index"] = asset.Index;
-            doc.Assets[doc.Assets.IndexOf(asset)] = replacement;
+            doc.Assets[assetIndex] = replacement;
 
             int ReadNode(int parent, int depth)
             {

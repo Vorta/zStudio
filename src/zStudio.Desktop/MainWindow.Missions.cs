@@ -43,19 +43,21 @@ public partial class MainWindow
         var doc = shownDocument ?? throw new StudioCommandException("not_ready", "Open a world or animation.");
         string path = MissionWorldPath ?? throw new StudioCommandException("unsupported", "Mission selection requires a MechWarrior 3 world or animation.");
         var resolver = ViewModel.Resolver!;
-        long request = ++missionRequest;
+        var editor = animation; var asset = shownAsset;
         if (automation) RequireNoDrafts();
         else if (!await ResolvePropertiesDraftsAsync() || animation?.ResolvePendingDrafts() == false)
         {
             if (animation == null && publishedStaticOptions != null) RestoreStaticSceneOptions(publishedStaticOptions);
             return;
         }
+        long request = ++missionRequest;
         var choices = await MissionSceneLoader.Mw3MissionsAsync(path, resolver, token);
-        if (request != missionRequest || shownDocument != doc || MissionWorldPath != path) throw new StudioCommandException("context_changed", "Mission selection was superseded.");
+        ValidateContext(); token.ThrowIfCancellationRequested();
         var choice = choices.SingleOrDefault(m => m.Archive.Equals(archive, StringComparison.OrdinalIgnoreCase)) ?? throw new StudioCommandException("invalid_argument", "Choose a reader returned by missions for this map.");
-        string? previous = resolver.SelectedMission(path);
-        if (previous == choice.Archive) return;
-        var editor = animation;
+        string? previous = editor?.MissionArchive ?? scene?.Mission?.Layout.MissionArchive ?? resolver.SelectedMission(path);
+        // A resolver selection can describe an in-flight request. Only a presented
+        // mission is a completed no-op; retrying a pending selection must await it.
+        if (previous == choice.Archive && resolver.SelectedMission(path) == choice.Archive) return;
         resolver.SelectMission(path, choice.Archive);
         foreach (var open in ViewModel.Documents) open.InvalidateMissionContext();
         try
@@ -64,11 +66,16 @@ public partial class MainWindow
             if (editor != null)
             {
                 await editor.RefreshModelContextAsync(resourceChanges: true);
+                ValidateContext();
                 if (editor.MissionArchive != choice.Archive) throw new StudioCommandException("preview_failed", "Mission preview could not be rebuilt; the previous mission is retained.");
             }
-            else if (await RefreshStaticSceneAsync(doc, shownAsset!) is not Guid)
-                throw new StudioCommandException("preview_failed", "Mission preview could not be rebuilt; the previous mission is retained.");
-            if (request != missionRequest || shownDocument != doc || MissionWorldPath != path) return;
+            else
+            {
+                var published = await RefreshStaticSceneAsync(doc, asset!);
+                ValidateContext();
+                if (published is not Guid) throw new StudioCommandException("preview_failed", "Mission preview could not be rebuilt; the previous mission is retained.");
+            }
+            ValidateContext();
             ViewModel.Settings.Mw3Missions ??= new(StringComparer.OrdinalIgnoreCase);
             if (ViewModel.Settings.Mw3Missions.Count >= 128 && !ViewModel.Settings.Mw3Missions.ContainsKey(path)) ViewModel.Settings.Mw3Missions.Remove(ViewModel.Settings.Mw3Missions.Keys.First());
             ViewModel.Settings.Mw3Missions[path] = choice.Archive; ViewModel.Settings.Save();
@@ -76,17 +83,23 @@ public partial class MainWindow
         }
         catch
         {
-            if (request == missionRequest && previous != null)
+            if (OwnsContext() && previous != null)
             {
                 resolver.SelectMission(path, previous); foreach (var open in ViewModel.Documents) open.InvalidateMissionContext();
                 if (editor == null && publishedStaticOptions != null) RestoreStaticSceneOptions(publishedStaticOptions);
             }
             throw;
         }
+        bool OwnsContext() => request == missionRequest && shownDocument == doc && shownAsset == asset && !doc.IsDisposed &&
+            MissionWorldPath == path && ViewModel.Resolver == resolver && animation == editor;
+        void ValidateContext()
+        {
+            if (!OwnsContext()) throw new StudioCommandException("context_changed", "Mission selection was superseded.");
+        }
     }
     private void RegisterMissionCommands(StudioCommands registry)
     {
-        RegisterJob(registry, "missions", "List the current MW3 map's authored mission readers, or select one for the visible world/animation. Selection retains archive edit history, playhead and camera. Shared resources remain available; other mission readers do not contribute actors or AI networks.",
+        RegisterJob(registry, "missions", "List the current MW3 map's authored mission readers, or select one for the visible world/animation. Selection waits for the displayed preview, retains archive edit history, playhead and camera, and rejects superseded requests with context_changed. Shared resources remain available; other mission readers do not contribute actors or AI networks.",
             [PreviewParameter, P("archive", "string", "Optional full reader path returned by this tool. Omit to list."), .. PageParameters], false, async (a, token) =>
         {
             RequirePreview(a); string path = MissionWorldPath ?? throw new StudioCommandException("unsupported", "Select a MechWarrior 3 world or animation.");

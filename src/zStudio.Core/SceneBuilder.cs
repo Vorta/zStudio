@@ -95,6 +95,7 @@ public static class GeometryBuilder
 {
     public static IReadOnlyList<MeshPart> Build(GameModel model, IList<Diagnostic>? diagnostics = null, CancellationToken token = default)
     {
+        bool colored = model.Polygons.Any(p => p.Colors.Length != 0);
         Dictionary<int, (List<Vector3> Positions, List<Vector3> Normals, List<Vector2> Uvs, List<int> Indices, List<Vector4> Colors)> groups = [];
         for (int p = 0; p < model.Polygons.Length; p++)
         {
@@ -120,7 +121,7 @@ public static class GeometryBuilder
             }
             foreach (int i in triangles) group.Indices.Add(offset + i);
         }
-        return groups.Select(g => new MeshPart(g.Key, g.Value.Positions.ToArray(), g.Value.Normals.ToArray(), g.Value.Uvs.ToArray(), g.Value.Indices.ToArray()) { Colors = model.Polygons.Any(p => p.Colors.Length != 0) ? g.Value.Colors.ToArray() : [] }).ToArray();
+        return groups.Select(g => new MeshPart(g.Key, g.Value.Positions.ToArray(), g.Value.Normals.ToArray(), g.Value.Uvs.ToArray(), g.Value.Indices.ToArray()) { Colors = colored ? g.Value.Colors.ToArray() : [] }).ToArray();
     }
     public static int[] TriangleStrip(int count)
     {

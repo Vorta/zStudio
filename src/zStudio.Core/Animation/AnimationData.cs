@@ -93,12 +93,16 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
         foreach (var frame in frames) { frame.Validate(); output.Write(frame.ForVersion(Version).Bytes); count++; }
         var result = new AnimationEvent(output.ToArray(), SourceOffset) { Id = Id, Version = Version }; result.SetInt(4, result.Bytes.Length); if (Version == 39) result.SetInt(16, count); return result;
     }
-    public JsonObject ToJson(CancellationToken token = default)
+    public JsonObject ToPreviewJson(CancellationToken token = default) => ToJson(token, bounded: true);
+    public JsonObject ToJson(CancellationToken token = default) => ToJson(token, bounded: false);
+    private JsonObject ToJson(CancellationToken token, bool bounded)
     {
         token.ThrowIfCancellationRequested();
-        JsonObject value = new() { ["event"] = Name, ["type_id"] = (int)Type, ["start_mode"] = AnimationCatalog.ModeName(StartMode), ["start_threshold"] = JsonData.Number(Threshold), ["record_size"] = Bytes.Length, ["source_offset"] = SourceOffset, ["preview"] = Spec?.Support ?? "Unavailable: unknown event", ["raw_hex"] = JsonData.Hex(Bytes, token) };
+        JsonObject value = new() { ["event"] = Name, ["type_id"] = (int)Type, ["start_mode"] = AnimationCatalog.ModeName(StartMode), ["start_threshold"] = JsonData.Number(Threshold), ["record_size"] = Bytes.Length, ["source_offset"] = SourceOffset, ["preview"] = Spec?.Support ?? "Unavailable: unknown event", ["raw_hex"] = bounded ? Convert.ToHexStringLower(Bytes.AsSpan(0, Math.Min(256, Bytes.Length))) : JsonData.Hex(Bytes, token) };
+        if (bounded) value["raw_hex_truncated"] = Bytes.Length > 256;
         if (Spec != null) foreach (var field in Spec.Fields.Where(f => f.Offset + f.Size <= Bytes.Length)) value[field.Name] = field.Read(this);
-        if (Type == 12)
+        if (Type == 12 && bounded) value["keyframes_omitted"] = true;
+        else if (Type == 12)
         {
             try { value["keyframes"] = JsonData.Array(Keyframes(token), f => f.ToJson(), token); }
             catch (InvalidDataException ex) { value["keyframe_diagnostic"] = ex.Message; }

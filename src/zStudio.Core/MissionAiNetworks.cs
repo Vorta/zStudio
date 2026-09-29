@@ -146,15 +146,14 @@ public static partial class MissionAiNetworks
         List<AiNode> nodes = []; List<AiConstraint> constraints = [];
         // A malformed duplicate still makes a numeric target ambiguous. Never
         // silently bind to the other record after rejecting the malformed one.
-        var declared = pairs.Select(p => NodeName().Match(p.Key)).Where(m => m.Success)
-            .Select(m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)).Where(n => n <= 98)
-            .GroupBy(n => n).ToDictionary(g => g.Key, g => g.Count());
+        Dictionary<int, int> declared = [];
         foreach (var (key, value) in pairs)
         {
             token.ThrowIfCancellationRequested(); var match = NodeName().Match(key);
-            if (!match.Success) { if (key.StartsWith("node_", StringComparison.Ordinal)) Note($"Unsupported node key {key}.", value.SourceOffset); continue; }
+            if (!match.Success) { if (key.StartsWith("node_", StringComparison.Ordinal)) Note($"Unsupported node key {key[..Math.Min(128, key.Length)]}.", value.SourceOffset); continue; }
             int index = int.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
             if (index > 98) { Note($"{key} is outside the retail node range 00–98.", value.SourceOffset); continue; }
+            bool constraint = false;
             try
             {
                 var c = value.Children;
@@ -163,6 +162,7 @@ public static partial class MissionAiNetworks
                     int from = Integer(c[0].Children[0]), to = Integer(c[0].Children[1]);
                     for (int attribute = 1; attribute < c.Count; attribute += 2)
                         if (c[attribute].Kind != ZrdKind.String || c[attribute + 1].Kind != ZrdKind.Array) throw new InvalidDataException("Expected ordered constraint name/parameter pairs.");
+                    constraint = true; // Only fully validated v106 constraints are a separate identity kind.
                     for (int attribute = 1; attribute < c.Count; attribute += 2)
                         constraints.Add(new(index, from, to, c[attribute].Text, value.SourceOffset, c[attribute + 1].ToPreviewJson(token)) { AttributeIndex = (attribute - 1) / 2 });
                     continue;
@@ -184,6 +184,7 @@ public static partial class MissionAiNetworks
                 nodes.Add(new(id + ":" + nodes.Count, index, Integer(c[0]), position, value.SourceOffset, links.AsReadOnly()) { AuthoredLinkCount = linkCount });
             }
             catch (InvalidDataException ex) { Note($"{key}: {ex.Message}", value.SourceOffset); }
+            finally { if (!constraint) declared[index] = declared.GetValueOrDefault(index) + 1; }
         }
         var byIndex = nodes.GroupBy(n => n.Index).ToDictionary(g => g.Key, g => g.ToArray());
         foreach (var duplicate in declared.Where(p => p.Value > 1)) Note($"Repeated node_{duplicate.Key:00}; links to it are ambiguous.");

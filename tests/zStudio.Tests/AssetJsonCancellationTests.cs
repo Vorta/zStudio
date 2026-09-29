@@ -12,6 +12,57 @@ namespace Recoil.Zbd.Tests;
 
 public sealed class AssetJsonCancellationTests
 {
+    [Fact]
+    public void MaximumWorldInspectionBudgetsIncludeAllRowsAndBothSnapshots()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var doc = Document(); doc.Scene = new();
+        JsonObject metadata = new();
+        for (int field = 0; field < 12; field++) metadata["field" + field] = new string('\u0001', 1024);
+        for (int row = 0; row < 32; row++)
+        {
+            doc.Scene.Nodes.Add(new(row, "node", "object3d", null, [], [], metadata, new()));
+            doc.Scene.Materials.Add(metadata);
+        }
+        var asset = doc.Add(AssetKind.World, 0, "world", 0, 0, metadata);
+        JsonObject response = new()
+        {
+            ["source"] = ExportService.AssetJson(doc, asset, token, boundedZrd: true),
+            ["edited"] = ExportService.AssetJson(doc, asset, token, boundedZrd: true)
+        };
+        Assert.True(response.ToJsonString().Length < 1024 * 1024, "Maximum aggregate must leave room under the 4 MiB protocol response limit.");
+        Assert.Equal(32, response["source"]!["nodes"]!.AsArray().Count);
+        Assert.True(response["source"]!["properties_truncated"]!.GetValue<bool>());
+        Assert.True(JsonNode.DeepEquals(metadata, ExportService.AssetJson(doc, asset, token)["nodes"]![31]));
+    }
+    [Fact]
+    public void BoundedModelAndWorldInspectionLimitNestedDataBeforeAllocation()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var doc = Document(); doc.Scene = new();
+        JsonObject metadata = new() { ["nested"] = new JsonArray(new string('\u0001', 2 * 1024 * 1024)), ["sentinel"] = 42 };
+        var model = new GameModel(0, Enumerable.Repeat(Vector3.One, 100000).ToArray(), [], [], [], metadata);
+        var asset = doc.Add(AssetKind.Model, 0, "large model", 0, 0, metadata, model);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var preview = ExportService.AssetJson(doc, asset, token, boundedZrd: true);
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 256 * 1024);
+        Assert.True(preview["properties_truncated"]!.GetValue<bool>());
+        Assert.True(preview["geometry_truncated"]!.GetValue<bool>());
+        Assert.Equal(100000, preview["vertex_count"]!.GetValue<int>()); Assert.Equal(32, preview["vertices"]!.AsArray().Count);
+        Assert.Equal(2 * 1024 * 1024, metadata["nested"]![0]!.GetValue<string>().Length);
+        var full = ExportService.AssetJson(doc, asset, token);
+        Assert.Equal(100000, full["vertices"]!.AsArray().Count);
+        Assert.True(JsonNode.DeepEquals(metadata, full["properties"]));
+        for (int i = 0; i < 1000; i++) doc.Scene.Nodes.Add(new(i, "node", "object3d", null, [], [], metadata, new()));
+        var world = doc.Add(AssetKind.World, 0, "world", 0, 0);
+        before = GC.GetAllocatedBytesForCurrentThread();
+        preview = ExportService.AssetJson(doc, world, token, boundedZrd: true);
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 512 * 1024);
+        Assert.True(preview["nodes_truncated"]!.GetValue<bool>()); Assert.True(preview["properties_truncated"]!.GetValue<bool>());
+        Assert.Equal(1000, preview["node_count"]!.GetValue<int>()); Assert.Equal(32, preview["nodes"]!.AsArray().Count);
+        Assert.True(preview.ToJsonString().Length < 1024 * 1024);
+    }
+
     [Theory]
     [InlineData(AssetKind.Raw)]
     [InlineData(AssetKind.Model)]

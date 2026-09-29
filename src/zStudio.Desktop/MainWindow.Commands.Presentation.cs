@@ -93,7 +93,7 @@ public partial class MainWindow
         });
         Register(r,"properties_state","Read the pinned Properties window identity, content and current editable fields.",false,[],_ =>
             Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? propertiesWindow?.ResourceFields)?.DescribeAutomationFields() }));
-        Register(r,"scene_properties","Inspect a scene node or open its Properties window, including editable mission pickups. MW3 actor labels use 128-character prefixes with name_characters/name_truncated metadata; source AIV names remain intact.",true,
+        Register(r,"scene_properties","Inspect a scene node or open its Properties window, including editable mission pickups. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",true,
             [PreviewParameter,P("node","integer","Scene node index.",true),P("open","boolean","Open the pinned Properties window.")],a=>
         {
             var viewport=TargetViewport(a); int node=Int(a,"node"); var data=viewport.PreviewScene;
@@ -103,10 +103,10 @@ public partial class MainWindow
                 RequireNoDrafts(); ++propertyRequest; var w=GetPropertiesWindow(); var actor=viewport.PickupAt(node);
                 bool opened=actor?.Pickup is { } pickup && shownDocument!.PickupEdits?.Find(pickup.Source) != null
                     ? w.SetPickup(shownDocument!,pickup.Source,data.Nodes[node].Name,data.Nodes[node].Metadata)
-                    : w.SetReadOnly(shownDocument!,data.Nodes[node].Name,data.Nodes[node].Metadata);
+                    : w.SetReadOnly(shownDocument!,data.Nodes[node].Name,Core.JsonData.PreviewObject(data.Nodes[node].Metadata));
                 PresentProperties(w,opened);
             }
-            return Result(new { data.Nodes[node].Index,data.Nodes[node].Name,data.Nodes[node].Metadata });
+            return Result(new { data.Nodes[node].Index,data.Nodes[node].Name, Metadata = Core.JsonData.PreviewObject(data.Nodes[node].Metadata) });
         });
     }
     private static void SetTab(TabControl tabs,int index)

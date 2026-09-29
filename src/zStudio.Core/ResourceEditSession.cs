@@ -220,7 +220,9 @@ public static class ArchiveWriter
         {
             token.ThrowIfCancellationRequested(); byte[] record = member.DirectoryRecord.ToArray();
             if (record.Length != 148) throw new InvalidDataException("Invalid archive directory record.");
-            var original = member.SourceIndex is int index ? source.Assets.Single(a => a.Index == index) : null;
+            // Intact archive assets retain directory order, as already required
+            // by the size calculation above. Avoid scanning it for every member.
+            var original = member.SourceIndex is int index ? source.Assets[index] : null;
             uint offset;
             if (original != null && member.Data.Span.SequenceEqual(source.Slice(original.Offset, original.Length).Span)) offset = checked((uint)original.Offset);
             else { offset = checked((uint)output.Position); output.Write(member.Data.Span); }
