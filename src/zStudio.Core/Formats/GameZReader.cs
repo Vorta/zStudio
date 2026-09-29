@@ -107,13 +107,15 @@ internal sealed class GameZReader : IZbdFormatReader
             if (!free) entries.Add((layout.Decode(raw, "GAMEZ_NODE_BASE_LAYOUT"), offset, header));
         }
         string[] names = ["none", "camera", "world", "window", "display", "object3d", "lod", "unknown_7", "unknown_8", "light"];
+        ReferenceBudget references = new();
         List<long> dataOffsets = [];
         for (int i = 0; i < entries.Count; i++)
         {
             token.ThrowIfCancellationRequested(); var (info, offset, header) = entries[i]; int classId = info.Int("node_class"); string kind = classId >= 0 && classId < names.Length ? names[classId] : $"unknown_{classId}";
             info["node_class"] = kind; info["data_offset_word"] = $"0x{offset:X8}";
             dataOffsets.Add(c.AbsolutePosition);
-            JsonObject data = ReadNodeData(c, kind, layout);
+            JsonObject data = ReadNodeData(c, kind, layout, references);
+            references.Add((kind == "none" ? 0 : info.Int("parent_count")) + (long)info.Int("child_count"));
             int[] parents = kind == "none" ? offset == uint.MaxValue ? [] : [unchecked((int)offset)] : c.Indices(info.Int("parent_count"));
             int[] children = c.Indices(info.Int("child_count"));
             info["parent_indices"] = JsonData.Integers(parents); info["child_indices"] = JsonData.Integers(children); info["data"] = data;
@@ -123,8 +125,15 @@ internal sealed class GameZReader : IZbdFormatReader
         if (c.Remaining > 0) doc.Diagnostics.Add(new("Warning", $"{c.Remaining} trailing node bytes preserved.", Offset: c.AbsolutePosition));
         return dataOffsets;
     }
-    internal static JsonObject ReadNodeData(BinaryCursor c, string kind, GameZLayouts version)
+    /// <summary>Per-document running total of node index references, each of which becomes metadata; retail worlds use at most about 16,000.</summary>
+    internal sealed class ReferenceBudget
     {
+        private long total;
+        internal void Add(long count) { total += Math.Max(0, count); GameZLayouts.CheckEntries("node reference", total, GameZLayouts.MaximumGeometryRecords); }
+    }
+    internal static JsonObject ReadNodeData(BinaryCursor c, string kind, GameZLayouts version, ReferenceBudget? references = null)
+    {
+        references ??= new();
         (int size, string? layout) = kind switch
         {
             "none" => (0, null),
@@ -144,14 +153,21 @@ internal sealed class GameZReader : IZbdFormatReader
             value["clear_polygon_count"] = (long)w.I32(); value["buffer_index"] = (long)w.I32(); value["buffer_surface_ptr"] = $"0x{w.U32():X8}"; value["buffer_width"] = (long)w.U32(); value["buffer_height"] = (long)w.U32(); value["buffer_bit_depth"] = (long)w.U32(); return value;
         }
         JsonObject result = layout == null ? [] : version.Read(c, size, layout);
-        if (kind == "light") result["attached_indices"] = JsonData.Integers(c.Indices(result.Int("attached_count")));
+        if (kind == "light") { references.Add(result.Int("attached_count")); result["attached_indices"] = JsonData.Integers(c.Indices(result.Int("attached_count"))); }
         if (kind == "world")
         {
-            result["light_indices"] = JsonData.Integers(c.Indices(result.Int("light_count"))); result["sound_indices"] = JsonData.Integers(c.Indices(result.Int("sound_count")));
-            int x = Math.Max(0, result.Int("virt_partition_x_count")), z = Math.Max(0, result.Int("virt_partition_z_count")); c.Count(checked((uint)((long)x * z)), version.PartitionSize);
+            references.Add(result.Int("light_count")); result["light_indices"] = JsonData.Integers(c.Indices(result.Int("light_count")));
+            references.Add(result.Int("sound_count")); result["sound_indices"] = JsonData.Integers(c.Indices(result.Int("sound_count")));
+            int x = Math.Max(0, result.Int("virt_partition_x_count")), z = Math.Max(0, result.Int("virt_partition_z_count"));
+            // Every cell and node reference becomes metadata; retail worlds use at most 738 cells and 1,742 partition references.
+            GameZLayouts.CheckEntries("world partition cell", (long)x * z); c.Count(checked((uint)((long)x * z)), version.PartitionSize);
             JsonArray rows = []; for (int row = 0; row < z; row++)
             {
-                JsonArray cells = []; for (int col = 0; col < x; col++) { var cell = version.Read(c, version.PartitionSize, "GAMEZ_WORLD_PARTITION_LAYOUT"); cell["node_indices"] = JsonData.Integers(c.Indices(cell.Int("node_count"))); cells.Add(cell); }
+                JsonArray cells = []; for (int col = 0; col < x; col++)
+                {
+                    var cell = version.Read(c, version.PartitionSize, "GAMEZ_WORLD_PARTITION_LAYOUT"); references.Add(cell.Int("node_count"));
+                    cell["node_indices"] = JsonData.Integers(c.Indices(cell.Int("node_count"))); cells.Add(cell);
+                }
                 rows.Add(cells);
             }
             result["partitions"] = rows;

@@ -23,8 +23,10 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Keep accepted edits and saves successful when a dependent motion library becomes unavailable; clear motion bindings unless the member identity is proven, and reconcile the displayed motion by member UUID rather than the Assets selection.
 - Follow authored MW3 conventions for new version-27 material flags and polygon priority/field24/zone words during mesh replacement; RECOIL version-15 output is unchanged.
 - Bound per-record metadata before it is materialized: at most 65,536 entries per archive, texture/script directory and GameZ table, and 262,144 GameZ polygon/light records per file, with cancellation while reading table headers.
+- Bound GameZ world partition cells and all node index references (relations, light/sound lists, partition nodes) per file, and keep one diagnostic budget across every AI network member of a snapshot.
+- Rebuild a Whole world whose remembered mission never published when that mission is selected again; keep a user's newer mech assembly choice when a delayed library refresh finishes; search mech models by node names and materials by texture names; classify valve Properties off the UI thread.
 - Never offer a partially parsed mission reader, report damaged mission resources, and make explicit MW3 animation mission switches fail rather than fall back when the requested reader disappears.
-- PR-watch tooling: retry state replacement while another process reads it, report an active watch without a worker, ignore review requests and review-bot status posts when arming feedback notices, honor rate-limit resets only when exhausted, require explicit release authorization on every arm, and accept approval only for the newest review summary of the current head.
+- PR-watch tooling: retry state replacement while another process reads it, report an active watch without a worker, ignore review requests and review-bot status posts when arming feedback notices, honor rate-limit resets only when exhausted, require explicit release authorization on every arm, accept approval only for the newest review summary of the current head, and add a Claude Code channel whose listener prints one notification per settled comment burst.
 
 ## 0.6.3 — 2026-09-28
 

@@ -128,6 +128,31 @@ internal static class MissionSelectionChecks
         void Set(string field, object? value) => typeof(MainWindow).GetField(field, flags)!.SetValue(main, value);
     }
 
+    /// <summary>Re-selecting the remembered reader rebuilds a preview that was never published instead of treating it as a no-op.</summary>
+    internal static async Task RunRetryWithoutPreview()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)); var token = timeout.Token;
+        using var fixture = new Mw3MissionFixture("actor_01");
+        var asset = fixture.World.Add(AssetKind.World, 0, "Whole world", 0, 0);
+        using var document = new DocumentModel(fixture.World);
+        var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        typeof(MainViewModel).GetProperty(nameof(MainViewModel.Resolver))!.SetValue(main.ViewModel, fixture.Resolver);
+        main.ViewModel.Documents.Add(document);
+        // The earlier load failed, so nothing is published even though the resolver still names the reader.
+        fixture.Resolver.SelectMission(fixture.World.Path, fixture.ReaderPath);
+        typeof(MainWindow).GetField("shownDocument", flags)!.SetValue(main, document); typeof(MainWindow).GetField("shownAsset", flags)!.SetValue(main, asset);
+        try
+        {
+            Assert.False((bool)typeof(MainWindow).GetProperty("HasPublishedStaticScene", flags)!.GetValue(main)!);
+            await (Task)typeof(MainWindow).GetMethod("SelectMissionAsync", flags)!.Invoke(main, [fixture.ReaderPath, true, token])!;
+            var current = (SceneViewport?)typeof(MainWindow).GetField("scene", flags)!.GetValue(main);
+            Assert.Equal(fixture.ReaderPath, current?.Mission?.Layout.MissionArchive, ignoreCase: true);
+            Assert.True((bool)typeof(MainWindow).GetProperty("HasPublishedStaticScene", flags)!.GetValue(main)!);
+        }
+        finally { main.Close(); }
+    }
+
     /// <summary>A remembered reader that no longer qualifies falls back visibly; an explicit request for it is rejected.</summary>
     internal static async Task RunUnavailableSelection()
     {

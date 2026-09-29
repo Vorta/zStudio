@@ -41,7 +41,10 @@ public sealed record AiNetworkSnapshot(string Id, IReadOnlyList<AiNetwork> Netwo
     public IReadOnlyList<AiValveSource> ValveSources { get; init; } = [];
     private static string Bounded(string text) => text.Length <= 256 ? text : text[..256] + "… [truncated]";
     public static AiNetworkSnapshot Empty { get; } = new("empty", []);
-    public IEnumerable<Diagnostic> Diagnostics => Networks.SelectMany(n => n.Diagnostics);
+    /// <summary>Diagnostics dropped by the snapshot-wide budget; each network also bounds its own notes.</summary>
+    public long OmittedDiagnostics { get; init; }
+    public IEnumerable<Diagnostic> Diagnostics => OmittedDiagnostics == 0 ? Networks.SelectMany(n => n.Diagnostics) :
+        Networks.SelectMany(n => n.Diagnostics).Append(new("Warning", $"{OmittedDiagnostics:N0} additional AI network diagnostics omitted. Inspect the source network resources for the complete records."));
     public (AiNetwork Network, AiNode Node)? Find(string id)
     {
         foreach (var network in Networks) foreach (var node in network.Nodes) if (node.Id == id) return (network, node);
@@ -113,16 +116,20 @@ public static partial class MissionAiNetworks
         token.ThrowIfCancellationRequested();
         string snapshotId = Convert.ToHexString(hash.GetHashAndReset());
         lock (CacheGate) if (Cache.TryGetValue(snapshotId, out var cached)) return cached;
-        List<AiNetwork> networks = [];
+        List<AiNetwork> networks = []; int retained = 0; long omitted = 0;
         foreach (var (archive, asset, id) in inputs)
         {
-            token.ThrowIfCancellationRequested(); var bytes = archive.Slice(asset.Offset, asset.Length);
-            try { networks.Add(Decode(id, archive.Path, asset.Index, asset.Name, asset.Content as ZrdNode ?? ZrdDecoder.Read(bytes, token), token)); }
-            catch (InvalidDataException ex) { networks.Add(new(id, archive.Path, asset.Index, asset.Name, asset.Name, "", 10, [],
-                [new("Warning", $"AI network {archive.Path} / {asset.Name} #{asset.Index}: {ex.Message}", asset.Index, asset.Offset)])); }
+            token.ThrowIfCancellationRequested(); var bytes = archive.Slice(asset.Offset, asset.Length); AiNetwork network;
+            try { network = Decode(id, archive.Path, asset.Index, asset.Name, asset.Content as ZrdNode ?? ZrdDecoder.Read(bytes, token), token); }
+            catch (InvalidDataException ex) { network = new(id, archive.Path, asset.Index, asset.Name, asset.Name, "", 10, [],
+                [new("Warning", $"AI network {archive.Path} / {asset.Name} #{asset.Index}: {ex.Message}", asset.Index, asset.Offset)]); }
+            // Many (possibly identically named) members must not compose per-network caps into an unbounded snapshot.
+            int keep = Math.Min(network.Diagnostics.Count, PreviewNotes.MaximumItems - retained);
+            if (keep < network.Diagnostics.Count) { omitted += network.Diagnostics.Count - keep; network = network with { Diagnostics = network.Diagnostics.Take(keep).ToArray() }; }
+            retained += keep; networks.Add(network);
         }
         token.ThrowIfCancellationRequested();
-        var result = new AiNetworkSnapshot(snapshotId, networks.AsReadOnly());
+        var result = new AiNetworkSnapshot(snapshotId, networks.AsReadOnly()) { OmittedDiagnostics = omitted };
         lock (CacheGate) { if (Cache.Count >= 8) Cache.Clear(); Cache[snapshotId] = result; }
         return result;
     }

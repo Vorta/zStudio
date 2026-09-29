@@ -50,6 +50,17 @@ public sealed class AiNetworkTests
         ResourceEditingTests.Archive(roots.Select(root => ("net_01.zrd", ZrdWriter.Write(root, TestContext.Current.CancellationToken))).ToArray()), token: TestContext.Current.CancellationToken);
     private static AiNetworkSnapshot Read(ZbdDocument doc) => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), TestContext.Current.CancellationToken);
     [Fact]
+    public void SnapshotDiagnosticsShareOneBudgetAcrossNetworkMembers()
+    {
+        // Identically named members are valid; each undecodable one reports a diagnostic, but the snapshot keeps one budget.
+        var doc = FormatRegistry.Default.OpenBytes("ai-test.zbd", ResourceEditingTests.Archive(Enumerable.Range(0, 1_000).Select(_ => ("net_01.zrd", new byte[] { 9, 9, 9, 9 })).ToArray()), token: TestContext.Current.CancellationToken);
+        var graph = Read(doc); var notes = graph.Diagnostics.ToArray();
+        Assert.Equal(1_000, graph.Networks.Count);
+        Assert.Equal(PreviewNotes.MaximumItems + 1, notes.Length); Assert.Equal(744, graph.OmittedDiagnostics);
+        Assert.Contains("744 additional AI network diagnostics omitted", notes[^1].Message);
+        Assert.Equal(PreviewNotes.MaximumItems, graph.Networks.Sum(n => n.Diagnostics.Count));
+    }
+    [Fact]
     public void Version106LinkPreviewIsBoundedWithoutChangingTheAuthoredTree()
     {
         var links = A(Enumerable.Range(0, 100_000).Select(_ => I(1)).ToArray());

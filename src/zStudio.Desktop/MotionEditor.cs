@@ -43,6 +43,9 @@ public sealed class MotionEditor : UserControl, IDisposable
     private bool? pendingPlayback;
     private int? selectedMember;
     private Guid? selectedIdentity;
+    // The assembly an in-flight SelectAssemblyAsync is loading, so a concurrent library refresh keeps that choice.
+    private int? requestedMember;
+    private Guid? requestedIdentity;
     private IReadOnlyList<string> librarySkipped = [];
     public SceneViewport Viewport { get; private set; } = new();
     public event Action? SceneChanged;
@@ -124,7 +127,7 @@ public sealed class MotionEditor : UserControl, IDisposable
         // Capture the UUID from the same frozen snapshot as the selected geometry.
         // A newly added/duplicated member has no original-file index to recover later.
         Guid? identity = librarySnapshot is { } snapshot && index < snapshot.Snapshot.Members.Count ? snapshot.Snapshot.Members[index].Id : null;
-        long request = ++generation; load?.Cancel();
+        long request = ++generation; load?.Cancel(); requestedMember = index; requestedIdentity = identity;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime, token); load = cancellation;
         var ct = cancellation.Token; pendingPlayback ??= IsPlaying; SuspendPlayback();
         SceneViewport? replacement = null;
@@ -168,7 +171,7 @@ public sealed class MotionEditor : UserControl, IDisposable
             replacement?.Dispose();
             if (request == generation)
             {
-                load = null; bool resume = pendingPlayback == true; pendingPlayback = null;
+                load = null; requestedMember = null; requestedIdentity = null; bool resume = pendingPlayback == true; pendingPlayback = null;
                 if (resume && !disposed && !lifetime.IsCancellationRequested) Play(); else Pause();
             }
         }
@@ -176,7 +179,6 @@ public sealed class MotionEditor : UserControl, IDisposable
     public async Task RefreshLibraryAsync()
     {
         if (disposed) return;
-        var previousLibrary = library; var previousSnapshot = librarySnapshot; int? target = selectedMember;
         ZbdDocument nextLibrary;
         List<string> skipped = [];
         try { nextLibrary = await MotionLibrary.LoadAsync(document.Path, resolver, lifetime, skipped); librarySkipped = skipped; }
@@ -189,11 +191,15 @@ public sealed class MotionEditor : UserControl, IDisposable
             ClearBinding("The mech library is unavailable: " + ex.Message); return;
         }
         if (disposed || lifetime.IsCancellationRequested) return;
-        // Nothing is bound to an unchanged library; keep any assembly choice the user is loading.
-        if (target == null && ReferenceEquals(previousLibrary, nextLibrary)) return;
+        // Read the binding only after the await: an assembly chosen meanwhile, loaded or still loading, is the current intent.
+        var previousLibrary = library; var previousSnapshot = librarySnapshot;
+        bool loading = load != null && requestedMember != null;
+        int? target = loading ? requestedMember : selectedMember; Guid? identity = loading ? requestedIdentity : selectedIdentity;
+        // An unchanged library needs nothing: no binding, or an in-flight choice that already loads from it.
+        if ((target == null || loading) && ReferenceEquals(previousLibrary, nextLibrary)) return;
         var nextSnapshot = resolveLibrarySnapshot(nextLibrary);
         if (target is int oldIndex && previousLibrary != null && !ReferenceEquals(previousLibrary, nextLibrary))
-            target = RemapMember(oldIndex, previousLibrary, previousSnapshot, nextLibrary, nextSnapshot);
+            target = RemapMember(oldIndex, identity, previousLibrary, previousSnapshot, nextLibrary, nextSnapshot);
         var view = Viewport.CaptureView();
         library = nextLibrary; librarySnapshot = nextSnapshot;
         syncing = true; assembly.ItemsSource = library.Assets.Where(a => a.Content is MechAssembly).ToArray(); syncing = false;
@@ -204,7 +210,7 @@ public sealed class MotionEditor : UserControl, IDisposable
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { if (!disposed) ClearBinding("The bound mech member cannot be previewed: " + ex.Message); }
     }
     /// <summary>Only exact identities survive a library change; never select another member at the former index.</summary>
-    private int? RemapMember(int oldIndex, ZbdDocument previous, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? before, ZbdDocument next, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? after)
+    private static int? RemapMember(int oldIndex, Guid? identity, ZbdDocument previous, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? before, ZbdDocument next, (ResourceEditSession Edits, ResourceSnapshot Snapshot)? after)
     {
         static bool Same(AssetRecord a, AssetRecord b) => a.Name == b.Name && a.Offset == b.Offset && a.Length == b.Length;
         if (oldIndex < 0 || oldIndex >= previous.Assets.Count) return null;
@@ -216,7 +222,7 @@ public sealed class MotionEditor : UserControl, IDisposable
             {
                 var m = members[i];
                 // Session members keep their UUIDs; a selection from the unedited file maps through its original directory entry.
-                if (selectedIdentity is Guid id ? m.Id == id : before == null && m.SourceIndex == oldIndex && current.Edits.OriginalAsset(m) is { } original && Same(original, old)) return i;
+                if (identity is Guid id ? m.Id == id : before == null && m.SourceIndex == oldIndex && current.Edits.OriginalAsset(m) is { } original && Same(original, old)) return i;
             }
             return null;
         }
@@ -224,12 +230,12 @@ public sealed class MotionEditor : UserControl, IDisposable
         // A closed session whose current snapshot was verified-saved to this unchanged file has identical member order.
         if (before is { } prior) return !prior.Edits.IsDirty && ReferenceEquals(prior.Snapshot, prior.Edits.Current) && prior.Edits.TargetPath.Equals(next.Path, StringComparison.OrdinalIgnoreCase) && prior.Edits.TargetStamp == next.Stamp ? oldIndex : null;
         // An unedited library keeps indices only while the file itself is unchanged.
-        return selectedIdentity == null && previous.Stamp == next.Stamp && Same(next.Assets[oldIndex], old) ? oldIndex : null;
+        return identity == null && previous.Stamp == next.Stamp && Same(next.Assets[oldIndex], old) ? oldIndex : null;
     }
     private void ClearBinding(string message, bool notify = true)
     {
         // Supersede any assembly load from the previous library; its completion no longer owns playback state.
-        generation++; load?.Cancel(); load = null; Pause(); pendingPlayback = null; sampler = null; selectedMember = null; selectedIdentity = null; ++clipGeneration;
+        generation++; load?.Cancel(); load = null; requestedMember = null; requestedIdentity = null; Pause(); pendingPlayback = null; sampler = null; selectedMember = null; selectedIdentity = null; ++clipGeneration;
         syncing = true; assembly.SelectedItem = null; syncing = false;
         Viewport.Clear(); SceneChanged?.Invoke(); support.Text = message; if (notify) StatusChanged?.Invoke(message);
     }

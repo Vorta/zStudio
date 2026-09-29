@@ -78,6 +78,19 @@ internal static class MotionLibraryRefreshChecks
             Assert.Null(editor.AssemblyMember); Assert.Equal(libraryPath, State()["library"]!.GetValue<string>());
             Assert.Equal("mech_other.flt", editor.Assemblies.Single(a => a.Index == 4).Name);
 
+            // A refresh delayed inside library loading must not restore the assembly bound before a newer user choice.
+            await editor.SelectAssemblyAsync(3, token);
+            var gate = (SemaphoreSlim)typeof(AssetResolver).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main.ViewModel.Resolver)!;
+            await gate.WaitAsync(token); Task refresh, choice;
+            try
+            {
+                refresh = editor.RefreshLibraryAsync(); Assert.False(refresh.IsCompleted); // Blocked while opening the library.
+                choice = editor.SelectAssemblyAsync(4, token);
+            }
+            finally { gate.Release(); }
+            await refresh; await choice;
+            Assert.Equal(4, editor.AssemblyMember); Assert.Equal("mech_other.flt", editor.Assemblies.Single(a => a.Index == 4).Name);
+
             MotionEditor? CurrentMotion() => (MotionEditor?)typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main);
             JsonNode State() => System.Text.Json.JsonSerializer.SerializeToNode(editor.State)!;
             Task RenameOther(string name) => Job("archive_edit", new() { ["document"] = other.SessionId.ToString(), ["revision"] = other.Revision, ["action"] = "rename", ["member"] = other.ResourceEdits!.Current.Members[0].Id.ToString(), ["name"] = name });

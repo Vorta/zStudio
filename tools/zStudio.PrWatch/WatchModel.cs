@@ -5,6 +5,8 @@ namespace Recoil.Zbd.PrWatch;
 public sealed record Feedback(string Key, string Url, string Author, string Body, DateTimeOffset Published, bool Informational = false);
 public sealed record Approval(string Head, long ReactionId, DateTimeOffset Created, string SummaryUrl);
 public sealed record Observation(string Head, bool Open, Feedback[] Comments, Approval? Approval);
+/// <summary>Outcome of a foreground listen: "notice" (claimed, not yet written), "closed" or "stopped".</summary>
+public sealed record ListenResult(Notice? Notice, string Outcome);
 public sealed record ReadSnapshot(Guid Id, Guid Watch, Guid? Notice, DateTimeOffset Created, Observation Observation);
 
 public sealed class Notice

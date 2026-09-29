@@ -122,15 +122,16 @@ public partial class MainWindow
         return Result(new { document = doc.SessionId, doc.Revision, member = member.Id, record = target });
     }
     /// <summary>Choose the semantic valve editor from the current member structure; names are shared across games.</summary>
-    private bool UsesValveProperties(DocumentModel doc, Guid memberId)
+    private async Task<bool> UsesValvePropertiesAsync(DocumentModel doc, Guid memberId, CancellationToken token)
     {
-        var edits = ResourceSession(doc); var snapshot = edits.Current;
+        var snapshot = ResourceSession(doc).Current;
         for (int i = 0; i < snapshot.Members.Count; i++)
         {
             var member = snapshot.Members[i];
             if (member.Id != memberId) continue;
-            // Classify the current snapshot's already decoded tree; structure, not identity, decides the editor.
-            return MissionAiValves.IsResource(member.Name) && snapshot.Document.Assets[i].Content is ZrdNode root && MissionAiValves.HasSemanticRecords(member.Name, root);
+            if (!MissionAiValves.IsResource(member.Name) || snapshot.Document.Assets[i].Content is not ZrdNode root) return false;
+            // Classify the snapshot's immutable decoded tree off the dispatcher: a large tree without valves is walked completely.
+            return await Task.Run(() => MissionAiValves.HasSemanticRecords(member.Name, root, token), token);
         }
         return false;
     }

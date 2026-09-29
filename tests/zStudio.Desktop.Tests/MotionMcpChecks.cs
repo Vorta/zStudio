@@ -161,6 +161,9 @@ internal static class MotionMcpChecks
             references = await Call("mech_models", MechArgs(("section", "nodes"), ("localModel", 0), ("query", "REFERENCE_0999")));
             Assert.Equal(1, references["nodes"]!["total"]!.GetValue<int>()); Assert.Equal(999, references["nodes"]!["items"]![0]!["localNode"]!.GetValue<int>());
             references = await Call("mech_models", MechArgs(("section", "nodes"), ("localModel", 0), ("query", "absent")));
+            // Model rows are found by the node labels users see, not only their synthetic "Model N" label.
+            var byNode = await Call("mech_models", MechArgs(("query", "REFERENCE_0999")));
+            Assert.Equal(1, byNode["models"]!["total"]!.GetValue<int>()); Assert.Equal(0, byNode["models"]!["items"]![0]!["localModel"]!.GetValue<int>());
             Assert.Equal(0, references["nodes"]!["total"]!.GetValue<int>());
             foreach (var invalidArgs in new[] { MechArgs(("section", "nodes")), MechArgs(("localModel", -1)), MechArgs(("localModel", assembly.ModelCount)) })
                 Assert.True((await client.CallToolAsync("zstudio_mech_models", invalidArgs, cancellationToken: token)).IsError);
@@ -176,6 +179,10 @@ internal static class MotionMcpChecks
             Assert.Equal(40, sharedMaterials["materials"]!["total"]!.GetValue<int>()); Assert.Null(sharedMaterials["materials"]!["nextOffset"]);
             Assert.Equal(38, sharedMaterials["materials"]!["items"]![0]!["index"]!.GetValue<int>());
             sharedMaterials = await Call("mech_models", MechArgs(("section", "materials"), ("query", "MATERIAL 39")));
+            // Material labels include the texture name shown in the GUI; material 0 is the textured one here.
+            Assert.Equal(39, (await Call("mech_models", MechArgs(("section", "materials"), ("query", "SOLID COLOR"))))["materials"]!["total"]!.GetValue<int>());
+            var textured = await Call("mech_models", MechArgs(("section", "materials"), ("query", "SAMPLE")));
+            Assert.Equal(1, textured["materials"]!["total"]!.GetValue<int>()); Assert.Equal(0, textured["materials"]!["items"]![0]!["index"]!.GetValue<int>());
             Assert.Equal(1, sharedMaterials["materials"]!["total"]!.GetValue<int>());
             Recoil.Zbd.Rendering.SceneViewport StaticViewport() => (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             AnimationFrame Presented() => (AnimationFrame)typeof(Recoil.Zbd.Rendering.SceneViewport).GetField("animationFrame", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor.Viewport)!;

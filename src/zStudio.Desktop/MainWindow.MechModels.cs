@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
@@ -70,8 +71,11 @@ public partial class MainWindow
             if (section == "materials")
             {
                 var used = localModel is int selected ? scene.Models[member.FirstModel + selected].Polygons.Select(p => p.MaterialIndex).ToHashSet() : null;
+                // Match the GUI label: "Material N" plus its texture name.
+                string Texture(JsonObject material) => material.Int("texture_index", -1) is >= 0 and int t && t < scene.Textures.Count ? scene.Textures[t].Text("name") : "solid color";
                 return Result(new { doc.Revision, materials = Page(scene.Materials.Select((m, i) => (Material: m, Index: i)).Where(m => used == null || used.Contains(m.Index)), a,
-                    m => $"Material {m.Index}", m => new { index = m.Index, fields = m.Material }).Data });
+                    project: m => new { index = m.Index, fields = m.Material },
+                    matches: (m, query) => $"Material {m.Index}".Contains(query, StringComparison.OrdinalIgnoreCase) || Texture(m.Material).Contains(query, StringComparison.OrdinalIgnoreCase)).Data });
             }
             var nodes = scene.Nodes.Skip(member.RootNode).Take(member.NodeCount);
             if (section == "nodes")
@@ -84,7 +88,9 @@ public partial class MainWindow
             var byModel = nodes.ToLookup(n => n.ModelIndex);
             return Result(new { doc.Revision, member.MemberIndex, member.RootNode, member.NodeCount,
                 models = Page(scene.Models.Skip(member.FirstModel).Take(member.ModelCount).Select((m, i) => (Model: m, Index: i)).Where(m => localModel == null || m.Index == localModel), a,
-                    row => $"Model {row.Index}", row =>
+                    // Match the labels users see: "Model N" and every referenced node name, without composing one search string.
+                    matches: (row, query) => $"Model {row.Index}".Contains(query, StringComparison.OrdinalIgnoreCase) || byModel[row.Model.Index].Any(n => n.Name.Contains(query, StringComparison.OrdinalIgnoreCase)),
+                    project: row =>
                     {
                         var m = row.Model; var references = byModel[m.Index]; int nodeCount = references.Count();
                         var materials = m.Polygons.Select(p => p.MaterialIndex).Distinct().ToArray();

@@ -65,7 +65,9 @@ public partial class MainWindow
         bool Same(string? a, string? b) => a != null && b != null && a.Equals(b, StringComparison.OrdinalIgnoreCase);
         // A resolver selection can describe an in-flight request. Only a presented
         // mission is a completed no-op; retrying a pending selection must await it.
-        if (Same(previous, choice.Archive) && Same(resolver.SelectedMission(path), choice.Archive)) return;
+        // Only a presented mission is a completed no-op; a remembered selection without a published preview must rebuild.
+        string? displayed = editor?.MissionArchive ?? (HasPublishedStaticScene ? scene?.Mission?.Layout.MissionArchive : null);
+        if (Same(displayed, choice.Archive) && Same(resolver.SelectedMission(path), choice.Archive)) return;
         resolver.SelectMission(path, choice.Archive); exactMissionRequest = (path, choice.Archive);
         foreach (var open in ViewModel.Documents) open.InvalidateMissionContext();
         try

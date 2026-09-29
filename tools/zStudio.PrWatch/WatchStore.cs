@@ -11,11 +11,14 @@ public sealed class WatchStore
     public string StatePath => Path.Combine(Folder, "state.json");
     /// <summary>Bound for retrying atomic replacement while another process holds a record without delete sharing.</summary>
     public TimeSpan ReplaceTimeout { get; init; } = TimeSpan.FromSeconds(10);
-    public WatchStore(string workspace, int pr)
+    /// <summary>Null for the Codex queue watch; "claude" for the independent foreground (Claude Code Monitor) watch.</summary>
+    public string? Channel { get; }
+    public WatchStore(string workspace, int pr, string? channel = null)
     {
         if (pr <= 0) throw new ArgumentOutOfRangeException(nameof(pr));
-        Workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
-        Folder = Path.Combine(Workspace, ".agent", "pr-watch", "pr-" + pr);
+        if (channel is not (null or "claude")) throw new ArgumentException("Unknown watch channel.", nameof(channel));
+        Workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace)); Channel = channel;
+        Folder = Path.Combine(Workspace, ".agent", "pr-watch", "pr-" + pr + (channel == null ? "" : "-" + channel));
         EnsureSafe(Folder);
     }
 
@@ -53,7 +56,7 @@ public sealed class WatchStore
     private void Validate(WatchState state)
     {
         if (state.Schema != 1 || !string.Equals(state.Workspace, Workspace, StringComparison.OrdinalIgnoreCase) ||
-            Path.GetFileName(Folder) != "pr-" + state.Pr || state.Id == Guid.Empty || state.Thread == Guid.Empty ||
+            Path.GetFileName(Folder) != "pr-" + state.Pr + (Channel == null ? "" : "-" + Channel) || state.Id == Guid.Empty || state.Thread == Guid.Empty ||
             state.Handled.Count > 30000 || state.Notices.Count > 2000)
             throw new InvalidDataException("Invalid watcher state; preserve it for inspection.");
     }

@@ -47,6 +47,16 @@ Follow-up PR review (commit 69c9d7e) found four further P2s, now fixed with regr
 - **Animation mission switches:** an MW3 animation mission switch could fall back to another reader if the requested one disappeared mid-switch. The request now reaches the animation context exactly, so the switch fails and keeps the displayed mission.
 - **PR watcher approval:** the watcher could pair a thumbs-up with a superseded summary. Only the newest current-head summary qualifies now.
 
+Codex's review of 13f99bc found six further P2s, now fixed with regressions that fail without the fixes:
+- **AI snapshot diagnostics:** one budget now covers every network member of a snapshot, with an omitted count.
+- **Partition grids and node index lists:** world partition cells and all node index lists are bounded per file before metadata is built.
+- **Mission re-selection:** selecting the remembered mission again rebuilds a Whole world that never published.
+- **Motion library refresh:** a delayed library refresh keeps a newer assembly choice.
+- **Mech search:** `mech_models` queries match node names and texture labels.
+- **Valve Properties:** classification runs as cancellable background work.
+
+The PR watcher gained a Claude Code channel (`-Claude`). A foreground `listen` command, run through Claude Code's Monitor, reuses the durable one-shot claim, snapshots and acknowledgment. It waits until a burst of new comments stops changing, prints exactly one notification line, and runs from a private runtime copy so builds stay possible. Watcher tests: 67/67.
+
 ## PR feedback watch and coordinate-path review (2026-09-29)
 
 Added optional local development tooling in `tools/pr-watch.ps1`. It observes a selected PR's conversation comments, published review summaries and inline comments, disarms on the first new feedback batch and queues one follow-up into the owning Codex conversation. Explicit snapshot acknowledgment preserves later arrivals; validated fix pushes re-arm against the remote head. Separate approval monitoring checks a fresh review-bot reaction on the PR description and a completed current-head summary. The helper does not edit, merge or publish; any authorized release still requires the agent's current-head review, CI and repository checks. Durable claims prevent automatic duplicate submissions after crashes or uncertain delivery. See [PR watch setup and recovery](pr-watch.md).

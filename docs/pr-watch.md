@@ -1,6 +1,6 @@
 # PR feedback notifications for Codex
 
-This optional checkout tool watches one selected GitHub PR and queues a follow-up into the current Codex conversation. It is development tooling, separate from zStudio's GUI and application MCP server. It needs Windows, the .NET 10 SDK, authenticated `gh.exe`, and a native Codex installation supporting the experimental App Server queue API. It never changes Codex permissions or zStudio MCP opt-in.
+This optional checkout tool watches one selected GitHub PR. It queues a follow-up into the current Codex conversation, or notifies a Claude Code session through a foreground listener (see [Claude Code](#claude-code)). It is development tooling, separate from zStudio's GUI and application MCP server. It needs Windows, the .NET 10 SDK, authenticated `gh.exe`, and a native Codex installation supporting the experimental App Server queue API. It never changes Codex permissions or zStudio MCP opt-in.
 
 ## Check and arm
 
@@ -53,6 +53,31 @@ One approval notice is emitted per head. Feedback and approval detected together
 4. Clean up only branches proven to belong to merged PRs, verifying current branch tips and preserving unrelated/unmerged work. Squash merges require PR evidence; ordinary ancestry alone is insufficient. Keep main/protected branches. Record results and stop the watch.
 
 The worker stops when GitHub reports the PR closed/merged. A queued approval does not authorize a release if the user later pauses/stops or changes scope.
+
+## Claude Code
+
+Claude Code has no conversation queue, so it uses a separate `-Claude` channel. Its state lives under `.agent/pr-watch/pr-<n>-claude/`. It keeps the same identities, one-shot disarm, snapshots and acknowledgment rules, but a foreground listener run through Claude Code's Monitor tool delivers the notices:
+
+```powershell
+$head = gh pr view 14 --json headRefOid --jq .headRefOid
+./tools/pr-watch.ps1 arm -Pr 14 -Head $head -Claude
+./tools/pr-watch.ps1 listen -Pr 14 -Claude   # command of a Monitor with its maximum timeout
+```
+
+`listen` polls every 60 seconds. When unhandled feedback appears, it rechecks every 15 seconds until the set of new comments has not changed for 45 seconds, waiting at most 5 minutes. It then durably claims one notice, prints exactly one JSON line and exits. The line contains `event`, `notice`, `reasons`, `head` and the `next` read command.
+
+Comments posted together or in quick succession therefore produce a single notification. Comments arriving after the claim wait until the snapshot is acknowledged and the watch is re-armed. Informational comments and approvals behave as in the Codex watch. A closed PR or stopped watch prints `closed` or `stopped` instead.
+
+Build output never reaches stdout. The listener runs from a private runtime copy, so solution builds during fix work are unaffected. If the Monitor expires without an event, run `listen` again; the durable state means nothing is lost or repeated.
+
+On a notice, follow the steps above with `-Claude`:
+
+1. Run `status` and `read`.
+2. Fix, validate and push.
+3. Run `acknowledge` for the read snapshot.
+4. Run `arm -Head <verified remote head> -Claude`, then `listen` again.
+
+`stop -Claude` disables the watch. `-Thread`, `-Codex` and `-NotifyTest` apply only to the Codex channel.
 
 ## Status, stopping and recovery
 

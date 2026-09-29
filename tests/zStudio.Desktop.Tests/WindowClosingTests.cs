@@ -52,6 +52,7 @@ public sealed class WindowClosingTests
                     await MissionSelectionChecks.Run();
                     await MissionSelectionChecks.RunSupersedingRefresh();
                     await MissionSelectionChecks.RunUnavailableSelection();
+                    await MissionSelectionChecks.RunRetryWithoutPreview();
                     await MissionOwnershipChecks.Run();
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();

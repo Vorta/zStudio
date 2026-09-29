@@ -59,6 +59,39 @@ public sealed class GameZBoundsTests
     }
 
     [Fact]
+    public void OversizedWorldPartitionsAreRejectedBeforeCellsAreMaterialized()
+    {
+        // Complete empty cells are present, so only the supported cell limit stops per-cell metadata.
+        byte[] cells = WorldNode(300, 300, _ => 0);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var error = Assert.Throws<InvalidDataException>(() => GameZReader.ReadNodeData(new BinaryCursor(cells), "world", GameZLayouts.For(15)));
+        Assert.Contains("partition cell count 90,000 exceeds the supported 65,536", error.Message);
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 4_000_000);
+        // Complete index arrays are present too: the running node-reference total stops before the last array is built.
+        byte[] references = WorldNode(5, 1, _ => ushort.MaxValue);
+        error = Assert.Throws<InvalidDataException>(() => GameZReader.ReadNodeData(new BinaryCursor(references), "world", GameZLayouts.For(15)));
+        Assert.Contains("node reference count 327,675 exceeds the supported 262,144", error.Message);
+        // Other node index lists share the same per-document budget (here, world light indices with complete bytes).
+        error = Assert.Throws<InvalidDataException>(() => GameZReader.ReadNodeData(new BinaryCursor(WorldNode(0, 0, _ => 0, lights: 300_000)), "world", GameZLayouts.For(15)));
+        Assert.Contains("node reference count 300,000 exceeds the supported 262,144", error.Message);
+        var retail = GameZReader.ReadNodeData(new BinaryCursor(WorldNode(20, 30, i => i % 3)), "world", GameZLayouts.For(15));
+        Assert.Equal(30, ((System.Text.Json.Nodes.JsonArray)retail["partitions"]!).Count);
+    }
+    /// <summary>A version-15 world node payload followed by its interleaved partition cells and node indices.</summary>
+    private static byte[] WorldNode(int x, int z, Func<int, int> references, int lights = 0)
+    {
+        using MemoryStream stream = new(); using BinaryWriter w = new(stream);
+        byte[] world = new byte[172]; BinaryPrimitives.WriteInt32LittleEndian(world.AsSpan(120), x); BinaryPrimitives.WriteInt32LittleEndian(world.AsSpan(124), z);
+        BinaryPrimitives.WriteInt32LittleEndian(world.AsSpan(144), lights); w.Write(world); w.Write(new byte[lights * 4]);
+        for (int i = 0; i < x * z; i++)
+        {
+            byte[] cell = new byte[64]; int count = references(i); BinaryPrimitives.WriteUInt16LittleEndian(cell.AsSpan(58), (ushort)count); w.Write(cell);
+            w.Write(new byte[count * 4]);
+        }
+        return stream.ToArray();
+    }
+
+    [Fact]
     public void WorldsWithinTheLimitsStillOpen()
     {
         var doc = FormatRegistry.Default.OpenBytes("gamez.zbd", World(27, 2_000, 2), token: Token);

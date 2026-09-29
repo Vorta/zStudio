@@ -65,6 +65,73 @@ public sealed class WatchService(WatchStore store, IPrSource source, INoticeQueu
         }
     }
     public static string Short(string message) => message[..Math.Min(2000, message.Length)];
+    /// <summary>
+    /// Foreground delivery for agents that receive notifications from a process's output (Claude Code's Monitor).
+    /// A burst is coalesced: once unhandled feedback appears, polling continues until that set stops changing for
+    /// <paramref name="settle"/> (bounded by <paramref name="maximumSettle"/>). One notice is then claimed durably,
+    /// disarming comments exactly like the queue worker; later arrivals wait for acknowledgment and re-arm.
+    /// </summary>
+    public async Task<ListenResult> ListenAsync(CancellationToken token, TimeSpan? poll = null, TimeSpan? settle = null, TimeSpan? maximumSettle = null, TimeSpan? settlePoll = null)
+    {
+        TimeSpan interval = poll ?? TimeSpan.FromSeconds(60), quiet = settle ?? TimeSpan.FromSeconds(45), longest = maximumSettle ?? TimeSpan.FromMinutes(5), recheck = settlePoll ?? TimeSpan.FromSeconds(15);
+        HashSet<string>? burst = null; DateTimeOffset first = default, changed = default; int generation = -1;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            WatchState before;
+            try { using (await store.LockAsync("state", token)) before = store.Load() ?? throw new InvalidOperationException("No watch exists."); }
+            catch (Exception ex) when (Transient(ex, token)) { await Task.Delay(recheck, clock, token); continue; }
+            if (!before.Active) return new(null, "stopped");
+            if (before.Outstanding is { } pending) throw new InvalidOperationException($"Notice {pending.Id:D} is outstanding; read and acknowledge it before listening again.");
+            if (before.Generation != generation) { burst = null; generation = before.Generation; }
+            Observation observation;
+            try { observation = await source.ReadAsync(before.Repository, before.Pr, token); }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException && !token.IsCancellationRequested)
+            {
+                int failures = 1;
+                try
+                {
+                    using (await store.LockAsync("state", token))
+                    { var state = store.Load()!; state.LastError = Short(ex.Message); failures = state.FailureCount = Math.Min(100, state.FailureCount + 1); store.Save(state); }
+                }
+                catch (Exception saveError) when (Transient(saveError, token)) { }
+                await Task.Delay(WatchLogic.RetryDelay(failures, (ex as GitHubException)?.RetryAfter), clock, token); continue;
+            }
+            var now = clock.GetUtcNow();
+            var fresh = before.CommentsArmed && observation.Open
+                ? observation.Comments.Where(c => !c.Informational && !before.Handled.Contains(c.Key)).Select(c => c.Key).ToHashSet() : [];
+            if (fresh.Count > 0)
+            {
+                if (burst == null) { burst = fresh; first = changed = now; }
+                else if (!burst.SetEquals(fresh)) { burst = fresh; changed = now; }
+                if (now - changed < quiet && now - first < longest) { await Task.Delay(recheck, clock, token); continue; }
+            }
+            else burst = null;
+            try
+            {
+                using (await store.LockAsync("state", token))
+                {
+                    var state = store.Load()!;
+                    if (state.Id != before.Id || state.Generation != before.Generation || !state.Active) continue;
+                    var notice = WatchLogic.Observe(state, observation, now);
+                    state.Heartbeat = now; store.Save(state); // The durable claim precedes the single output line.
+                    if (notice != null) return new(notice, "notice");
+                    if (!state.Active) return new(null, observation.Open ? "stopped" : "closed");
+                }
+            }
+            catch (Exception ex) when (Transient(ex, token)) { await Task.Delay(recheck, clock, token); continue; }
+            await Task.Delay(interval, clock, token);
+        }
+    }
+    /// <summary>Record that the claimed notice was written to the listener's output.</summary>
+    public async Task MarkEmittedAsync(Notice notice, CancellationToken token)
+    {
+        using (await store.LockAsync("state", token))
+        {
+            var state = store.Load() ?? throw new InvalidOperationException("No watch exists.");
+            if (state.Notices.SingleOrDefault(n => n.Id == notice.Id) is { } saved) { saved.Delivery = "emitted"; store.Save(state); }
+        }
+    }
     public async Task RunAsync(CancellationToken token)
     {
         FileStream lease;
@@ -145,11 +212,12 @@ public sealed class WatchService(WatchStore store, IPrSource source, INoticeQueu
         }
         return runtime;
     }
+    public static readonly string[] RuntimeFiles = ["Recoil.Zbd.PrWatch.dll", "Recoil.Zbd.PrWatch.deps.json", "Recoil.Zbd.PrWatch.runtimeconfig.json"];
     public static async Task StartWorkerAsync(WatchStore store, CancellationToken token)
     {
         using var launch = await store.LockAsync("launch", token);
         // Run a private immutable copy so subsequent solution builds do not hit locked tool binaries.
-        string[] names = ["Recoil.Zbd.PrWatch.dll", "Recoil.Zbd.PrWatch.deps.json", "Recoil.Zbd.PrWatch.runtimeconfig.json"];
+        string[] names = RuntimeFiles;
         string runtime = await PrepareRuntimeAsync(store, AppContext.BaseDirectory, names, token);
         using var child = Process.Start(CommandRunner.StartInfo(CommandRunner.Executable("dotnet"),
             [Path.Combine(runtime, names[0]), "worker", "--workspace", store.Workspace, "--pr", Path.GetFileName(store.Folder)[3..]], store.Workspace))
