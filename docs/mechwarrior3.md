@@ -30,6 +30,8 @@ GameZ version-27 replacement also supports the existing source-hash-bound OBJ/PN
 
 Open the motion archive and select a **Motion** asset. The viewer suggests a unique base assembly from the clip/assembly naming or leaves the choice explicit. The assembly picker can bind another library member. Rapid assembly changes retain the playback intent from before loading; an explicit Play/Pause during loading takes precedence, including after cancellation. Accepted motion edits and Undo/Redo immediately refresh the displayed sampler while retaining the camera and playback state. Missing/ambiguous track names keep the stored node pose and produce a support notice.
 
+Assembly binding indexes the selected member's node names once, with ordinal matching and duplicate-name protection. Binding runs off the UI thread and observes cancellation while indexing and binding tracks; superseded requests cannot replace the current selection, including when edits require rebinding during a pending load.
+
 Deleting the displayed motion or replacing it with non-motion data closes that motion viewer and shows the archive's resulting selection, or archive information when empty. Undo/Redo updates the preview as well, including when another Navigator tab is open. Renaming or reordering a surviving motion retains its viewer, playback and camera by member UUID; duplicate names and reused row indices do not identify the same clip. The separate Properties window keeps its pinned identity.
 
 Play/pause, the loop-time seeker, LOD and Frame use the shared renderer. Space works from Assets or passive preview content. Blender-style navigation, scene inspection and the tree apply to the visible posed geometry. Playback interpolates translations and normalized quaternions through the hierarchy; aiming, gait correction and inverse kinematics are not simulated.
@@ -39,6 +41,8 @@ Open **Properties** for a motion member to edit loop duration or a part/frame's 
 ## Compiled animations
 
 Version-39 entries use the existing sequence/event editor, Properties, transport, seek, audio preparation, camera preview, export and verified Save As. Catalogs are version-specific. Larger light/procedural records, water/lava collision fields, keyframe blocks, weapon events and particle records retain serialized sizes and opaque data. No-op writes preserve original bytes and record order.
+
+Version-39 transform events require the stored keyframe count to describe the entire payload exactly. Negative/excessive counts, missing records and trailing bytes or records make the keyframe stream unavailable for editing or playback. Inspection exposes a diagnostic and preserves the original bytes; scheduling fields remain inspectable/editable. Version-28's reserved field is not treated as a count.
 
 Supported shared animation operations have explicit approximation notices. Stored spline coefficients are preserved; preview sampling uses base/rate channels. Weapon gameplay and particle simulation are not executed. Version-39 gameplay markers 41/42 retain their dispatch traces and support notices, then allow subsequent events to run in both ordinary and cleanup sequences. Water/lava contact behavior, AI activation and mission-script execution are not reproduced. Recoil engine evidence does not establish MW3 runtime compatibility. Bind version-39 animations to a version-27 world; cross-game bindings are rejected. Ambiguous MW3 roots require an explicit root binding.
 

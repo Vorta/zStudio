@@ -68,14 +68,21 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
         token.ThrowIfCancellationRequested();
         if (Type != 12) return [];
         List<AnimationKeyframe> frames = []; int offset = Version == 39 ? 36 : 32;
-        while (offset < Bytes.Length)
+        BinaryCursor.CheckRange(Bytes.Length, 0, offset);
+        int? count = Version == 39 ? I32(16) : null;
+        if (count is < 0 || count > (Bytes.Length - offset) / 12)
+            throw new InvalidDataException("MW3 keyframe count is negative or exceeds the event payload.");
+        while (count is int expected ? frames.Count < expected : offset < Bytes.Length)
         {
             token.ThrowIfCancellationRequested();
+            if (count != null && Bytes.Length - offset < 12)
+                throw new InvalidDataException("MW3 keyframe count exceeds the available records.");
             BinaryCursor.CheckRange(Bytes.Length, offset, 12);
             int flags = I32(offset), length = 12 + (Version == 39 ? 76 : 28) * System.Numerics.BitOperations.PopCount((uint)flags & 7);
             BinaryCursor.CheckRange(Bytes.Length, offset, length);
             frames.Add(new(Bytes.AsSpan(offset, length).ToArray())); offset += length;
         }
+        if (offset != Bytes.Length) throw new InvalidDataException("MW3 keyframe count does not match the event payload; trailing bytes or records remain.");
         return frames;
     }
     public AnimationEvent WithKeyframes(IEnumerable<AnimationKeyframe> frames)

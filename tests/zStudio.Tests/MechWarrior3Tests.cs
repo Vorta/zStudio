@@ -193,6 +193,37 @@ public sealed class MechWarrior3Tests
         Assert.Equal(frame.Bytes, channels.WithChannels(1, 39).Bytes);
         var procedural = AnimationCatalog.Create(10, 39); Assert.Equal(-1, procedural.I16(240)); Assert.Equal(-1, procedural.I16(280)); Assert.Equal(-1, procedural.I16(320));
     }
+    [Theory]
+    [InlineData(-1, 0)]
+    [InlineData(0, 0)]
+    [InlineData(1, 0)]
+    [InlineData(3, 0)]
+    [InlineData(int.MaxValue, 0)]
+    [InlineData(2, 1)]
+    [InlineData(2, 12)]
+    public void Version39KeyframesRejectCountsThatDoNotDescribeTheCompletePayload(int count, int trailingBytes)
+    {
+        var ev = AnimationCatalog.Create(12, 39).WithKeyframes([AnimationKeyframe.Create(1), AnimationKeyframe.Create(7)]);
+        byte[] bytes = new byte[ev.Bytes.Length + trailingBytes]; ev.Bytes.CopyTo(bytes, 0);
+        ev = new AnimationEvent(bytes) { Version = 39 }; ev.SetInt(4, bytes.Length); ev.SetInt(16, count);
+        byte[] original = bytes.ToArray();
+        Assert.Throws<InvalidDataException>(() => ev.Keyframes(TestContext.Current.CancellationToken));
+        Assert.NotNull(ev.ToJson(TestContext.Current.CancellationToken)["keyframe_diagnostic"]);
+        Assert.Equal(original, ev.Bytes);
+    }
+    [Fact]
+    public void Version39KeyframesAcceptExactEmptyAndMixedChannelStreamsAndRejectTruncation()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var empty = AnimationCatalog.Create(12, 39).WithKeyframes([]);
+        Assert.Empty(empty.Keyframes(token)); Assert.Equal(0, empty.I32(16)); Assert.Equal(36, empty.Bytes.Length);
+        var mixed = empty.WithKeyframes([AnimationKeyframe.Create(0), AnimationKeyframe.Create(1), AnimationKeyframe.Create(7)]);
+        Assert.Equal(new[] { 12, 88, 240 }, mixed.Keyframes(token).Select(f => f.Bytes.Length)); Assert.Equal(3, mixed.I32(16));
+        foreach (int length in new[] { 16, 35, 36, mixed.Bytes.Length - 1 })
+            Assert.Throws<InvalidDataException>(() => new AnimationEvent(mixed.Bytes[..length]) { Version = 39 }.Keyframes(token));
+        var recoil = AnimationCatalog.Create(12).WithKeyframes([AnimationKeyframe.Create(1), AnimationKeyframe.Create(7)]);
+        recoil.SetInt(16, -1); Assert.Equal(2, recoil.Keyframes(token).Count); // RECOIL's field is reserved, not a count.
+    }
     [Fact]
     public async Task MotionEditsUseMemberIdentityAndVerifiedArchiveHistory()
     {

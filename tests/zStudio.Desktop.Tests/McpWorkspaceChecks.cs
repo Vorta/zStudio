@@ -120,24 +120,28 @@ internal static class McpWorkspaceChecks
             Assert.Equal(originalSegments+1,doc.AnimationEdits.Package.Entries[0].Sequences[0].Events[1].Keyframes().Count);
             // A truncated payload leaves scheduling and catalog fields available
             // in the GUI. MCP must preserve the same partial inspection/edit path.
-            var malformed = new AnimationEvent(keyframe.Bytes[..33]);
-            byte[] malformedPayload = malformed.Bytes[32..];
-            doc.AnimationEdits.Apply(0, "Malformed fixture", e => e.Sequences[0].Events.Add(malformed));
-            var malformedTarget = new JsonObject { ["document"] = doc.SessionId.ToString(), ["entry"] = 0, ["sequence"] = sequence.Id.ToString(), ["event"] = malformed.Id.ToString() };
-            var malformedFields = await Call("property_fields", malformedTarget);
-            var diagnostic = malformedFields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Keyframe diagnostic")!;
-            Assert.True(diagnostic["readOnly"]!.GetValue<bool>());
-            Assert.Contains("read-only", diagnostic["value"]!.GetValue<string>());
-            Assert.Empty(malformedFields["fields"]!["actions"]!.AsArray());
-            string thresholdField = malformedFields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Threshold (s)")!["Id"]!.GetValue<string>();
-            var badSegment = (JsonObject)malformedTarget.DeepClone(); badSegment["segment"] = 1;
-            await Call("property_fields", badSegment, "invalid_argument");
-            var editMalformed = (JsonObject)malformedTarget.DeepClone();
-            editMalformed["revision"] = doc.Revision; editMalformed["field"] = thresholdField; editMalformed["value"] = "1.25";
-            await Call("property_edit", editMalformed);
-            var changedMalformed = doc.AnimationEdits.Package.Entries[0].Sequences[0].Events.Last();
-            Assert.Equal(1.25f, changedMalformed.Threshold);
-            Assert.Equal(malformedPayload, changedMalformed.Bytes[32..]);
+            var mw3Malformed = AnimationCatalog.Create(12, 39); mw3Malformed.SetInt(16, 0);
+            foreach (var malformed in new[] { new AnimationEvent(keyframe.Bytes[..33]), mw3Malformed })
+            {
+                byte[] malformedPayload = malformed.Bytes[32..];
+                doc.AnimationEdits.Apply(0, "Malformed fixture", e => e.Sequences[0].Events.Add(malformed));
+                var malformedTarget = new JsonObject { ["document"] = doc.SessionId.ToString(), ["entry"] = 0, ["sequence"] = sequence.Id.ToString(), ["event"] = malformed.Id.ToString() };
+                var malformedFields = await Call("property_fields", malformedTarget);
+                var diagnostic = malformedFields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Keyframe diagnostic")!;
+                Assert.True(diagnostic["readOnly"]!.GetValue<bool>());
+                Assert.Contains("read-only", diagnostic["value"]!.GetValue<string>());
+                Assert.Empty(malformedFields["fields"]!["actions"]!.AsArray());
+                string thresholdField = malformedFields["fields"]!["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Threshold (s)")!["Id"]!.GetValue<string>();
+                var badSegment = (JsonObject)malformedTarget.DeepClone(); badSegment["segment"] = 1;
+                await Call("property_fields", badSegment, "invalid_argument");
+                var editMalformed = (JsonObject)malformedTarget.DeepClone();
+                editMalformed["revision"] = doc.Revision; editMalformed["field"] = thresholdField; editMalformed["value"] = "1.25";
+                await Call("property_edit", editMalformed);
+                var changedMalformed = doc.AnimationEdits.Package.Entries[0].Sequences[0].Events.Last();
+                Assert.Equal(1.25f, changedMalformed.Threshold);
+                Assert.Equal(malformedPayload, changedMalformed.Bytes[32..]);
+                Assert.Equal(malformed.I32(16), changedMalformed.I32(16));
+            }
             await Call("close_document",new() { ["document"]=doc.SessionId.ToString(),["revision"]=doc.Revision },"unsaved_changes");
             await Call("source_bytes",new() { ["document"]=doc.SessionId.ToString(),["offset"]=0,["length"]=4097 },"invalid_argument");
             await Call("state",new() { ["unexpected"]=true },"invalid_argument");

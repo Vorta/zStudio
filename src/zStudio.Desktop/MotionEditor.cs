@@ -119,7 +119,8 @@ public sealed class MotionEditor : UserControl, IDisposable
         {
             var selected = (MechAssembly)asset.Content!; var nextClip = CurrentClip();
             var selectedLibrary = library!;
-            var next = new MotionPreview(nextClip, selectedLibrary, selected);
+            var next = await Task.Run(() => new MotionPreview(nextClip, selectedLibrary, selected, ct), ct);
+            ct.ThrowIfCancellationRequested(); if (disposed || request != generation) return;
             var choices = SceneLods.Choices(new SceneLods(selectedLibrary.Scene!).Count([selected.RootNode]));
             int nextLod = Math.Min(Lod, choices.Length - 1);
             var context = new AnimationPreviewContext { World = selectedLibrary, Package = new AnimationPackage { Prefix = new byte[72], Tail = [] } };
@@ -127,7 +128,12 @@ public sealed class MotionEditor : UserControl, IDisposable
             await replacement.ShowAnimationAsync(context, next.At(seconds, nextLod, ct), resolver, false, ct, previewLifetime: lifetime);
             ct.ThrowIfCancellationRequested(); if (disposed || request != generation) return;
             // A resource edit may have refreshed the clip while mesh/texture preparation was pending.
-            if (!ReferenceEquals(nextClip, CurrentClip())) { nextClip = CurrentClip(); next = new(nextClip, selectedLibrary, selected); }
+            while (!ReferenceEquals(nextClip, CurrentClip()))
+            {
+                nextClip = CurrentClip();
+                next = await Task.Run(() => new MotionPreview(nextClip, selectedLibrary, selected, ct), ct);
+                ct.ThrowIfCancellationRequested(); if (disposed || request != generation) return;
+            }
             seconds = Math.Min(seconds, nextClip.LoopTime);
             var previous = Viewport; Viewport = replacement; replacement = null;
             root.Children.Remove(previous); root.Children.Add(Viewport); previous.Dispose();
@@ -189,7 +195,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     {
         if (disposed) return;
         clip = CurrentClip(); seconds = Math.Min(seconds, clip.LoopTime);
-        if (library?.Assets.FirstOrDefault(a => a.Index == selectedMember)?.Content is MechAssembly selected) { sampler = new(clip, library, selected); RefreshSupport(); }
+        if (library?.Assets.FirstOrDefault(a => a.Index == selectedMember)?.Content is MechAssembly selected) { sampler = new(clip, library, selected, lifetime); RefreshSupport(); }
         startedAt = seconds; elapsed.Restart(); Present();
     }
     public void SetLod(int value)

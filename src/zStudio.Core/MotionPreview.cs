@@ -12,19 +12,32 @@ public sealed class MotionPreview
     private readonly MechAssembly assembly;
     private readonly Dictionary<int, int> tracks = [];
     public IReadOnlyList<string> Diagnostics { get; }
-    public MotionPreview(MotionClip clip, ZbdDocument library, MechAssembly assembly)
+    public MotionPreview(MotionClip clip, ZbdDocument library, MechAssembly assembly, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         this.clip = clip; scene = library.Scene ?? throw new InvalidDataException("A decoded mech library is required."); this.assembly = assembly;
         if (assembly.RootNode < 0 || assembly.NodeCount < 1 || assembly.RootNode + (long)assembly.NodeCount > scene.Nodes.Count) throw new InvalidDataException("Invalid mech member range.");
         List<string> notes = ["Authored motion preview. Aiming, gait adjustment, inverse kinematics and gameplay are not simulated."];
-        var partCounts = clip.Parts.GroupBy(p => p.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        Dictionary<string, int> nodesByName = new(StringComparer.Ordinal), partCounts = new(StringComparer.Ordinal);
+        for (int i = assembly.RootNode; i < assembly.RootNode + assembly.NodeCount; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var node = scene.Nodes[i];
+            if (!nodesByName.TryAdd(node.Name, node.Index)) nodesByName[node.Name] = -1;
+        }
+        foreach (var part in clip.Parts)
+        {
+            token.ThrowIfCancellationRequested();
+            partCounts[part.Name] = partCounts.GetValueOrDefault(part.Name) + 1;
+        }
         for (int i = 0; i < clip.Parts.Count; i++)
         {
+            token.ThrowIfCancellationRequested();
             var part = clip.Parts[i];
-            var matches = scene.Nodes.Skip(assembly.RootNode).Take(assembly.NodeCount).Where(n => n.Name == part.Name).ToArray();
-            if (matches.Length != 1 || partCounts[part.Name] != 1) notes.Add($"Part #{i} {part.Name}: missing or ambiguous node; stored pose retained.");
-            else tracks.Add(matches[0].Index, i);
+            if (!nodesByName.TryGetValue(part.Name, out int node) || node < 0 || partCounts[part.Name] != 1) notes.Add($"Part #{i} {part.Name}: missing or ambiguous node; stored pose retained.");
+            else tracks.Add(node, i);
         }
+        token.ThrowIfCancellationRequested();
         Diagnostics = notes;
     }
     public AnimationFrame At(double seconds, int lod = 0, CancellationToken token = default)

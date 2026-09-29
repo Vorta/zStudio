@@ -238,6 +238,7 @@ internal static class MotionMcpChecks
                 await File.WriteAllBytesAsync(libraryPath, MotionFixture.Library(textured: true), token);
                 await File.WriteAllBytesAsync(Path.Combine(folder, "image.zbd"), Recoil.Zbd.Tests.ContentFixture.Texture(2, 2, false), token);
                 var resolver = main.ViewModel.Resolver!; await resolver.InvalidateAsync([libraryPath], token); await editor.RefreshLibraryAsync(null);
+                await CheckBindingSupersession();
                 var gate = (SemaphoreSlim)typeof(AssetResolver).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(resolver)!;
                 foreach (string action in new[] { "keep", "pause", "play", "cancel" })
                 {
@@ -273,6 +274,39 @@ internal static class MotionMcpChecks
                 await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" });
                 await editor.SelectAssemblyAsync(3, token); editor.Seek(1);
             }
+            async Task CheckBindingSupersession()
+            {
+                var asset = doc.ResourceEdits!.Current.Document.Assets[0]; var seed = Assert.IsType<MotionClip>(asset.Content);
+                using var release = new ManualResetEventSlim();
+                TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                var blocked = new BindingParts(seed.Parts, () =>
+                {
+                    Assert.False(main.Dispatcher.CheckAccess());
+                    entered.TrySetResult();
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(5), token), "Motion binding did not yield to a newer workspace request.");
+                });
+                asset.Content = new MotionClip { Header = seed.Header, LoopTime = seed.LoopTime, FrameCount = seed.FrameCount, Parts = blocked };
+                string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+                editor.Play(); JsonNode? operation = null;
+                try
+                {
+                    operation = await Call("motion_preview", new() { ["preview"] = preview, ["action"] = "assembly", ["memberIndex"] = 4 });
+                    await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), token);
+                    var state = await Call("preview_state", new() { ["preview"] = preview });
+                    Assert.True(state["motion"]!["loading"]!.GetValue<bool>()); Assert.True(state["motion"]!["playbackRequested"]!.GetValue<bool>());
+                    asset.Content = seed;
+                    // GUI changes can supersede an MCP job; MCP mutations themselves remain serialized.
+                    var replacement = editor.SelectAssemblyAsync(3, token);
+                    release.Set(); await replacement;
+                    Assert.Equal(3, editor.AssemblyMember); Assert.True(editor.IsPlaying);
+                }
+                finally { asset.Content = seed; release.Set(); }
+                Assert.NotNull(operation); string id = operation["id"]!.GetValue<string>();
+                while (operation["State"]!.GetValue<string>() is "queued" or "running")
+                { await Task.Delay(10, token); operation = await Call("operation", new() { ["id"] = id }); }
+                Assert.True(operation["State"]!.GetValue<string>() == "canceled", operation.ToJsonString());
+                Assert.Equal(3, editor.AssemblyMember); Assert.True(editor.IsPlaying); editor.Pause();
+            }
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);
@@ -287,5 +321,12 @@ internal static class MotionMcpChecks
             }
         }
         finally { foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc); main.Close(); Directory.Delete(folder, true); }
+    }
+    private sealed class BindingParts(IReadOnlyList<MotionPart> parts, Action read) : IReadOnlyList<MotionPart>
+    {
+        public int Count => parts.Count;
+        public MotionPart this[int index] => parts[index];
+        public IEnumerator<MotionPart> GetEnumerator() { read(); return parts.GetEnumerator(); }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

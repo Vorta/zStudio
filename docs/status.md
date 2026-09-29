@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #14 cancellable motion binding and MW3 keyframe counts (2026-09-29)
+
+Motion binding builds one ordinal name index over the selected assembly, reducing matching from parts × nodes to nodes + parts while retaining member boundaries and duplicate-name ambiguity. Indexing/counting/binding observe cancellation. Assembly selection prepares bindings off the UI thread and checks request ownership before publication; edits accepted during loading trigger cancellable background rebinding until the current clip is ready. Existing playback intent, explicit pause/play, identity and source protections remain shared by GUI and MCP.
+
+Version-39 transform streams validate the stored frame count against the complete event payload. Negative/excessive counts, missing records, truncated headers/channels and trailing bytes/records are rejected before any transform is applied. Malformed streams retain source bytes and show the existing read-only keyframe diagnostic; scheduling fields remain editable through GUI and MCP. Version-28's reserved field remains uninterpreted. MCP capability notes and guides are updated; command schemas/catalog are unchanged and parity tests pass.
+
+Release build has zero warnings/errors. All 431 tests pass (338 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. New checks cover 4096 tracks/200000 assembly nodes, ordinal/member-scoped matching, duplicates, cancellation during binding, responsive MCP state while a background bind is blocked, GUI supersession of that MCP operation and retained playback intent. Count regressions reproduced the defect before the fix and cover zero/negative/excessive/mismatched counts, extra records/bytes, empty/mixed-channel streams, malformed preview blocking, round-trip source preservation and protocol property diagnostics/segment rejection/scheduling edits. Full installed MW3 corpus keyframe counts remain valid. Follow-up review found no further actionable defect in these changes. Version remains 0.7.0.
+
 ## PR #14 closing-sample preservation and bounded preview fixes (2026-09-29)
 
 Motion frame-zero edits and frame insertion/deletion now preserve each separately authored closing sample exactly, including distinct translation/quaternion values; earlier notes describing automatic closure are superseded. The shared archive editor, generated Properties and MCP use this behavior through Undo/Redo and verified Save As. Closing samples remain readable outside the editable frame range.
