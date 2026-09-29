@@ -281,7 +281,7 @@
   },
   {
     "Name": "zstudio_inspect_asset",
-    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings with explicit truncation markers; export retains complete data. Closed or changed documents reject stale results.",
+    "Description": "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Motion metadata previews 32 parts with 128-character names, totals and truncation flags; motion_records pages complete names. Export retains complete data. Closed or changed documents reject stale results.",
     "Mutates": false,
     "Parameters": [
       {
@@ -3955,7 +3955,7 @@
   },
   {
     "Name": "zstudio_mech_models",
-    "Description": "Inspect a mech archive member\u0027s local model identities and shared materials. Node names may repeat across members. Replacement retains the hierarchy and uses explicit member/local model indices.",
+    "Description": "Inspect member-local models, shared materials or node references. Model rows preview at most 32 nodes/material indices with totals and truncation flags; use section nodes/materials and localModel for complete paged lists. Node names may repeat. Queries filter model labels, node names or material labels before pagination.",
     "Mutates": false,
     "Parameters": [
       {
@@ -3981,9 +3981,20 @@
         "Required": false,
         "Choices": [
           "models",
-          "materials"
+          "materials",
+          "nodes"
         ],
         "Properties": null
+      },
+      {
+        "Name": "localModel",
+        "Type": "integer",
+        "Description": "Member-local model index, required for nodes; optionally restrict models/materials.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
       },
       {
         "Name": "offset",

@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #14 gameplay markers, fog and inspection bounds (2026-09-29)
+
+Version-39 gameplay-only events 41/42 now complete as trace-only markers, preserving support notices and allowing later ordinary/cleanup events to execute. Seeking remains deterministic, duration analysis completes and serialized data is untouched. Camera-only fog refreshes update both material and vertex tint through one helper, without advancing playback or rebuilding poses, positions or geometry.
+
+Motion metadata previews at most 32 parts with 128-character names, full counts and explicit truncation. Paged motion records retain full names, and explicit JSON exports retain every part. Mech model rows cap nested node and material previews at 32; full references use the nodes/materials sections with member-local model identity and shared paging/filtering. Projection occurs only for requested model rows. Typed discovery, the embedded catalog, capability mapping and MCP guides are updated.
+
+Release build passes with zero warnings/errors. All 406 tests pass (313 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. Regressions cover both gameplay event types in ordinary/cleanup sequences, trace/seek/duration/source preservation, maximum-sized motion names/part counts, real named-pipe bounded inspection and complete final pages, nested node/material limits, filters, invalid identities and catalog parity. Renderer checks preserve the paused frame/poses and avoid needless tint allocations; GPU checks confirm fog changes and reverses in the presented back buffer without forced rendering. Follow-up review found no additional actionable defects in these fixes. Version remains 0.7.0.
+
 ## PR #14 active-preview and bounded-output fixes (2026-09-29)
 
 Accepted motion edits, generated Properties changes and archive Undo/Redo now refresh the active motion sampler as well as dependent previews. Motion preparation no longer pauses playback, including failed edits. Mech mesh replacement and history rebuild the active geometry with the camera retained. Assembly loads share pending playback intent across superseded requests, honor explicit Play/Pause, restore transport after cancellation, and publish the latest clip if an edit arrives during loading. MCP state distinguishes actual playing, loading and requested playback.

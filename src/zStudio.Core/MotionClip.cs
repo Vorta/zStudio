@@ -111,7 +111,15 @@ public sealed class MotionClip
         }
         return stream.ToArray();
     }
-    public JsonObject ToJson() => new() { ["version"] = 4, ["loop_seconds"] = LoopTime, ["frame_count"] = FrameCount,
-        ["parts"] = new JsonArray(Parts.Select((p, i) => (JsonNode)new JsonObject { ["index"] = i, ["name"] = p.Name, ["flags"] = p.Flags,
-            ["closing_sample_matches"] = p.Frames[0] == p.Frames[^1] }).ToArray()) };
+    public JsonObject ToJson(bool bounded = true, CancellationToken token = default) => new()
+    {
+        ["version"] = 4, ["loop_seconds"] = LoopTime, ["frame_count"] = FrameCount, ["part_count"] = Parts.Count,
+        ["parts_truncated"] = bounded && Parts.Count > 32,
+        ["parts"] = JsonData.Array((bounded ? Parts.Take(32) : Parts).Select((p, i) => (Part: p, Index: i)), row => new JsonObject
+        {
+            ["index"] = row.Index, ["name"] = bounded ? row.Part.Name[..Math.Min(128, row.Part.Name.Length)] : row.Part.Name,
+            ["name_characters"] = row.Part.Name.Length, ["name_truncated"] = bounded && row.Part.Name.Length > 128, ["flags"] = row.Part.Flags,
+            ["closing_sample_matches"] = row.Part.Frames[0] == row.Part.Frames[^1]
+        }, token)
+    };
 }

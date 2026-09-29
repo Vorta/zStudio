@@ -155,6 +155,10 @@ public sealed partial class AnimationPlayer
                 float endTime = ev.F32(108); screenWave = new(Curve(ev, 28, sequence.EventElapsed, endTime), Curve(ev, 40, sequence.EventElapsed, endTime), Curve(ev, 60, sequence.EventElapsed, endTime), Curve(ev, 72, sequence.EventElapsed, endTime));
                 return Timed(sequence, endTime, ref remaining);
             case 38: AddNote($"Game text message ID {ev.I32(12)}; text lookup is unavailable in the preview.", "Support", "Information"); return 2;
+            // The scheduler records these MW3 gameplay markers and their support notes.
+            // They have no preview side effects and must not block following events.
+            case 41 when ev.Version == 39:
+            case 42 when ev.Version == 39: return 2;
             default: throw new InvalidDataException("No verified event handler.");
         }
     }

@@ -165,7 +165,7 @@
         "zstudio_motion_edit",
         "zstudio_resource_properties"
       ],
-      "note": "Generated timing/part/frame/translation/quaternion fields and insert/delete actions share archive identities, draft guards and undo. All tracks change together on insertion/deletion. Accepted edits and Undo/Redo refresh the active sampler while retaining camera and playback; failed edits do not pause playback."
+      "note": "Generated timing/part/frame/translation/quaternion fields and insert/delete actions share archive identities, draft guards and undo. All tracks change together on insertion/deletion. Accepted edits and Undo/Redo refresh the active sampler while retaining camera and playback; failed edits do not pause playback. Motion inspection metadata previews 32 parts and 128 characters per name with counts/truncation; motion_records pages complete names and explicit exports retain all parts."
     },
     {
       "gui": "MainWindow.MechModels:ReplaceMechModelDialogAsync",
@@ -174,7 +174,7 @@
         "zstudio_mech_model_replace",
         "zstudio_texture_import"
       ],
-      "note": "Explicit member-local mesh and shared material picker plus OBJ selection use the same resource transaction as MCP. Accepted mesh edits and Undo/Redo rebuild the active mech preview and dependent viewers while retaining the camera. Texture replacement uses the existing texture editor."
+      "note": "Explicit member-local mesh and shared material picker plus OBJ selection use the same resource transaction as MCP. Accepted mesh edits and Undo/Redo rebuild the active mech preview and dependent viewers while retaining the camera. Texture replacement uses the existing texture editor. mech_models caps nested node/material previews at 32 with totals/truncation; section nodes/materials plus localModel pages full lists with pre-pagination filtering."
     }
   ],
   "handlers": [

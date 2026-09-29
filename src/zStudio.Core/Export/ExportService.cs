@@ -60,7 +60,12 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
     {
         token.ThrowIfCancellationRequested();
         JsonObject result = new() { ["name"] = a.Name, ["kind"] = a.Kind.ToString(), ["index"] = a.Index, ["source_offset"] = a.Offset, ["source_length"] = a.Length, ["properties"] = JsonData.Clone(a.Metadata, token) };
-        if (a.Content is GameModel model)
+        if (a.Content is MotionClip motion)
+        {
+            // Archive metadata is always a small inspection preview; explicit exports retain the full part list.
+            if (!boundedZrd) result["properties"]!["motion"] = motion.ToJson(bounded: false, token: token);
+        }
+        else if (a.Content is GameModel model)
         {
             result["vertices"] = JsonData.Vectors(model.Vertices, token);
             result["normals"] = JsonData.Vectors(model.Normals, token);

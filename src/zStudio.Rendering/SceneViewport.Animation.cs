@@ -140,12 +140,7 @@ public sealed partial class SceneViewport
                 }
                 item.Material.DiffuseMap = diffuseMap;
                 float alpha = pose.Opacity * color.Alpha;
-                item.Material.DiffuseColor = AnimationColor(pose, color, frame, effectLighting);
-                if (item.Part.Colors.Length != 0 && item.VertexTint != item.Material.DiffuseColor && item.Mesh.Geometry is MeshGeometry3D colored)
-                {
-                    colored.Colors = VertexColors(item.Part, item.Material.DiffuseColor);
-                    item.VertexTint = item.Material.DiffuseColor;
-                }
+                SetAnimationColor(item, AnimationColor(pose, color, frame, effectLighting));
                 item.Mesh.IsTransparent = !horizon && (alphaTexture || alpha < 1);
                 if (!horizon && pose.Visible && item.Mesh.Geometry?.Positions is { } positions) IncludeBounds(positions, transform);
             }
@@ -199,6 +194,16 @@ public sealed partial class SceneViewport
         rgb = Vector3.Clamp(rgb, Vector3.Zero, Vector3.One);
         return new(rgb.X, rgb.Y, rgb.Z, pose.Opacity * color.Alpha);
     }
+    private static void SetAnimationColor(AnimatedMesh item, Color4 color)
+    {
+        item.Material.DiffuseColor = color;
+        // The vertex-tint shader consumes geometry colors, including fog and opacity.
+        if (item.Part.Colors.Length != 0 && item.VertexTint != color && item.Mesh.Geometry is MeshGeometry3D colored)
+        {
+            colored.Colors = VertexColors(item.Part, color);
+            item.VertexTint = color;
+        }
+    }
     private void RefreshAnimationCamera(bool updateHitTests = false)
     {
         if (animationFrame is not { } frame || animationContext == null || updatingAnimation) return;
@@ -220,7 +225,7 @@ public sealed partial class SceneViewport
                 if (animationEffectLighting && frame.Fog is { Enabled: true })
                 {
                     JsonMaterial(scene, item.Part.MaterialIndex, out var color, out _);
-                    item.Material.DiffuseColor = AnimationColor(pose, color, frame, true);
+                    SetAnimationColor(item, AnimationColor(pose, color, frame, true));
                 }
             }
         }

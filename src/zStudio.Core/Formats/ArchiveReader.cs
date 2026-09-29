@@ -30,7 +30,7 @@ internal sealed class ArchiveReader : IZbdFormatReader
                 var motion = tree == null ? MotionClip.TryRead(bytes, token) : null;
                 if (motion != null) { kind = AssetKind.Motion; doc.Game = GameVariant.MechWarrior3; }
                 var a = doc.Add(kind, i, name, offset, size, new JsonObject { ["source_path"] = source, ["aux_value"] = (long)aux, ["source_filetime"] = time.ToString(System.Globalization.CultureInfo.InvariantCulture), ["record_raw"] = Convert.ToHexStringLower(doc.Bytes.Span.Slice((int)recStart, 148)) }, (object?)motion ?? tree);
-                if (motion != null) a.Metadata["motion"] = motion.ToJson();
+                if (motion != null) a.Metadata["motion"] = motion.ToJson(token: token);
                 a.Summary = $"{size:N0} bytes · {kind}";
             }
             catch (InvalidDataException ex) { doc.Diagnostics.Add(new("Error", $"Archive member {i} ({name}): {ex.Message}", i, offset)); }

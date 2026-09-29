@@ -52,15 +52,38 @@ public partial class MainWindow
     }
     private void RegisterMechCommands(StudioCommands registry)
     {
-        Register(registry, "mech_models", "Inspect a mech archive member's local model identities and shared materials. Node names may repeat across members. Replacement retains the hierarchy and uses explicit member/local model indices.", false,
-            [DocumentParameter, MemberParameter, P("section", "string", "List section; default models.", false, "models", "materials"), .. PageParameters], a =>
+        Register(registry, "mech_models", "Inspect member-local models, shared materials or node references. Model rows preview at most 32 nodes/material indices with totals and truncation flags; use section nodes/materials and localModel for complete paged lists. Node names may repeat. Queries filter model labels, node names or material labels before pagination.", false,
+            [DocumentParameter, MemberParameter, P("section", "string", "List section; default models.", false, "models", "materials", "nodes"), P("localModel", "integer", "Member-local model index, required for nodes; optionally restrict models/materials."), .. PageParameters], a =>
         {
             var doc = TargetDocument(a); var member = MechMember(doc, GuidArg(a, "member")); var scene = doc.PreviewDocument.Scene!;
-            if (Text(a, "section") == "materials") return Result(new { doc.Revision, materials = Page(scene.Materials.Select((m, i) => new { index = i, fields = m }), a).Data });
+            int? localModel = a.ContainsKey("localModel") ? Int(a, "localModel") : null;
+            if (localModel is int local && (local < 0 || local >= member.ModelCount)) throw new StudioCommandException("invalid_argument", "localModel must identify a model in this member.");
+            string section = Text(a, "section", "models");
+            if (section == "materials")
+            {
+                var used = localModel is int selected ? scene.Models[member.FirstModel + selected].Polygons.Select(p => p.MaterialIndex).ToHashSet() : null;
+                return Result(new { doc.Revision, materials = Page(scene.Materials.Select((m, i) => (Material: m, Index: i)).Where(m => used == null || used.Contains(m.Index)), a,
+                    m => $"Material {m.Index}", m => new { index = m.Index, fields = m.Material }).Data });
+            }
+            var nodes = scene.Nodes.Skip(member.RootNode).Take(member.NodeCount);
+            if (section == "nodes")
+            {
+                if (localModel is not int selected) throw new StudioCommandException("invalid_argument", "Specify localModel when paging node references.");
+                int sceneModel = scene.Models[member.FirstModel + selected].Index;
+                return Result(new { doc.Revision, member.MemberIndex, localModel, sceneModel, nodes = Page(nodes.Where(n => n.ModelIndex == sceneModel), a, n => n.Name,
+                    n => new { localNode = n.Index - member.RootNode, sceneNode = n.Index, n.Name }).Data });
+            }
+            var byModel = nodes.ToLookup(n => n.ModelIndex);
             return Result(new { doc.Revision, member.MemberIndex, member.RootNode, member.NodeCount,
-                models = Page(scene.Models.Skip(member.FirstModel).Take(member.ModelCount).Select((m, i) => new { localModel = i, sceneModel = m.Index,
-                    vertices = m.Vertices.Length, polygons = m.Polygons.Length, materials = m.Polygons.Select(p => p.MaterialIndex).Distinct().ToArray(),
-                    nodes = scene.Nodes.Skip(member.RootNode).Take(member.NodeCount).Where(n => n.ModelIndex == m.Index).Select(n => new { localNode = n.Index - member.RootNode, n.Name }).ToArray() }), a).Data });
+                models = Page(scene.Models.Skip(member.FirstModel).Take(member.ModelCount).Select((m, i) => (Model: m, Index: i)).Where(m => localModel == null || m.Index == localModel), a,
+                    row => $"Model {row.Index}", row =>
+                    {
+                        var m = row.Model; var references = byModel[m.Index]; int nodeCount = references.Count();
+                        var materials = m.Polygons.Select(p => p.MaterialIndex).Distinct().ToArray();
+                        return new { localModel = row.Index, sceneModel = m.Index, vertices = m.Vertices.Length, polygons = m.Polygons.Length,
+                            materials = materials.Take(32).ToArray(), materialCount = materials.Length, materialsTruncated = materials.Length > 32,
+                            nodes = references.Take(32).Select(n => new { localNode = n.Index - member.RootNode, n.Name }).ToArray(), nodeCount, nodesTruncated = nodeCount > 32 };
+                    }).Data });
         });
         RegisterJob(registry, "mech_model_replace", "Replace one member-local mech mesh from a triangulated local-coordinate OBJ with UVs/normals and optional RGB vertex colors. Explicit shared material index; textures use texture_import. One archive undo step, with hierarchy and unrelated members preserved. Refreshes active and dependent previews, retaining the camera. Save through save_document.",
             [DocumentParameter, RevisionParameter, MemberParameter, P("localModel", "integer", "Local model index from mech_models.", true), P("material", "integer", "Shared material index from mech_models materials.", true), P("path", "string", "OBJ file path.", true)], false,

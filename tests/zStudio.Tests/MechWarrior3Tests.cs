@@ -11,6 +11,28 @@ namespace Recoil.Zbd.Tests;
 public sealed class MechWarrior3Tests
 {
     [Fact]
+    public void MotionInspectionCapsPartNamesAndCountsWhileExportRetainsAllParts()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var seed = MotionClip.Read(MotionBytes(), token);
+        string name = new('x', 4096); byte[] nameBytes = new byte[4100];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(nameBytes, 4096); System.Text.Encoding.Latin1.GetBytes(name).CopyTo(nameBytes, 4);
+        var part = seed.Parts[0] with { Name = name, NameBytes = nameBytes };
+        var clip = new MotionClip { Header = seed.Header, LoopTime = seed.LoopTime, FrameCount = seed.FrameCount, Parts = Enumerable.Repeat(part, 4096).ToArray() };
+        byte[] source = clip.Write(token);
+        var doc = FormatRegistry.Default.OpenBytes("motion.zbd", ResourceEditingTests.Archive(("large_motion", source)), token: token);
+        var asset = Assert.Single(doc.Assets); Assert.IsType<MotionClip>(asset.Content);
+        var metadata = asset.Metadata["motion"]!;
+        Assert.InRange(metadata["parts"]!.AsArray().Count, 1, 32); Assert.Equal(4096, metadata["part_count"]!.GetValue<int>());
+        Assert.True(metadata["parts_truncated"]!.GetValue<bool>());
+        var row = metadata["parts"]![0]!; Assert.Equal(128, row["name"]!.GetValue<string>().Length);
+        Assert.Equal(4096, row["name_characters"]!.GetValue<int>()); Assert.True(row["name_truncated"]!.GetValue<bool>());
+        Assert.True(ExportService.AssetJson(doc, asset, token, boundedZrd: true).ToJsonString().Length < 20_000);
+        var complete = ExportService.AssetJson(doc, asset, token)["properties"]!["motion"]!;
+        Assert.Equal(4096, complete["parts"]!.AsArray().Count); Assert.Equal(name, complete["parts"]![4095]!["name"]!.GetValue<string>());
+        Assert.Equal(source, ((MotionClip)asset.Content!).Write(token));
+    }
+    [Fact]
     public void DuplicateMotionTracksLeaveTheAmbiguousNodeAtItsStoredPose()
     {
         var clip = MotionClip.Read(MotionBytes(), TestContext.Current.CancellationToken);

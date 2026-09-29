@@ -63,6 +63,18 @@ internal static class AlphaCheck
                 if (Math.Abs(tintPixel[2]-128)>3 || Math.Abs(tintPixel[1]-64)>3 || Math.Abs(tintPixel[0]-32)>3)
                     throw new InvalidDataException($"Vertex colors did not modulate the texture: BGR {string.Join(',',tintPixel)}.");
                 Console.WriteLine("PASS: authored vertex tint multiplies diffuse texture RGB without replacing the texture.");
+                var fogFrame = frame with { Nodes = [frame.Nodes[0]], Fog = new(true, Vector3.UnitZ, 3, 6) };
+                preview.UpdateAnimationFrame(fogFrame);
+                ((DiffuseMaterial)tinted.Material!).DiffuseMap = new TextureModel(new byte[] { 255,128,64,255 }, SharpDX.DXGI.Format.R8G8B8A8_UNorm,1,1);
+                await Task.Delay(200); var nearPixel = Pixel(Presented(viewport));
+                camera.Position = new(0,0,6); camera.LookDirection = new(0,0,-6);
+                await Task.Delay(200); var fogPixel = Pixel(Presented(viewport));
+                if (Math.Abs(nearPixel[2]-128)>3 || fogPixel[2]>3 || fogPixel[1]>3 || Math.Abs(fogPixel[0]-32)>3)
+                    throw new InvalidDataException($"Paused camera fog did not retint the presented geometry: near BGR {string.Join(',',nearPixel)}; far BGR {string.Join(',',fogPixel)}.");
+                camera.Position = new(0,0,3); camera.LookDirection = new(0,0,-3);
+                await Task.Delay(200); var restored = Pixel(Presented(viewport));
+                if (!restored.SequenceEqual(nearPixel)) throw new InvalidDataException("Paused camera fog did not restore the authored tint.");
+                Console.WriteLine("PASS: paused camera fog retints textured vertex colors and restores them without advancing animation or forcing rendering.");
             }
             catch (Exception ex) { Console.Error.WriteLine(ex); exit = 1; }
             finally { window.Close(); app.Shutdown(exit); }
@@ -70,6 +82,14 @@ internal static class AlphaCheck
         try { app.Run(); }
         finally { if (originalSettings != null) File.WriteAllBytes(settings, originalSettings); else if (File.Exists(settings)) File.Delete(settings); }
         return exit;
+    }
+    private static BitmapSource Presented(Viewport3DX viewport)
+    {
+        using MemoryStream stream = new();
+        HelixToolkit.SharpDX.Utilities.ScreenCapture.SaveWICTextureToBitmapStream(viewport.RenderHost!.EffectsManager!,
+            viewport.RenderHost.RenderBuffer!.BackBuffer!.Resource as SharpDX.Direct3D11.Texture2D, stream);
+        stream.Position = 0;
+        return BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
     }
     private static byte[] Pixel(BitmapSource image)
     {

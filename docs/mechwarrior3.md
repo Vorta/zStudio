@@ -38,11 +38,13 @@ Open **Properties** for a motion member to edit loop duration or a part/frame's 
 
 Version-39 entries use the existing sequence/event editor, Properties, transport, seek, audio preparation, camera preview, export and verified Save As. Catalogs are version-specific. Larger light/procedural records, water/lava collision fields, keyframe blocks, weapon events and particle records retain serialized sizes and opaque data. No-op writes preserve original bytes and record order.
 
-Supported shared animation operations have explicit approximation notices. Stored spline coefficients are preserved; preview sampling uses base/rate channels. Weapon gameplay and particle simulation are not executed. Water/lava contact behavior, AI activation and mission-script execution are not reproduced. Recoil engine evidence does not establish MW3 runtime compatibility. Bind version-39 animations to a version-27 world; cross-game bindings are rejected. Ambiguous MW3 roots require an explicit root binding.
+Supported shared animation operations have explicit approximation notices. Stored spline coefficients are preserved; preview sampling uses base/rate channels. Weapon gameplay and particle simulation are not executed. Version-39 gameplay markers 41/42 retain their dispatch traces and support notices, then allow subsequent events to run in both ordinary and cleanup sequences. Water/lava contact behavior, AI activation and mission-script execution are not reproduced. Recoil engine evidence does not establish MW3 runtime compatibility. Bind version-39 animations to a version-27 world; cross-game bindings are rejected. Ambiguous MW3 roots require an explicit root binding.
 
 ## MCP
 
 GUI and MCP share the visible workspace, parser, identities, edit sessions, previews and saves.
+
+Motion inspection metadata previews at most 32 parts and 128 characters per name, with full counts and explicit truncation flags. Use `zstudio_motion_records` to page all parts with complete names; explicit JSON exports also retain the full part list. Model rows from `zstudio_mech_models` preview at most 32 node references and material indices, with `nodeCount`/`nodesTruncated` and `materialCount`/`materialsTruncated`. For the complete lists, supply `section: "nodes"` or `"materials"` and the member's `localModel`, then use `offset`/`limit`. Nodes require `localModel`; materials without it lists all shared materials. Queries match node names, `Model N` or `Material N` labels before pagination.
 
 | Command | Purpose |
 | --- | --- |
@@ -50,7 +52,7 @@ GUI and MCP share the visible workspace, parser, identities, edit sessions, prev
 | `zstudio_motion_records` | Page motion parts or frames, including the closing sample. |
 | `zstudio_motion_edit` | Edit timing/transforms or insert/delete frames as one archive undo step. |
 | `zstudio_motion_preview` | Control visible motion playback, seek, assembly, LOD and framing. |
-| `zstudio_mech_models` | Inspect member-local models and shared materials. |
+| `zstudio_mech_models` | Page member-local models, shared materials and node references. |
 | `zstudio_mech_model_replace` | Replace one explicit member-local mesh. |
 
 `zstudio_motion_preview` state distinguishes actual `playing`, `loading` and `playbackRequested`, so a temporarily suspended assembly load does not look like a new pause request. `zstudio_resource_properties` accepts motion `part`/`frame` targets and generated actions. `zstudio_event_catalog` accepts `version: 28` or `39`. `zstudio_ai_nodes` exposes edge constraints with `section: "constraints"`; a record may contain multiple ordered attributes, identified by its record index and `AttributeIndex`. Existing resource, camera, inspection, export, texture and save commands apply. Revision and draft guards remain mandatory for mutations. Discovery remains windowless and access remains opt-in.

@@ -88,8 +88,62 @@ internal static class MotionMcpChecks
             Assert.Equal(1, StaticViewport().PreviewScene!.Models[0].Vertices[1].X);
             await Call("undo_redo", new() { ["document"] = libraryDoc.SessionId.ToString(), ["revision"] = libraryDoc.Revision, ["action"] = "redo" });
             Assert.Equal(4, StaticViewport().PreviewScene!.Models[0].Vertices[1].X);
+            var libraryScene = libraryDoc.PreviewDocument.Scene!; var libraryAsset = libraryDoc.PreviewDocument.Assets[3];
+            var assembly = (MechAssembly)libraryAsset.Content!;
+            libraryScene.Nodes.Clear();
+            for (int i = 0; i < 1000; i++) libraryScene.Nodes.Add(new(i, $"reference_{i:D4}", "object3d", assembly.FirstModel, [], [], [], []));
+            libraryAsset.Content = assembly with { RootNode = 0, NodeCount = 1000 };
+            Dictionary<string, object?> MechArgs(params (string Key, object Value)[] values)
+            { var a = new Dictionary<string, object?> { ["document"] = libraryDoc.SessionId.ToString(), ["member"] = libraryDoc.ResourceEdits.Current.Members[3].Id.ToString() }; foreach (var (k, v) in values) a[k] = v; return a; }
+            var models = await Call("mech_models", MechArgs(("limit", 1)));
+            var model = Assert.Single(models["models"]!["items"]!.AsArray())!;
+            Assert.Equal(32, model["nodes"]!.AsArray().Count); Assert.Equal(1000, model["nodeCount"]!.GetValue<int>()); Assert.True(model["nodesTruncated"]!.GetValue<bool>());
+            Assert.True(models.ToJsonString().Length < 10_000);
+            var references = await Call("mech_models", MechArgs(("section", "nodes"), ("localModel", 0), ("offset", 995), ("limit", 5)));
+            Assert.Equal(1000, references["nodes"]!["total"]!.GetValue<int>()); Assert.Null(references["nodes"]!["nextOffset"]);
+            Assert.Equal(995, references["nodes"]!["items"]![0]!["localNode"]!.GetValue<int>());
+            references = await Call("mech_models", MechArgs(("section", "nodes"), ("localModel", 0), ("query", "REFERENCE_0999")));
+            Assert.Equal(1, references["nodes"]!["total"]!.GetValue<int>()); Assert.Equal(999, references["nodes"]!["items"]![0]!["localNode"]!.GetValue<int>());
+            references = await Call("mech_models", MechArgs(("section", "nodes"), ("localModel", 0), ("query", "absent")));
+            Assert.Equal(0, references["nodes"]!["total"]!.GetValue<int>());
+            foreach (var invalidArgs in new[] { MechArgs(("section", "nodes")), MechArgs(("localModel", -1)), MechArgs(("localModel", assembly.ModelCount)) })
+                Assert.True((await client.CallToolAsync("zstudio_mech_models", invalidArgs, cancellationToken: token)).IsError);
+            var sharedMaterials = await Call("mech_models", MechArgs(("section", "materials"), ("localModel", 0)));
+            Assert.Equal(1, sharedMaterials["materials"]!["total"]!.GetValue<int>());
+            for (int i = libraryScene.Materials.Count; i < 40; i++) libraryScene.Materials.Add(new() { ["alpha"] = 255 });
+            var meshModel = libraryScene.Models[assembly.FirstModel];
+            libraryScene.Models[assembly.FirstModel] = meshModel with { Polygons = Enumerable.Range(0, 40).Select(i => meshModel.Polygons[0] with { MaterialIndex = i }).ToArray() };
+            models = await Call("mech_models", MechArgs(("query", "MODEL 0")));
+            model = Assert.Single(models["models"]!["items"]!.AsArray())!;
+            Assert.Equal(32, model["materials"]!.AsArray().Count); Assert.Equal(40, model["materialCount"]!.GetValue<int>()); Assert.True(model["materialsTruncated"]!.GetValue<bool>());
+            sharedMaterials = await Call("mech_models", MechArgs(("section", "materials"), ("localModel", 0), ("offset", 38), ("limit", 2)));
+            Assert.Equal(40, sharedMaterials["materials"]!["total"]!.GetValue<int>()); Assert.Null(sharedMaterials["materials"]!["nextOffset"]);
+            Assert.Equal(38, sharedMaterials["materials"]!["items"]![0]!["index"]!.GetValue<int>());
+            sharedMaterials = await Call("mech_models", MechArgs(("section", "materials"), ("query", "MATERIAL 39")));
+            Assert.Equal(1, sharedMaterials["materials"]!["total"]!.GetValue<int>());
+            await CheckLargeMotionInspection();
             Recoil.Zbd.Rendering.SceneViewport StaticViewport() => (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             AnimationFrame Presented() => (AnimationFrame)typeof(Recoil.Zbd.Rendering.SceneViewport).GetField("animationFrame", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor.Viewport)!;
+            async Task CheckLargeMotionInspection()
+            {
+                var seed = MotionClip.Read(payload, token); string name = new('x', 4096); byte[] nameBytes = new byte[4100];
+                BinaryPrimitives.WriteInt32LittleEndian(nameBytes, 4096); System.Text.Encoding.Latin1.GetBytes(name).CopyTo(nameBytes, 4);
+                var part = seed.Parts[0] with { Name = name, NameBytes = nameBytes };
+                var clip = new MotionClip { Header = seed.Header, LoopTime = seed.LoopTime, FrameCount = seed.FrameCount, Parts = Enumerable.Repeat(part, 4096).ToArray() };
+                var large = new DocumentModel(FormatRegistry.Default.OpenBytes(Path.Combine(folder, "large.zbd"), MotionFixture.Archive(("large_motion", clip.Write(token))), token: token));
+                main.ViewModel.Documents.Add(large);
+                var inspected = await Call("inspect_asset", new() { ["document"] = large.SessionId.ToString(), ["kind"] = "Motion", ["index"] = 0 });
+                foreach (string snapshot in new[] { "source", "edited" })
+                {
+                    var metadata = inspected[snapshot]!["properties"]!["motion"]!;
+                    Assert.Equal(4096, metadata["part_count"]!.GetValue<int>()); Assert.True(metadata["parts_truncated"]!.GetValue<bool>());
+                    Assert.Equal(32, metadata["parts"]!.AsArray().Count);
+                }
+                Assert.True(inspected.ToJsonString().Length < 40_000);
+                var page = await Call("motion_records", new() { ["document"] = large.SessionId.ToString(), ["member"] = large.ResourceEdits!.Current.Members[0].Id.ToString(), ["offset"] = 4095, ["limit"] = 1 });
+                Assert.Equal(4096, page["rows"]!["total"]!.GetValue<int>()); Assert.Null(page["rows"]!["nextOffset"]);
+                Assert.Equal(name, Assert.Single(page["rows"]!["items"]!.AsArray())!["Name"]!.GetValue<string>());
+            }
             async Task CheckAssemblyLoads()
             {
                 await File.WriteAllBytesAsync(libraryPath, MotionFixture.Library(textured: true), token);
