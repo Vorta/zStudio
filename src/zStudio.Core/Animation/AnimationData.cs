@@ -8,6 +8,8 @@ namespace Recoil.Zbd.Core.Animation;
 /// <summary>Little-endian serialized data. Pointer-shaped fields are never dereferenced.</summary>
 public class AnimationRecord(byte[] bytes)
 {
+    protected long MutationVersion { get; private set; }
+    internal Action? Modified { get; set; }
     public byte[] Bytes { get; } = bytes;
     protected static byte[] SnapshotBytes(byte[] bytes, CancellationToken token)
     {
@@ -31,8 +33,8 @@ public class AnimationRecord(byte[] bytes)
         var span = Bytes.AsSpan(offset, length); int end = span.IndexOf((byte)0);
         return Encoding.Latin1.GetString(end < 0 ? span : span[..end]);
     }
-    public void SetInt(int offset, int value) => BinaryPrimitives.WriteInt32LittleEndian(Bytes.AsSpan(offset, 4), value);
-    public void SetShort(int offset, short value) => BinaryPrimitives.WriteInt16LittleEndian(Bytes.AsSpan(offset, 2), value);
+    public void SetInt(int offset, int value) { BinaryPrimitives.WriteInt32LittleEndian(Bytes.AsSpan(offset, 4), value); MutationVersion++; Modified?.Invoke(); }
+    public void SetShort(int offset, short value) { BinaryPrimitives.WriteInt16LittleEndian(Bytes.AsSpan(offset, 2), value); MutationVersion++; Modified?.Invoke(); }
     public void SetFloat(int offset, float value)
     {
         if (!float.IsFinite(value)) throw new InvalidDataException("Edited numbers must be finite.");
@@ -46,11 +48,17 @@ public class AnimationRecord(byte[] bytes)
         if (Text(offset, length) == value) return;
         // Preserve unrelated bytes after the new terminator, as the loader uses strcmp.
         Encoding.Latin1.GetBytes(value, Bytes.AsSpan(offset, value.Length)); Bytes[offset + value.Length] = 0;
+        MutationVersion++;
     }
 }
 
 public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : AnimationRecord(bytes)
 {
+    private KeyframeStream? keyframeStream;
+    private string? keyframeError;
+    private AnimationKeyframe[]? playbackKeyframes;
+    private long playbackVersion = -1;
+    private long keyframeVersion = -1;
     public Guid Id { get; init; } = Guid.NewGuid();
     public long SourceOffset { get; } = sourceOffset;
     public uint Version { get; init; } = 28;
@@ -60,30 +68,25 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
     public AnimationEventSpec? Spec => AnimationCatalog.Find(Type, Version);
     public string Name => Spec?.Name ?? $"Unknown event 0x{Type:X2}";
     public AnimationEvent Clone() => Clone(default);
-    public AnimationEvent Clone(CancellationToken token) => new(SnapshotBytes(Bytes, token), SourceOffset) { Id = Id, Version = Version };
+    public AnimationEvent Clone(CancellationToken token)
+    {
+        var clone = new AnimationEvent(SnapshotBytes(Bytes, token), SourceOffset) { Id = Id, Version = Version };
+        if (keyframeVersion == MutationVersion) { clone.keyframeStream = keyframeStream?.ForSnapshot(clone.Bytes); clone.keyframeError = keyframeError; clone.keyframeVersion = 0; }
+        return clone;
+    }
     public AnimationEvent Duplicate() => Duplicate(default);
     public AnimationEvent Duplicate(CancellationToken token) => new(SnapshotBytes(Bytes, token)) { Version = Version };
     public IReadOnlyList<AnimationKeyframe> Keyframes(CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         if (Type != 12) return [];
-        List<AnimationKeyframe> frames = []; int offset = Version == 39 ? 36 : 32;
-        BinaryCursor.CheckRange(Bytes.Length, 0, offset);
-        int? count = Version == 39 ? I32(16) : null;
-        if (count is < 0 || count > (Bytes.Length - offset) / 12)
-            throw new InvalidDataException("MW3 keyframe count is negative or exceeds the event payload.");
-        while (count is int expected ? frames.Count < expected : offset < Bytes.Length)
+        if (keyframeVersion != MutationVersion)
         {
-            token.ThrowIfCancellationRequested();
-            if (count != null && Bytes.Length - offset < 12)
-                throw new InvalidDataException("MW3 keyframe count exceeds the available records.");
-            BinaryCursor.CheckRange(Bytes.Length, offset, 12);
-            int flags = I32(offset), length = 12 + (Version == 39 ? 76 : 28) * System.Numerics.BitOperations.PopCount((uint)flags & 7);
-            BinaryCursor.CheckRange(Bytes.Length, offset, length);
-            frames.Add(new(Bytes.AsSpan(offset, length).ToArray())); offset += length;
+            try { keyframeStream = new(Bytes, Version, token); keyframeError = null; keyframeVersion = MutationVersion; }
+            catch (InvalidDataException ex) { keyframeError = ex.Message; keyframeStream = null; keyframeVersion = MutationVersion; }
         }
-        if (offset != Bytes.Length) throw new InvalidDataException("MW3 keyframe count does not match the event payload; trailing bytes or records remain.");
-        return frames;
+        if (keyframeError != null) throw new InvalidDataException(keyframeError);
+        return new EditableKeyframeView(keyframeStream!);
     }
     public AnimationEvent WithKeyframes(IEnumerable<AnimationKeyframe> frames)
     {
@@ -92,6 +95,13 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
         int count = 0;
         foreach (var frame in frames) { frame.Validate(); output.Write(frame.ForVersion(Version).Bytes); count++; }
         var result = new AnimationEvent(output.ToArray(), SourceOffset) { Id = Id, Version = Version }; result.SetInt(4, result.Bytes.Length); if (Version == 39) result.SetInt(16, count); return result;
+    }
+    internal IReadOnlyList<AnimationKeyframe> PlaybackKeyframes()
+    {
+        if (playbackVersion == MutationVersion && playbackKeyframes != null) return playbackKeyframes;
+        var frames = Keyframes();
+        if (frames.Count > 16384) throw new InvalidDataException("Transform playback is unavailable above 16,384 keyframes per event. Paged inspection and export retain the complete stream.");
+        playbackKeyframes = keyframeStream?.ToArray() ?? []; playbackVersion = MutationVersion; return playbackKeyframes;
     }
     public JsonObject ToPreviewJson(CancellationToken token = default) => ToJson(token, bounded: true);
     public JsonObject ToJson(CancellationToken token = default) => ToJson(token, bounded: false);

@@ -2178,6 +2178,276 @@
     ]
   },
   {
+    "Name": "zstudio_ai_valves",
+    "Description": "Page authored MW3 valve records or exact-name references from an edited resource. Includes repeated triggers, compound definitions and node/edge/objective uses; no runtime state is inferred. Query filters record names or valve references before paging. Parameters and reference previews are bounded; zrd_nodes/export retains complete data. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "section",
+        "Type": "string",
+        "Description": "Records, references or eligible network binding targets.",
+        "Required": false,
+        "Choices": [
+          "records",
+          "references",
+          "targets"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_ai_valve_edit",
+    "Description": "Edit one authored valve occurrence through shared resource history. set uses a scalar operand UUID and invariant typed text. add_record creates a complete action/compound block in valves.zrd; add_binding uses the owning network row\u0027s value-node UUID. Record/item moves use final zero-based pair/item positions. No implicit rename propagation or cascade deletion. Unknown fields are preserved. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "member",
+        "Type": "string",
+        "Description": "Stable member UUID from archive_members or assets.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Semantic operation.",
+        "Required": true,
+        "Choices": [
+          "set",
+          "add_record",
+          "add_binding",
+          "delete",
+          "duplicate",
+          "move",
+          "add_action",
+          "add_term",
+          "delete_item",
+          "duplicate_item",
+          "move_item",
+          "add_option",
+          "remove_option"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "record",
+        "Type": "string",
+        "Description": "Valve occurrence UUID except for add_record/add_binding.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "operand",
+        "Type": "string",
+        "Description": "Scalar, action-name, union-term or target row UUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "value",
+        "Type": "string",
+        "Description": "Typed set value; unquoted new valve/term name.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "kind",
+        "Type": "string",
+        "Description": "Action, compound or binding kind from authored valve vocabulary.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "Final item or pair index for move.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_ai_valve_selection",
+    "Description": "Discover mission valve resources or open one in pinned Properties without changing the Whole world preview. Uses the current AI snapshot and source member index, never names as identity. Optional record selects a discovered source occurrence. Source edits require the returned owning document\u0027s revision and stable member identity. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "preview",
+        "Type": "string",
+        "Description": "Current preview lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "snapshot",
+        "Type": "string",
+        "Description": "AI graph snapshot from preview_state.ai. Handles apply only to this snapshot.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Selection operation.",
+        "Required": true,
+        "Choices": [
+          "sources",
+          "records",
+          "references",
+          "properties",
+          "overlay",
+          "highlight",
+          "frame",
+          "clear"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "archive",
+        "Type": "string",
+        "Description": "Exact source archive path from sources.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "memberIndex",
+        "Type": "integer",
+        "Description": "Source member index.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "record",
+        "Type": "string",
+        "Description": "Optional source record UUID.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "Exact valve name for highlighting.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "visible",
+        "Type": "boolean",
+        "Description": "Overlay visibility.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
     "Name": "zstudio_scene_inspect",
     "Description": "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits and expanded state.",
     "Mutates": false,
@@ -3669,6 +3939,14 @@
         "Properties": null,
         "Minimum": -2147483648,
         "Maximum": 2147483647
+      },
+      {
+        "Name": "valves",
+        "Type": "boolean",
+        "Description": "Use the semantic MW3 valve editor; node identifies an optional valve occurrence.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
       }
     ]
   },

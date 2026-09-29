@@ -16,6 +16,20 @@ A valid version-106 constraint may share a `node_NN` key with a spatial node. Co
 
 Rendering supports triangle strips and per-corner RGB colors. OBJ export retains vertex colors. Texture resolution includes shared mech texture packs. Scene inspection and the Document scene tree preserve source/member identity when names repeat.
 
+## AI valves
+
+In **Whole world**, enable AI nodes and use **Valves** to open the mission's valve definitions in the reusable Properties window. The adjacent valve overlay toggle adds white outlines around nodes with authored conditions and dashed lines for uniquely resolved edge assignments. It preserves the network's attack-strategy color. With **Unlock editing** enabled, clicking a valve-bound node also exposes its valve summary and **Valve Properties…** button.
+
+Properties distinguishes occurrences by resource, source order and offset; equal names do not merge records. The editor supports the authored `attack_strategy`, `delayupdate`, `destroy`, `shutdown`, `sound`, `sound_once` and `teleport` actions and `all_zero`, `all_nonzero` and `any_nonzero` compounds. Node `valve` tuples retain their optional third integer, `valveunion` retains ordered tuples, and `valve_assign` retains its edge and assigned integer. Objective `valve_change` and `set_valve` uses are inspectable, editable and linked. Unverified integer operands are labeled as stored values. Unknown layouts stay available in the shared Data tree.
+
+1. Open a valve, version-106 network or objectives resource's **Properties**, or use the map controls above.
+2. Select the specific occurrence. Use record, binding-target, operand, action/term and reference pages for longer resources.
+3. Edit a typed field and press Enter, or use Add/Duplicate/Delete/Move actions. Each accepted operation is one resource undo step. Strings in existing fields use JSON quotes; the new-record name is plain text.
+4. Use **Find uses** for exact-name references in the pinned mission scope, then open a result in the same Properties window. Names may be set by mission scripts without a defining action block; absence of a definition is not treated as an error. **Highlight** and **Frame** locate known map associations without executing the valve.
+5. Use Undo/Redo and document-scoped Ctrl+S or Save As. Saves use the owning archive's shared verified resource service. Renames and deletes never silently rewrite other occurrences or their references.
+
+The map overlay is an authored-data aid, not a live open/closed or enabled/disabled state. It previews up to 16 node attributes, 1024 constraint attributes per network and 32 reference names per attribute; drawing is capped at 4096 outlines and 1024 dashed assignments across visible networks. Cards show a shorter summary. Paged source inspection/editing and export retain all records. Missing or ambiguous edge endpoints never invent geometry. Edited dependencies refresh the map; a stale source/snapshot must be rediscovered before editing through MCP.
+
 ## Mech assemblies and replacement
 
 Open the model library and select a model member. Each base, lower-detail or HUD member owns a separate hierarchy. **Export referenced models** exports assembled and local OBJ/MTL/PNG files and a manifest recording the source hash, member, local model indices, nodes and transforms.
@@ -36,6 +50,8 @@ Open the motion archive and select a **Motion** asset. The viewer suggests a uni
 
 Assembly binding indexes the selected member's node names once, with ordinal matching and duplicate-name protection. Binding runs off the UI thread and observes cancellation while indexing and binding tracks; superseded requests cannot replace the current selection, including when edits require rebinding during a pending load.
 
+Prepared LOD hierarchies are reused between frames; sampling runs off the UI thread with superseded results rejected. Motion preview supports up to 16,384 visible model placements per assembly. Larger authored libraries remain inspectable/exportable. Preview notices retain 256 bounded messages plus an omitted-count summary.
+
 Bindings to edited libraries retain the selected member UUID from the same snapshot as its geometry, including duplicated/imported members with no original-file index. Renaming, reordering, model replacement and Undo/Redo keep that member bound with camera/playback retained. Selecting another member replaces the binding identity only after a successful load. Deleting the selected member clears the binding instead of selecting another member at its former index.
 
 If an edit or Undo/Redo overtakes library loading, identity lookup uses that exact decoded snapshot in retained edit history. A separately parsed document with identical names/bytes does not share those session identities.
@@ -54,6 +70,8 @@ Opening and passive inspection retain bounded metadata, without expanding full p
 
 Version-39 transform events require the stored keyframe count to describe the entire payload exactly. Negative/excessive counts, missing records and trailing bytes or records make the keyframe stream unavailable for editing or playback. Inspection exposes a diagnostic and preserves the original bytes; scheduling fields remain inspectable/editable. Version-28's reserved field is not treated as a count.
 
+Keyframe inspection validates the stream with a sparse offset index and displays 64 segments per page. Preview execution accepts up to 16,384 segments per transform event; larger streams remain inspectable/editable/exportable and report a preview limitation.
+
 Supported shared animation operations have explicit approximation notices. Stored spline coefficients are preserved; preview sampling uses base/rate channels. Weapon gameplay and particle simulation are not executed. Version-39 gameplay markers 41/42 retain their dispatch traces and support notices, then allow subsequent events to run in both ordinary and cleanup sequences. Water/lava contact behavior, AI activation and mission-script execution are not reproduced. Recoil engine evidence does not establish MW3 runtime compatibility. Bind version-39 animations to a version-27 world; cross-game bindings are rejected. Ambiguous MW3 roots require an explicit root binding.
 
 ## MCP
@@ -68,6 +86,9 @@ Motion inspection metadata previews at most 32 parts and 128 characters per name
 
 | Command | Purpose |
 | --- | --- |
+| `zstudio_ai_valves` | Page edited valve records, references and eligible binding targets by document/member UUID. |
+| `zstudio_ai_valve_edit` | Apply one shared semantic resource edit with a current revision. |
+| `zstudio_ai_valve_selection` | Discover mission sources, inspect source occurrences, open pinned Properties, toggle/highlight/frame the overlay. |
 | `zstudio_missions` | List/select authored readers for the visible MW3 world or animation. |
 | `zstudio_motion_records` | Page motion parts or frames, including the closing sample. |
 | `zstudio_motion_edit` | Edit timing/transforms or insert/delete frames as one archive undo step. |

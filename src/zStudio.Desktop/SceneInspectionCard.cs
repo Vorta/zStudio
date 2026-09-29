@@ -30,6 +30,8 @@ internal sealed partial class SceneInspectionCard : Grid
     private const string AuthoredPlacement = "Authored placement XYZ";
     private ValueTextBox[] Coordinates => values[AuthoredPlacement].Inputs;
     private readonly Button edit, cancel;
+    private readonly Button valves;
+    internal event Action<string>? ValvesRequested;
     private JsonObject details = [];
     private Guid draftId;
     internal DocumentModel? DraftDocument { get; private set; }
@@ -63,7 +65,10 @@ internal sealed partial class SceneInspectionCard : Grid
         cancel = Button("↶", "Discard transform draft", CancelDraft); cancel.Visibility = Visibility.Hidden;
         DockPanel.SetDock(cancel, Dock.Right); title.Children.Add(cancel); title.Children.Add(heading);
         layout.Children.Add(title);
-        StackPanel body = new(); body.Children.Add(modes); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(rows);
+        valves = new Button { Content = "Valve Properties…", HorizontalAlignment = HorizontalAlignment.Left, Margin = new(0, 4, 0, 4) };
+        System.Windows.Automation.AutomationProperties.SetName(valves, "Open selected node valves");
+        valves.Click += (_, _) => { if (Selection?.AiNode is { } id && ResolvePending()) ValvesRequested?.Invoke(id); };
+        StackPanel body = new(); body.Children.Add(modes); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(valves); body.Children.Add(rows);
         error.Visibility = Visibility.Collapsed;
         ScrollViewer scroll = new() { Name = "InspectionScroll", Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0) };
         scroll.SetResourceReference(Control.TemplateProperty, "InspectionScrollTemplate");
@@ -155,6 +160,7 @@ internal sealed partial class SceneInspectionCard : Grid
         ArrangePanel();
         if (selected == null) return;
         details = describe(selected);
+        valves.Visibility = details.ContainsKey("AI valves") ? Visibility.Visible : Visibility.Collapsed;
         heading.Text = Display(details["Node"]); heading.ToolTip = heading.Text;
         scope.Text = details["Edit scope"] is { } affected ? Display(affected) : "";
         scope.Visibility = scope.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;

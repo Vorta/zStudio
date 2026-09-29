@@ -9,6 +9,7 @@ internal static class McpStdioCheck
     public static int Run(string executable, string? root = null) => RunAsync(Path.GetFullPath(executable), root).GetAwaiter().GetResult();
     private static async Task<int> RunAsync(string executable, string? root)
     {
+        using var savedSettings = new SettingsSnapshot();
         if (LocalMcpHost.Discover(executable).Count > 0) throw new InvalidOperationException("Close this test installation first.");
         string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
         var settings = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new JsonObject();

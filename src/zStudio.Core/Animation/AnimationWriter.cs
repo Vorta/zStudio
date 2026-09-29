@@ -167,10 +167,11 @@ public sealed class AnimationEditSession(AnimationPackage package)
         if (duplicate != null)
         {
             string old = sequence.Name;
+            int sourceIndex = e.Sequences.FindIndex(s => s.Id == duplicate);
             foreach (var ev in sequence.Events)
             {
                 foreach (var r in SequenceReferences(ev))
-                    if (ev.Text(r.Name) == old || GetCache(r) == e.Sequences.FindIndex(s => s.Id == duplicate)) { ev.SetText(r.Name, name); SetCache(r, -1); }
+                    if (ev.Text(r.Name) == old || sourceIndex >= 0 && GetCache(r) == sourceIndex) { ev.SetText(r.Name, name); SetCache(r, -1); }
             }
         }
         sequence.Name = name; e.Sequences.Add(sequence);

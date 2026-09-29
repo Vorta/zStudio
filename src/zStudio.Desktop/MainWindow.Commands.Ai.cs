@@ -24,7 +24,7 @@ public partial class MainWindow
             return Page(graph.Networks, args, search: n => $"{ShortAiText(n.Member)} {ShortAiText(n.Name)} {ShortAiText(n.Type)} {n.Archive}",
                 project: n => new { snapshot = graph.Id, n.Id, n.Archive, n.MemberIndex, n.Member, Name = ShortAiText(n.Name), Type = ShortAiText(n.Type), n.PathWidth,
                     attack_strategy = DescribeAiStrategy(n),
-                    nodes = n.Nodes.Count, constraints = n.Constraints.Count, links = n.Nodes.Sum(p => p.PreviewLinks.Count(l => l.Target != null)),
+                    nodes = n.Nodes.Count, constraints = n.ConstraintCount, constraintsTruncated = n.ConstraintCount > n.Constraints.Count, links = n.Nodes.Sum(p => p.PreviewLinks.Count(l => l.Target != null)),
                     linkSlots = n.Nodes.Sum(p => (long)p.LinkCount), linksTruncated = n.Nodes.Any(p => p.LinksTruncated),
                     diagnostics = n.Diagnostics.Take(8).Select(d => d with { Message = d.Message[..Math.Min(128, d.Message.Length)] }).ToArray(), diagnosticCount = n.Diagnostics.Count,
                     diagnosticsTruncated = n.Diagnostics.Count > 8 || n.Diagnostics.Take(8).Any(d => d.Message.Length > 128) });

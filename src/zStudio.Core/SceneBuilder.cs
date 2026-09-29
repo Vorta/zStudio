@@ -113,8 +113,11 @@ public static class GeometryBuilder
             for (int i = 0; i < vertices.Length; i++)
             {
                 group.Positions.Add(vertices[i]);
-                var color = polygon.Colors.Length == vertices.Length ? polygon.Colors[i] / 255f : Vector3.One;
-                group.Colors.Add(new Vector4(float.IsFinite(color.LengthSquared()) ? Vector3.Clamp(color, Vector3.Zero, Vector3.One) : Vector3.One, 1));
+                if (colored)
+                {
+                    var color = polygon.Colors.Length == vertices.Length ? polygon.Colors[i] / 255f : Vector3.One;
+                    group.Colors.Add(new Vector4(float.IsFinite(color.LengthSquared()) ? Vector3.Clamp(color, Vector3.Zero, Vector3.One) : Vector3.One, 1));
+                }
                 Vector3 n = polygon.Normals.Length == vertices.Length && polygon.Normals[i] >= 0 && polygon.Normals[i] < model.Normals.Length ? model.Normals[polygon.Normals[i]] : normal;
                 group.Normals.Add(n.LengthSquared() > 1e-12f && float.IsFinite(n.LengthSquared()) ? Vector3.Normalize(n) : normal);
                 group.Uvs.Add(polygon.Uvs.Length == vertices.Length ? polygon.Uvs[i] : Vector2.Zero);

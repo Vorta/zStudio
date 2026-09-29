@@ -4,7 +4,7 @@
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse and edit game archives, typed data, texture packs and prepared scripts, inspect and export assets, replace supported 3D models, preview assembled worlds, edit mission coordinates, and edit supported animation programs. This source tree targets **v0.7.0**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse and edit game archives, typed data, texture packs and prepared scripts, inspect and export assets, replace supported 3D models, preview assembled worlds, edit mission coordinates, and edit supported animation programs. This source tree targets **v0.7.1**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 

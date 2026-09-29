@@ -144,6 +144,7 @@ public partial class MainWindow
         RegisterWorkspaceCommands(registry);
         RegisterPreviewCommands(registry);
         RegisterAiCommands(registry);
+        RegisterValveCommands(registry);
         RegisterInspectionCommands(registry);
         RegisterSceneTreeCommand(registry);
         RegisterEditCommands(registry);

@@ -199,7 +199,7 @@ public partial class MainWindow : Window
         // A motion's member UUID survives rename/reorder; its asset index does not.
         // Conversely, deleting a member can put another clip at the same asset ID.
         if (asset?.Kind == AssetKind.Motion && shownDocument == doc && motion != null && doc.ResourceEdits?.Current.Members[asset.Index].Id == motion.MemberId)
-        { shownAsset = asset; motion.RefreshClip(); await RefreshAssetInspectionAsync(doc, asset, preview.Token); return; }
+        { shownAsset = asset; await motion.RefreshClipAsync(); await RefreshAssetInspectionAsync(doc, asset, preview.Token); return; }
         if (!differentAsset && asset != null && shownDocument == doc && HasPublishedStaticScene && ViewModel.Resolver != null)
         { shownAsset = asset; await RefreshStaticSceneAsync(doc, asset); return; }
         // Entering the animation viewer starts at Sequences. Consecutive animation

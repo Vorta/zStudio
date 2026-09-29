@@ -35,7 +35,7 @@ public sealed partial class AnimationPropertiesEditor
     private string KeyframeShape()
     {
         if (Event?.Type != 12) return "";
-        try { return string.Join(',',ReadKeyframes().Select(f => f.Flags)); }
+        try { var frames = ReadKeyframes(); return $"{frames.Count}/{selectedSegment}/{(frames.Count == 0 ? 0 : frames[Math.Clamp(selectedSegment, 0, frames.Count - 1)].Flags)}"; }
         catch (InvalidDataException) { return "malformed"; }
     }
     private AnimationKeyframe CurrentSegment(int index) => ReadKeyframes()[index];
@@ -44,14 +44,20 @@ public sealed partial class AnimationPropertiesEditor
         Label(panel, "Keyframe segments", true); Label(panel, "Times are local to this event. XYZ channels store a base and rate per second. Rotation stores W, X, Y, Z and the engine rotation-vector rate.");
         WrapPanel tools = new(); panel.Children.Add(tools);
         Button(tools, "+ segment", () => EditKeyframes("Add keyframe", list => { var next = AnimationKeyframe.Create(7); next.Start = list.Count > 0 ? list[^1].End : 0; next.End = next.Start + 1; list.Add(next); }));
-        var items = segments.Select((segment, index) => new KeyframeChoice(index, $"{index}: {segment.Start:R}–{segment.End:R} s · channels 0x{segment.Flags:X}")).ToArray();
-        ListBox list = new() { ItemsSource = items, DisplayMemberPath = nameof(KeyframeChoice.Label), MaxHeight = 140, MinHeight = 48, SelectedIndex = Math.Clamp(selectedSegment, 0, Math.Max(0, items.Length - 1)) };
+        const int pageSize = 64;
+        int first = Math.Clamp(selectedSegment, 0, Math.Max(0, segments.Count - 1)) / pageSize * pageSize;
+        KeyframeChoice[] Choices(IReadOnlyList<AnimationKeyframe> frames) => Enumerable.Range(first, Math.Max(0, Math.Min(pageSize, frames.Count - first))).Select(index => { var frame = frames[index]; return new KeyframeChoice(index, $"{index}: {frame.Start:R}–{frame.End:R} s · channels 0x{frame.Flags:X}"); }).ToArray();
+        var items = Choices(segments);
+        Button(tools, "Previous segments", () => { if (ResolvePendingDrafts()) SelectAutomationSegment(Math.Max(0, first - pageSize)); });
+        Button(tools, "Next segments", () => { if (ResolvePendingDrafts()) SelectAutomationSegment(Math.Min(Math.Max(0, segments.Count - 1), first + pageSize)); });
+        Label(panel, $"{segments.Count:N0} segments · showing {first}–{Math.Max(first, first + items.Length - 1)}");
+        ListBox list = new() { ItemsSource = items, DisplayMemberPath = nameof(KeyframeChoice.Label), MaxHeight = 140, MinHeight = 48, SelectedIndex = Math.Clamp(selectedSegment - first, 0, Math.Max(0, items.Length - 1)) };
         panel.Children.Add(list);
-        valueRefresh.Add(() => { int at = list.SelectedIndex; list.ItemsSource = ReadKeyframes().Select((f,i) => new KeyframeChoice(i,$"{i}: {f.Start:R}–{f.End:R} s · channels 0x{f.Flags:X}")).ToArray(); list.SelectedIndex = at; });
+        valueRefresh.Add(() => { int at = list.SelectedIndex; list.ItemsSource = Choices(ReadKeyframes()); list.SelectedIndex = at; });
         list.SelectionChanged += (_, _) =>
         {
             if (refreshingFields || list.SelectedItem is not KeyframeChoice choice || choice.Index == selectedSegment) return;
-            if (!ResolvePendingDrafts()) { list.SelectedIndex = selectedSegment; return; }
+            if (!ResolvePendingDrafts()) { list.SelectedIndex = selectedSegment - first; return; }
             selectedSegment = choice.Index; fieldsShape = ""; RefreshProperties();
         };
         if (segments.Count == 0) return;
@@ -86,9 +92,9 @@ public sealed partial class AnimationPropertiesEditor
             Button(actions, "↓", () => EditKeyframes("Move keyframe", list => { if (index + 1 < list.Count) (list[index+1],list[index]) = (list[index],list[index+1]); }));
     }
     private sealed record KeyframeChoice(int Index, string Label);
-    private void EditKeyframes(string description, Action<List<AnimationKeyframe>> change) => ChangeEvents(description, events =>
+    private void EditKeyframes(string description, Action<IList<AnimationKeyframe>> change) => ChangeEvents(description, events =>
     {
-        int at = events.FindIndex(e => e.Id == selectedEvent); var frames = events[at].Keyframes().Select(f => new AnimationKeyframe((byte[])f.Bytes.Clone())).ToList();
-        change(frames); foreach (var f in frames) f.Validate(); events[at] = events[at].WithKeyframes(frames);
+        int at = events.FindIndex(e => e.Id == selectedEvent); var frames = new KeyframeEditList(events[at].Keyframes());
+        change(frames); events[at] = events[at].WithKeyframes(frames);
     });
 }

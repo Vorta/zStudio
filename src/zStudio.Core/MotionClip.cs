@@ -5,7 +5,7 @@ using Recoil.Zbd.Core.Formats;
 
 namespace Recoil.Zbd.Core;
 
-public sealed record MotionFrame(Vector3 Translation, Quaternion Rotation);
+public readonly record struct MotionFrame(Vector3 Translation, Quaternion Rotation);
 public sealed record MotionPart(string Name, uint Flags, IReadOnlyList<MotionFrame> Frames, ReadOnlyMemory<byte> NameBytes);
 
 /// <summary>Version 4 motion tracks. The authored closing sample is retained separately from the playback frame count.</summary>
@@ -68,12 +68,14 @@ public sealed class MotionClip
         if (action == "delete" && FrameCount == 1) throw new InvalidDataException("A motion clip needs at least one frame.");
         if (action == "insert" && FrameCount >= 100_000) throw new InvalidDataException("A motion clip cannot exceed 100000 frames.");
         if (action is not ("set" or "insert" or "delete")) throw new InvalidDataException("Unknown motion edit action.");
-        if (action == "set" && (value == null || !float.IsFinite(value.Translation.LengthSquared()) || !float.IsFinite(value.Rotation.LengthSquared()) || value.Rotation.LengthSquared() < 1e-12f))
+        var replacement = value.GetValueOrDefault();
+        if (action == "set" && (value == null || !float.IsFinite(replacement.Translation.LengthSquared()) || !float.IsFinite(replacement.Rotation.LengthSquared()) || replacement.Rotation.LengthSquared() < 1e-12f))
             throw new InvalidDataException("Specify a finite translation and a nonzero finite quaternion.");
         var tracks = Parts.Select((p, index) =>
         {
+            if (action == "set" && index != part) return p;
             var samples = p.Frames.ToList();
-            if (action == "set" && index == part) samples[frame] = value!;
+            if (action == "set") samples[frame] = replacement;
             if (action == "insert") samples.Insert(frame + 1, samples[frame]);
             if (action == "delete") samples.RemoveAt(frame);
             // The final sample is authored separately; structural edits shift it

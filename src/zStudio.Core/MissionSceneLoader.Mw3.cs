@@ -62,7 +62,8 @@ public static partial class MissionSceneLoader
                 token.ThrowIfCancellationRequested();
                 scene.Nodes.Add(n with { Parents = [..n.Parents], Children = [..n.Children], Data = (JsonObject)n.Data.DeepClone(), Metadata = (JsonObject)n.Metadata.DeepClone() });
             }
-            List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; List<string> notes = ["MW3 authored layout preview. Mission scripts, AI activation, combat and inventory are not simulated."];
+            List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; PreviewNotes notes = new();
+            notes.Add("MW3 authored layout preview. Mission scripts, AI activation, combat and inventory are not simulated.");
             int worldRoot = scene.Nodes.FirstOrDefault(n => n.Class == "world")?.Index ?? -1;
             Dictionary<string, List<GameNode>> worldActors = new(StringComparer.Ordinal);
             foreach (var node in original.Nodes)
@@ -115,6 +116,8 @@ public static partial class MissionSceneLoader
                         if (rows[row].Kind != ZrdKind.String || data.Count < 3 || data[1].Children.Count != 3) throw new InvalidDataException("Missing authored position/heading.");
                         float Scalar(ZrdNode n) => n.Kind == ZrdKind.Float && float.IsFinite(BitConverter.UInt32BitsToSingle(n.Bits)) ? BitConverter.UInt32BitsToSingle(n.Bits) : throw new InvalidDataException("Invalid placement scalar.");
                         Vector3 position = new(Scalar(data[1].Children[0]), Scalar(data[1].Children[1]), Scalar(data[1].Children[2])); float heading = Scalar(data[2]);
+                        if (Math.Abs(position.X) > 1e12 || Math.Abs(position.Y) > 1e12 || Math.Abs(position.Z) > 1e12)
+                            throw new InvalidDataException("Placement coordinates exceed the supported ±1e12 game-unit preview range.");
                         var matches = worldActors.GetValueOrDefault(name) ?? [];
                         int root;
                         if (matches.Count == 1)
@@ -192,6 +195,7 @@ public static partial class MissionSceneLoader
                 scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Concat(attachedRoots).Distinct().ToArray() };
             var context = new MissionSceneContext(scene, sources, actors, [], notes, layout, original.Nodes.Count);
             if (selected != null) context.AiNetworks = MissionAiNetworks.Read(selected.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (selected, a)), token);
+            context.AiNetworks = MissionAiValves.Attach(context.AiNetworks, archives.Where(a => a == selected || !a.Assets.Any(v => v.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase))), token);
             return context;
 
             int Clone(GameScene source, int index, int parent, int depth, HashSet<int> active, bool mech)

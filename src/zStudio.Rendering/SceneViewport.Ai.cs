@@ -18,7 +18,7 @@ public sealed partial class SceneViewport
     // Dedicated group: never part of authored meshes, depth bounds, isolation or export.
     private sealed class AiOverlayGroup : GroupModel3D;
     private AiOverlayGroup? aiOverlay;
-    private readonly List<(MeshGeometryModel3D Mesh, AiNode[] Nodes)> aiMarkers = [];
+    private readonly List<(MeshGeometryModel3D Mesh, AiNode[] Nodes, double Pixels)> aiMarkers = [];
     private readonly Dictionary<MeshGeometryModel3D, Func<MeshGeometry3D>> aiLinks = [];
     private MeshGeometryModel3D? aiSelectionMarker;
     private readonly List<MeshGeometryModel3D> aiDrawables = [];
@@ -37,7 +37,7 @@ public sealed partial class SceneViewport
     public void SetAiNetworks(AiNetworkSnapshot snapshot)
     {
         if (AiNetworks.Id == snapshot.Id) return;
-        AiNetworks = snapshot; AiNetworkFilter = null; SelectedAiNode = null; hoveredAiNode = null;
+        AiNetworks = snapshot; AiNetworkFilter = null; SelectedAiNode = null; hoveredAiNode = null; ValveFilter = null;
         RebuildAiOverlay();
     }
     public void SetAiOptions(bool visible, bool throughGeometry, string? network)
@@ -73,7 +73,7 @@ public sealed partial class SceneViewport
             var color = AiNetworkColors.Color(network.AttackStrategy); var nodes = network.Nodes.ToArray();
             if (nodes.Length == 0) continue;
             var markers = AiMesh(AiOctahedron(), color);
-            aiMarkers.Add((markers, nodes));
+            aiMarkers.Add((markers, nodes, 4));
             var byId = nodes.ToDictionary(n => n.Id);
             var lines = AiMesh(BuildLinks(), color); aiLinks.Add(lines, BuildLinks);
             MeshGeometry3D BuildLinks()
@@ -119,6 +119,7 @@ public sealed partial class SceneViewport
                 void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d) { Triangle(a, b, c); Triangle(a, c, d); }
             }
         }
+        BuildValveOverlay();
         aiSelectionMarker = AiMesh(AiOctahedron(), new(1, 1, 1, 1));
         RefreshAiSelection(); UpdateAiMarkers(); viewport.InvalidateRender();
     }
@@ -148,7 +149,7 @@ public sealed partial class SceneViewport
         var pose = CaptureView();
         if (aiMarkerPose == pose && aiMarkerWidth == viewport.ActualWidth && aiMarkerHeight == viewport.ActualHeight) return;
         aiMarkerPose = pose; aiMarkerWidth = viewport.ActualWidth; aiMarkerHeight = viewport.ActualHeight;
-        foreach (var (mesh, nodes) in aiMarkers) mesh.Instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(n.Position, 4)) * Matrix4x4.CreateTranslation(n.Position)).ToArray();
+        foreach (var (mesh, nodes, pixels) in aiMarkers) mesh.Instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(n.Position, pixels)) * Matrix4x4.CreateTranslation(n.Position)).ToArray();
         foreach (var (mesh, build) in aiLinks) mesh.Geometry = build();
         RefreshAiSelection();
     }

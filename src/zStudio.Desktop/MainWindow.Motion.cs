@@ -67,6 +67,8 @@ public partial class MainWindow
                 case "lod": editor.SetLod(Int(a, "lod", -1)); break;
                 case "frame": editor.Viewport.FrameAll(); break;
             }
+            if (Text(a, "action") is "seek" or "lod" && !await editor.PresentationWork.WaitAsync(token))
+                throw new StudioCommandException("context_changed", "The requested motion frame was superseded or unavailable. Inspect preview status and retry.");
             RequirePreview(a); return Result(editor.State);
         });
     }

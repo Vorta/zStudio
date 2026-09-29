@@ -36,7 +36,8 @@ public partial class MainWindow
         long revision = doc.Revision; var assembly = MechMember(doc, member); var scene = doc.PreviewDocument.Scene!;
         StackPanel body = new() { Margin = new(16) };
         body.Children.Add(new TextBlock { Text = "Replace a member-local mesh with a triangulated OBJ. Choose an existing shared material. Edit its texture through the texture pack editor.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 12) });
-        var models = Enumerable.Range(0, assembly.ModelCount).Select(i => new { Index = i, Label = $"Model {i} · " + string.Join(", ", scene.Nodes.Skip(assembly.RootNode).Take(assembly.NodeCount).Where(n => n.ModelIndex == assembly.FirstModel + i).Select(n => n.Name).Distinct()) }).ToArray();
+        var nodesByModel = scene.Nodes.Skip(assembly.RootNode).Take(assembly.NodeCount).ToLookup(n => n.ModelIndex);
+        var models = Enumerable.Range(0, assembly.ModelCount).Select(i => new { Index = i, Label = $"Model {i} · " + string.Join(", ", nodesByModel[assembly.FirstModel + i].Take(8).Select(n => n.Name)) }).ToArray();
         ComboBox model = new() { ItemsSource = models, DisplayMemberPath = "Label", SelectedValuePath = "Index", SelectedIndex = 0, Margin = new(0, 4, 0, 12) };
         body.Children.Add(new TextBlock { Text = "Mesh part" }); body.Children.Add(model);
         var materials = scene.Materials.Select((m, i) => new { Index = i, Label = $"Material {i} · " + (m.Int("texture_index", -1) is >= 0 and int t && t < scene.Textures.Count ? scene.Textures[t].Text("name") : "solid color") }).ToArray();

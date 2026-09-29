@@ -7,6 +7,21 @@ namespace Recoil.Zbd.Tests;
 
 public sealed partial class AnimationTests
 {
+    [Fact]
+    public void Mw3CleanupWaterAndLavaInvalidCachesRetainUnrelatedTargetsOnDuplication()
+    {
+        byte[] prefix = new byte[80]; BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(4), 39);
+        var package = new AnimationPackage { Prefix = prefix, Tail = [] };
+        var entry = new AnimationEntry(new byte[316], 0, 80); package.Entries.Add(entry); entry.Primary.Name = "cleanup";
+        var procedural = AnimationCatalog.Create(10, 39); procedural.SetInt(12, 0x800);
+        procedural.SetText(208, "cleanup"); procedural.SetShort(240, -1);
+        procedural.SetText(248, "water"); procedural.SetShort(280, -1);
+        procedural.SetText(288, "lava"); procedural.SetShort(320, -1); entry.Primary.Events.Add(procedural);
+        var session = new AnimationEditSession(package); session.AddSequence(0, entry.Primary.Id);
+        var copy = package.Entries[0].Sequences.Single(); var ev = Assert.Single(copy.Events);
+        Assert.Equal(copy.Name, ev.Text(208)); Assert.Equal("water", ev.Text(248)); Assert.Equal("lava", ev.Text(288));
+        Assert.Equal("water", AnimationPackage.Read(AnimationWriter.Write(package, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken).Entries[0].Sequences[0].Events[0].Text(248));
+    }
     [Theory]
     [InlineData(0)]
     [InlineData(2)]

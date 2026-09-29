@@ -11,6 +11,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
 using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Rendering;
 
@@ -174,6 +175,35 @@ internal static class AiNetworkCheck
                 Require(HasColor(Presented(view), view, point, hex), "Clearing selection did not restore strategy color: " + text);
                 Save(Presented(view), Path.Combine(output, "strategy-" + text + ".png"));
             }
+            // Actual presented pixels: valve cages and assignments must remain separate
+            // from strategy-colored base nodes, and an unmatched filter removes them.
+            ZrdNode A(params ZrdNode[] values) => new(Guid.NewGuid(), ZrdKind.Array, 0, "", values);
+            ZrdNode S(string value) => new(Guid.NewGuid(), ZrdKind.String, 0, value, []);
+            ZrdNode I(int value) => new(Guid.NewGuid(), ZrdKind.Int, unchecked((uint)value), "", []);
+            ZrdNode F(float value) => new(Guid.NewGuid(), ZrdKind.Float, BitConverter.SingleToUInt32Bits(value), "", []);
+            var valveGraph = MissionAiNetworks.Decode("valve-network", "fixture.zbd", 0, "net_01.zrd", A(
+                S("version"), A(I(106)),
+                S("node_00"), A(I(12), A(F(-6), F(0), F(-2)), A(I(1)), S("valve"), A(I(1), S("start"))),
+                S("node_01"), A(I(12), A(F(6), F(0), F(-2)), A(I(0))),
+                S("node_02"), A(A(I(0), I(1)), S("valve_assign"), A(S("start"), I(1)))));
+            scene.SetAiNetworks(new("valve-fixture", [valveGraph]));
+            scene.SetAiOptions(true, true, null); scene.SetValveOptions(false); await Task.Delay(150);
+            var valveBase = Pixels(Presented(view));
+            scene.SetValveOptions(true); await Task.Delay(150);
+            var valves = Presented(view);
+            Require(!valveBase.SequenceEqual(Pixels(valves)), "Valve overlay did not render");
+            Require(HasColor(valves, view, point, "#FF6666"), "Valve cage replaced attack strategy color");
+            Require(HasColor(valves, view, view.Project(new Point3D(-1.5, 0, -2)), "#F2F2F2"), "Valve assignment dash missing");
+            byte[] valveIdle = Pixels(valves); await Task.Delay(150);
+            Require(valveIdle.SequenceEqual(Pixels(Presented(view))), "Valve overlay changed at idle");
+            Save(valves, Path.Combine(output, "fixture-valves.png"));
+            scene.SetValveOptions(true, "absent"); await Task.Delay(150);
+            Require(valveBase.SequenceEqual(Pixels(Presented(view))), "Valve name filter left unrelated overlays");
+            scene.SetValveOptions(true, "start"); await Task.Delay(150);
+            Require(HasColor(Presented(view), view, view.Project(new Point3D(-1.5, 0, -2)), "#FFCC33"), "Valve highlight dash missing");
+            Require(scene.CaptureView() == pose && clip == (camera.NearPlaneDistance, camera.FarPlaneDistance), "Valve overlays altered camera/depth bounds");
+            Require(scene.FrameValveAssociations(), "Valve associations could not be framed");
+            Console.WriteLine("PASS: valve cages retain strategy colors, assignments/highlights render, filtering restores base pixels, idle/depth/camera stable and associations frame");
             Console.WriteLine("PASS: rendered strategy colors for markers/arrows, equal strategies across networks, filtering, both depth modes and white selection");
             Console.WriteLine("PASS: GPU through/occluded modes, reciprocal arrows, visibility-aware picking, unchanged clipping/camera and idle back buffer");
         }

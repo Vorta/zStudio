@@ -17,6 +17,7 @@ public partial class MainWindow
     private void AttachInspection(SceneViewport viewport)
     {
         var card = new SceneInspectionCard(viewport, item => DescribeInspection(viewport, item), BeginInspectionEdit, ApplyInspectionEdit);
+        card.ValvesRequested += async id => await ResourceUiAsync(() => OpenNodeValvesAsync(id));
         card.SetPanelHeight(Layout.InspectionPanelHeight);
         card.PanelHeightChanged += height => Layout.InspectionPanelHeight = height;
         card.DraftClosed += () => { if (ReferenceEquals(inspectionDraft, card)) inspectionDraft = null; };
@@ -88,6 +89,11 @@ public partial class MainWindow
             info["Node"] = $"AI {ai.Network.Member} · node_{ai.Node.Index:00}";
             info["Network"] = Short(ai.Network.Name); info["Network type"] = Short(ai.Network.Type);
             info["Attack strategy"] = AiStrategyText(ai.Network.AttackStrategy);
+            if (ai.Network.IsMw3)
+            {
+                var valves = MissionAiValves.ForNode(ai.Network, ai.Node).Take(9).ToArray();
+                info["AI valves"] = valves.Length == 0 ? "No authored valve conditions or assignments" : string.Join("\n", valves.Take(8).Select(r => r.Name + ": " + string.Join(", ", MissionAiValves.References(r).Take(4).Select(v => MissionAiValves.Short(v.Name, 96))))) + (valves.Length > 8 ? "\nMore in Valve Properties…" : "");
+            }
             info["Path width"] = ai.Network.PathWidth; info["Raw node value"] = ai.Node.RawValue;
             info["Directed link slots"] = new JsonArray(ai.Node.PreviewLinks.Select(l => (JsonNode)new JsonObject { ["slot"] = l.Slot, ["target"] = l.TargetIndex, ["problem"] = l.Problem }).ToArray());
             info["Authored link slot count"] = ai.Node.LinkCount;

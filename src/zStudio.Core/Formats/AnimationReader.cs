@@ -21,6 +21,10 @@ internal sealed class AnimationReader : IZbdFormatReader
         foreach (var entry in doc.Animations.Entries)
         {
             token.ThrowIfCancellationRequested();
+            // Opening already runs on the background parser. Prepare sparse indices
+            // here so selecting a large event never validates its payload on the UI thread.
+            foreach (var ev in entry.AllSequences.SelectMany(s => s.Events).Where(e => e.Type == 12))
+                try { _ = ev.Keyframes(token); } catch (InvalidDataException) { /* Scheduling fields and source bytes remain available. */ }
             string name = string.IsNullOrWhiteSpace(entry.Name) ? entry.Primary.Name : entry.Name;
             var asset = doc.Add(AssetKind.Animation, entry.Index, string.IsNullOrWhiteSpace(name) ? $"Animation {entry.Index}" : name,
                 entry.SourceOffset, entry.SourceLength, entry.ToPreviewJson(token), entry);

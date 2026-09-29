@@ -93,6 +93,9 @@ public partial class MainWindow
             SceneHost.Content = scene;
             ApplySceneOptions();
             if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
+            scene.SetValveOptions(previous.ValveOverlayVisible,
+                mission?.Layout.MissionArchive == previous.Mission?.Layout.MissionArchive ? previous.ValveFilter : null);
+            ApplyAiOptions();
             scene.RestoreView(view);
             isolatedNode = mission != null && previous.Mission != null && isolate is int oldIsolate
                 ? Remap(oldIsolate) is >= 0 and int mapped ? mapped : null : isolate;

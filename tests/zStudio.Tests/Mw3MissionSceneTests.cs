@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Formats;
 using Xunit;
 
 namespace Recoil.Zbd.Tests;
@@ -7,6 +8,34 @@ namespace Recoil.Zbd.Tests;
 [Collection("Allocation-sensitive")]
 public sealed class Mw3MissionSceneTests
 {
+    [Fact]
+    public async Task MissingPlacementDiagnosticsAreBoundedBeforeRetainingTheMission()
+    {
+        using var fixture = new Mw3MissionFixture(Enumerable.Range(0, 20_000).Select(i => "absent_" + i).ToArray());
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, token: TestContext.Current.CancellationToken);
+        Assert.Empty(mission.Actors); Assert.Equal(257, mission.Diagnostics.Count);
+        Assert.Contains("additional preview notices omitted", mission.Diagnostics[^1]);
+        Assert.All(mission.Diagnostics, n => Assert.True(n.Length <= 1025));
+        Assert.Equal(fixture.ReaderBytes, File.ReadAllBytes(fixture.ReaderPath));
+    }
+    [Theory]
+    [InlineData(float.MaxValue)]
+    [InlineData(-float.MaxValue)]
+    public async Task ExtremeFinitePositionsDoNotPoisonFramingOrTheNextPlacement(float position)
+    {
+        using var fixture = new Mw3MissionFixture("actor_01", "actor_02"); var token = TestContext.Current.CancellationToken;
+        var archive = await FormatRegistry.Default.OpenAsync(fixture.ReaderPath, token);
+        var root = (Recoil.Zbd.Core.Formats.ZrdNode)archive.Assets[0].Content!;
+        var edits = new ResourceEditSession(archive); var member = edits.Current.Members[0];
+        var node = edits.Tree(member, token).Children[1].Children[1].Children[0];
+        edits.Accept(await edits.PrepareZrdAsync(member.Id, node.Id, "set", value: position.ToString("R", System.Globalization.CultureInfo.InvariantCulture), token: token));
+        await edits.SaveAsync(token: token); byte[] authored = File.ReadAllBytes(fixture.ReaderPath);
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, token: token);
+        Assert.Equal("actor_02", Assert.Single(mission.Actors).Name);
+        Assert.Contains(mission.Diagnostics, n => n.Contains("±1e12"));
+        Assert.All(mission.Scene.Nodes, n => Assert.True(float.IsFinite(SceneBuilder.LocalTransform(n).GetDeterminant())));
+        Assert.Equal(authored, File.ReadAllBytes(fixture.ReaderPath));
+    }
     [Fact]
     public async Task ManyPlacementsPublishOrderedEdgesWithoutQuadraticArrayCopies()
     {

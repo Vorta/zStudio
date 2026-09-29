@@ -35,6 +35,10 @@ public sealed class MotionEditor : UserControl, IDisposable
     private bool syncing, disposed;
     private double seconds, startedAt;
     private long generation;
+    private long sampleRequest;
+    private long clipGeneration;
+    private Task sampling = Task.CompletedTask;
+    public Task<bool> PresentationWork { get; private set; } = Task.FromResult(true);
     private CancellationTokenSource? load;
     private bool? pendingPlayback;
     private int? selectedMember;
@@ -50,7 +54,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     private (string[] Items, int Count, bool Truncated) DiagnosticPreview()
     {
         var all = sampler?.Diagnostics ?? [];
-        return (all.Take(32).Select(s => s.Length > 512 ? s[..512] + "…" : s).ToArray(), all.Count,
+        return (all.Take(32).Select(s => s.Length > 512 ? s[..512] + "…" : s).ToArray(), sampler?.DiagnosticCount ?? 0,
             all.Count > 32 || all.Take(32).Any(s => s.Length > 512));
     }
     public object State
@@ -93,7 +97,7 @@ public sealed class MotionEditor : UserControl, IDisposable
             catch (OperationCanceledException) { }
             catch (Exception ex) when (ex is InvalidDataException or IOException) { StatusChanged?.Invoke(ex.Message); }
         };
-        timer.Tick += (_, _) => { if (lifetime.IsCancellationRequested) { Pause(); return; } if (IsPlaying && clip != null) { seconds = (startedAt + elapsed.Elapsed.TotalSeconds) % clip.LoopTime; Present(); } }; timer.Start();
+        timer.Tick += (_, _) => { if (lifetime.IsCancellationRequested) { Pause(); return; } if (IsPlaying && clip != null) { seconds = (startedAt + elapsed.Elapsed.TotalSeconds) % clip.LoopTime; Present(tick: true); } }; timer.Start();
     }
     private MotionClip CurrentClip()
     {
@@ -109,7 +113,7 @@ public sealed class MotionEditor : UserControl, IDisposable
         syncing = true; assembly.ItemsSource = library.Assets.Where(a => a.Content is MechAssembly).ToArray(); syncing = false;
         var suggestion = MotionLibrary.SuggestedMember(document.ResourceEdits!.Member(member).Name, library);
         if (suggestion is int index) await SelectAssemblyAsync(index, token);
-        else { support.Text = "Choose a mech assembly to preview this motion. No unique assembly matches the clip name."; RefreshClip(); }
+        else { support.Text = "Choose a mech assembly to preview this motion. No unique assembly matches the clip name."; await RefreshClipAsync(); }
     }
     public async Task SelectAssemblyAsync(int index, CancellationToken token = default)
     {
@@ -131,7 +135,8 @@ public sealed class MotionEditor : UserControl, IDisposable
             int nextLod = Math.Min(Lod, choices.Length - 1);
             var context = new AnimationPreviewContext { World = selectedLibrary, Package = new AnimationPackage { Prefix = new byte[72], Tail = [] } };
             replacement = new();
-            await replacement.ShowAnimationAsync(context, next.At(seconds, nextLod, ct), resolver, false, ct, previewLifetime: lifetime);
+            var initialFrame = await Task.Run(() => next.At(seconds, nextLod, ct), ct);
+            await replacement.ShowAnimationAsync(context, initialFrame, resolver, false, ct, previewLifetime: lifetime);
             ct.ThrowIfCancellationRequested(); if (disposed || request != generation) return;
             // A resource edit may have refreshed the clip while mesh/texture preparation was pending.
             while (!ReferenceEquals(nextClip, CurrentClip()))
@@ -143,9 +148,9 @@ public sealed class MotionEditor : UserControl, IDisposable
             seconds = Math.Min(seconds, nextClip.LoopTime);
             var previous = Viewport; Viewport = replacement; replacement = null;
             root.Children.Remove(previous); root.Children.Add(Viewport); previous.Dispose();
-            selectedIdentity = identity; selectedMember = index; clip = nextClip; sampler = next;
+            ++clipGeneration; selectedIdentity = identity; selectedMember = index; clip = nextClip; sampler = next;
             syncing = true; assembly.SelectedItem = asset; lod.ItemsSource = choices; lod.SelectedIndex = nextLod; syncing = false;
-            RefreshSupport(); Present(); SceneChanged?.Invoke();
+            RefreshSupport(); Present(); await PresentationWork; SceneChanged?.Invoke();
         }
         catch
         {
@@ -195,12 +200,18 @@ public sealed class MotionEditor : UserControl, IDisposable
         }
         catch { library = previousLibrary; librarySnapshot = previousSnapshot; syncing = true; assembly.ItemsSource = library.Assets.Where(a => a.Content is MechAssembly).ToArray(); assembly.SelectedItem = library.Assets.FirstOrDefault(a => a.Index == selectedMember); syncing = false; throw; }
     }
-    public void RefreshClip()
+    public async Task RefreshClipAsync()
     {
         if (disposed) return;
         clip = CurrentClip(); seconds = Math.Min(seconds, clip.LoopTime);
-        if (library?.Assets.FirstOrDefault(a => a.Index == selectedMember)?.Content is MechAssembly selected) { sampler = new(clip, library, selected, lifetime); RefreshSupport(); }
-        startedAt = seconds; elapsed.Restart(); Present();
+        if (library?.Assets.FirstOrDefault(a => a.Index == selectedMember)?.Content is MechAssembly selected)
+        {
+            var current = clip; var bound = library; long request = ++clipGeneration;
+            var next = await Task.Run(() => new MotionPreview(current, bound, selected, lifetime), lifetime);
+            if (disposed || request != clipGeneration || !ReferenceEquals(current, clip) || !ReferenceEquals(bound, library)) return;
+            sampler = next; RefreshSupport();
+        }
+        startedAt = seconds; elapsed.Restart(); Present(); await PresentationWork;
     }
     public void SetLod(int value)
     {
@@ -222,12 +233,30 @@ public sealed class MotionEditor : UserControl, IDisposable
     }
     public void Pause() { if (pendingPlayback != null) pendingPlayback = false; SuspendPlayback(); play.Content = "▶"; }
     private void SuspendPlayback() { IsPlaying = false; elapsed.Stop(); }
-    private void Present()
+    private void Present(bool tick = false)
     {
         if (disposed || clip == null) return;
-        if (sampler != null && !lifetime.IsCancellationRequested) Viewport.UpdateAnimationFrame(sampler.At(seconds, Lod, lifetime));
+        if (sampler != null && !lifetime.IsCancellationRequested && (!tick || PresentationWork.IsCompleted))
+            PresentationWork = PresentAsync(++sampleRequest, sampler, seconds, Lod);
         syncing = true; seeker.Maximum = clip.LoopTime; seeker.Value = seconds; syncing = false;
         time.Text = $"{seconds:F3} / {clip.LoopTime:F3} s";
+    }
+    private async Task<bool> PresentAsync(long request, MotionPreview source, double at, int level)
+    {
+        try
+        {
+            await sampling;
+            if (disposed || request != sampleRequest || !ReferenceEquals(source, sampler) || lifetime.IsCancellationRequested) return false;
+            var work = Task.Run(() => source.At(at, level, lifetime), lifetime); sampling = work;
+            var frame = await work;
+            if (disposed || request != sampleRequest || !ReferenceEquals(source, sampler) || lifetime.IsCancellationRequested) return false;
+            Viewport.UpdateAnimationFrame(frame);
+            return true;
+        }
+        catch (OperationCanceledException) when (disposed || lifetime.IsCancellationRequested) { }
+        catch (InvalidDataException ex) { if (!disposed && request == sampleRequest && ReferenceEquals(source, sampler)) { Pause(); StatusChanged?.Invoke(ex.Message); } }
+        finally { if (sampling.IsCompleted) sampling = Task.CompletedTask; }
+        return false;
     }
     public void Dispose()
     {

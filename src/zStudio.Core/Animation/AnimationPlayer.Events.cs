@@ -237,7 +237,7 @@ public sealed partial class AnimationPlayer
     private int Keyframes(Instance instance, Sequence state, AnimationEvent ev, ref float remaining)
     {
         var node = NodeRef(instance, ev.I32(12)); if (node == null) return 2;
-        var frames = ev.Keyframes(); if (frames.Count == 0) return 2;
+        var frames = ev.PlaybackKeyframes(); if (frames.Count == 0) return 2;
         for (int i = 0; i < frames.Count; i++)
         {
             var frame = frames[i]; if (state.EventElapsed < frame.Start) break;

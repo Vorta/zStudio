@@ -2,6 +2,14 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## 0.7.1 — 2026-09-29
+
+- Integrate authored MW3 AI valves: ordered action blocks, compound conditions, node conditions/unions, edge assignments and objective references. Preserve repeated names as distinct source occurrences. Add typed Properties, paged inspection and reference navigation, atomic edits, undo/redo and verified resource saves.
+- Add optional valve outlines and dashed assignment edges in Whole world while preserving attack-strategy colors. Node cards open their valve source in Properties; exact-name highlighting and framing use resolved spatial associations. Runtime valve evaluation and mission-script execution remain outside preview support.
+- Add three typed MCP tools for valve records/targets/references, semantic edits and mission selection/visualization, bringing windowless discovery to 82 tools.
+- Bound AI constraint previews and mission diagnostics before retaining them, reject placement coordinates beyond the supported preview range, and cache motion hierarchy bindings with frame sampling off the UI thread.
+- Inspect large animation keyframe streams through sparse indices and paged fields; serialize edits without eagerly cloning every untouched frame. Keep explicit preview limits visible. Preserve unrelated sequence references when duplicating cleanup.
+
 ## 0.7.0 — 2026-09-29
 
 - Add MechWarrior 3 base-game support through the shared format library: version-27 worlds and mech hierarchies, version-4 motion clips, and version-39 compiled animations. Preserve version-specific layouts, record identities and opaque data, with byte-exact animation/motion no-op writes.

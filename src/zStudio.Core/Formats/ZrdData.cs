@@ -60,9 +60,10 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
         return result;
     }
     /// <summary>Inspection uses a bounded tree; full exports continue to use ToJson.</summary>
-    public JsonObject ToPreviewJson(CancellationToken token = default)
+    public JsonObject ToPreviewJson(CancellationToken token = default, int maximumNodes = 1024, int maximumCharacters = 65536, int maximumDepth = 24, int maximumString = 4096)
     {
-        int nodes = 1024, characters = 65536;
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumDepth); ArgumentOutOfRangeException.ThrowIfNegative(maximumString);
+        int nodes = Math.Max(1, maximumNodes), characters = Math.Max(0, maximumCharacters);
         return Visit(this, 0);
         JsonObject Visit(ZrdNode node, int depth)
         {
@@ -71,14 +72,14 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
             JsonObject result = new() { ["offset"] = node.SourceOffset < 0 ? null : $"0x{node.SourceOffset:X}", ["type"] = node.Kind.ToString().ToLowerInvariant() };
             if (node.Kind == ZrdKind.String)
             {
-                int count = Math.Min(node.Text.Length, Math.Min(characters, 4096)); characters -= count;
+                int count = Math.Min(node.Text.Length, Math.Min(characters, maximumString)); characters -= count;
                 result["value"] = node.Text[..count];
                 if (count != node.Text.Length) { result["value_truncated"] = true; result["stored_characters"] = node.Text.Length; }
             }
             else
             {
                 JsonArray children = []; result["children"] = children;
-                foreach (var child in node.Children) { if (nodes == 0 || depth >= 24) break; children.Add(Visit(child, depth + 1)); }
+                foreach (var child in node.Children) { if (nodes == 0 || depth >= maximumDepth) break; children.Add(Visit(child, depth + 1)); }
                 if (children.Count != node.Children.Count) { result["children_truncated"] = true; result["stored_children"] = node.Children.Count; }
             }
             return result;

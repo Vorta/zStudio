@@ -42,6 +42,24 @@ internal static class Mw3LiveCheck
                 await Call("ai_selection", new { preview, snapshot = aiState["snapshot"]!.GetValue<string>(), action = "select", node = nodes["items"]![0]!["node_id"]!.GetValue<string>() });
                 await Call("camera", new { preview, action = "frame", target = "selected" });
                 await Capture("c1-ai");
+                string snapshot = aiState["snapshot"]!.GetValue<string>();
+                var valveSources = await Call("ai_valve_selection", new { preview, snapshot, action = "sources" });
+                var valveSource = valveSources["items"]!.AsArray().First(s => s!["Member"]!.GetValue<string>().Equals("valves.zrd", StringComparison.OrdinalIgnoreCase))!;
+                var valveRows = await Call("ai_valve_selection", new { preview, snapshot, action = "records", archive = valveSource["Archive"]!.GetValue<string>(), memberIndex = valveSource["MemberIndex"]!.GetValue<int>(), limit = 1 });
+                Require(valveRows["total"]!.GetValue<int>() > 0, "Missing authored valve definitions");
+                var opened = await Call("ai_valve_selection", new { preview, snapshot, action = "properties", archive = valveSource["Archive"]!.GetValue<string>(), memberIndex = valveSource["MemberIndex"]!.GetValue<int>(), record = valveRows["items"]![0]!["record"]!.GetValue<string>() });
+                Require(await Preview() == preview, "Valve Properties replaced the world preview");
+                Require((await Call("properties_state", new { }))["content"]!["valves"]!.GetValue<bool>(), "Valve Properties was not published");
+                await Call("ai_valve_selection", new { preview, snapshot, action = "overlay", visible = true });
+                Require((await Call("preview_state", new { preview }))["ai"]!["valveOverlay"]!.GetValue<bool>(), "Valve overlay not enabled");
+                await Capture("c1-valve-overlay");
+                await Call("capture", new { target = "properties" });
+                File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, "c1-valve-properties.png"), true);
+                await Call("scene_options", new { preview, changes = new { wireframe = true } }); preview = await Preview();
+                Require((await Call("preview_state", new { preview }))["ai"]!["valveOverlay"]!.GetValue<bool>(), "Scene refresh lost valve overlay");
+                await Call("scene_options", new { preview, changes = new { wireframe = false } }); preview = await Preview();
+                Console.WriteLine("PASS: authored valve discovery, pinned Properties, retained world preview and overlay across scene refresh.");
+                await Call("close_document", new { document = opened["document"]!.GetValue<string>(), revision = opened["Revision"]!.GetValue<long>() });
             }
             Console.WriteLine($"PASS: {map} world, mission selector, textured capture and AI networks.");
             await Call("close_document", new { document, revision = doc["Revision"]!.GetValue<long>() });

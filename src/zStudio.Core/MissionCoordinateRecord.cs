@@ -122,12 +122,12 @@ public sealed partial class PickupPlacementEditSession
             changed = true; return node with { Position = p };
         }).ToArray() }).ToArray();
         if (!changed) return snapshot;
-        if (preview != null) return new(snapshot.Id, networks); // A draft does not replace accepted source identities.
+        if (preview != null) return snapshot with { Networks = networks }; // A draft does not replace accepted source identities.
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         hash.AppendData(System.Text.Encoding.UTF8.GetBytes(snapshot.Id));
         foreach (var node in networks.SelectMany(n => n.Nodes))
             foreach (float value in new[] { node.Position.X, node.Position.Y, node.Position.Z }) hash.AppendData(BitConverter.GetBytes(value));
-        return new(Convert.ToHexString(hash.GetHashAndReset()), networks);
+        return snapshot with { Id = Convert.ToHexString(hash.GetHashAndReset()), Networks = networks };
     }
 
     public IReadOnlyDictionary<int, Vector3> TankPreviewPositions(MissionSceneContext mission) => mission.Actors

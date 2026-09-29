@@ -23,6 +23,10 @@ public sealed class MotionPreviewTests
         Assert.Equal(parts.Length, frame.Nodes.Count);
         Assert.Equal(new Vector3(1, 0, 0), frame.Nodes.Single(n => n.SourceNode == 0).Transform.Translation);
         Assert.All(frame.Nodes.Where(n => n.SourceNode != 0), n => Assert.Equal(new Vector3(2, 0, 0), n.Transform.Translation));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 8; i++) Assert.Equal(parts.Length, preview.At(.125 * i, token: token).Nodes.Count);
+        long allocation = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocation < 8_000_000, $"Warm frame sampling allocated {allocation:N0} bytes; hierarchy construction must stay out of the frame loop.");
     }
 
     [Fact]

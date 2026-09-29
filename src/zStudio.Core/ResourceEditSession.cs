@@ -156,6 +156,19 @@ public sealed class ResourceEditSession
         }, token);
     }
     public static ZrdNode? FindParent(ZrdNode root, Guid id) => root.Children.Any(c => c.Id == id) ? root : root.Children.Select(c => FindParent(c, id)).FirstOrDefault(n => n != null);
+    public Task<PreparedResourceEdit> PrepareValveAsync(Guid member, AiValveEdit edit, CancellationToken token = default)
+    {
+        var before = Current;
+        return Task.Run(() =>
+        {
+            var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
+            if (index < 0) throw new InvalidDataException("The valve resource no longer exists.");
+            var item = list[index]; var root = MissionAiValves.Edit(item.Name, Tree(item, token), edit, token);
+            byte[] bytes = ZrdWriter.Write(root, token); _ = ZrdDecoder.Read(bytes, token);
+            list[index] = item with { Data = bytes, Tree = root };
+            return new PreparedResourceEdit(before, Build(list, token));
+        }, token);
+    }
     private ResourceSnapshot Build(IReadOnlyList<ResourceMember> members, CancellationToken token)
     {
         byte[] bytes = IsArchive ? ArchiveWriter.Write(source, members, token) : members.Single().Data.ToArray();

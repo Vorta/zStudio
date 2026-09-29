@@ -87,7 +87,9 @@ public partial class MainWindow
         if (doc.ResourceEdits != null)
         {
             if (resourceMember == null) throw new StudioCommandException("stale_asset", "Read the current member identity before opening Properties.");
-            return await OpenResourcePropertiesAsync(doc, resourceMember.Value, null, cancellationToken, automation);
+            bool valves = asset.Name.Equals("valves.zrd", StringComparison.OrdinalIgnoreCase) || asset.Name.Equals("objectives.zrd", StringComparison.OrdinalIgnoreCase) ||
+                MissionAiNetworks.IsCandidate(asset.Name) && asset.Content is Recoil.Zbd.Core.Formats.ZrdNode root && MissionAiValves.IsNetwork(root);
+            return await OpenResourcePropertiesAsync(doc, resourceMember.Value, null, cancellationToken, automation, valves: valves);
         }
         if (asset.Kind == AssetKind.Animation && doc.AnimationEdits != null) return OpenAnimationProperties(doc, asset.Index, Guid.Empty, Guid.Empty);
         try

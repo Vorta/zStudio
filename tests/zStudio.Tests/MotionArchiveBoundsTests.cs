@@ -8,6 +8,19 @@ namespace Recoil.Zbd.Tests;
 public sealed class MotionArchiveBoundsTests
 {
     [Fact]
+    public void LargeMotionTracksUseDenseStorageWithoutPerSampleObjects()
+    {
+        using MemoryStream stream = new(); using BinaryWriter w = new(stream);
+        w.Write(4); w.Write(1f); w.Write(100_000); w.Write(1); w.Write(-1f); w.Write(1f);
+        w.Write(4); w.Write("body"u8); w.Write(12);
+        for (int i = 0; i < 100_001 * 3; i++) w.Write(0f);
+        for (int i = 0; i < 100_001; i++) { w.Write(1f); w.Write(0f); w.Write(0f); w.Write(0f); }
+        byte[] source = stream.ToArray(); long before = GC.GetAllocatedBytesForCurrentThread();
+        var clip = MotionClip.Read(source, TestContext.Current.CancellationToken);
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 4_100_000);
+        Assert.Equal(100_001, clip.Parts[0].Frames.Count); Assert.Equal(source, clip.Write(TestContext.Current.CancellationToken));
+    }
+    [Fact]
     public void AliasedMotionMembersShareOneDecodedPayloadAndKeepDistinctRecords()
     {
         using MemoryStream stream = new(); using BinaryWriter writer = new(stream);

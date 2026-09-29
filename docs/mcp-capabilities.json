@@ -135,7 +135,8 @@
         "zstudio_drafts",
         "zstudio_resolve_drafts",
         "zstudio_undo_redo",
-        "zstudio_save_document"
+        "zstudio_save_document",
+        "zstudio_ai_valve_selection"
       ],
       "note": "Whole world cards and selection bounds require unlocked editing; source/tree inspection and hover remain available while locked. Fixed-header Edit/Confirm, Cancel, Copy all and Close share scene_card revisions, draft lifetimes, archive ownership, history and verified saves. AuthoredPosition, AuthoredRotation and AuthoredHeading bindings enable persistent fields in place. Move/Rotate buttons are hidden with reserved space until a draft begins, then appear alongside world-axis handles using the same draft as scene_card set position/rotationDegrees/headingDegrees/transformMode. Pickups support XYZ radians displayed as degrees; vehicles support native Y heading degrees; Rotate stays hidden for placements without authored rotation. Drags preview until explicit confirmation creates one combined undo step; Escape during a drag restores that gesture only. Invalid inputs retain the last valid preview and hide handles. Field/all copy returns accepted values with labels. World-origin readouts, animation poses and ambiguous actor ownership remain read-only. Header spacing, scrolling and gutter do not change camera or document state. Short viewports automatically place the navigation cube beside the panel, restoring its normal corner when space permits or details close; axis commands remain shared and no physical input is captured."
     },
@@ -175,6 +176,27 @@
         "zstudio_texture_import"
       ],
       "note": "Explicit member-local mesh and shared material picker plus OBJ selection use the same resource transaction as MCP. Accepted mesh edits and Undo/Redo rebuild the active mech preview and dependent viewers while retaining the camera. Texture replacement uses the existing texture editor. mech_models caps nested node/material previews at 32 with totals/truncation; section nodes/materials plus localModel pages full lists with pre-pagination filtering."
+    },
+    {
+      "gui": "ResourcePropertiesEditor:ValveFields",
+      "tools": [
+        "zstudio_resource_properties",
+        "zstudio_ai_valves",
+        "zstudio_ai_valve_edit",
+        "zstudio_ai_valve_selection",
+        "zstudio_zrd_nodes",
+        "zstudio_zrd_edit"
+      ],
+      "note": "Generated typed fields/actions and paged records, operands, bindings, ordered actions/terms and exact-name references share resource history, draft guards and verified saves. Record UUIDs distinguish repeated names. Generic ZRD editing retains access to unknown fields."
+    },
+    {
+      "gui": "SceneViewport:Valves",
+      "tools": [
+        "zstudio_ai_valve_selection",
+        "zstudio_ai_nodes",
+        "zstudio_preview_state"
+      ],
+      "note": "Authored node conditions and uniquely resolved edge assignments can be outlined, highlighted and framed; node cards navigate to source occurrences in Properties. Runtime valve evaluation is not simulated."
     }
   ],
   "handlers": [
@@ -1068,6 +1090,21 @@
         "zstudio_missions"
       ],
       "note": "Selects an authored MW3 mission while retaining animation playhead, custom range, camera and playback intent."
+    },
+    {
+      "gui": "MainWindow.xaml:AiValvesClick",
+      "tools": [
+        "zstudio_ai_valve_selection"
+      ],
+      "note": "Opens an authored MW3 valve resource in the reusable pinned Properties window, retaining the Whole world preview and resolving pending drafts."
+    },
+    {
+      "gui": "MainWindow.xaml:AiValveOverlayChanged",
+      "tools": [
+        "zstudio_ai_valve_selection",
+        "zstudio_preview_state"
+      ],
+      "note": "Toggles valve node outlines and dashed assignment edges while retaining the base attack-strategy colors."
     }
   ]
 }

@@ -200,14 +200,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         token.ThrowIfCancellationRequested(); RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics";
     }
-    public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null)
+    public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
         long generation = ++navigationGeneration;
         RequireCurrentNavigation(generation);
         path = Path.GetFullPath(path);
         var existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
-        if (existing != null) { ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation); SelectedDocument = existing; return existing; }
+        if (existing != null) { ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation); if (activate) SelectedDocument = existing; return existing; }
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken);
         var token = cancellation.Token; Status = "Opening " + Path.GetFileName(path) + "…";
         try
@@ -215,8 +215,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             var doc = await LoadDocumentAsync(path, token); token.ThrowIfCancellationRequested();
             RequireCurrentNavigation(generation); ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation);
             existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
-            if (existing != null) { SelectedDocument = existing; return existing; }
-            DocumentModel model = new(doc); model.AttachResolver(Resolver); Documents.Add(model); SelectedDocument = model;
+            if (existing != null) { if (activate) SelectedDocument = existing; return existing; }
+            DocumentModel model = new(doc); model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
             foreach (var diagnostic in doc.Diagnostics) AddProblem(diagnostic.Message, diagnostic.Severity, path, diagnostic.AssetIndex, diagnostic.Offset);
             Status = model.Description; return model;
         }

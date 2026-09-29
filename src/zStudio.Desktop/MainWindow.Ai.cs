@@ -55,6 +55,8 @@ public partial class MainWindow
         bool world = IsAiWorld; AiTools.Visibility = world ? Visibility.Visible : Visibility.Collapsed;
         if (!world) { AiLabel.Visibility = Visibility.Collapsed; return; }
         var graph = scene!.AiNetworks;
+        AiValves.Visibility = graph.ValveSources.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        AiValveOverlay.Visibility = AiValves.Visibility;
         if (aiSnapshot != graph.Id)
         {
             aiSnapshot = graph.Id; aiNetworkFilter = null;
@@ -69,6 +71,7 @@ public partial class MainWindow
         try
         {
             AiEnabled.IsChecked = aiVisible; AiThroughGeometry.IsChecked = aiThroughGeometry;
+            AiValveOverlay.IsChecked = scene.ValveOverlayVisible;
             AiNetworkCombo.SelectedItem = AiNetworkCombo.Items.Cast<AiNetworkChoice>().FirstOrDefault(n => n.Id == aiNetworkFilter);
             AiNetworkCombo.ToolTip = ((AiNetworkChoice?)AiNetworkCombo.SelectedItem)?.Label + "\nFilter authored AI networks by source record.";
             AiNetworkCombo.Visibility = AiThroughGeometry.Visibility = aiVisible ? Visibility.Visible : Visibility.Collapsed;
@@ -85,6 +88,7 @@ public partial class MainWindow
     {
         snapshot = scene!.AiNetworks.Id, visible = scene.AiVisible, throughGeometry = scene.AiThroughGeometry,
         network = scene.AiNetworkFilter ?? "all", selectedNode = scene.SelectedAiNode,
+        valveOverlay = scene.ValveOverlayVisible, valveFilter = scene.ValveFilter,
         networks = scene.AiNetworks.Networks.Count, nodes = scene.AiNetworks.Networks.Sum(n => n.Nodes.Count),
         links = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => p.PreviewLinks.Count(l => l.Target != null))),
         linkSlots = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => (long)p.LinkCount)), linksTruncated = scene.AiNetworks.Networks.Any(n => n.Nodes.Any(p => p.LinksTruncated))
