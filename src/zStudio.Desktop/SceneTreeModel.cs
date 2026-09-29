@@ -27,9 +27,9 @@ internal sealed class SceneTreeModel
     private readonly Dictionary<string, SceneTreeItem> rows = [];
     internal event Action<SceneTreeItem>? Collapsing;
     internal void OnCollapsing(SceneTreeItem row) => Collapsing?.Invoke(row);
-    internal SceneTreeModel(GameScene scene, string source, bool isPreview, SceneTreeState state, Func<int, SceneTreeIdentity>? identity = null)
+    internal SceneTreeModel(GameScene scene, string source, bool isPreview, SceneTreeState state, Func<int, SceneTreeIdentity>? identity = null, IReadOnlySet<int>? included = null)
     {
-        Hierarchy = new(scene); Source = source; IsPreview = isPreview; State = state;
+        Hierarchy = new(scene, included: included); Source = source; IsPreview = isPreview; State = state;
         this.identity = identity ?? (index => new("node:" + index, index, null));
         var roots = Hierarchy.Roots.Select(i => New(i, null, "root", 0)).ToList();
         if (Hierarchy.UnlinkedRoots.Count > 0) roots.Add(New(null, null, "unlinked", 0));

@@ -133,7 +133,7 @@ public sealed class MotionEditor : UserControl, IDisposable
             ct.ThrowIfCancellationRequested(); if (disposed || request != generation) return;
             var choices = SceneLods.Choices(new SceneLods(selectedLibrary.Scene!).Count([selected.RootNode]));
             int nextLod = Math.Min(Lod, choices.Length - 1);
-            var context = new AnimationPreviewContext { World = selectedLibrary, Package = new AnimationPackage { Prefix = new byte[72], Tail = [] } };
+            var context = new AnimationPreviewContext { World = selectedLibrary, InspectionNodes = next.InspectionNodes, Package = new AnimationPackage { Prefix = new byte[72], Tail = [] } };
             replacement = new();
             var initialFrame = await Task.Run(() => next.At(seconds, nextLod, ct), ct);
             await replacement.ShowAnimationAsync(context, initialFrame, resolver, false, ct, previewLifetime: lifetime);

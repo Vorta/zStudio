@@ -332,7 +332,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         ClearAnimationResources();
         ClearWorldHighlights();
         ClearAi();
-        horizonNodes.Clear(); Mission = null; PreviewScene = null;
+        horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null;
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
         viewport.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); textureMaps.Clear();

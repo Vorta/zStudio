@@ -16,6 +16,7 @@ public sealed partial class AnimationPreviewContext
     public required AnimationPackage Package { get; init; }
     public required ZbdDocument World { get; init; }
     public MissionSceneContext? Mission { get; set; }
+    public IReadOnlySet<int>? InspectionNodes { get; init; }
     public GameScene Scene => Mission?.Scene ?? World.Scene!;
     public Dictionary<string, AnimationEffectTemplate> Effects { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, AnimationSound> Sounds { get; } = new(StringComparer.Ordinal);
@@ -31,7 +32,7 @@ public sealed partial class AnimationPreviewContext
         var package = new AnimationPackage { Prefix = Package.Prefix, Tail = Package.Tail };
         package.Entries.AddRange(Package.Entries.Select(e => e.Clone()));
         package.Diagnostics.AddRange(Package.Diagnostics);
-        var copy = new AnimationPreviewContext { Package = package, World = World, Mission = Mission };
+        var copy = new AnimationPreviewContext { Package = package, World = World, Mission = Mission, InspectionNodes = InspectionNodes };
         foreach (var pair in Effects) copy.Effects.Add(pair.Key, pair.Value);
         foreach (var pair in Sounds) copy.Sounds.Add(pair.Key, pair.Value);
         foreach (var pair in MaterialCycles) copy.MaterialCycles.Add(pair.Key, pair.Value);

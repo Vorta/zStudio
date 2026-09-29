@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Buffers;
+using System.Collections.Frozen;
 using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Core.Formats;
 
@@ -19,12 +20,14 @@ public sealed class MotionPreview
     private readonly int lodCount;
     public const int MaximumPreviewPlacements = 16384;
     public IReadOnlyList<string> Diagnostics { get; }
+    public IReadOnlySet<int> InspectionNodes { get; }
     public int DiagnosticCount => Diagnostics is PreviewNotes notes ? notes.TotalCount : Diagnostics.Count;
     public MotionPreview(MotionClip clip, ZbdDocument library, MechAssembly assembly, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         this.clip = clip; scene = library.Scene ?? throw new InvalidDataException("A decoded mech library is required."); this.assembly = assembly;
         if (assembly.RootNode < 0 || assembly.NodeCount < 1 || assembly.RootNode + (long)assembly.NodeCount > scene.Nodes.Count) throw new InvalidDataException("Invalid mech member range.");
+        InspectionNodes = Enumerable.Range(assembly.RootNode, assembly.NodeCount).ToFrozenSet();
         PreviewNotes notes = new(); notes.Add("Authored motion preview. Aiming, gait adjustment, inverse kinematics and gameplay are not simulated.");
         Dictionary<string, int> nodesByName = new(StringComparer.Ordinal), partCounts = new(StringComparer.Ordinal);
         for (int i = assembly.RootNode; i < assembly.RootNode + assembly.NodeCount; i++)

@@ -22,7 +22,7 @@ internal static class MotionFixture
         int header = 208 + 144; Int(model, header + 16, 1); Int(model, header + 20, 3);
         int data = header + 92;
         Float(model, data, -1); Float(model, data + 12, 1); Float(model, data + 28, 2);
-        Int(model, data + 36, 3);
+        Int(model, data + 36, 3); Int(model, data + 56, 1); // Optional corner-color array is present.
         for (int i = 0; i < 3; i++) { Int(model, data + 72 + i * 4, i); for (int j = 0; j < 3; j++) Float(model, data + 84 + (i * 3 + j) * 4, 1); }
         byte[] version = new byte[4], format = new byte[4]; Int(version, 0, 27); Int(format, 0, 1);
         return Archive(("version", version), ("format", format), ("materials", materials), ("mech_body.flt", model), ("mech_other.flt", model));

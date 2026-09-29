@@ -52,9 +52,12 @@ internal sealed class KeyframeStream : IReadOnlyList<AnimationKeyframe>
         {
             token.ThrowIfCancellationRequested();
             if (count % Stride == 0) index.Add(offset);
-            try { offset += Length(offset); }
+            int length;
+            try { length = Length(offset); }
             catch (InvalidDataException ex) when (expected != null) { throw new InvalidDataException("MW3 keyframe count exceeds the available complete records.", ex); }
-            count++;
+            try { AnimationKeyframe.Validate(bytes.AsSpan(offset, length), channelSize); }
+            catch (InvalidDataException ex) { throw new InvalidDataException($"Keyframe {count}: {ex.Message}", ex); }
+            offset += length; count++;
         }
         if (offset != bytes.Length) throw new InvalidDataException("MW3 keyframe count does not match the event payload; trailing bytes or records remain.");
         blocks = index.ToArray(); Count = count;

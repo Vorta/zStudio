@@ -31,7 +31,8 @@ public sealed record AiNetwork(string Id, string Archive, int MemberIndex, strin
     public bool IsMw3 { get; init; }
     public IReadOnlySet<int> AmbiguousIndices { get; init; } = new HashSet<int>();
     public IReadOnlySet<int> ResolvedIndices { get; init; } = new HashSet<int>();
-    public IReadOnlyDictionary<int, IReadOnlyList<AiValveRecord>> EdgeValves { get; init; } = new Dictionary<int, IReadOnlyList<AiValveRecord>>();
+    public IReadOnlyList<ZrdNode> ValveEdgeSources { get; init; } = [];
+    public IReadOnlyDictionary<int, IReadOnlyList<ZrdNode>> ValveEdgesByNode { get; init; } = new Dictionary<int, IReadOnlyList<ZrdNode>>();
 }
 
 /// <summary>Authored navigation data; no AI activation or pathfinding simulation. IDs are snapshot-scoped.</summary>
@@ -176,7 +177,7 @@ public static partial class MissionAiNetworks
             if (pathWidth.Children.Count == 1 && pathWidth.Children[0].Kind == ZrdKind.Float && float.IsFinite(Float(pathWidth.Children[0]))) width = Float(pathWidth.Children[0]);
             else Note("Invalid path_width; displaying the default width 10.", pathWidth.SourceOffset);
         }
-        List<AiNode> nodes = []; List<AiConstraint> constraints = []; int constraintCount = 0;
+        List<AiNode> nodes = []; List<AiConstraint> constraints = []; List<ZrdNode> valveEdges = []; int constraintCount = 0;
         // A malformed duplicate still makes a numeric target ambiguous. Never
         // silently bind to the other record after rejecting the malformed one.
         Dictionary<int, int> declared = [];
@@ -196,6 +197,8 @@ public static partial class MissionAiNetworks
                     int from = Integer(c[0].Children[0]), to = Integer(c[0].Children[1]);
                     constraint = true; // Only fully validated v106 constraints are a separate identity kind.
                     constraintCount += (c.Count - 1) / 2;
+                    for (int attribute = 1; attribute < c.Count; attribute += 2)
+                        if (c[attribute].Text == "valve_assign") { valveEdges.Add(value); break; }
                     for (int attribute = 1; attribute < c.Count && constraints.Count < 1024; attribute += 2)
                         constraints.Add(new(index, from, to, c[attribute].Text, value.SourceOffset, c[attribute + 1].ToPreviewJson(token, 32, 512, 6, 256)) { AttributeIndex = (attribute - 1) / 2, SourceId = c[attribute].Id,
                             Valve = c[attribute].Text == "valve_assign" ? new(c[attribute].Id, value.Id, attribute, c[attribute], c[attribute + 1], "edge", From: from, To: to) : null });
@@ -241,13 +244,18 @@ public static partial class MissionAiNetworks
         if (constraintCount > constraints.Count) Note($"Showing {constraints.Count} of {constraintCount} constraint attributes; the complete source remains available in ZRD inspection and export.");
         if (noteCount > notes.Count) notes.Add(new("Warning", $"{noteCount - notes.Count} additional AI diagnostics omitted.", memberIndex));
         var unique = byIndex.Where(p => p.Value.Length == 1 && declared[p.Key] == 1).Select(p => p.Key).ToHashSet();
-        Dictionary<int, List<AiValveRecord>> edgeValves = [];
-        foreach (var edge in constraints.Where(c => c.Valve != null && unique.Contains(c.FromNode) && unique.Contains(c.ToNode)))
+        // Retain source rows, not one allocated record/JSON tree per attribute.
+        // Semantic associations must not inherit the constraint display budget.
+        Dictionary<int, List<ZrdNode>> edgeValves = []; List<ZrdNode> resolvedEdges = [];
+        foreach (var edge in valveEdges)
         {
-            foreach (int endpoint in new[] { edge.FromNode, edge.ToNode }.Distinct())
-            { if (!edgeValves.TryGetValue(endpoint, out var list)) edgeValves.Add(endpoint, list = []); list.Add(edge.Valve!); }
+            token.ThrowIfCancellationRequested(); int from = Integer(edge.Children[0].Children[0]), to = Integer(edge.Children[0].Children[1]);
+            if (!unique.Contains(from) || !unique.Contains(to)) continue;
+            resolvedEdges.Add(edge);
+            if (!edgeValves.TryGetValue(from, out var first)) edgeValves.Add(from, first = []); first.Add(edge);
+            if (to != from) { if (!edgeValves.TryGetValue(to, out var second)) edgeValves.Add(to, second = []); second.Add(edge); }
         }
-        return new(id, archive, memberIndex, member, TextField("name", member), TextField("type", ""), width, Array.AsReadOnly(resolved), notes.AsReadOnly()) { AttackStrategy = attackStrategy, Constraints = constraints.AsReadOnly(), ConstraintCount = constraintCount, Source = root, IsMw3 = mw3, AmbiguousIndices = declared.Where(p => p.Value > 1).Select(p => p.Key).ToHashSet(), ResolvedIndices = unique, EdgeValves = edgeValves.ToDictionary(p => p.Key, p => (IReadOnlyList<AiValveRecord>)p.Value.AsReadOnly()) };
+        return new(id, archive, memberIndex, member, TextField("name", member), TextField("type", ""), width, Array.AsReadOnly(resolved), notes.AsReadOnly()) { AttackStrategy = attackStrategy, Constraints = constraints.AsReadOnly(), ConstraintCount = constraintCount, Source = root, IsMw3 = mw3, AmbiguousIndices = declared.Where(p => p.Value > 1).Select(p => p.Key).ToHashSet(), ResolvedIndices = unique, ValveEdgeSources = resolvedEdges.AsReadOnly(), ValveEdgesByNode = edgeValves.ToDictionary(p => p.Key, p => (IReadOnlyList<ZrdNode>)p.Value.AsReadOnly()) };
     }
     private static int Integer(ZrdNode node) => node.Kind == ZrdKind.Int ? unchecked((int)node.Bits) : throw new InvalidDataException("Expected an integer.");
     private static float Float(ZrdNode node) => node.Kind == ZrdKind.Float ? BitConverter.UInt32BitsToSingle(node.Bits) : throw new InvalidDataException("Expected a float.");

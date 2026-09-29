@@ -72,9 +72,9 @@ public partial class MainWindow
                 sound = wave == null ? null : new { seconds = wave.CurrentTime.TotalSeconds, duration = wave.TotalTime.TotalSeconds, playing = player?.PlaybackState == PlaybackState.Playing } });
         });
         RegisterCameraCommand(r);
-        Register(r, "scene_nodes", "List active assembled scene nodes by index, including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.", false, [PreviewParameter, .. PageParameters], a =>
+        Register(r, "scene_nodes", "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.", false, [PreviewParameter, .. PageParameters], a =>
         {
-            var viewport = TargetViewport(a); return Page((viewport.PreviewScene?.Nodes ?? []).Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)), a,
+            var viewport = TargetViewport(a); return Page(viewport.InspectableNodes.Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)), a,
                 project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.ActorAt(n.Index) });
         });
         Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
@@ -87,7 +87,7 @@ public partial class MainWindow
             if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; }
             else
             {
-                int node = Int(a,"node",-1); if (node < 0 || viewport.PreviewScene == null || node >= viewport.PreviewScene.Nodes.Count) throw new StudioCommandException("stale_record","Scene node unavailable.");
+                int node = Int(a,"node",-1); if (!viewport.CanInspectNode(node)) throw new StudioCommandException("stale_record","Scene node unavailable.");
                 if (animation == null)
                 {
                     // A picked pickup mesh represents its whole placed instance,

@@ -183,9 +183,10 @@ internal static class AiNetworkCheck
             ZrdNode F(float value) => new(Guid.NewGuid(), ZrdKind.Float, BitConverter.SingleToUInt32Bits(value), "", []);
             var valveGraph = MissionAiNetworks.Decode("valve-network", "fixture.zbd", 0, "net_01.zrd", A(
                 S("version"), A(I(106)),
-                S("node_00"), A(I(12), A(F(-6), F(0), F(-2)), A(I(1)), S("valve"), A(I(1), S("start"))),
+                S("node_00"), A([I(12), A(F(-6), F(0), F(-2)), A(I(1)), ..Enumerable.Range(0, 20).SelectMany(n => new[] { S("valve"), A(I(1), S("node" + n)) }),
+                    S("valveunion"), A(Enumerable.Range(0, 40).Select(n => A(I(1), S("term" + n))).ToArray())]),
                 S("node_01"), A(I(12), A(F(6), F(0), F(-2)), A(I(0))),
-                S("node_02"), A(A(I(0), I(1)), S("valve_assign"), A(S("start"), I(1)))));
+                S("node_02"), A([A(I(0), I(1)), ..Enumerable.Range(0, 1100).SelectMany(n => new[] { S("valve_assign"), A(S(n == 1099 ? "start" : "edge" + n), I(1)) })])));
             scene.SetAiNetworks(new("valve-fixture", [valveGraph]));
             scene.SetAiOptions(true, true, null); scene.SetValveOptions(false); await Task.Delay(150);
             var valveBase = Pixels(Presented(view));
@@ -202,7 +203,14 @@ internal static class AiNetworkCheck
             scene.SetValveOptions(true, "start"); await Task.Delay(150);
             Require(HasColor(Presented(view), view, view.Project(new Point3D(-1.5, 0, -2)), "#FFCC33"), "Valve highlight dash missing");
             Require(scene.CaptureView() == pose && clip == (camera.NearPlaneDistance, camera.FarPlaneDistance), "Valve overlays altered camera/depth bounds");
-            Require(scene.FrameValveAssociations(), "Valve associations could not be framed");
+            foreach (string name in new[] { "node19", "term39" })
+            {
+                scene.SetValveOptions(true, name); await Task.Delay(150);
+                Require(!valveBase.SequenceEqual(Pixels(Presented(view))), "Late valve condition was not rendered: " + name);
+            }
+            Require(scene.CaptureView() == pose, "Late valve filtering moved the camera");
+            foreach (string name in new[] { "node19", "term39", "start" })
+            { scene.SetValveOptions(true, name); Require(scene.FrameValveAssociations(), "Late valve association could not be framed: " + name); }
             Console.WriteLine("PASS: valve cages retain strategy colors, assignments/highlights render, filtering restores base pixels, idle/depth/camera stable and associations frame");
             Console.WriteLine("PASS: rendered strategy colors for markers/arrows, equal strategies across networks, filtering, both depth modes and white selection");
             Console.WriteLine("PASS: GPU through/occluded modes, reciprocal arrows, visibility-aware picking, unchanged clipping/camera and idle back buffer");

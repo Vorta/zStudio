@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #14 optional data, semantic validation and inspection scope (2026-09-29)
+
+Fixed four further review findings: optional v27 polygon RGB arrays honor their stored presence word; sparse v28/v39 keyframe indexing validates flags, times and active base/rate values; valve highlighting/framing searches complete node, union and resolved edge sources before drawing limits; and motion inspection/tree/selection/Properties/node framing include only the selected assembly, retaining source indices. Shared GUI/MCP paths, discovery and capability documentation are updated.
+
+The adversarial cycle also rejected binding-only kinds when creating valve definitions, matching the GUI's action/compound choices and preserving document revision/history on failure. Corpus testing identified unused NaN vector padding, which stays opaque, and 456 authored MW3 transform streams with reversed time spans. The latter retain their bytes and show an unsupported keyframe diagnostic; their runtime meaning is not inferred or rewritten.
+
+Validation: **507 tests pass**, zero failed/skipped, with MW3 and RECOIL1999 corpora enabled; Release solution builds have zero warnings/errors. Regressions cover absent/present UV/RGB data followed by another polygon, invalid semantic payloads with byte-exact save/reopen, million-record allocation bounds, late node/union/edge valve references, and real WPF/named-pipe assembly switching and out-of-scope rejection. Actual GPU checks verify late valve highlighting/framing, strategy colors, assignment dashes, filtering, depth/picking and stable idle output. A final challenge after the last production fix found no further actionable P1/P2 in the recorded full-PR scope. Portable/live delivery and remote CI results are recorded locally. Version remains 0.7.1; these checks do not establish original-game compatibility.
+
 ## v0.7.1 MW3 AI valves and PR #14 review (2026-09-29)
 
 MW3 authored AI valves now share the resource editor's typed fields, record identities, drafts, undo/redo and verified archive saves. The Properties view supports action and compound definitions, repeated triggers, node tuples/unions, edge assignments and objective uses, with structural actions, paged operands and exact-name reference navigation in the pinned mission scope. Whole world exposes valve Properties from its toolbar and node cards, plus outlines and dashed assignment overlays that preserve attack-strategy colors. Unknown data and record order remain intact. These are authored-data tools; runtime valve execution is not simulated.

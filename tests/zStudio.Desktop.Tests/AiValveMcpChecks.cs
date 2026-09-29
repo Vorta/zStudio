@@ -38,6 +38,10 @@ internal static class AiValveMcpChecks
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
             await Job("open_document", new() { ["path"] = path }); var doc = main.ViewModel.Documents.Single(); var edits = doc.ResourceEdits!;
             Guid member = edits.Current.Members[0].Id, net = edits.Current.Members[1].Id;
+            var rejected = await Job("ai_valve_edit", Args(("member", member), ("action", "add_record"), ("value", "bad"), ("kind", "valve_assign")), "failed");
+            Assert.Contains("supported valve action or compound condition", rejected.ToJsonString());
+            Assert.Equal(0, doc.Revision); Assert.False(doc.IsDirty);
+            Assert.Equal(original, edits.Current.Document.Bytes.ToArray());
             var page = await Job("ai_valves", Args(("member", member)));
             var rows = page["records"]!["items"]!.AsArray(); Assert.Equal(2, rows.Count);
             Guid first = Guid.Parse(rows[0]!["record"]!.GetValue<string>()), second = Guid.Parse(rows[1]!["record"]!.GetValue<string>()); Assert.NotEqual(first, second);

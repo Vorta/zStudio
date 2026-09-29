@@ -297,7 +297,7 @@ public sealed class MechWarrior3Tests
     public async Task OptionalBaseGameCorpusParsesAndAnimationsAndMotionsRoundTrip()
     {
         string? root = Environment.GetEnvironmentVariable("ZSTUDIO_MW3_CORPUS"); if (root == null) return;
-        var token = TestContext.Current.CancellationToken; int worlds = 0, animations = 0, motions = 0, assemblies = 0;
+        var token = TestContext.Current.CancellationToken; int worlds = 0, animations = 0, motions = 0, assemblies = 0, invalidTransforms = 0;
         foreach (string file in Directory.EnumerateFiles(root, "*.zbd", SearchOption.AllDirectories))
         {
             var doc = await FormatRegistry.Default.OpenAsync(file, token);
@@ -315,7 +315,20 @@ public sealed class MechWarrior3Tests
                 animations++; Assert.Equal(39u, package.Version); Assert.Equal(doc.Bytes.ToArray(), AnimationWriter.Write(package, token));
                 foreach (var ev in package.Entries.SelectMany(e => e.AllSequences).SelectMany(s => s.Events))
                 {
-                    if (ev.Type == 12) Assert.Equal(ev.I32(16), ev.Keyframes(token).Count);
+                    if (ev.Type == 12)
+                    {
+                        try { Assert.Equal(ev.I32(16), ev.Keyframes(token).Count); }
+                        catch (InvalidDataException ex)
+                        {
+                            invalidTransforms++;
+                            // Retail data includes reversed time spans. Do not invent their runtime meaning:
+                            // retain source bytes and surface the unsupported stream to inspection/preview.
+                            Assert.Contains("Keyframe times", ex.Message);
+                            Assert.Equal(ex.Message, ev.ToPreviewJson(token)["keyframe_diagnostic"]!.GetValue<string>());
+                            Assert.Contains("Keyframe", ex.Message);
+                            Assert.Contains(doc.Diagnostics, d => d.Severity == "Warning");
+                        }
+                    }
                     if (ev.Spec != null) Assert.True(ev.Bytes.Length >= ev.Spec.Size, $"{file}: event {ev.Type} is smaller than its layout.");
                 }
             }
@@ -325,7 +338,7 @@ public sealed class MechWarrior3Tests
                 if (asset.Content is MechAssembly assembly) { assemblies++; Assert.NotEmpty(SceneBuilder.ForAsset(doc.Scene!, asset, token: token).Placements); }
             }
         }
-        Assert.Equal(6, worlds); Assert.Equal(6, animations); Assert.Equal(258, motions); Assert.Equal(57, assemblies);
+        Assert.Equal(6, worlds); Assert.Equal(6, animations); Assert.Equal(258, motions); Assert.Equal(57, assemblies); Assert.Equal(456, invalidTransforms);
     }
     internal static byte[] MotionBytes()
     {

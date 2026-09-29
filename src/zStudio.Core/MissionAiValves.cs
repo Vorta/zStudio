@@ -53,8 +53,50 @@ public static class MissionAiValves
     public static IEnumerable<AiValveRecord> ForNode(AiNetwork network, AiNode node)
     {
         if (!network.IsMw3) yield break;
-        foreach (var valve in node.Valves) yield return valve;
-        if (network.EdgeValves.TryGetValue(node.Index, out var edges)) foreach (var edge in edges) yield return edge;
+        if (node.Source is { } source)
+        { foreach (var valve in Attributes(source, node.Index)) yield return valve; }
+        else foreach (var valve in node.Valves) yield return valve;
+        if (network.ValveEdgesByNode.TryGetValue(node.Index, out var edges))
+            foreach (var edge in edges) foreach (var valve in Attributes(edge, null)) yield return valve;
+    }
+    public static bool HasAssociation(AiNetwork network, AiNode node, string? name)
+    {
+        if (!network.IsMw3) return false;
+        if (node.Source is { } source)
+        { if (HasAttribute(source, 3, name)) return true; }
+        else if (node.Valves.Any(v => Matches(v.Name, v.Value, name))) return true;
+        return network.ValveEdgesByNode.TryGetValue(node.Index, out var edges) && edges.Any(e => HasAttribute(e, 1, name));
+    }
+    private static bool HasAttribute(ZrdNode source, int first, string? name)
+    {
+        for (int i = first; i + 1 < source.Children.Count; i += 2)
+        {
+            var key = source.Children[i];
+            if (key.Kind == ZrdKind.String && (first == 3 ? key.Text is "valve" or "valveunion" : key.Text == "valve_assign") && Matches(key.Text, source.Children[i + 1], name)) return true;
+        }
+        return false;
+    }
+    private static bool Matches(string attribute, ZrdNode value, string? name)
+    {
+        if (name == null) return true;
+        var c = value.Children;
+        if (attribute == "valve") return c.Count > 1 && c[1].Kind == ZrdKind.String && c[1].Text == name;
+        if (attribute == "valve_assign") return c.Count > 0 && c[0].Kind == ZrdKind.String && c[0].Text == name;
+        if (attribute == "valveunion") foreach (var term in c)
+            if (term.Children.Count > 1 && term.Children[1].Kind == ZrdKind.String && term.Children[1].Text == name) return true;
+        return false;
+    }
+    public static IEnumerable<AiValveRecord> EdgeAssignments(AiNetwork network, string? name = null)
+    { foreach (var edge in network.ValveEdgeSources) foreach (var record in Attributes(edge, null, name)) yield return record; }
+    private static IEnumerable<AiValveRecord> Attributes(ZrdNode source, int? node, string? name = null)
+    {
+        var c = source.Children;
+        for (int i = node != null ? 3 : 1; i + 1 < c.Count; i += 2)
+        {
+            if (c[i].Kind != ZrdKind.String || (node != null ? c[i].Text is not ("valve" or "valveunion") : c[i].Text != "valve_assign") || !Matches(c[i].Text, c[i + 1], name)) continue;
+            yield return new(c[i].Id, source.Id, i, c[i], c[i + 1], node != null ? "node" : "edge", node,
+                node == null ? unchecked((int)c[0].Children[0].Bits) : null, node == null ? unchecked((int)c[0].Children[1].Bits) : null);
+        }
     }
     public static ZrdNode Fields(ZrdNode root) => root.Kind == ZrdKind.Array && root.Children.Count == 1 && root.Children[0].Kind == ZrdKind.Array ? root.Children[0] : root;
     public static bool IsNetwork(ZrdNode root)
@@ -213,6 +255,7 @@ public static class MissionAiValves
             if (!member.Equals("valves.zrd", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Add valve records in valves.zrd.");
             string name = edit.Value ?? ""; if (name.Length is < 1 or > 16384) throw new InvalidDataException("Enter a valve name of 1–16384 characters.");
             string kind = edit.Kind ?? "delayupdate";
+            if (!Actions.Contains(kind) && !Conditions.Contains(kind)) throw new InvalidDataException("Choose a supported valve action or compound condition for a definition.");
             var value = Conditions.Contains(kind) ? A(S(kind), S("namelist"), A(S(""))) : A(S(kind), Parameters(kind));
             var fields = Fields(root);
             if (fields.Kind != ZrdKind.Array || fields.Children.Count % 2 != 0 || fields.Children.Where((_, i) => i % 2 == 0).Any(n => n.Kind != ZrdKind.String)) throw new InvalidDataException("Repair the incomplete source name/value pairs before adding a record.");

@@ -30,7 +30,7 @@ public partial class MainWindow
         var data = viewport?.PreviewScene ?? doc?.PreviewDocument.Scene;
         bool active = data != null && viewport?.PreviewScene == data;
         if (doc?.IsDisposed == true) { doc = null; data = null; }
-        if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active) return;
+        if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active && ReferenceEquals(sceneTree?.Hierarchy.Included, active ? viewport?.InspectionNodes : null)) return;
         changingSceneTree = true;
         try
         {
@@ -50,7 +50,7 @@ public partial class MainWindow
                     if (states.Count >= 16) states.Remove(states.Keys.First());
                     states[key] = state = new();
                 }
-                sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits));
+                sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes);
             }
             if (sceneTree != null) sceneTree.Collapsing += SceneTreeCollapsing;
             DocumentSceneTree.ItemsSource = sceneTree?.Roots;

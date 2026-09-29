@@ -111,7 +111,7 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
         JsonObject value = new() { ["event"] = Name, ["type_id"] = (int)Type, ["start_mode"] = AnimationCatalog.ModeName(StartMode), ["start_threshold"] = JsonData.Number(Threshold), ["record_size"] = Bytes.Length, ["source_offset"] = SourceOffset, ["preview"] = Spec?.Support ?? "Unavailable: unknown event", ["raw_hex"] = bounded ? Convert.ToHexStringLower(Bytes.AsSpan(0, Math.Min(256, Bytes.Length))) : JsonData.Hex(Bytes, token) };
         if (bounded) value["raw_hex_truncated"] = Bytes.Length > 256;
         if (Spec != null) foreach (var field in Spec.Fields.Where(f => f.Offset + f.Size <= Bytes.Length)) value[field.Name] = field.Read(this);
-        if (Type == 12 && bounded) value["keyframes_omitted"] = true;
+        if (Type == 12 && bounded) { value["keyframes_omitted"] = true; if (keyframeVersion == MutationVersion && keyframeError != null) value["keyframe_diagnostic"] = keyframeError; }
         else if (Type == 12)
         {
             try { value["keyframes"] = JsonData.Array(Keyframes(token), f => f.ToJson(), token); }
@@ -146,14 +146,28 @@ public sealed class AnimationKeyframe(byte[] bytes) : AnimationRecord(bytes)
         return copy;
     }
     public int ChannelOffset(int channel) => (Flags & (1 << channel)) == 0 ? -1 : 12 + ChannelStride * BitOperations.PopCount((uint)Flags & ((1u << channel) - 1));
-    public void Validate()
+    public void Validate() => Validate(Bytes, ChannelStride);
+    internal static void Validate(ReadOnlySpan<byte> bytes, int channelStride)
     {
-        if (!float.IsFinite(Start) || !float.IsFinite(End) || Start < 0 || End < Start) throw new InvalidDataException("Keyframe times must be finite, nonnegative, and end at or after the start.");
-        if ((Flags & ~7) != 0 || Bytes.Length != 12 + ChannelStride * BitOperations.PopCount((uint)Flags)) throw new InvalidDataException("Invalid keyframe channel layout.");
+        BinaryCursor.CheckRange(bytes.Length, 0, 12);
+        int flags = BinaryPrimitives.ReadInt32LittleEndian(bytes);
+        if ((flags & ~7) != 0 || bytes.Length != 12 + channelStride * BitOperations.PopCount((uint)flags)) throw new InvalidDataException("Invalid keyframe channel layout.");
+        float start = BinaryPrimitives.ReadSingleLittleEndian(bytes[4..]), end = BinaryPrimitives.ReadSingleLittleEndian(bytes[8..]);
+        if (!float.IsFinite(start) || !float.IsFinite(end) || start < 0 || end < start) throw new InvalidDataException("Keyframe times must be finite, nonnegative, and end at or after the start.");
+        // The first seven words contain base/rate operands and vector padding in both versions.
+        // Preserve the remaining v39 channel bytes without assigning semantics to them.
+        int channelOffset = 12;
         for (int channel = 0; channel < 3; channel++)
-            if (ChannelOffset(channel) is >= 0 and int start)
-                for (int offset = start; offset < start + 28; offset += 4)
-                    if (!float.IsFinite(F32(offset))) throw new InvalidDataException("Keyframe channels must be finite.");
+        {
+            if ((flags & (1 << channel)) == 0) continue;
+            for (int component = 0; component < 7; component++)
+            {
+                // Position/scale store XYZ plus an unused fourth slot; rotation uses WXYZ.
+                if (component == 3 && channel != 1) continue;
+                if (!float.IsFinite(BinaryPrimitives.ReadSingleLittleEndian(bytes[(channelOffset + component * 4)..]))) throw new InvalidDataException("Keyframe channels must be finite.");
+            }
+            channelOffset += channelStride;
+        }
     }
     public static AnimationKeyframe Create(int channels = 1)
     {

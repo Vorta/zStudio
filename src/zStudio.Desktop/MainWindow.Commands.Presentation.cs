@@ -97,7 +97,7 @@ public partial class MainWindow
             [PreviewParameter,P("node","integer","Scene node index.",true),P("open","boolean","Open the pinned Properties window.")],a=>
         {
             var viewport=TargetViewport(a); int node=Int(a,"node"); var data=viewport.PreviewScene;
-            if(data == null || node<0 || node>=data.Nodes.Count) throw new StudioCommandException("stale_record","Scene node unavailable.");
+            if(data == null || !viewport.CanInspectNode(node)) throw new StudioCommandException("stale_record","Scene node unavailable.");
             if(Flag(a,"open"))
             {
                 RequireNoDrafts(); ++propertyRequest; var w=GetPropertiesWindow(); var actor=viewport.PickupAt(node);

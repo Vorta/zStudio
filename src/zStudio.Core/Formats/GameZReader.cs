@@ -82,7 +82,7 @@ internal sealed class GameZReader : IZbdFormatReader
             token.ThrowIfCancellationRequested();
             uint flags = polygon.UInt("flags"); int n = (int)(flags & 255); int[] vi = c.Indices(n), ni = (flags & 512) != 0 ? c.Indices(n) : [];
             Vector2[] uvs = polygon.Text("uvs_ptr") != "0x00000000" ? c.Uvs(n) : [];
-            var colors = layout.HasVertexColors ? c.Vectors(n) : [];
+            var colors = layout.HasVertexColors && polygon.Text("colors_ptr") != "0x00000000" ? c.Vectors(n) : [];
             polygons.Add(new(polygon.Int("material_index", -1), flags, vi, ni, uvs, polygon) { Colors = colors });
             if (vi.Any(v => v < 0 || v >= vertices.Length)) diagnostics?.Add(new("Warning", $"Model {index} contains an out-of-range vertex reference.", index, start));
         }

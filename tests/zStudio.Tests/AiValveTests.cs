@@ -8,6 +8,31 @@ namespace Recoil.Zbd.Tests;
 public sealed class AiValveTests
 {
     [Fact]
+    public void ExactAssociationsRetainLateNodeAndEdgeAttributesAndUnionTerms()
+    {
+        var attrs = Enumerable.Range(0, 20).SelectMany(i => new[] { S("valve"), A(I(1), S("node" + i)) }).ToArray();
+        var edges = Enumerable.Range(0, 1100).SelectMany(i => new[] { S("valve_assign"), A(S("edge" + i), I(1)) }).ToArray();
+        var root = A(S("version"), A(I(106)), S("node_00"), A([I(1), A(F(), F(), F()), A(), ..attrs, S("valveunion"), A(Enumerable.Range(0, 40).Select(i => A(I(1), S("term" + i))).ToArray())]),
+            S("node_01"), A(I(1), A(F(), F(), F()), A()), S("node_02"), A([A(I(0), I(1)), ..edges]));
+        var graph = Decode("net", "", 0, "net_01.zrd", root);
+        var sourceRefs = Records("net_01.zrd", root).SelectMany(r => MissionAiValves.References(r, TestContext.Current.CancellationToken)).Select(r => r.Name).ToArray();
+        Assert.Contains("node19", sourceRefs); Assert.Contains("edge1099", sourceRefs); Assert.Contains("term39", sourceRefs);
+        var semantic = MissionAiValves.ForNode(graph, graph.Nodes[0]).SelectMany(r => MissionAiValves.References(r, TestContext.Current.CancellationToken)).Select(r => r.Name).ToArray();
+        Assert.Contains("node19", semantic); Assert.Contains("term39", semantic); Assert.Contains("edge1099", semantic);
+        Assert.Contains(MissionAiValves.ForNode(graph, graph.Nodes[1]), r => r.Value.Children[0].Text == "edge1099");
+        Assert.Equal(1024, graph.Constraints.Count);
+        foreach (string name in new[] { "node19", "term39", "edge1099" })
+            Assert.True(MissionAiValves.HasAssociation(graph, graph.Nodes[0], name));
+        Assert.True(MissionAiValves.HasAssociation(graph, graph.Nodes[1], "edge1099"));
+        Assert.False(MissionAiValves.HasAssociation(graph, graph.Nodes[1], "term39"));
+        Assert.Single(MissionAiValves.EdgeAssignments(graph, "edge1099"));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int repeat = 0; repeat < 100; repeat++)
+            Assert.False(MissionAiValves.HasAssociation(graph, graph.Nodes[0], "absent"));
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 100_000);
+
+    }
+    [Fact]
     public async Task OptionalMw3ValveCorpusKeepsCompleteResourcesAndRecognizesAuthoredFamilies()
     {
         string? root = Environment.GetEnvironmentVariable("ZSTUDIO_MW3_CORPUS"); if (root == null) return;
@@ -113,6 +138,19 @@ public sealed class AiValveTests
         Assert.Throws<InvalidDataException>(() => Edit("valves.zrd", root, new("move", record.Id, Index: int.MaxValue)));
         Assert.Throws<InvalidDataException>(() => Edit("valves.zrd", root, new("set", record.Id, record.Value.Children[1].Children[1].Id)));
         Assert.Equal(original, Write(root));
+    }
+    [Theory]
+    [InlineData("valve")]
+    [InlineData("valveunion")]
+    [InlineData("valve_assign")]
+    [InlineData("set_valve")]
+    public void NewDefinitionsRejectBindingKindsWithoutChangingTheSource(string kind)
+    {
+        var root = A(S("go"), A(S("sound"), A(S("sample"), I(1))));
+        var original = Write(root);
+        Assert.Throws<InvalidDataException>(() => Edit("valves.zrd", root, new("add_record", Value: "new", Kind: kind)));
+        Assert.Equal(original, Write(root));
+        Assert.Equal(2, Records("valves.zrd", Edit("valves.zrd", root, new("add_record", Value: "new", Kind: "sound"))).Count());
     }
     private static IEnumerable<AiValveRecord> Records(string name, ZrdNode root) => MissionAiValves.Records(name, root, TestContext.Current.CancellationToken);
     private static IEnumerable<AiValveReference> References(AiValveRecord record) => MissionAiValves.References(record, TestContext.Current.CancellationToken);

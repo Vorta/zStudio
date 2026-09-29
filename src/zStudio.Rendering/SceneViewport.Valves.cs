@@ -15,13 +15,12 @@ public sealed partial class SceneViewport
         if (ValveOverlayVisible == visible && ValveFilter == valve) return;
         ValveOverlayVisible = visible; ValveFilter = valve; RebuildAiOverlay();
     }
-    private bool ValveMatches(AiValveRecord record) => ValveFilter == null || MissionAiValves.References(record).Take(32).Any(r => r.Name == ValveFilter);
     public bool FrameValveAssociations()
     {
         if (!AiVisible || IsPickupDragging || IsFlyActive) return false;
         Rect3D bounds = Rect3D.Empty;
         foreach (var network in VisibleAiNetworks)
-        foreach (var node in network.Nodes.Where(n => MissionAiValves.ForNode(network, n).Any(ValveMatches)))
+        foreach (var node in network.Nodes.Where(n => MissionAiValves.HasAssociation(network, n, ValveFilter)))
             bounds.Union(new Rect3D(node.Position.X - 2, node.Position.Y - 2, node.Position.Z - 2, 4, 4, 4));
         return FrameBounds(bounds, true);
     }
@@ -31,13 +30,13 @@ public sealed partial class SceneViewport
         int remaining = 4096, remainingEdges = 1024;
         foreach (var network in VisibleAiNetworks.Where(n => n.IsMw3))
         {
-            var nodes = network.Nodes.Where(n => MissionAiValves.ForNode(network, n).Any(ValveMatches)).Take(remaining).ToArray();
+            var nodes = network.Nodes.Where(n => MissionAiValves.HasAssociation(network, n, ValveFilter)).Take(remaining).ToArray();
             remaining -= nodes.Length;
             Color4 color = ValveFilter == null ? new(.95f, .95f, .95f, 1) : new(1, .8f, .2f, 1);
             if (nodes.Length > 0) aiMarkers.Add((AiMesh(ValveCage(), color), nodes, 8));
             var byIndex = network.Nodes.Where(n => !network.AmbiguousIndices.Contains(n.Index)).GroupBy(n => n.Index).Where(g => g.Count() == 1).ToDictionary(g => g.Key, g => g.Single());
-            var edges = network.Constraints.Where(c => c.Valve is { } record && ValveMatches(record) && byIndex.ContainsKey(c.FromNode) && byIndex.ContainsKey(c.ToNode)).Take(remainingEdges)
-                .Select(c => (From: byIndex[c.FromNode].Position, To: byIndex[c.ToNode].Position)).ToArray();
+            var edges = MissionAiValves.EdgeAssignments(network, ValveFilter).Take(remainingEdges)
+                .Select(c => (From: byIndex[c.From!.Value].Position, To: byIndex[c.To!.Value].Position)).ToArray();
             remainingEdges -= edges.Length;
             if (edges.Length > 0) { var mesh = AiMesh(Links(), color); aiLinks.Add(mesh, Links); }
             MeshGeometry3D Links()

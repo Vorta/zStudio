@@ -69,6 +69,25 @@ internal static class MotionMcpChecks
             var frames = await Call("motion_records", Args(("part", 0))); Assert.Equal(3, frames["rows"]!["items"]!.AsArray().Count);
             var editor = (MotionEditor)typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             Assert.NotNull(editor); await editor.SelectAssemblyAsync(3, token); editor.Seek(1);
+            string preview = (await Call("state", new()))["preview"]!.GetValue<string>();
+            var visibleNodes = (await Call("scene_nodes", new() { ["preview"] = preview }))["items"]!.AsArray();
+            Assert.Single(visibleNodes); Assert.Equal(0, visibleNodes[0]!["Index"]!.GetValue<int>());
+            var hierarchy = await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString() });
+            Assert.Single(hierarchy["children"]!["items"]!.AsArray());
+            await editor.SelectAssemblyAsync(4, token);
+            visibleNodes = (await Call("scene_nodes", new() { ["preview"] = preview }))["items"]!.AsArray();
+            Assert.Single(visibleNodes); Assert.Equal(1, visibleNodes[0]!["Index"]!.GetValue<int>());
+            hierarchy = await Call("scene_tree", new() { ["document"] = doc.SessionId.ToString() });
+            Assert.Equal(1, hierarchy["children"]!["items"]![0]!["node"]!.GetValue<int>());
+            foreach (string command in new[] { "scene_selection", "scene_properties", "camera" })
+            {
+                var targetArgs = new Dictionary<string, object?> { ["preview"] = preview, ["node"] = 0 };
+                if (command != "scene_properties") targetArgs["action"] = command == "scene_selection" ? "select" : "frame";
+                var invalidTarget = await client.CallToolAsync("zstudio_" + command, targetArgs, cancellationToken: token);
+                Assert.True(invalidTarget.IsError == true);
+                Assert.Contains("stale_record", invalidTarget.Content.OfType<TextContentBlock>().Single().Text);
+            }
+            await editor.SelectAssemblyAsync(3, token);
             await CheckAssemblyLoads();
             editor.Viewport.RestoreView(new(new(0, 0, 100), new(0, 0, -100), new(0, 1, 0), 45));
             var view = editor.Viewport.CaptureView();

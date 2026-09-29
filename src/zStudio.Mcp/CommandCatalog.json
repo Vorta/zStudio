@@ -982,7 +982,7 @@
   },
   {
     "Name": "zstudio_scene_nodes",
-    "Description": "List active assembled scene nodes by index, including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.",
+    "Description": "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.",
     "Mutates": false,
     "Parameters": [
       {

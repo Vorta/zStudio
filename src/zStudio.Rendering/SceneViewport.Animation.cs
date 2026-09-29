@@ -42,7 +42,7 @@ public sealed partial class SceneViewport
         else { Clear(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects; QueueRenderSize(); }
         token.ThrowIfCancellationRequested();
         animationContext = context; animationResolver = resolver; animationToken = token;
-        Mission = context.Mission; PreviewScene = context.Scene; InspectionSourcePath = context.World.Path; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
+        Mission = context.Mission; PreviewScene = context.Scene; InspectionNodes = context.InspectionNodes; InspectionSourcePath = context.World.Path; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
         // Helix 3.1.2's OIT paths drop the unlit DiffuseMaterial effect cards.
         // Standard alpha blending with a sorted group renders their actual alpha.
         previousTransparency = viewport.OITRenderMode; viewport.OITRenderMode = OITRenderType.None;
