@@ -141,9 +141,10 @@ public sealed class GitHubTests
         var state = State(); WatchLogic.Arm(state, await source.ReadAsync("o/r", 14, TestContext.Current.CancellationToken), Head, true, Now);
         runner.Conversation = [Row(10, " @Codex \n review "), Row(11, Summary(), Bot()),
             Row(12, "You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).", Bot()),
-            Row(13, "The account paying for this security review has reached its Codex usage limits. The payer can check the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).", Bot())];
+            Row(13, "The account paying for this security review has reached its Codex usage limits. The payer can check the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).", Bot()),
+            Row(14, "Codex usage limits have been reached for code reviews. Please check with the admins of this repo to increase the limits by adding credits.\nRepo admins can enable using credits for code reviews in their [settings](https://chatgpt.com/codex/cloud/settings/code-review).", Bot())];
         var informational = await source.ReadAsync("o/r", 14, TestContext.Current.CancellationToken);
-        Assert.Equal(4, informational.Comments.Length);
+        Assert.Equal(5, informational.Comments.Length);
         Assert.Null(WatchLogic.Observe(state, informational, Now));
         Assert.True(state.CommentsArmed); Assert.Empty(state.Notices);
         var review = Review(20); review["user"] = Bot(); runner.Reviews = [review];

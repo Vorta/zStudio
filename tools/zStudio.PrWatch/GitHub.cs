@@ -135,7 +135,8 @@ public sealed partial class GitHub(ICommandRunner runner, string executable, str
     public static bool Informational(string body, bool reviewBot) =>
         string.Join(' ', body.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Equals("@codex review", StringComparison.OrdinalIgnoreCase) ||
         reviewBot && (body.StartsWith("<!-- codex-pull-request-review-summary -->", StringComparison.Ordinal) ||
-            body.Contains("Codex usage limits", StringComparison.Ordinal) && body.Contains("https://chatgpt.com/codex/cloud/settings/usage", StringComparison.Ordinal));
+            // Usage-limit notices link to different Codex settings pages (usage dashboard, code-review settings).
+            body.Contains("Codex usage limits", StringComparison.Ordinal) && body.Contains("https://chatgpt.com/codex/cloud/settings/", StringComparison.Ordinal));
     private static bool IsBot(JsonObject row) => Text(row["user"]!, "login") == ReviewBot && Text(row["user"]!, "type") == "Bot";
     private static string Text(JsonNode row, string key) => row[key]?.GetValue<string>() ?? throw new InvalidDataException("GitHub omitted " + key);
     private static DateTimeOffset Date(JsonNode row, string key) => DateTimeOffset.Parse(Text(row, key), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
