@@ -69,8 +69,11 @@ internal static class AiValveMcpChecks
             await Job("ai_valve_edit", Args(("member", member), ("record", named.Id), ("operand", named.Value.Children[0].Id), ("action", "delete_item")));
             await Until(() => Descendants(main.OpenPropertiesWindow.ResourceFields!).OfType<Button>().Any(b => Equals(b.Content, "Append action")));
             long beforeAppend = doc.Revision;
-            FindButton("Append action").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            await Until(() => doc.Revision == beforeAppend + 1);
+            var append = FindButton("Append action");
+            append.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            // Acceptance changes Revision before dependent preview refresh finishes.
+            // The button is re-enabled only after that GUI transaction releases its guard.
+            await Until(() => doc.Revision == beforeAppend + 1 && append.IsEnabled);
             Assert.Equal(2, MissionAiValves.Records("valves.zrd", edits.Tree(edits.Member(member), token), token).Last().Value.Children.Count);
             await Job("resource_properties", Args(("member", net), ("valves", true), ("action", "open")));
             pinned = main.OpenPropertiesWindow.ResourceFields!;
