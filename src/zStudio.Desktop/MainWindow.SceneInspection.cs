@@ -97,6 +97,7 @@ public partial class MainWindow
         if (actor != null)
         {
             info["Placed instance"] = Short(actor.Name) + $" · root #{actor.Root}";
+            if (actor.NameTruncated) { info["Name truncated"] = true; info["Authored name characters"] = actor.NameCharacters; }
             info["Template source node"] = actor.SourceRoot; info["Layout"] = actor.PlacementSource;
             info.Remove("Scene local XYZ");
             if (actor.Pickup is { } pickup)

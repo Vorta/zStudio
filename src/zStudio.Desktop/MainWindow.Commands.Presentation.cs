@@ -93,7 +93,7 @@ public partial class MainWindow
         });
         Register(r,"properties_state","Read the pinned Properties window identity, content and current editable fields.",false,[],_ =>
             Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? propertiesWindow?.ResourceFields)?.DescribeAutomationFields() }));
-        Register(r,"scene_properties","Inspect a scene node or open its Properties window, including editable mission pickups.",true,
+        Register(r,"scene_properties","Inspect a scene node or open its Properties window, including editable mission pickups. MW3 actor labels use 128-character prefixes with name_characters/name_truncated metadata; source AIV names remain intact.",true,
             [PreviewParameter,P("node","integer","Scene node index.",true),P("open","boolean","Open the pinned Properties window.")],a=>
         {
             var viewport=TargetViewport(a); int node=Int(a,"node"); var data=viewport.PreviewScene;

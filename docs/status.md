@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #14 bounded mission actor labels and placement failure review (2026-09-29)
+
+MW3 mission scene nodes and actors publish 128-character label prefixes, with original length/truncation metadata shared by scene listings, Properties and object cards. Full authored AIV names remain unchanged for template matching, source inspection and export; archive/member/record identities distinguish identical prefixes. Rejected-placement diagnostics also bound their labels. Template lookup indexes ordinal world names once, retaining duplicate ambiguity, and mech matching avoids concatenating arbitrarily large names for every library member. Scene copying and indexing observe cancellation.
+
+The adversarial review reproduced two additional placement defects: failed hierarchy cloning left partial preview nodes, and finite extreme headings overflowed while converting to radians. Rejected placements now roll back appended nodes/provenance and uncommitted stored-instance claims before continuing. Heading transforms use the shared coordinate editor's conversion. Source scenes and archives are untouched.
+
+Thirteen new Core cases cover label boundaries and million-character Latin-1 names, prefix collisions/remapping, bounded failure diagnostics, cyclic/missing-child rollback, ordinal/duplicate template matching and ordinary/extreme headings. Real named-pipe/WPF checks cover one-row and full 200-row escaped-name pages, Properties, pinned state, selection, cards and unchanged source/revision. The reported name leak, diagnostic leak, orphan cloning and heading overflow were reproduced before their fixes. Final review of the affected publication, identity, failure and protocol paths found no further actionable P1/P2 issue. Release build has zero warnings/errors; all 453 tests pass (352 Core, 101 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. MCP descriptions, capability notes and guides are updated; the embedded discovery catalog is regenerated and full parity passes. Version remains 0.7.0.
+
 ## PR #14 explicit unlit textured vertex tint (2026-09-29)
 
 The vertex-tint shader now explicitly restricts preview lighting to untextured, lit mode. Textures multiply authored vertex RGBA independently of the material lighting flag, while untextured shaded mode retains its existing lighting. The Helix 3.1.2 DiffuseMaterialVariables binding reuses the ABI field named bHasNormalMap for EnableUnLit; the existing unlit path already honored that flag. A shader comment documents this alias without changing the buffer layout.

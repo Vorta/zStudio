@@ -982,7 +982,7 @@
   },
   {
     "Name": "zstudio_scene_nodes",
-    "Description": "List active assembled scene nodes by index, including instance metadata.",
+    "Description": "List active assembled scene nodes by index, including instance metadata. MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated and node metadata name_characters/name_truncated disclose shortening. Full authored names remain in the source AIV resource.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1990,7 +1990,7 @@
   },
   {
     "Name": "zstudio_scene_properties",
-    "Description": "Inspect a scene node or open its Properties window, including editable mission pickups.",
+    "Description": "Inspect a scene node or open its Properties window, including editable mission pickups. MW3 actor labels use 128-character prefixes with name_characters/name_truncated metadata; source AIV names remain intact.",
     "Mutates": true,
     "Parameters": [
       {

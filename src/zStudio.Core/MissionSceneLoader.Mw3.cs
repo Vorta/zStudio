@@ -57,9 +57,21 @@ public static partial class MissionSceneLoader
         {
             var original = world.Scene ?? throw new InvalidDataException("Missing MW3 world scene.");
             GameScene scene = new(); scene.Models.AddRange(original.Models); scene.Materials.AddRange(original.Materials); scene.Textures.AddRange(original.Textures);
-            scene.Nodes.AddRange(original.Nodes.Select(n => n with { Parents = [..n.Parents], Children = [..n.Children], Data = (JsonObject)n.Data.DeepClone(), Metadata = (JsonObject)n.Metadata.DeepClone() }));
+            foreach (var n in original.Nodes)
+            {
+                token.ThrowIfCancellationRequested();
+                scene.Nodes.Add(n with { Parents = [..n.Parents], Children = [..n.Children], Data = (JsonObject)n.Data.DeepClone(), Metadata = (JsonObject)n.Metadata.DeepClone() });
+            }
             List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; List<string> notes = ["MW3 authored layout preview. Mission scripts, AI activation, combat and inventory are not simulated."];
             int worldRoot = scene.Nodes.FirstOrDefault(n => n.Class == "world")?.Index ?? -1;
+            Dictionary<string, List<GameNode>> worldActors = new(StringComparer.Ordinal);
+            foreach (var node in original.Nodes)
+            {
+                token.ThrowIfCancellationRequested();
+                if (node.Class != "object3d") continue;
+                if (!worldActors.TryGetValue(node.Name, out var nodes)) worldActors.Add(node.Name, nodes = []);
+                nodes.Add(node);
+            }
             HashSet<int> placedWorldActors = [];
             var layout = new MissionLayoutSelection(MissionDifficulty.Medium, "aiv.zrd", "vehicle.zrd", "") { MissionArchive = chosen };
             int modelBase = scene.Models.Count;
@@ -82,36 +94,41 @@ public static partial class MissionSceneLoader
                 {
                     token.ThrowIfCancellationRequested();
                     string name = rows[row].Text; var data = rows[row + 1].Children;
+                    string label = name[..Math.Min(name.Length, MissionActor.MaximumNamePreviewCharacters)];
+                    int firstNewNode = scene.Nodes.Count;
+                    int? claimedStored = null;
                     try
                     {
                         if (rows[row].Kind != ZrdKind.String || data.Count < 3 || data[1].Children.Count != 3) throw new InvalidDataException("Missing authored position/heading.");
                         float Scalar(ZrdNode n) => n.Kind == ZrdKind.Float && float.IsFinite(BitConverter.UInt32BitsToSingle(n.Bits)) ? BitConverter.UInt32BitsToSingle(n.Bits) : throw new InvalidDataException("Invalid placement scalar.");
                         Vector3 position = new(Scalar(data[1].Children[0]), Scalar(data[1].Children[1]), Scalar(data[1].Children[2])); float heading = Scalar(data[2]);
-                        var matches = original.Nodes.Where(n => n.Class == "object3d" && n.Name == name).ToArray();
+                        var matches = worldActors.GetValueOrDefault(name) ?? [];
                         int root;
-                        if (matches.Length == 1)
+                        if (matches.Count == 1)
                         {
                             int stored = matches[0].Index;
-                            root = placedWorldActors.Add(stored) ? stored : Clone(original, stored, -1, 0, new(), false);
+                            if (placedWorldActors.Add(stored)) { root = stored; claimedStored = stored; }
+                            else root = Clone(original, stored, -1, 0, new(), false);
                         }
-                        else if (matches.Length > 1) throw new InvalidDataException("Ambiguous world actor identity.");
+                        else if (matches.Count > 1) throw new InvalidDataException("Ambiguous world actor identity.");
                         else
                         {
                             string type = VehicleTemplateName(name);
-                            var templates = original.Nodes.Where(n => n.Class == "object3d" && n.Name == type).ToArray();
-                            if (templates.Length == 1) root = Clone(original, templates[0].Index, -1, 0, new(), false);
+                            var templates = worldActors.GetValueOrDefault(type) ?? [];
+                            if (templates.Count == 1) root = Clone(original, templates[0].Index, -1, 0, new(), false);
                             else
                             {
                                 // Base assemblies are distinct from the lower-detail and HUD members.
                                 // Resolve the full member name and verify its root, never choose the first
                                 // similarly named part across those independent hierarchies.
-                                var candidates = library?.Assets.Where(a => a.Name.Equals("mech_" + type + ".flt", StringComparison.Ordinal) && a.Content is MechAssembly ma && library.Scene!.Nodes[ma.RootNode].Children.Any(c => library.Scene.Nodes[c].Name == type)).ToArray() ?? [];
-                                if (templates.Length > 1 || candidates.Length != 1) throw new InvalidDataException("No unique stored actor or mech template. Placement remains inspectable in the AIV resource.");
+                                var candidates = library?.Assets.Where(a => a.Name.Length == type.Length + 9 && a.Name.StartsWith("mech_", StringComparison.Ordinal) && a.Name.EndsWith(".flt", StringComparison.Ordinal) &&
+                                    a.Name.AsSpan(5, type.Length).SequenceEqual(type) && a.Content is MechAssembly ma && library.Scene!.Nodes[ma.RootNode].Children.Any(c => library.Scene.Nodes[c].Name == type)).ToArray() ?? [];
+                                if (templates.Count > 1 || candidates.Length != 1) throw new InvalidDataException("No unique stored actor or mech template. Placement remains inspectable in the AIV resource.");
                                 var assembly = (MechAssembly)candidates[0].Content!;
                                 root = Clone(library!.Scene!, assembly.RootNode, -1, 0, new(), true);
                             }
                         }
-                        SetPose(scene, root, Matrix4x4.CreateRotationY(heading * MathF.PI / 180) * Matrix4x4.CreateTranslation(position));
+                        SetPose(scene, root, Matrix4x4.CreateFromQuaternion(PlacementTransform.Orientation(PlacementRotationKind.HeadingDegrees, new(0, heading, 0))) * Matrix4x4.CreateTranslation(position));
                         scene.Nodes[root].Metadata["flags"] = scene.Nodes[root].Metadata.UInt("flags") | 4;
                         scene.Nodes[root].Metadata["mission_archive"] = selected!.Path;
                         scene.Nodes[root].Metadata["mission_member"] = aiv.Index;
@@ -128,11 +145,23 @@ public static partial class MissionSceneLoader
                                     if (cell["node_indices"] is JsonArray indices)
                                         for (int i = indices.Count - 1; i >= 0; i--) if (JsonData.Integer(indices[i]) == root) indices.RemoveAt(i);
                         }
-                        scene.Nodes[root] = scene.Nodes[root] with { Name = name, Parents = [worldRoot] };
+                        // Matching above uses the complete authored string; only the
+                        // published preview label is shortened. Record identity is unchanged.
+                        scene.Nodes[root].Metadata["name_characters"] = name.Length;
+                        scene.Nodes[root].Metadata["name_truncated"] = label.Length != name.Length;
+                        scene.Nodes[root] = scene.Nodes[root] with { Name = label, Parents = [worldRoot] };
                         scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Append(root).Distinct().ToArray() };
-                        actors.Add(new(root, sources[root], name, layout.Description, CoordinateSource: new(Path.GetFullPath(selected!.Path).ToUpperInvariant(), aiv.Index, aiv.Name.ToUpperInvariant(), row / 2), PlacementPosition: position, PlacementRotation: new(0, heading, 0)));
+                        actors.Add(new(root, sources[root], label, layout.Description, CoordinateSource: new(Path.GetFullPath(selected!.Path).ToUpperInvariant(), aiv.Index, aiv.Name.ToUpperInvariant(), row / 2), PlacementPosition: position, PlacementRotation: new(0, heading, 0)) { NameCharacters = name.Length });
                     }
-                    catch (InvalidDataException ex) { notes.Add($"{name} (AIV record {row / 2}): {ex.Message}"); }
+                    catch (InvalidDataException ex)
+                    {
+                        // Failed hierarchies/poses must not publish orphan meshes or
+                        // consume instance indices/budget needed by valid placements.
+                        scene.Nodes.RemoveRange(firstNewNode, scene.Nodes.Count - firstNewNode);
+                        sources.RemoveRange(firstNewNode, sources.Count - firstNewNode);
+                        if (claimedStored is int stored) placedWorldActors.Remove(stored);
+                        notes.Add($"{label}{(label.Length == name.Length ? "" : $"… [name truncated; {name.Length} characters]")} (AIV record {row / 2}): {ex.Message}");
+                    }
                 }
             }
             else notes.Add("No mission AIV resource is available; showing stored world geometry.");

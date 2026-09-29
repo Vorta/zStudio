@@ -8,6 +8,8 @@ Open a map's `gamez.zbd` and select **Whole world**. The mission picker replaces
 
 Authored AIV positions and headings place uniquely resolved world templates and base mech assemblies. Repeated placements have independent instance transforms and retain archive/member/record identity. Player inventory, custom player mechs, mission-script activation and combat are not simulated. Missing or ambiguous templates remain inspectable in the AIV resource and produce preview notices.
 
+Actor labels in the scene, hierarchy, cards and Properties use at most 128 characters. Truncated labels disclose the original length; they do not identify an instance. Template matching uses the complete authored name, and full names remain intact in the AIV resource and exports. Rejected placement diagnostics use the same bounded label. Invalid hierarchy clones are discarded completely before processing the next placement.
+
 **Unlock editing** enables object cards and selection bounds. **Edit** enables the existing transform draft and movement/rotation controls. MW3 AIV edits affect that mission record only; Recoil difficulty linking does not apply. AI nodes support translation. Gate and other edge-constraint records have no authored XYZ and remain non-spatial constraints. Switching missions preserves coordinate edits and undo history. Save patches changed coordinate scalars through the existing verified archive service.
 
 Rendering supports triangle strips and per-corner RGB colors. OBJ export retains vertex colors. Texture resolution includes shared mech texture packs. Scene inspection and the Document scene tree preserve source/member identity when names repeat.
@@ -53,6 +55,8 @@ Supported shared animation operations have explicit approximation notices. Store
 ## MCP
 
 GUI and MCP share the visible workspace, parser, identities, edit sessions, previews and saves.
+
+For MW3 actors, `scene_nodes` returns a bounded `Name` on the node and its `actor`, with `actor.NameCharacters`/`NameTruncated` and node `Metadata.name_characters`/`name_truncated`. `scene_properties` and the pinned Properties window retain the same node metadata; the object card discloses truncation and authored length. Scene queries match the published 128-character prefix. Use the archive/member/record identity to distinguish equal labels, and inspect or export the source AIV resource for the complete name.
 
 Motion state responses (`motion_preview` and `preview_state.motion`) show at most 32 diagnostics with 512-character prefixes plus `diagnosticCount`/`diagnosticsTruncated`. The GUI support notice also discloses shortened output; inspect `motion_records` for complete authored part names. State previews at most 32 assembly choices with `assemblyCount`/`assembliesTruncated`; `motion_preview action: "assemblies"` pages all choices using `offset`, `limit` and a case-insensitive name `query`.
 
