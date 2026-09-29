@@ -92,7 +92,7 @@ public static class WatchLogic
         if (observation.Head != expectedHead) throw new InvalidOperationException("Remote PR head differs from --head. Read it again before arming.");
         if (state.Outstanding != null) throw new InvalidOperationException("Read and acknowledge the outstanding notice before re-arming.");
         if (first) state.Handled.UnionWith(observation.Comments.Select(c => c.Key));
-        state.ExpectedHead = expectedHead; state.Generation++;
+        state.ExpectedHead = state.ObservedHead = expectedHead; state.Generation++; // Arm verified the remote head; status must not report a stale change.
         state.Active = state.CommentsArmed = state.ApprovalEnabled = true;
         // Each arm records exactly the authorization supplied for it; a later arm never inherits a prior grant.
         state.ReleaseAuthorized = releaseAuthorized;

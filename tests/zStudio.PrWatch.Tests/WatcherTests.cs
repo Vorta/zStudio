@@ -47,6 +47,7 @@ public sealed class WatcherTests
         Assert.False(state.CommentsArmed); // Informational-only handling stays disarmed.
         var afterPush = Observe(Comment(1), Comment(2)) with { Head = Next };
         WatchLogic.Arm(state, afterPush, Next, false, Now.AddSeconds(10));
+        Assert.Equal(Next, state.ObservedHead); Assert.Null(WatchLogic.StatusWarning(state, true));
         Assert.DoesNotContain("inline:2", state.Handled);
         Assert.NotNull(WatchLogic.Observe(state, afterPush, Now.AddSeconds(11)));
         Assert.Equal(2, state.Notices.Count);
