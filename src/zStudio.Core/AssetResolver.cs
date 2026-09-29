@@ -9,13 +9,20 @@ public sealed class AssetResolver(string root) : IDisposable
     public ResourceEditOwnership EditOwnership { get; } = new();
     public string Root { get; } = Path.GetFullPath(root);
     private readonly Dictionary<string, string> missions = new(StringComparer.OrdinalIgnoreCase);
-    public string? SelectedMission(string worldPath) { lock (missions) return missions.GetValueOrDefault(Path.GetDirectoryName(worldPath)!); }
-    public void SelectMission(string worldPath, string archive)
+    public string? SelectedMission(string worldPath) { lock (missions) return missions.GetValueOrDefault(Path.GetDirectoryName(Path.GetFullPath(worldPath))!); }
+    public void SelectMission(string worldPath, string archive) => TrySelectMission(worldPath, archive, null, false);
+    /// <summary>Replace only the selection a load started from, so an older fallback cannot overwrite a newer choice.</summary>
+    public bool TrySelectMission(string worldPath, string archive, string? expected) => TrySelectMission(worldPath, archive, expected, true);
+    private bool TrySelectMission(string worldPath, string archive, string? expected, bool compare)
     {
         string directory = Path.GetDirectoryName(Path.GetFullPath(worldPath))!;
         if (!Path.GetDirectoryName(Path.GetFullPath(archive))!.Equals(directory, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("A mission reader must belong to the selected map directory.");
-        lock (missions) missions[directory] = Path.GetFullPath(archive);
+        lock (missions)
+        {
+            if (compare && !string.Equals(missions.GetValueOrDefault(directory), expected == null ? null : Path.GetFullPath(expected), StringComparison.OrdinalIgnoreCase)) return false;
+            missions[directory] = Path.GetFullPath(archive); return true;
+        }
     }
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, (ZbdDocument Document, long Used)> cache = new(StringComparer.OrdinalIgnoreCase);
@@ -24,6 +31,8 @@ public sealed class AssetResolver(string root) : IDisposable
     private readonly Dictionary<Guid, ZbdDocument[]> workspaceSnapshots = [];
     public long SnapshotRevision { get; private set; }
     public event Action? WorkspaceSnapshotsChanged;
+    public bool IsWorkspaceSnapshot(ZbdDocument document)
+    { lock (snapshotGate) return publishedSnapshots.TryGetValue(document.Path, out var published) && ReferenceEquals(published, document); }
     public ZbdDocument? WorkspaceSnapshot(string path, Guid excludingOwner)
     { lock (snapshotGate) return workspaceSnapshots.Where(p => p.Key != excludingOwner).SelectMany(p => p.Value).SingleOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase)); }
     private IReadOnlyDictionary<string, ZbdDocument> publishedSnapshots = new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase);
@@ -32,6 +41,8 @@ public sealed class AssetResolver(string root) : IDisposable
         lock (snapshotGate)
         {
             var values = documents.ToArray();
+            // Closing a document that published nothing changes no source; it must not expire other previews.
+            if (values.Length == 0 && !workspaceSnapshots.ContainsKey(owner)) return;
             // Build the complete replacement before changing either published state or ownership history.
             var next = workspaceSnapshots.Where(p => p.Key != owner).SelectMany(p => p.Value).Concat(values)
                 .ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase);

@@ -19,14 +19,19 @@ public partial class AnimationEditor
         {
             Difficulty.Visibility = Mw3WorldPath == null ? Visibility.Visible : Visibility.Collapsed;
             Mission.Visibility = Mw3WorldPath != null ? Visibility.Visible : Visibility.Collapsed;
-            Mission.ItemsSource = choices; Mission.SelectedItem = choices.FirstOrDefault(m => m.Archive == MissionArchive);
+            Mission.ItemsSource = choices; Mission.SelectedItem = choices.FirstOrDefault(m => m.Archive.Equals(MissionArchive, StringComparison.OrdinalIgnoreCase));
+            if (context?.Mission is { } mission && Mw3WorldPath is { } world) preferences?.AdoptMissionFallback(world, mission.Layout);
         }
         finally { changing = wasChanging; }
     }
     private void SynchronizeMissionSelection()
     {
         bool wasChanging = changing; changing = true;
-        try { Mission.SelectedItem = MissionChoices.FirstOrDefault(m => m.Archive == MissionArchive); }
+        try
+        {
+            Mission.SelectedItem = MissionChoices.FirstOrDefault(m => m.Archive.Equals(MissionArchive, StringComparison.OrdinalIgnoreCase));
+            if (context?.Mission is { } mission && Mw3WorldPath is { } world) preferences?.AdoptMissionFallback(world, mission.Layout);
+        }
         finally { changing = wasChanging; }
     }
     private async void MissionChanged(object sender, SelectionChangedEventArgs e)

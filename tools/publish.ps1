@@ -37,18 +37,33 @@ try {
         throw 'Portable output must contain only zStudio.exe and dependencies.'
     }
     if (Test-Path -LiteralPath $outputPath) {
-        # Keep the previous portable build rather than deleting its contents.
-        $backup = $outputPath + '.previous-' + [Guid]::NewGuid().ToString('N')
-        Assert-ArtifactPath $backup
-        Move-Item -LiteralPath $outputPath -Destination $backup
+        # Previous builds are not kept. Move the old output aside first so a file in use
+        # cannot leave a half-deleted current build; it is deleted once replaced.
+        $superseded = $outputPath + '.previous-' + [Guid]::NewGuid().ToString('N')
+        Assert-ArtifactPath $superseded
+        Move-Item -LiteralPath $outputPath -Destination $superseded
     }
-    New-Item -ItemType Directory -Path (Split-Path -Parent $outputPath) -Force | Out-Null
+    $parent = Split-Path -Parent $outputPath
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
     Move-Item -LiteralPath $stage -Destination $outputPath
     [xml]$properties = Get-Content -LiteralPath 'Directory.Build.props'
     $version = $properties.Project.PropertyGroup.Version
-    $archive = Join-Path (Split-Path -Parent $outputPath) "zStudio-$version-win-x64.zip"
+    $archive = Join-Path $parent "zStudio-$version-win-x64.zip"
     Compress-Archive -Path (Join-Path $outputPath '*') -DestinationPath $archive -Force
     & (Join-Path $PSScriptRoot 'verify-package.ps1') -Directory $outputPath -Archive $archive -ExpectedVersion $version
+    # Delete this and any earlier superseded Studio output, and older portable ZIPs. A build
+    # still running from a superseded folder is reported and removed by the next publish.
+    foreach ($stale in @(Get-ChildItem -LiteralPath $parent -Directory -Filter ((Split-Path -Leaf $outputPath) + '.previous-*'))) {
+        Assert-ArtifactPath $stale.FullName
+        $studio = (Test-Path -LiteralPath (Join-Path $stale.FullName 'Recoil.Zbd.Studio.runtimeconfig.json')) -or
+                  (Test-Path -LiteralPath (Join-Path $stale.FullName 'dependencies/Recoil.Zbd.Studio.runtimeconfig.json'))
+        if (-not $studio) { Write-Warning "Not deleting a folder that is not a Studio publish: $($stale.FullName)"; continue }
+        try { Remove-Item -LiteralPath $stale.FullName -Recurse -Force -ErrorAction Stop }
+        catch { Write-Warning "Superseded build is still in use and will be deleted by the next publish: $($stale.FullName)" }
+    }
+    foreach ($zip in @(Get-ChildItem -LiteralPath $parent -File -Filter 'zStudio-*-win-x64.zip' | Where-Object { $_.FullName -ne [IO.Path]::GetFullPath($archive) })) {
+        Assert-ArtifactPath $zip.FullName; Remove-Item -LiteralPath $zip.FullName -Force
+    }
     Get-FileHash -LiteralPath $archive -Algorithm SHA256
 } finally {
     if ($stage -and (Test-Path -LiteralPath $stage)) { Assert-ArtifactPath $stage; Remove-Item -LiteralPath $stage -Recurse -Force }

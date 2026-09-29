@@ -47,6 +47,7 @@ public partial class MainWindow
         // Accepted snapshots outlive the request which prepared them.
         using (PreviewOperation.Begin(CancellationToken.None)) await RefreshResourceDependentsAsync(doc);
     }
+    private Guid? shownResourceMember;
     private async Task RefreshResourceDependentsAsync(DocumentModel doc)
     {
         if (aiPropertiesArchive != null && (aiPropertiesArchive.Equals(doc.Path, StringComparison.OrdinalIgnoreCase) || aiPropertiesArchive.Equals(doc.ResourceEdits?.TargetPath, StringComparison.OrdinalIgnoreCase))) propertiesWindow?.MarkAiSnapshotStale();
@@ -55,12 +56,13 @@ public partial class MainWindow
         // Archive edits may remove the selected member, change its kind or move a
         // different member into its old index. Reconcile the current selection even
         // when the Assets tab is not realized and has not raised SelectionChanged.
-        if (shownDocument == doc) await ShowAsset(doc, doc.SelectedAsset?.Record);
-        else if (motion != null) await motion.RefreshLibraryAsync(doc.ResourceEdits);
+        // Prefer the displayed member's UUID: a filtered or cleared Assets row is not a request to switch previews.
+        if (shownDocument == doc) await ShowAsset(doc, ((shownResourceMember is Guid shownMember ? doc.Assets.FirstOrDefault(a => a.ResourceId == shownMember) : null) ?? doc.SelectedAsset)?.Record);
+        else if (motion != null) await motion.RefreshLibraryAsync();
         else if (shownDocument != doc && animation != null) await animation.RefreshModelContextAsync(resourceChanges: true);
         else if (HasPublishedStaticScene && shownDocument is { } shown)
         {
-            var asset = shown.SelectedAsset?.Record;
+            var asset = shownAsset ?? shown.SelectedAsset?.Record;
             if (asset != null) { shownAsset = asset; await RefreshStaticSceneAsync(shown, asset); }
         }
         UpdateDocumentCommands();
@@ -196,6 +198,8 @@ public partial class MainWindow
                 }
                 using var fields = ResourceAdapter(d, member, node, part, frame, Flag(a, "valves"));
                 await fields.ValveWork.WaitAsync(token);
+                // Positional field/action IDs belong to the requested revision; a GUI edit may land during the awaits above.
+                if (action is "edit" or "invoke") CheckResourceContext(d, a["revision"]!.GetValue<long>());
                 if (action == "edit") await fields.WriteAutomationFieldAsync(Text(a,"field"), Text(a,"value"));
                 if (action == "invoke") await fields.InvokeAutomationActionAsync(Text(a,"field"));
                 await fields.ValveWork.WaitAsync(token);

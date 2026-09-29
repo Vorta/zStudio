@@ -96,12 +96,26 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
         foreach (var frame in frames) { frame.Validate(); output.Write(frame.ForVersion(Version).Bytes); count++; }
         var result = new AnimationEvent(output.ToArray(), SourceOffset) { Id = Id, Version = Version }; result.SetInt(4, result.Bytes.Length); if (Version == 39) result.SetInt(16, count); return result;
     }
+    /// <summary>Why a structurally valid stream cannot be previewed, or null. Inspection, editing and export remain available.</summary>
+    public string? KeyframePreviewDiagnostic(CancellationToken token = default)
+    {
+        if (Type != 12) return null;
+        _ = Keyframes(token);
+        // Retail RECOIL samples reversed/negative spans (see AnimationPlayer.Keyframes); MW3's runtime has not been verified.
+        return Version == 39 && keyframeStream!.FirstUnordered >= 0
+            ? $"Keyframe {keyframeStream.FirstUnordered}: MW3 reversed or negative time spans have unverified runtime meaning; transform preview is unavailable." : null;
+    }
+    /// <summary>Retail completes a stream only after every sample has started and finished.</summary>
+    internal float PlaybackEnd { get; private set; }
     internal IReadOnlyList<AnimationKeyframe> PlaybackKeyframes()
     {
         if (playbackVersion == MutationVersion && playbackKeyframes != null) return playbackKeyframes;
         var frames = Keyframes();
+        if (KeyframePreviewDiagnostic() is { } unsupported) throw new InvalidDataException(unsupported);
         if (frames.Count > 16384) throw new InvalidDataException("Transform playback is unavailable above 16,384 keyframes per event. Paged inspection and export retain the complete stream.");
-        playbackKeyframes = keyframeStream?.ToArray() ?? []; playbackVersion = MutationVersion; return playbackKeyframes;
+        playbackKeyframes = keyframeStream?.ToArray() ?? []; playbackVersion = MutationVersion;
+        PlaybackEnd = playbackKeyframes.Aggregate(0f, (end, frame) => Math.Max(end, Math.Max(frame.Start, frame.End)));
+        return playbackKeyframes;
     }
     public JsonObject ToPreviewJson(CancellationToken token = default) => ToJson(token, bounded: true);
     public JsonObject ToJson(CancellationToken token = default) => ToJson(token, bounded: false);
@@ -111,10 +125,19 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
         JsonObject value = new() { ["event"] = Name, ["type_id"] = (int)Type, ["start_mode"] = AnimationCatalog.ModeName(StartMode), ["start_threshold"] = JsonData.Number(Threshold), ["record_size"] = Bytes.Length, ["source_offset"] = SourceOffset, ["preview"] = Spec?.Support ?? "Unavailable: unknown event", ["raw_hex"] = bounded ? Convert.ToHexStringLower(Bytes.AsSpan(0, Math.Min(256, Bytes.Length))) : JsonData.Hex(Bytes, token) };
         if (bounded) value["raw_hex_truncated"] = Bytes.Length > 256;
         if (Spec != null) foreach (var field in Spec.Fields.Where(f => f.Offset + f.Size <= Bytes.Length)) value[field.Name] = field.Read(this);
-        if (Type == 12 && bounded) { value["keyframes_omitted"] = true; if (keyframeVersion == MutationVersion && keyframeError != null) value["keyframe_diagnostic"] = keyframeError; }
+        if (Type == 12 && bounded)
+        {
+            value["keyframes_omitted"] = true;
+            // Bounded previews report only an already prepared index; they never validate a large stream.
+            if (keyframeVersion == MutationVersion && (keyframeError ?? KeyframePreviewDiagnostic(token)) is { } diagnostic) value["keyframe_diagnostic"] = diagnostic;
+        }
         else if (Type == 12)
         {
-            try { value["keyframes"] = JsonData.Array(Keyframes(token), f => f.ToJson(), token); }
+            try
+            {
+                value["keyframes"] = JsonData.Array(Keyframes(token), f => f.ToJson(), token);
+                if (KeyframePreviewDiagnostic(token) is { } diagnostic) value["keyframe_diagnostic"] = diagnostic;
+            }
             catch (InvalidDataException ex) { value["keyframe_diagnostic"] = ex.Message; }
         }
         return value;
@@ -147,13 +170,17 @@ public sealed class AnimationKeyframe(byte[] bytes) : AnimationRecord(bytes)
     }
     public int ChannelOffset(int channel) => (Flags & (1 << channel)) == 0 ? -1 : 12 + ChannelStride * BitOperations.PopCount((uint)Flags & ((1u << channel) - 1));
     public void Validate() => Validate(Bytes, ChannelStride);
+    internal static bool IsOrdered(ReadOnlySpan<byte> bytes)
+    { float start = BinaryPrimitives.ReadSingleLittleEndian(bytes[4..]), end = BinaryPrimitives.ReadSingleLittleEndian(bytes[8..]); return start >= 0 && end >= start; }
     internal static void Validate(ReadOnlySpan<byte> bytes, int channelStride)
     {
         BinaryCursor.CheckRange(bytes.Length, 0, 12);
         int flags = BinaryPrimitives.ReadInt32LittleEndian(bytes);
         if ((flags & ~7) != 0 || bytes.Length != 12 + channelStride * BitOperations.PopCount((uint)flags)) throw new InvalidDataException("Invalid keyframe channel layout.");
+        // Reversed and negative spans are authored data: retail RECOIL samples them
+        // (0x45AE90), so ordering is a playback property, not stream validity.
         float start = BinaryPrimitives.ReadSingleLittleEndian(bytes[4..]), end = BinaryPrimitives.ReadSingleLittleEndian(bytes[8..]);
-        if (!float.IsFinite(start) || !float.IsFinite(end) || start < 0 || end < start) throw new InvalidDataException("Keyframe times must be finite, nonnegative, and end at or after the start.");
+        if (!float.IsFinite(start) || !float.IsFinite(end)) throw new InvalidDataException("Keyframe times must be finite.");
         // The first seven words contain base/rate operands and vector padding in both versions.
         // Preserve the remaining v39 channel bytes without assigning semantics to them.
         int channelOffset = 12;

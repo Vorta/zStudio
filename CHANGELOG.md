@@ -4,22 +4,25 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 ## 0.7.1 — 2026-09-29
 
-- Integrate authored MW3 AI valves: ordered action blocks, compound conditions, node conditions/unions, edge assignments and objective references. Preserve repeated names as distinct source occurrences. Add typed Properties, paged inspection and reference navigation, atomic edits, undo/redo and verified resource saves.
-- Add optional valve outlines and dashed assignment edges in Whole world while preserving attack-strategy colors. Node cards open their valve source in Properties; exact-name highlighting and framing use resolved spatial associations. Runtime valve evaluation and mission-script execution remain outside preview support.
-- Add three typed MCP tools for valve records/targets/references, semantic edits and mission selection/visualization, bringing windowless discovery to 82 tools.
-- Bound AI constraint previews and mission diagnostics before retaining them, reject placement coordinates beyond the supported preview range, and cache motion hierarchy bindings with frame sampling off the UI thread.
-- Inspect large animation keyframe streams through sparse indices and paged fields; serialize edits without eagerly cloning every untouched frame. Keep explicit preview limits visible. Preserve unrelated sequence references when duplicating cleanup.
-
-## 0.7.0 — 2026-09-29
-
 - Add MechWarrior 3 base-game support through the shared format library: version-27 worlds and mech hierarchies, version-4 motion clips, and version-39 compiled animations. Preserve version-specific layouts, record identities and opaque data, with byte-exact animation/motion no-op writes.
 - Preview authored MW3 mission layouts with an explicit mission reader picker, independent actor instances, AI networks and mission-scoped coordinate editing. Retain camera, playhead, draft guards and edit history while switching missions. Keep non-spatial AI edge constraints as ordered metadata.
 - Export mech assemblies as assembled and local OBJ/MTL/PNG bundles, including vertex colors and member/local mesh identities. Replace explicit member-local meshes or supported version-27 world models through shared undo and verified saves, preserving unrelated members and hierarchy bounds.
 - Play and seek motion clips against explicit mech assemblies; edit loop timing, frame translations and WXYZ quaternions through pinned Properties. Insert/delete frames across all tracks with shared archive history. Retain the stored pose for ambiguous motion bindings, including duplicate tracks.
 - Edit version-39 animation sequences, events and keyframes with a versioned catalog, retaining spline bytes and water/lava sequence references. Document approximate preview behavior and reject cross-game world bindings; mission scripts, combat, particles, spline interpolation and gait/IK are not simulated.
 - Show authored attack strategy in AI node inspection, Properties and copy actions. Keep the card field among its scrolling details immediately above Status. Share a fixed network color palette between nodes, connections, the tooltip and MCP: absent attack_strategy is red, while empty, unrecognized and invalid values remain grey. Selected markers stay white.
-- Add six typed MCP tools for mission selection, motion inspection/editing/playback and mech inspection/replacement, bringing windowless discovery to 79 tools. Preserve shared GUI identities, revision/draft checks, asynchronous operations and verified saves.
+- Add six typed MCP tools for mission selection, motion inspection/editing/playback and mech inspection/replacement. Preserve shared GUI identities, revision/draft checks, asynchronous operations and verified saves.
 - Multiply authored vertex RGB by textures while preserving alpha depth behavior. Correct initial and resized render-buffer dimensions under a busy render queue, and keep retained-world rendering from starving preview replacement.
+- Integrate authored MW3 AI valves: ordered action blocks, compound conditions, node conditions/unions, edge assignments and objective references. Preserve repeated names as distinct source occurrences. Add typed Properties, paged inspection and reference navigation, atomic edits, undo/redo and verified resource saves.
+- Add optional valve outlines and dashed assignment edges in Whole world while preserving attack-strategy colors. Node cards open their valve source in Properties; exact-name highlighting and framing use resolved spatial associations. Runtime valve evaluation and mission-script execution remain outside preview support.
+- Add three typed MCP tools for valve records/targets/references, semantic edits and mission selection/visualization, bringing windowless discovery to 82 tools.
+- Bound AI constraint previews and mission diagnostics before retaining them, reject placement coordinates beyond the supported preview range, and cache motion hierarchy bindings with frame sampling off the UI thread.
+- Inspect large animation keyframe streams through sparse indices and paged fields; serialize edits without eagerly cloning every untouched frame. Keep explicit preview limits visible. Preserve unrelated sequence references when duplicating cleanup.
+- Keep RECOIL keyframe streams with authored reversed spans readable, editable and playable using the retail sample cursor; MW3 streams with reversed or negative spans stay editable with an explicit transform-preview diagnostic. MW3 animation node references with ambiguous names stay unresolved during playback.
+- Choose valve Properties from authored valve structure, so RECOIL `objectives.zrd` keeps the generic member editor; bound the highlighted valve name in MCP state; keep the highlight when MCP toggles the overlay; recheck revisions after valve forms load.
+- Reject difficulty changes for MW3 previews before touching the shared RECOIL preference, and reject automation edits to other documents while the shown preview holds a scene-card draft instead of prompting.
+- Keep accepted edits and saves successful when a dependent motion library becomes unavailable; clear motion bindings unless the member identity is proven, and reconcile the displayed motion by member UUID rather than the Assets selection.
+- Follow authored MW3 conventions for new version-27 material flags and polygon priority/field24/zone words during mesh replacement; RECOIL version-15 output is unchanged.
+- PR-watch tooling: retry state replacement while another process reads it, report an active watch without a worker, ignore review requests and review-bot status posts when arming feedback notices, honor rate-limit resets only when exhausted, and require explicit release authorization on every arm.
 
 ## 0.6.3 — 2026-09-28
 

@@ -317,16 +317,16 @@ public sealed class MechWarrior3Tests
                 {
                     if (ev.Type == 12)
                     {
-                        try { Assert.Equal(ev.I32(16), ev.Keyframes(token).Count); }
-                        catch (InvalidDataException ex)
+                        Assert.Equal(ev.I32(16), ev.Keyframes(token).Count);
+                        if (ev.KeyframePreviewDiagnostic(token) is { } unsupported)
                         {
                             invalidTransforms++;
                             // Retail data includes reversed time spans. Do not invent their runtime meaning:
-                            // retain source bytes and surface the unsupported stream to inspection/preview.
-                            Assert.Contains("Keyframe times", ex.Message);
-                            Assert.Equal(ex.Message, ev.ToPreviewJson(token)["keyframe_diagnostic"]!.GetValue<string>());
-                            Assert.Contains("Keyframe", ex.Message);
-                            Assert.Contains(doc.Diagnostics, d => d.Severity == "Warning");
+                            // keep the stream inspectable/editable and surface the unsupported preview.
+                            Assert.Contains("unverified runtime meaning", unsupported);
+                            Assert.Equal(unsupported, ev.ToPreviewJson(token)["keyframe_diagnostic"]!.GetValue<string>());
+                            Assert.Equal(unsupported, Assert.Throws<InvalidDataException>(() => ev.PlaybackKeyframes()).Message);
+                            Assert.Contains(doc.Diagnostics, d => d.Severity == "Warning" && d.Offset == ev.SourceOffset);
                         }
                     }
                     if (ev.Spec != null) Assert.True(ev.Bytes.Length >= ev.Spec.Size, $"{file}: event {ev.Type} is smaller than its layout.");

@@ -100,7 +100,8 @@ public partial class MainWindow
     }
     private void RequireNoDrafts(DocumentModel? doc = null)
     {
-        if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc))
+        // Resource/content edits elsewhere refresh the shown preview, whose scene-card draft would otherwise need a modal decision mid-request.
+        if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc || doc != shownDocument && inspectionDraft.DraftDocument == shownDocument && (doc.ResourceEdits != null || doc.ContentEdits != null)))
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
         if ((doc == null || propertiesWindow?.Document == doc) && propertiesWindow?.HasPendingDrafts == true || (doc == null || shownDocument == doc) && animation?.HasAutomationDrafts == true)
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");

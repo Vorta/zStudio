@@ -58,7 +58,10 @@ public partial class AnimationEditor
             case "effects": Lighting.IsChecked = value.GetValue<bool>(); break;
             case "height": PreviewHeight.Text = Numeric(-999,999).ToString(CultureInfo.InvariantCulture); break;
             case "lod": Lod.SelectedIndex = Integer(0, Math.Max(0,Lod.Items.Count - 1)); break;
-            case "difficulty": if (!Enum.TryParse<MissionDifficulty>(value.GetValue<string>(), out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument", "Difficulty must be Easy, Medium or Hard."); Difficulty.SelectedItem = difficulty; break;
+            case "difficulty":
+                if (!Enum.TryParse<MissionDifficulty>(value.GetValue<string>(), out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument", "Difficulty must be Easy, Medium or Hard.");
+                if (Mw3WorldPath != null) throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
+                Difficulty.SelectedItem = difficulty; break;
             case "speed": int index = Array.IndexOf(new[] { .25, .5, 1, 2, 4 }, Numeric(.25,4)); if (index < 0) throw new StudioCommandException("invalid_argument", "Speed must be 0.25, 0.5, 1, 2 or 4."); Speed.SelectedIndex = index; break;
             case "replay": Loop.IsChecked = value.GetValue<bool>(); break;
             case "mute": Mute.IsChecked = value.GetValue<bool>(); break;

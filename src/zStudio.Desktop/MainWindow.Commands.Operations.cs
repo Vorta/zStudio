@@ -108,7 +108,9 @@ public partial class MainWindow
     {
         using var save = BeginDocumentSave();
         var edits = doc.PickupEdits ?? throw new InvalidOperationException("No editable pickup placements loaded.");
-        doc.ClaimResourcePaths(edits.ArchivePaths.Concat(edits.ArchivePaths.Select(edits.TargetPath)).Concat(destinations?.Values ?? []));
+        // Claim only archives this save writes; unedited readers may belong to other documents.
+        var written = edits.ArchivePaths.Where(p => edits.IsArchiveDirty(p) || destinations?.Keys.Any(d => Path.GetFullPath(d).Equals(Path.GetFullPath(p), StringComparison.OrdinalIgnoreCase)) == true).ToArray();
+        doc.ClaimResourcePaths(written.Concat(written.Select(edits.TargetPath)).Concat(destinations?.Values ?? []));
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
         var result = await edits.SaveAsync(destinations, backup, cancellation.Token);
         if (result.SavedPaths.Count > 0)

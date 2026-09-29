@@ -76,7 +76,8 @@ public sealed partial class GitHub(ICommandRunner runner, string executable, str
         {
             string body = Text(row, "body");
             if (kind == "review" && string.IsNullOrWhiteSpace(body)) return;
-            comments.Add(new(kind + ":" + row["id"]!.GetValue<long>(), Text(row, "html_url"), Text(row["user"]!, "login"), body, Date(row, date)));
+            comments.Add(new(kind + ":" + row["id"]!.GetValue<long>(), Text(row, "html_url"), Text(row["user"]!, "login"), body, Date(row, date),
+                kind == "conversation" && Informational(body, IsBot(row))));
         }
         foreach (var row in conversation) Add(row, "conversation", "created_at");
         foreach (var row in published) Add(row, "review", "submitted_at");
@@ -117,6 +118,11 @@ public sealed partial class GitHub(ICommandRunner runner, string executable, str
         }
         return code ? latest : null;
     }
+    /// <summary>Review requests and the review bot's summary/usage-limit status posts are not reviewer feedback.</summary>
+    public static bool Informational(string body, bool reviewBot) =>
+        string.Join(' ', body.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Equals("@codex review", StringComparison.OrdinalIgnoreCase) ||
+        reviewBot && (body.StartsWith("<!-- codex-pull-request-review-summary -->", StringComparison.Ordinal) ||
+            body.Contains("Codex usage limits", StringComparison.Ordinal) && body.Contains("https://chatgpt.com/codex/cloud/settings/usage", StringComparison.Ordinal));
     private static bool IsBot(JsonObject row) => Text(row["user"]!, "login") == ReviewBot && Text(row["user"]!, "type") == "Bot";
     private static string Text(JsonNode row, string key) => row[key]?.GetValue<string>() ?? throw new InvalidDataException("GitHub omitted " + key);
     private static DateTimeOffset Date(JsonNode row, string key) => DateTimeOffset.Parse(Text(row, key), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
@@ -128,17 +134,19 @@ public sealed partial class GitHub(ICommandRunner runner, string executable, str
         string headers = output[..boundary];
         if (result.ExitCode != 0)
         {
-            TimeSpan? retry = null;
+            TimeSpan? retry = null, reset = null; bool exhausted = false;
             foreach (string header in headers.Split('\n'))
             {
                 int colon = header.IndexOf(':'); if (colon < 0) continue;
                 string name = header[..colon].Trim(), value = header[(colon + 1)..].Trim();
                 if (name.Equals("retry-after", StringComparison.OrdinalIgnoreCase) && double.TryParse(value, CultureInfo.InvariantCulture, out double seconds) && double.IsFinite(seconds) && seconds > 0)
                     retry = TimeSpan.FromSeconds(Math.Min(seconds, 86400));
-                if (name.Equals("x-ratelimit-reset", StringComparison.OrdinalIgnoreCase) && long.TryParse(value, out long reset) && reset > clock.GetUtcNow().ToUnixTimeSeconds() && reset < clock.GetUtcNow().AddDays(1).ToUnixTimeSeconds())
-                    retry = TimeSpan.FromSeconds(reset - clock.GetUtcNow().ToUnixTimeSeconds() + 1);
+                if (name.Equals("x-ratelimit-remaining", StringComparison.OrdinalIgnoreCase)) exhausted = value == "0";
+                if (name.Equals("x-ratelimit-reset", StringComparison.OrdinalIgnoreCase) && long.TryParse(value, out long at) && at > clock.GetUtcNow().ToUnixTimeSeconds() && at < clock.GetUtcNow().AddDays(1).ToUnixTimeSeconds())
+                    reset = TimeSpan.FromSeconds(at - clock.GetUtcNow().ToUnixTimeSeconds() + 1);
             }
-            throw new GitHubException("GitHub request failed: " + result.Error[..Math.Min(1000, result.Error.Length)], retry);
+            // GitHub reports the hourly reset on every response; only an exhausted primary limit waits for it.
+            throw new GitHubException("GitHub request failed: " + result.Error[..Math.Min(1000, result.Error.Length)], retry ?? (exhausted ? reset : null));
         }
         return JsonNode.Parse(output[(boundary + 2)..]) ?? throw new InvalidDataException("Empty GitHub response.");
     }

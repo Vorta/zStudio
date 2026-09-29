@@ -74,7 +74,7 @@ public partial class MainWindow
         if (propertiesWindow?.Document == doc) await propertiesWindow.AssetRefreshWork;
         await previewWork;
         if (animation != null) await animation.RefreshModelContextAsync();
-        else if (shownDocument == doc) await ShowAsset(doc, doc.SelectedAsset?.Record);
+        else if (shownDocument == doc) await ShowAsset(doc, doc.SelectedAsset?.Record ?? shownAsset);
         UpdateDocumentCommands();
     }
     private async Task<ModelSaveResult> SaveModelsAsync(DocumentModel doc, string? directory, CancellationToken token)

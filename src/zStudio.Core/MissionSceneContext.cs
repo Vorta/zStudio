@@ -87,10 +87,13 @@ public static partial class MissionSceneLoader
         .SelectMany(d => Directory.EnumerateFiles(d, "*.zbd").Order(StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     public static void Invalidate(ZbdDocument world) => Cache.Remove(world);
 
-    public static async Task<MissionSceneContext> LoadAsync(ZbdDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium)
+    /// <param name="mission">MW3 reader requested by the caller. Omitted, the resolver selection is captured before any await.</param>
+    /// <param name="exactMission">Fail when the requested MW3 reader is unavailable instead of reporting a fallback.</param>
+    public static async Task<MissionSceneContext> LoadAsync(ZbdDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
+        string? mission = null, bool exactMission = false)
     {
         token.ThrowIfCancellationRequested();
-        if (world.Game == GameVariant.MechWarrior3) return await LoadMw3Async(world, resolver, token).ConfigureAwait(false);
+        if (world.Game == GameVariant.MechWarrior3) return await LoadMw3Async(world, resolver, mission ?? resolver.SelectedMission(world.Path), exactMission && mission != null, token).ConfigureAwait(false);
         var requested = MissionLayoutSelection.For(difficulty);
         string directory = Path.GetDirectoryName(world.Path)!;
         var files = ResourceFiles(world.Path, resolver);

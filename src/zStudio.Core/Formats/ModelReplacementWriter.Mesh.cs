@@ -1,11 +1,32 @@
+using System.Buffers.Binary;
 using System.Numerics;
 using Recoil.Zbd.Core.Export;
 
 namespace Recoil.Zbd.Core.Formats;
 
+/// <summary>
+/// Version-27 polygon words copied from the replaced model: priority (+4), field24 (+24, a stored pointer kept as metadata)
+/// and zone set (+32). MW3 engine semantics are unavailable; this follows authored corpus conventions (every retail MW3
+/// polygon has a nonzero field24 and a 0xFF-padded zone set) and does not establish original-game acceptance.
+/// </summary>
+internal readonly record struct PolygonConvention(uint Priority, uint Field24, uint ZoneSet)
+{
+    // A model without authored polygons uses the dominant corpus priority, a nonzero pointer marker like the
+    // other stored pointer words, and the authored empty zone set (count 0, 0xFF padding; all mechlib polygons).
+    internal static readonly PolygonConvention Default = new(0, 1, 0xFFFFFF00);
+    internal static PolygonConvention From(ZbdDocument source, GameModel model, long dataOffset)
+    {
+        if (model.Polygons.Length == 0) return Default;
+        var record = source.Slice(dataOffset + 12L * (model.Vertices.Length + model.Normals.Length + model.Morphs.Length), 36).Span;
+        if (model.Metadata.Int("light_count") != 0 || BinaryPrimitives.ReadUInt32LittleEndian(record) != model.Polygons[0].Flags)
+            throw new InvalidDataException($"Model {model.Index} polygon records are not at their decoded location.");
+        return new(BinaryPrimitives.ReadUInt32LittleEndian(record[4..]), BinaryPrimitives.ReadUInt32LittleEndian(record[24..]), BinaryPrimitives.ReadUInt32LittleEndian(record[32..]));
+    }
+}
+
 public static partial class ModelReplacementWriter
 {
-    internal static byte[] EncodeMesh(byte[] header, uint? version, ImportedMesh mesh, int material, CancellationToken token)
+    internal static byte[] EncodeMesh(byte[] header, uint? version, ImportedMesh mesh, int material, PolygonConvention convention, CancellationToken token)
     {
         mesh.Validate(); var layout = GameZLayouts.For(version); int shift = version == 27 ? 4 : 0;
         if (header.Length != layout.ModelSize) throw new InvalidDataException("Invalid model header size.");
@@ -20,7 +41,12 @@ public static partial class ModelReplacementWriter
         foreach (var v in mesh.Positions) { w.Write(v.X); w.Write(v.Y); w.Write(v.Z); }
         foreach (var v in mesh.Normals) { w.Write(v.X); w.Write(v.Y); w.Write(v.Z); }
         for (int i = 0; i < mesh.Triangles.Length; i += 3)
-        { token.ThrowIfCancellationRequested(); w.Write(0x203u); w.Write(0); w.Write(1); w.Write(1); w.Write(1); if (layout.HasVertexColors) { w.Write(1); w.Write(0); } w.Write(material); w.Write(0); }
+        {
+            token.ThrowIfCancellationRequested();
+            // Version 15 keeps its established zero priority/zone words byte-for-byte.
+            if (layout.HasVertexColors) { w.Write(0x203u); w.Write(convention.Priority); w.Write(1); w.Write(1); w.Write(1); w.Write(1); w.Write(convention.Field24); w.Write(material); w.Write(convention.ZoneSet); }
+            else { w.Write(0x203u); w.Write(0); w.Write(1); w.Write(1); w.Write(1); w.Write(material); w.Write(0); }
+        }
         for (int i = 0; i < mesh.Triangles.Length; i += 3)
         {
             token.ThrowIfCancellationRequested();
@@ -43,7 +69,7 @@ public static partial class ModelReplacementWriter
         if (model.Morphs.Length != 0 || model.Metadata.Int("light_count") != 0) throw new InvalidDataException("Models with morph or light channels require their authored geometry.");
         int headerAt = checked((int)model.Metadata["source_header_offset"]!.GetValue<long>());
         int dataAt = checked((int)model.Metadata["source_data_offset"]!.GetValue<long>()), dataLength = checked((int)model.Metadata["source_data_length"]!.GetValue<long>());
-        byte[] header = source.Slice(headerAt, 92).ToArray(); byte[] data = EncodeMesh(header, 27, mesh, material, token);
+        byte[] header = source.Slice(headerAt, 92).ToArray(); byte[] data = EncodeMesh(header, 27, mesh, material, PolygonConvention.From(source, model, dataAt), token);
         FormatRegistry.ValidateDocumentSize(asset.Length - dataLength + data.Length);
         byte[] nodes = new byte[checked(scene.Nodes.Count * 208)];
         foreach (var node in scene.Nodes)

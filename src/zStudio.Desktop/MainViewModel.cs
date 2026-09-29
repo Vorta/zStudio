@@ -18,6 +18,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<SearchHit> SearchResults { get; } = [];
     public ObservableCollection<string> Diagnostics { get; } = [];
     public ObservableCollection<StudioProblem> Problems { get; } = [];
+    /// <summary>Replace a remembered MW3 mission that no longer qualified with the reported fallback.</summary>
+    internal void AdoptMissionFallback(string worldPath, MissionLayoutSelection layout)
+    {
+        if (layout.UnavailableMission is not { } stale || layout.MissionArchive is not { } effective) return;
+        if (!Settings.Mw3Missions.TryGetValue(worldPath, out var saved) || !Path.GetFullPath(saved).Equals(stale, StringComparison.OrdinalIgnoreCase)) return;
+        Settings.Mw3Missions[worldPath] = effective;
+        try { Settings.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AddProblem("Could not save the mission selection: " + ex.Message); }
+    }
     public void AddProblem(string message, string severity = "Error", string? file = null, int? assetIndex = null, long? offset = null)
     {
         Diagnostics.Add(message); Problems.Add(new(severity, "File / operation", message, file, assetIndex, offset));
@@ -142,9 +151,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // A previous asynchronous operation may still hold its resolver; its
         // canceled task owns that short remaining lifetime, not the new workspace.
         Resolver = new AssetResolver(root);
+        // Check the cheap root prefix first: remembered maps on unavailable shares must not
+        // stall the UI thread. A reader that exists but no longer qualifies falls back on load.
+        string rootPrefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         foreach (var (map, mission) in (Settings.Mw3Missions ?? []).Take(128))
-            try { if (File.Exists(map) && File.Exists(mission) && Path.GetFullPath(map).StartsWith(Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) Resolver.SelectMission(map, mission); }
-            catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException) { }
+            try { if (Path.GetFullPath(map).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) && File.Exists(map) && File.Exists(mission)) Resolver.SelectMission(map, mission); }
+            catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
         Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
         RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";
         Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();

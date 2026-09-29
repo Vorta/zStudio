@@ -204,6 +204,23 @@ internal static class SceneInspectionMcpChecks
             await Card("clear", new(), "pending_drafts");
             await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = "undo" }, "pending_drafts");
             await Call("close_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["discard"] = true }, "pending_drafts");
+            // A resource edit elsewhere refreshes this preview. Its draft needs an explicit decision, never a modal prompt mid-request.
+            string otherPath = Path.Combine(root, "other.zbd"); File.WriteAllBytes(otherPath, MotionFixture.Archive(("data.zrd", ZrdWriter.Write(A(S("value"))))));
+            using (var other = new DocumentModel(await FormatRegistry.Default.OpenAsync(otherPath, deadline.Token)))
+            {
+                main.ViewModel.Documents.Add(other);
+                try
+                {
+                    var rename = await Call("archive_edit", new() { ["document"] = other.SessionId.ToString(), ["revision"] = other.Revision, ["action"] = "rename",
+                        ["member"] = other.ResourceEdits!.Current.Members[0].Id.ToString(), ["name"] = "renamed.zrd" });
+                    for (string id = rename["id"]!.GetValue<string>(); rename["State"]!.GetValue<string>() is "queued" or "running";)
+                    { await Task.Delay(10, deadline.Token); rename = await Call("operation", new() { ["id"] = id }); }
+                    Assert.True(rename["State"]!.GetValue<string>() == "failed", rename.ToJsonString());
+                    Assert.Equal("pending_drafts", rename["result"]!["code"]!.GetValue<string>());
+                    Assert.Equal(0, other.Revision); Assert.False(other.IsDirty); Assert.True((viewport.InspectionContent as SceneInspectionCard)!.HasDraft);
+                }
+                finally { main.ViewModel.CloseResolved(other); }
+            }
             await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray(new string('1', 65), "6", "7") }, "invalid_argument");
             var outOfRange = await Edit("set", new() { ["token"] = token, ["position"] = new JsonArray("2000000000000", "2", "3") });
             token = outOfRange["draft"]!["token"]!.GetValue<string>();

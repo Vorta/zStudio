@@ -25,7 +25,11 @@ internal sealed class AnimationReader : IZbdFormatReader
             // Opening already runs on the background parser. Prepare sparse indices
             // here so selecting a large event never validates its payload on the UI thread.
             foreach (var ev in entry.AllSequences.SelectMany(s => s.Events).Where(e => e.Type == 12))
-                try { _ = ev.Keyframes(token); }
+                try
+                {
+                    if (ev.KeyframePreviewDiagnostic(token) is { } unsupported && ++keyframeFailures <= 256)
+                        doc.Diagnostics.Add(new("Warning", $"Animation {entry.Index}: {unsupported} Source event retained and editable.", entry.Index, ev.SourceOffset));
+                }
                 catch (InvalidDataException ex)
                 {
                     if (++keyframeFailures <= 256) doc.Diagnostics.Add(new("Warning", $"Animation {entry.Index}: {ex.Message} Source event retained; transform preview unavailable.", entry.Index, ev.SourceOffset));
@@ -35,7 +39,7 @@ internal sealed class AnimationReader : IZbdFormatReader
                 entry.SourceOffset, entry.SourceLength, entry.ToPreviewJson(token), entry);
             asset.Summary = $"{entry.Sequences.Count + 1} sequences · {entry.References[1].Count} node references";
         }
-        if (keyframeFailures > 256) doc.Diagnostics.Add(new("Warning", $"{keyframeFailures - 256} additional invalid transform streams omitted; each event retains its inspection diagnostic."));
+        if (keyframeFailures > 256) doc.Diagnostics.Add(new("Warning", $"{keyframeFailures - 256} additional transform-stream diagnostics omitted; each event retains its inspection diagnostic."));
         if (doc.Animations.Tail.Length != 0) doc.Diagnostics.Add(new("Warning", $"{doc.Animations.Tail.Length} trailing animation bytes preserved.", Offset: doc.Bytes.Length - doc.Animations.Tail.Length));
     }
 }

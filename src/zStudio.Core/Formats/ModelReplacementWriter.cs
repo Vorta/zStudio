@@ -39,7 +39,7 @@ public static partial class ModelReplacementWriter
         ValidatePool(source.Slice(layout.MaterialOffset, layout.ModelOffset - layout.MaterialOffset).ToArray(), material, layout.MaterialCapacity);
         if (nextFree >= 0) Put16(materials, 16 + nextFree * 44 + 40, -1);
         if (activeHead >= 0) Put16(materials, 16 + activeHead * 44 + 40, material);
-        materials.AsSpan(slot, 44).Clear(); materials[slot] = 255; materials[slot + 1] = 1;
+        materials.AsSpan(slot, 44).Clear(); materials[slot] = 255; materials[slot + 1] = source.Probe.Version == 27 ? AuthoredTexturedFlags(scene) : (byte)1;
         Put16(materials, slot + 2, 32767);
         for (int i = 4; i <= 12; i += 4) Float(materials, slot + i, 255);
         Put(materials, slot + 16, scene.Textures.Count); Float(materials, slot + 24, .5f); Float(materials, slot + 28, .5f);
@@ -62,7 +62,8 @@ public static partial class ModelReplacementWriter
             }
             if (model.Morphs.Length != 0 || model.Metadata.Int("light_count") != 0) throw new InvalidDataException($"Model {model.Index} has morphs or lights; replacement is not supported.");
             byte[] modelHeader = table.AsSpan(header, dialect.ModelSize).ToArray();
-            dynamics.Write(EncodeMesh(modelHeader, source.Probe.Version, mesh, material, token));
+            var convention = dialect.HasVertexColors ? PolygonConvention.From(source, model, originalAsset.Offset) : default;
+            dynamics.Write(EncodeMesh(modelHeader, source.Probe.Version, mesh, material, convention, token));
             modelHeader.CopyTo(table, header);
         }
         if (replacements.Keys.Any(i => i < 0 || i >= scene.Models.Count)) throw new InvalidDataException("Missing model index.");
@@ -101,6 +102,12 @@ public static partial class ModelReplacementWriter
         }
         return bytes;
     }
+    // Version-27 materials copy the flags of the world's most common authored opaque, textured, non-cycling
+    // material (all six retail MW3 worlds: 0x11; every MW3 material carries 0x10, which version 15 never uses).
+    // This follows authored corpus conventions; MW3 engine semantics remain unverified.
+    private static byte AuthoredTexturedFlags(GameScene scene) => scene.Materials
+        .Where(m => (m.UInt("flags") & 5) == 1 && m.Int("alpha") == 255 && m.Int("texture_index", -1) >= 0 && m.Text("cycle_ptr") == "0x00000000")
+        .GroupBy(m => (byte)m.UInt("flags")).OrderByDescending(g => g.Count()).ThenBy(g => g.Key).Select(g => (byte?)g.Key).FirstOrDefault() ?? 0x11;
     public static void ValidateName(string name)
     {
         if (name.Length is < 1 or > 19 || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_')) throw new InvalidDataException("Texture name must be 1–19 ASCII letters, digits or underscores.");

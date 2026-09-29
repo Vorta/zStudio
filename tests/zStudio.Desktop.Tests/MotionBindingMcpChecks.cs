@@ -67,7 +67,7 @@ internal static class MotionBindingMcpChecks
                 finally { gate.Release(); }
                 await initialize;
                 await editor.SelectAssemblyAsync(Index(added), token);
-                await editor.RefreshLibraryAsync(edits);
+                await editor.RefreshLibraryAsync();
                 Assert.Equal(Index(added), editor.AssemblyMember);
                 await History("undo");
                 editor.Seek(.5); editor.Viewport.RestoreView(new(new(0, 0, 100), new(0, 0, -100), new(0, 1, 0), 45));

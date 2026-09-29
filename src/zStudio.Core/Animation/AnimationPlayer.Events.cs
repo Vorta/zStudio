@@ -238,11 +238,19 @@ public sealed partial class AnimationPlayer
     {
         var node = NodeRef(instance, ev.I32(12)); if (node == null) return 2;
         var frames = ev.PlaybackKeyframes(); if (frames.Count == 0) return 2;
+        // Retail 0x45B120/0x45AE90 advance a sample cursor from the event start. A
+        // sample's local time runs from max(cursor, start); a finished sample leaves
+        // the cursor at its end. Authored reversed spans therefore finish as soon as
+        // they start, and sample end - start (negative) unless a same-channel
+        // successor replaces them.
+        float cursor = 0;
         for (int i = 0; i < frames.Count; i++)
         {
             var frame = frames[i]; if (state.EventElapsed < frame.Start) break;
-            float time = Math.Clamp(state.EventElapsed - frame.Start, 0, Math.Max(0, frame.End - frame.Start));
-            if (state.EventElapsed > frame.End && i + 1 < frames.Count && frames[i + 1].Flags == frame.Flags && state.EventElapsed >= frames[i + 1].Start) continue;
+            float entry = Math.Max(cursor, frame.Start); bool finished = state.EventElapsed > frame.End;
+            float time = finished ? frame.End - entry : state.EventElapsed - entry;
+            if (finished) cursor = frame.End;
+            if (finished && i + 1 < frames.Count && frames[i + 1].Flags == frame.Flags && state.EventElapsed >= frames[i + 1].Start) continue;
             int p = frame.ChannelOffset(0), r = frame.ChannelOffset(1), s = frame.ChannelOffset(2);
             if (p >= 0) Position(node, frame.Vector(p) + frame.Vector(p + 16) * time);
             if (r >= 0)
@@ -253,7 +261,7 @@ public sealed partial class AnimationPlayer
             }
             if (s >= 0) { node.Scale = frame.Vector(s) + frame.Vector(s + 16) * time; node.Changed = true; }
         }
-        return Timed(state, frames[^1].End, ref remaining);
+        return Timed(state, ev.PlaybackEnd, ref remaining);
     }
     private int Procedural(Instance instance, Sequence state, AnimationEvent ev, bool starting, ref float remaining)
     {

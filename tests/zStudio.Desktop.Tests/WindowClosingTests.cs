@@ -50,6 +50,9 @@ public sealed class WindowClosingTests
                     await SceneSelectionMcpChecks.Run();
                     await Mw3MissionMcpChecks.Run();
                     await MissionSelectionChecks.Run();
+                    await MissionSelectionChecks.RunSupersedingRefresh();
+                    await MissionSelectionChecks.RunUnavailableSelection();
+                    await MissionOwnershipChecks.Run();
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();
                     await AiNetworkMcpChecks.Run();
@@ -64,6 +67,7 @@ public sealed class WindowClosingTests
                     await AiValveMcpChecks.Run();
                     await MotionMcpChecks.Run();
                     await MotionBindingMcpChecks.Run();
+                    await MotionLibraryRefreshChecks.Run();
                     await AnimationFogChecks.Run();
                     await ContentEditingMcpChecks.Run();
                     await NavigationMcpChecks.Run();

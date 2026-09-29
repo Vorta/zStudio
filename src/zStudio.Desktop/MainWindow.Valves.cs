@@ -51,10 +51,10 @@ public partial class MainWindow
                 {
                     if (action == "highlight" && !args.ContainsKey("name")) throw new StudioCommandException("invalid_argument", "Specify an exact authored valve name.");
                     if (action == "highlight") SetAiOptions(true, aiThroughGeometry, null);
-                    scene!.SetValveOptions(action == "overlay" ? Flag(args, "visible") : action != "clear", action == "highlight" ? Text(args, "name") : null);
+                    scene!.SetValveOptions(action == "overlay" ? Flag(args, "visible") : action != "clear", action == "highlight" ? Text(args, "name") : action == "overlay" ? scene.ValveFilter : null);
                     ApplyAiOptions();
                 }
-                return Result(new { scene!.ValveOverlayVisible, scene.ValveFilter });
+                return Result(new { scene!.ValveOverlayVisible, ValveFilter = ValveFilterText(), valveFilterCharacters = scene.ValveFilter?.Length ?? 0, valveFilterTruncated = scene.ValveFilter?.Length > 256 });
             }
             var source = graph.ValveSources.SingleOrDefault(s => s.Archive.Equals(Text(args, "archive"), StringComparison.OrdinalIgnoreCase) && s.MemberIndex == Int(args, "memberIndex", -1)) ?? throw new StudioCommandException("stale_record", "Choose an exact mission valve source.");
             if (action is "records" or "references")
@@ -120,6 +120,19 @@ public partial class MainWindow
         var window = await OpenResourcePropertiesAsync(doc, member.Id, target, token, automation, valves: true, valveScope: scope);
         if (window?.ResourceFields is not { ValveMode: true }) throw new StudioCommandException("context_changed", "Valve Properties was superseded.");
         return Result(new { document = doc.SessionId, doc.Revision, member = member.Id, record = target });
+    }
+    /// <summary>Choose the semantic valve editor from the current member structure; names are shared across games.</summary>
+    private bool UsesValveProperties(DocumentModel doc, Guid memberId)
+    {
+        var edits = ResourceSession(doc); var snapshot = edits.Current;
+        for (int i = 0; i < snapshot.Members.Count; i++)
+        {
+            var member = snapshot.Members[i];
+            if (member.Id != memberId) continue;
+            // Classify the current snapshot's already decoded tree; structure, not identity, decides the editor.
+            return MissionAiValves.IsResource(member.Name) && snapshot.Document.Assets[i].Content is ZrdNode root && MissionAiValves.HasSemanticRecords(member.Name, root);
+        }
+        return false;
     }
     private AiValveSource[] CaptureValveScope(DocumentModel doc)
     {

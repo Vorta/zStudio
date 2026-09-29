@@ -1,5 +1,46 @@
 # Desktop implementation status
 
+## PR #14 independent review and fix cycle (2026-09-29)
+
+An independent full-PR review (base a0574b6, head c9e7daa) found 13 confirmed and 4 plausible P2 findings; all are fixed here with regression coverage.
+
+- **RECOIL regressions:**
+  - v28 keyframe streams with authored reversed spans (retail `m3/anim.zbd` `m3pickup` frame 9) are readable, editable and play with the retail sample cursor again. Structural validity no longer depends on span order.
+  - A RECOIL `objectives.zrd` keeps the generic member Properties; the valve editor requires authored valve structure.
+- **MW3 animation:**
+  - Streams with reversed or negative spans stay editable and exportable, with an explicit transform-preview diagnostic.
+  - Ambiguous node names stay unresolved during playback.
+- **MCP:**
+  - Difficulty requests for MW3 previews return `unsupported` before touching the shared preference.
+  - Highlighted valve names are bounded in state results, and `overlay` keeps the current highlight.
+  - Edits to other documents while the shown preview holds a scene-card draft return `pending_drafts` instead of opening a modal prompt.
+  - Valve edit/invoke recheck the revision after the form loads.
+  - Superseded motion assembly requests return `context_changed`.
+- **Motion:**
+  - Accepted edits and saves stay successful when the dependent library becomes unavailable or ambiguous; unreadable archives are skipped and listed.
+  - A binding survives only a proven member identity; a discarded session or replaced file clears it with a notice.
+  - Cleared or filtered Assets selections no longer switch the displayed motion or model preview.
+- **MW3 missions:**
+  - One unreadable archive no longer hides the map, its missions or its animations.
+  - A stale remembered reader falls back visibly (a merely unreadable one keeps its remembered choice), and the picker stays available.
+  - Refreshes capture their mission explicitly.
+  - Coordinate edits claim, publish and check only the readers they changed, so valve editing on other readers remains possible. Same-archive edits by two documents are still rejected.
+  - Closing a document that published nothing no longer expires other previews.
+- **Mesh replacement:** version-27 replacement copies authored polygon priority/field24/zone words and textured material flags; version-15 output is byte-identical.
+- **PR-watch helper:**
+  - Transient state-file contention no longer kills the worker, and status warns about an active watch without a worker.
+  - Review requests and review-bot status posts do not consume the feedback notice.
+  - Rate-limit resets apply only when the limit is exhausted, and every `arm` records exactly the supplied release authorization.
+- **Docs and release notes:** the standing PR authorization text was removed. The unreleased 0.7.0 changelog entries now belong to 0.7.1, the first MW3 release.
+
+Validation:
+- **Release suite:** **613 tests pass** (451 Core, 101 Desktop WPF/named-pipe, 61 watcher), zero failed/skipped, with RECOIL1999 and MW3 corpora enabled. Core also passes 451/451 with RECOIL1998. The Release build has zero warnings/errors.
+- **Discovery:** the MCP catalog was regenerated (82 tools); parity passes.
+- **Portable package:** 587 files, relative apphost binding and ZIP hash parity verified. `tools/publish.ps1` now deletes the superseded portable folder and older ZIPs instead of keeping backups.
+- **Not rerun in this cycle:** the packaged stdio/corpus PreviewCheck modes and GPU harnesses. The Desktop `SceneInspectionInputChecks` text-selection case is sensitive to real keyboard input reaching its focused offscreen window during a run.
+
+MW3 engine semantics for the copied replacement words and reversed v39 spans remain unverified.
+
 ## PR feedback watch and coordinate-path review (2026-09-29)
 
 Added optional local development tooling in `tools/pr-watch.ps1`. It observes a selected PR's conversation comments, published review summaries and inline comments, disarms on the first new feedback batch and queues one follow-up into the owning Codex conversation. Explicit snapshot acknowledgment preserves later arrivals; validated fix pushes re-arm against the remote head. Separate approval monitoring checks a fresh review-bot reaction on the PR description and a completed current-head summary. The helper does not edit, merge or publish; any authorized release still requires the agent's current-head review, CI and repository checks. Durable claims prevent automatic duplicate submissions after crashes or uncertain delivery. See [PR watch setup and recovery](pr-watch.md).

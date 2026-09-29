@@ -70,6 +70,24 @@ internal static class Mw3MissionMcpChecks
             Assert.Equal(names[0].Length, card["Authored name characters"]!.GetValue<int>());
             Assert.True(card.ToJsonString().Length < 10_000);
             Assert.Equal(0, document.Revision); Assert.False(document.IsDirty);
+            // MW3 previews select missions. A difficulty request must fail before changing the shared RECOIL preference.
+            var difficulty = main.ViewModel.Difficulty; string requested = (difficulty == MissionDifficulty.Hard ? MissionDifficulty.Easy : MissionDifficulty.Hard).ToString();
+            var job = await Call("scene_options", new() { ["preview"] = preview, ["changes"] = new JsonObject { ["difficulty"] = requested } });
+            for (string id = job["id"]!.GetValue<string>(); job["State"]!.GetValue<string>() is "queued" or "running";)
+            { await Task.Delay(10, deadline.Token); job = await Call("operation", new() { ["id"] = id }); }
+            Assert.True(job["State"]!.GetValue<string>() == "failed", job.ToJsonString());
+            Assert.Equal("unsupported", job["result"]!["code"]!.GetValue<string>());
+            Assert.Equal(difficulty, main.ViewModel.Difficulty); Assert.Equal(difficulty, main.ViewModel.Settings.Difficulty);
+            // Exact highlighting keeps the full authored valve name; published state carries a bounded label.
+            string valveName = new string('é', 600_000) + "_tail"; viewport.SetValveOptions(true, valveName);
+            try
+            {
+                var ai = (await Call("preview_state", new() { ["preview"] = preview }))["ai"]!;
+                Assert.True(ai["valveFilter"]!.GetValue<string>().Length <= 257);
+                Assert.Equal(valveName.Length, ai["valveFilterCharacters"]!.GetValue<int>()); Assert.True(ai["valveFilterTruncated"]!.GetValue<bool>());
+                Assert.Equal(valveName, viewport.ValveFilter);
+            }
+            finally { viewport.SetValveOptions(false); }
             // Large nested metadata must be bounded for a full page, selection
             // and pinned Properties, before anything is serialized to the pipe.
             foreach (var item in mission.Actors)

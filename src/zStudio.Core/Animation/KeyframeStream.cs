@@ -38,9 +38,11 @@ internal sealed class KeyframeStream : IReadOnlyList<AnimationKeyframe>
     private readonly int channelSize;
     private readonly int[] blocks;
     public int Count { get; }
-    private KeyframeStream(byte[] bytes, int channelSize, int[] blocks, int count)
-    { this.bytes = bytes; this.channelSize = channelSize; this.blocks = blocks; Count = count; }
-    internal KeyframeStream ForSnapshot(byte[] snapshot) => new(snapshot, channelSize, blocks, Count);
+    /// <summary>First reversed or negative-time record, or -1. Its playback meaning depends on the game version.</summary>
+    public int FirstUnordered { get; } = -1;
+    private KeyframeStream(byte[] bytes, int channelSize, int[] blocks, int count, int firstUnordered)
+    { this.bytes = bytes; this.channelSize = channelSize; this.blocks = blocks; Count = count; FirstUnordered = firstUnordered; }
+    internal KeyframeStream ForSnapshot(byte[] snapshot) => new(snapshot, channelSize, blocks, Count, FirstUnordered);
     public KeyframeStream(byte[] bytes, uint version, CancellationToken token)
     {
         this.bytes = bytes; channelSize = version == 39 ? 76 : 28;
@@ -57,6 +59,7 @@ internal sealed class KeyframeStream : IReadOnlyList<AnimationKeyframe>
             catch (InvalidDataException ex) when (expected != null) { throw new InvalidDataException("MW3 keyframe count exceeds the available complete records.", ex); }
             try { AnimationKeyframe.Validate(bytes.AsSpan(offset, length), channelSize); }
             catch (InvalidDataException ex) { throw new InvalidDataException($"Keyframe {count}: {ex.Message}", ex); }
+            if (FirstUnordered < 0 && !AnimationKeyframe.IsOrdered(bytes.AsSpan(offset, length))) FirstUnordered = count;
             offset += length; count++;
         }
         if (offset != bytes.Length) throw new InvalidDataException("MW3 keyframe count does not match the event payload; trailing bytes or records remain.");

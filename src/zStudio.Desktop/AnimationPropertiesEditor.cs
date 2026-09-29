@@ -120,7 +120,11 @@ public sealed partial class AnimationPropertiesEditor : FieldEditor, IDisposable
                     }
                     if (ev.Type == 12 && editable)
                     {
-                        try { Keyframes(Group(panel, "Keyframe segments"), ReadKeyframes()); }
+                        try
+                        {
+                            if (ev.KeyframePreviewDiagnostic() is { } unsupported) Input(panel, "Keyframe diagnostic", unsupported + " Segments remain editable.", _ => { }, readOnly: true);
+                            Keyframes(Group(panel, "Keyframe segments"), ReadKeyframes());
+                        }
                         catch (InvalidDataException ex) { Input(panel, "Keyframe diagnostic", ex.Message + " Keyframe payload remains read-only.", _ => { }, readOnly: true); }
                     }
                 }

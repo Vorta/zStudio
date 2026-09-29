@@ -9,19 +9,19 @@ Run from this checkout in the owning Codex conversation:
 ```powershell
 ./tools/pr-watch.ps1 check -Pr 14
 $head = gh pr view 14 --json headRefOid --jq .headRefOid
-./tools/pr-watch.ps1 arm -Pr 14 -Head $head -ReleaseOnApproval
+./tools/pr-watch.ps1 arm -Pr 14 -Head $head
 ./tools/pr-watch.ps1 status -Pr 14
 ```
 
 The repository comes from this checkout's GitHub origin, and the thread comes from `CODEX_THREAD_ID`. `-Codex`, `-Gh` and `-Thread` can explicitly select the native executables/current thread; shell shims and a thread conflicting with the environment are rejected. Discovery skips missing executable paths, including a stale `CC_PLUGIN_CODEX_EXECUTABLE` value.
 
-`-ReleaseOnApproval` records **existing user authorization** for this selected PR; it does not grant permission on its own. Omit it for a notification-only watch. The current user has authorized PR #14's merge/release/merged-branch cleanup after the review bot's qualifying approval. The helper itself never edits files outside its local state, fixes code, pushes, merges, creates tags, or publishes releases.
+The example is a notification-only watch. Add `-ReleaseOnApproval` to `arm` only when the user has explicitly authorized, in the current conversation, merge/release/merged-branch cleanup of this selected PR after the review bot's qualifying approval. The flag records that authorization; it does not grant permission on its own. Every `arm` records exactly the value supplied, so re-arming without the flag clears a previous authorization. `resume` keeps the recorded value and rejects the flag. The helper itself never edits files outside its local state, fixes code, pushes, merges, creates tags, or publishes releases.
 
 Initial arming baselines comments already present; inspect existing feedback separately. Re-arming retains handled identities. Run `arm` again after each validated successful fix push, using the full remote head SHA. Do this before waiting for CI: feedback can arrive quickly after a push.
 
 ## One notification per feedback batch
 
-The hidden worker polls every 60 seconds. New conversation comments, inline review comments/replies, and nonempty published review summaries from people or bots trigger it. Edits, unpublished drafts, empty review summaries and ordinary reactions do not. All pages are read; excessive responses or incomplete/failed reads produce a diagnostic, never a silently truncated successful observation. Transient failures back off up to ten minutes; GitHub's explicit rate-limit delay takes precedence.
+The hidden worker polls every 60 seconds. New conversation comments, inline review comments/replies, and nonempty published review summaries from people or bots trigger it. Edits, unpublished drafts, empty review summaries and ordinary reactions do not. Informational conversation comments do not trigger or disarm either: a comment consisting only of `@codex review` (review requests from anyone), and the review bot's own summary/status posts (the `codex-pull-request-review-summary` comment and its Codex usage-limit notices). They remain in `read` snapshots, marked `Informational`, and acknowledgment records them as handled. All pages are read; excessive responses or incomplete/failed reads produce a diagnostic, never a silently truncated successful observation. Transient failures back off up to ten minutes; GitHub's `Retry-After`, or the rate-limit reset once the primary limit is exhausted, takes precedence. The reset time GitHub reports on other failures is ignored. State contention is also transient: another process briefly opening `state.json` without delete sharing, or a command holding the state lock, delays that poll and never stops the worker. Missing or invalid state still stops it with a saved diagnostic.
 
 The first detected new comment durably disarms comment notifications before one queue submission. Simultaneous comments share that notice. While disarmed, subsequent comments remain available for reading but generate no extra comment notice. Exact type/record identities distinguish comments, including old draft IDs first becoming public later.
 
@@ -62,7 +62,7 @@ The worker stops when GitHub reports the PR closed/merged. A queued approval doe
 ./tools/pr-watch.ps1 resume -Pr 14
 ```
 
-`status` shows both channels, process identity/liveness, latest successful poll/error and the outstanding/last notice. `stop` durably disables both channels and release authorization before attempting queue cleanup; it works without GitHub access, a Codex executable or a Codex-thread environment. It does not terminate other processes or clear other queued messages. The worker exits after its current bounded request. Use explicit `arm` to restart a stopped watch; `resume` only restarts an active watch whose worker was lost, retaining all history and disarmed state.
+`status` shows both channels, process identity/liveness, latest successful poll/error and the outstanding/last notice. Its `warning` reports an active watch whose worker is not running, which means no notices are being delivered. Notices direct agents to `status` and `read`; inspect state through them rather than opening `state.json` directly. `stop` durably disables both channels and release authorization before attempting queue cleanup; it works without GitHub access, a Codex executable or a Codex-thread environment. It does not terminate other processes or clear other queued messages. The worker exits after its current bounded request. Use explicit `arm` to restart a stopped watch; `resume` only restarts an active watch whose worker was lost, retaining all history and disarmed state.
 
 The worker survives the end of a conversation turn. It uses an immutable local runtime copy so solution builds remain possible. Stop it before changing watcher code; validate the new helper and explicitly arm it afterward. Arming an already running unchanged helper does not create a second worker. Executable paths refreshed during arm/resume are used on subsequent polls/delivery.
 

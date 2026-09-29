@@ -25,7 +25,7 @@ public partial class MainWindow
             if (options.Mission != null && shownDocument != null)
             {
                 ViewModel.Resolver?.SelectMission(shownDocument.Path, options.Mission);
-                WorldMission.SelectedItem = WorldMission.Items.Cast<MissionVariant>().FirstOrDefault(m => m.Archive == options.Mission);
+                WorldMission.SelectedItem = WorldMission.Items.Cast<MissionVariant>().FirstOrDefault(m => m.Archive.Equals(options.Mission, StringComparison.OrdinalIgnoreCase));
             }
         }
         finally { updating = wasUpdating; restoringStaticOptions = false; }
@@ -59,7 +59,9 @@ public partial class MainWindow
         try
         {
             token.ThrowIfCancellationRequested();
-            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, resolver, token: token, difficulty: requested.Difficulty) : null;
+            // The mission is captured with the other options; a concurrent selection cannot change it mid-load.
+            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, resolver, token: token, difficulty: requested.Difficulty,
+                mission: requested.Mission, exactMission: ExactMissionFor(doc.Path, requested.Mission) != null) : null;
             if (mission != null) await doc.GetPickupEditsAsync(resolver, token);
             token.ThrowIfCancellationRequested();
             // Keep all partially built meshes off the displayed viewport. ShowAsync
@@ -106,7 +108,8 @@ public partial class MainWindow
             if (selectedNode is int node) { InspectNode(node); scene.SelectInspectionNode(node); }
             if (aiSelection != null && previous.AiNetworks.Find(aiSelection) is { } oldAi && scene.AiNetworks.Find(aiSelection) is { } newAi &&
                 oldAi.Node.SourceOffset == newAi.Node.SourceOffset) scene.SelectAiNode(aiSelection);
-            publishedStaticOptions = requested; previewId = Guid.NewGuid();
+            publishedStaticOptions = requested with { Mission = mission?.Layout.MissionArchive ?? requested.Mission }; previewId = Guid.NewGuid();
+            if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
             PreviewInfo.Text = scene.PreviewSummary; PreviewInfo.ToolTip = scene.PreviewSummary;
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
             ShowStaticPreviewProblems(doc, asset);

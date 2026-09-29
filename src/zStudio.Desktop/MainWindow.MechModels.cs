@@ -42,7 +42,14 @@ public partial class MainWindow
         body.Children.Add(new TextBlock { Text = "Mesh part" }); body.Children.Add(model);
         var materials = scene.Materials.Select((m, i) => new { Index = i, Label = $"Material {i} · " + (m.Int("texture_index", -1) is >= 0 and int t && t < scene.Textures.Count ? scene.Textures[t].Text("name") : "solid color") }).ToArray();
         ComboBox material = new() { ItemsSource = materials, DisplayMemberPath = "Label", SelectedValuePath = "Index", MaxDropDownHeight = 300, Margin = new(0, 4, 0, 12) };
-        material.SelectedValue = assembly.ModelCount > 0 ? scene.Models[assembly.FirstModel].Polygons.FirstOrDefault()?.MaterialIndex ?? 0 : 0;
+        // Suggest the selected part's current material until the user chooses one explicitly.
+        bool materialChosen = false, suggesting = false;
+        void SuggestMaterial()
+        {
+            if (materialChosen || model.SelectedValue is not int local) return;
+            suggesting = true; material.SelectedValue = scene.Models[assembly.FirstModel + local].Polygons.FirstOrDefault()?.MaterialIndex ?? 0; suggesting = false;
+        }
+        SuggestMaterial(); model.SelectionChanged += (_, _) => SuggestMaterial(); material.SelectionChanged += (_, _) => { if (!suggesting) materialChosen = true; };
         body.Children.Add(new TextBlock { Text = "Shared material" }); body.Children.Add(material);
         var dialog = ResourceDialog("Replace mech part mesh", body); DialogButtons(dialog, body);
         if (dialog.ShowDialog() != true) return;

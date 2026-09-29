@@ -52,7 +52,7 @@ public sealed class GitHubTests
         var state = State(); WatchLogic.Arm(state, baseline, Head, true, Now);
         runner.Reviews = [Review(1)];
         var submitted = await source.ReadAsync("o/r", 14, TestContext.Current.CancellationToken);
-        Assert.NotNull(WatchLogic.Observe(state, submitted, Now, "state"));
+        Assert.NotNull(WatchLogic.Observe(state, submitted, Now));
         Assert.Equal(2, submitted.Comments.Length);
     }
 
@@ -115,16 +115,56 @@ public sealed class GitHubTests
         Assert.Single(runner.Arguments);
     }
 
+    [Fact]
+    public async Task ReviewRequestsAndBotStatusCommentsDoNotConsumeTheFeedbackNotice()
+    {
+        static JsonObject Bot() => User(GitHub.ReviewBot, "Bot"); var runner = new GitHubRunner(); var source = Source(runner);
+        var state = State(); WatchLogic.Arm(state, await source.ReadAsync("o/r", 14, TestContext.Current.CancellationToken), Head, true, Now);
+        runner.Conversation = [Row(10, " @Codex \n review "), Row(11, Summary(), Bot()),
+            Row(12, "You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).", Bot()),
+            Row(13, "The account paying for this security review has reached its Codex usage limits. The payer can check the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).", Bot())];
+        var informational = await source.ReadAsync("o/r", 14, TestContext.Current.CancellationToken);
+        Assert.Equal(4, informational.Comments.Length);
+        Assert.Null(WatchLogic.Observe(state, informational, Now));
+        Assert.True(state.CommentsArmed); Assert.Empty(state.Notices);
+        var review = Review(20); review["user"] = Bot(); runner.Reviews = [review];
+        Assert.Equal(["comments"], WatchLogic.Observe(state, await source.ReadAsync("o/r", 14, TestContext.Current.CancellationToken), Now)!.Reasons);
+    }
+
+    [Theory]
+    [InlineData("@codex review, then also check the save path", "reviewer", "User")]
+    [InlineData("You have reached your Codex usage limits. See https://chatgpt.com/codex/cloud/settings/usage", "reviewer", "User")]
+    [InlineData("Codex found an issue in the save path.", GitHub.ReviewBot, "Bot")]
+    public async Task OtherConversationCommentsStillNotify(string body, string login, string type)
+    {
+        var runner = new GitHubRunner(); var source = Source(runner);
+        var state = State(); WatchLogic.Arm(state, await source.ReadAsync("o/r", 14, TestContext.Current.CancellationToken), Head, true, Now);
+        runner.Conversation = [Row(10, body, User(login, type))];
+        Assert.NotNull(WatchLogic.Observe(state, await source.ReadAsync("o/r", 14, TestContext.Current.CancellationToken), Now));
+    }
+
+    [Fact]
+    public async Task OnlyAnExhaustedPrimaryLimitWaitsForTheRateLimitReset()
+    {
+        long reset = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3000;
+        var transient = new GitHubRunner { Conversation = Enumerable.Range(1, 101).Select(i => Row(i)).ToArray(), Page2Failure = $"HTTP/2.0 502 Bad Gateway\nX-RateLimit-Remaining: 4999\nX-RateLimit-Reset: {reset}\n\n{{}}" };
+        Assert.Null((await Assert.ThrowsAsync<GitHubException>(() => Source(transient).ReadAsync("o/r", 14, TestContext.Current.CancellationToken))).RetryAfter);
+        var limited = new GitHubRunner { Conversation = Enumerable.Range(1, 101).Select(i => Row(i)).ToArray(), Page2Failure = $"HTTP/2.0 403 Forbidden\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: {reset}\n\n{{}}" };
+        var delay = (await Assert.ThrowsAsync<GitHubException>(() => Source(limited).ReadAsync("o/r", 14, TestContext.Current.CancellationToken))).RetryAfter!.Value;
+        Assert.InRange(delay.TotalSeconds, 2980, 3002);
+    }
+
     private static GitHub Source(GitHubRunner runner) => new(runner, "gh.exe", "workspace");
     private sealed class GitHubRunner : ICommandRunner
     {
-        public JsonObject[] Conversation { get; init; } = [];
+        public JsonObject[] Conversation { get; set; } = [];
         public JsonObject[] Reviews { get; set; } = [];
         public JsonObject[] Inline { get; init; } = [];
         public JsonObject[] Reactions { get; init; } = [];
         public bool ChangeHead { get; init; }
         public bool Closed { get; init; }
         public bool FailPage2 { get; init; }
+        public string? Page2Failure { get; init; }
         public int HeadReads;
         public List<IReadOnlyList<string>> Arguments { get; } = [];
         public Task<CommandResult> RunAsync(string executable, IReadOnlyList<string> arguments, string cwd, CancellationToken token)
@@ -137,6 +177,7 @@ public sealed class GitHubTests
             {
                 int page = int.Parse(endpoint[(endpoint.LastIndexOf("page=", StringComparison.Ordinal) + 5)..]);
                 if (FailPage2 && page == 2) return Task.FromResult(new CommandResult(1, "HTTP/2.0 429 Too Many Requests\nRetry-After: 125\n\n{}", "rate limited"));
+                if (Page2Failure != null && page == 2) return Task.FromResult(new CommandResult(1, Page2Failure, "failed"));
                 JsonObject[] rows = endpoint.Contains("/issues/14/comments?", StringComparison.Ordinal) ? Conversation :
                     endpoint.Contains("/reviews?", StringComparison.Ordinal) ? Reviews : endpoint.Contains("/reactions?", StringComparison.Ordinal) ? Reactions : Inline;
                 body = new JsonArray(rows.Skip((page - 1) * 100).Take(100).Select(r => r.DeepClone()).ToArray());

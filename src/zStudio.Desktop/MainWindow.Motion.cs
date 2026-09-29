@@ -23,10 +23,11 @@ public partial class MainWindow
     }
     private void RegisterMotionCommands(StudioCommands registry)
     {
-        Register(registry, "motion_records", "Inspect a version 4 motion clip by stable archive member identity. Omit part for tracks (512-character name preview, nameCharacters/nameTruncated; queries match full names); supply part for paged authored frames including the retained closing sample. JSON export retains complete names.", false,
+        Register(registry, "motion_records", "Inspect a version 4 motion clip by stable archive member identity. Omit part for tracks (512-character name preview, nameCharacters/nameTruncated; queries match full names); supply part for paged authored frames including the retained closing sample (query applies to tracks only). JSON export retains complete names.", false,
             [DocumentParameter, MemberParameter, P("part", "integer", "Optional zero-based part index."), .. PageParameters], a =>
         {
             var doc = TargetDocument(a); var clip = ValidateMotionTarget(doc, GuidArg(a, "member"), a.ContainsKey("part") ? Int(a, "part") : null);
+            if (a.ContainsKey("part") && !string.IsNullOrEmpty(a["query"]?.GetValue<string>())) throw new StudioCommandException("invalid_argument", "Frame pages are positional; omit query when part is supplied.");
             object rows = a.ContainsKey("part") ? Page(clip.Parts[Int(a, "part")].Frames.Select((f, i) => new { index = i, closing = i == clip.FrameCount, seconds = i * (double)clip.LoopTime / clip.FrameCount,
                 translation = new[] { f.Translation.X, f.Translation.Y, f.Translation.Z }, quaternionWxyz = new[] { f.Rotation.W, f.Rotation.X, f.Rotation.Y, f.Rotation.Z } }), a).Data :
                 Page(clip.Parts.Select((p, i) => (Part: p, Index: i)), a, row => row.Part.Name,
@@ -63,7 +64,11 @@ public partial class MainWindow
                 case "play": editor.Play(); break;
                 case "pause": editor.Pause(); break;
                 case "seek": editor.Seek(a["seconds"]?.GetValue<double>() ?? throw new StudioCommandException("invalid_argument", "Specify seconds.")); break;
-                case "assembly": await editor.SelectAssemblyAsync(Int(a, "memberIndex", -1), token); break;
+                case "assembly":
+                    int requestedMember = Int(a, "memberIndex", -1); await editor.SelectAssemblyAsync(requestedMember, token);
+                    // A superseded load returns without publishing; never report another request's binding as this one.
+                    if (motion != editor || editor.AssemblyMember != requestedMember) throw new StudioCommandException("context_changed", "The assembly request was superseded. Read motion_preview state before retrying.");
+                    break;
                 case "lod": editor.SetLod(Int(a, "lod", -1)); break;
                 case "frame": editor.Viewport.FrameAll(); break;
             }

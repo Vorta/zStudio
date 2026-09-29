@@ -11,7 +11,7 @@ public sealed class ProcessTests
         using var fixture = new WatcherTests.Fixture();
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "zStudio.slnx"), "test workspace", TestContext.Current.CancellationToken);
         var state = fixture.NewState(); state.ReleaseAuthorized = true;
-        WatchLogic.Observe(state, WatcherTests.Observe(WatcherTests.Comment(1)), WatcherTests.Now, fixture.Store.StatePath);
+        WatchLogic.Observe(state, WatcherTests.Observe(WatcherTests.Comment(1)), WatcherTests.Now);
         fixture.Store.Save(state);
         int exit = await Program.Main(["stop", "--workspace", fixture.Root, "--pr", "14", "--codex", Path.Combine(fixture.Root, "missing.exe")]);
         Assert.Equal(0, exit); var saved = fixture.Store.Load()!;

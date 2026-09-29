@@ -5,50 +5,84 @@ using Recoil.Zbd.Core.Formats;
 namespace Recoil.Zbd.Core;
 
 public sealed record MissionVariant(string Archive, string Label);
+/// <summary>Authored mission readers plus per-file discovery failures; one unreadable archive never hides the others.</summary>
+public sealed record Mw3MissionCatalog(IReadOnlyList<MissionVariant> Missions, IReadOnlyList<string> Diagnostics)
+{
+    /// <summary>Readers that could not be opened; their authored content is unknown, not absent.</summary>
+    public IReadOnlySet<string> Unreadable { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+}
 
 public static partial class MissionSceneLoader
 {
+    internal sealed record Mw3Resources(string? Mission, string[] Files, string? Unavailable, IReadOnlyList<string> Diagnostics, bool Unreadable = false);
+    // Discovery, loading and valve scopes share one definition of a mission reader.
+    private static bool IsMissionAiv(AssetRecord asset) => asset.Kind == AssetKind.Zrd && asset.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase);
     public static async Task<IReadOnlyList<MissionVariant>> Mw3MissionsAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
+        => (await Mw3MissionCatalogAsync(worldPath, resolver, token).ConfigureAwait(false)).Missions;
+    public static async Task<Mw3MissionCatalog> Mw3MissionCatalogAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
     {
-        List<MissionVariant> result = [];
-        foreach (string path in Directory.EnumerateFiles(Path.GetDirectoryName(worldPath)!, "*.zbd").Order(StringComparer.OrdinalIgnoreCase))
+        List<MissionVariant> result = []; PreviewNotes diagnostics = new(); HashSet<string> unreadable = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in Directory.EnumerateFiles(Path.GetDirectoryName(Path.GetFullPath(worldPath))!, "*.zbd").Order(StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
-            if (FormatRegistry.Probe(path).Family != FormatFamily.Archive) continue;
-            var doc = await resolver.OpenCachedAsync(path, token).ConfigureAwait(false);
-            if (doc.Assets.Any(a => a.Kind == AssetKind.Zrd && a.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase)))
+            try
             {
+                if (FormatRegistry.Probe(path).Family != FormatFamily.Archive) continue;
+                var doc = await resolver.OpenCachedAsync(path, token).ConfigureAwait(false);
+                if (!doc.Assets.Any(IsMissionAiv)) continue;
                 string name = Path.GetFileNameWithoutExtension(path);
                 string label = name.StartsWith("readermp", StringComparison.OrdinalIgnoreCase) ? "Multiplayer " + name[8..] :
                     name.StartsWith("readeria", StringComparison.OrdinalIgnoreCase) ? "Instant action " + name[8..] :
                     name.StartsWith("readerm", StringComparison.OrdinalIgnoreCase) ? "Campaign " + name[7..] : name;
-                result.Add(new(path, label));
+                result.Add(new(Path.GetFullPath(path), label));
             }
+            // Match the RECOIL loader: report the file and keep every other reader available.
+            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+            { diagnostics.Add($"Mission reader {Path.GetFileName(path)}: {ex.Message}"); unreadable.Add(Path.GetFullPath(path)); }
         }
-        return result.OrderBy(m => m.Label.StartsWith("Campaign", StringComparison.Ordinal) ? 0 : 1).ThenBy(m => m.Archive, StringComparer.OrdinalIgnoreCase).ToArray();
+        return new(result.OrderBy(m => m.Label.StartsWith("Campaign", StringComparison.Ordinal) ? 0 : 1).ThenBy(m => m.Archive, StringComparer.OrdinalIgnoreCase).ToArray(), diagnostics) { Unreadable = unreadable };
     }
-    internal static async Task<string[]> Mw3ResourceFilesAsync(string worldPath, AssetResolver resolver, CancellationToken token, string? missionArchive = null)
+    /// <summary>
+    /// Resolve the requested reader once. A remembered selection that no longer qualifies falls
+    /// back to the first reader with a diagnostic; an exact request fails instead of loading another.
+    /// </summary>
+    internal static async Task<Mw3Resources> Mw3ResourcesAsync(string worldPath, AssetResolver resolver, string? requested, bool exact, CancellationToken token)
     {
-        var choices = await Mw3MissionsAsync(worldPath, resolver, token).ConfigureAwait(false);
-        string? selected = missionArchive ?? resolver.SelectedMission(worldPath);
-        if (selected != null && !choices.Any(c => c.Archive.Equals(selected, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidDataException("The selected mission reader is no longer available. Choose another mission.");
+        var catalog = await Mw3MissionCatalogAsync(worldPath, resolver, token).ConfigureAwait(false);
+        var choices = catalog.Missions; string? unavailable = null; bool unreadable = false;
+        string? selected = requested == null ? null : choices.FirstOrDefault(c => c.Archive.Equals(Path.GetFullPath(requested), StringComparison.OrdinalIgnoreCase))?.Archive;
+        if (requested != null && selected == null)
+        {
+            if (exact) throw new InvalidDataException($"The mission reader {Path.GetFileName(requested)} is no longer available. Choose another mission.");
+            unavailable = Path.GetFullPath(requested); unreadable = catalog.Unreadable.Contains(unavailable);
+        }
         selected ??= choices.FirstOrDefault()?.Archive;
-        if (selected != null && missionArchive == null) resolver.SelectMission(worldPath, selected);
         var missionFiles = choices.Select(c => c.Archive).ToHashSet(StringComparer.OrdinalIgnoreCase);
         // Only the chosen mission contributes its resources; shared map/root archives follow it.
-        return (selected == null ? Array.Empty<string>() : [selected]).Concat(ResourceFiles(worldPath, resolver).Where(p => !missionFiles.Contains(p))).ToArray();
+        // Unreadable readers are neither the chosen mission nor shared resources; the catalog already reports them.
+        string[] files = (selected == null ? Array.Empty<string>() : [selected]).Concat(ResourceFiles(worldPath, resolver).Where(p => !missionFiles.Contains(Path.GetFullPath(p)) && !catalog.Unreadable.Contains(Path.GetFullPath(p)))).ToArray();
+        return new(selected, files, unavailable, catalog.Diagnostics, unreadable);
     }
-    private static async Task<MissionSceneContext> LoadMw3Async(ZbdDocument world, AssetResolver resolver, CancellationToken token)
+    private static async Task<MissionSceneContext> LoadMw3Async(ZbdDocument world, AssetResolver resolver, string? requested, bool exact, CancellationToken token)
     {
-        var paths = await Mw3ResourceFilesAsync(world.Path, resolver, token).ConfigureAwait(false);
+        var resources = await Mw3ResourcesAsync(world.Path, resolver, requested, exact, token).ConfigureAwait(false);
+        // Adopt a default or fallback only if no newer selection arrived while loading. A remembered reader that
+        // merely failed to open keeps its selection, so a later refresh can recover once it is readable again.
+        if (resources.Mission != null && !resources.Unreadable && !string.Equals(resources.Mission, requested, StringComparison.OrdinalIgnoreCase)) resolver.TrySelectMission(world.Path, resources.Mission, requested);
+        var paths = resources.Files;
+        PreviewNotes loadNotes = new(); loadNotes.AddRange(resources.Diagnostics);
+        if (resources.Unavailable != null)
+            loadNotes.Add($"The remembered mission reader {Path.GetFileName(resources.Unavailable)} {(resources.Unreadable ? "could not be read" : "is no longer available")}; showing {(resources.Mission == null ? "stored world geometry" : Path.GetFileName(resources.Mission))}.");
         List<ZbdDocument> archives = [];
         foreach (string path in paths)
-            if (FormatRegistry.Probe(path).Family == FormatFamily.Archive) archives.Add(await resolver.OpenCachedAsync(path, token).ConfigureAwait(false));
+            try { if (FormatRegistry.Probe(path).Family == FormatFamily.Archive) archives.Add(await resolver.OpenCachedAsync(path, token).ConfigureAwait(false)); }
+            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+            { loadNotes.Add($"Mission resource {Path.GetFileName(path)}: {ex.Message}"); }
         // The dependency list freezes the mission before any archive loads await.
-        var selected = archives.FirstOrDefault(a => a.Path.Equals(paths.FirstOrDefault(), StringComparison.OrdinalIgnoreCase) && a.Assets.Any(v => v.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase)));
-        string? chosen = selected?.Path;
-        var aivs = selected?.Assets.Where(a => a.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
+        var selected = archives.FirstOrDefault(a => resources.Mission != null && a.Path.Equals(resources.Mission, StringComparison.OrdinalIgnoreCase) && a.Assets.Any(IsMissionAiv));
+        // Report the resolved reader even if it failed to open, so the pickers can offer another.
+        string? chosen = resources.Mission;
+        var aivs = selected?.Assets.Where(IsMissionAiv).ToArray() ?? [];
         if (aivs.Length > 1) throw new InvalidDataException("The mission contains multiple AIV records; choose a unique resource before previewing actors.");
         var aiv = aivs.SingleOrDefault();
         var libraries = archives.Where(d => d.Game == GameVariant.MechWarrior3 && d.Scene != null).ToArray();
@@ -64,6 +98,7 @@ public static partial class MissionSceneLoader
             }
             List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; PreviewNotes notes = new();
             notes.Add("MW3 authored layout preview. Mission scripts, AI activation, combat and inventory are not simulated.");
+            notes.AddRange(loadNotes);
             int worldRoot = scene.Nodes.FirstOrDefault(n => n.Class == "world")?.Index ?? -1;
             Dictionary<string, List<GameNode>> worldActors = new(StringComparer.Ordinal);
             foreach (var node in original.Nodes)
@@ -87,7 +122,7 @@ public static partial class MissionSceneLoader
                     if (!mechTemplates.TryGetValue(type, out var assemblies)) mechTemplates[type] = assemblies = [];
                     assemblies.Add(assembly);
                 }
-            var layout = new MissionLayoutSelection(MissionDifficulty.Medium, "aiv.zrd", "vehicle.zrd", "") { MissionArchive = chosen };
+            var layout = new MissionLayoutSelection(MissionDifficulty.Medium, "aiv.zrd", "vehicle.zrd", "") { MissionArchive = chosen, UnavailableMission = resources.Unreadable ? null : resources.Unavailable };
             int modelBase = scene.Models.Count;
             if (library?.Scene is { } mechs)
             {

@@ -106,7 +106,8 @@ public sealed partial class PickupPlacementEditSession
 
     public IEnumerable<ZbdDocument> WorkingArchives(CancellationToken token = default)
     {
-        foreach (var (path, archive) in archives)
+        // Publish only owned archives; unedited readers remain served by their own documents or files.
+        foreach (var (path, archive) in archives.Where(a => touched.Contains(a.Key)).ToArray())
             yield return FormatRegistry.Default.OpenBytes(archive.Original.Path, EncodeArchive(path), archive.Original.Stamp, token);
     }
 

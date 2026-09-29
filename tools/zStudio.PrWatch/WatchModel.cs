@@ -1,6 +1,8 @@
 namespace Recoil.Zbd.PrWatch;
 
-public sealed record Feedback(string Key, string Url, string Author, string Body, DateTimeOffset Published);
+// Informational comments (review requests, the review bot's status/summary posts) stay in snapshots and
+// acknowledgment accounting but never consume the one-shot feedback notice.
+public sealed record Feedback(string Key, string Url, string Author, string Body, DateTimeOffset Published, bool Informational = false);
 public sealed record Approval(string Head, long ReactionId, DateTimeOffset Created, string SummaryUrl);
 public sealed record Observation(string Head, bool Open, Feedback[] Comments, Approval? Approval);
 public sealed record ReadSnapshot(Guid Id, Guid Watch, Guid? Notice, DateTimeOffset Created, Observation Observation);
@@ -53,7 +55,7 @@ public sealed class WatchState
 
 public static class WatchLogic
 {
-    public static Notice? Observe(WatchState state, Observation observation, DateTimeOffset now, string statePath)
+    public static Notice? Observe(WatchState state, Observation observation, DateTimeOffset now)
     {
         state.LastSuccess = now; state.LastError = null; state.FailureCount = 0;
         state.ObservedHead = observation.Head;
@@ -63,7 +65,7 @@ public static class WatchLogic
             state.Active = state.CommentsArmed = state.ApprovalEnabled = false;
             return null;
         }
-        bool feedback = state.CommentsArmed && observation.Comments.Any(c => !state.Handled.Contains(c.Key));
+        bool feedback = state.CommentsArmed && observation.Comments.Any(c => !c.Informational && !state.Handled.Contains(c.Key));
         bool approval = state.ApprovalEnabled && observation.Head == state.ExpectedHead && observation.Approval?.Head == observation.Head
             && !state.ApprovalNotifiedHeads.Contains(observation.Head);
         if (state.Outstanding != null || (!feedback && !approval)) return null;
@@ -76,13 +78,13 @@ public static class WatchLogic
             Reasons = feedback ? approval ? ["comments", "approval"] : ["comments"] : ["approval"]
         };
         notice.Message = $"zStudio PR watch notice {notice.Id:D}: {state.Repository}#{state.Pr}, {string.Join(" and ", notice.Reasons)}. " +
-            $"Inspect {statePath}. Run tools/pr-watch.ps1 status and read for PR {state.Pr}; follow AGENTS.md PR watch handling. " +
+            $"Run tools/pr-watch.ps1 status -Pr {state.Pr}, then read; follow AGENTS.md PR watch handling. " +
             "Skip acknowledged/stopped notices. Honor newer stop/pause/scope instructions. This notice is not proof of approval, CI, or release readiness.";
         state.Notices.Add(notice);
         return notice;
     }
 
-    public static void Arm(WatchState state, Observation observation, string expectedHead, bool first, DateTimeOffset now)
+    public static void Arm(WatchState state, Observation observation, string expectedHead, bool first, DateTimeOffset now, bool releaseAuthorized = false)
     {
         if (!observation.Open) throw new InvalidOperationException("The selected PR is closed.");
         if (observation.Head != expectedHead) throw new InvalidOperationException("Remote PR head differs from --head. Read it again before arming.");
@@ -90,6 +92,8 @@ public static class WatchLogic
         if (first) state.Handled.UnionWith(observation.Comments.Select(c => c.Key));
         state.ExpectedHead = expectedHead; state.Generation++;
         state.Active = state.CommentsArmed = state.ApprovalEnabled = true;
+        // Each arm records exactly the authorization supplied for it; a later arm never inherits a prior grant.
+        state.ReleaseAuthorized = releaseAuthorized;
         state.LastSuccess = now; state.LastError = null;
         // Never add newly observed comments to Handled on a re-arm.
     }
@@ -102,6 +106,14 @@ public static class WatchLogic
             throw new InvalidOperationException("Read a fresh snapshot for this watch and notice before acknowledging.");
         state.Handled.UnionWith(snapshot.Observation.Comments.Select(c => c.Key));
         notice.Acknowledged = now;
+    }
+
+    public static string? StatusWarning(WatchState state, bool workerAlive)
+    {
+        List<string> warnings = [];
+        if (state.Active && !workerAlive) warnings.Add("The watch is active but its worker is not running, so no notices are delivered. Check LastError and worker-error.json, then resume in the owning conversation or arm explicitly.");
+        if (state.ObservedHead != null && state.ObservedHead != state.ExpectedHead) warnings.Add("Remote head changed; approval is suspended until explicitly re-armed.");
+        return warnings.Count == 0 ? null : string.Join(" ", warnings);
     }
 
     public static TimeSpan RetryDelay(int failures, TimeSpan? requested = null) =>

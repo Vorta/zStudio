@@ -9,6 +9,8 @@ public sealed class WatchStore
     public string Workspace { get; }
     public string Folder { get; }
     public string StatePath => Path.Combine(Folder, "state.json");
+    /// <summary>Bound for retrying atomic replacement while another process holds a record without delete sharing.</summary>
+    public TimeSpan ReplaceTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public WatchStore(string workspace, int pr)
     {
         if (pr <= 0) throw new ArgumentOutOfRangeException(nameof(pr));
@@ -86,7 +88,15 @@ public sealed class WatchStore
                 if (stream.Length > 64 * 1024 * 1024) throw new InvalidDataException("Watcher record exceeds 64 MiB; previous record retained.");
                 stream.Flush(true);
             }
-            File.Move(temporary, path, true);
+            // Editors, scanners and Get-Content can briefly open the record without delete sharing.
+            // Retry the atomic replacement; the previous complete record stays readable meanwhile.
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            for (int attempt = 0; ; attempt++)
+            {
+                try { File.Move(temporary, path, true); break; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && System.Diagnostics.Stopwatch.GetElapsedTime(started) < ReplaceTimeout)
+                { Thread.Sleep(Math.Min(250, 10 << Math.Min(attempt, 5))); }
+            }
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }

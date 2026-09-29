@@ -81,13 +81,17 @@ public sealed partial class AnimationPreviewContext
         var context = new AnimationPreviewContext { Package = package, World = world };
         context.Mission = await MissionSceneLoader.LoadAsync(world, resolver, package, token, difficulty).ConfigureAwait(false);
         context.Diagnostics.AddRange(context.Mission.Diagnostics);
-        var files = world.Game == GameVariant.MechWarrior3 ? await MissionSceneLoader.Mw3ResourceFilesAsync(world.Path, resolver, token, context.Mission.Layout.MissionArchive).ConfigureAwait(false) :
+        // The loaded mission is exact here: another reader must not silently supply its resources.
+        var files = world.Game == GameVariant.MechWarrior3 ? (await MissionSceneLoader.Mw3ResourcesAsync(world.Path, resolver, context.Mission.Layout.MissionArchive, true, token).ConfigureAwait(false)).Files :
             resolver.ResourceDirectories(world.Path).SelectMany(d => Directory.EnumerateFiles(d,"*.zbd")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         List<(string Name, string File, bool Loop)> aliases = []; List<ZbdDocument> soundArchives = [];
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested(); if (FormatRegistry.Probe(file).Family != FormatFamily.Archive) continue;
-            var archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
+            ZbdDocument archive;
+            try { archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+            { context.Diagnostics.Add($"Animation resources {Path.GetFileName(file)}: {ex.Message}"); continue; }
             if (archive.Assets.Any(a => a.Kind == AssetKind.Sound)) soundArchives.Add(archive);
             foreach (var asset in archive.Assets.Where(a => a.Kind == AssetKind.Zrd && (a.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase) || a.Name.Equals("sounds.zrd", StringComparison.OrdinalIgnoreCase))))
             {
@@ -197,6 +201,14 @@ public sealed partial class AnimationPreviewContext
         return found >= 0 ? found : Scene.Nodes.FirstOrDefault(n => n.Name == name)?.Index ?? -1;
     }
     public int FindBelow(int root, string name) => Descendants(root).FirstOrDefault(i => Scene.Nodes[i].Name == name, -1);
+    /// <summary>Name lookup below an instance root: RECOIL keeps its loader's first match; MW3 names must be unique there.</summary>
+    public int FindNamedBelow(int root, string name)
+    {
+        if (World.Game != GameVariant.MechWarrior3) return FindBelow(root, name);
+        int found = -1;
+        foreach (int i in Descendants(root)) if (Scene.Nodes[i].Name == name) { if (found >= 0) return -1; found = i; }
+        return found;
+    }
     public IEnumerable<int> Descendants(int root)
     {
         HashSet<int> visited = []; Stack<int> pending = new(); pending.Push(root);

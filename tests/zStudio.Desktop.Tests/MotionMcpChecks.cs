@@ -290,7 +290,9 @@ internal static class MotionMcpChecks
             {
                 await File.WriteAllBytesAsync(libraryPath, MotionFixture.Library(textured: true), token);
                 await File.WriteAllBytesAsync(Path.Combine(folder, "image.zbd"), Recoil.Zbd.Tests.ContentFixture.Texture(2, 2, false), token);
-                var resolver = main.ViewModel.Resolver!; await resolver.InvalidateAsync([libraryPath], token); await editor.RefreshLibraryAsync(null);
+                var resolver = main.ViewModel.Resolver!; await resolver.InvalidateAsync([libraryPath], token); await editor.RefreshLibraryAsync();
+                // A replaced file cannot prove member identity; the binding is cleared rather than reused by index.
+                Assert.Null(editor.AssemblyMember); await editor.SelectAssemblyAsync(3, token);
                 await CheckBindingSupersession();
                 var gate = (SemaphoreSlim)typeof(AssetResolver).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(resolver)!;
                 foreach (string action in new[] { "keep", "pause", "play", "cancel" })

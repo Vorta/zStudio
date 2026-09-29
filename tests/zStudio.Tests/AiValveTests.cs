@@ -152,6 +152,29 @@ public sealed class AiValveTests
         Assert.Equal(original, Write(root));
         Assert.Equal(2, Records("valves.zrd", Edit("valves.zrd", root, new("add_record", Value: "new", Kind: "sound"))).Count());
     }
+    [Fact]
+    public async Task SemanticValvePropertiesRequireAuthoredValveStructureNotOnlyTheSharedName()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var recoil = A(S("objective"), A(S("text"), S("Destroy the base"), S("kill"), A(S("target"), I(1))));
+        var mw3 = A(S("objective"), A(S("text"), S("Open the gate"), S("valve_change"), A(S("gate"), I(1))));
+        Assert.False(MissionAiValves.HasSemanticRecords("objectives.zrd", recoil, token));
+        Assert.True(MissionAiValves.HasSemanticRecords("objectives.zrd", mw3, token));
+        Assert.True(MissionAiValves.HasSemanticRecords("valves.zrd", A(S("go"), A(S("shutdown"), A(S("actor"), I(0), I(1)))), token));
+        Assert.False(MissionAiValves.HasSemanticRecords("valves.zrd", A(), token));
+        Assert.True(MissionAiValves.HasSemanticRecords("net_01.zrd", A(S("version"), A(I(106))), token));
+        Assert.False(MissionAiValves.HasSemanticRecords("net_01.zrd", A(S("version"), A(I(105))), token));
+        Assert.False(MissionAiValves.HasSemanticRecords("sounds.zrd", mw3, token));
+        string? corpus = Environment.GetEnvironmentVariable("ZSTUDIO_CORPUS"); if (string.IsNullOrEmpty(corpus)) return;
+        int objectives = 0;
+        foreach (string file in Directory.EnumerateFiles(corpus, "zrdr.zbd", SearchOption.AllDirectories))
+        {
+            var archive = await FormatRegistry.Default.OpenAsync(file, token);
+            foreach (var asset in archive.Assets.Where(a => MissionAiValves.IsResource(a.Name) && a.Content is ZrdNode))
+            { objectives += asset.Name == "objectives.zrd" ? 1 : 0; Assert.False(MissionAiValves.HasSemanticRecords(asset.Name, (ZrdNode)asset.Content!, token), file + " " + asset.Name); }
+        }
+        Assert.True(objectives > 0);
+    }
     private static IEnumerable<AiValveRecord> Records(string name, ZrdNode root) => MissionAiValves.Records(name, root, TestContext.Current.CancellationToken);
     private static IEnumerable<AiValveReference> References(AiValveRecord record) => MissionAiValves.References(record, TestContext.Current.CancellationToken);
     private static byte[] Write(ZrdNode root) => ZrdWriter.Write(root, TestContext.Current.CancellationToken);

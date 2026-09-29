@@ -16,6 +16,7 @@ public sealed partial class ResourcePropertiesEditor
     private readonly Func<ValveReferenceTarget, Task>? valveNavigate;
     private readonly Action<string, bool>? valveHighlight;
     public bool ValveMode { get; }
+    private static string Offset(long offset) => offset >= 0 ? $"@{offset:X}" : "(new)";
     internal Task ValveWork { get; private set; } = Task.CompletedTask;
     private Guid? valveRecord;
     private string valveQuery = "", newValveName = "new_valve", newValveKind = "delayupdate", appendValveKind = "delayupdate";
@@ -23,7 +24,7 @@ public sealed partial class ResourcePropertiesEditor
     private long valveGeneration;
     private string? valveForm;
     private sealed record ValveChoice(AiValveRecord Record)
-    { public override string ToString() => $"{MissionAiValves.Short(Record.Name, 80)} · {Record.Kind}" + (Record.NodeIndex is int n ? $" · node_{n:00}" : Record.From is int f ? $" · {f} → {Record.To}" : "") + $" · @{Record.SourceOffset:X}"; }
+    { public override string ToString() => $"{MissionAiValves.Short(Record.Name, 80)} · {Record.Kind}" + (Record.NodeIndex is int n ? $" · node_{n:00}" : Record.From is int f ? $" · {f} → {Record.To}" : "") + (Record.SourceOffset >= 0 ? $" · @{Record.SourceOffset:X}" : " · new"); }
     private void RefreshValves()
     {
         var snapshot = document.ResourceEdits!.Current;
@@ -86,8 +87,8 @@ public sealed partial class ResourcePropertiesEditor
             {
                 foreach (var target in result.targets.Take(16))
                 {
-                    AsyncButton(panel, $"Add valve to {MissionAiValves.Short(target.Name, 32)} @{target.SourceOffset:X}", () => Apply(new("add_binding", Operand: target.Id, Kind: target.Spatial ? "valve" : "valve_assign")));
-                    if (target.Spatial) AsyncButton(panel, $"Add union to {MissionAiValves.Short(target.Name, 32)} @{target.SourceOffset:X}", () => Apply(new("add_binding", Operand: target.Id, Kind: "valveunion")));
+                    AsyncButton(panel, $"Add valve to {MissionAiValves.Short(target.Name, 32)} {Offset(target.SourceOffset)}", () => Apply(new("add_binding", Operand: target.Id, Kind: target.Spatial ? "valve" : "valve_assign")));
+                    if (target.Spatial) AsyncButton(panel, $"Add union to {MissionAiValves.Short(target.Name, 32)} {Offset(target.SourceOffset)}", () => Apply(new("add_binding", Operand: target.Id, Kind: "valveunion")));
                 }
                 if (targetOffset > 0) AsyncButton(panel, "Previous binding targets", () => { targetOffset = Math.Max(0, targetOffset - 16); valveForm = null; return Task.CompletedTask; });
                 if (result.targets.Length > 16) AsyncButton(panel, "Next binding targets", () => { targetOffset += 16; valveForm = null; return Task.CompletedTask; });

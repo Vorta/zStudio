@@ -110,7 +110,7 @@ public partial class MainWindow
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
             RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             TargetViewport(a); var doc = shownDocument!; var asset = shownAsset!;
@@ -129,6 +129,9 @@ public partial class MainWindow
             }
             if (changes.ContainsKey("highlight") && asset.Kind != AssetKind.World)
                 throw new StudioCommandException("unsupported", "Surface highlighting is available only in Whole world.");
+            // MW3 previews select an authored mission; the shared RECOIL difficulty preference does not apply.
+            if (changes.ContainsKey("difficulty") && (doc.PreviewDocument.Game == GameVariant.MechWarrior3 || scene?.Mission?.Layout.MissionArchive != null))
+                throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
             // Schema validation covers types/enums. Validate current-view constraints
             // for the entire batch before any control, preference or renderer changes.
             int? requestedLod = changes.ContainsKey("lod") ? Int(changes, "lod") : null;
@@ -197,10 +200,13 @@ public partial class MainWindow
             if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
             return Result(new { preview = previewId, ViewModel.Status });
         });
-        RegisterJob(r, "animation_options", "Set animation options: map/grid/collision/horizon/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty, speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>
+        RegisterJob(r, "animation_options", "Set animation options: map/grid/collision/horizon/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>
         {
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
-            foreach(var (name,value) in (JsonObject)a["changes"]!) { RequirePreview(a); await editor.SetPreviewOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument","Use an explicit value.")); }
+            var animationChanges = (JsonObject)a["changes"]!;
+            if (animationChanges.ContainsKey("difficulty") && !animationChanges.ContainsKey("worldPath") && editor.Mw3WorldPath != null)
+                throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
+            foreach(var (name,value) in animationChanges) { RequirePreview(a); await editor.SetPreviewOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument","Use an explicit value.")); }
             return Result(editor.PreviewState());
         });
         RegisterJob(r, "animation_transport", "Play/pause/stop, frame-step or seek the current animation.", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","previous","next","seek"),P("seconds","number","Seek time in seconds.")], false, async (a, _) =>

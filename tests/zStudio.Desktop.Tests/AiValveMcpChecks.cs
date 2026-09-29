@@ -97,6 +97,22 @@ internal static class AiValveMcpChecks
             var reopened = await FormatRegistry.Default.OpenAsync(saved, token);
             Assert.Equal(new byte[] { 9, 3, 7 }, reopened.Slice(reopened.Assets[3].Offset, reopened.Assets[3].Length).ToArray());
             Assert.Equal(41, MissionAiValves.Records("net_01.zrd", (ZrdNode)reopened.Assets[1].Content!, token).Count());
+            // Asset Properties picks the semantic valve editor from authored valve structure, not a shared member name.
+            await Call("properties_open", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = "Zrd", ["index"] = 2 });
+            Assert.True(main.OpenPropertiesWindow!.ResourceFields!.ValveMode);
+            var recoilObjectives = A(S("objective"), A(S("text"), S("Destroy the base"), S("kill"), A(S("target"), I(1))));
+            using (var recoil = new DocumentModel(FormatRegistry.Default.OpenBytes(Path.Combine(folder, "zrdr.zbd"), MotionFixture.Archive(("objectives.zrd", ZrdWriter.Write(recoilObjectives, token))), token: token)))
+            {
+                main.ViewModel.Documents.Add(recoil);
+                try
+                {
+                    await Call("properties_open", new() { ["document"] = recoil.SessionId.ToString(), ["kind"] = "Zrd", ["index"] = 0 });
+                    var generic = main.OpenPropertiesWindow!.ResourceFields!; Assert.False(generic.ValveMode);
+                    var described = System.Text.Json.JsonSerializer.SerializeToNode(generic.DescribeAutomationFields())!;
+                    Assert.Contains(described["fields"]!.AsArray(), f => f!["Label"]!.GetValue<string>() == "Name");
+                }
+                finally { main.ViewModel.CloseResolved(recoil); }
+            }
             await Call("close_document", Args()); Assert.Null(main.OpenPropertiesWindow);
 
             async Task Until(Func<bool> ready) { while (!ready()) await Task.Delay(10, token); }

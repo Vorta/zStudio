@@ -22,6 +22,8 @@ public sealed partial class PickupPlacementEditSession
         public byte[] SavedBytes { get; set; } = document.Bytes.ToArray();
         public FileStamp Stamp { get; set; } = document.Stamp;
         public FileStamp SourceStamp { get; set; } = document.Stamp;
+        // A working copy published by another document; its file stamp does not describe its bytes.
+        public bool FromSnapshot { get; set; }
     }
     private sealed record Entry(PickupPlacementRecord Record, int[] Offsets, int[] RotationOffsets);
     // All mission coordinates share these archive baselines and one save transaction.
@@ -36,10 +38,14 @@ public sealed partial class PickupPlacementEditSession
     private readonly Stack<Move> undo = [], redo = [];
     private readonly PreviewNotes diagnostics = new();
     private readonly Dictionary<ZbdDocument, HashSet<AssetRecord>> overlappingMembers = [];
+    // Archives changed by accepted history or saved copies. Only these are owned, published and
+    // checked for external changes; other readers stay free for independent resource documents.
+    private readonly HashSet<string> touched = new(StringComparer.OrdinalIgnoreCase);
     private bool saving;
     public event Action? Changed;
     public event Action? EditAccepted;
-    public event Action? BeforeEdit;
+    /// <summary>Raised with the source paths an accepted transform will change, before history changes.</summary>
+    public event Action<IReadOnlyList<string>>? BeforeEdit;
     public IReadOnlyList<string> Diagnostics => diagnostics;
     public int DiagnosticCount => diagnostics.TotalCount;
     public IReadOnlyList<PickupPlacementRecord> Records => entries.Values.Where(e => !otherCoordinates.ContainsKey(e.Record.Source)).Select(e => e.Record).ToArray();
@@ -49,6 +55,8 @@ public sealed partial class PickupPlacementEditSession
     public bool CanUndo => !saving && undo.Count > 0;
     public bool CanRedo => !saving && redo.Count > 0;
     public IReadOnlyList<string> ArchivePaths => archives.Values.Select(a => a.Original.Path).ToArray();
+    public IReadOnlyList<string> EditedArchivePaths => archives.Where(a => touched.Contains(a.Key)).Select(a => a.Value.Original.Path).ToArray();
+    public bool IsArchiveEdited(string path) => touched.Contains(Path.GetFullPath(path));
     public string TargetPath(string source) => archives[source].Target;
 
     public static async Task<PickupPlacementEditSession> LoadAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
@@ -59,7 +67,7 @@ public sealed partial class PickupPlacementEditSession
         bool mw3 = FormatRegistry.Probe(worldPath) is { Family: FormatFamily.GameZ, Version: 27 };
         // Load the coordinate store once for every reader in this map. Preview selection
         // filters by archive identity; changing mission must never discard accepted history.
-        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver);
+        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver); HashSet<ZbdDocument> snapshots = new(ReferenceEqualityComparer.Instance);
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
@@ -67,6 +75,7 @@ public sealed partial class PickupPlacementEditSession
             {
                 if (FormatRegistry.Probe(file).Family != FormatFamily.Archive) continue;
                 var archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
+                if (resolver.IsWorkspaceSnapshot(archive)) snapshots.Add(archive);
                 coordinateResources.AddRange(archive.Assets.Where(a => IsCoordinateResource(a.Name)).Select(a => (archive, a)));
                 foreach (var asset in archive.Assets.Where(a => IsPickupResource(a.Name) || IsCoordinateResource(a.Name))) found.TryAdd(asset.Name, (archive, asset));
             }
@@ -85,6 +94,7 @@ public sealed partial class PickupPlacementEditSession
         {
             var result = Create(resources, notes, token);
             result.AddCoordinates(coordinateResources, token, mw3);
+            foreach (var archive in result.archives.Values) archive.FromSnapshot = snapshots.Contains(archive.Original);
             return result;
         }, token).ConfigureAwait(false);
     }
@@ -200,7 +210,10 @@ public sealed partial class PickupPlacementEditSession
         var after = PreviewTransform(source, transform);
         var before = after.Keys.ToDictionary(s => s, Transform);
         if (after.All(p => p.Value == before[p.Key])) return false;
-        BeforeEdit?.Invoke(); undo.Push(new(before, after)); redo.Clear(); EditAccepted?.Invoke(); Apply(after); return true;
+        string[] affected = after.Keys.Select(s => s.ArchivePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        BeforeEdit?.Invoke(affected.Select(a => archives[a].Original.Path).ToArray());
+        foreach (string archive in affected) touched.Add(archive);
+        undo.Push(new(before, after)); redo.Clear(); EditAccepted?.Invoke(); Apply(after); return true;
     }
     /// <summary>Validate and derive linked transforms without accepting an edit or changing history.</summary>
     public IReadOnlyDictionary<MissionPickupSource, PlacementTransform> PreviewTransform(MissionPickupSource source, PlacementTransform transform)
@@ -264,18 +277,58 @@ public sealed partial class PickupPlacementEditSession
         var found = mission.Actors.Where(a => a.Pickup is { } p && identities.Contains(p.Source)).ToArray();
         return found.Length == 1 ? found[0].Pickup!.Source : null;
     }
+    private IEnumerable<ArchiveState> Edited => archives.Where(a => touched.Contains(a.Key)).Select(a => a.Value);
+    /// <summary>External changes to edited archives. Unedited readers are rebased instead of blocking.</summary>
     public bool HasExternalChanges()
     {
-        foreach (var archive in archives.Values)
+        foreach (var archive in Edited)
             try { if (archive.PendingCopy ? File.Exists(archive.Target) || Directory.Exists(archive.Target) : FileStamp.Read(archive.Target) != archive.Stamp) return true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }
         return HasSourceChanges();
     }
     public bool HasSourceChanges()
     {
-        foreach (var archive in archives.Values)
+        foreach (var archive in Edited)
             try { if (FileStamp.Read(archive.Original.Path) != archive.SourceStamp) return true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }
         return false;
+    }
+    /// <summary>
+    /// Whether an unedited archive's baseline differs from the source now served: another
+    /// document's published working copy (compared by identity) or otherwise the file.
+    /// </summary>
+    public bool HasStaleBaselines(Func<string, ZbdDocument?> published, IEnumerable<string>? paths = null)
+    {
+        var scope = paths?.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, archive) in archives)
+        {
+            if (touched.Contains(key) || scope?.Contains(key) == false) continue;
+            if (published(archive.Original.Path) is { } current) { if (!ReferenceEquals(current, archive.Original)) return true; continue; }
+            if (archive.FromSnapshot) return true; // The working copy was closed or discarded.
+            try { if (FileStamp.Read(archive.Original.Path) != archive.SourceStamp) return true; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }
+        }
+        return false;
+    }
+    /// <summary>
+    /// Adopt freshly loaded baselines for archives this session never edited. Edited archives
+    /// keep their owned baseline, history and save targets; no edit or revision is recorded.
+    /// </summary>
+    public void RebaseUntouched(PickupPlacementEditSession fresh)
+    {
+        if (saving) throw new InvalidOperationException("Wait for the current save to finish.");
+        bool Untouched(MissionPickupSource s) => !touched.Contains(s.ArchivePath);
+        foreach (var key in entries.Keys.Where(Untouched).ToArray())
+        { entries.Remove(key); positions.Remove(key); savedPositions.Remove(key); rotations.Remove(key); savedRotations.Remove(key); otherCoordinates.Remove(key); }
+        foreach (string key in archives.Keys.Where(k => !touched.Contains(k)).ToArray()) archives.Remove(key);
+        foreach (var (key, archive) in fresh.archives) if (!touched.Contains(key)) archives[key] = archive;
+        foreach (var (key, entry) in fresh.entries)
+        {
+            if (!Untouched(key)) continue;
+            entries[key] = entry; positions[key] = fresh.positions[key]; savedPositions[key] = fresh.savedPositions[key];
+            rotations[key] = fresh.rotations[key]; savedRotations[key] = fresh.savedRotations[key];
+            if (fresh.otherCoordinates.TryGetValue(key, out var coordinate)) otherCoordinates[key] = coordinate;
+        }
+        overlappingMembers.Clear();
     }
 }

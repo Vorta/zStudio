@@ -35,7 +35,7 @@ public sealed partial class AnimationPropertiesEditor
     private string KeyframeShape()
     {
         if (Event?.Type != 12) return "";
-        try { var frames = ReadKeyframes(); return $"{frames.Count}/{selectedSegment}/{(frames.Count == 0 ? 0 : frames[Math.Clamp(selectedSegment, 0, frames.Count - 1)].Flags)}"; }
+        try { var frames = ReadKeyframes(); return $"{frames.Count}/{selectedSegment}/{(frames.Count == 0 ? 0 : frames[Math.Clamp(selectedSegment, 0, frames.Count - 1)].Flags)}/{Event!.KeyframePreviewDiagnostic() != null}"; }
         catch (InvalidDataException) { return "malformed"; }
     }
     private AnimationKeyframe CurrentSegment(int index) => ReadKeyframes()[index];

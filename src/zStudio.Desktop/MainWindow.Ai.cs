@@ -84,11 +84,13 @@ public partial class MainWindow
     }
     private static string ShortAiText(string text) => text.Length <= 70 ? text : text[..70] + "…";
     private string AiSourceLabel(string path) => string.IsNullOrEmpty(ViewModel.RootPath) ? Path.GetFullPath(path) : Path.GetRelativePath(ViewModel.RootPath, path);
+    // The full authored name stays internal for exact matching; responses publish a bounded label.
+    private string? ValveFilterText() => scene?.ValveFilter is { } filter ? MissionAiValves.Short(filter, 256) : null;
     private object? AiPreviewState() => !IsAiWorld ? null : new
     {
         snapshot = scene!.AiNetworks.Id, visible = scene.AiVisible, throughGeometry = scene.AiThroughGeometry,
         network = scene.AiNetworkFilter ?? "all", selectedNode = scene.SelectedAiNode,
-        valveOverlay = scene.ValveOverlayVisible, valveFilter = scene.ValveFilter,
+        valveOverlay = scene.ValveOverlayVisible, valveFilter = ValveFilterText(), valveFilterCharacters = scene.ValveFilter?.Length ?? 0, valveFilterTruncated = scene.ValveFilter?.Length > 256,
         networks = scene.AiNetworks.Networks.Count, nodes = scene.AiNetworks.Networks.Sum(n => n.Nodes.Count),
         links = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => p.PreviewLinks.Count(l => l.Target != null))),
         linkSlots = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => (long)p.LinkCount)), linksTruncated = scene.AiNetworks.Networks.Any(n => n.Nodes.Any(p => p.LinksTruncated))

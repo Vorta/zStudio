@@ -6,6 +6,8 @@ public enum MissionDifficulty { Easy = 0, Medium = 1, Hard = 2 }
 public sealed record MissionLayoutSelection(MissionDifficulty Difficulty, string AivResource, string VehicleResource, string PickupResource = "puppies.zrd")
 {
     public string? MissionArchive { get; init; }
+    /// <summary>A remembered mission reader that no longer qualified; MissionArchive is the reported fallback.</summary>
+    public string? UnavailableMission { get; init; }
     public static MissionLayoutSelection For(MissionDifficulty difficulty) => difficulty switch
     {
         MissionDifficulty.Easy => new(difficulty, "aiv_easy.zrd", "vehicle_easy.zrd", "puppies_easy.zrd"),

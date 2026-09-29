@@ -129,6 +129,12 @@ public sealed class ResourceEditingTests
         Assert.Same(second, await resolver.OpenCachedAsync(second.Path, token));
         resolver.SetWorkspaceSnapshots(a, [first]);
         Assert.Same(first, await resolver.OpenCachedAsync(first.Path, token));
+        // Closing a document that never published anything is not a source change for other previews.
+        revision = resolver.SnapshotRevision; bool notified = false; resolver.WorkspaceSnapshotsChanged += () => notified = true;
+        resolver.SetWorkspaceSnapshots(Guid.NewGuid(), []);
+        Assert.Equal(revision, resolver.SnapshotRevision); Assert.False(notified);
+        resolver.SetWorkspaceSnapshots(a, []);
+        Assert.Equal(revision + 1, resolver.SnapshotRevision); Assert.True(notified);
     }
     [Fact]
     public async Task RenamedTypedMembersKeepStructureAfterUndoAndReopen()
