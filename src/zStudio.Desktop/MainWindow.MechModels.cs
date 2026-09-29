@@ -62,7 +62,7 @@ public partial class MainWindow
                     vertices = m.Vertices.Length, polygons = m.Polygons.Length, materials = m.Polygons.Select(p => p.MaterialIndex).Distinct().ToArray(),
                     nodes = scene.Nodes.Skip(member.RootNode).Take(member.NodeCount).Where(n => n.ModelIndex == m.Index).Select(n => new { localNode = n.Index - member.RootNode, n.Name }).ToArray() }), a).Data });
         });
-        RegisterJob(registry, "mech_model_replace", "Replace one member-local mech mesh from a triangulated local-coordinate OBJ with UVs/normals and optional RGB vertex colors. Explicit shared material index; textures use texture_import. One archive undo step, with hierarchy and unrelated members preserved. Save through save_document.",
+        RegisterJob(registry, "mech_model_replace", "Replace one member-local mech mesh from a triangulated local-coordinate OBJ with UVs/normals and optional RGB vertex colors. Explicit shared material index; textures use texture_import. One archive undo step, with hierarchy and unrelated members preserved. Refreshes active and dependent previews, retaining the camera. Save through save_document.",
             [DocumentParameter, RevisionParameter, MemberParameter, P("localModel", "integer", "Local model index from mech_models.", true), P("material", "integer", "Shared material index from mech_models materials.", true), P("path", "string", "OBJ file path.", true)], false,
             async (a, token) => { var doc = TargetDocument(a, true); await ReplaceMechModelAsync(doc, GuidArg(a, "member"), Int(a, "localModel"), Int(a, "material"), Text(a, "path"), doc.Revision, token); return Result(DocumentState(doc)); });
     }

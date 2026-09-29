@@ -77,11 +77,36 @@ internal static class AiNetworkMcpChecks
             {
                 constraints = await Call("ai_nodes", Args(("section", "constraints"), ("network", network), ("query", query)));
                 Assert.Equal(total, constraints["total"]!.GetValue<int>()); Assert.Equal(total, constraints["items"]!.AsArray().Count); Assert.Null(constraints["nextOffset"]);
-                if (query == "CANLEAVE") Assert.Equal(1, constraints["items"]![0]!["constraint"]!["AttributeIndex"]!.GetValue<int>());
+                if (query == "CANLEAVE")
+                {
+                    var row = constraints["items"]![0]!["constraint"]!;
+                    Assert.Equal(1, row["AttributeIndex"]!.GetValue<int>()); Assert.False(row["KindTruncated"]!.GetValue<bool>());
+                    Assert.False(row["ParametersTruncated"]!.GetValue<bool>()); Assert.Empty(row["Parameters"]!.AsObject());
+                }
             }
             constraintArgs["offset"] = 3;
             constraints = await Call("ai_nodes", constraintArgs);
             Assert.Equal(3, constraints["total"]!.GetValue<int>()); Assert.Empty(constraints["items"]!.AsArray()); Assert.Null(constraints["nextOffset"]);
+            string hugeKind = new string('k', 100_000) + "only-in-omitted-suffix";
+            JsonObject hugeParameters = new() { ["children"] = new JsonArray(Enumerable.Range(0, 1000).Select(_ => (JsonNode)new JsonObject { ["value"] = new string('x', 10_000) }).ToArray()) };
+            var large = new AiConstraint(46, 0, 1, hugeKind, 96, hugeParameters);
+            viewport.SetAiNetworks(new("large-constraints", [first with { Name = new string('n', 100_000), Constraints = Enumerable.Repeat(large, 200).ToArray() }]));
+            var boundedArgs = Args(("section", "constraints"), ("query", "kkkk"), ("snapshot", "large-constraints")); boundedArgs["limit"] = 200;
+            constraints = await Call("ai_nodes", boundedArgs);
+            Assert.Equal(200, constraints["total"]!.GetValue<int>()); Assert.True(constraints.ToJsonString().Length < 1_000_000);
+            var bounded = constraints["items"]![0]!["constraint"]!;
+            Assert.Equal(256, bounded["Kind"]!.GetValue<string>().Length); Assert.True(bounded["KindTruncated"]!.GetValue<bool>());
+            Assert.Equal(hugeKind.Length, bounded["KindCharacters"]!.GetValue<int>()); Assert.True(bounded["ParametersTruncated"]!.GetValue<bool>());
+            constraints = await Call("ai_nodes", Args(("section", "constraints"), ("query", "only-in-omitted-suffix"), ("snapshot", "large-constraints")));
+            Assert.Equal(0, constraints["total"]!.GetValue<int>()); Assert.Equal(1000, hugeParameters["children"]!.AsArray().Count);
+            Assert.Equal(hugeKind, large.Kind);
+            JsonObject deep = new() { ["value"] = "leaf" }; for (int i = 0; i < 100; i++) deep = new() { ["children"] = new JsonArray(deep) };
+            var numeric = new JsonObject { ["children"] = new JsonArray(Enumerable.Range(0, 1000).Select(i => (JsonNode)JsonValue.Create(i)!).ToArray()) };
+            viewport.SetAiNetworks(new("bounded-parameters", [first with { Constraints = [large with { Kind = "deep", Parameters = deep }, large with { Kind = "wide", Parameters = numeric }, large with { Kind = "previously truncated", Parameters = new() { ["value_truncated"] = true, ["value"] = "prefix" } }] }]));
+            constraints = await Call("ai_nodes", Args(("section", "constraints"), ("snapshot", "bounded-parameters")));
+            Assert.Equal(3, constraints["total"]!.GetValue<int>()); Assert.True(constraints.ToJsonString().Length < 5000);
+            Assert.All(constraints["items"]!.AsArray(), row => Assert.True(row!["constraint"]!["ParametersTruncated"]!.GetValue<bool>()));
+            viewport.SetAiNetworks(new("graph1", [first, second]));
             await Select("select", "a", "not_ready");
             enabled.IsChecked = true; Assert.True((await State())["ai"]!["visible"]!.GetValue<bool>());
             through.IsChecked = false; Assert.False((await State())["ai"]!["throughGeometry"]!.GetValue<bool>());

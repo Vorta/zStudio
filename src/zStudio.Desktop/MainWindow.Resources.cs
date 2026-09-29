@@ -52,9 +52,17 @@ public partial class MainWindow
         if (aiPropertiesArchive != null && (aiPropertiesArchive.Equals(doc.Path, StringComparison.OrdinalIgnoreCase) || aiPropertiesArchive.Equals(doc.ResourceEdits?.TargetPath, StringComparison.OrdinalIgnoreCase))) propertiesWindow?.MarkAiSnapshotStale();
         foreach (var open in ViewModel.Documents) { open.InvalidateMissionContext(); if (open != doc) open.InvalidateCleanPickupEdits(); }
         await previewWork;
-        if (shownDocument != doc && motion != null) await motion.RefreshLibraryAsync(doc.ResourceEdits);
+        if (motion != null)
+        {
+            if (shownDocument == doc) motion.RefreshClip();
+            else await motion.RefreshLibraryAsync(doc.ResourceEdits);
+        }
         else if (shownDocument != doc && animation != null) await animation.RefreshModelContextAsync(resourceChanges: true);
-        else if (shownDocument != doc && HasPublishedStaticScene && shownDocument is { } shown) await RefreshStaticSceneAsync(shown, shownAsset!);
+        else if (HasPublishedStaticScene && shownDocument is { } shown)
+        {
+            var asset = shown.SelectedAsset?.Record;
+            if (asset != null) { shownAsset = asset; await RefreshStaticSceneAsync(shown, asset); }
+        }
         UpdateDocumentCommands();
     }
     private async Task UndoResourcesAsync(DocumentModel doc, bool redo)

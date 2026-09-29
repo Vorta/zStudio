@@ -21,14 +21,14 @@ To replace a mech part:
 1. Export its referenced models and edit the corresponding **local** OBJ in Blender. Use game-local +Y up and −Z forward; keep node transforms out of the mesh.
 2. Export a triangulated OBJ with UVs and normals. Optional RGB vertex colors use values from 0 to 1.
 3. Select the owning library member and choose **Replace models**. Choose the member-local mesh and its shared material, then select the OBJ.
-4. Inspect the result. The shared resource editor reparses the member, updates hierarchy bounds and accepts one undo step. Other archive members and shared materials are preserved.
+4. Inspect the result. The shared resource editor reparses the member, updates hierarchy bounds and accepts one undo step. The active mech preview and dependent previews refresh automatically with the camera retained, including Undo/Redo. Other archive members and shared materials are preserved.
 5. Use **Save As** for a working copy. Replace the material's texture through explicit texture-pack records in the existing texture editor. Mesh replacement does not silently replace textures shared by other parts.
 
 GameZ version-27 replacement also supports the existing source-hash-bound OBJ/PNG batch manifest, updating the world and all local texture variants. Morph/light-bearing models and expansion beyond world-partition bounds are rejected rather than losing authored data.
 
 ## Motion clips
 
-Open the motion archive and select a **Motion** asset. The viewer suggests a unique base assembly from the clip/assembly naming or leaves the choice explicit. The assembly picker can bind another library member. Missing/ambiguous track names keep the stored node pose and produce a support notice.
+Open the motion archive and select a **Motion** asset. The viewer suggests a unique base assembly from the clip/assembly naming or leaves the choice explicit. The assembly picker can bind another library member. Rapid assembly changes retain the playback intent from before loading; an explicit Play/Pause during loading takes precedence, including after cancellation. Accepted motion edits and Undo/Redo immediately refresh the displayed sampler while retaining the camera and playback state. Missing/ambiguous track names keep the stored node pose and produce a support notice.
 
 Play/pause, the loop-time seeker, LOD and Frame use the shared renderer. Space works from Assets or passive preview content. Blender-style navigation, scene inspection and the tree apply to the visible posed geometry. Playback interpolates translations and normalized quaternions through the hierarchy; aiming, gait correction and inverse kinematics are not simulated.
 
@@ -53,7 +53,7 @@ GUI and MCP share the visible workspace, parser, identities, edit sessions, prev
 | `zstudio_mech_models` | Inspect member-local models and shared materials. |
 | `zstudio_mech_model_replace` | Replace one explicit member-local mesh. |
 
-`zstudio_resource_properties` accepts motion `part`/`frame` targets and generated actions. `zstudio_event_catalog` accepts `version: 28` or `39`. `zstudio_ai_nodes` exposes edge constraints with `section: "constraints"`; a record may contain multiple ordered attributes, identified by its record index and `AttributeIndex`. Existing resource, camera, inspection, export, texture and save commands apply. Revision and draft guards remain mandatory for mutations. Discovery remains windowless and access remains opt-in.
+`zstudio_motion_preview` state distinguishes actual `playing`, `loading` and `playbackRequested`, so a temporarily suspended assembly load does not look like a new pause request. `zstudio_resource_properties` accepts motion `part`/`frame` targets and generated actions. `zstudio_event_catalog` accepts `version: 28` or `39`. `zstudio_ai_nodes` exposes edge constraints with `section: "constraints"`; a record may contain multiple ordered attributes, identified by its record index and `AttributeIndex`. Existing resource, camera, inspection, export, texture and save commands apply. Revision and draft guards remain mandatory for mutations. Discovery remains windowless and access remains opt-in.
 
 ## Validation
 

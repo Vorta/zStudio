@@ -2096,7 +2096,7 @@
       {
         "Name": "section",
         "Type": "string",
-        "Description": "Spatial nodes (default) or MW3 edge constraints, which have no authored position. Constraint queries match network member/name, kind, edge_NN, attribute_NN or node_NN endpoints before pagination.",
+        "Description": "Spatial nodes (default) or MW3 edge constraints, which have no authored position. Constraint queries match member/name prefixes (70 characters), kind prefix (256), edge_NN, attribute_NN or node_NN endpoints before pagination. KindCharacters/KindTruncated disclose shortened kinds. Parameters is a bounded preview (64 nodes, depth 8, 2048 total text characters, 512 per string), with ParametersTruncated.",
         "Required": false,
         "Choices": [
           "nodes",
@@ -3735,7 +3735,7 @@
   },
   {
     "Name": "zstudio_motion_edit",
-    "Description": "Edit authored motion timing or a frame, or insert/delete a frame across all parts. One shared archive undo transaction. Does not save; use the existing verified document save operation. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit authored motion timing or a frame, or insert/delete a frame across all parts. One shared archive undo transaction. Refreshes the active sampler while retaining camera/playback. Does not save; use the existing verified document save operation. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3845,7 +3845,7 @@
   },
   {
     "Name": "zstudio_motion_preview",
-    "Description": "Control the visible motion viewer: play/pause, seek, choose an explicit library member or LOD, frame the model, or inspect available bindings. Shares GUI playback and camera. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Control the visible motion viewer: play/pause, seek, choose an explicit library member or LOD, frame the model, or inspect available bindings. Shares GUI playback and camera. Superseded assembly loads retain playback intent; an explicit play/pause during loading takes precedence. State distinguishes actual playing, loading and playbackRequested. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4017,7 +4017,7 @@
   },
   {
     "Name": "zstudio_mech_model_replace",
-    "Description": "Replace one member-local mech mesh from a triangulated local-coordinate OBJ with UVs/normals and optional RGB vertex colors. Explicit shared material index; textures use texture_import. One archive undo step, with hierarchy and unrelated members preserved. Save through save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Replace one member-local mech mesh from a triangulated local-coordinate OBJ with UVs/normals and optional RGB vertex colors. Explicit shared material index; textures use texture_import. One archive undo step, with hierarchy and unrelated members preserved. Refreshes active and dependent previews, retaining the camera. Save through save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

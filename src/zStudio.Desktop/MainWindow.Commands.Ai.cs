@@ -27,14 +27,14 @@ public partial class MainWindow
                     nodes = n.Nodes.Count, constraints = n.Constraints.Count, links = n.Nodes.Sum(p => p.Links.Count(l => l.Target != null)), diagnostics = n.Diagnostics.Take(32).ToArray(), diagnosticCount = n.Diagnostics.Count });
         });
         Register(registry, "ai_nodes", "List authored AI nodes, XYZ, raw integer, network attack_strategy metadata/color and ordered directed link slots (three for RECOIL; variable for MW3). Negative indices mean no link; unresolved targets retain diagnostics.", false,
-            [PreviewParameter, AiSnapshotParameter, P("network", "string", "Network ID, or all/omitted for all networks."), P("section", "string", "Spatial nodes (default) or MW3 edge constraints, which have no authored position. Constraint queries match network member/name, kind, edge_NN, attribute_NN or node_NN endpoints before pagination.", false, "nodes", "constraints"), .. PageParameters], args =>
+            [PreviewParameter, AiSnapshotParameter, P("network", "string", "Network ID, or all/omitted for all networks."), P("section", "string", "Spatial nodes (default) or MW3 edge constraints, which have no authored position. Constraint queries match member/name prefixes (70 characters), kind prefix (256), edge_NN, attribute_NN or node_NN endpoints before pagination. KindCharacters/KindTruncated disclose shortened kinds. Parameters is a bounded preview (64 nodes, depth 8, 2048 total text characters, 512 per string), with ParametersTruncated.", false, "nodes", "constraints"), .. PageParameters], args =>
         {
             var graph = TargetAiGraph(args); string network = Text(args, "network", "all");
             if (network != "all" && !graph.Networks.Any(n => n.Id == network)) throw new StudioCommandException("stale_record", "AI network unavailable.");
             if (Text(args, "section") == "constraints") return Page(graph.Networks.Where(n => network == "all" || n.Id == network)
                 .SelectMany(n => n.Constraints.Select(c => (Network: n, Constraint: c))), args,
-                search: p => FormattableString.Invariant($"{p.Network.Member} {p.Network.Name} {p.Constraint.Kind} edge_{p.Constraint.Index:00} attribute_{p.Constraint.AttributeIndex:00} node_{p.Constraint.FromNode:00} node_{p.Constraint.ToNode:00}"),
-                project: p => new { network = p.Network.Id, constraint = p.Constraint });
+                search: p => FormattableString.Invariant($"{ShortAiText(p.Network.Member)} {ShortAiText(p.Network.Name)} {ConstraintKind(p.Constraint)} edge_{p.Constraint.Index:00} attribute_{p.Constraint.AttributeIndex:00} node_{p.Constraint.FromNode:00} node_{p.Constraint.ToNode:00}"),
+                project: p => new { network = p.Network.Id, constraint = DescribeConstraint(p.Constraint) });
             return Page(graph.Networks.Where(n => network == "all" || n.Id == network).SelectMany(n => n.Nodes
                 .Where(p => $"{n.Member} {n.Name} node_{p.Index:00}".Contains(Text(args, "query"), StringComparison.OrdinalIgnoreCase)).Select(p => (Network: n, Node: p))), args, project: p => DescribeAiNode(graph, p.Network, p.Node));
         });
@@ -54,5 +54,48 @@ public partial class MainWindow
             }
             return Result(DescribeAiNode(graph, target.Network, target.Node));
         });
+    }
+
+    private static string ConstraintKind(AiConstraint constraint) => constraint.Kind[..Math.Min(256, constraint.Kind.Length)];
+    private static object DescribeConstraint(AiConstraint constraint)
+    {
+        var parameters = ConstraintParameters(constraint.Parameters);
+        return new { constraint.Index, constraint.AttributeIndex, constraint.FromNode, constraint.ToNode, constraint.SourceOffset,
+            Kind = ConstraintKind(constraint), KindCharacters = constraint.Kind.Length, KindTruncated = constraint.Kind.Length > 256,
+            Parameters = parameters.Value, ParametersTruncated = parameters.Truncated };
+    }
+    // Clone only a small preview: never serialize authored strings/subtrees before applying the budgets.
+    private static (JsonNode? Value, bool Truncated) ConstraintParameters(JsonNode source)
+    {
+        int nodes = 64, characters = 2048; bool truncated = false;
+        var value = Visit(source, 0); return (value, truncated);
+        JsonNode? Visit(JsonNode? node, int depth)
+        {
+            if (nodes-- <= 0 || depth > 8) { truncated = true; return null; }
+            if (node is JsonObject obj)
+            {
+                JsonObject result = [];
+                foreach (var pair in obj)
+                {
+                    if (nodes <= 0 || pair.Key.Length > characters) { truncated = true; break; }
+                    characters -= pair.Key.Length;
+                    result[pair.Key] = Visit(pair.Value, depth + 1);
+                    if (pair.Key.EndsWith("_truncated", StringComparison.Ordinal) && pair.Value is JsonValue flag && flag.TryGetValue<bool>(out bool alreadyTruncated) && alreadyTruncated) truncated = true;
+                }
+                return result;
+            }
+            if (node is JsonArray array)
+            {
+                JsonArray result = [];
+                foreach (var child in array) { if (nodes <= 0) { truncated = true; break; } result.Add(Visit(child, depth + 1)); }
+                return result;
+            }
+            if (node is JsonValue scalar && scalar.TryGetValue<string>(out string? text))
+            {
+                int count = Math.Min(text.Length, Math.Min(512, characters)); characters -= count;
+                truncated |= count != text.Length; return JsonValue.Create(text[..count]);
+            }
+            return node?.DeepClone();
+        }
     }
 }

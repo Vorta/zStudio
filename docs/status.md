@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #14 active-preview and bounded-output fixes (2026-09-29)
+
+Accepted motion edits, generated Properties changes and archive Undo/Redo now refresh the active motion sampler as well as dependent previews. Motion preparation no longer pauses playback, including failed edits. Mech mesh replacement and history rebuild the active geometry with the camera retained. Assembly loads share pending playback intent across superseded requests, honor explicit Play/Pause, restore transport after cancellation, and publish the latest clip if an edit arrives during loading. MCP state distinguishes actual playing, loading and requested playback.
+
+AI constraint search caps authored name/kind prefixes before interpolation. Results preserve edge/attribute/endpoints/source offsets and expose kind length/truncation plus a bounded structured parameter preview: 64 nodes, depth 8, 2048 total text characters and 512 per string. Truncation is explicit, and source records remain unchanged. MCP schemas/descriptions, embedded discovery, capability mapping and guides are updated.
+
+Release build passes with zero warnings/errors. All 401 tests pass (308 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. The named-pipe regression now uses a synthetic textured mech library and checks actual presented motion transforms, active mesh replacement, camera retention, failed-edit playback, Undo/Redo, overlapping loads, explicit transport overrides, cancellation and concurrent edits. Bounded-output checks cover a full 200-item page, oversized kinds and parameters, deep/wide trees, prior truncation and unchanged inputs. Follow-up review found no additional actionable defects in these changes. Version remains 0.7.0.
+
 ## PR #14 review fixes (2026-09-29)
 
 Animation world discovery now filters by the animation's required GameZ version before selecting a file: version-28 animations use version-15 worlds and version-39 animations use version-27 worlds. Mixed-format folders no longer fail because an incompatible world is enumerated first. Explicit incompatible selections remain rejected, and absent compatible worlds retain an actionable selection diagnostic. GUI and MCP use the same preview loader.
