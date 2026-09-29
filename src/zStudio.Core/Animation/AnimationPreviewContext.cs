@@ -65,11 +65,17 @@ public sealed partial class AnimationPreviewContext
         var frozen = new AnimationPackage { Prefix = package.Prefix, Tail = package.Tail };
         frozen.Entries.AddRange(package.Entries.Select(e => e.Clone())); frozen.Diagnostics.AddRange(package.Diagnostics); package = frozen;
         string directory = Path.GetDirectoryName(animationPath)!;
-        worldPath ??= Directory.EnumerateFiles(directory, "*.zbd").FirstOrDefault(p => FormatRegistry.Probe(p).Family == FormatFamily.GameZ);
+        uint requiredWorldVersion = package.Version == 39 ? 27u : 15u;
+        worldPath ??= Directory.EnumerateFiles(directory, "*.zbd").FirstOrDefault(p =>
+        {
+            token.ThrowIfCancellationRequested();
+            var probe = FormatRegistry.Probe(p);
+            return probe.Family == FormatFamily.GameZ && probe.Version == requiredWorldVersion;
+        });
         if (worldPath == null) throw new InvalidDataException("Select the matching mission GameZ file to bind this animation.");
         var world = await resolver.OpenCachedAsync(worldPath, token).ConfigureAwait(false);
         if (world.Scene == null) throw new InvalidDataException("The selected file has no GameZ scene.");
-        if (package.Version == 39 && world.Probe.Version != 27 || package.Version == 28 && world.Probe.Version != 15)
+        if (world.Probe.Version != requiredWorldVersion)
             throw new InvalidDataException("The animation and world formats belong to different games. Choose the matching world.");
         var context = new AnimationPreviewContext { Package = package, World = world };
         context.Mission = await MissionSceneLoader.LoadAsync(world, resolver, package, token, difficulty).ConfigureAwait(false);

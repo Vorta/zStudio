@@ -32,8 +32,12 @@ internal static class AiNetworkMcpChecks
         string preview = ((Guid)Get("previewId")!).ToString();
         AiNode a = new("a", 0, 12, Vector3.Zero, 12, [new(0, 1, "b", null), new(1, -7, null, null), new(2, -1, null, null)]);
         AiNode b = new("b", 1, 12, new(30, 0, 0), 64, [new(0, -1, null, null), new(1, -1, null, null), new(2, -1, null, null)]);
-        var first = new AiNetwork("first", "fixture.zbd", 0, "net_01.zrd", "same_name", "standard", 10, [a, b], []) { AttackStrategy = AiAttackStrategy.Stored("cIrClE") };
-        var second = first with { Id = "second", MemberIndex = 1, Nodes = [a with { Id = "duplicate", Links = [] }] };
+        var first = new AiNetwork("first", "fixture.zbd", 0, "net_01.zrd", "same_name", "standard", 10, [a, b], [])
+        {
+            AttackStrategy = AiAttackStrategy.Stored("cIrClE"),
+            Constraints = [new(46, 0, 1, "scan_time", 96, new()), new(46, 0, 1, "canleave", 108, new()) { AttributeIndex = 1 }, new(47, 1, 0, "scan_time", 120, new())]
+        };
+        var second = first with { Id = "second", MemberIndex = 1, Member = "net_02.zrd", Nodes = [a with { Id = "duplicate", Links = [] }], Constraints = [new(48, 0, 0, "scan_time", 96, new())] };
         viewport.SetAiNetworks(new("graph1", [first, second]));
         Invoke("ConfigureAiScene", viewport); Invoke("ApplyAiOptions");
         var enabled = (ToggleButton)main.FindName("AiEnabled"); var through = (ToggleButton)main.FindName("AiThroughGeometry");
@@ -58,6 +62,26 @@ internal static class AiNetworkMcpChecks
             var nodes = await Call("ai_nodes", Args(("network", "first"), ("query", "node_00")));
             Assert.Single(nodes["items"]!.AsArray()); Assert.Equal(-7, nodes["items"]![0]!["links"]![1]!["target_index"]!.GetValue<int>());
             Assert.True(JsonNode.DeepEquals(strategy, nodes["items"]![0]!["attack_strategy"]));
+            var constraintArgs = Args(("section", "constraints"), ("query", "SCAN_TIME")); constraintArgs["limit"] = 1;
+            var constraints = await Call("ai_nodes", constraintArgs);
+            Assert.Equal(3, constraints["total"]!.GetValue<int>()); Assert.Equal(1, constraints["nextOffset"]!.GetValue<int>());
+            Assert.Equal(46, Assert.Single(constraints["items"]!.AsArray())!["constraint"]!["Index"]!.GetValue<int>());
+            constraintArgs["offset"] = 1;
+            constraints = await Call("ai_nodes", constraintArgs);
+            Assert.Equal(3, constraints["total"]!.GetValue<int>()); Assert.Equal(2, constraints["nextOffset"]!.GetValue<int>());
+            Assert.Equal(47, Assert.Single(constraints["items"]!.AsArray())!["constraint"]!["Index"]!.GetValue<int>());
+            constraintArgs["offset"] = 2;
+            constraints = await Call("ai_nodes", constraintArgs);
+            Assert.Equal("second", Assert.Single(constraints["items"]!.AsArray())!["network"]!.GetValue<string>()); Assert.Null(constraints["nextOffset"]);
+            foreach (var (network, query, total) in new[] { ("first", "scan_time", 2), ("all", "CANLEAVE", 1), ("all", "NET_02.ZRD", 1), ("all", "same_NAME", 4), ("all", "EDGE_46", 2), ("all", "ATTRIBUTE_01", 1), ("all", "NODE_01", 3), ("all", "missing-constraint", 0), ("first", "net_02.zrd", 0), ("all", "", 4) })
+            {
+                constraints = await Call("ai_nodes", Args(("section", "constraints"), ("network", network), ("query", query)));
+                Assert.Equal(total, constraints["total"]!.GetValue<int>()); Assert.Equal(total, constraints["items"]!.AsArray().Count); Assert.Null(constraints["nextOffset"]);
+                if (query == "CANLEAVE") Assert.Equal(1, constraints["items"]![0]!["constraint"]!["AttributeIndex"]!.GetValue<int>());
+            }
+            constraintArgs["offset"] = 3;
+            constraints = await Call("ai_nodes", constraintArgs);
+            Assert.Equal(3, constraints["total"]!.GetValue<int>()); Assert.Empty(constraints["items"]!.AsArray()); Assert.Null(constraints["nextOffset"]);
             await Select("select", "a", "not_ready");
             enabled.IsChecked = true; Assert.True((await State())["ai"]!["visible"]!.GetValue<bool>());
             through.IsChecked = false; Assert.False((await State())["ai"]!["throughGeometry"]!.GetValue<bool>());

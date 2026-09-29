@@ -27,11 +27,14 @@ public partial class MainWindow
                     nodes = n.Nodes.Count, constraints = n.Constraints.Count, links = n.Nodes.Sum(p => p.Links.Count(l => l.Target != null)), diagnostics = n.Diagnostics.Take(32).ToArray(), diagnosticCount = n.Diagnostics.Count });
         });
         Register(registry, "ai_nodes", "List authored AI nodes, XYZ, raw integer, network attack_strategy metadata/color and ordered directed link slots (three for RECOIL; variable for MW3). Negative indices mean no link; unresolved targets retain diagnostics.", false,
-            [PreviewParameter, AiSnapshotParameter, P("network", "string", "Network ID, or all/omitted for all networks."), P("section", "string", "Spatial nodes (default) or MW3 edge constraints, which have no authored position.", false, "nodes", "constraints"), .. PageParameters], args =>
+            [PreviewParameter, AiSnapshotParameter, P("network", "string", "Network ID, or all/omitted for all networks."), P("section", "string", "Spatial nodes (default) or MW3 edge constraints, which have no authored position. Constraint queries match network member/name, kind, edge_NN, attribute_NN or node_NN endpoints before pagination.", false, "nodes", "constraints"), .. PageParameters], args =>
         {
             var graph = TargetAiGraph(args); string network = Text(args, "network", "all");
             if (network != "all" && !graph.Networks.Any(n => n.Id == network)) throw new StudioCommandException("stale_record", "AI network unavailable.");
-            if (Text(args, "section") == "constraints") return Page(graph.Networks.Where(n => network == "all" || n.Id == network).SelectMany(n => n.Constraints.Select(c => new { network = n.Id, constraint = c })), args);
+            if (Text(args, "section") == "constraints") return Page(graph.Networks.Where(n => network == "all" || n.Id == network)
+                .SelectMany(n => n.Constraints.Select(c => (Network: n, Constraint: c))), args,
+                search: p => FormattableString.Invariant($"{p.Network.Member} {p.Network.Name} {p.Constraint.Kind} edge_{p.Constraint.Index:00} attribute_{p.Constraint.AttributeIndex:00} node_{p.Constraint.FromNode:00} node_{p.Constraint.ToNode:00}"),
+                project: p => new { network = p.Network.Id, constraint = p.Constraint });
             return Page(graph.Networks.Where(n => network == "all" || n.Id == network).SelectMany(n => n.Nodes
                 .Where(p => $"{n.Member} {n.Name} node_{p.Index:00}".Contains(Text(args, "query"), StringComparison.OrdinalIgnoreCase)).Select(p => (Network: n, Node: p))), args, project: p => DescribeAiNode(graph, p.Network, p.Node));
         });

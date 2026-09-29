@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR #14 review fixes (2026-09-29)
+
+Animation world discovery now filters by the animation's required GameZ version before selecting a file: version-28 animations use version-15 worlds and version-39 animations use version-27 worlds. Mixed-format folders no longer fail because an incompatible world is enumerated first. Explicit incompatible selections remain rejected, and absent compatible worlds retain an actionable selection diagnostic. GUI and MCP use the same preview loader.
+
+MW3 AI constraint queries now apply the shared case-insensitive filter before pagination. Network member/name, constraint kind and edge/attribute/endpoint labels are searchable; the optional network filter, matching totals, next offsets and source identities are preserved. Typed discovery descriptions, the embedded command catalog and MCP capability documentation are updated.
+
+Both reported defects were reproduced by regression tests before their fixes. Release build passes with zero warnings/errors. All 401 tests pass (308 Core, 93 Desktop), zero skipped, with the local MW3 and RECOIL1999 corpus enabled. Coverage includes both animation versions, explicit and absent world selection, real named-pipe constraint queries, page boundaries, multiple attributes per edge, empty/nonmatching queries and catalog parity. Review of the fixes found no additional actionable issues. Version remains 0.7.0; this update does not merge or release the PR.
+
 ## 0.7.0 review and validation (2026-09-29)
 
 AI networks with an absent attack_strategy now use red #FF6666 nodes and directed connections. Empty, unrecognized and invalid values retain gray #A0A0A0; recognized colors and the white selected marker are unchanged. The renderer, tooltip and existing GUI/MCP strategy metadata use one state-aware palette. Attack strategy remains a read-only scrolling detail immediately above Status. The ai_nodes description now distinguishes RECOIL's three ordered links from MW3's variable link counts; the 79-tool discovery catalog was regenerated and parity checks pass. Earlier gray-missing and fixed-header entries below are historical.
