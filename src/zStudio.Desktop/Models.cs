@@ -194,17 +194,20 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     private string? animationWorldPath;
     private MissionDifficulty animationDifficulty = MissionDifficulty.Medium;
     private CancellationTokenSource? contextLoading;
-    public Task<AnimationPreviewContext> GetAnimationContextAsync(AssetResolver resolver, CancellationToken token, string? worldPath = null, MissionDifficulty difficulty = MissionDifficulty.Medium)
+    public Task<AnimationPreviewContext> GetAnimationContextAsync(AssetResolver resolver, CancellationToken token, string? worldPath = null, MissionDifficulty difficulty = MissionDifficulty.Medium, string? exactMission = null)
     {
         bool worldChanged = worldPath != null;
         if (worldPath != null) animationWorldPath = worldPath;
-        if (worldChanged || animationContext == null || animationContext.IsFaulted || animationContext.IsCanceled || animationDifficulty != difficulty)
+        // An explicit mission request must load exactly that reader, never a cached or fallback context.
+        bool missionChanged = exactMission != null && (animationContext?.IsCompletedSuccessfully != true ||
+            !string.Equals(animationContext.Result.Mission?.Layout.MissionArchive, exactMission, StringComparison.OrdinalIgnoreCase));
+        if (worldChanged || missionChanged || animationContext == null || animationContext.IsFaulted || animationContext.IsCanceled || animationDifficulty != difficulty)
         {
             var previous = !worldChanged && animationContext?.IsCompletedSuccessfully == true ? animationContext.Result : null;
             contextLoading?.Cancel(); contextLoading?.Dispose(); contextLoading = CancellationTokenSource.CreateLinkedTokenSource(Lifetime.Token);
             animationDifficulty = difficulty;
-            animationContext = previous != null ? previous.WithDifficultyAsync(resolver, difficulty, contextLoading.Token) :
-                AnimationPreviewContext.LoadAsync(AnimationEdits!.Package, Path, resolver, animationWorldPath, contextLoading.Token, difficulty);
+            animationContext = previous != null ? previous.WithDifficultyAsync(resolver, difficulty, contextLoading.Token, exactMission) :
+                AnimationPreviewContext.LoadAsync(AnimationEdits!.Package, Path, resolver, animationWorldPath, contextLoading.Token, difficulty, exactMission);
         }
         return animationContext.WaitAsync(token);
     }

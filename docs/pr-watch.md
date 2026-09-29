@@ -43,7 +43,7 @@ Acknowledgment records only the reviewed snapshot and removes only the matching 
 
 ## Approval and release handoff
 
-Approval monitoring stays active while comment notifications are disarmed. Only `+1` from `chatgpt-codex-connector[bot]` on the **PR description** qualifies. A bot-authored summary must identify the current head and show all listed code/security reviews completed; the reaction must be at least as recent as their completion. Unknown summary formats fail closed. A retained thumbs-up from an older review, a reaction on a comment, or another author's reaction is not approval.
+Approval monitoring stays active while comment notifications are disarmed. Only `+1` from `chatgpt-codex-connector[bot]` on the **PR description** qualifies. A bot-authored summary must identify the current head and show all listed code/security reviews completed; the reaction must be at least as recent as their completion. Only the newest bot summary for the current head qualifies: a later review of the same head, running or completed, supersedes earlier summaries and their reactions. Unknown summary formats fail closed. A retained thumbs-up from an older review, a reaction on a comment, or another author's reaction is not approval.
 
 One approval notice is emitted per head. Feedback and approval detected together share one notice; approval arriving during an outstanding notice waits until acknowledgment. An unexpected head change suspends approval until explicitly re-armed. A notification is only a candidate for the following agent checks:
 

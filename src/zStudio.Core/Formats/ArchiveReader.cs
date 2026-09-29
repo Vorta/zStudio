@@ -7,7 +7,7 @@ internal sealed class ArchiveReader : IZbdFormatReader
     public FormatFamily Family => FormatFamily.Archive;
     public void Read(ZbdDocument doc, CancellationToken token)
     {
-        BinaryCursor c = new(doc.Bytes); c.Seek(doc.Bytes.Length - 4); uint records = c.U32();
+        BinaryCursor c = new(doc.Bytes); c.Seek(doc.Bytes.Length - 4); uint records = c.U32(); FormatRegistry.CheckEntries("Archive member", records);
         long table = doc.Bytes.Length - 8L - records * 148L; BinaryCursor.CheckRange(doc.Bytes.Length, table, records * 148L);
         doc.ArchiveDirectoryOffset = table;
         Dictionary<(uint Offset, uint Size), (ZrdNode? Tree, MotionClip? Motion)> typedRanges = [];

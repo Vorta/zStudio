@@ -16,6 +16,8 @@ public static partial class MissionSceneLoader
 {
     internal sealed record Mw3Resources(string? Mission, string[] Files, string? Unavailable, IReadOnlyList<string> Diagnostics, bool Unreadable = false);
     // Discovery, loading and valve scopes share one definition of a mission reader.
+    internal static string? ParseError(ZbdDocument doc) => doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error
+        ? (error.Message.Length > 512 ? error.Message[..512] + "…" : error.Message) : null;
     private static bool IsMissionAiv(AssetRecord asset) => asset.Kind == AssetKind.Zrd && asset.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase);
     public static async Task<IReadOnlyList<MissionVariant>> Mw3MissionsAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
         => (await Mw3MissionCatalogAsync(worldPath, resolver, token).ConfigureAwait(false)).Missions;
@@ -29,6 +31,13 @@ public static partial class MissionSceneLoader
             {
                 if (FormatRegistry.Probe(path).Family != FormatFamily.Archive) continue;
                 var doc = await resolver.OpenCachedAsync(path, token).ConfigureAwait(false);
+                // A partially parsed archive is damaged, not authoritative: never offer it as a mission.
+                if (ParseError(doc) is { } error)
+                {
+                    diagnostics.Add($"Mission archive {Path.GetFileName(path)}: {error}");
+                    if (doc.Assets.Any(IsMissionAiv)) unreadable.Add(Path.GetFullPath(path));
+                    continue;
+                }
                 if (!doc.Assets.Any(IsMissionAiv)) continue;
                 string name = Path.GetFileNameWithoutExtension(path);
                 string label = name.StartsWith("readermp", StringComparison.OrdinalIgnoreCase) ? "Multiplayer " + name[8..] :
@@ -73,9 +82,16 @@ public static partial class MissionSceneLoader
         PreviewNotes loadNotes = new(); loadNotes.AddRange(resources.Diagnostics);
         if (resources.Unavailable != null)
             loadNotes.Add($"The remembered mission reader {Path.GetFileName(resources.Unavailable)} {(resources.Unreadable ? "could not be read" : "is no longer available")}; showing {(resources.Mission == null ? "stored world geometry" : Path.GetFileName(resources.Mission))}.");
-        List<ZbdDocument> archives = [];
+        List<ZbdDocument> archives = []; string mapDirectory = Path.GetDirectoryName(Path.GetFullPath(world.Path))!;
         foreach (string path in paths)
-            try { if (FormatRegistry.Probe(path).Family == FormatFamily.Archive) archives.Add(await resolver.OpenCachedAsync(path, token).ConfigureAwait(false)); }
+            try
+            {
+                if (FormatRegistry.Probe(path).Family != FormatFamily.Archive) continue;
+                var archive = await resolver.OpenCachedAsync(path, token).ConfigureAwait(false); archives.Add(archive);
+                // The catalog reported damaged map-directory archives; report shared root resources here.
+                if (ParseError(archive) is { } error && !Path.GetDirectoryName(Path.GetFullPath(path))!.Equals(mapDirectory, StringComparison.OrdinalIgnoreCase))
+                    loadNotes.Add($"Mission resource {Path.GetFileName(path)}: {error}");
+            }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             { loadNotes.Add($"Mission resource {Path.GetFileName(path)}: {ex.Message}"); }
         // The dependency list freezes the mission before any archive loads await.

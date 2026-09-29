@@ -14,6 +14,7 @@ internal sealed class GameZReader : IZbdFormatReader
         if (textureOffset < 36 || materialOffset < textureOffset || modelOffset < materialOffset || nodeOffset < modelOffset) throw new InvalidDataException("GameZ section offsets are not ordered.");
         GameScene scene = new(); doc.Scene = scene;
         doc.Metadata["header_raw"] = Convert.ToHexStringLower(doc.Bytes.Span[..36]);
+        GameZLayouts.CheckEntries("texture", textureCount);
         BinaryCursor t = new(doc.Slice(textureOffset, materialOffset - textureOffset), textureOffset); t.Count(textureCount, layout.TextureSize);
         for (int i = 0; i < textureCount; i++)
         {
@@ -38,7 +39,7 @@ internal sealed class GameZReader : IZbdFormatReader
     }
     private static void ReadMaterials(ZbdDocument doc, GameScene scene, BinaryCursor c, CancellationToken token)
     {
-        uint capacity = c.U32(), count = c.U32(); c.Skip(8); if (count > capacity) throw new InvalidDataException("Material count exceeds capacity."); c.Count(capacity, 44);
+        uint capacity = c.U32(), count = c.U32(); c.Skip(8); if (count > capacity) throw new InvalidDataException("Material count exceeds capacity."); GameZLayouts.CheckEntries("material", count); c.Count(capacity, 44);
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested(); long offset = c.AbsolutePosition;
@@ -55,9 +56,15 @@ internal sealed class GameZReader : IZbdFormatReader
     }
     private static void ReadModels(ZbdDocument doc, GameScene scene, BinaryCursor c, GameZLayouts layout, CancellationToken token)
     {
-        uint capacity = c.U32(), count = c.U32(); c.Skip(4); if (count > capacity) throw new InvalidDataException("Model count exceeds capacity."); c.Count(capacity, layout.ModelSize + 4);
-        List<JsonObject> infos = [];
-        for (int i = 0; i < count; i++) { var info = layout.Read(c, layout.ModelSize, "GAMEZ_MODEL_INFO_LAYOUT"); info["data_offset"] = (long)c.U32(); infos.Add(info); }
+        uint capacity = c.U32(), count = c.U32(); c.Skip(4); if (count > capacity) throw new InvalidDataException("Model count exceeds capacity."); GameZLayouts.CheckEntries("model", count); c.Count(capacity, layout.ModelSize + 4);
+        List<JsonObject> infos = []; long geometry = 0;
+        for (int i = 0; i < count; i++)
+        {
+            token.ThrowIfCancellationRequested(); var info = layout.Read(c, layout.ModelSize, "GAMEZ_MODEL_INFO_LAYOUT"); info["data_offset"] = (long)c.U32(); infos.Add(info);
+            geometry += info.UInt("polygon_count") + (long)info.UInt("light_count");
+        }
+        // Each polygon/light becomes metadata; bound the document total before reading any model data.
+        GameZLayouts.CheckEntries("polygon/light record", geometry, GameZLayouts.MaximumGeometryRecords);
         c.Skip(checked((int)(capacity - count) * (layout.ModelSize + 4)));
         for (int index = 0; index < count; index++)
         {
@@ -91,10 +98,11 @@ internal sealed class GameZReader : IZbdFormatReader
     }
     private static IReadOnlyList<long> ReadNodes(ZbdDocument doc, GameScene scene, BinaryCursor c, uint capacity, GameZLayouts layout, CancellationToken token)
     {
+        GameZLayouts.CheckEntries("node", capacity);
         int count = c.Count(capacity, layout.NodeSize + 4); List<(JsonObject Info, uint Offset, long Header)> entries = []; bool free = false;
         for (int i = 0; i < count; i++)
         {
-            long header = c.AbsolutePosition; var raw = c.Take(layout.NodeSize); uint offset = c.U32();
+            token.ThrowIfCancellationRequested(); long header = c.AbsolutePosition; var raw = c.Take(layout.NodeSize); uint offset = c.U32();
             if (!raw.Span[..36].ContainsAnyExcept((byte)0)) free = true;
             if (!free) entries.Add((layout.Decode(raw, "GAMEZ_NODE_BASE_LAYOUT"), offset, header));
         }

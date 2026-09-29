@@ -84,9 +84,11 @@ public sealed partial class GitHub(ICommandRunner runner, string executable, str
         foreach (var row in inline)
             if (row["pull_request_review_id"] is { } review && publishedIds.Contains(review.GetValue<long>())) Add(row, "inline", "created_at");
         Approval? approval = null;
-        foreach (var summary in conversation.Where(IsBot))
-        {
-            if (SummaryCompletion(Text(summary, "body"), head) is not { } completed) continue;
+        // Only the newest bot summary for this head can approve. Another review of the same head, running or
+        // completed after an earlier reaction, supersedes the older completed summary and that reaction.
+        var summary = conversation.Where(IsBot).Where(s => SummaryForHead(Text(s, "body"), head))
+            .OrderBy(s => Date(s, "created_at")).ThenBy(s => s["id"]!.GetValue<long>()).LastOrDefault();
+        if (summary != null && SummaryCompletion(Text(summary, "body"), head) is { } completed)
             foreach (var reaction in reactions.Where(IsBot).Where(r => Text(r, "content") == "+1"))
             {
                 DateTimeOffset created = Date(reaction, "created_at");
@@ -94,7 +96,6 @@ public sealed partial class GitHub(ICommandRunner runner, string executable, str
                 if (created.ToUnixTimeSeconds() >= completed.ToUnixTimeSeconds())
                     approval = new(head, reaction["id"]!.GetValue<long>(), created, Text(summary, "html_url"));
             }
-        }
         // A push during pagination invalidates the entire mixed snapshot.
         var final = await GetAsync($"{root}/pulls/{pr}", deadline.Token);
         if (Text(final["head"]!, "sha") != head || Text(final, "state") != "open")
@@ -102,6 +103,18 @@ public sealed partial class GitHub(ICommandRunner runner, string executable, str
         return new(head, true, comments.ToArray(), approval);
     }
 
+    /// <summary>Whether a review-bot summary lists any code/security review of this head, in any state.</summary>
+    public static bool SummaryForHead(string body, string head)
+    {
+        if (!body.StartsWith("<!-- codex-pull-request-review-summary -->", StringComparison.Ordinal)) return false;
+        foreach (string line in body.Split('\n'))
+        {
+            var cells = line.Split('|');
+            if (cells.Length < 5 || !(cells[1].Contains("**Code Review**", StringComparison.Ordinal) || cells[1].Contains("**Security Review**", StringComparison.Ordinal))) continue;
+            if (CommitCell().Match(cells[3]) is { Success: true } commit && head.StartsWith(commit.Groups[1].Value, StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
     public static DateTimeOffset? SummaryCompletion(string body, string head)
     {
         if (!body.StartsWith("<!-- codex-pull-request-review-summary -->", StringComparison.Ordinal)) return null;

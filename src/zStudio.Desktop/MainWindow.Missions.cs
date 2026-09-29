@@ -11,6 +11,7 @@ public partial class MainWindow
     private long missionRequest;
     // An explicit picker/MCP choice must fail if its reader vanished, never display a fallback.
     private (string World, string Archive)? exactMissionRequest;
+    private string? PendingExactMission(string worldPath) => exactMissionRequest is { } pending && pending.World.Equals(worldPath, StringComparison.OrdinalIgnoreCase) ? pending.Archive : null;
     private string? ExactMissionFor(string worldPath, string? archive) => exactMissionRequest is { } pending && archive != null &&
         pending.World.Equals(worldPath, StringComparison.OrdinalIgnoreCase) && pending.Archive.Equals(archive, StringComparison.OrdinalIgnoreCase) ? archive : null;
     private string? MissionWorldPath => animation?.Mw3WorldPath ?? (shownAsset?.Kind == AssetKind.World && shownDocument?.PreviewDocument.Game == GameVariant.MechWarrior3 ? shownDocument.Path : null);

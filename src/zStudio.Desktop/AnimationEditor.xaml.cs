@@ -200,7 +200,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                 var view = refreshScene ? contextRefreshView ??= viewport.CaptureView() : viewport.CaptureView();
                 if (refreshScene)
                 {
-                    var updated = await document.GetAnimationContextAsync(resolver, token, difficulty: SelectedDifficulty);
+                    var updated = await document.GetAnimationContextAsync(resolver, token, difficulty: SelectedDifficulty, exactMission: Mw3WorldPath is { } world ? ExactMission?.Invoke(world) : null);
                     token.ThrowIfCancellationRequested();
                     updated.RemapBindingsFrom(context); nextContext = updated;
                 }

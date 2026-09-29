@@ -68,6 +68,25 @@ public sealed class GitHubTests
     }
 
     [Fact]
+    public async Task OnlyTheNewestCurrentHeadSummaryCanApprove()
+    {
+        JsonObject Summarized(int id, string created, string status, string time)
+        { var row = Row(id, Summary(status: status, time: time), User(GitHub.ReviewBot, "Bot")); row["created_at"] = created; return row; }
+        async Task<Approval?> Read(JsonObject[] conversation, params JsonObject[] reactions) =>
+            (await Source(new GitHubRunner { Conversation = conversation, Reactions = reactions }).ReadAsync("o/r", 14, TestContext.Current.CancellationToken)).Approval;
+        JsonObject Older() => Summarized(1, "2026-09-29T11:00:00Z", "✅ **Completed**", "2026-09-29T11:59:50Z");
+        Assert.NotNull(await Read([Older()], Reaction(1)));
+        // A later review of the same unchanged head supersedes the older completed summary and its reaction.
+        Assert.Null(await Read([Older(), Summarized(2, "2026-09-29T12:05:00Z", "🔄 **Running**", "2026-09-29T12:05:00Z")], Reaction(1)));
+        JsonObject Newer() => Summarized(2, "2026-09-29T12:05:00Z", "✅ **Completed**", "2026-09-29T12:10:00Z");
+        Assert.Null(await Read([Older(), Newer()], Reaction(1)));
+        var approval = await Read([Older(), Newer()], Reaction(1), Reaction(2, created: "2026-09-29T12:11:00Z"));
+        Assert.Equal(2, approval?.ReactionId); Assert.EndsWith("#2", approval?.SummaryUrl);
+        // A summary for another head does not hide the current head's latest review.
+        Assert.NotNull(await Read([Newer(), Row(3, Summary(Next), User(GitHub.ReviewBot, "Bot"))], Reaction(2, created: "2026-09-29T12:11:00Z")));
+    }
+
+    [Fact]
     public async Task AUserCannotForgeTheBotSummary()
     {
         var runner = new GitHubRunner { Conversation = [Row(1, Summary())], Reactions = [Reaction(1)] };

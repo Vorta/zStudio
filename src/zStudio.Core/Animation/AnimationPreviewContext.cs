@@ -40,9 +40,9 @@ public sealed partial class AnimationPreviewContext
         copy.Diagnostics.AddRange(Diagnostics);
         return copy;
     }
-    public async Task<AnimationPreviewContext> WithDifficultyAsync(AssetResolver resolver, MissionDifficulty difficulty, CancellationToken token = default)
+    public async Task<AnimationPreviewContext> WithDifficultyAsync(AssetResolver resolver, MissionDifficulty difficulty, CancellationToken token = default, string? exactMission = null)
     {
-        var mission = await MissionSceneLoader.LoadAsync(World, resolver, Package, token, difficulty).ConfigureAwait(false);
+        var mission = await MissionSceneLoader.LoadAsync(World, resolver, Package, token, difficulty, exactMission, exactMission != null).ConfigureAwait(false);
         var copy = Snapshot(); copy.Mission = mission;
         copy.RootOverrides.Clear();
         if (Mission != null) copy.Diagnostics.RemoveAll(message => Mission.Diagnostics.Contains(message));
@@ -61,7 +61,8 @@ public sealed partial class AnimationPreviewContext
             else Diagnostics.Add($"Preview binding for animation #{binding.Key} was cleared: its actor is absent or ambiguous in this layout.");
         }
     }
-    public static async Task<AnimationPreviewContext> LoadAsync(AnimationPackage package, string animationPath, AssetResolver resolver, string? worldPath = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium)
+    /// <param name="exactMission">An explicitly requested MW3 reader; loading fails rather than falling back when it is unavailable.</param>
+    public static async Task<AnimationPreviewContext> LoadAsync(AnimationPackage package, string animationPath, AssetResolver resolver, string? worldPath = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium, string? exactMission = null)
     {
         var frozen = new AnimationPackage { Prefix = package.Prefix, Tail = package.Tail };
         frozen.Entries.AddRange(package.Entries.Select(e => e.Clone())); frozen.Diagnostics.AddRange(package.Diagnostics); package = frozen;
@@ -79,7 +80,7 @@ public sealed partial class AnimationPreviewContext
         if (world.Probe.Version != requiredWorldVersion)
             throw new InvalidDataException("The animation and world formats belong to different games. Choose the matching world.");
         var context = new AnimationPreviewContext { Package = package, World = world };
-        context.Mission = await MissionSceneLoader.LoadAsync(world, resolver, package, token, difficulty).ConfigureAwait(false);
+        context.Mission = await MissionSceneLoader.LoadAsync(world, resolver, package, token, difficulty, exactMission, exactMission != null).ConfigureAwait(false);
         context.Diagnostics.AddRange(context.Mission.Diagnostics);
         // The loaded mission is exact here: another reader must not silently supply its resources.
         var files = world.Game == GameVariant.MechWarrior3 ? (await MissionSceneLoader.Mw3ResourcesAsync(world.Path, resolver, context.Mission.Layout.MissionArchive, true, token).ConfigureAwait(false)).Files :

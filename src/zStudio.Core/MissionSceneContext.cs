@@ -112,6 +112,7 @@ public static partial class MissionSceneLoader
                     package = (await resolver.OpenCachedAsync(file, token).ConfigureAwait(false)).Animations;
                 if (family != FormatFamily.Archive) continue;
                 var archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
+                if (MissionSceneLoader.ParseError(archive) is { } parseError) diagnostics.Add($"Mission layout: {Path.GetFileName(file)}: {parseError}");
                 aiResources.AddRange(archive.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (archive, a)));
                 foreach (var asset in archive.Assets.Where(a => a.Name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd" or "vehicle.zrd" or "vehicle_easy.zrd" or "vehicle_hard.zrd" or "startanims.zrd" or "ai.zrd" or "puppies.zrd" or "puppies_easy.zrd" or "puppies_hard.zrd"))
                 {

@@ -217,6 +217,55 @@ public sealed class Mw3MissionIsolationTests
     }
 
     [Fact]
+    public async Task PartiallyParsedMissionReadersAreReportedAndNeverOffered()
+    {
+        using var fixture = new Mw3MissionFixture("actor_01");
+        string damaged = Path.Combine(fixture.Folder, "readerm2.zbd"); File.WriteAllBytes(damaged, WithBrokenMember(fixture.ReaderBytes));
+        var parsed = await fixture.Resolver.OpenCachedAsync(damaged, Token);
+        Assert.Contains(parsed.Assets, a => a.Kind == AssetKind.Zrd && a.Name == "aiv.zrd"); // The typed AIV still decodes before the damaged member.
+        Assert.Contains(parsed.Diagnostics, d => d.Severity == "Error");
+        var catalog = await MissionSceneLoader.Mw3MissionCatalogAsync(fixture.World.Path, fixture.Resolver, Token);
+        Assert.Equal(fixture.ReaderPath, Assert.Single(catalog.Missions).Archive, ignoreCase: true);
+        Assert.Contains(catalog.Diagnostics, d => d.Contains("readerm2.zbd", StringComparison.Ordinal) && d.Contains("broken.zrd", StringComparison.Ordinal));
+        Assert.Contains(Path.GetFullPath(damaged), catalog.Unreadable);
+        // A remembered damaged reader is shown through the visible fallback, never as a seemingly valid preview.
+        fixture.Resolver.SelectMission(fixture.World.Path, damaged);
+        var mission = await MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, token: Token);
+        Assert.Equal(fixture.ReaderPath, mission.Layout.MissionArchive, ignoreCase: true);
+        Assert.Contains(mission.Diagnostics, d => d.Contains("readerm2.zbd", StringComparison.Ordinal) && d.Contains("broken.zrd", StringComparison.Ordinal));
+        // An explicit request for it fails instead of loading another reader.
+        await Assert.ThrowsAsync<InvalidDataException>(() => MissionSceneLoader.LoadAsync(fixture.World, fixture.Resolver, token: Token, mission: damaged, exactMission: true));
+    }
+    [Fact]
+    public async Task ExactAnimationMissionRequestsNeverLoadAFallbackReader()
+    {
+        using var fixture = new Mw3MissionFixture("actor_01");
+        fixture.Resolver.SetWorkspaceSnapshots(Guid.NewGuid(), [fixture.World]);
+        byte[] prefix = new byte[80]; BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(4), 39);
+        var package = new Recoil.Zbd.Core.Animation.AnimationPackage { Prefix = prefix, Tail = [] };
+        string animation = Path.Combine(fixture.Folder, "anim.zbd"), vanished = Path.Combine(fixture.Folder, "readerm2.zbd");
+        var context = await Recoil.Zbd.Core.Animation.AnimationPreviewContext.LoadAsync(package, animation, fixture.Resolver, fixture.World.Path, Token, exactMission: fixture.ReaderPath);
+        Assert.Equal(fixture.ReaderPath, context.Mission!.Layout.MissionArchive, ignoreCase: true);
+        // The requested reader disappeared after the picker listed it: fail before publishing another reader.
+        fixture.Resolver.SelectMission(fixture.World.Path, vanished);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => Recoil.Zbd.Core.Animation.AnimationPreviewContext.LoadAsync(package, animation, fixture.Resolver, fixture.World.Path, Token, exactMission: vanished));
+        Assert.Contains("readerm2.zbd", error.Message);
+        await Assert.ThrowsAsync<InvalidDataException>(() => context.WithDifficultyAsync(fixture.Resolver, MissionDifficulty.Medium, Token, vanished));
+        // A remembered (non-exact) selection still falls back visibly.
+        var fallback = await Recoil.Zbd.Core.Animation.AnimationPreviewContext.LoadAsync(package, animation, fixture.Resolver, fixture.World.Path, Token);
+        Assert.Equal(fixture.ReaderPath, fallback.Mission!.Layout.MissionArchive, ignoreCase: true);
+        Assert.Equal(vanished, fallback.Mission.Layout.UnavailableMission, ignoreCase: true);
+    }
+    private static byte[] WithBrokenMember(byte[] archive)
+    {
+        int count = BinaryPrimitives.ReadInt32LittleEndian(archive.AsSpan(archive.Length - 4)), table = archive.Length - 8 - count * 148;
+        byte[] record = new byte[148]; BinaryPrimitives.WriteInt32LittleEndian(record, 0x7FFF_0000); BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(4), 16);
+        Encoding.Latin1.GetBytes("broken.zrd").CopyTo(record, 8);
+        byte[] trailer = new byte[8]; BinaryPrimitives.WriteInt32LittleEndian(trailer, 1); BinaryPrimitives.WriteInt32LittleEndian(trailer.AsSpan(4), count + 1);
+        return [.. archive.AsSpan(0, archive.Length - 8), .. record, .. trailer];
+    }
+
+    [Fact]
     public async Task UnreadableArchivesDoNotHideTheMotionLibrary()
     {
         string root = Path.Combine(Path.GetTempPath(), "zstudio-motion-library-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);

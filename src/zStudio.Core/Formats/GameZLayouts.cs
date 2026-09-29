@@ -12,6 +12,10 @@ internal sealed class GameZLayouts(bool mw3)
         15 => recoil, 27 => mw, _ => throw new InvalidDataException("Unsupported world version.")
     };
     internal bool HasVertexColors => mw3;
+    // Supported limits for per-record metadata, far above retail pools (at most 20,000 models/nodes and about
+    // 35,000 polygons per world). They bound allocation before any record is materialized.
+    internal const int MaximumTableEntries = FormatRegistry.MaximumDirectoryEntries, MaximumGeometryRecords = 262_144;
+    internal static void CheckEntries(string table, long count, long maximum = MaximumTableEntries) => FormatRegistry.CheckEntries("GameZ " + table, count, maximum);
     internal int TextureSize => mw3 ? 40 : 36;
     internal int ModelSize => mw3 ? 92 : 84;
     internal int PolygonSize => mw3 ? 36 : 28;

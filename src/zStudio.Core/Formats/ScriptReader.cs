@@ -23,7 +23,7 @@ internal sealed class ScriptReader : IZbdFormatReader
     public FormatFamily Family => FormatFamily.Scripts;
     public void Read(ZbdDocument doc, CancellationToken token)
     {
-        BinaryCursor c = new(doc.Bytes); c.Skip(8); int count = c.Count(c.U32(), 128);
+        BinaryCursor c = new(doc.Bytes); c.Skip(8); uint stored = c.U32(); FormatRegistry.CheckEntries("Script entry", stored); int count = c.Count(stored, 128);
         List<(string Name, uint Time, uint Offset, ReadOnlyMemory<byte> Raw)> directory = [];
         for (int i = 0; i < count; i++)
         {

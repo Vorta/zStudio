@@ -22,7 +22,9 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Reject difficulty changes for MW3 previews before touching the shared RECOIL preference, and reject automation edits to other documents while the shown preview holds a scene-card draft instead of prompting.
 - Keep accepted edits and saves successful when a dependent motion library becomes unavailable; clear motion bindings unless the member identity is proven, and reconcile the displayed motion by member UUID rather than the Assets selection.
 - Follow authored MW3 conventions for new version-27 material flags and polygon priority/field24/zone words during mesh replacement; RECOIL version-15 output is unchanged.
-- PR-watch tooling: retry state replacement while another process reads it, report an active watch without a worker, ignore review requests and review-bot status posts when arming feedback notices, honor rate-limit resets only when exhausted, and require explicit release authorization on every arm.
+- Bound per-record metadata before it is materialized: at most 65,536 entries per archive, texture/script directory and GameZ table, and 262,144 GameZ polygon/light records per file, with cancellation while reading table headers.
+- Never offer a partially parsed mission reader, report damaged mission resources, and make explicit MW3 animation mission switches fail rather than fall back when the requested reader disappears.
+- PR-watch tooling: retry state replacement while another process reads it, report an active watch without a worker, ignore review requests and review-bot status posts when arming feedback notices, honor rate-limit resets only when exhausted, require explicit release authorization on every arm, and accept approval only for the newest review summary of the current head.
 
 ## 0.6.3 — 2026-09-28
 

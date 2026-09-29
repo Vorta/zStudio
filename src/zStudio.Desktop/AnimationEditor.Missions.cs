@@ -7,6 +7,8 @@ namespace Recoil.Zbd.Desktop;
 public partial class AnimationEditor
 {
     internal Func<string, Task>? MissionRequested { get; set; }
+    /// <summary>The explicitly requested reader for a pending mission switch of this world, or null.</summary>
+    internal Func<string, string?>? ExactMission { get; set; }
     internal string? Mw3WorldPath => context?.World.Game == GameVariant.MechWarrior3 ? context.World.Path : null;
     internal string? MissionArchive => context?.Mission?.Layout.MissionArchive;
     internal IReadOnlyList<MissionVariant> MissionChoices => Mission.Items.Cast<MissionVariant>().ToArray();

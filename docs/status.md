@@ -41,6 +41,12 @@ Validation:
 
 MW3 engine semantics for the copied replacement words and reversed v39 spans remain unverified.
 
+Follow-up PR review (commit 69c9d7e) found four further P2s, now fixed with regressions that fail without the fixes:
+- **Unbounded GameZ tables:** oversized GameZ model tables and polygon totals were materialized before any bound. The same failure class existed in archive, texture-pack and script directories. All are now checked against shared supported limits before per-record metadata is created, and the header loops observe cancellation.
+- **Damaged mission readers:** a partially parsed mission reader could still be offered and used. Such readers are now reported and excluded, and damaged shared resources are noted in both loaders.
+- **Animation mission switches:** an MW3 animation mission switch could fall back to another reader if the requested one disappeared mid-switch. The request now reaches the animation context exactly, so the switch fails and keeps the displayed mission.
+- **PR watcher approval:** the watcher could pair a thumbs-up with a superseded summary. Only the newest current-head summary qualifies now.
+
 ## PR feedback watch and coordinate-path review (2026-09-29)
 
 Added optional local development tooling in `tools/pr-watch.ps1`. It observes a selected PR's conversation comments, published review summaries and inline comments, disarms on the first new feedback batch and queues one follow-up into the owning Codex conversation. Explicit snapshot acknowledgment preserves later arrivals; validated fix pushes re-arm against the remote head. Separate approval monitoring checks a fresh review-bot reaction on the PR description and a completed current-head summary. The helper does not edit, merge or publish; any authorized release still requires the agent's current-head review, CI and repository checks. Durable claims prevent automatic duplicate submissions after crashes or uncertain delivery. See [PR watch setup and recovery](pr-watch.md).

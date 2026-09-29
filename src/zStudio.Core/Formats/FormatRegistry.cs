@@ -14,6 +14,13 @@ public sealed class FormatRegistry
     { new TextureReader(), new ArchiveReader(), new ScriptReader(), new AnimationReader(), new GameZReader() }.ToDictionary(r => r.Family);
     public static FormatRegistry Default { get; } = new();
     public const long MaximumDocumentBytes = 512L * 1024 * 1024;
+    /// <summary>
+    /// Supported entries per stored directory/table (archive members, texture/script records, GameZ tables), far above
+    /// retail data (at most 20,000). Each entry becomes metadata, so the count is checked before anything is materialized.
+    /// </summary>
+    public const int MaximumDirectoryEntries = 65_536;
+    internal static void CheckEntries(string kind, long count, long maximum = MaximumDirectoryEntries)
+    { if (count > maximum) throw new InvalidDataException($"{kind} count {count:N0} exceeds the supported {maximum:N0}; source bytes are retained."); }
     internal static void ValidateDocumentSize(long size)
     {
         if (size < 0 || size > MaximumDocumentBytes) throw new InvalidDataException("Files larger than 512 MiB cannot be opened or saved in this version.");

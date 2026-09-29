@@ -18,7 +18,8 @@ internal static class MechLibraryReader
             new BinaryCursor(doc.Slice(formats[0].Offset, 4)).U32() != 1) return;
         GameScene scene = new(); var layout = GameZLayouts.For(27);
         var materialCursor = new BinaryCursor(doc.Slice(materials[0].Offset, materials[0].Length), materials[0].Offset);
-        int count = materialCursor.Count(materialCursor.U32(), 40);
+        uint storedMaterials = materialCursor.U32(); GameZLayouts.CheckEntries("mech material", storedMaterials);
+        int count = materialCursor.Count(storedMaterials, 40); long geometry = 0;
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested();
@@ -54,7 +55,7 @@ internal static class MechLibraryReader
             int ReadNode(int parent, int depth)
             {
                 token.ThrowIfCancellationRequested();
-                if (depth > 256 || scene.Nodes.Count >= 200_000) throw new InvalidDataException("Mech hierarchy limit exceeded.");
+                if (depth > 256 || scene.Nodes.Count >= GameZLayouts.MaximumTableEntries) throw new InvalidDataException("Mech hierarchy limit exceeded.");
                 long start = c.AbsolutePosition;
                 var info = layout.Read(c, layout.NodeSize, "GAMEZ_NODE_BASE_LAYOUT");
                 if (info.Int("node_class") != 5 || info.Int("parent_count") != (parent < 0 ? 0 : 1))
@@ -68,6 +69,8 @@ internal static class MechLibraryReader
                     modelIndex = scene.Models.Count;
                     long header = c.AbsolutePosition;
                     var modelInfo = layout.Read(c, layout.ModelSize, "GAMEZ_MODEL_INFO_LAYOUT");
+                    geometry += modelInfo.UInt("polygon_count") + (long)modelInfo.UInt("light_count");
+                    GameZLayouts.CheckEntries("mech polygon/light record", geometry, GameZLayouts.MaximumGeometryRecords);
                     modelInfo["source_header_offset"] = header; modelInfo["member_index"] = asset.Index;
                     long modelStart = c.AbsolutePosition;
                     var model = GameZReader.ReadModelData(c, modelInfo, modelIndex.Value, layout, doc.Diagnostics, token);
