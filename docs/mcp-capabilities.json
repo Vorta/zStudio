@@ -41,7 +41,7 @@
         "zstudio_resource_select",
         "zstudio_export"
       ],
-      "note": "Dynamic Edit/Archive members and Assets context menus share the resource session. Member UUIDs survive rename, reorder and undo; imported known payloads are validated off-thread. Aliased payload ranges share immutable decoding but retain independent member edits. Malformed embedded ZRD remains raw with a warning and supports member repair. Raw export uses the edited snapshot."
+      "note": "Dynamic Edit/Archive members and Assets context menus share the resource session. Member UUIDs survive rename, reorder and undo; imported known payloads are validated off-thread. The active preview follows the current selection even when Assets is hidden: deletion or content-kind replacement clears/retargets the viewer, and Undo/Redo restores the selected content. Motion rename/reorder retains transport and camera by UUID, never name or old index. Aliased payload ranges share immutable decoding but retain independent member edits. Malformed embedded ZRD remains raw with a warning and supports member repair. Raw export uses the edited snapshot."
     },
     {
       "gui": "MainWindow.Resources:ZrdNodes",

@@ -3324,7 +3324,7 @@
   },
   {
     "Name": "zstudio_archive_edit",
-    "Description": "Add, replace, rename, duplicate, delete or reorder a ZAR member as one undoable edit. add_zrd creates an empty array. Names use Latin-1 and are not identities. Move position is the final zero-based index. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Add, replace, rename, duplicate, delete or reorder a ZAR member as one undoable edit. add_zrd creates an empty array. Names use Latin-1 and are not identities. Move position is the final zero-based index. The active preview follows the selected member UUID; deleting or changing its content kind clears or retargets the viewer, including Undo/Redo. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

@@ -192,7 +192,11 @@ public partial class MainWindow : Window
         if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         asset = asset == null ? null : doc.PreviewDocument.Assets.SingleOrDefault(a => a.Id == asset.Id);
         bool differentAsset = shownAsset?.Id != asset?.Id;
-        if (!differentAsset && asset?.Kind == AssetKind.Motion && shownDocument == doc && motion != null)
+        PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
+        ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
+        // A motion's member UUID survives rename/reorder; its asset index does not.
+        // Conversely, deleting a member can put another clip at the same asset ID.
+        if (asset?.Kind == AssetKind.Motion && shownDocument == doc && motion != null && doc.ResourceEdits?.Current.Members[asset.Index].Id == motion.MemberId)
         { shownAsset = asset; motion.RefreshClip(); await RefreshAssetInspectionAsync(doc, asset, preview.Token); return; }
         if (!differentAsset && asset != null && shownDocument == doc && HasPublishedStaticScene && ViewModel.Resolver != null)
         { shownAsset = asset; await RefreshStaticSceneAsync(doc, asset); return; }
@@ -208,8 +212,6 @@ public partial class MainWindow : Window
         var token = loading.Token;
         foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
         EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
-        PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
-        ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
         try
         {
             var snapshot = doc.PreviewDocument;

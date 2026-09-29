@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR #14 active motion removal and identity fix (2026-09-29)
+
+Resource edits and Undo/Redo now reconcile the active preview with the resulting archive selection, including when Assets is hidden. Deleting the displayed motion or replacing it with non-motion data disposes the old viewer and displays the remaining selection or empty archive metadata; accepted edits no longer report failure while refreshing a missing member. Motion reuse checks the stable member UUID, so a different clip taking the old index creates its own viewer while rename/reorder retains the surviving clip's transport and camera. Preview headings refresh with the selected record. Pinned Properties retains its identity.
+
+The named-pipe regression reproduced the original post-accept failure before the fix. Coverage now exercises delete/replace with Assets visible and hidden, empty archives, Undo/Redo, same-name clips with distinct data, old-index reuse, rename/reorder, pinned Properties, pending assembly-load cancellation, restored clean history and unchanged source bytes. Release build passes with zero warnings/errors; all 406 tests pass (313 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. MCP command descriptions, embedded discovery, capabilities and guides are updated. Focused follow-up review found no further actionable defect in this change. Version remains 0.7.0.
+
 ## PR #14 gameplay markers, fog and inspection bounds (2026-09-29)
 
 Version-39 gameplay-only events 41/42 now complete as trace-only markers, preserving support notices and allowing later ordinary/cleanup events to execute. Seeking remains deterministic, duration analysis completes and serialized data is untouched. Camera-only fog refreshes update both material and vertex tint through one helper, without advancing playback or rebuilding poses, positions or geometry.

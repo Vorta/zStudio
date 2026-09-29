@@ -51,6 +51,8 @@ Folder/file opening revalidates navigation ownership and unfinished input after 
 
 All tools below have the `zstudio_` prefix. Call `capabilities` for current schemas and option names.
 
+`archive_edit` and resource `undo_redo` reconcile the visible preview with the resulting selection, including while Assets is hidden. Removing the active motion or replacing it with another content kind disposes its viewer; a surviving motion retains transport and camera through rename/reorder by stable member UUID. Pinned Properties retains its own target.
+
 | Area | Tools and behavior |
 | --- | --- |
 | Workspace | `state`, `capabilities`, `open_root`, `files`, `search`, `open_document`, `assets`, `asset_filter`, `select_asset`, `related`, `reload_document`, `close_document` |

@@ -52,11 +52,11 @@ public partial class MainWindow
         if (aiPropertiesArchive != null && (aiPropertiesArchive.Equals(doc.Path, StringComparison.OrdinalIgnoreCase) || aiPropertiesArchive.Equals(doc.ResourceEdits?.TargetPath, StringComparison.OrdinalIgnoreCase))) propertiesWindow?.MarkAiSnapshotStale();
         foreach (var open in ViewModel.Documents) { open.InvalidateMissionContext(); if (open != doc) open.InvalidateCleanPickupEdits(); }
         await previewWork;
-        if (motion != null)
-        {
-            if (shownDocument == doc) motion.RefreshClip();
-            else await motion.RefreshLibraryAsync(doc.ResourceEdits);
-        }
+        // Archive edits may remove the selected member, change its kind or move a
+        // different member into its old index. Reconcile the current selection even
+        // when the Assets tab is not realized and has not raised SelectionChanged.
+        if (shownDocument == doc) await ShowAsset(doc, doc.SelectedAsset?.Record);
+        else if (motion != null) await motion.RefreshLibraryAsync(doc.ResourceEdits);
         else if (shownDocument != doc && animation != null) await animation.RefreshModelContextAsync(resourceChanges: true);
         else if (HasPublishedStaticScene && shownDocument is { } shown)
         {
@@ -123,7 +123,7 @@ public partial class MainWindow
     {
         Register(r, "archive_members", "List edited resource members in stored order with stable identities and original source indices. Duplicate names are allowed. Standalone ZRD has one member.", false,
             [DocumentParameter, .. PageParameters], a => { var d = TargetDocument(a); return Result(new { d.Revision, members = Page(ResourceSession(d).Current.Members.Select((m, i) => new { member = m.Id, index = i, m.SourceIndex, m.Name, bytes = m.Data.Length }), a, m => m.Name).Data }); });
-        RegisterJob(r, "archive_edit", "Add, replace, rename, duplicate, delete or reorder a ZAR member as one undoable edit. add_zrd creates an empty array. Names use Latin-1 and are not identities. Move position is the final zero-based index.",
+        RegisterJob(r, "archive_edit", "Add, replace, rename, duplicate, delete or reorder a ZAR member as one undoable edit. add_zrd creates an empty array. Names use Latin-1 and are not identities. Move position is the final zero-based index. The active preview follows the selected member UUID; deleting or changing its content kind clears or retargets the viewer, including Undo/Redo.",
             [DocumentParameter, RevisionParameter, P("action", "string", "Member operation.", true, "add", "add_zrd", "replace", "rename", "duplicate", "delete", "move"), P("member", "string", "Required member UUID except for add/add_zrd."), P("name", "string", "Required for add/add_zrd/rename/duplicate; 1–63 Latin-1 characters."), P("path", "string", "Input file for add/replace."), new("position", "integer", "Final index for move.", Minimum: 0, Maximum: int.MaxValue)], false,
             async (a, token) => { var d = TargetDocument(a, true); var edits = ResourceSession(d); await ApplyResourceAsync(d, ct => edits.PrepareArchiveAsync(Text(a,"action"), GuidArg(a,"member"), Text(a,"name"), Text(a,"path"), Int(a,"position",-1), ct), d.Revision, token); return Result(DocumentState(d)); });
         RegisterJob(r, "resource_select", "Select a member and optional ZRD node by stable UUID in the visible Data tree. Properties retains its pinned target.",

@@ -42,6 +42,7 @@ public sealed class MotionEditor : UserControl, IDisposable
     public event Action<string>? StatusChanged;
     public int Lod => Math.Max(0, lod.SelectedIndex);
     public bool IsPlaying { get; private set; }
+    internal Guid MemberId => member;
     public int? AssemblyMember => selectedMember;
     public object State => new { member, seconds, playing = IsPlaying, loading = load != null, playbackRequested = pendingPlayback ?? IsPlaying, loopSeconds = clip?.LoopTime, frameCount = clip?.FrameCount, lod = Lod, library = library?.Path, assembly = AssemblyMember,
         assemblies = library?.Assets.Where(a => a.Content is MechAssembly).Select(a => new { member = a.Index, a.Name }).ToArray(), diagnostics = sampler?.Diagnostics };

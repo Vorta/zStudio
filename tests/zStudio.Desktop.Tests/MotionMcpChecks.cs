@@ -75,6 +75,7 @@ internal static class MotionMcpChecks
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["destination"] = copy });
             Assert.False(doc.IsDirty); Assert.Equal(archive, await File.ReadAllBytesAsync(path, token));
             var catalog = await Call("event_catalog", new() { ["version"] = 39 }); Assert.Contains(catalog["items"]!.AsArray(), e => e!["Type"]!.GetValue<int>() == 42);
+            await CheckMotionRemoval();
             await Job("open_document", new() { ["path"] = libraryPath });
             var libraryDoc = main.ViewModel.Documents.Single(d => d.Path == libraryPath);
             await Job("select_asset", new() { ["document"] = libraryDoc.SessionId.ToString(), ["kind"] = "Model", ["index"] = 3 });
@@ -124,6 +125,72 @@ internal static class MotionMcpChecks
             await CheckLargeMotionInspection();
             Recoil.Zbd.Rendering.SceneViewport StaticViewport() => (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             AnimationFrame Presented() => (AnimationFrame)typeof(Recoil.Zbd.Rendering.SceneViewport).GetField("animationFrame", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor.Viewport)!;
+            MotionEditor? CurrentMotion() => (MotionEditor?)typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main);
+            async Task CheckMotionRemoval()
+            {
+                var tabs = (TabControl)main.FindName("NavigationTabs");
+                string raw = Path.Combine(folder, "replacement.bin"); await File.WriteAllBytesAsync(raw, [0xDE, 0xAD, 0xBE, 0xEF], token);
+                foreach (int tab in new[] { 2, 1 })
+                foreach (string action in new[] { "delete", "replace" })
+                {
+                    tabs.SelectedIndex = tab;
+                    await main.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+                    var previous = Assert.IsType<MotionEditor>(CurrentMotion()); await previous.SelectAssemblyAsync(3, token); previous.Play();
+                    long before = doc.Revision;
+                    await Job("archive_edit", Args(("revision", before), ("action", action), ("path", raw)));
+                    Assert.Equal(before + 1, doc.Revision); Assert.True(doc.IsDirty); Assert.Null(CurrentMotion());
+                    Assert.Null(((ContentControl)main.FindName("AnimationHost")).Content);
+                    Assert.True((bool)typeof(MotionEditor).GetField("disposed", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(previous)!);
+                    if (action == "delete") { Assert.Empty(doc.Assets); Assert.Null(doc.SelectedAsset); }
+                    else { Assert.Equal(member, doc.SelectedAsset!.ResourceId); Assert.IsNotType<MotionClip>(doc.SelectedAsset.Record.Content); }
+                    Assert.Equal(member, main.OpenPropertiesWindow!.ResourceFields!.MemberId);
+                    await History("undo"); AssertRestored();
+                    await History("redo"); Assert.Null(CurrentMotion());
+                    await History("undo"); AssertRestored();
+                }
+                // Names and authored indices are not member identities. The same row index
+                // can now denote a different clip; moving a surviving UUID retains transport.
+                tabs.SelectedIndex = 2;
+                var retained = Assert.IsType<MotionEditor>(CurrentMotion()); await retained.SelectAssemblyAsync(3, token); retained.Play();
+                retained.Viewport.RestoreView(new(new(0, 0, 100), new(0, 0, -100), new(0, 1, 0), 45));
+                var view = retained.Viewport.CaptureView();
+                await Job("archive_edit", Args(("revision", doc.Revision), ("action", "rename"), ("name", "renamed_motion")));
+                Assert.Same(retained, CurrentMotion()); Assert.Equal("renamed_motion", ((TextBlock)main.FindName("PreviewTitle")).Text);
+                await History("undo"); Assert.Equal("test_motion", ((TextBlock)main.FindName("PreviewTitle")).Text);
+                await Job("archive_edit", Args(("revision", doc.Revision), ("action", "duplicate"), ("name", "test_motion")));
+                Guid duplicate = doc.ResourceEdits!.Current.Members.Single(m => m.Id != member).Id;
+                byte[] alternate = payload.ToArray(); BinaryPrimitives.WriteSingleLittleEndian(alternate.AsSpan(4), 3);
+                string otherClip = Path.Combine(folder, "other.motion"); await File.WriteAllBytesAsync(otherClip, alternate, token);
+                await Job("archive_edit", Args(("revision", doc.Revision), ("action", "replace"), ("member", duplicate.ToString()), ("path", otherClip)));
+                await Job("archive_edit", Args(("revision", doc.Revision), ("action", "move"), ("position", 1)));
+                Assert.Same(retained, CurrentMotion()); Assert.True(retained.IsPlaying); Assert.Equal(view, retained.Viewport.CaptureView());
+                await Job("archive_edit", Args(("revision", doc.Revision), ("action", "move"), ("position", 0)));
+                await Job("archive_edit", Args(("revision", doc.Revision), ("action", "delete")));
+                Assert.NotSame(retained, CurrentMotion()); Assert.Equal(duplicate, doc.SelectedAsset!.ResourceId);
+                Assert.Equal(duplicate, System.Text.Json.JsonSerializer.SerializeToNode(CurrentMotion()!.State)!["member"]!.GetValue<Guid>());
+                Assert.Equal(3, System.Text.Json.JsonSerializer.SerializeToNode(CurrentMotion()!.State)!["loopSeconds"]!.GetValue<float>());
+                await History("undo"); Assert.Equal(duplicate, doc.SelectedAsset!.ResourceId);
+                await History("undo"); await History("undo"); await History("undo"); await History("undo"); AssertRestored();
+                var pendingEditor = CurrentMotion()!;
+                var gate = (SemaphoreSlim)typeof(AssetResolver).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main.ViewModel.Resolver)!;
+                await gate.WaitAsync(token);
+                try
+                {
+                    var pending = pendingEditor.SelectAssemblyAsync(4, token); Assert.False(pending.IsCompleted);
+                    await Job("archive_edit", Args(("revision", doc.Revision), ("action", "delete")));
+                    Assert.Null(CurrentMotion()); await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+                }
+                finally { gate.Release(); }
+                await History("undo"); AssertRestored();
+                Assert.False(doc.IsDirty); Assert.Equal(archive, await File.ReadAllBytesAsync(path, token));
+                void AssertRestored()
+                {
+                    Assert.Equal(member, doc.SelectedAsset!.ResourceId); Assert.IsType<MotionClip>(doc.SelectedAsset.Record.Content);
+                    Assert.NotNull(CurrentMotion());
+                    Assert.Equal(member, System.Text.Json.JsonSerializer.SerializeToNode(CurrentMotion()!.State)!["member"]!.GetValue<Guid>());
+                }
+                async Task History(string action) => await Call("undo_redo", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["action"] = action });
+            }
             async Task CheckLargeMotionInspection()
             {
                 var seed = MotionClip.Read(payload, token); string name = new('x', 4096); byte[] nameBytes = new byte[4100];
