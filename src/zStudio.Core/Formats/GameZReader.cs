@@ -60,14 +60,14 @@ internal sealed class GameZReader : IZbdFormatReader
     private static void ReadModels(ZbdDocument doc, GameScene scene, BinaryCursor c, GameZLayouts layout, CancellationToken token)
     {
         uint capacity = c.U32(), count = c.U32(); c.Skip(4); if (count > capacity) throw new InvalidDataException("Model count exceeds capacity."); GameZLayouts.CheckEntries("model", count); c.Count(capacity, layout.ModelSize + 4);
-        List<JsonObject> infos = []; RecordBudget geometry = new("polygon/light record");
+        List<JsonObject> infos = []; GeometryBudget geometry = new();
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested(); var info = layout.Read(c, layout.ModelSize, "GAMEZ_MODEL_INFO_LAYOUT"); info["data_offset"] = (long)c.U32(); infos.Add(info);
-            geometry.Add(info.UInt("polygon_count") + (long)info.UInt("light_count"));
+            geometry.AddHeader(info);
         }
-        // Each polygon/light becomes metadata: the document total is bounded before any model data is read, and
-        // point-light vertices join the same total before they are allocated and expanded into JSON.
+        // Each polygon/light becomes metadata and every model vector a dense sample: both document totals are bounded
+        // before any model data is read. Point-light vertices and polygon corners are checked before their arrays.
         c.Skip(checked((int)(capacity - count) * (layout.ModelSize + 4)));
         for (int index = 0; index < count; index++)
         {
@@ -76,16 +76,24 @@ internal sealed class GameZReader : IZbdFormatReader
             var a = doc.Add(AssetKind.Model, index, $"Model {index}", start, c.AbsolutePosition - start, info, model); a.Summary = $"{model.Vertices.Length:N0} vertices · {model.Polygons.Length:N0} polygons";
         }
     }
-    internal static GameModel ReadModelData(BinaryCursor c, JsonObject info, int index, GameZLayouts layout, RecordBudget geometry, IList<Diagnostic>? diagnostics, CancellationToken token)
+    internal static GameModel ReadModelData(BinaryCursor c, JsonObject info, int index, GameZLayouts layout, GeometryBudget geometry, IList<Diagnostic>? diagnostics, CancellationToken token)
     {
         long start = c.AbsolutePosition; token.ThrowIfCancellationRequested();
         Vector3[] vertices = c.Vectors(info.Int("vertex_count")), normals = c.Vectors(info.Int("normal_count")), morphs = c.Vectors(info.Int("morph_count"));
         int lightCount = c.Count(info.UInt("light_count"), 76); JsonArray lights = [];
         for (int i = 0; i < lightCount; i++) lights.Add(FieldLayouts.Read(c, 76, "GAMEZ_POINT_LIGHT_LAYOUT"));
-        foreach (var light in lights) { geometry.Add(light!.Int("vertex_count")); light!["vertices"] = JsonData.Vectors(c.Vectors(light.Int("vertex_count")), token); }
+        foreach (var light in lights) { geometry.Records.Add(light!.Int("vertex_count")); light!["vertices"] = JsonData.Vectors(c.Vectors(light.Int("vertex_count")), token); }
         info["lights"] = lights;
         int polygonCount = c.Count(info.UInt("polygon_count"), layout.PolygonSize); List<JsonObject> polygonInfos = [];
         for (int i = 0; i < polygonCount; i++) { token.ThrowIfCancellationRequested(); polygonInfos.Add(layout.Read(c, layout.PolygonSize, "GAMEZ_POLYGON_INFO_LAYOUT")); }
+        // Vertex/normal indices, UVs and colors are dense per-corner arrays; bound them before any is allocated.
+        long corners = 0;
+        foreach (var polygon in polygonInfos)
+        {
+            uint flags = polygon.UInt("flags");
+            corners += (flags & 255) * (1L + ((flags & 512) != 0 ? 1 : 0) + (polygon.Text("uvs_ptr") != "0x00000000" ? 1 : 0) + (layout.HasVertexColors && polygon.Text("colors_ptr") != "0x00000000" ? 1 : 0));
+        }
+        geometry.Corners.Add(corners);
         List<Polygon> polygons = [];
         foreach (var polygon in polygonInfos)
         {
@@ -130,10 +138,22 @@ internal sealed class GameZReader : IZbdFormatReader
     }
     /// <summary>Per-document running total of records that each become metadata, checked before they are allocated.</summary>
     /// <remarks>Retail worlds use at most about 16,000 node references.</remarks>
-    internal sealed class RecordBudget(string kind)
+    internal sealed class RecordBudget(string kind, long maximum = GameZLayouts.MaximumGeometryRecords)
     {
         private long total;
-        internal void Add(long count) { total += Math.Max(0, count); GameZLayouts.CheckEntries(kind, total, GameZLayouts.MaximumGeometryRecords); }
+        internal void Add(long count) { total += Math.Max(0, count); GameZLayouts.CheckEntries(kind, total, maximum); }
+    }
+    /// <summary>Per-document decoded model geometry, each total checked before its arrays are allocated.</summary>
+    internal sealed class GeometryBudget(string prefix = "")
+    {
+        internal RecordBudget Records { get; } = new(prefix + "polygon/light record");
+        internal RecordBudget Vectors { get; } = new(prefix + "model vector", GameZLayouts.MaximumModelVectors);
+        internal RecordBudget Corners { get; } = new(prefix + "polygon corner", GameZLayouts.MaximumPolygonCorners);
+        internal void AddHeader(JsonObject info)
+        {
+            Records.Add(info.UInt("polygon_count") + (long)info.UInt("light_count"));
+            Vectors.Add((long)info.UInt("vertex_count") + info.UInt("normal_count") + info.UInt("morph_count"));
+        }
     }
     internal static JsonObject ReadNodeData(BinaryCursor c, string kind, GameZLayouts version, RecordBudget? references = null)
     {

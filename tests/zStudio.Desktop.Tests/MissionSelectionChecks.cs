@@ -153,6 +153,32 @@ internal static class MissionSelectionChecks
         finally { main.Close(); }
     }
 
+    /// <summary>A remembered reader deleted between sessions is still seeded when the root opens, so the fallback is reported and replaces it.</summary>
+    internal static async Task RunDeletedReaderAtStartup()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)); var token = timeout.Token;
+        using var fixture = new Mw3MissionFixture("actor_01");
+        string deleted = Path.Combine(fixture.Folder, "readerm2.zbd"), outside = Path.Combine(Path.GetTempPath(), "readerm3.zbd");
+        var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
+        var saved = main.ViewModel.Settings.Mw3Missions; string worldPath = fixture.World.Path;
+        main.ViewModel.Settings.Mw3Missions = new(saved, StringComparer.OrdinalIgnoreCase) { [worldPath] = deleted };
+        try
+        {
+            await main.ViewModel.OpenRootAsync(fixture.Folder, token);
+            var resolver = main.ViewModel.Resolver!;
+            Assert.Equal(deleted, resolver.SelectedMission(worldPath), ignoreCase: true);
+            var mission = await MissionSceneLoader.LoadAsync(fixture.World, resolver, token: token);
+            Assert.Equal(fixture.ReaderPath, mission.Layout.MissionArchive, ignoreCase: true);
+            Assert.Equal(deleted, mission.Layout.UnavailableMission, ignoreCase: true);
+            Assert.Contains(mission.Diagnostics, d => d.Contains("readerm2.zbd", StringComparison.Ordinal) && d.Contains("no longer available", StringComparison.Ordinal));
+            // A remembered path outside the map directory is still never seeded.
+            main.ViewModel.Settings.Mw3Missions[worldPath] = outside;
+            await main.ViewModel.OpenRootAsync(fixture.Folder, token);
+            Assert.Null(main.ViewModel.Resolver!.SelectedMission(worldPath));
+        }
+        finally { main.ViewModel.Settings.Mw3Missions = saved; main.Close(); }
+    }
+
     /// <summary>An MW3 world without mission readers has no difficulty: showing it neither reloads for nor records the shared preference.</summary>
     internal static async Task RunWithoutReaders()
     {

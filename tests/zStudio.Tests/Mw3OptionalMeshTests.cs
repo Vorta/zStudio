@@ -27,7 +27,7 @@ public sealed class Mw3OptionalMeshTests
         if (colors) for (int i = 0; i < 3; i++) { w.Write(255f); w.Write(128f); w.Write(0f); }
         w.Write(2); w.Write(1); w.Write(0); w.Write(0x76543210);
         BinaryCursor cursor = new(s.ToArray());
-        var model = GameZReader.ReadModelData(cursor, new JsonObject { ["vertex_count"] = 3, ["polygon_count"] = 2 }, 0, GameZLayouts.For(27), new("polygon/light record"), null, TestContext.Current.CancellationToken);
+        var model = GameZReader.ReadModelData(cursor, new JsonObject { ["vertex_count"] = 3, ["polygon_count"] = 2 }, 0, GameZLayouts.For(27), new(), null, TestContext.Current.CancellationToken);
         Assert.Equal(new[] { 7, 9 }, model.Polygons.Select(p => p.MaterialIndex));
         Assert.Equal(new[] { 2, 1, 0 }, model.Polygons[1].Vertices);
         Assert.Equal(colors ? 3 : 0, model.Polygons[0].Colors.Length); Assert.Empty(model.Polygons[1].Colors);

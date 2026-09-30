@@ -90,11 +90,12 @@ public static class Program
         string gh = CommandRunner.Executable("gh", options.GetValueOrDefault("--gh"));
         var github = new GitHub(new CommandRunner(), gh, workspace);
         string repository = await github.RepositoryAsync(token);
+        IPrSource source = claude ? new CodeFeedbackSource(github) : github;
 
         if (action == "check")
         {
             if (queue != null) await queue.CheckAsync(thread, token);
-            var observation = await github.ReadAsync(repository, pr, token);
+            var observation = await source.ReadAsync(repository, pr, token);
             if (options.ContainsKey("--notify-test"))
             {
                 var (probe, path) = await WatchService.NotifyTestAsync(store, queue!, thread, token);
@@ -109,7 +110,7 @@ public static class Program
             if (action == "resume" && options.ContainsKey("--release-on-approval")) throw new ArgumentException("resume retains the recorded authorization; use arm to change it.");
             if (action == "resume" && claude) throw new ArgumentException("Claude watches have no worker to resume; run listen.");
             if (queue != null) await queue.CheckAsync(thread, token);
-            var observation = await github.ReadAsync(repository, pr, token);
+            var observation = await source.ReadAsync(repository, pr, token);
             using (await store.LockAsync("state", token))
             {
                 var state = store.Load(); bool first = state == null;
@@ -136,7 +137,7 @@ public static class Program
         {
             WatchState before;
             using (await store.LockAsync("state", token)) { before = store.Load() ?? throw new InvalidOperationException("No watch exists."); CheckIdentity(before, repository, thread, claude); }
-            var observation = await github.ReadAsync(repository, pr, token);
+            var observation = await source.ReadAsync(repository, pr, token);
             using (await store.LockAsync("state", token))
             {
                 var state = store.Load()!; CheckIdentity(state, repository, thread, claude);
@@ -174,7 +175,7 @@ public static class Program
         {
             if (!claude) throw new ArgumentException("listen delivers --claude watches; Codex watches use arm and the queue worker.");
             using (await store.LockAsync("state", token)) CheckIdentity(store.Load() ?? throw new InvalidOperationException("No watch exists; arm it first."), repository, thread, claude);
-            var service = new WatchService(store, github, new NoQueue());
+            var service = new WatchService(store, source, new NoQueue());
             var result = await service.ListenAsync(token);
             // Exactly one compact line: a Claude Code Monitor turns each stdout line into a notification.
             Console.WriteLine(JsonSerializer.Serialize(result.Notice is { } notice

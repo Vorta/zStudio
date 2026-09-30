@@ -152,10 +152,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // canceled task owns that short remaining lifetime, not the new workspace.
         Resolver = new AssetResolver(root);
         // Check the cheap root prefix first: remembered maps on unavailable shares must not
-        // stall the UI thread. A reader that exists but no longer qualifies falls back on load.
+        // stall the UI thread. A remembered reader is seeded even if it was deleted (SelectMission
+        // keeps it in the map directory), so loading reports the fallback and replaces the setting.
         string rootPrefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         foreach (var (map, mission) in (Settings.Mw3Missions ?? []).Take(128))
-            try { if (Path.GetFullPath(map).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) && File.Exists(map) && File.Exists(mission)) Resolver.SelectMission(map, mission); }
+            try { if (Path.GetFullPath(map).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) && File.Exists(map)) Resolver.SelectMission(map, mission); }
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
         Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
         RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";

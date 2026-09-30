@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -72,7 +73,9 @@ public sealed record AiNetworkSnapshot(string Id, IReadOnlyList<AiNetwork> Netwo
 public static partial class MissionAiNetworks
 {
     private static readonly object CacheGate = new();
-    private static readonly Dictionary<string, AiNetworkSnapshot> Cache = [];
+    /// <summary>Snapshots retain their decoded source trees, so they are cached only while their first source
+    /// archive is alive: closed documents and replaced roots must not keep them reachable.</summary>
+    private static readonly ConditionalWeakTable<ZbdDocument, Dictionary<string, AiNetworkSnapshot>> Cache = new();
     [GeneratedRegex("^net_[0-9]{2}\\.zrd\\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ResourceName();
     [GeneratedRegex("^node_([0-9]+)\\z", RegexOptions.CultureInvariant)]
@@ -115,7 +118,8 @@ public static partial class MissionAiNetworks
         }
         token.ThrowIfCancellationRequested();
         string snapshotId = Convert.ToHexString(hash.GetHashAndReset());
-        lock (CacheGate) if (Cache.TryGetValue(snapshotId, out var cached)) return cached;
+        var owner = inputs.Count > 0 ? inputs[0].Archive : null;
+        if (owner != null) lock (CacheGate) if (Cache.TryGetValue(owner, out var owned) && owned.TryGetValue(snapshotId, out var cached)) return cached;
         List<AiNetwork> networks = []; int retained = 0; long omitted = 0;
         foreach (var (archive, asset, id) in inputs)
         {
@@ -130,7 +134,7 @@ public static partial class MissionAiNetworks
         }
         token.ThrowIfCancellationRequested();
         var result = new AiNetworkSnapshot(snapshotId, networks.AsReadOnly()) { OmittedDiagnostics = omitted };
-        lock (CacheGate) { if (Cache.Count >= 8) Cache.Clear(); Cache[snapshotId] = result; }
+        if (owner != null) lock (CacheGate) { var owned = Cache.GetOrCreateValue(owner); if (owned.Count >= 8) owned.Clear(); owned[snapshotId] = result; }
         return result;
     }
 

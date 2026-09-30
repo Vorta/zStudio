@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
@@ -49,6 +50,25 @@ public sealed class AiNetworkTests
     private static ZbdDocument Archive(params ZrdNode[] roots) => FormatRegistry.Default.OpenBytes("ai-test.zbd",
         ResourceEditingTests.Archive(roots.Select(root => ("net_01.zrd", ZrdWriter.Write(root, TestContext.Current.CancellationToken))).ToArray()), token: TestContext.Current.CancellationToken);
     private static AiNetworkSnapshot Read(ZbdDocument doc) => MissionAiNetworks.Read(doc.Assets.Select(a => (doc, a)), TestContext.Current.CancellationToken);
+    [Fact]
+    public void CachedSnapshotsLiveOnlyAsLongAsTheirSourceArchive()
+    {
+        var (archive, snapshot) = CachedSnapshot();
+        Assert.True(ReusesSnapshot(archive, snapshot));
+        for (int i = 0; i < 3 && snapshot.IsAlive; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); }
+        Assert.False(snapshot.IsAlive, "A closed archive's decoded AI source trees remained reachable through the cache.");
+    }
+    /// <summary>While the archive lives, reading it again reuses the decoded snapshot.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool ReusesSnapshot(WeakReference<ZbdDocument> archive, WeakReference snapshot) =>
+        archive.TryGetTarget(out var doc) && ReferenceEquals(snapshot.Target, Read(doc));
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference<ZbdDocument> Archive, WeakReference Snapshot) CachedSnapshot()
+    {
+        var doc = Archive(A(S("node_00"), Node())); var snapshot = Read(doc);
+        Assert.NotNull(Assert.Single(snapshot.Networks).Source);
+        return (new(doc), new(snapshot));
+    }
     [Fact]
     public void SnapshotDiagnosticsShareOneBudgetAcrossNetworkMembers()
     {

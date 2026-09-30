@@ -66,6 +66,15 @@ Codex's review of 7dd7b05 raised five P2s. Four were fixed as reported. The fift
 
 Validation: 639/639 Release tests (471 Core, 101 Desktop, 67 watcher) with RECOIL1999 and MW3 corpora; Core 471/471 with RECOIL1998. Temporarily disabling each fix makes its regression fail.
 
+Codex's review of f9cdaba found three further P2s, now fixed with regressions that fail without the fixes:
+- **Model geometry arrays:** model vertices/normals/morphs (at most 1,048,576) and polygon corner arrays (at most 4,194,304 vertex/normal indices, UVs and colors) are bounded per file before allocation. Retail maxima are 77,559 and 455,526.
+- **Deleted remembered missions:** opening a root seeds a remembered in-directory mission reader even after its file was deleted, so loading reports the fallback and replaces the saved choice.
+- **AI snapshot cache:** decoded snapshots, including their source trees, live only as long as their first source archive instead of in a process-wide cache.
+
+The PR watcher's Claude channel now wakes only for code review feedback. The PR author's replies marked `<!-- zstudio-agent-reply -->` are informational in both channels.
+
+Validation: 643/643 Release tests (474 Core, 101 Desktop, 68 watcher) with RECOIL1999 and MW3 corpora; Core 474/474 with RECOIL1998.
+
 ## PR feedback watch and coordinate-path review (2026-09-29)
 
 Added optional local development tooling in `tools/pr-watch.ps1`. It observes a selected PR's conversation comments, published review summaries and inline comments, disarms on the first new feedback batch and queues one follow-up into the owning Codex conversation. Explicit snapshot acknowledgment preserves later arrivals; validated fix pushes re-arm against the remote head. Separate approval monitoring checks a fresh review-bot reaction on the PR description and a completed current-head summary. The helper does not edit, merge or publish; any authorized release still requires the agent's current-head review, CI and repository checks. Durable claims prevent automatic duplicate submissions after crashes or uncertain delivery. See [PR watch setup and recovery](pr-watch.md).

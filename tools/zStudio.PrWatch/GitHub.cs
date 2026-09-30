@@ -9,10 +9,22 @@ public sealed class GitHubException(string message, TimeSpan? retryAfter = null)
     public TimeSpan? RetryAfter { get; } = retryAfter;
 }
 public interface IPrSource { Task<Observation> ReadAsync(string repository, int pr, CancellationToken token); }
+/// <summary>The Claude channel wakes only for code review feedback (inline comments/replies and published review
+/// summaries). Conversation comments remain in snapshots and acknowledgment accounting as informational.</summary>
+public sealed class CodeFeedbackSource(IPrSource inner) : IPrSource
+{
+    public async Task<Observation> ReadAsync(string repository, int pr, CancellationToken token)
+    {
+        var observation = await inner.ReadAsync(repository, pr, token);
+        return observation with { Comments = [.. observation.Comments.Select(c => c.Key.StartsWith("conversation:", StringComparison.Ordinal) ? c with { Informational = true } : c)] };
+    }
+}
 
 public sealed partial class GitHub(ICommandRunner runner, string executable, string workspace, TimeProvider? time = null) : IPrSource
 {
     public const string ReviewBot = "chatgpt-codex-connector[bot]";
+    /// <summary>Marks replies an agent posts from the PR author's account; they explain handled feedback and are not new feedback.</summary>
+    public const string AgentReplyMarker = "<!-- zstudio-agent-reply -->";
     private readonly TimeProvider clock = time ?? TimeProvider.System;
     private const int MaxRows = 10000, MaxCharacters = 32 * 1024 * 1024;
     public static bool ValidRepository(string value) => RepositoryPattern().IsMatch(value);
@@ -39,7 +51,7 @@ public sealed partial class GitHub(ICommandRunner runner, string executable, str
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token); deadline.CancelAfter(TimeSpan.FromMinutes(3));
         string root = $"repos/{repository}";
         var info = await GetAsync($"{root}/pulls/{pr}", deadline.Token);
-        string head = Text(info["head"]!, "sha");
+        string head = Text(info["head"]!, "sha"); string? author = info["user"]?["login"]?.GetValue<string>();
         if (!ValidHead(head)) throw new InvalidDataException("Invalid PR head.");
         if (Text(info, "state") == "closed") return new(head, false, [], null);
         if (Text(info, "state") != "open") throw new InvalidDataException("Unknown PR state.");
@@ -76,8 +88,10 @@ public sealed partial class GitHub(ICommandRunner runner, string executable, str
         {
             string body = Text(row, "body");
             if (kind == "review" && string.IsNullOrWhiteSpace(body)) return;
-            comments.Add(new(kind + ":" + row["id"]!.GetValue<long>(), Text(row, "html_url"), Text(row["user"]!, "login"), body, Date(row, date),
-                kind == "conversation" && Informational(body, IsBot(row))));
+            string login = Text(row["user"]!, "login");
+            // Only the PR author's own marked replies are exempt: the marker in anyone else's comment is ignored.
+            comments.Add(new(kind + ":" + row["id"]!.GetValue<long>(), Text(row, "html_url"), login, body, Date(row, date),
+                kind == "conversation" && Informational(body, IsBot(row)) || login == author && body.Contains(AgentReplyMarker, StringComparison.Ordinal)));
         }
         foreach (var row in conversation) Add(row, "conversation", "created_at");
         foreach (var row in published) Add(row, "review", "submitted_at");

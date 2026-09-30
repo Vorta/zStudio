@@ -45,6 +45,35 @@ public sealed class GitHubTests
     }
 
     [Fact]
+    public async Task ClaudeChannelWakesOnlyForCodeFeedbackAndIgnoresMarkedAuthorReplies()
+    {
+        var reply = Inline(5, 1); reply["user"] = User("author"); reply["body"] = "Fixed in abc.\n" + GitHub.AgentReplyMarker;
+        var forged = Inline(6, 1); forged["body"] = "Real feedback " + GitHub.AgentReplyMarker;
+        var marked = Review(2, body: "Handled " + GitHub.AgentReplyMarker); marked["user"] = User("author");
+        var runner = new GitHubRunner { Conversation = [Row(1, "please look at the build")], Reviews = [Review(1)], Inline = [reply] };
+        var token = TestContext.Current.CancellationToken;
+        var source = new CodeFeedbackSource(Source(runner)); var baseline = await source.ReadAsync("o/r", 14, token);
+        var state = State(); WatchLogic.Arm(state, baseline, Head, true, Now);
+        // A new ordinary conversation comment and the author's own marked reply stay informational.
+        runner.Conversation = [Row(1, "please look at the build"), Row(2, "any update?")];
+        runner.Reviews = [Review(1), marked];
+        var quiet = await source.ReadAsync("o/r", 14, token);
+        Assert.All(quiet.Comments.Where(c => c.Key is "conversation:2" or "inline:5" or "review:2"), c => Assert.True(c.Informational, c.Key));
+        Assert.Null(WatchLogic.Observe(state, quiet, Now));
+        // The Codex channel still treats conversation comments as feedback.
+        Assert.False((await Source(runner).ReadAsync("o/r", 14, token)).Comments.Single(c => c.Key == "conversation:2").Informational);
+        // Code feedback wakes the channel, and the marker does not exempt another author's comment.
+        runner.Reviews = [Review(1), marked, Review(3)];
+        var code = await source.ReadAsync("o/r", 14, token);
+        Assert.NotNull(WatchLogic.Observe(state, code, Now));
+        var forgedState = State(); WatchLogic.Arm(forgedState, quiet, Head, true, Now);
+        runner.Reviews = [Review(1), marked]; runner.Inline = [reply, forged];
+        var withForged = await source.ReadAsync("o/r", 14, token);
+        Assert.False(withForged.Comments.Single(c => c.Key == "inline:6").Informational);
+        Assert.NotNull(WatchLogic.Observe(forgedState, withForged, Now));
+    }
+
+    [Fact]
     public async Task DraftSubmissionWithOldIdBecomesNewFeedback()
     {
         var runner = new GitHubRunner { Reviews = [Review(1, pending: true)], Inline = [Inline(2, 1)] };
@@ -179,7 +208,7 @@ public sealed class GitHubTests
     {
         public JsonObject[] Conversation { get; set; } = [];
         public JsonObject[] Reviews { get; set; } = [];
-        public JsonObject[] Inline { get; init; } = [];
+        public JsonObject[] Inline { get; set; } = [];
         public JsonObject[] Reactions { get; init; } = [];
         public bool ChangeHead { get; init; }
         public bool Closed { get; init; }
@@ -192,7 +221,7 @@ public sealed class GitHubTests
             Arguments.Add(arguments);
             string endpoint = arguments[^1]; JsonNode body;
             if (endpoint == "repos/o/r/pulls/14")
-            { HeadReads++; body = new JsonObject { ["head"] = new JsonObject { ["sha"] = ChangeHead && HeadReads > 1 ? Next : Head }, ["state"] = Closed ? "closed" : "open" }; }
+            { HeadReads++; body = new JsonObject { ["head"] = new JsonObject { ["sha"] = ChangeHead && HeadReads > 1 ? Next : Head }, ["state"] = Closed ? "closed" : "open", ["user"] = User("author") }; }
             else
             {
                 int page = int.Parse(endpoint[(endpoint.LastIndexOf("page=", StringComparison.Ordinal) + 5)..]);

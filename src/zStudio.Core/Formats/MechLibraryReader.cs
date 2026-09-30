@@ -19,7 +19,7 @@ internal static class MechLibraryReader
         GameScene scene = new(); var layout = GameZLayouts.For(27);
         var materialCursor = new BinaryCursor(doc.Slice(materials[0].Offset, materials[0].Length), materials[0].Offset);
         uint storedMaterials = materialCursor.U32(); GameZLayouts.CheckEntries("mech material", storedMaterials);
-        int count = materialCursor.Count(storedMaterials, 40); GameZReader.RecordBudget geometry = new("mech polygon/light record");
+        int count = materialCursor.Count(storedMaterials, 40); GameZReader.GeometryBudget geometry = new("mech ");
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested();
@@ -69,7 +69,7 @@ internal static class MechLibraryReader
                     modelIndex = scene.Models.Count;
                     long header = c.AbsolutePosition;
                     var modelInfo = layout.Read(c, layout.ModelSize, "GAMEZ_MODEL_INFO_LAYOUT");
-                    geometry.Add(modelInfo.UInt("polygon_count") + (long)modelInfo.UInt("light_count"));
+                    geometry.AddHeader(modelInfo);
                     modelInfo["source_header_offset"] = header; modelInfo["member_index"] = asset.Index;
                     long modelStart = c.AbsolutePosition;
                     var model = GameZReader.ReadModelData(c, modelInfo, modelIndex.Value, layout, geometry, doc.Diagnostics, token);

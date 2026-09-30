@@ -54,6 +54,26 @@ public sealed class GameZBoundsTests
         Assert.Equal(10, retail.Assets.Single(a => a.Kind == AssetKind.Model).Metadata["lights"]![0]!["vertices"]!.AsArray().Count);
     }
 
+    [Theory]
+    [InlineData(15)]
+    [InlineData(27)]
+    public void ModelVectorsAndPolygonCornersAreBoundedBeforeTheirArraysAreAllocated(int version)
+    {
+        // Complete vertex bytes are present: only the model-vector total stops the dense array.
+        byte[] world = World(version, 1, 0, vertices: 1_100_000);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var doc = FormatRegistry.Default.OpenBytes("gamez.zbd", world, token: Token);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Contains(doc.Diagnostics, d => d.Severity == "Error" && d.Message.Contains("model vector count 1,100,000 exceeds the supported 1,048,576", StringComparison.Ordinal));
+        Assert.True(allocated < 8_000_000, $"Allocated {allocated:N0} bytes");
+        // Complete 255-corner index arrays for every polygon: the corner total stops them before any is allocated.
+        doc = FormatRegistry.Default.OpenBytes("gamez.zbd", World(version, 1, 16_500, polygonCorners: 255), token: Token);
+        Assert.Contains(doc.Diagnostics, d => d.Severity == "Error" && d.Message.Contains("polygon corner count 4,207,500 exceeds the supported 4,194,304", StringComparison.Ordinal));
+        var retail = FormatRegistry.Default.OpenBytes("gamez.zbd", World(version, 1, 2, vertices: 3, polygonCorners: 3), token: Token);
+        Assert.DoesNotContain(retail.Diagnostics, d => d.Severity is "Error" or "Warning");
+        var model = retail.Scene!.Models[0]; Assert.Equal(3, model.Vertices.Length); Assert.All(model.Polygons, p => Assert.Equal(3, p.Vertices.Length));
+    }
+
     [Fact]
     public void MaterialCycleIndicesShareABudgetBeforeTheyAreExpanded()
     {
@@ -132,12 +152,14 @@ public sealed class GameZBoundsTests
 
     /// <summary>A minimal world: no textures/materials/nodes, <paramref name="models"/> zero-vertex models, the first with empty polygons
     /// and, when <paramref name="lightVertices"/> is nonnegative, one point light with that many complete vertices.
-    /// A nonnegative <paramref name="cycleIndices"/> adds one cycling material with that many complete texture indices.</summary>
-    private static byte[] World(int version, int models, int polygons, int lightVertices = -1, int cycleIndices = -1)
+    /// A nonnegative <paramref name="cycleIndices"/> adds one cycling material with that many complete texture indices.
+    /// The first model may also have <paramref name="vertices"/> complete vertices and <paramref name="polygonCorners"/> vertex indices per polygon.</summary>
+    private static byte[] World(int version, int models, int polygons, int lightVertices = -1, int cycleIndices = -1, int vertices = 0, int polygonCorners = 0)
     {
         var layout = GameZLayouts.For((uint)version); int header = layout.ModelSize, polygonSize = layout.PolygonSize, shift = version == 27 ? 4 : 0;
         const int materials = 36; int modelTable = materials + 16 + (cycleIndices < 0 ? 0 : 44 + 28 + cycleIndices * 4);
-        int data = modelTable + 12 + models * (header + 4), light = lightVertices < 0 ? 0 : 76 + lightVertices * 12, nodes = data + light + polygons * polygonSize;
+        int data = modelTable + 12 + models * (header + 4), light = lightVertices < 0 ? 0 : 76 + lightVertices * 12;
+        int polygonInfo = data + vertices * 12 + light, nodes = polygonInfo + polygons * (polygonSize + polygonCorners * 4);
         byte[] b = new byte[nodes];
         void I(int o, int v) => BinaryPrimitives.WriteInt32LittleEndian(b.AsSpan(o), v);
         I(0, 0x02971222); I(4, version); I(12, 36); I(16, materials); I(20, modelTable); I(24, 0); I(28, -1); I(32, nodes);
@@ -145,7 +167,10 @@ public sealed class GameZBoundsTests
         // polygon_count (+12, shifted for version 27) on the first model only; polygon flags 0 carry no index arrays.
         I(modelTable + 12 + 12 + shift, polygons);
         // light_count (+28); the light record's vertex_count (+12) precedes its vertices and the polygons.
-        if (lightVertices >= 0) { I(modelTable + 12 + 28 + shift, 1); I(data + 12, lightVertices); }
+        if (lightVertices >= 0) { I(modelTable + 12 + 28 + shift, 1); I(data + vertices * 12 + 12, lightVertices); }
+        // vertex_count (+16); polygon flags (+0) carry the corner count, and zero pointers add no normal/UV/color arrays.
+        I(modelTable + 12 + 16 + shift, vertices);
+        for (int i = 0; i < polygons && polygonCorners > 0; i++) I(polygonInfo + i * polygonSize, polygonCorners);
         // Material flag 4 (+1) reads the cycle record after the table; its tex_map_count (+16) precedes the indices.
         if (cycleIndices >= 0) { I(materials, 1); I(materials + 4, 1); b[materials + 16 + 1] = 4; I(materials + 16 + 44 + 16, cycleIndices); }
         return b;

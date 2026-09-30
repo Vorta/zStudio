@@ -15,6 +15,8 @@ internal sealed class GameZLayouts(bool mw3)
     // Supported limits for per-record metadata, far above retail pools (at most 20,000 models/nodes and about
     // 35,000 polygons per world). They bound allocation before any record is materialized.
     internal const int MaximumTableEntries = FormatRegistry.MaximumDirectoryEntries, MaximumGeometryRecords = 262_144;
+    // Dense decoded geometry per file; retail worlds use at most 77,559 model vectors and 455,526 polygon corner elements.
+    internal const int MaximumModelVectors = 1_048_576, MaximumPolygonCorners = 4_194_304;
     internal static void CheckEntries(string table, long count, long maximum = MaximumTableEntries) => FormatRegistry.CheckEntries("GameZ " + table, count, maximum);
     internal int TextureSize => mw3 ? 40 : 36;
     internal int ModelSize => mw3 ? 92 : 84;
