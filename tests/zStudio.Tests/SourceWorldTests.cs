@@ -153,6 +153,70 @@ public sealed class SourceWorldTests
     }
 
     [Fact]
+    public async Task APlacedModelIsTheNodeItsLinesAttach()
+    {
+        using SourceWorldFixture fixture = new();
+        string root = fixture.Project;
+        // The tank model's own root node is "hull". AddChild takes the newest node with a name, and the model's nodes are
+        // newer than the root LoadGameGen names, so a placed model named "hull" would leave its root (and placement) out.
+        SourceWorldEdits edits = new(root, "m1");
+        edits.Add(new(new(fixture.Tank, "hull", new(100, 0, -50)), []), Token);
+        var models = edits.Additions.Select(a => a.Model).ToArray();
+        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p1"), edits.Overlay(Token), token: Token, additions: models));
+        Assert.Contains("node of its own named hull", refused.Message);
+        // The same world without the check shows the defect: the inner node is in the world, the placed root is not.
+        var unchecked_ = await SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p2"), edits.Overlay(Token), token: Token);
+        Assert.Contains(unchecked_.Outputs.Single(o => o.Family == "world").Warnings, w => w.Contains("node of its own named hull", StringComparison.Ordinal));
+        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(unchecked_.WorldPath, Token), token: Token), Token);
+        Assert.Contains(world.Nodes, n => n.Name == "hull" && n.Parents.Any(p => p.Class == WorldNodeClass.World));
+        Assert.DoesNotContain(world.Nodes, n => n.Name == "hull" && n.Parents.Any(p => p.Class == WorldNodeClass.World) && WorldUpdate.LocalMatrix(n)?.Translation == new Vector3(100, 0, -50));
+
+        // Unplaced, the name only makes lookups find the model's node, as the engine would; a new name places the model.
+        edits.Undo(); edits.Add(new(new(fixture.Tank, "hull"), []), Token); edits.Add(new(new(fixture.Tank, "tank_at", new(100, 0, -50)), []), Token);
+        var build = await SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p3"), edits.Overlay(Token), token: Token, additions: [.. edits.Additions.Select(a => a.Model)]);
+        world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var placed = world.Nodes.Single(n => n.Name == "tank_at");
+        Assert.Equal(WorldNodeClass.World, placed.Parents.Single().Class);
+        Assert.Equal(new Vector3(100, 0, -50), WorldUpdate.LocalMatrix(placed)!.Value.Translation);
+        // Additions the script does not run where it writes the world are refused too.
+        await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p4"), token: Token, additions: [new(fixture.Tank, "tank_at", new(1, 2, 3))]));
+    }
+
+    [Fact]
+    public void ARefusedOrFailedSaveLeavesTheProjectAsItWas()
+    {
+        using SourceWorldFixture fixture = new();
+        string root = fixture.Project, script = fixture.Path("gamegen/m1.gs"), list = fixture.Path("data/m1/zrdr/anim.zrd");
+        byte[] scriptBefore = File.ReadAllBytes(script), listBefore = File.ReadAllBytes(list);
+        SourceWorldEdits edits = new(root, "m1");
+        // One addition changes both files.
+        edits.Add(new(new(fixture.Tank, "tank"), [SourceWorldFixture.TankDefinitions]), Token);
+
+        // The animation list changed elsewhere: neither file is written, although the script comes first.
+        File.AppendAllText(list, "# elsewhere\r\n"); File.SetLastWriteTimeUtc(list, DateTime.UtcNow.AddMinutes(1));
+        Assert.Throws<IOException>(() => edits.Save(Token));
+        Assert.Equal(scriptBefore, File.ReadAllBytes(script));
+        Assert.True(edits.IsDirty);
+
+        // A list that cannot be replaced (read-only) fails after the script was replaced: the script is restored.
+        SourceWorldEdits again = new(root, "m1");
+        again.Add(new(new(fixture.Tank, "tank"), [SourceWorldFixture.TankDefinitions]), Token);
+        byte[] listNow = File.ReadAllBytes(list);
+        File.SetAttributes(list, FileAttributes.ReadOnly);
+        try
+        {
+            Assert.ThrowsAny<Exception>(() => again.Save(Token));
+            Assert.Equal(scriptBefore, File.ReadAllBytes(script)); Assert.Equal(listNow, File.ReadAllBytes(list));
+            Assert.True(again.IsDirty); Assert.False(again.HasExternalChanges());
+            Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(script)!, "*.tmp")); Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(list)!, "*.tmp"));
+        }
+        finally { File.SetAttributes(list, FileAttributes.Normal); }
+        // Once the list can be written, the same edits save both files.
+        Assert.Equal([again.ScriptPath, again.DefinitionsPath], again.Save(Token));
+        Assert.NotEqual(scriptBefore, File.ReadAllBytes(script)); Assert.NotEqual(listBefore, File.ReadAllBytes(list));
+    }
+
+    [Fact]
     public void AdditionsAreValidatedBeforeTheyReachAScript()
     {
         using SourceWorldFixture fixture = new();

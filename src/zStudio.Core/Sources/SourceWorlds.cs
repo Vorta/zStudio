@@ -250,9 +250,11 @@ public static partial class SourceWorlds
     /// Builds <paramref name="mission"/> into <paramref name="destination"/> (a new private folder outside the project) as
     /// the export would, with <paramref name="overlay"/> replacing project files: the world, its animations and resources,
     /// the common resources, scripts and images the Whole world view reads beside it, and one full-quality texture pack.
-    /// Only the world must build; other failures are reported in the outputs.
+    /// Only the world must build; other failures are reported in the outputs. <paramref name="additions"/> are the models
+    /// the overlay's script adds (see <see cref="SourceWorldEdits.Additions"/>): the world must load each of them where
+    /// it is written, and hold each placed one (see <see cref="CheckAdditions"/>).
     /// </summary>
-    public static async Task<SourceWorldBuild> BuildPreviewAsync(string root, string mission, string destination, IReadOnlyDictionary<string, byte[]>? overlay = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default)
+    public static async Task<SourceWorldBuild> BuildPreviewAsync(string root, string mission, string destination, IReadOnlyDictionary<string, byte[]>? overlay = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, IReadOnlyList<SourceModelAddition>? additions = null)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
@@ -273,6 +275,7 @@ public static partial class SourceWorlds
             try
             {
                 var built = await Task.Run(() => SourceBuilder.Build(root, output, snapshot, now, token), token).ConfigureAwait(false);
+                if (output.Family == "world" && additions != null) CheckAdditions(snapshot.World(mission, token).LoadedRoots, additions);
                 var check = FormatRegistry.Default.OpenBytes(output.Path, built.Bytes, token: token);
                 if (check.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built file does not reopen: " + error.Message);
                 string path = SourceProject.Resolve(destination, output.Path);
@@ -289,6 +292,38 @@ public static partial class SourceWorlds
         progress?.Report(new(selected.Length, selected.Length, "Built"));
         return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps());
     }
+
+    /// <summary>
+    /// Checks that the script loaded <paramref name="additions"/> as the last models before it wrote the world (their
+    /// lines stand right before <c>GameZWriteZBDFile</c>) and that each placed one is a child of the world. AddChild
+    /// attaches the newest node with the name, so a model with a node of its own named like it would put that node in
+    /// the world instead of the placed root.
+    /// </summary>
+    internal static void CheckAdditions(IReadOnlyList<WorldNode> loadedRoots, IReadOnlyList<SourceModelAddition> additions)
+    {
+        for (int i = 0; i < additions.Count; i++)
+        {
+            var addition = additions[i]; int at = loadedRoots.Count - additions.Count + i;
+            var root = at >= 0 ? loadedRoots[at] : null;
+            if (root == null || root.Name != addition.Name)
+                throw new InvalidDataException($"The script does not run the lines that load {addition.Name} before it writes the world.");
+            if (addition.Position == null || root.Parents.Any(p => p.Class == WorldNodeClass.World)) continue;
+            throw new InvalidDataException(Holds(root, addition.Name)
+                ? $"{Path.GetFileName(addition.Model)} has a node of its own named {addition.Name}, so AddChild {addition.Name} would put that node in the world instead of the placed model; choose another name."
+                : $"{addition.Name} is not placed in the world: the script's %worldName% names no world node.");
+        }
+        static bool Holds(WorldNode root, string name)
+        {
+            HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Stack<WorldNode> pending = new(root.Children);
+            while (pending.TryPop(out var node))
+            {
+                if (!seen.Add(node)) continue;
+                if (node.Name == name) return true;
+                foreach (var child in node.Children) pending.Push(child);
+            }
+            return false;
+        }
+    }
 }
 
 /// <summary>
@@ -304,8 +339,9 @@ public sealed class SourceWorldEdits
     public string DefinitionsPath { get; }
     private readonly byte[] script;
     private readonly byte[]? definitions;
-    /// <summary>What this session read or last wrote, per file: the external-change baseline.</summary>
+    /// <summary>What this session read or last wrote, per file: the external-change baseline (guarded by <see cref="diskGate"/>, as it is checked off the UI thread).</summary>
     private readonly Dictionary<string, (byte[] Bytes, FileStamp Stamp)> disk = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Lock diskGate = new();
     private readonly List<SourceWorldAddition> history = [];
     private int position, saved;
     public event Action? Changed;
@@ -326,7 +362,7 @@ public sealed class SourceWorldEdits
         if (stamp.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"{relative} exceeds {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB.");
         byte[] bytes = File.ReadAllBytes(path);
         if (FileStamp.Read(path) != stamp) throw new InvalidDataException($"{relative} changed while it was read; try again.");
-        disk[relative] = (bytes, stamp);
+        lock (diskGate) disk[relative] = (bytes, stamp);
         return bytes;
     }
 
@@ -377,10 +413,12 @@ public sealed class SourceWorldEdits
         return files;
     }
 
-    /// <summary>Whether a managed file changed on disk since this session read or saved it.</summary>
+    /// <summary>Whether a managed file changed on disk since this session read or saved it. Safe to call off the UI thread.</summary>
     public bool HasExternalChanges()
     {
-        foreach (var (relative, entry) in disk)
+        KeyValuePair<string, (byte[] Bytes, FileStamp Stamp)>[] entries;
+        lock (diskGate) entries = [.. disk];
+        foreach (var (relative, entry) in entries)
         {
             string path = SourceProject.Resolve(Root, relative);
             if (!File.Exists(path) || FileStamp.Read(path) != entry.Stamp) return true;
@@ -389,34 +427,68 @@ public sealed class SourceWorldEdits
     }
 
     /// <summary>
-    /// Writes each managed file whose content differs from what is on disk: through a temporary file in its folder, read
-    /// back and compared before it replaces the original. Returns the files written.
+    /// Writes each managed file whose content differs from what is on disk. Every such file is checked against what this
+    /// session read before any is written, and staged through a temporary file in its folder that is read back and
+    /// compared; if replacing one fails, those already replaced are restored, so a refused or failed save leaves the
+    /// project as it was. Returns the files written.
     /// </summary>
     public IReadOnlyList<string> Save(CancellationToken token = default)
     {
-        var content = Overlay(token); List<string> written = [];
+        var content = Overlay(token);
+        List<(string Relative, string Path, byte[] Bytes, (byte[] Bytes, FileStamp Stamp) Expected)> changed = [];
         foreach (var (relative, bytes) in content)
         {
             token.ThrowIfCancellationRequested();
-            var expected = disk[relative];
+            (byte[] Bytes, FileStamp Stamp) expected;
+            lock (diskGate) expected = disk[relative];
             if (bytes.AsSpan().SequenceEqual(expected.Bytes)) continue;
             string path = SourceProject.Resolve(Root, relative);
             SourceProject.RejectNestedLinks(Root, relative);
             if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException($"{relative} is inside the protected zbd_1998/zbd_1999 folders; nothing was saved.");
-            if (!File.Exists(path) || FileStamp.Read(path) != expected.Stamp || !File.ReadAllBytes(path).AsSpan().SequenceEqual(expected.Bytes))
-                throw new IOException($"{relative} changed on disk since it was read; nothing more was saved. Reload the world to continue from the file.");
-            string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllBytes(temporary, bytes);
-                if (!File.ReadAllBytes(temporary).AsSpan().SequenceEqual(bytes)) throw new IOException($"{relative} did not write correctly; the original is unchanged.");
-                File.Replace(temporary, path, null);
-            }
-            finally { if (File.Exists(temporary)) File.Delete(temporary); }
-            disk[relative] = (bytes, FileStamp.Read(path));
-            written.Add(relative);
+            if (!Unchanged(path, expected)) throw new IOException($"{relative} changed on disk since it was read; nothing was saved. Reload the world to continue from the file.");
+            changed.Add((relative, path, bytes, expected));
         }
+        List<string> temporaries = []; int replaced = 0;
+        try
+        {
+            foreach (var file in changed)
+            {
+                string temporary = file.Path + "." + Guid.NewGuid().ToString("N") + ".tmp"; temporaries.Add(temporary);
+                File.WriteAllBytes(temporary, file.Bytes);
+                if (!File.ReadAllBytes(temporary).AsSpan().SequenceEqual(file.Bytes)) throw new IOException($"{file.Relative} did not write correctly; nothing was saved.");
+            }
+            token.ThrowIfCancellationRequested();
+            foreach (var file in changed)
+            {
+                if (!Unchanged(file.Path, file.Expected)) throw new IOException($"{file.Relative} changed on disk while saving; nothing was saved. Reload the world to continue from the file.");
+                File.Replace(temporaries[replaced], file.Path, null); replaced++;
+                lock (diskGate) disk[file.Relative] = (file.Bytes, FileStamp.Read(file.Path));
+            }
+        }
+        catch (Exception ex) when (replaced > 0 && ex is IOException or UnauthorizedAccessException or OperationCanceledException)
+        {
+            // Put back the files already replaced, as this session read them.
+            List<string> unrestored = [];
+            for (int i = 0; i < replaced; i++)
+            {
+                var file = changed[i]; string temporary = file.Path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    File.WriteAllBytes(temporary, file.Expected.Bytes);
+                    File.Replace(temporary, file.Path, null);
+                    lock (diskGate) disk[file.Relative] = (file.Expected.Bytes, FileStamp.Read(file.Path));
+                }
+                catch (Exception restore) when (restore is IOException or UnauthorizedAccessException) { unrestored.Add(file.Relative); }
+                finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            }
+            if (unrestored.Count > 0) throw new IOException($"Saving failed ({ex.Message}) and {string.Join(", ", unrestored)} could not be restored; it holds the saved edits.", ex);
+            throw;
+        }
+        finally { foreach (string temporary in temporaries) if (File.Exists(temporary)) File.Delete(temporary); }
         saved = position; Changed?.Invoke();
-        return written;
+        return changed.Select(c => c.Relative).ToArray();
+
+        static bool Unchanged(string path, (byte[] Bytes, FileStamp Stamp) expected) =>
+            File.Exists(path) && FileStamp.Read(path) == expected.Stamp && File.ReadAllBytes(path).AsSpan().SequenceEqual(expected.Bytes);
     }
 }

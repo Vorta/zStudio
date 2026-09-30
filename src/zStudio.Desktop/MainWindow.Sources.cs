@@ -193,7 +193,7 @@ public partial class MainWindow
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
         ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
-        AddSourceModelMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld != null;
+        AddSourceModelMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false };
         if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceWorldMenuAsync(root); }
     }
     /// <summary>Lists the project's game files off the UI thread; a newer menu opening or root supersedes the listing.</summary>

@@ -30,6 +30,7 @@ internal sealed class SourceModelDialog : Window
     private string? suggestedName;
     /// <summary>The node name the shown animation definitions were looked up for.</summary>
     private string? animationsFor;
+    private bool closed;
 
     public SourceModelDialog(Window owner, string mission, IReadOnlyList<SourceModelChoice> models, IReadOnlySet<string> worldNames, Vector3 position,
         Func<string, CancellationToken, Task<IReadOnlyList<SourceDefinitionFile>>> definitions, Func<SourceModelAddition, string?> validate)
@@ -72,7 +73,7 @@ internal sealed class SourceModelDialog : Window
         lookup.Tick += async (_, _) => { lookup.Stop(); await LookUpAnimationsAsync(); };
         placed.Checked += (_, _) => Placement(); unplaced.Checked += (_, _) => Placement();
         add.Click += async (_, _) => await AcceptAsync();
-        Closed += (_, _) => { lookup.Stop(); lookupCancellation?.Cancel(); };
+        Closed += (_, _) => { closed = true; lookup.Stop(); lookupCancellation?.Cancel(); };
         Fill(); Placement(); NameChanged();
         Loaded += (_, _) => filter.Focus();
     }
@@ -145,6 +146,8 @@ internal sealed class SourceModelDialog : Window
             // The listed definitions belong to another name; show this name's before adding.
             lookup.Stop(); add.IsEnabled = false;
             try { await LookUpAnimationsAsync(); } finally { add.IsEnabled = Model != null; }
+            // Canceling the dialog during the lookup ends it; a closed dialog has no result to set.
+            if (closed) return;
             if (animationsFor == name.Text.Trim() && animations.Children.Count > 0) { error.Text = "Review the animation definitions for this name, then choose Add again."; return; }
         }
         if (Model is not { } model) { error.Text = "Choose a model."; return; }

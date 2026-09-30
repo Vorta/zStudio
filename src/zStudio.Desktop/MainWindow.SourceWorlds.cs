@@ -75,8 +75,9 @@ public partial class MainWindow
         try
         {
             var overlay = session.Edits.Overlay(cancellation.Token);
+            var additions = session.Edits.Additions.Select(a => a.Model).ToArray();
             var progress = new Progress<SourceProgress>(p => { if (session.Building == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"Building the {session.Mission} world {p.Completed}/{p.Total}: {p.Item}"; });
-            var build = await Task.Run(() => SourceWorlds.BuildPreviewAsync(session.Root, session.Mission, folder, overlay, progress, cancellation.Token), cancellation.Token);
+            var build = await Task.Run(() => SourceWorlds.BuildPreviewAsync(session.Root, session.Mission, folder, overlay, progress, cancellation.Token, additions), cancellation.Token);
             var world = await Task.Run(() => FormatRegistry.Default.OpenAsync(build.WorldPath, cancellation.Token), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation) throw new OperationCanceledException(cancellation.Token);
@@ -84,9 +85,12 @@ public partial class MainWindow
             built = true;
             return (world, build);
         }
-        catch (OperationCanceledException) when (!token.IsCancellationRequested) { throw new StudioCommandException("context_changed", "A newer edit, the world's closing or a workspace change superseded this build."); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested) { throw new StudioCommandException("context_changed", "The world's closing or a workspace change superseded this build."); }
         catch (InvalidDataException ex) { throw new StudioCommandException("build_failed", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        // Malformed project sources (a glTF that is not JSON, for example) can fail the build in other ways.
+        catch (Exception ex) when (ex is not (OperationCanceledException or StudioCommandException or OutOfMemoryException or StackOverflowException))
+        { throw new StudioCommandException("build_failed", ex.Message); }
         finally
         {
             if (session.Building == cancellation) session.Building = null;
@@ -128,22 +132,36 @@ public partial class MainWindow
         return replacement;
     }
 
-    /// <summary>Applies one edit and rebuilds. An edit whose rebuild fails is reverted, so the shown world and the edits agree; a newer edit that supersedes the rebuild includes it.</summary>
+    /// <summary>Refuses a second operation while the world is rebuilding (see <see cref="SourceWorldSession.IsRebuilding"/>).</summary>
+    private static void RequireSourceWorldIdle(SourceWorldSession session)
+    {
+        if (session.IsRebuilding) throw new StudioCommandException("busy", $"The {session.Mission} world is rebuilding after an edit or reload; try again when it is shown.");
+    }
+
+    /// <summary>
+    /// Applies one edit and rebuilds. Until the rebuilt world replaces the document, other edits, saves and reloads of the
+    /// world are refused; an edit whose rebuild fails or is canceled is reverted, so the shown world and the edits agree.
+    /// </summary>
     private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Action<SourceWorldEdits> apply, Action<SourceWorldEdits> revert, CancellationToken token)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
+        RequireSourceWorldIdle(session);
         RequireNoDrafts(doc);
         try { apply(session.Edits); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-        UpdateDocumentCommands();
+        session.IsRebuilding = true; UpdateDocumentCommands();
         try { return await RebuildSourceWorldAsync(session, token); }
-        catch (StudioCommandException ex) when (ex.Code != "context_changed" && !session.IsDisposed)
+        // Until the replacement is published the session's owner is still this document, which shows the world without the edit.
+        catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException) && !session.IsDisposed && session.Owner == doc && !doc.IsDisposed)
         {
-            revert(session.Edits); UpdateDocumentCommands();
-            throw new StudioCommandException(ex.Code, ex.Code == "build_failed" ? $"{action} was reverted because the world does not build with it: {ex.Message}" : $"{action} was reverted: {ex.Message}");
+            revert(session.Edits);
+            if (ex is StudioCommandException { Code: not "context_changed" } failure)
+                throw new StudioCommandException(failure.Code, failure.Code == "build_failed" ? $"{action} was reverted because the world does not build with it: {failure.Message}" : $"{action} was reverted: {failure.Message}");
+            throw;
         }
+        finally { session.IsRebuilding = false; UpdateDocumentCommands(); }
     }
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token) =>
         EditSourceWorldAsync(doc, $"Adding {addition.Model.Name}", edits => edits.Add(addition, token), edits => edits.Retract(), token);
@@ -159,31 +177,39 @@ public partial class MainWindow
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
+        RequireSourceWorldIdle(session);
         RequireNoDrafts(doc);
-        if (!session.Edits.HasExternalChanges()) return await RebuildSourceWorldAsync(session, token);
-        if (session.Edits.IsDirty && !discardAccepted)
-            throw new StudioCommandException("unsaved_changes", $"{session.Edits.ScriptPath} or {session.Edits.DefinitionsPath} changed on disk, so the pending edits cannot be kept. Close the world with discard, or undo them, then reload.");
-        // The files the edits change were replaced: start again from them.
-        SourceWorldSession fresh;
-        try { fresh = await Task.Run(() => new SourceWorldSession(session.Root, session.Mission), token); }
-        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        session.IsRebuilding = true; UpdateDocumentCommands();
         try
         {
-            var (world, build) = await BuildSourceWorldAsync(fresh, token);
-            if (doc.IsDisposed || !ViewModel.Documents.Contains(doc) || session.Owner != doc) throw new StudioCommandException("context_changed", "The world was closed or rebuilt while it was reloading.");
-            RequireNoDrafts(doc);
-            var replacement = new DocumentModel(world, fresh, build);
-            ReportSourceBuild(fresh, build);
-            ViewModel.ReplaceDocument(doc, replacement);
-            return replacement;
+            if (!session.Edits.HasExternalChanges()) return await RebuildSourceWorldAsync(session, token);
+            if (session.Edits.IsDirty && !discardAccepted)
+                throw new StudioCommandException("unsaved_changes", $"{session.Edits.ScriptPath} or {session.Edits.DefinitionsPath} changed on disk, so the pending edits cannot be kept. Close the world with discard, or undo them, then reload.");
+            // The files the edits change were replaced: start again from them.
+            SourceWorldSession fresh;
+            try { fresh = await Task.Run(() => new SourceWorldSession(session.Root, session.Mission), token); }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+            try
+            {
+                var (world, build) = await BuildSourceWorldAsync(fresh, token);
+                if (doc.IsDisposed || !ViewModel.Documents.Contains(doc) || session.Owner != doc) throw new StudioCommandException("context_changed", "The world was closed or rebuilt while it was reloading.");
+                RequireNoDrafts(doc);
+                var replacement = new DocumentModel(world, fresh, build);
+                ReportSourceBuild(fresh, build);
+                ViewModel.ReplaceDocument(doc, replacement);
+                return replacement;
+            }
+            catch { if (fresh.Owner == null) fresh.Dispose(); throw; }
         }
-        catch { if (fresh.Owner == null) fresh.Dispose(); throw; }
+        finally { session.IsRebuilding = false; UpdateDocumentCommands(); }
     }
 
     private Task<IReadOnlyList<string>> SaveSourceWorldAsync(DocumentModel doc, CancellationToken token)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
+        // A rebuilding edit is not verified yet: saving it could write sources the world cannot be built with.
+        RequireSourceWorldIdle(session);
         RequireNoDrafts(doc);
         IReadOnlyList<string> written;
         // Two small text files, written on the UI thread so the document's change notifications stay on it.
@@ -204,6 +230,7 @@ public partial class MainWindow
     private async Task AddSourceModelInteractiveAsync()
     {
         if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project first (Tools → Open mission world).");
+        RequireSourceWorldIdle(session);
         var models = await Task.Run(() => SourceWorlds.Models(session.Root));
         HashSet<string> names = new(doc.PreviewDocument.Scene?.Nodes.Select(n => n.Name) ?? [], StringComparer.Ordinal);
         Vector3 position = Vector3.Zero;
@@ -213,7 +240,8 @@ public partial class MainWindow
         SourceModelDialog dialog = new(this, session.Mission, models, names, position,
             (root, token) => Task.Run(() => SourceWorlds.DefinitionsFor(session.Root, session.Mission, root, overlay, token), token),
             addition => { try { SourceWorlds.Validate(session.Root, addition); return null; } catch (Exception ex) when (ex is InvalidDataException or IOException) { return ex.Message; } });
-        if (dialog.ShowDialog() != true || dialog.Result is not { } result || doc.IsDisposed) return;
+        if (dialog.ShowDialog() != true || dialog.Result is not { } result) return;
+        // A closed world reports stale_document rather than dropping the choice silently.
         await AddSourceModelAsync(session.Owner ?? doc, result, CancellationToken.None);
     }
     private async void AddSourceModelClick(object sender, RoutedEventArgs e) => await RunUi(AddSourceModelInteractiveAsync);
@@ -247,7 +275,8 @@ public partial class MainWindow
         additions = world.Edits.Additions.Take(256).Select(a => new
         {
             model = a.Model.Model, name = a.Model.Name, placed = a.Model.Position != null,
-            position = a.Model.Position is { } p ? new { p.X, p.Y, p.Z } : null, heading = a.Model.Heading, definitionFiles = a.DefinitionFiles
+            position = a.Model.Position is { } p ? new { p.X, p.Y, p.Z } : null, heading = a.Model.Heading,
+            definitionFiles = a.DefinitionFiles.Take(16).ToArray(), definitionFileCount = a.DefinitionFiles.Count
         }).ToArray(),
         outputs = d.SourceBuild?.Outputs.Select(o => new { path = o.Path, status = o.Status, warningCount = o.Warnings.Count, error = o.Error == null ? null : Bounded(o.Error, 512) }).ToArray()
     };
@@ -278,9 +307,9 @@ public partial class MainWindow
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
             return Result(new { name, files = files.Take(64).Select(f => new { path = f.Path, animations = f.Animations.Take(32).Select(n => Bounded(n, 128)).ToArray(), animationCount = f.Animations.Count, missions = f.Missions }).ToArray(), fileCount = files.Count, truncated = files.Count > 64 });
         });
-        RegisterJob(r, "source_world_add_model", "Add a project model to a source world as one undoable edit: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zrd. The world rebuilds (an edit it cannot build with is reverted) and the result is the replacement document; nothing is written until save_document.",
+        RegisterJob(r, "source_world_add_model", "Add a project model to a source world as one undoable edit: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zrd. The world rebuilds and the result is the replacement document; an edit the world cannot be built with (build_failed), or one canceled before the rebuilt world is shown, is reverted. While the world rebuilds, other edits, undo_redo, save_document and reload_document of it return busy. Nothing is written until save_document.",
             [DocumentParameter, RevisionParameter, P("model", "string", "Project path of the glTF model, as zstudio_source_world_models lists it (for example data/m2/models/bft/ltank.gltf).", true),
-             P("name", "string", "Node name: 1–31 letters, digits, '_', '-' or '.'. Resources and animations find the model by it.", true),
+             P("name", "string", "Node name: 1–31 letters, digits, '_', '-' or '.'. Resources and animations find the model by it. A placed model's name must not also name a node inside the model, which AddChild would attach instead (build_failed).", true),
              new("position", "object", "Optional world position; omit for an unplaced root.", Properties: [P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)]),
              P("heading", "number", "Rotation about Y in degrees (−360 to 360) for a placed model; default 0."),
              new("definitionFiles", "array", "Definition files to list, as zstudio_source_world_definitions returns them; omit to list all it returns, or pass [] to list none.", Items: new("", "string", "Project path of a definition file."), MaxItems: 64)], true,

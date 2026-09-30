@@ -119,7 +119,7 @@ public static partial class SourceBuilder
             return damageMasks;
         }
         /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>
-        internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing);
+        internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<WorldNode> LoadedRoots);
         private readonly Dictionary<string, (AssembledWorld? World, Exception? Failure)> worlds = new(StringComparer.OrdinalIgnoreCase);
         internal bool HasWorld(string mission) => overlay?.ContainsKey(WorldScript(mission)) == true || File.Exists(SourceProject.Resolve(root, WorldScript(mission)));
         internal AssembledWorld World(string mission, CancellationToken token)
@@ -131,7 +131,7 @@ public static partial class SourceBuilder
                     WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token);
                     var world = assembler.Assemble($"{mission}.gs");
                     cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
-                        new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase)), null);
+                        new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots]), null);
                 }
                 catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or FormatException) { cached = (null, ex); }
                 worlds[mission] = cached;

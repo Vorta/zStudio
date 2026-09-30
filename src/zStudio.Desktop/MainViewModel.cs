@@ -253,11 +253,42 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private Task<bool> CanRemoveAsync(DocumentModel document) => ConfirmDiscardAsync?.Invoke(document) ?? Task.FromResult(!document.IsDirty);
     private void RemoveDocument(DocumentModel document) { int i = Documents.IndexOf(document); Documents.Remove(document); document.Dispose(); if (SelectedDocument == document) SelectedDocument = Documents.Count > 0 ? Documents[Math.Clamp(i, 0, Documents.Count - 1)] : null; }
     public Task ReloadAsync() => ReloadSelectedAsync();
-    public void CheckExternalChanges()
+    public void CheckExternalChanges() => _ = CheckExternalChangesAsync();
+    /// <summary>
+    /// Marks documents whose files changed on disk. A source world compares the stamps of every project file its build read
+    /// (thousands for a retail mission), so that runs off the UI thread; the task completes when those results are shown.
+    /// </summary>
+    internal Task CheckExternalChangesAsync()
     {
+        List<Task> pending = [];
         foreach (var doc in Documents)
-            try { doc.IsStale = doc.SourceWorld != null ? doc.SourceInputsChanged() : (doc.ContentEdits is { } content ? content.HasExternalChanges() : doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
+        {
+            if (doc.SourceWorld != null) { pending.Add(CheckSourceWorldAsync(doc)); continue; }
+            try { doc.IsStale = (doc.ContentEdits is { } content ? content.HasExternalChanges() : doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { doc.IsStale = true; }
+        }
+        return Task.WhenAll(pending);
+    }
+    private readonly Dictionary<DocumentModel, Task> sourceWorldChecks = [];
+    private Task CheckSourceWorldAsync(DocumentModel doc)
+    {
+        if (sourceWorldChecks.TryGetValue(doc, out var running)) return running;
+        TaskCompletionSource done = new();
+        sourceWorldChecks[doc] = done.Task;
+        _ = Run();
+        return done.Task;
+        async Task Run()
+        {
+            long revision = doc.Revision; bool stale;
+            try
+            {
+                try { stale = await Task.Run(doc.SourceInputsChanged); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { stale = true; }
+                // An edit, save or rebuild during the check makes its result obsolete; the next check reads the new state.
+                if (!doc.IsDisposed && doc.Revision == revision) doc.IsStale = stale;
+            }
+            finally { sourceWorldChecks.Remove(doc); done.SetResult(); }
+        }
     }
     /// <summary>Publishes a document built elsewhere (a source world), as opening a file would.</summary>
     internal void AddDocument(DocumentModel model, bool activate)

@@ -27,7 +27,7 @@ In a source project, a mission's world is what its build script (`gamegen\mN.gs`
 
 **Add model** (in the Whole world toolbar, or **Tools → Add model to world…**) loads any glTF model of the project into the world, for example a vehicle that only another mission used:
 
-- Choose the model and its node name (the model's name by default). Resources and animations find the model by this name; the dialog says when the world already has a node with it.
+- Choose the model and its node name (the model's name by default). Resources and animations find the model by this name; the dialog says when the world already has a node with it. `AddChild` attaches the newest node with the name, so a placed model cannot use a name one of its own nodes has (the root node of `vtol.gltf` is `vtol`): the addition is withdrawn with a request to choose another name.
 - **Not placed** loads the model as a root outside the world, as the shipped scripts load vehicle templates: resources such as `aiv.zrd` place copies of it by name (`ltank_01` places a copy of `ltank`). **Placed in the world** puts it at a position and heading (the orbit point by default).
 - **Animations** lists the definition files other missions list with an animation for that name, such as `data\common\zrdr\enemies\ltank.zrd` for `ltank`; checked files are added to the mission's `data\mN\zrdr\anim.zrd`.
 
@@ -47,7 +47,7 @@ FindNode %worldName%
 AddChild ltank_wreck
 ```
 
-Each addition, undo and redo rebuilds the world and keeps the camera. An addition the world cannot be built with is withdrawn. Nothing changes in the project until **Save**, which writes only the mission's script and animation list, and refuses either file when it changed on disk since it was read. When a model, texture or other source the world was built from changes on disk, the world is marked stale; **Reload** rebuilds it and keeps pending additions, unless the script or animation list itself changed. Exports of the mission then include the model's geometry and materials, every texture it uses in each of the mission's packs, and its animations. Placing copies through `aiv.zrd` and other resources is done in their `.zrd` sources.
+Each addition, undo and redo rebuilds the world and keeps the camera. An addition the world cannot be built with, or whose rebuild is canceled, is withdrawn. Until the rebuilt world is shown, Add model, Undo, Redo, Save and Reload of that world wait (they are disabled, or report that the world is rebuilding), so a save never includes an addition the world has not been built with. Nothing changes in the project until **Save**, which writes only the mission's script and animation list: when either changed on disk since it was read, neither is written, and if replacing the second fails the first is restored. When a model, texture or other source the world was built from changes on disk, the world is marked stale; **Reload** rebuilds it and keeps pending additions, unless the script or animation list itself changed. Exports of the mission then include the model's geometry and materials, every texture it uses in each of the mission's packs, and its animations. Placing copies through `aiv.zrd` and other resources is done in their `.zrd` sources.
 
 ## Layout
 

@@ -6,7 +6,9 @@ using System.Windows;
 using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Sources;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Mcp;
 using Recoil.Zbd.Tests;
@@ -80,6 +82,37 @@ internal static class SourceWorldMcpChecks
             await Preview();
             Assert.Contains(placed.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
 
+            // A placed model cannot be named like a node of its own (the tank's root node is "hull"): AddChild finds the
+            // newest node with the name, which would attach that inner node and leave the placed root out of the world.
+            var shadowed = await Job("source_world_add_model", new()
+            {
+                ["document"] = Id(placed), ["revision"] = placed.Revision, ["model"] = fixture.Tank, ["name"] = "hull",
+                ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = 10 }, ["definitionFiles"] = Array.Empty<string>()
+            }, "failed");
+            Assert.Equal("build_failed", shadowed["code"]!.GetValue<string>()); Assert.Contains("hull", shadowed["message"]!.GetValue<string>());
+            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Edits.Additions.Count); Assert.False(placed.SourceWorld!.Edits.CanRedo);
+
+            // An edit canceled while its world rebuilds is withdrawn: the shown world never had it.
+            using (CancellationTokenSource cancel = new())
+            {
+                var canceled = SourceTask<DocumentModel>("AddSourceModelAsync", placed, new SourceWorldAddition(new(fixture.Tank, "tank_canceled"), []), cancel.Token);
+                cancel.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceled);
+            }
+            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Edits.Additions.Count); Assert.False(placed.SourceWorld!.Edits.CanRedo);
+
+            // While an edit rebuilds the world, nothing else edits or saves it: an edit it cannot be built with (here a
+            // malformed glTF) is withdrawn afterwards and never reaches the project.
+            string scriptPath = fixture.Path("gamegen/m1.gs"); byte[] scriptBefore = await File.ReadAllBytesAsync(scriptPath, token);
+            fixture.Write("data/m1/models/broken.gltf", "{");
+            var failing = SourceTask<DocumentModel>("AddSourceModelAsync", placed, new SourceWorldAddition(new("data/m1/models/broken.gltf", "broken"), []), CancellationToken.None);
+            Assert.Equal("busy", (await Assert.ThrowsAsync<StudioCommandException>(async () => await SourceTask<IReadOnlyList<string>>("SaveSourceWorldAsync", placed, CancellationToken.None))).Code);
+            Assert.Equal("busy", (await Assert.ThrowsAsync<StudioCommandException>(() => SourceTask<DocumentModel>("UndoSourceWorldAsync", placed, false, CancellationToken.None))).Code);
+            Assert.Equal("build_failed", (await Assert.ThrowsAsync<StudioCommandException>(() => failing)).Code);
+            Assert.Equal(scriptBefore, await File.ReadAllBytesAsync(scriptPath, token));
+            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Edits.Additions.Count); Assert.False(placed.SourceWorld!.Edits.CanRedo);
+            File.Delete(fixture.Path("data/m1/models/broken.gltf"));
+
             // Undo and redo rebuild too.
             var undone = Document(await Call("undo_redo", new() { ["document"] = Id(placed), ["revision"] = placed.Revision, ["action"] = "undo" }));
             Assert.DoesNotContain(undone.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
@@ -96,9 +129,9 @@ internal static class SourceWorldMcpChecks
             Assert.Contains("LoadGameGen tank.flt tank\r\n", await File.ReadAllTextAsync(script, token));
 
             // A changed model marks the world stale; reloading rebuilds it from disk.
-            main.ViewModel.CheckExternalChanges(); Assert.False(redone.IsStale);
+            await main.ViewModel.CheckExternalChangesAsync(); Assert.False(redone.IsStale);
             File.SetLastWriteTimeUtc(fixture.Path(fixture.Tank), DateTime.UtcNow.AddMinutes(2));
-            main.ViewModel.CheckExternalChanges(); Assert.True(redone.IsStale);
+            await main.ViewModel.CheckExternalChangesAsync(); Assert.True(redone.IsStale);
             var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision }));
             Assert.False(reloaded.IsStale); Assert.Contains(reloaded.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
             // After the script changes on disk, the pending edits cannot be kept and reloading starts from the file.
@@ -121,6 +154,12 @@ internal static class SourceWorldMcpChecks
             {
                 var work = (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
                 await work.WaitAsync(token);
+            }
+            // The GUI's own entry points, called on the dispatcher as its commands call them.
+            Task<T> SourceTask<T>(string method, params object[] arguments)
+            {
+                try { return (Task<T>)typeof(MainWindow).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, arguments)!; }
+                catch (TargetInvocationException ex) when (ex.InnerException != null) { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(ex.InnerException); throw; }
             }
             DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == state["id"]!.GetValue<string>());
             static string Id(DocumentModel d) => d.SessionId.ToString();

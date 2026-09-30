@@ -58,7 +58,8 @@ public partial class MainWindow
     {
         if (doc.SourceWorld is { } world)
         {
-            if (redo ? world.Edits.CanRedo : world.Edits.CanUndo) sourceWorldWork = RunUi(() => UndoSourceWorldAsync(doc, redo, CancellationToken.None));
+            if (world.IsRebuilding) ViewModel.Status = $"The {world.Mission} world is still rebuilding; undo and redo are available when it is shown.";
+            else if (redo ? world.Edits.CanRedo : world.Edits.CanUndo) sourceWorldWork = RunUi(() => UndoSourceWorldAsync(doc, redo, CancellationToken.None));
             return;
         }
         if (doc.ContentEdits != null) { contentWork = UndoContentAsync(doc, redo); return; }

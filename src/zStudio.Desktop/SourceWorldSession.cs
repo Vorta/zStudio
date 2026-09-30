@@ -22,6 +22,11 @@ internal sealed class SourceWorldSession : IDisposable
     internal DocumentModel? Owner { get; set; }
     /// <summary>Cancels the newest build request; a newer request or the session's end supersedes it.</summary>
     internal CancellationTokenSource? Building { get; set; }
+    /// <summary>
+    /// An edit, undo, redo or reload is rebuilding the world until its replacement is shown. Other edits, saves and
+    /// reloads wait for it, so the world shown always matches the edits and only edits it was built with are saved.
+    /// </summary>
+    internal bool IsRebuilding { get; set; }
     private readonly string folder;
     private readonly FileStream lockFile;
     private int generation;

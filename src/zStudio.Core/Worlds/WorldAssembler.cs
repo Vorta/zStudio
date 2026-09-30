@@ -34,6 +34,8 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
     /// <summary>Model sources the world was built from, for export inputs.</summary>
     public HashSet<string> ModelFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> ScriptFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The root node of each <c>LoadGameGen</c> before the world was written, in script order.</summary>
+    public List<WorldNode> LoadedRoots { get; } = [];
     public string? WorldFile { get; private set; }
     public string? AnimationFile { get; private set; }
     /// <summary>World children in the order they were added; their cells are assigned after the update pass.</summary>
@@ -346,7 +348,7 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
     /// </summary>
     private void LoadGameGen(string file, string name, string script)
     {
-        var root = Create(name, WorldNodeClass.Object3D); Object3D(root);
+        var root = Create(name, WorldNodeClass.Object3D); Object3D(root); LoadedRoots.Add(root);
         string? path = ResolveModel(file);
         if (path == null) { Warn($"{script}: LoadGameGen found no model for {file} in {string.Join(", ", modelDirectories)}."); pendingWorld = null; return; }
         // One load reads each referenced file once, so repeated references share their models, as the loader shared them.
@@ -375,6 +377,8 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
             root.Children.Add(node); node.Parents.Add(root);
             if (pendingWorld != null) { node.Parents.Add(pendingWorld); worldChildren.Add(node); }
         }
+        // FindNode and AddChild take the newest node with a name, and the file's own nodes are newer than the root.
+        if (added.Any(n => n.Name == name)) Warn($"{script}: {file} has a node of its own named {name}, so FindNode and AddChild {name} find that node rather than the loaded root.");
         pendingWorld = null; current = root;
         void AddNodes(WorldNode node)
         {

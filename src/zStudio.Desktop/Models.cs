@@ -76,7 +76,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (IsDisposed) return;
         Revision++; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); SourceWorldChanged?.Invoke();
     }
-    /// <summary>Whether a project file this world was built from changed on disk since.</summary>
+    /// <summary>Whether a project file this world was built from changed on disk since. Reads only immutable build state, so it runs off the UI thread.</summary>
     internal bool SourceInputsChanged()
     {
         if (SourceWorld is not { } world || SourceBuild is not { } build) return false;
