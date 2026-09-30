@@ -270,6 +270,9 @@ public sealed class WorldAssemblyTests
         Assert.Equal([0u, 0u, WorldUpdate.LandmarkFlag], [Landmark("flags1"), Landmark("flags2"), Landmark("flags3")]);
         // Macros set after the world is written still expand in the texture registrations that follow.
         Assert.Contains("wave07", assembler.ScriptTextures);
+        // A retail command that changes nodes but is not built is reported rather than silently ignored.
+        AssembleScript("NewWorld world\nNewObject3D a\nNodeSetActive off\nGameZWriteZBDFile x\n", out var unsupported);
+        Assert.Contains(unsupported.Warnings, w => w.Contains("NodeSetActive", StringComparison.Ordinal));
 
         // Reconstruction traces the same instructions.
         Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> scripts = new(StringComparer.OrdinalIgnoreCase)

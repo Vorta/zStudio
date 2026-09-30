@@ -197,7 +197,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "LoadGameGen": LoadGameGen(A(0), A(1), script); break;
             case "GameZWriteZBDFile": WorldFile = A(0); Finish(); break;
             // Rendering and runtime settings are not part of the world file; gamegen-only commands had no retail effect.
-            default: break;
+            // Commands that change nodes or models in the retail interpreter but are not built here are reported.
+            default: if (Unsupported.Contains(command)) Warn($"{script}: {command} changes the world in the game's interpreter, but the source build does not apply it."); break;
         }
 
         void WorldSet(Action<WorldNode> action) { if (current?.Class == WorldNodeClass.World) action(current); else Warn($"{script}: {command} needs a world node."); }
@@ -216,6 +217,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         }
     }
 
+    /// <summary>Retail interpreter commands (zinterp_parse) that create, free, attach or change nodes and models, which the build does not implement.</summary>
+    private static readonly HashSet<string> Unsupported = new(["NewNode", "NewSEQ", "FreeNode", "NodeSetActive", "Object3DAddChild", "Object3DSetShowBackFace", "Object3DSetMorphVertex"], StringComparer.Ordinal);
     private static float Radians(float degrees) => degrees * (MathF.PI / 180f);
     /// <summary>ParseFloatToken's atof: the longest leading decimal number (after spaces), 0 when there is none.</summary>
     internal static float Number(string text)
