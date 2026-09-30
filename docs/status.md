@@ -9,6 +9,7 @@ zStudio can reconstruct RECOIL's original source tree from shipped data and pack
 - **Workspace:** text `.zrd` sources open and save as text in the shared ZRD editor; importing one into an archive compiles it; scripts open as token text.
 - **GUI/MCP:** Tools menu commands and `source_reconstruct`, `source_pack` and `source_status` (85 tools), with staged, verified, all-or-nothing packing and separate-folder rules.
 - **Not yet:** regenerating stored sound variants after a source edit, and reconstruction of worlds, animations and textures.
+- **Review of 55a97ca (10 findings, all fixed with regressions):** publication rolls back on any failure; nested links in pack folders are refused; pack folders belong to one project identity; a pack reads a frozen project state; opening another root cancels a pack and suppresses its result; canceled reconstructions clean up; non-RECOIL folders are refused; text sources are bounded to 16 MiB before decoding; archives keep their structural identity whatever their name; manifest fields are bounded when a project loads.
 
 ## PR #14 independent review and fix cycle (2026-09-29)
 

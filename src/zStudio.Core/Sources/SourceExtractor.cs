@@ -18,9 +18,27 @@ public static class SourceExtractor
         if (Directory.Exists(projectRoot) && Directory.EnumerateFileSystemEntries(projectRoot).Any()) throw new IOException("Choose a new or empty folder for the source project.");
         var files = Corpus(corpusRoot);
         // The recovered build layout is RECOIL's; MechWarrior 3 data uses other formats and folders.
-        if (files.FirstOrDefault(f => FormatRegistry.Probe(f.Path) is { Family: FormatFamily.GameZ, Version: 27 } or { Family: FormatFamily.Animation, Version: 39 }) is { Path: not null } mw3)
+        var probes = files.Select(f => (f.Relative, Probe: FormatRegistry.Probe(f.Path))).ToArray();
+        if (probes.FirstOrDefault(f => f.Probe is { Family: FormatFamily.GameZ, Version: 27 } or { Family: FormatFamily.Animation, Version: 39 }) is { Relative: not null } mw3)
             throw new InvalidDataException($"{mw3.Relative} is MechWarrior 3 data; source reconstruction supports RECOIL.");
+        // Require positive RECOIL evidence: prepared scripts, a version-15 world or a version-28 animation program.
+        if (!probes.Any(f => f.Probe is { Family: FormatFamily.Scripts, Version: 7 } or { Family: FormatFamily.GameZ, Version: 15 } or { Family: FormatFamily.Animation, Version: 28 }))
+            throw new InvalidDataException("No RECOIL game data was found. Choose the folder that contains interp.zbd, zrdr.zbd and the mission folders.");
+        bool created = !Directory.Exists(projectRoot);
         Directory.CreateDirectory(projectRoot);
+        try { return await ExtractFilesAsync(corpusRoot, projectRoot, files, progress, token); }
+        catch
+        {
+            // The folder was new or empty: remove everything this reconstruction wrote so it can be retried.
+            if (created) Directory.Delete(projectRoot, true);
+            else foreach (var entry in new DirectoryInfo(projectRoot).EnumerateFileSystemInfos())
+                { if (entry is DirectoryInfo directory) directory.Delete(true); else entry.Delete(); }
+            throw;
+        }
+    }
+
+    private static async Task<SourceProjectManifest> ExtractFilesAsync(string corpusRoot, string projectRoot, List<(string Path, string Relative)> files, IProgress<SourceProgress>? progress, CancellationToken token)
+    {
         Context context = new(projectRoot, token);
         List<SourceOutput> outputs = []; List<string> fingerprint = []; long total = 0;
         for (int i = 0; i < files.Count; i++)
@@ -35,7 +53,7 @@ public static class SourceExtractor
                 if (probe.Recognition == Recognition.Supported && probe.Family == FormatFamily.Archive) output = await context.ExtractArchiveAsync(relative, bytes, sha);
                 else if (probe.Recognition == Recognition.Supported && probe.Family == FormatFamily.Scripts) output = await context.ExtractScriptsAsync(relative, bytes, sha);
                 // Verify the reconstruction before accepting it; anything that does not pack back exactly stays verbatim.
-                if (output != null && !SourcePacker.Build(projectRoot, output, token).Bytes.AsSpan().SequenceEqual(bytes))
+                if (output != null && !SourcePacker.Build(projectRoot, output, new(projectRoot), token).Bytes.AsSpan().SequenceEqual(bytes))
                     throw new InvalidDataException("the reconstructed sources do not pack back byte-identically");
             }
             catch (InvalidDataException ex) { context.Rollback(); context.Notes.Add($"{relative}: kept verbatim because {ex.Message}"); output = null; }
@@ -45,6 +63,7 @@ public static class SourceExtractor
         progress?.Report(new(files.Count, files.Count, "Writing manifest"));
         SourceProjectManifest manifest = new()
         {
+            Id = Guid.NewGuid(),
             Origin = new(Path.GetFileName(corpusRoot), files.Count, total, SourceProject.Sha256(Encoding.UTF8.GetBytes(string.Join('\n', fingerprint)))),
             Outputs = outputs, Notes = context.Notes
         };

@@ -188,7 +188,11 @@ public static class ZrdText
         InvalidDataException Error(string message) => new($"Line {line}: {message}");
     }
 
-    public static ZrdNode Parse(ReadOnlySpan<byte> bytes, CancellationToken token = default) => Parse(Encoding.Latin1.GetString(bytes), token);
+    public static ZrdNode Parse(ReadOnlySpan<byte> bytes, CancellationToken token = default)
+    {
+        if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"Source text larger than {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB is not supported.");
+        return Parse(Encoding.Latin1.GetString(bytes), token);
+    }
     public static byte[] Encode(ZrdNode root, CancellationToken token = default) => Encoding.ASCII.GetBytes(Write(root, token));
 
     /// <summary>A text source rather than compiled zReader data: compiled files begin with a type word of 1–4.</summary>

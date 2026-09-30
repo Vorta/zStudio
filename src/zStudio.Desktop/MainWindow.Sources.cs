@@ -12,6 +12,8 @@ public partial class MainWindow
     /// <summary>The open root when it is a reconstructed source project.</summary>
     private string? SourceProjectRoot => ViewModel.HasRoot && SourceProject.IsProject(ViewModel.RootPath) ? ViewModel.RootPath : null;
     private static string Bounded(string text, int maximum = 1024) => text.Length <= maximum ? text : text[..maximum] + "…";
+    /// <summary>Test hook: runs after a pack finishes and before its result is published to the workspace.</summary>
+    internal Func<Task>? SourcePackFinishing { get; set; }
 
     private async Task<SourceProjectManifest> ReconstructSourceProjectAsync(string source, string destination, bool open, CancellationToken token)
     {
@@ -49,12 +51,16 @@ public partial class MainWindow
         string prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
         if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && Path.GetFullPath(d.Path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) is { } dirty)
             throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {Path.GetFileName(dirty.Path)} before packing.");
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token); operation = cancellation; CancelOperationItem.IsEnabled = true;
+        // Opening another root cancels the pack; its result never publishes into the new workspace.
+        long generation = ViewModel.WorkspaceGeneration;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken); operation = cancellation; CancelOperationItem.IsEnabled = true;
         try
         {
             string verb = destination == null ? "Verifying" : "Packing";
             var progress = new Progress<SourceProgress>(p => { if (operation == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"{verb} {p.Completed}/{p.Total}: {p.Item}"; });
             var report = await Task.Run(() => destination == null ? SourcePacker.VerifyAsync(root, progress, cancellation.Token) : SourcePacker.PackAsync(root, destination, progress, cancellation.Token), cancellation.Token);
+            if (SourcePackFinishing is { } finishing) await finishing();
+            if (ViewModel.WorkspaceGeneration != generation) throw new StudioCommandException("context_changed", "The workspace changed while packing.");
             foreach (var failed in report.Outputs.Where(o => o.Status == "failed")) ViewModel.AddProblem(Bounded($"{failed.Path}: {failed.Error}"), file: root);
             ViewModel.Status = $"{(destination == null ? "Verified" : "Packed")} {report.Outputs.Count} game files: {report.Identical} identical, {report.Changed} changed, {report.Failed} failed";
             return report;
@@ -71,7 +77,7 @@ public partial class MainWindow
             project = root, destination = report.Destination, written = report.Destination != null, report.Identical, report.Changed, report.Failed,
             outputs = report.Outputs.Take(shown).Select(o => new
             {
-                o.Path, o.Family, o.Status, o.Sha256, o.OriginalSha256, changedSources = o.ChangedSources.Take(16).ToArray(),
+                o.Path, o.Family, o.Status, o.Sha256, o.OriginalSha256, changedSources = o.ChangedSources.Take(16).Select(s => Bounded(s, 512)).ToArray(),
                 changedSourceCount = o.ChangedSources.Count, error = o.Error == null ? null : Bounded(o.Error)
             }).ToArray(),
             outputCount = report.Outputs.Count, outputsTruncated = report.Outputs.Count > shown
@@ -84,7 +90,7 @@ public partial class MainWindow
         var manifest = await SourceProject.LoadAsync(root, token);
         return new
         {
-            project = root, manifest.Game, manifest.Version, origin = manifest.Origin,
+            project = root, id = manifest.Id, game = Bounded(manifest.Game, 64), manifest.Version, origin = manifest.Origin,
             families = manifest.Outputs.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
             notes = manifest.Notes.Take(32).Select(n => Bounded(n, 512)).ToArray(), noteCount = manifest.Notes.Count, notesTruncated = manifest.Notes.Count > 32,
             outputs = Page(manifest.Outputs, a, o => o.Path, o => new { o.Path, o.Family, o.Bytes, o.Sha256 }).Data

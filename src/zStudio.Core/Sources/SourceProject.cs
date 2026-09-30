@@ -15,6 +15,8 @@ public sealed record SourceProjectManifest
     public string Format { get; init; } = FormatName;
     public int Version { get; init; } = CurrentVersion;
     public string Game { get; init; } = "RECOIL";
+    /// <summary>Unique per reconstruction; pack folders record it so one project never overwrites the output of another.</summary>
+    public Guid Id { get; init; }
     public required SourceOrigin Origin { get; init; }
     public required IReadOnlyList<SourceOutput> Outputs { get; init; }
     public IReadOnlyList<string> Notes { get; init; } = [];
@@ -49,6 +51,10 @@ public sealed record ScriptLayoutPadding(int Instruction, string Bytes);
 public static class SourceProject
 {
     public const string DataFolder = "data", GameGenFolder = "gamegen", MetadataFolder = ".zstudio";
+    /// <summary>Text sources are bounded before they are decoded; retail sources are at most a few hundred kilobytes.</summary>
+    public const int MaximumSourceTextBytes = 16 * 1024 * 1024;
+    internal static readonly string[] Families = ["archive", "scripts", "passthrough"];
+    internal static bool IsSha256(string? value) => value is { Length: 64 } && value.All(char.IsAsciiHexDigitLower);
     public static readonly JsonSerializerOptions Json = new()
     {
         WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -81,10 +87,16 @@ public static class SourceProject
         var manifest = await JsonSerializer.DeserializeAsync<SourceProjectManifest>(stream, Json, token) ?? throw new InvalidDataException("Empty project manifest.");
         if (manifest.Format != SourceProjectManifest.FormatName) throw new InvalidDataException("This folder is not a zStudio source project.");
         if (manifest.Version != SourceProjectManifest.CurrentVersion) throw new InvalidDataException($"Source project version {manifest.Version} is not supported (expected {SourceProjectManifest.CurrentVersion}).");
-        // Every output and layout path must stay inside its folder; outputs are unique ignoring case.
+        // Every field is bounded and every output/layout path stays inside its folder; outputs are unique ignoring case.
+        if (manifest.Id == Guid.Empty) throw new InvalidDataException("The project manifest has no project identity.");
+        if (manifest.Origin is not { Name.Length: <= 255, Files: >= 0, Bytes: >= 0 } origin || !IsSha256(origin.Fingerprint)) throw new InvalidDataException("The project manifest has an invalid origin.");
+        if (manifest.Outputs is not { Count: <= SourceExtractor.MaximumFiles } list) throw new InvalidDataException("The project manifest lists too many or no outputs.");
+        if (manifest.Notes is not { Count: <= 100_000 } notes || notes.Any(n => n is not { Length: <= 8192 })) throw new InvalidDataException("The project manifest has invalid notes.");
         HashSet<string> outputs = new(StringComparer.OrdinalIgnoreCase);
-        foreach (var output in manifest.Outputs ?? throw new InvalidDataException("The project manifest lists no outputs."))
+        foreach (var output in list)
         {
+            if (output.Path is not { Length: <= 400 } || output.Layout is not { Length: <= 500 } || !Families.Contains(output.Family) || !IsSha256(output.Sha256) || output.Bytes < 0)
+                throw new InvalidDataException("The project manifest has an invalid output entry.");
             _ = Resolve(root, output.Path); _ = Resolve(root, output.Layout);
             if (!outputs.Add(output.Path)) throw new InvalidDataException($"The project manifest lists {output.Path} twice.");
             if (!output.Layout.StartsWith(MetadataFolder + "/", StringComparison.Ordinal)) throw new InvalidDataException($"Layout {output.Layout} must be inside {MetadataFolder}.");
@@ -96,6 +108,17 @@ public static class SourceProject
         string path = Resolve(root, relative);
         if (new FileInfo(path).Length > 256 * 1024 * 1024) throw new InvalidDataException($"Layout {relative} exceeds 256 MiB.");
         return JsonSerializer.Deserialize<T>(File.ReadAllBytes(path), Json) ?? throw new InvalidDataException($"Empty layout {relative}.");
+    }
+    /// <summary>Refuse links on the way from <paramref name="root"/> to a relative file, including the file itself; nothing is followed.</summary>
+    public static void RejectNestedLinks(string root, string relative)
+    {
+        string current = System.IO.Path.GetFullPath(root); var parts = relative.Split('/');
+        for (int i = 0; i < parts.Length; i++)
+        {
+            current = System.IO.Path.Combine(current, parts[i]);
+            FileSystemInfo info = i < parts.Length - 1 ? new DirectoryInfo(current) : new FileInfo(current);
+            if (info.Exists && info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{info.FullName} is a link; nothing was written through it.");
+        }
     }
     /// <summary>Refuse to write through directory links anywhere above a destination.</summary>
     public static void RejectLinks(string path)

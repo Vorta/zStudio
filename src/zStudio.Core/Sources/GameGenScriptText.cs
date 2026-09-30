@@ -13,6 +13,12 @@ public static class GameGenScriptText
     private static readonly char[] Separators = [',', ' ', '\t', '\n'];
     private static bool IsSpace(char c) => c is ' ' or '\t' or '\n' or '\v' or '\f' or '\r';
 
+    /// <summary>A script file's text, bounded before it is decoded.</summary>
+    public static string Decode(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"Source text larger than {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB is not supported.");
+        return Encoding.Latin1.GetString(bytes);
+    }
     /// <summary>Instructions of a script file read in text mode (CRLF becomes LF); blank and comment lines are skipped.</summary>
     public static IReadOnlyList<IReadOnlyList<string>> Tokenize(string text)
     {

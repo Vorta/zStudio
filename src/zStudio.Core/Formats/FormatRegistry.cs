@@ -62,10 +62,6 @@ public sealed class FormatRegistry
         }
         if (extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) && magic is >= 1 and <= 4)
             return new(FormatFamily.Zrd, null, Recognition.Supported, "zReader typed data");
-        if (extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) && Sources.ZrdText.LooksLikeText(prefix))
-            return new(FormatFamily.Zrd, null, Recognition.Supported, SourceZrdDescription);
-        if (extension.Equals(".gw", StringComparison.OrdinalIgnoreCase) || extension.Equals(".gs", StringComparison.OrdinalIgnoreCase))
-            return new(FormatFamily.Scripts, null, Recognition.Supported, SourceScriptDescription);
         if (trailer.Length == 8 && BinaryPrimitives.ReadUInt32LittleEndian(trailer) == 1)
         {
             uint count = BinaryPrimitives.ReadUInt32LittleEndian(trailer[4..]);
@@ -76,6 +72,11 @@ public sealed class FormatRegistry
         // trailing archive index takes precedence over a standalone WAV header.
         if (prefix.Length >= 12 && prefix[..4].SequenceEqual("RIFF"u8) && prefix.Slice(8, 4).SequenceEqual("WAVE"u8))
             return new(FormatFamily.Wave, null, Recognition.Supported, "RIFF / WAVE audio");
+        // Reconstructed source text is recognized by name only after every structural format has been ruled out.
+        if (extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) && Sources.ZrdText.LooksLikeText(prefix))
+            return new(FormatFamily.Zrd, null, Recognition.Supported, SourceZrdDescription);
+        if (extension.Equals(".gw", StringComparison.OrdinalIgnoreCase) || extension.Equals(".gs", StringComparison.OrdinalIgnoreCase))
+            return new(FormatFamily.Scripts, null, Recognition.Supported, SourceScriptDescription);
         return new(FormatFamily.Unknown, null, Recognition.Unknown, "Unrecognized format · raw inspection available");
     }
 
@@ -108,7 +109,7 @@ public sealed class FormatRegistry
             }
             else if (probe.Description == SourceScriptDescription)
             {
-                doc.SourceSyntax = "gamegen-script"; string text = System.Text.Encoding.Latin1.GetString(bytes);
+                doc.SourceSyntax = "gamegen-script"; string text = Sources.GameGenScriptText.Decode(bytes);
                 var lines = Sources.GameGenScriptText.Tokenize(text);
                 doc.Add(AssetKind.Script, 0, System.IO.Path.GetFileName(path), 0, bytes.Length, new System.Text.Json.Nodes.JsonObject { ["instructions"] = lines.Count },
                     new ScriptContent(lines.Select(l => l.ToArray()).ToArray(), text)).Summary = $"{lines.Count:N0} instructions";

@@ -11,7 +11,11 @@ RECOIL's shipped ZBD files are build outputs. The studio originally built them w
 
 Reconstruction supports RECOIL data; MechWarrior 3 folders are refused. It verifies that every output packs back byte-identically before it is accepted; an output that would not is kept verbatim and reported as a note. On the 1999 retail data (58 files) every output reconstructs and packs back exactly. Packing reports each output as `identical`, `changed` (with the edited sources) or `failed` (with the error). Unsaved edits to project files must be saved or discarded before packing, because packing reads the files on disk.
 
-Projects and pack folders can never be the protected `zbd_1998`/`zbd_1999` corpora, overlap their input, or pass through directory links. A pack folder is marked with `zstudio-pack.json`; re-packing replaces only outputs this project produces.
+Reconstruction requires RECOIL evidence (prepared scripts, a version-15 world or a version-28 animation program). A canceled or failed reconstruction removes everything it wrote, so the same folder can be used again.
+
+Packing reads every project file once and checks that none changed before anything is written; an edit made while a pack runs fails the pack rather than mixing two states. Publication moves replaced outputs aside and restores them if any later step fails, so a pack folder always holds one complete pack. Opening another folder cancels a running pack.
+
+Projects and pack folders can never be the protected `zbd_1998`/`zbd_1999` corpora, overlap their input, or pass through links, including links inside a previously packed folder. A pack folder is marked with `zstudio-pack.json` and the project's identity: only the same project can pack into it again, and re-packing replaces only outputs this project produces. Text sources larger than 16 MiB are refused before they are decoded.
 
 ## Layout
 

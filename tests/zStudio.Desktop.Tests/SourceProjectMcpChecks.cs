@@ -69,6 +69,14 @@ internal static class SourceProjectMcpChecks
             Assert.True(written["written"]!.GetValue<bool>());
             Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(fixture.Corpus, "interp.zbd"), token), await File.ReadAllBytesAsync(Path.Combine(packed, "interp.zbd"), token));
             Assert.True(File.Exists(Path.Combine(packed, SourcePacker.MarkerFileName)));
+            // A pack whose workspace is replaced never reports into the new workspace.
+            string elsewhere = Path.Combine(fixture.Root, "elsewhere"); Directory.CreateDirectory(elsewhere);
+            main.SourcePackFinishing = () => main.ViewModel.OpenRootAsync(elsewhere, token);
+            var superseded = await Job("source_pack", new(), "failed");
+            main.SourcePackFinishing = null;
+            Assert.Equal("context_changed", superseded["code"]!.GetValue<string>());
+            Assert.DoesNotContain("Verified", main.ViewModel.Status);
+            Assert.Equal(Path.GetFullPath(elsewhere), Path.GetFullPath(main.ViewModel.RootPath!));
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);
