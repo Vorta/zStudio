@@ -44,7 +44,12 @@ public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IRea
     internal static AnimationEntry? ResolveChild(AnimationPackage package, AnimationEvent ev)
     {
         int index = ev.I16(48);
-        string name = ev.Type == 19 ? ev.Text(16) : ev.Text(12, 20);
+        string name = ChildName(ev);
         return index > 0 && index < package.Entries.Count ? package.Entries[index] : package.Entries.FirstOrDefault(e => e.Name == name);
     }
+    /// <summary>
+    /// The launched animation's name: 32 bytes at 16 (type 19) or 12 (type 24). The engine compares the whole field with
+    /// the entry name (retail 0x45BC60), and shipped names such as reset_the_transporters run past 20 characters.
+    /// </summary>
+    internal static string ChildName(AnimationEvent ev) => ev.Text(ev.Type == 19 ? 16 : 12);
 }

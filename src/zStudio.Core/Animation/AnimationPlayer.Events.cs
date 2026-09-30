@@ -212,7 +212,7 @@ public sealed partial class AnimationPlayer
         int slot = ev.I16(50);
         if (starting)
         {
-            string name = ev.Type == 19 ? ev.Text(16) : ev.Text(12, 20);
+            string name = AnimationAudioDependencies.ChildName(ev);
             var target = AnimationAudioDependencies.ResolveChild(context.Package, ev);
             if (target == null) { unavailableDuration = true; AddNote($"Unresolved child animation: {name}"); return 2; }
             Vector3? position = null; int? bound = null;

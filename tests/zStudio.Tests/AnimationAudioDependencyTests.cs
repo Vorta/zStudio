@@ -71,8 +71,30 @@ public sealed partial class AnimationTests
         Assert.Throws<ArgumentOutOfRangeException>(() => AnimationAudioDependencies.Collect(package, 99, TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public void ChildAnimationsResolveTheirWholeStoredName()
+    {
+        // Shipped m6 launches reset_the_transporters (22 characters) by name, with a zero entry cache. The engine
+        // compares the event's 32-byte name with the entry name (HandleSurfaceRefEvent, retail 0x45BC60).
+        var token = TestContext.Current.CancellationToken;
+        var package = Fixture(); var parent = package.Entries[0];
+        var child = new AnimationEntry((byte[])parent.Bytes.Clone(), 1, -1); child.SetText(0, "reset_the_transporters");
+        var motion = AnimationCatalog.Create(11); motion.SetInt(16, -100); motion.SetFloat(140, 2);
+        var sequence = new AnimationSequence(new byte[64]); sequence.Events.Add(motion); child.Sequences.Add(sequence);
+        // A decoy whose name is the first 20 characters must not be chosen either.
+        var decoy = new AnimationEntry((byte[])parent.Bytes.Clone(), 2, -1); decoy.SetText(0, "reset_the_transporte");
+        package.Entries.AddRange([child, decoy]);
+        var launch = Child(24, child.Name, 0); parent.Sequences[0].Events.Add(launch);
+        Assert.Same(child, AnimationAudioDependencies.ResolveChild(package, launch));
+        var duration = new AnimationPlayer(Context(package), 0).MeasureDuration(token);
+        Assert.True(duration.IsFinite); Assert.InRange(duration.Frames, 120, 122);
+
+        child.Sequences[0].Events.Add(SoundNode("child-sound"));
+        Assert.Equal(["child-sound"], AnimationAudioDependencies.Collect(package, 0, token).Names);
+    }
+
     private static AnimationEvent SoundNode(string name)
     { var ev = AnimationCatalog.Create(2); ev.SetText(12, name); ev.SetInt(52, 1); return ev; }
     private static AnimationEvent Child(byte type, string name, short index)
-    { var ev = AnimationCatalog.Create(type); ev.SetText(type == 19 ? 16 : 12, name, type == 19 ? 32 : 20); ev.SetShort(48, index); return ev; }
+    { var ev = AnimationCatalog.Create(type); ev.SetText(type == 19 ? 16 : 12, name); ev.SetShort(48, index); return ev; }
 }
