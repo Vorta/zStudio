@@ -6,15 +6,17 @@ namespace Recoil.Zbd.Core.Worlds;
 public sealed record PolygonInput(Vector3[] Points, Vector2[] Uvs, Vector3[] Normals, Vector3[] Targets, WorldMaterial Material, int Priority = 0, bool ShowBackFace = false, uint Zone = 0xFFFFFF00);
 
 /// <summary>
-/// Builds a display instance polygon by polygon with the engine's rules (zDi::AddPolygonEx, retail 0x483650), so
-/// compiled models match what the original build produced: colinear corners are dropped, non-planar polygons are
-/// fanned into triangles, large ones split, vertices merge within 0.001 (at most 921 per model), normals within
-/// 0.0001, and textured UVs are shifted to their tile, extrapolated from the first triangle and quantized to 1/256.
+/// Builds a display instance polygon by polygon as the original build did, so compiled models match the shipped ones:
+/// large polygons split, vertices merge within 0.001 (at most 921 per model), normals within 0.0001, and textured UVs
+/// are shifted to their tile and quantized to 1/256. Polygons are otherwise kept as authored. The runtime's
+/// zDi::AddPolygonEx (retail 0x483650) also removes colinear corners, fans non-planar polygons and extrapolates UVs
+/// past the first triangle, but the shipped models repeat corners (a vertex listed twice in a row), hold non-planar
+/// polygons and keep a non-affine mapping, so the build did none of that; only a polygon without area is discarded.
 /// </summary>
 public sealed class ModelBuilder(WorldModel model)
 {
     public const float VertexMergeEpsilon = 0.001f;
-    public const double NormalMergeEpsilon = 0.0001, CoplanarTolerance = 0.001, ColinearTolerance = 0.001;
+    public const double NormalMergeEpsilon = 0.0001, CoplanarTolerance = 0.001;
     /// <summary>AddOrMergeVertex fails once a model holds more than 0.9 × 1024 vertices.</summary>
     public const int MaximumVertices = 921, SplitCorners = 48, MaximumCorners = 57;
     /// <summary>How far a corner's UV may lie from the first triangle's affine map and still count as on it.</summary>
@@ -30,10 +32,7 @@ public sealed class ModelBuilder(WorldModel model)
         if (n > MaximumCorners) { Warnings.Add($"A polygon with {n} corners exceeds the engine limit and was fanned."); return Fan(polygon); }
         bool textured = polygon.Material.Texture != null;
         if (textured && polygon.Uvs.Length != n) throw new InvalidDataException("A textured polygon needs a UV for every corner.");
-        List<int> keep = RemoveColinear(polygon.Points);
-        if (keep.Count < 3) { Warnings.Add($"A polygon was discarded: {keep.Count} of {n} corners remain after removing colinear corners."); return false; }
-        if (keep.Count != n) polygon = Select(polygon, keep);
-        if (polygon.Points.Length > 3 && !Coplanar(polygon.Points)) return Fan(polygon);
+        if (!HasArea(polygon.Points)) { Warnings.Add("A polygon without area (all corners on one line) was discarded."); return false; }
         if (polygon.Points.Length > SplitCorners) return Split(polygon);
 
         int count = polygon.Points.Length; bool morphs = polygon.Targets.Length == count;
@@ -44,7 +43,7 @@ public sealed class ModelBuilder(WorldModel model)
             if (vertices[i] < 0) { Warnings.Add($"The model exceeds {MaximumVertices} vertices; a polygon was discarded."); return false; }
             if (normals.Length > 0) normals[i] = AddNormal(polygon.Normals[i]);
         }
-        Vector2[] uvs = textured ? Uvs(polygon.Uvs, vertices) : [];
+        Vector2[] uvs = textured ? Uvs(polygon.Uvs) : [];
         Model.Polygons.Add(new() { Material = polygon.Material, Priority = polygon.Priority, Flags = polygon.ShowBackFace ? 0x100u : 0, Zone = polygon.Zone, Vertices = vertices, Normals = normals, Uvs = uvs });
         return true;
     }
@@ -56,7 +55,7 @@ public sealed class ModelBuilder(WorldModel model)
         Targets = p.Targets.Length == p.Points.Length ? keep.Select(i => p.Targets[i]).ToArray() : p.Targets,
     };
 
-    /// <summary>Fan triangles from the first corner (SplitPolygonChunkedByVertexLimit for non-planar polygons).</summary>
+    /// <summary>Fan triangles from the first corner, for polygons past the engine's corner limit.</summary>
     private bool Fan(PolygonInput p)
     {
         bool any = false;
@@ -76,26 +75,27 @@ public sealed class ModelBuilder(WorldModel model)
         return any;
     }
 
-    /// <summary>
-    /// Corners on a degenerate edge pair are removed, repeatedly (check_colinearity). The engine tests the normalized
-    /// cross product against 0.001, which only a zero cross product fails: a repeated corner or an exactly straight one.
-    /// Its scan starts at the second corner, so the first corner is never removed.
-    /// </summary>
-    private static List<int> RemoveColinear(Vector3[] points)
+    /// <summary>Whether the corners span a plane: some corner lies off the line through the first two distinct ones.</summary>
+    private static bool HasArea(Vector3[] points)
     {
-        List<int> keep = Enumerable.Range(0, points.Length).ToList();
-        bool removed;
-        do
-        {
-            removed = false;
-            for (int i = 1; i < keep.Count && keep.Count >= 3; i++)
+        for (int i = 1; i < points.Length; i++)
+            if (points[i] != points[0])
             {
-                Vector3 a = points[keep[(i + keep.Count - 1) % keep.Count]], b = points[keep[i]], c = points[keep[(i + 1) % keep.Count]];
-                if (Vector3.Cross(b - a, c - b).LengthSquared() == 0) { keep.RemoveAt(i); removed = true; break; }
+                for (int j = i + 1; j < points.Length; j++) if (!Straight(points[0], points[i], points[j])) return true;
+                return false;
             }
-        }
-        while (removed && keep.Count >= 3);
-        return keep;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether corner <paramref name="b"/> lies on the line through its neighbours: every component of the cross product
+    /// of its edges is zero in float arithmetic. No shipped polygon has such a corner past its first except where a
+    /// corner repeats, so fans are never merged across one.
+    /// </summary>
+    public static bool Straight(Vector3 a, Vector3 b, Vector3 c)
+    {
+        Vector3 cross = Vector3.Cross(b - a, c - b);
+        return cross.X == 0 && cross.Y == 0 && cross.Z == 0;
     }
 
     /// <summary>
@@ -172,26 +172,12 @@ public sealed class ModelBuilder(WorldModel model)
     }
 
     /// <summary>The engine's UV pipeline for a textured entry: tile shift, affine extrapolation past the first triangle, 1/256 quantization, tile shift.</summary>
-    private Vector2[] Uvs(Vector2[] source, int[] vertices)
+    private static Vector2[] Uvs(Vector2[] source)
     {
         Vector2[] uv = (Vector2[])source.Clone();
+        // Corners keep their own UVs: the one shipped polygon whose mapping is not affine stores them unchanged, so the
+        // original build did not extrapolate corners past the first triangle as the runtime's AddPolygonEx does.
         Shift(uv);
-        // UVs already on one affine map (every stored polygon) are kept; the engine's extrapolation only replaces the
-        // corners of a polygon whose mapping is not affine.
-        if (uv.Length > 3 && !Affine(vertices.Select(v => Model.Vertices[v]).ToArray(), uv, AffineTolerance / 4))
-        {
-            Vector3 p0 = Model.Vertices[vertices[0]], p1 = Model.Vertices[vertices[1]], p2 = Model.Vertices[vertices[2]];
-            Vector3 normal = Vector3.Cross(p1 - p0, p2 - p0); float ax = Math.Abs(normal.X), ay = Math.Abs(normal.Y), az = Math.Abs(normal.Z);
-            // Project onto the plane most facing the triangle, as RebuildGeneratedUvPairsForEntry does.
-            Func<Vector3, Vector2> project = ax >= ay && ax >= az ? p => new(p.Y, p.Z) : ay >= ax && ay >= az ? p => new(p.Z, p.X) : p => new(p.X, p.Y);
-            Vector2 a = project(p0), b = project(p1), c = project(p2);
-            if (Gradient(a, b, c, uv[0].X, uv[1].X, uv[2].X) is { } gu && Gradient(a, b, c, uv[0].Y, uv[1].Y, uv[2].Y) is { } gv)
-                for (int i = 3; i < uv.Length; i++)
-                {
-                    Vector2 d = project(Model.Vertices[vertices[i]]) - a;
-                    uv[i] = new(uv[0].X + d.X * gu.X + d.Y * gu.Y, uv[0].Y + d.X * gv.X + d.Y * gv.Y);
-                }
-        }
         for (int i = 0; i < uv.Length; i++) uv[i] = new(Quantize(uv[i].X), Quantize(uv[i].Y));
         Shift(uv);
         return uv;

@@ -108,19 +108,21 @@ public sealed class WorldGltfTests
         WorldMaterial plain = new() { Color = new(1, 2, 3) };
         WorldTexture t = new("t"); WorldMaterial textured = new() { Texture = t };
         ModelBuilder builder = new();
-        // Vertices within 0.001 merge; an exactly straight corner is dropped unless it is the first.
-        builder.Add(new([new(0, 0, 0), new(1, 0, 0), new(2, 0, 0), new(2, 0, -1), new(0.0005f, 0, -1)], [], [], [], plain));
-        Assert.Equal(4, builder.Model.Polygons[0].Vertices.Length);
+        // Corners stay as authored, straight or repeated, as in the shipped models; vertices within 0.001 merge.
+        builder.Add(new([new(0, 0, 0), new(1, 0, 0), new(2, 0, 0), new(2, 0, -1), new(2, 0, -1), new(0.0005f, 0, -1)], [], [], [], plain));
+        Assert.Equal(new[] { 0, 1, 2, 3, 3, 4 }, builder.Model.Polygons[0].Vertices);
         builder.Add(new([new(0, 0, 0.0004f), new(2, 0, -1), new(0, 0, -1)], [], [], [], plain));
-        Assert.Equal(new[] { 0, 2, 3 }, builder.Model.Polygons[1].Vertices);
-        // Non-planar polygons fan into triangles.
+        Assert.Equal(new[] { 0, 3, 4 }, builder.Model.Polygons[1].Vertices);
+        // A polygon without area draws nothing.
+        Assert.False(builder.Add(new([new(0, 0, 0), new(1, 0, 0), new(0, 0, 0), new(3, 0, 0)], [], [], [], plain)));
+        // Non-planar polygons stay whole, as the shipped models store them.
         builder.Add(new([new(0, 0, 0), new(1, 0, 0), new(1, 1, -1), new(0, 0, -1)], [], [], [], plain));
-        Assert.Equal(4, builder.Model.Polygons.Count);
-        // UVs shift to their tile and quantize to 1/256; non-affine corners are extrapolated.
+        Assert.Equal(3, builder.Model.Polygons.Count); Assert.Equal(4, builder.Model.Polygons[^1].Vertices.Length);
+        // UVs shift to their tile and quantize to 1/256; every corner keeps its own, affine or not.
         builder.Add(new([new(0, 0, 0), new(1, 0, 0), new(1, 0, -1), new(0, 0, -1)], [new(2.3f, 5.1f), new(3.3f, 5.1f), new(3.3f, 6.1f), new(2.9f, 6.9f)], [], [], textured));
         var uvs = builder.Model.Polygons[^1].Uvs;
         Assert.Equal(new Vector2(0.30078125f, 0.1015625f), uvs[0]);
-        Assert.Equal(new Vector2(0.30078125f, 1.1015625f), uvs[3]);
+        Assert.Equal(new Vector2(0.8984375f, 1.8984375f), uvs[3]);
         Assert.All(uvs, uv => Assert.Equal(uv.X * 256, MathF.Round(uv.X * 256)));
         var model = builder.Finish();
         Assert.NotEqual(0, model.BoundsRadius);

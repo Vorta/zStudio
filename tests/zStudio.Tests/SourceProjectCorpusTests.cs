@@ -1,6 +1,7 @@
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Sources;
+using Recoil.Zbd.Core.Worlds;
 using Xunit;
 
 namespace Recoil.Zbd.Tests;
@@ -20,6 +21,7 @@ public sealed class SourceProjectCorpusTests
             var report = await SourceExtractor.ExtractAsync(corpus, project, token: Token);
             Assert.Empty(report.Notes);
             Assert.Equal(1, report.Families["scripts"]); Assert.Equal(3, report.Families["sounds"]);
+            Assert.Equal(Directory.GetFiles(corpus, "gamez.zbd", SearchOption.AllDirectories).Length, report.Families["worlds"]);
             Assert.Equal(Directory.GetFiles(corpus, "zrdr.zbd", SearchOption.AllDirectories).Length, report.Families["resources"]);
             Assert.All(report.NotReconstructed, f => Assert.DoesNotContain("zrdr.zbd", f));
             // The original layout, and nothing zStudio-specific.
@@ -37,6 +39,14 @@ public sealed class SourceProjectCorpusTests
                 var shipped = Members(archive); var built = Members(Path.Combine(exported, relative));
                 Assert.Equal(shipped.Keys.Order(StringComparer.OrdinalIgnoreCase), built.Keys.Order(StringComparer.OrdinalIgnoreCase));
                 Assert.All(shipped, m => Assert.Equal(m.Value, built[m.Key]));
+            }
+            // Worlds rebuilt by their scripts have the shipped nodes, placements, flags, cells, models and textures; only the
+            // grouping of coplanar triangles into polygons may differ, which draws the same surfaces.
+            foreach (string world in Directory.GetFiles(corpus, "gamez.zbd", SearchOption.AllDirectories))
+            {
+                string relative = Path.GetRelativePath(corpus, world);
+                var differences = WorldComparer.Compare(World(world), World(Path.Combine(exported, relative)));
+                Assert.All(differences, d => Assert.Equal("model.polygons", d.Field));
             }
             var scripts = Scripts(Path.Combine(corpus, "interp.zbd")); var builtScripts = Scripts(Path.Combine(exported, "interp.zbd"));
             Assert.Equal(scripts.Keys.Order(StringComparer.OrdinalIgnoreCase), builtScripts.Keys.Order(StringComparer.OrdinalIgnoreCase));
@@ -72,6 +82,7 @@ public sealed class SourceProjectCorpusTests
         foreach (var asset in doc.Assets) members.TryAdd(asset.Name, doc.Slice(asset.Offset, asset.Length).ToArray());
         return members;
     }
+    private static GameZWorld World(string path) => GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token), Token);
     private static Dictionary<string, string> Scripts(string path)
     {
         var doc = FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token);

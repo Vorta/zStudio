@@ -76,6 +76,24 @@ public sealed class GameZWorldTests
     }
 
     [Fact]
+    public void UnnamedNodesStayLiveAndNamesKeepTheEngineResidue()
+    {
+        var world = SmallWorld();
+        // gwNodeNew's default name stays behind a shorter name, as in the shipped worlds.
+        Assert.Equal("world1\0_node_name"u8.ToArray(), world.Nodes[0].NameField[..17]);
+        var part = world.Nodes.Single(n => n.Name == "part");
+        part.Name = new string('x', 40);
+        Assert.Equal(new string('x', 34), part.Name);
+        // An empty name is still a live node, not the start of the free slots.
+        part.Name = "";
+        Assert.NotEqual(0, part.NameField[1]);
+        byte[] bytes = GameZWriter.Write(world, Token);
+        var reread = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", bytes, token: Token), Token);
+        Assert.Equal(["world1", "camera1", "building", "group", "", "sunlight"], reread.Nodes.Select(n => n.Name));
+        Assert.Equal("group", reread.Nodes[4].Parents.Single().Name);
+    }
+
+    [Fact]
     public void DerivedValuesFollowTheEngine()
     {
         var world = SmallWorld();

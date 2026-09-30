@@ -114,8 +114,11 @@ internal sealed class GameZReader : IZbdFormatReader
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested(); long header = c.AbsolutePosition; var raw = c.Take(layout.NodeSize); uint offset = c.U32();
-            if (!raw.Span[..36].ContainsAnyExcept((byte)0)) free = true;
-            if (!free) entries.Add((layout.Decode(raw, "GAMEZ_NODE_BASE_LAYOUT"), offset, header));
+            // Never-used slots start the free area: no name and no class. A live node may have an empty name.
+            if (free) continue;
+            var info = layout.Decode(raw, "GAMEZ_NODE_BASE_LAYOUT");
+            if (!raw.Span[..36].ContainsAnyExcept((byte)0) && info.Int("node_class") == 0) free = true;
+            else entries.Add((info, offset, header));
         }
         string[] names = ["none", "camera", "world", "window", "display", "object3d", "lod", "unknown_7", "unknown_8", "light"];
         RecordBudget references = new("node reference");

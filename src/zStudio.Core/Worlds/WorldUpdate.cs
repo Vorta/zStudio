@@ -99,6 +99,25 @@ public static class WorldUpdate
         }
     }
 
+    public const uint SingleParentFlag = 0x80000;
+    /// <summary>
+    /// The single-parent flag (0x80000, which lets a node cache its world matrix): a second parent clears it on the node
+    /// and everything below it (SetSingleParentFlagRecursive), so it is set exactly where no node on the way up has two parents.
+    /// </summary>
+    public static void SingleParentFlags(GameZWorld world)
+    {
+        Dictionary<WorldNode, bool> single = new(ReferenceEqualityComparer.Instance);
+        foreach (var node in world.Nodes) node.Flags = Single(node, 0) ? node.Flags | SingleParentFlag : node.Flags & ~SingleParentFlag;
+        bool Single(WorldNode node, int depth)
+        {
+            if (single.TryGetValue(node, out bool known)) return known;
+            // Worlds are not ancestors for this purpose: a node in a world cell has the world as its only parent.
+            bool result = depth < 512 && node.Parents.Count(p => p.Class != WorldNodeClass.World) + (node.Parents.Any(p => p.Class == WorldNodeClass.World) ? 1 : 0) <= 1
+                && node.Parents.Where(p => p.Class != WorldNodeClass.World).All(p => Single(p, depth + 1));
+            single[node] = result; return result;
+        }
+    }
+
     /// <summary>World record fields the partition uses (CZWorldDataPartial).</summary>
     private readonly record struct Grid(float OriginX, float OriginZ, float MaxX, float MaxZ, float CellX, float CellZ, float InverseX, float InverseZ, float ToleranceX, float ToleranceZ, int Columns, int Rows);
     private static Grid ReadGrid(WorldNode world)

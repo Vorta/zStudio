@@ -46,6 +46,7 @@ public static class SourceExtractor
         Dictionary<string, int> families = []; List<string> skipped = [];
         List<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> soundBanks = [];
         List<(string Relative, ZbdDocument Document)> texturePacks = [];
+        List<(string Relative, ZbdDocument Document)> worlds = [];
         for (int i = 0; i < files.Count; i++)
         {
             token.ThrowIfCancellationRequested(); var (path, relative) = files[i]; progress?.Report(new(i, files.Count, relative));
@@ -63,6 +64,12 @@ public static class SourceExtractor
                     else { await context.ExtractResourcesAsync(relative, members); family = "resources"; }
                 }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Scripts, Version: 7 }) { await context.ExtractScriptsAsync(relative, bytes); family = "scripts"; }
+                else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.GameZ, Version: 15 } && TextureSources.MissionNumber(relative) > 0 && Path.GetFileName(relative).Equals("gamez.zbd", StringComparison.OrdinalIgnoreCase))
+                {
+                    var doc = FormatRegistry.Default.OpenBytes(relative, bytes, token: token);
+                    if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
+                    worlds.Add((relative, doc)); family = "worlds";
+                }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.TexturePack } && IsTexturePack(relative))
                 {
                     var doc = FormatRegistry.Default.OpenBytes(relative, bytes, token: token);
@@ -75,6 +82,7 @@ public static class SourceExtractor
         }
         if (soundBanks.Count > 0) await context.ExtractSoundsAsync(soundBanks);
         if (texturePacks.Count > 0) await context.ExtractTexturesAsync(texturePacks);
+        if (worlds.Count > 0) await context.ExtractWorldsAsync(worlds);
         progress?.Report(new(files.Count, files.Count, "Done"));
         return new(projectRoot, context.Written, families, skipped, context.Notes);
     }
@@ -128,6 +136,8 @@ public static class SourceExtractor
         internal Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> Scripts { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Direct3D clamp word of each reconstructed texture (by name), for the materials that use it.</summary>
         internal Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Every texture source written, for resolving model textures the way the build searches its folders.</summary>
+        internal HashSet<string> TextureFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Reconstructed texture source per mission and name.</summary>
         internal Dictionary<(int Mission, string Name), string> TexturePaths { get; } = [];
 
@@ -243,11 +253,21 @@ public static class SourceExtractor
                     .OrderByDescending(c => (long)c.Info.Width * c.Info.Height).ThenBy(c => c.Info.PaletteCount > 0 ? 1 : 0).First().c;
                 string path = $"{folder}/{name}{TextureSources.Extension}";
                 var image = TextureDecoder.Decode(best.Doc, best.Asset, token);
-                await WriteAsync(path, Export.PngEncoder.Encode(image, token));
+                await WriteAsync(path, Export.PngEncoder.Encode(image, token)); TextureFiles.Add(path);
                 int addressing = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(best.Doc.Bytes.Span[(int)(best.Asset.Offset + 14)..]) & 3;
                 if (addressing != 0) TextureAddressing.TryAdd(name, addressing);
                 foreach (int mission in list.Select(c => c.Mission).Distinct()) TexturePaths.TryAdd((mission, name), path);
             }
+        }
+        /// <summary>Model sources from the mission worlds, replayed against their build scripts (see <see cref="WorldSources"/>).</summary>
+        internal async Task ExtractWorldsAsync(IReadOnlyList<(string Relative, ZbdDocument Document)> worlds)
+        {
+            List<WorldSources.MissionWorld> missions = [];
+            foreach (var (relative, doc) in worlds.OrderBy(w => TextureSources.MissionNumber(w.Relative)))
+                missions.Add(new(TextureSources.MissionNumber(relative), Worlds.GameZWorldReader.FromDocument(doc, token)));
+            var outputs = await Task.Run(() => WorldSources.Reconstruct(missions, name => Scripts.GetValueOrDefault(name),
+                (mission, name) => TexturePaths.GetValueOrDefault((mission, name)), TextureFiles, name => TextureAddressing.GetValueOrDefault(name), Notes, token), token);
+            foreach (var output in outputs) await WriteAsync(output.Path, output.Bytes);
         }
         /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle (support\bftmulti.gw).</summary>
         private bool Multiplayer(int mission) =>

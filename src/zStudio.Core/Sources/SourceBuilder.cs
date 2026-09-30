@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Worlds;
 
 namespace Recoil.Zbd.Core.Sources;
 
@@ -16,8 +17,10 @@ public sealed record SourceExportReport(string? Destination, IReadOnlyList<Sourc
 
 /// <summary>
 /// Builds game files from a source tree, as the original gamegen build did: resource archives from each <c>zrdr</c> folder,
-/// prepared scripts from <c>gamegen</c>, and the three sound banks from the best-quality WAVs converted to the formats
-/// that <c>sounds.zrd</c> declares. Output must work in the game; it does not reproduce the shipped bytes.
+/// prepared scripts from <c>gamegen</c>, the three sound banks from the best-quality WAVs converted to the formats
+/// that <c>sounds.zrd</c> declares, interface images and mission texture packs from PNGs, and each mission world by
+/// running its build script (<c>gamegen/mN.gs</c>) over the glTF model sources. Output must work in the game; it does
+/// not reproduce the shipped bytes.
 /// </summary>
 public static partial class SourceBuilder
 {
@@ -46,6 +49,8 @@ public static partial class SourceBuilder
         var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase));
         if (sounds.Count > 0) plans.AddRange(Banks.Select(bank => new SourceOutputPlan(bank, "sounds", sounds)));
         var missions = new DirectoryInfo(SourceProject.Resolve(root, SourceProject.DataFolder)).EnumerateDirectories().Where(d => MissionFolder().IsMatch(d.Name)).OrderBy(d => int.Parse(d.Name.AsSpan(1))).ToArray();
+        // A world may load any model in the project; which ones depends on its scripts.
+        IReadOnlyList<string>? models = null;
         // Interface images: fonts, the images tree and each mission's objective images.
         var images = SourceProject.Files(root, TextureSources.Fonts, Png).Concat(SourceProject.Files(root, TextureSources.Images, Png))
             .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m.Name}/images", Png))).ToArray();
@@ -53,6 +58,13 @@ public static partial class SourceBuilder
         foreach (var mission in missions)
         {
             string name = mission.Name.ToLowerInvariant();
+            string entry = WorldScript(name);
+            if (File.Exists(SourceProject.Resolve(root, entry)))
+            {
+                models ??= SourceProject.Files(root, SourceProject.DataFolder, IsModelSource);
+                // A project without glTF models has no world to build (buffers alone are not models).
+                if (models.Any(m => !m.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))) plans.Add(new($"{name}/gamez.zbd", "world", [entry, .. models]));
+            }
             var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd);
             if (resources.Count > 0) plans.Add(new($"{name}/zrdr.zbd", "archive", resources));
             var textures = MissionTextures(root, name);
@@ -61,6 +73,9 @@ public static partial class SourceBuilder
         return plans;
         static bool Png(string name) => name.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase);
     }
+    /// <summary>The script that builds a mission's world (gamegen/mN.gs).</summary>
+    internal static string WorldScript(string mission) => $"{SourceProject.GameGenFolder}/{mission}.gs";
+    private static bool IsModelSource(string name) => name.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".glb", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Every project file read by one run. A file read by several outputs must have the same content each time, and no
@@ -91,6 +106,39 @@ public static partial class SourceBuilder
                     if (line.Count > 1 && line[0].Equals("WriteTextureSetMap", StringComparison.OrdinalIgnoreCase)) damageMasks.Add(Path.GetFileNameWithoutExtension(line[1]));
             return damageMasks;
         }
+        /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>
+        internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing);
+        private readonly Dictionary<string, (AssembledWorld? World, Exception? Failure)> worlds = new(StringComparer.OrdinalIgnoreCase);
+        internal bool HasWorld(string mission) => File.Exists(SourceProject.Resolve(root, WorldScript(mission)));
+        internal AssembledWorld World(string mission, CancellationToken token)
+        {
+            if (!worlds.TryGetValue(mission, out var cached))
+            {
+                try
+                {
+                    WorldAssembler assembler = new(new ProjectFiles(this, root), token);
+                    var world = assembler.Assemble($"{mission}.gs");
+                    cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
+                        new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase)), null);
+                }
+                catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or FormatException) { cached = (null, ex); }
+                worlds[mission] = cached;
+            }
+            if (cached.Failure != null) throw new InvalidDataException($"The {mission} world does not assemble: {cached.Failure.Message}", cached.Failure);
+            return cached.World!;
+        }
+        /// <summary>The assembler's view of the project: reads go through the snapshot, and links are refused.</summary>
+        private sealed class ProjectFiles(Snapshot snapshot, string root) : IProjectFiles
+        {
+            public bool Exists(string relative)
+            {
+                if (!File.Exists(SourceProject.Resolve(root, relative))) return false;
+                SourceProject.RejectNestedLinks(root, relative);
+                return true;
+            }
+            public byte[] Read(string relative, CancellationToken token) { SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token); }
+        }
+
         internal void CheckUnchanged(CancellationToken token)
         {
             foreach (var (relative, entry) in files)
@@ -204,6 +252,7 @@ public static partial class SourceBuilder
         "sounds" => BuildSounds(root, plan, snapshot, now, token),
         "images" => BuildImages(plan, snapshot, token),
         "textures" => BuildTexturePack(plan, snapshot, token),
+        "world" => BuildWorld(plan, snapshot, token),
         _ => throw new InvalidDataException($"Unknown output family '{plan.Family}'.")
     };
 
@@ -299,16 +348,46 @@ public static partial class SourceBuilder
     {
         var variant = TexturePackVariant.FromFileName(Path.GetFileName(plan.Path)) ?? throw new InvalidDataException($"{plan.Path} is not a texture pack name.");
         List<PackTexture> textures = [];
-        foreach (string input in plan.Inputs)
+        var (inputs, addressing, warnings) = PackInputs(plan, snapshot, token);
+        foreach (string input in inputs)
         {
             token.ThrowIfCancellationRequested();
             string folder = Path.GetDirectoryName(input)!.Replace('\\', '/');
             bool vehicle = folder.EndsWith("/bft", StringComparison.OrdinalIgnoreCase) || folder.Equals(TextureSources.MultiBftTextures, StringComparison.OrdinalIgnoreCase);
             string name = TextureName(input);
-            textures.Add(new(name, TextureSources.SortKey(input), DecodeTexture(input, snapshot.Read(input, token), token), 0, vehicle || snapshot.DamageMasks(token).Contains(name)));
+            textures.Add(new(name, TextureSources.SortKey(input), DecodeTexture(input, snapshot.Read(input, token), token), addressing.GetValueOrDefault(name), vehicle || snapshot.DamageMasks(token).Contains(name)));
         }
         var built = TexturePackBuilder.Build(textures, variant, token);
-        return new(built.Bytes, textures.Count, built.Warnings);
+        return new(built.Bytes, textures.Count, [.. warnings, .. built.Warnings]);
+    }
+    /// <summary>
+    /// A mission pack holds its texture folders and every texture its world uses from elsewhere: a model brought in
+    /// from another mission names textures in that mission's folders, and the game only finds textures in its packs.
+    /// A name already in the folders keeps the folder's image, as the engine finds the first match. Each texture's
+    /// edge mode (clamp word) comes from the glTF samplers that use it.
+    /// </summary>
+    private static (List<string> Inputs, IReadOnlyDictionary<string, int> Addressing, List<string> Warnings) PackInputs(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    {
+        List<string> inputs = [.. plan.Inputs], warnings = [];
+        string mission = plan.Path.Split('/')[0];
+        if (!snapshot.HasWorld(mission)) return (inputs, new Dictionary<string, int>(), warnings);
+        try
+        {
+            var world = snapshot.World(mission, token);
+            HashSet<string> names = new(inputs.Select(TextureName), StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, file) in world.TextureFiles.OrderBy(t => t.Key, StringComparer.Ordinal))
+                if (names.Add(name)) inputs.Add(file);
+            return (inputs, world.TextureAddressing, warnings);
+        }
+        catch (InvalidDataException ex) { warnings.Add($"{ex.Message} The pack holds only the mission's texture folders, without edge modes."); }
+        return (inputs, new Dictionary<string, int>(), warnings);
+    }
+
+    /// <summary>The mission world, built by its script from the model sources (see <see cref="WorldAssembler"/>).</summary>
+    private static Built BuildWorld(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    {
+        var assembled = snapshot.World(plan.Path.Split('/')[0], token);
+        return new(GameZWriter.Write(assembled.World, token), assembled.World.Nodes.Count, assembled.Warnings);
     }
     /// <summary>Damage-mark masks (support\weapons.gw WriteTextureSetMap), which must stay unpaletted.</summary>
     private static readonly HashSet<string> DamageMasks = new(["pock1", "pock2", "pock3"], StringComparer.OrdinalIgnoreCase);

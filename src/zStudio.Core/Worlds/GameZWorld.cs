@@ -119,8 +119,11 @@ public sealed class WorldNode
     public WorldNode(string name, WorldNodeClass kind)
     {
         Class = kind; Payload = new byte[PayloadSize(kind)];
-        NameField = new byte[36]; Name = name;
+        // gwNodeNew (retail Class.c) names a node "Default_node_name" and a rename writes over it, so the field keeps the
+        // rest as residue ("world1\0_node_name"); an empty name is therefore never an all-zero field, which marks free slots.
+        NameField = new byte[36]; DefaultName.CopyTo(NameField); Name = name;
     }
+    private static ReadOnlySpan<byte> DefaultName => "Default_node_name"u8;
     /// <summary>The 36-byte name field (retail names keep residue after the terminator, e.g. "world1\0_node_name").</summary>
     public byte[] NameField { get; set; }
     public string Name
@@ -128,9 +131,11 @@ public sealed class WorldNode
         get { int end = Array.IndexOf(NameField, (byte)0); return Encoding.Latin1.GetString(NameField, 0, end < 0 ? 36 : end); }
         set
         {
-            // gwNodeSetName keeps at most 35 characters.
-            var bytes = Encoding.Latin1.GetBytes(value.Length > 35 ? value[..35] : value);
-            Array.Clear(NameField); bytes.CopyTo(NameField, 0);
+            // gwNodeSetName: a name that fits is copied with its terminator; a longer one keeps 34 characters and the
+            // field is terminated at its last byte.
+            var bytes = Encoding.Latin1.GetBytes(value);
+            if (bytes.Length >= NameField.Length) { bytes.AsSpan(0, 34).CopyTo(NameField); NameField[35] = 0; }
+            else { bytes.CopyTo(NameField, 0); NameField[bytes.Length] = 0; }
         }
     }
     public WorldNodeClass Class { get; }
