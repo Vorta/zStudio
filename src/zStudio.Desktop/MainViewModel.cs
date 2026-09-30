@@ -86,7 +86,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             if (otherOpenFiles == null) { otherOpenFiles = new("Other open files", "Files opened outside the selected root"); Folders.Add(otherOpenFiles); }
             var file = new FileEntry(doc.Path,doc.Path,doc.Document.Probe);
-            FolderNode node = new(Path.GetFileName(Path.GetDirectoryName(doc.Path)) + "/" + file.Name,doc.Path,file) { Document = doc, IsActive = doc == SelectedDocument };
+            FolderNode node = new(doc.SourceWorld?.Label ?? Path.GetFileName(Path.GetDirectoryName(doc.Path)) + "/" + file.Name,doc.Path,file) { Document = doc, IsActive = doc == SelectedDocument };
             fileNodes.Add(doc.Path,node); otherOpenFiles.Children.Add(node);
         }
         if (otherOpenFiles != null)
@@ -256,8 +256,30 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void CheckExternalChanges()
     {
         foreach (var doc in Documents)
-            try { doc.IsStale = (doc.ContentEdits is { } content ? content.HasExternalChanges() : doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { doc.IsStale = true; }
+            try { doc.IsStale = doc.SourceWorld != null ? doc.SourceInputsChanged() : (doc.ContentEdits is { } content ? content.HasExternalChanges() : doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { doc.IsStale = true; }
+    }
+    /// <summary>Publishes a document built elsewhere (a source world), as opening a file would.</summary>
+    internal void AddDocument(DocumentModel model, bool activate)
+    {
+        model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
+        Status = model.Description;
+    }
+    /// <summary>Replaces <paramref name="original"/> in place with a rebuilt document; the original is disposed.</summary>
+    internal void ReplaceDocument(DocumentModel original, DocumentModel replacement)
+    {
+        int index = Documents.IndexOf(original);
+        if (index < 0) throw new StudioCommandException("context_changed", "The document was closed.");
+        ++navigationGeneration;
+        replacement.Query = original.Query; replacement.KindFilter = original.KindFilter;
+        replacement.AttachResolver(Resolver);
+        var asset = original.SelectedAsset?.Record;
+        replacement.SelectedAsset = asset == null ? null : replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind && a.Record.Index == asset.Index) ?? replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind);
+        bool selected = SelectedDocument == original;
+        Documents[index] = replacement;
+        if (selected) SelectedDocument = replacement;
+        original.Dispose();
+        SynchronizeOpenFiles();
     }
     partial void OnGlobalQueryChanged(string value) => RefreshSearch();
     private void RefreshSearch()

@@ -73,11 +73,14 @@ public partial class MainWindow
         CopyEventJsonMenu.IsEnabled = animation != null;
         foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.AnimationEdits != null ? Visibility.Visible : Visibility.Collapsed;
         foreach (var item in AnimationMenu.Items.OfType<MenuItem>()) if (item.Tag is string command) item.IsEnabled = animation?.CanRunCommand(command) == true;
-        DocumentSave.IsEnabled = doc?.AnimationEdits != null || doc?.PickupEdits != null || doc?.ModelEdits != null || doc?.ResourceEdits != null || doc?.ContentEdits != null;
-        DocumentSave.ToolTip = doc?.ModelEdits?.IsDirty == true ? "Save model and texture changes (Ctrl+S)" : doc?.PickupEdits != null ? "Save pickup placements to the owning archive (Ctrl+S)" : doc?.AnimationEdits != null ? "Save the animation pack to a new file (Ctrl+S)" : "Save (Ctrl+S)";
-        DocumentUndo.IsEnabled = doc?.AnimationEdits?.CanUndo == true || doc?.CanUndoScene == true || doc?.ResourceEdits?.CanUndo == true || doc?.ContentEdits?.CanUndo == true;
-        DocumentRedo.IsEnabled = doc?.AnimationEdits?.CanRedo == true || doc?.CanRedoScene == true || doc?.ResourceEdits?.CanRedo == true || doc?.ContentEdits?.CanRedo == true;
+        DocumentSave.IsEnabled = doc?.SourceWorld != null || doc?.AnimationEdits != null || doc?.PickupEdits != null || doc?.ModelEdits != null || doc?.ResourceEdits != null || doc?.ContentEdits != null;
+        DocumentSave.ToolTip = doc?.SourceWorld is { } sourceWorld ? $"Save the world's edits to {sourceWorld.Edits.ScriptPath} (Ctrl+S)" : doc?.ModelEdits?.IsDirty == true ? "Save model and texture changes (Ctrl+S)" : doc?.PickupEdits != null ? "Save pickup placements to the owning archive (Ctrl+S)" : doc?.AnimationEdits != null ? "Save the animation pack to a new file (Ctrl+S)" : "Save (Ctrl+S)";
+        DocumentUndo.IsEnabled = doc?.SourceWorld?.Edits.CanUndo == true || doc?.AnimationEdits?.CanUndo == true || doc?.CanUndoScene == true || doc?.ResourceEdits?.CanUndo == true || doc?.ContentEdits?.CanUndo == true;
+        DocumentRedo.IsEnabled = doc?.SourceWorld?.Edits.CanRedo == true || doc?.AnimationEdits?.CanRedo == true || doc?.CanRedoScene == true || doc?.ResourceEdits?.CanRedo == true || doc?.ContentEdits?.CanRedo == true;
         SaveMenu.IsEnabled = SaveAsMenu.IsEnabled = DocumentSave.IsEnabled;
+        // A source world saves to its project's sources; there is no other destination.
+        if (doc?.SourceWorld != null) SaveAsMenu.IsEnabled = false;
+        AddSourceModelMenu.IsEnabled = doc?.SourceWorld != null;
         UndoMenu.IsEnabled = DocumentUndo.IsEnabled; RedoMenu.IsEnabled = DocumentRedo.IsEnabled;
         DocumentUndo.ToolTip = doc?.AnimationEdits?.UndoDescription is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
         DocumentRedo.ToolTip = doc?.AnimationEdits?.RedoDescription is string redo ? "Redo: " + redo + " (Ctrl+Y)" : "Redo (Ctrl+Y)";
@@ -93,6 +96,7 @@ public partial class MainWindow
             previous.ResourceEditsChanged -= UpdateDocumentCommands;
             previous.ContentEditsChanged -= UpdateDocumentCommands;
             previous.ContentEditsChanged -= ContentWorkspaceChanged;
+            previous.SourceWorldChanged -= UpdateDocumentCommands;
         }
         commandDocument = document;
         if (document != null)
@@ -103,6 +107,7 @@ public partial class MainWindow
             document.ResourceEditsChanged += UpdateDocumentCommands;
             document.ContentEditsChanged += UpdateDocumentCommands;
             document.ContentEditsChanged += ContentWorkspaceChanged;
+            document.SourceWorldChanged += UpdateDocumentCommands;
         }
     }
     private void AttachAnimationWorkspace(AnimationEditor editor)

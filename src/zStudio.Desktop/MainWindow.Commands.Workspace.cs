@@ -111,9 +111,9 @@ public partial class MainWindow
             var doc = TargetDocument(a, true); if (doc.IsDirty && !Flag(a, "discard")) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });
         });
-        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
+        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project on disk, keeping its pending edits unless gamegen/mN.gs or data/mN/zrdr/anim.zrd changed on disk.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
-            var doc = TargetDocument(a, true); if (doc.IsDirty) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
+            var doc = TargetDocument(a, true); if (doc.IsDirty && doc.SourceWorld == null) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
             bool active = ViewModel.SelectedDocument == doc;
             var selected = ViewModel.SelectedDocument;
             long generation = ViewModel.NavigationGeneration + 1;
@@ -135,7 +135,9 @@ public partial class MainWindow
         });
         Register(r, "undo_redo", "Undo or redo one accepted edit in the specified document.", true, [DocumentParameter, RevisionParameter, P("action", "string", "History direction.", true, "undo", "redo")], async (a, token) =>
         {
-            var d = TargetDocument(a, true); UndoDocument(d, Text(a, "action") == "redo"); if (d.ContentEdits != null) await contentWork.WaitAsync(token); else if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
+            var d = TargetDocument(a, true);
+            if (d.SourceWorld != null) return Result(DocumentState(await UndoSourceWorldAsync(d, Text(a, "action") == "redo", token)));
+            UndoDocument(d, Text(a, "action") == "redo"); if (d.ContentEdits != null) await contentWork.WaitAsync(token); else if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
         });
         RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batches return saved paths and errors; state.contentEdits lists affected content paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files.",
             [DocumentParameter, RevisionParameter, P("destination", "string", "New single-file Save As path (animation, ZAR/ZRD, script or texture pack). Omit to save working files."), P("modelDirectory", "string", "Model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Mission coordinate or texture batch source path to new Save As path map; cover every affected file.", AdditionalProperties: new("", "string", "New Save As path for this source archive.")), P("backup", "boolean", "Mission coordinate backup preference; defaults to app setting.")], false, async (a, token) =>
@@ -144,6 +146,11 @@ public partial class MainWindow
             IsEnabled = false; if (propertiesWindow != null) propertiesWindow.IsEnabled = false;
             try
             {
+                if (d.SourceWorld != null)
+                {
+                    if (a.ContainsKey("destination") || a.ContainsKey("destinations") || a.ContainsKey("modelDirectory")) throw new StudioCommandException("invalid_argument", "A source world saves to its project's sources; it has no Save As.");
+                    var written = await SaveSourceWorldAsync(d, token); return Result(new { document = DocumentState(d), written });
+                }
                 if (d.ContentEdits != null)
                 {
                     var targets = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value!.GetValue<string>(), StringComparer.OrdinalIgnoreCase);

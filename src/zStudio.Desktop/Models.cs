@@ -65,7 +65,29 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public long Revision { get; private set; }
     public ZbdDocument Document { get; }
     public string Path => Document.Path;
-    public string Title => System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) + "/" + System.IO.Path.GetFileName(Path) + (IsDirty ? " *" : "");
+    public string Title => (SourceWorld?.Label ?? System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) + "/" + System.IO.Path.GetFileName(Path)) + (IsDirty ? " *" : "");
+    /// <summary>A mission world built from the open source project; its edits go to the project's sources, never to this file.</summary>
+    internal SourceWorldSession? SourceWorld { get; }
+    /// <summary>The private build this document shows, with the project files it read.</summary>
+    internal Recoil.Zbd.Core.Sources.SourceWorldBuild? SourceBuild { get; }
+    public event Action? SourceWorldChanged;
+    private void SourceEditsChanged()
+    {
+        if (IsDisposed) return;
+        Revision++; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); SourceWorldChanged?.Invoke();
+    }
+    /// <summary>Whether a project file this world was built from changed on disk since.</summary>
+    internal bool SourceInputsChanged()
+    {
+        if (SourceWorld is not { } world || SourceBuild is not { } build) return false;
+        if (world.Edits.HasExternalChanges()) return true;
+        foreach (var (relative, stamp) in build.Inputs)
+        {
+            string path = Recoil.Zbd.Core.Sources.SourceProject.Resolve(world.Root, relative);
+            if (!File.Exists(path) || FileStamp.Read(path) != stamp) return true;
+        }
+        return false;
+    }
     public AnimationEditSession? AnimationEdits { get; }
     public ModelEditSession? ModelEdits { get; }
     public ResourceEditSession? ResourceEdits { get; }
@@ -106,7 +128,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public event Action? Disposing;
     public bool PickupDiagnosticsReported { get; set; }
     internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
-    public bool IsDirty => ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
+    public bool IsDirty => SourceWorld?.Edits.IsDirty == true || ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
     public void ClaimResourcePaths(IEnumerable<string> paths) => workspaceResolver?.EditOwnership.Acquire(SessionId, Title, paths);
     public void InvalidateCleanPickupEdits()
     {
@@ -230,9 +252,12 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     partial void OnSelectedAssetChanged(AssetItem? value) { if (value?.ResourceId is Guid id) lastResourceSelection = id; }
     [ObservableProperty] private bool isStale;
     public string[] Kinds { get; private set; }
-    public DocumentModel(ZbdDocument doc)
+    public DocumentModel(ZbdDocument doc) : this(doc, null, null) { }
+    internal DocumentModel(ZbdDocument doc, SourceWorldSession? sourceWorld, Recoil.Zbd.Core.Sources.SourceWorldBuild? sourceBuild)
     {
         Document = doc;
+        SourceWorld = sourceWorld; SourceBuild = sourceBuild;
+        if (sourceWorld != null) { sourceWorld.Owner = this; sourceWorld.Edits.Changed += SourceEditsChanged; }
         Assets = new(doc.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).Select(a => new AssetItem(a)));
         Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()];
         FilteredAssets = CollectionViewSource.GetDefaultView(Assets); FilteredAssets.Filter = Matches;
@@ -249,7 +274,8 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ResourceEditsChanged?.Invoke();
             };
         }
-        if (doc.GameZLayout != null && doc.Probe.Version is 15 or 27 && !doc.Diagnostics.Any(d => d.Severity == "Error"))
+        // A source world's models change through its build script, never by editing the built file.
+        if (sourceWorld == null && doc.GameZLayout != null && doc.Probe.Version is 15 or 27 && !doc.Diagnostics.Any(d => d.Severity == "Error"))
         {
             ModelEdits = new(doc);
             ModelEdits.BeforeEdit += ClaimResourcePaths;
@@ -309,7 +335,19 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     private bool Matches(object o) => o is AssetItem a && (KindFilter == "All types" || KindFilter == a.Kind) && (Query.Length == 0 || a.Name.Contains(Query, StringComparison.OrdinalIgnoreCase) || a.Identity.Contains(Query, StringComparison.OrdinalIgnoreCase));
     partial void OnQueryChanged(string value) => FilteredAssets.Refresh();
     partial void OnKindFilterChanged(string value) => FilteredAssets.Refresh();
-    public void Dispose() { if (IsDisposed) return; IsDisposed = true; if (workspaceResolver != null) workspaceResolver.WorkspaceSnapshotsChanged -= ContentSnapshotsChanged; workspaceResolver?.SetWorkspaceSnapshots(SessionId, []); workspaceResolver?.EditOwnership.Release(SessionId); Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
+    public void Dispose()
+    {
+        if (IsDisposed) return;
+        DisposeCore();
+        if (SourceWorld is { } world)
+        {
+            world.Edits.Changed -= SourceEditsChanged;
+            // The document showing the world owns the session; a replaced document only releases its build.
+            if (world.Owner == this) world.Dispose();
+            if (SourceBuild != null) SourceWorldSession.DeleteBuild(SourceBuild.Folder);
+        }
+    }
+    private void DisposeCore() { IsDisposed = true; if (workspaceResolver != null) workspaceResolver.WorkspaceSnapshotsChanged -= ContentSnapshotsChanged; workspaceResolver?.SetWorkspaceSnapshots(SessionId, []); workspaceResolver?.EditOwnership.Release(SessionId); Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }
 }
 public sealed partial class InspectorNode : ObservableObject
 {

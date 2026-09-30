@@ -120,7 +120,7 @@ public partial class MainWindow
 
     private void RegisterSourceCommands(StudioCommands r)
     {
-        RegisterJob(r, "source_reconstruct", "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Resources become text .zrd files in their recorded folders, prepared scripts become .gs/.gw text, and each sound keeps its best-quality WAV; families not reconstructed yet are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first.",
+        RegisterJob(r, "source_reconstruct", "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Resources become text .zrd files in their recorded folders, prepared scripts become .gs/.gw text, each sound keeps its best-quality WAV and each texture its best-quality PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with .zan keyframe scripts; files it does not reconstruct are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first.",
             [P("source", "string", "Shipped game data folder (for example the folder containing interp.zbd and m1\\).", true), P("destination", "string", "New or empty project folder outside the source folder.", true),
              P("open", "boolean", "Open the project as the workspace root afterwards; default true.")], true,
             async (a, token) =>
@@ -156,7 +156,7 @@ public partial class MainWindow
         bool open = !ViewModel.Documents.Any(d => d.IsDirty) &&
             MessageBox.Show(this, "Open the source project when reconstruction finishes?", "Reconstruct source project", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
         var report = await ReconstructSourceProjectAsync(input.FolderName, output.FolderName, open, CancellationToken.None);
-        string skipped = report.NotReconstructed.Count > 0 ? $"\n{report.NotReconstructed.Count} game files are not reconstructed yet (textures, worlds, animations)." : "";
+        string skipped = report.NotReconstructed.Count > 0 ? $"\n{report.NotReconstructed.Count} game files were not reconstructed: {string.Join(", ", report.NotReconstructed.Take(5))}{(report.NotReconstructed.Count > 5 ? ", …" : "")}." : "";
         string notes = report.Notes.Count > 0 ? $"\n{report.Notes.Count} notes are listed in Problems." : "";
         MessageBox.Show(this, $"Reconstructed {report.SourceFiles:N0} source files into {output.FolderName}.{skipped}{notes}", "Source project ready", MessageBoxButton.OK, MessageBoxImage.Information);
     });
@@ -192,8 +192,9 @@ public partial class MainWindow
     {
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
-        ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
-        if (root != null) _ = FillExportSourceFileMenuAsync(root);
+        ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
+        AddSourceModelMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld != null;
+        if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceWorldMenuAsync(root); }
     }
     /// <summary>Lists the project's game files off the UI thread; a newer menu opening or root supersedes the listing.</summary>
     private async Task FillExportSourceFileMenuAsync(string root)

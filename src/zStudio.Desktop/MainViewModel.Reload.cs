@@ -7,9 +7,12 @@ namespace Recoil.Zbd.Desktop;
 public sealed partial class MainViewModel
 {
     internal Action<DocumentModel>? ValidateReload { get; set; }
+    /// <summary>Rebuilds a source world from the project on disk (see MainWindow.SourceWorlds).</summary>
+    internal Func<DocumentModel, bool, CancellationToken, Task<DocumentModel>>? ReloadSourceWorld { get; set; }
 
     internal async Task<DocumentModel> ReloadDocumentAsync(DocumentModel original, long revision, bool discardAccepted = false, CancellationToken cancellationToken = default)
     {
+        if (original.SourceWorld != null && ReloadSourceWorld is { } rebuild) return await rebuild(original, discardAccepted, cancellationToken);
         long generation = ++navigationGeneration;
         var selected = SelectedDocument;
         string reloadPath = original.ContentEdits?.TargetPath(original.Path) ?? original.ResourceEdits?.TargetPath ?? original.ModelEdits?.TargetPath(original.Path) ?? original.Path;
@@ -61,7 +64,9 @@ public sealed partial class MainViewModel
 
     private async Task ReloadSelectedAsync()
     {
-        if (SelectedDocument is not { } original || !await CanRemoveAsync(original)) return;
+        if (SelectedDocument is not { } original) return;
+        // A source world keeps its pending edits across a rebuild unless its own files changed on disk.
+        if ((original.SourceWorld == null || original.SourceWorld.Edits.HasExternalChanges()) && !await CanRemoveAsync(original)) return;
         if (original.IsDisposed || SelectedDocument != original) return;
         // CanRemoveAsync may have saved edits or resolved input. That accepted
         // state is the snapshot; further edits during parsing reject publication.

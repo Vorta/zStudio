@@ -11,6 +11,7 @@ A source project is separate from editing ZBD files directly. Opening a ZBD file
 - **Tools → Export all ZBD files…** builds every game file into a folder outside the project. MCP: `zstudio_source_export` with `destination`.
 - **Tools → Export ZBD file** lists the game files the project can build; choosing one exports only that file. MCP: `zstudio_source_export` with `outputs`, for example `["m1/zrdr.zbd"]`.
 - `zstudio_source_status` lists the game files the project can build and the sources of each.
+- **Tools → Open mission world** shows a mission's world as its build script assembles it from the project, and **Add model** loads a model from any folder of the project into it (see [Mission worlds](#mission-worlds)). MCP: `zstudio_source_world_open`, `zstudio_source_world_add_model`.
 
 The export commands appear when the open folder is a source project, which is any folder with both `data` and `gamegen` subfolders. The project holds no zStudio files: what it can build is derived from its folders.
 
@@ -19,6 +20,34 @@ When the destination already has some of the selected game files, the GUI asks b
 Exports read every source file once and check that none changed before anything is written; an edit made while an export runs fails the export rather than mixing two states. Opening another folder cancels a running export.
 
 Reconstruction supports RECOIL data and requires RECOIL evidence (prepared scripts, a version-15 world or a version-28 animation program); MechWarrior 3 folders are refused. A canceled or failed reconstruction removes everything it wrote, so the same folder can be used again. Projects and export folders can never be the protected `zbd_1998`/`zbd_1999` corpora, overlap their input, or pass through links. Text sources larger than 16 MiB are refused before they are decoded.
+
+## Mission worlds
+
+In a source project, a mission's world is what its build script (`gamegen\mN.gs`) assembles from the project's models, so the world editor works on those sources. **Tools → Open mission world** lists the missions with a world script; choosing one builds that mission privately, exactly as the export would (the world, its animations and resources, and a full-quality texture pack), into a temporary folder outside the project, and shows it in Whole world with its mission context. The built world is read-only: placements and models change through the sources. Build problems are listed in Problems under the script's path.
+
+**Add model** (in the Whole world toolbar, or **Tools → Add model to world…**) loads any glTF model of the project into the world, for example a vehicle that only another mission used:
+
+- Choose the model and its node name (the model's name by default). Resources and animations find the model by this name; the dialog says when the world already has a node with it.
+- **Not placed** loads the model as a root outside the world, as the shipped scripts load vehicle templates: resources such as `aiv.zrd` place copies of it by name (`ltank_01` places a copy of `ltank`). **Placed in the world** puts it at a position and heading (the orbit point by default).
+- **Animations** lists the definition files other missions list with an animation for that name, such as `data\common\zrdr\enemies\ltank.zrd` for `ltank`; checked files are added to the mission's `data\mN\zrdr\anim.zrd`.
+
+The edit adds the lines the shipped scripts use to load a model, before the line that writes the world:
+
+```
+SetModelDirectory ..\data\m2\models\bft
+LoadGameGen ltank.flt ltank
+```
+
+and for a placed model its transform and parent:
+
+```
+Object3DTranslate 3161.9 33.0 2593.2
+Object3DRotate 0.0 -90.0 0.0
+FindNode %worldName%
+AddChild ltank_wreck
+```
+
+Each addition, undo and redo rebuilds the world and keeps the camera. An addition the world cannot be built with is withdrawn. Nothing changes in the project until **Save**, which writes only the mission's script and animation list, and refuses either file when it changed on disk since it was read. When a model, texture or other source the world was built from changes on disk, the world is marked stale; **Reload** rebuilds it and keeps pending additions, unless the script or animation list itself changed. Exports of the mission then include the model's geometry and materials, every texture it uses in each of the mission's packs, and its animations. Placing copies through `aiv.zrd` and other resources is done in their `.zrd` sources.
 
 ## Layout
 
@@ -81,7 +110,7 @@ Reconstruction replays each mission's scripts against its shipped world and undo
 
 A world assembled from the reconstructed sources has the shipped nodes, placements, flags, grid cells, models and textures for every 1998 and 1999 mission. It shares identical models between loads, so it has fewer model and material records than the shipped file.
 
-**Models from other missions.** A mission can load any model in the project: add a `SetModelDirectory` for the other mission's folder and a `LoadGameGen` to a mission script. The export then includes the model's geometry and materials in the world, and every texture it uses in the mission's packs, even when the texture lives in another mission's folder; the mission's own folders win for a name both have, as the engine finds the first match.
+**Models from other missions.** A mission can load any model in the project: add a `SetModelDirectory` for the other mission's folder and a `LoadGameGen` to a mission script, or use **Add model** in the mission's world ([Mission worlds](#mission-worlds)). The export then includes the model's geometry and materials in the world, and every texture it uses in the mission's packs, even when the texture lives in another mission's folder; the mission's own folders win for a name both have, as the engine finds the first match.
 
 ### Animations
 

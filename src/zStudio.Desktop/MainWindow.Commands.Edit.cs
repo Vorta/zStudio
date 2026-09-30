@@ -99,7 +99,9 @@ public partial class MainWindow
         });
         Register(r, "pickup_lock", "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked. Pending drafts require explicit resolution.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.", true)], a =>
         {
-            var d = TargetDocument(a, true); SetSceneEditingLocked(d, Flag(a, "locked")); return Result(DocumentState(d));
+            var d = TargetDocument(a, true);
+            if (d.SourceWorld != null && !Flag(a, "locked")) throw new StudioCommandException("unsupported", "A source world is edited through its sources (zstudio_source_world_add_model); its placements stay locked.");
+            SetSceneEditingLocked(d, Flag(a, "locked")); return Result(DocumentState(d));
         });
         Register(r, "pickup_move", "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements.", true,
             [DocumentParameter, RevisionParameter, new("source", "object", "Exact source identity returned by pickups; field names are case-sensitive.", true, Properties:

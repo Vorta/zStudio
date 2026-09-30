@@ -63,7 +63,7 @@ public partial class MainWindow
             // The mission is captured with the other options; a concurrent selection cannot change it mid-load.
             var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, resolver, token: token, difficulty: requested.Difficulty,
                 mission: requested.Mission, exactMission: ExactMissionFor(doc.Path, requested.Mission) != null) : null;
-            if (mission != null) await doc.GetPickupEditsAsync(resolver, token);
+            if (mission != null && doc.SourceWorld == null) await doc.GetPickupEditsAsync(resolver, token);
             token.ThrowIfCancellationRequested();
             // Keep all partially built meshes off the displayed viewport. ShowAsync
             // yields during GPU object creation, so cancellation must not touch it.

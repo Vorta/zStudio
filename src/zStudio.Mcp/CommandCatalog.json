@@ -382,7 +382,7 @@
   },
   {
     "Name": "zstudio_reload_document",
-    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project on disk, keeping its pending edits unless gamegen/mN.gs or data/mN/zrdr/anim.zrd changed on disk. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4856,7 +4856,7 @@
   },
   {
     "Name": "zstudio_source_reconstruct",
-    "Description": "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Resources become text .zrd files in their recorded folders, prepared scripts become .gs/.gw text, and each sound keeps its best-quality WAV; families not reconstructed yet are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Resources become text .zrd files in their recorded folders, prepared scripts become .gs/.gw text, each sound keeps its best-quality WAV and each texture its best-quality PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with .zan keyframe scripts; files it does not reconstruct are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4958,6 +4958,178 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_open",
+    "Description": "Open (or activate) a mission world of the open source project as its build script assembles it from the project\u0027s glTF models, textures and animation definitions. The world is built privately, as the export builds it, and shown read-only in Whole world; edit it with zstudio_source_world_add_model, undo_redo and save_document, which change only the project\u0027s sources. Build problems are listed in problems. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "mission",
+        "Type": "string",
+        "Description": "Mission folder, for example m1 (see zstudio_source_status: outputs of family world).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_models",
+    "Description": "List the glTF models of the open source project that a world script can load (every .gltf/.glb under data with a loadable name), paged and filtered by path.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_definitions",
+    "Description": "List animation definition files that other missions list with an animation for a root name and this source world does not list yet, such as an enemy\u0027s destruction animations.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "Root node name, as the model\u0027s node would be named.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_add_model",
+    "Description": "Add a project model to a source world as one undoable edit: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zrd. The world rebuilds (an edit it cannot build with is reverted) and the result is the replacement document; nothing is written until save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "model",
+        "Type": "string",
+        "Description": "Project path of the glTF model, as zstudio_source_world_models lists it (for example data/m2/models/bft/ltank.gltf).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "Node name: 1\u201331 letters, digits, \u0027_\u0027, \u0027-\u0027 or \u0027.\u0027. Resources and animations find the model by it.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "position",
+        "Type": "object",
+        "Description": "Optional world position; omit for an unplaced root.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "World X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "World Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "World Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "heading",
+        "Type": "number",
+        "Description": "Rotation about Y in degrees (\u2212360 to 360) for a placed model; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "definitionFiles",
+        "Type": "array",
+        "Description": "Definition files to list, as zstudio_source_world_definitions returns them; omit to list all it returns, or pass [] to list none.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Project path of a definition file.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MaxItems": 64
       }
     ]
   }

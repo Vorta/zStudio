@@ -90,12 +90,15 @@ public static partial class SourceBuilder
     /// Every project file read by one run. A file read by several outputs must have the same content each time, and no
     /// file may change before the run publishes, so an export always corresponds to one state of the project.
     /// </summary>
-    internal sealed class Snapshot(string root)
+    internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null)
     {
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>The project files read from disk and their stamps (pending content that replaced files is not included).</summary>
+        internal IReadOnlyDictionary<string, FileStamp> Stamps() => files.ToDictionary(f => f.Key, f => f.Value.Stamp, StringComparer.OrdinalIgnoreCase);
         internal byte[] Read(string relative, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
+            if (overlay?.TryGetValue(relative, out var pending) == true) return pending;
             string path = SourceProject.Resolve(root, relative);
             var stamp = FileStamp.Read(path);
             if (stamp.Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} exceeds 512 MiB.");
@@ -118,14 +121,14 @@ public static partial class SourceBuilder
         /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>
         internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing);
         private readonly Dictionary<string, (AssembledWorld? World, Exception? Failure)> worlds = new(StringComparer.OrdinalIgnoreCase);
-        internal bool HasWorld(string mission) => File.Exists(SourceProject.Resolve(root, WorldScript(mission)));
+        internal bool HasWorld(string mission) => overlay?.ContainsKey(WorldScript(mission)) == true || File.Exists(SourceProject.Resolve(root, WorldScript(mission)));
         internal AssembledWorld World(string mission, CancellationToken token)
         {
             if (!worlds.TryGetValue(mission, out var cached))
             {
                 try
                 {
-                    WorldAssembler assembler = new(new ProjectFiles(this, root), token);
+                    WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token);
                     var world = assembler.Assemble($"{mission}.gs");
                     cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
                         new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase)), null);
@@ -137,17 +140,18 @@ public static partial class SourceBuilder
             return cached.World!;
         }
         /// <summary>The project as the compilers read it: through the snapshot, refusing links.</summary>
-        internal IProjectFiles Files() => new ProjectFiles(this, root);
+        internal IProjectFiles Files() => new ProjectFiles(this, root, overlay);
         /// <summary>The assembler's view of the project: reads go through the snapshot, and links are refused.</summary>
-        private sealed class ProjectFiles(Snapshot snapshot, string root) : IProjectFiles
+        private sealed class ProjectFiles(Snapshot snapshot, string root, IReadOnlyDictionary<string, byte[]>? overlay) : IProjectFiles
         {
             public bool Exists(string relative)
             {
+                if (overlay?.ContainsKey(relative) == true) return true;
                 if (!File.Exists(SourceProject.Resolve(root, relative))) return false;
                 SourceProject.RejectNestedLinks(root, relative);
                 return true;
             }
-            public byte[] Read(string relative, CancellationToken token) { SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token); }
+            public byte[] Read(string relative, CancellationToken token) { if (overlay?.ContainsKey(relative) != true) SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token); }
         }
 
         internal void CheckUnchanged(CancellationToken token)

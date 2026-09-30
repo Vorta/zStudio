@@ -107,7 +107,7 @@ public partial class MainWindow
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
         if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "A pickup drag is in progress.");
     }
-    private static object DocumentState(DocumentModel d) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, d.PickupsLocked, game = d.PreviewDocument.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, d.LastSavedCopy,
+    private static object DocumentState(DocumentModel d) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, d.PickupsLocked, game = d.PreviewDocument.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, d.LastSavedCopy, sourceWorld = SourceWorldState(d),
         contentEdits = d.ContentEdits == null ? null : new { d.IsContentMirror, files = d.ContentEdits.Documents.Select(doc => new { doc.Path, destination = d.ContentEdits.TargetPath(doc.Path) }).ToArray() } };
     private void Register(StudioCommands registry, string name, string description, bool mutates, StudioParameter[] parameters, Func<JsonObject, CancellationToken, Task<StudioResult>> action)
     {
@@ -154,6 +154,7 @@ public partial class MainWindow
         RegisterMotionCommands(registry); RegisterMissionCommands(registry); RegisterMechCommands(registry);
         RegisterContentCommands(registry);
         RegisterSourceCommands(registry);
+        RegisterSourceWorldCommands(registry);
         return registry;
     }
 }

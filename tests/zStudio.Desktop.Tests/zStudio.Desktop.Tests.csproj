@@ -9,6 +9,7 @@
     <Compile Include="../zStudio.Tests/ContentFixture.cs" Link="ContentFixture.cs" />
     <Compile Include="../zStudio.Tests/Mw3MissionFixture.cs" Link="Mw3MissionFixture.cs" />
     <Compile Include="../zStudio.Tests/SourceFixture.cs" Link="SourceFixture.cs" />
+    <Compile Include="../zStudio.Tests/SourceWorldFixture.cs" Link="SourceWorldFixture.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio"><PrivateAssets>all</PrivateAssets></PackageReference>

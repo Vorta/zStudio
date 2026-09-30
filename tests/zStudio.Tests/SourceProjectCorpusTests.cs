@@ -84,6 +84,41 @@ public sealed class SourceProjectCorpusTests
             var first = Tree(project); var reconstructed = Tree(again);
             Assert.Equal(first.Keys.Order(StringComparer.OrdinalIgnoreCase), reconstructed.Keys.Order(StringComparer.OrdinalIgnoreCase));
             Assert.All(first, f => Assert.Equal(f.Value, reconstructed[f.Key]));
+
+            // A vehicle only another mission loads (the 1999 light tank of m2–m6) added to m1: the export of m1 holds its
+            // nodes, every texture its materials use in each pack, and the animations other missions list for it.
+            var m1 = World(Path.Combine(exported, "m1", "gamez.zbd"));
+            HashSet<string> present = new(m1.Nodes.Select(n => n.Name), StringComparer.Ordinal);
+            var models = SourceWorlds.Models(project);
+            var vehicle = models.FirstOrDefault(m => m.Path == "data/m2/models/bft/ltank.gltf") ??
+                models.First(m => m.Folder.EndsWith("/models/bft", StringComparison.Ordinal) && !m.Folder.StartsWith("data/m1/", StringComparison.Ordinal) && !present.Contains(m.Name));
+            Assert.DoesNotContain(vehicle.Name, present);
+            var definitions = SourceWorlds.DefinitionsFor(project, "m1", vehicle.Name, token: Token);
+            SourceWorldEdits edits = new(project, "m1");
+            edits.Add(new(new(vehicle.Path, vehicle.Name), definitions.Select(d => d.Path).ToArray()), Token);
+            edits.Save(Token);
+            string added = Path.Combine(work, "added");
+            var withVehicle = await SourceBuilder.ExportAsync(project, added, ["m1/gamez.zbd", "m1/anim.zbd", "m1/rtexture16.zbd", "m1/texture2.zbd"], token: Token);
+            Assert.Equal(0, withVehicle.Failed);
+            var vehicleWorld = World(Path.Combine(added, "m1", "gamez.zbd"));
+            var root = vehicleWorld.Nodes.Single(n => n.Name == vehicle.Name);
+            Assert.Empty(root.Parents);
+            HashSet<string> textures = new(StringComparer.OrdinalIgnoreCase);
+            Collect(root, 0);
+            Assert.NotEmpty(textures);
+            foreach (string pack in new[] { "rtexture16.zbd", "texture2.zbd" })
+            {
+                var names = FormatRegistry.Default.OpenBytes(pack, File.ReadAllBytes(Path.Combine(added, "m1", pack)), token: Token).Assets.Select(a => a.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                Assert.All(textures, t => Assert.Contains(t, names));
+            }
+            var package = Recoil.Zbd.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(Path.Combine(added, "m1", "anim.zbd")), Token);
+            if (definitions.Count > 0) Assert.Contains(package.Entries, e => e.RootName == vehicle.Name);
+            void Collect(WorldNode node, int depth)
+            {
+                Assert.True(depth < 512);
+                foreach (var polygon in node.Model?.Polygons ?? []) if (polygon.Material?.Texture is { } texture) textures.Add(texture.Name);
+                foreach (var child in node.Children) Collect(child, depth + 1);
+            }
         }
         finally { if (Directory.Exists(work)) Directory.Delete(work, true); }
     }
