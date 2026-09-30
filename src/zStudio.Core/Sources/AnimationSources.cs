@@ -57,6 +57,8 @@ internal static class AnimationSources
                     string file = AnimationCompiler.Bind(item.TextOf("SCRIPT_FILENAME") ?? "", digits), target = AnimationCompiler.Bind(item.TextOf("NAME") ?? "", digits);
                     float rate = item.Item("SCRIPT_FRAME_RATE")?.Number() ?? 30;
                     if (file.Length == 0 || file.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || target.Length == 0) continue;
+                    // OBJECT lines separate names with whitespace and comments start with #.
+                    if (!AnimationScript.IsObjectName(target)) { notes.Add($"m{mission.Mission}: {entry.Name} moves {target}, which a keyframe script cannot name; the track was not reconstructed."); continue; }
                     string? track;
                     try { track = AnimationScript.Decompile(ev.Keyframes(token), rate); }
                     catch (InvalidDataException) { track = null; }
@@ -67,7 +69,8 @@ internal static class AnimationSources
                     if (existing < 0) { tracks.Add((target, track)); touched.Add(path); }
                     else if (tracks[existing].Track != track) notes.Add($"{path}: {entry.Name} moves {target} differently from an earlier animation using the same script; the first track was kept.");
                 }
-            foreach (string path in touched) files.Written[path] = Encoding.ASCII.GetBytes(AnimationScript.Write(scripts[path]));
+            // Scripts are read as Latin-1, like the names they hold.
+            foreach (string path in touched) files.Written[path] = Encoding.Latin1.GetBytes(AnimationScript.Write(scripts[path]));
 
             RepairDefinitions(mission, bindings, files, attempted, notes, token);
         }

@@ -22,7 +22,8 @@ namespace Recoil.Zbd.Core.Animation;
 /// segment as authored (the shipped m3puloop.zan steps from frame 45 back to 40).
 /// POSITION and SCALE are XYZ, ROTATION a quaternion (W X Y Z). A rate may follow its channel: VELOCITY (units per
 /// second), SPIN (rotation vector, half-angle radians per second) and GROWTH (scale per second). An omitted rate moves
-/// the channel to its value at the next key that lists it, reached at that key's time (or holds it if none does).
+/// the channel to its value at the next key that lists it, reached at that key's time (or holds it if none does); a key
+/// that lists it again at the same frame is a cut.
 /// Reconstructed scripts list every rate, so they compile to the shipped keyframes exactly. <c>#</c> starts a comment.
 /// </remarks>
 public static class AnimationScript
@@ -41,6 +42,7 @@ public static class AnimationScript
     public static List<(string? Object, List<Key> Keys)> Parse(ReadOnlySpan<byte> bytes, string source)
     {
         List<(string? Object, List<Key> Keys)> tracks = [];
+        HashSet<string> objects = new(StringComparer.Ordinal);
         List<Key>? keys = null; int total = 0;
         string text = Encoding.Latin1.GetString(bytes);
         int lineNumber = 0;
@@ -54,7 +56,7 @@ public static class AnimationScript
             {
                 if (tokens.Length != 2) throw Error("OBJECT is followed by one object name.");
                 if (tracks.Count > 0 && tracks[0].Object == null) throw Error("keys before the first OBJECT line belong to no object.");
-                if (tracks.Any(t => t.Object == tokens[1])) throw Error($"object {tokens[1]} has two tracks.");
+                if (!objects.Add(tokens[1])) throw Error($"object {tokens[1]} has two tracks.");
                 Close(); keys = []; tracks.Add((tokens[1], keys));
                 continue;
             }
@@ -75,7 +77,10 @@ public static class AnimationScript
                 {
                     case "POSITION": key.Position = new(v[0], v[1], v[2]); break;
                     case "SCALE": key.Scale = new(v[0], v[1], v[2]); break;
-                    case "ROTATION": key.Rotation = new(v[1], v[2], v[3], v[0]); break;
+                    case "ROTATION":
+                        // The engine turns the quaternion into a matrix (0x45AE90); a zero one collapses the node.
+                        if (v[0] * (double)v[0] + v[1] * (double)v[1] + v[2] * (double)v[2] + v[3] * (double)v[3] < 1e-10) throw Error("ROTATION needs a quaternion that is not zero.");
+                        key.Rotation = new(v[1], v[2], v[3], v[0]); break;
                     case "VELOCITY": key.Velocity = new(v[0], v[1], v[2]); break;
                     case "GROWTH": key.Growth = new(v[0], v[1], v[2]); break;
                     case "SPIN": key.Spin = new(v[0], v[1], v[2]); break;
@@ -114,6 +119,7 @@ public static class AnimationScript
         {
             var key = keys[i];
             float time = keys[i].Frame * step, end = keys[i + 1].Frame * step;
+            if (!float.IsFinite(time) || !float.IsFinite(end)) throw new InvalidDataException($"{source}: frame {keys[i + 1].Frame} is beyond single-precision time at {frameRate} frames per second.");
             int flags = (key.Position.HasValue ? 1 : 0) | (key.Rotation.HasValue ? 2 : 0) | (key.Scale.HasValue ? 4 : 0);
             if (flags == 0) continue;
             var frame = AnimationKeyframe.Create(flags); frame.Start = time; frame.End = end;
@@ -136,14 +142,16 @@ public static class AnimationScript
         }
         return frames;
 
-        // The rate that reaches the channel's value at the next key listing it (float operands, double arithmetic).
+        // The rate that reaches the channel's value at the next key listing it (float operands, double arithmetic). A
+        // key listing it again at the same frame is a cut: the zero-length segment holds its value (the engine samples
+        // it at time 0), so its rate is zero rather than a division by zero.
         Vector3 Rate(int index, Func<Key, Vector3?> channel, Vector3 from)
         {
             for (int j = index + 1; j < keys.Count; j++)
                 if (channel(keys[j]) is { } to)
                 {
                     double seconds = (keys[j].Frame - keys[index].Frame) / (double)frameRate;
-                    return new((float)((to.X - (double)from.X) / seconds), (float)((to.Y - (double)from.Y) / seconds), (float)((to.Z - (double)from.Z) / seconds));
+                    return seconds == 0 ? Vector3.Zero : Finite(new((float)((to.X - (double)from.X) / seconds), (float)((to.Y - (double)from.Y) / seconds), (float)((to.Z - (double)from.Z) / seconds)), j);
                 }
             return Vector3.Zero;
         }
@@ -153,10 +161,12 @@ public static class AnimationScript
                 if (keys[j].Rotation is { } to)
                 {
                     double seconds = (keys[j].Frame - keys[index].Frame) / (double)frameRate;
-                    return (Vector3)(Log(to, from) / seconds);
+                    return seconds == 0 ? Vector3.Zero : Finite((Vector3)(Log(to, from) / seconds), j);
                 }
             return Vector3.Zero;
         }
+        Vector3 Finite(Vector3 rate, int to) => float.IsFinite(rate.X) && float.IsFinite(rate.Y) && float.IsFinite(rate.Z) ? rate
+            : throw new InvalidDataException($"{source}: reaching the value at frame {keys[to].Frame} needs a rate beyond single precision.");
     }
 
     /// <summary>
@@ -186,13 +196,16 @@ public static class AnimationScript
         public static explicit operator Vector3(DoubleVector v) => new((float)v.X, (float)v.Y, (float)v.Z);
     }
 
+    /// <summary>Whether an OBJECT line can hold <paramref name="name"/>: one Latin-1 token without comment marks.</summary>
+    public static bool IsObjectName(string name) => name.Length > 0 && !name.Any(c => c is ' ' or '\t' or '\r' or '\n' or '#' or '\0' || c > 255);
+
     /// <summary>A script file of object tracks (each from <see cref="Decompile"/>), in the given order.</summary>
     public static string Write(IEnumerable<(string Object, string Track)> tracks)
     {
         StringBuilder text = new("# RECOIL keyframe script, reconstructed by zStudio: a track per OBJECT, keys as FRAME n and\n# channels with their rates per second.\n");
         foreach (var (name, track) in tracks)
         {
-            if (name.Length == 0 || name.Any(c => char.IsWhiteSpace(c) || c == '#')) throw new InvalidDataException($"'{name}' cannot name a script track.");
+            if (!IsObjectName(name)) throw new InvalidDataException($"'{name}' cannot name a script track.");
             text.Append("OBJECT ").Append(name).Append('\n').Append(track);
         }
         return text.ToString();

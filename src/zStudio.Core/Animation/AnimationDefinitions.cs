@@ -73,7 +73,12 @@ public sealed record AnimationDefinition(AnimationItem Item, string File, int Or
 /// </summary>
 public sealed class AnimationDefinitionSet
 {
-    public const int MaximumFileDepth = 16, MaximumDefinitions = 20_000;
+    /// <summary>
+    /// Limits on the definition tree. A file may be listed more than once (each listing compiles its definitions again),
+    /// so the total number of definition file reads is bounded as well as their depth.
+    /// </summary>
+    public const int MaximumFileDepth = 16, MaximumDefinitions = 20_000, MaximumFileReads = 10_000;
+    private int reads;
     public float Gravity { get; private set; } = -9.8f;
     /// <summary>Project folders searched for bare definition and keyframe script names, in order.</summary>
     public List<string> SearchPath { get; } = [];
@@ -98,6 +103,7 @@ public sealed class AnimationDefinitionSet
     {
         token.ThrowIfCancellationRequested();
         if (depth > MaximumFileDepth) throw new InvalidDataException($"{path}: definition files include each other more than {MaximumFileDepth} levels deep.");
+        if (++reads > MaximumFileReads) throw new InvalidDataException($"{path}: the animation definitions list definition files more than {MaximumFileReads:N0} times.");
         Files.Add(path);
         var document = Parse(path); int ordinal = 0;
         foreach (var top in AnimationItem.Parse(document, path).Where(i => i.Key == "ANIMATION_DEFINITIONS"))
@@ -107,8 +113,8 @@ public sealed class AnimationDefinitionSet
                     case "GRAVITY" when root: Gravity = item.Number(); break;
                     case "ANIMATION_PATH" when root:
                         foreach (string part in item.Text().Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                            if (WorldAssembler.ProjectPath(part) is { } folder && !SearchPath.Contains(folder, StringComparer.OrdinalIgnoreCase)) SearchPath.Add(folder);
-                            else if (WorldAssembler.ProjectPath(part) == null) Warnings.Add($"{path}: ANIMATION_PATH folder '{part}' is outside the project and is not searched.");
+                            if (!part.Contains('\0') && WorldAssembler.ProjectPath(part) is { } folder) { if (!SearchPath.Contains(folder, StringComparer.OrdinalIgnoreCase)) SearchPath.Add(folder); }
+                            else Warnings.Add($"{path}: ANIMATION_PATH folder '{part.Replace('\0', '?')}' is outside the project and is not searched.");
                         break;
                     case "ANIMATION_LIST":
                         foreach (var entry in item.Items)
@@ -186,6 +192,7 @@ public sealed class AnimationDefinitionSet
     /// </summary>
     public string? Resolve(string name, string from)
     {
+        if (name.Contains('\0')) throw new InvalidDataException($"{from}: '{name.Replace('\0', '?')}' is not a file name.");
         string normalized = name.Replace('\\', '/');
         if (normalized.Contains('/'))
         {
@@ -200,12 +207,14 @@ public sealed class AnimationDefinitionSet
         return new[] { beside }.Concat(SearchPath).Select(folder => $"{folder}/{normalized}").FirstOrDefault(files.Exists);
     }
 
-    /// <summary>A keyframe script's bytes (resolved like definition files), recorded as an input.</summary>
+    /// <summary>A keyframe script's bytes (resolved like definition files, and limited like every text source), recorded as an input.</summary>
     public (string Path, byte[] Bytes)? ReadScript(string name, string from)
     {
         string? path = Resolve(name, from);
         if (path == null) return null;
         Files.Add(path);
-        return (path, files.Read(path, token));
+        byte[] bytes = files.Read(path, token);
+        if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"{path} exceeds {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB.");
+        return (path, bytes);
     }
 }

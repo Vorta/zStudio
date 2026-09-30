@@ -268,7 +268,7 @@ public static partial class SourceBuilder
         "images" => BuildImages(plan, snapshot, token),
         "textures" => BuildTexturePack(plan, snapshot, token),
         "world" => BuildWorld(plan, snapshot, token),
-        "animations" => BuildAnimations(plan, snapshot, token),
+        "animations" => BuildAnimations(root, plan, snapshot, token),
         _ => throw new InvalidDataException($"Unknown output family '{plan.Family}'.")
     };
 
@@ -401,17 +401,35 @@ public static partial class SourceBuilder
 
     /// <summary>
     /// A mission's animations (see <see cref="Animation.AnimationCompiler"/>), bound to the world this export builds:
-    /// definitions whose root the world lacks are left out, and names the game could not resolve are reported.
+    /// definitions whose root the world lacks are left out, and names the game could not resolve (world nodes, and
+    /// effect templates that effects.zrd does not define) are reported.
     /// </summary>
-    private static Built BuildAnimations(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    private static Built BuildAnimations(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         string mission = plan.Path.Split('/')[0];
         List<string> warnings = [];
         IReadOnlyCollection<string>? nodes = null;
         if (snapshot.HasWorld(mission)) nodes = snapshot.World(mission, token).World.Nodes.Select(n => n.Name).ToArray();
         else warnings.Add($"{mission} has no world script ({WorldScript(mission)}), so animation roots and node names are not checked and patterns do not expand.");
-        var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, token);
+        // Without an effects.zrd in the project the game's own resource archives supply it, so nothing can be checked.
+        var effects = EffectNames(root, mission, snapshot, token);
+        var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, token);
         return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]);
+    }
+    /// <summary>
+    /// The effect templates the game can find for <paramref name="mission"/>: it loads effects.zrd by name from the
+    /// resource archives, which hold the zrdr folders under data/common and the mission's. Names from every such file
+    /// count, so only an effect none of them defines is reported. Null when there is no effects.zrd.
+    /// </summary>
+    private static HashSet<string>? EffectNames(string root, string mission, Snapshot snapshot, CancellationToken token)
+    {
+        static bool Effects(string name) => name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase);
+        var sources = SourceProject.Files(root, "data/common", Effects).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase))
+            .Concat(SourceProject.Files(root, $"data/{mission}/zrdr", Effects)).ToArray();
+        if (sources.Length == 0) return null;
+        HashSet<string> names = new(StringComparer.Ordinal);
+        foreach (string source in sources) names.UnionWith(Animation.AnimationCompiler.EffectNames(Animation.AnimationDefinitionSet.Read(snapshot.Files(), source, token)));
+        return names;
     }
 
     /// <summary>The mission world, built by its script from the model sources (see <see cref="WorldAssembler"/>).</summary>

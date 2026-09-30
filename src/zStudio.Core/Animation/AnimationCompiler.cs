@@ -16,21 +16,30 @@ namespace Recoil.Zbd.Core.Animation;
 /// </summary>
 public sealed partial class AnimationCompiler
 {
-    public const int HeaderSize = 308, MaximumEntries = 65_535;
+    /// <summary>
+    /// The engine reads the entry count as a signed 16-bit value (LoadZbd sign-extends it, retail 0x45F18C), so a file
+    /// holds at most 32,767 entries including the blank first one.
+    /// </summary>
+    public const int HeaderSize = 308, MaximumEntries = short.MaxValue;
     public sealed record Result(byte[] Bytes, AnimationPackage Package, IReadOnlyList<string> Warnings, IReadOnlyList<string> Inputs);
 
     private readonly AnimationDefinitionSet definitions;
     private readonly IReadOnlyCollection<string>? worldNodes;
-    private readonly HashSet<string>? nodeSet;
+    private readonly HashSet<string>? nodeSet, effectSet;
     private readonly List<string> warnings = [];
     private readonly HashSet<string> seen = new(StringComparer.Ordinal);
     private readonly CancellationToken token;
+    private readonly long maximumBytes;
+    private long bytes;
+    /// <summary>Keyframe scripts by name and naming file: each is read and parsed once per compilation.</summary>
+    private readonly Dictionary<(string Name, string From), Script?> scripts = [];
     private void Warn(string message) { if (seen.Add(message) && warnings.Count < 2000) warnings.Add(message); }
 
-    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, CancellationToken token)
+    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token)
     {
-        this.definitions = definitions; this.worldNodes = worldNodes; this.token = token;
+        this.definitions = definitions; this.worldNodes = worldNodes; this.token = token; this.maximumBytes = maximumBytes;
         nodeSet = worldNodes == null ? null : new(worldNodes, StringComparer.Ordinal);
+        effectSet = effects == null ? null : new(effects, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -39,13 +48,64 @@ public sealed partial class AnimationCompiler
     /// cannot expand and names are not checked.
     /// </summary>
     public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, CancellationToken token = default)
+        => Compile(files, root, worldNodes, null, token);
+
+    /// <summary>
+    /// Compiles <paramref name="root"/>, also checking effect templates against <paramref name="effects"/>, the names
+    /// effects.zrd defines (see <see cref="EffectNames"/>): the game rejects the whole file when one does not resolve.
+    /// </summary>
+    public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, CancellationToken token = default)
+        => Compile(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token);
+
+    internal static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token)
     {
         var set = AnimationDefinitionSet.Load(files, root, token);
-        AnimationCompiler compiler = new(set, worldNodes, token);
+        AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token);
         foreach (var w in set.Warnings) compiler.Warn(w);
         var package = compiler.Build();
         byte[] bytes = AnimationWriter.Write(package, token);
         return new(bytes, AnimationPackage.Read(bytes, token), compiler.warnings, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    /// <summary>
+    /// Counts compiled bytes as they are built, so definitions that would expand past what a document can hold (pattern
+    /// roots, repeated long keyframe streams) fail early instead of growing without bound.
+    /// </summary>
+    private void Grow(long count)
+    {
+        bytes += count;
+        if (bytes > maximumBytes) throw new InvalidDataException($"The compiled animations would be larger than {maximumBytes:N0} bytes.");
+    }
+
+    /// <summary>
+    /// The effect template names an effects.zrd tree defines: the NAME of each entry of its EFFECTS list, which
+    /// FindTemplateIndexByName (retail 0x462280) compares exactly with an animation's effect names.
+    /// </summary>
+    public static IEnumerable<string> EffectNames(ZrdNode root)
+    {
+        while (root.Children.Count == 1 && root.Children[0].Kind == ZrdKind.Array) root = root.Children[0];
+        var children = root.Children;
+        for (int i = 0; i + 1 < children.Count; i++)
+            if (children[i] is { Kind: ZrdKind.String, Text: "EFFECTS" } && children[i + 1].Kind == ZrdKind.Array)
+                foreach (var effect in children[i + 1].Children.Where(c => c.Kind == ZrdKind.Array))
+                    if (new AnimationItem("EFFECT", effect, "effects.zrd").TextOf("NAME") is { } name) yield return name;
+    }
+
+    /// <summary>A keyframe script read once: its tracks by object and its track without OBJECT lines.</summary>
+    private sealed class Script(string path, IReadOnlyList<(string? Object, List<AnimationScript.Key> Keys)> tracks)
+    {
+        public string Path { get; } = path;
+        private readonly Dictionary<string, List<AnimationScript.Key>> objects = tracks.Where(t => t.Object != null).ToDictionary(t => t.Object!, t => t.Keys, StringComparer.Ordinal);
+        private readonly List<AnimationScript.Key>? loose = tracks.Count == 1 && tracks[0].Object == null ? tracks[0].Keys : null;
+        /// <summary>The track for a node, as <see cref="AnimationScript.Track"/> picks it.</summary>
+        public List<AnimationScript.Key>? Track(string name) => objects.GetValueOrDefault(name) ?? loose;
+    }
+    private Script? ReadScript(string name, string from)
+    {
+        if (scripts.TryGetValue((name, from), out var cached)) return cached;
+        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, AnimationScript.Parse(file.Bytes, file.Path)) : null;
+        scripts[(name, from)] = script;
+        return script;
     }
 
     private AnimationPackage Build()
@@ -58,7 +118,7 @@ public sealed partial class AnimationCompiler
             {
                 // Definitions are shared between missions; one whose root the world lacks has no animation there.
                 if (!NodeExists(root)) continue;
-                if (entries.Count >= MaximumEntries) throw definition.Item.Error($"more than {MaximumEntries} animation entries.");
+                if (entries.Count >= MaximumEntries) throw definition.Item.Error($"more than {MaximumEntries - 1} animations; the game reads at most {MaximumEntries} entries, including the blank first one.");
                 try { entries.Add(new EntryBuilder(this, definition, root, bindings, entries.Count).Build()); }
                 catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{Name(definition.Item)}: {ex.Message}"); }
             }
@@ -125,6 +185,7 @@ public sealed partial class AnimationCompiler
     }
 
     internal bool NodeExists(string name) => nodeSet == null || nodeSet.Contains(name);
+    internal bool EffectExists(string name) => effectSet == null || effectSet.Contains(name);
 
     /// <summary>
     /// Launch direction for yaw and pitch in degrees, forward −Z, as the shipped events store it: pitch is linear

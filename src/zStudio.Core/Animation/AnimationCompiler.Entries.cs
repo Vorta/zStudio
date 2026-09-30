@@ -46,7 +46,7 @@ public sealed partial class AnimationCompiler
                     case "RESET_TIME": reset = key.Number(); secondReset = key.Scalars.Count > 1; break;
                     case "EXECUTION_BY_RANGE": flags |= 0x02; range = key.Number(); break;
                     case "EXECUTION_BY_ZONE": flags |= 0x08; break;
-                    case "EXECUTION_PRIORITY": priority = checked((byte)key.Integer()); break;
+                    case "EXECUTION_PRIORITY": priority = Byte(key, key.Integer()); break;
                     case "SAVE_LOG": if (key.Text() == "OFF") flags |= 0x1000; break;
                     case "NETWORK_LOG": if (key.Text() == "OFF") flags |= 0x0400; break;
                     case "ACTIVATION_PREREQUISITE": Prerequisites(key); break;
@@ -73,14 +73,21 @@ public sealed partial class AnimationCompiler
                 string node = Name(record, 36);
                 if (!created.Contains(node) && !compiler.NodeExists(node)) compiler.Warn($"{definition.File}: {name} names node {node}, which the world lacks; the game rejects the animation file.");
             }
-            for (int t = 0; t < 8; t++)
+            // LoadZbd also rejects the file when an effect template is not in effects.zrd (retail 0x45F899).
+            foreach (var record in tables[5].Skip(1))
             {
-                if (tables[t].Count > 255) throw item.Error("more than 254 references of one kind.");
-                foreach (var record in tables[t]) entry.References[t].Add(new(record));
+                string effect = Name(record, 32);
+                if (!compiler.EffectExists(effect)) compiler.Warn($"{definition.File}: {name} spawns effect {effect}, which effects.zrd does not define; the game rejects the animation file.");
             }
+            for (int t = 0; t < 8; t++)
+                foreach (var record in tables[t]) entry.References[t].Add(new(record));
             header[268] = minimumPrerequisites;
+            compiler.Grow(HeaderSize + entry.References.Sum(t => t.Sum(r => (long)r.Bytes.Length)) + 64L * (1 + entry.Sequences.Count));
             return entry;
         }
+
+        /// <summary>A setting stored in one byte of the header.</summary>
+        private static byte Byte(AnimationItem key, int value) => value is >= 0 and <= 255 ? (byte)value : throw key.Error($"{key.Key} must be from 0 to 255, not {value}.");
 
         /// <summary>Every event item of the definition: its reset state and sequences.</summary>
         private static IEnumerable<AnimationItem> Events(AnimationItem definition) =>
@@ -88,11 +95,20 @@ public sealed partial class AnimationCompiler
 
         // ------------------------------------------------------------ tables
 
+        private static readonly string[] TableNames = ["tracked node", "node reference", "light", "sound node", "sample", "effect template", "activation prerequisite", "child animation"];
         private int Reference(int table, string name, int size)
         {
             if (tables[table].Count == 0) tables[table].Add(new byte[size]);
             for (int i = 1; i < tables[table].Count; i++) if (Name(tables[table][i], NameSizes[table]) == name) return i;
             byte[] record = new byte[size]; Text(record, 0, name, NameSizes[table], "name");
+            return Append(table, record);
+        }
+        /// <summary>Appends a record; the entry header counts each table in one unsigned byte (LoadZbd, retail 0x45F25E).</summary>
+        private int Append(int table, byte[] record)
+        {
+            // Tables with a reserved blank first record hold 254 references; prerequisites and child animations 255.
+            int reserved = table is 6 or 7 ? 0 : 1;
+            if (tables[table].Count >= 255) throw item.Error($"more than {255 - reserved} {TableNames[table]} references.");
             tables[table].Add(record); return tables[table].Count - 1;
         }
         private static string Name(byte[] record, int size) { int end = Array.IndexOf(record, (byte)0, 0, size); return Encoding.Latin1.GetString(record, 0, end < 0 ? size : end); }
@@ -112,7 +128,7 @@ public sealed partial class AnimationCompiler
             byte[] record = new byte[72]; Text(record, 0, Bound(animation), 32, "NAME");
             // A named (local) child is stopped when its launcher is cleaned up; a waited-for child ends by itself.
             if (local.Length > 0) { Text(record, 32, Bound(local), 32, "LOCAL_NAME"); BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(64), 1); }
-            tables[7].Add(record); return checked((short)(tables[7].Count - 1));
+            return (short)Append(7, record);
         }
 
         private void Prerequisites(AnimationItem key)
@@ -123,14 +139,14 @@ public sealed partial class AnimationCompiler
             {
                 byte[] record = new byte[48]; BinaryPrimitives.WriteInt32LittleEndian(record, option ? 1 : 0); record[4] = (byte)mode;
                 if (mode == 1) Text(record, 8, target, 32, "prerequisite"); else Text(record, 12, target, 28, "prerequisite");
-                tables[6].Add(record);
+                Append(6, record);
             }
             void Group(AnimationItem group, bool required)
             {
                 foreach (var part in group.Items)
                     switch (part.Key)
                     {
-                        case "MINIMUM_TO_SATISFY": minimumPrerequisites = checked((byte)part.Integer()); break;
+                        case "MINIMUM_TO_SATISFY": minimumPrerequisites = Byte(part, part.Integer()); break;
                         case "ANIMATION_LIST": foreach (var value in part.Scalars) Add(1, Bound(value.Text), required); break;
                         case "OBJECT_ACTIVE_LIST":
                             foreach (var path in part.Values!.Children.Where(c => c.Kind == ZrdKind.Array))
@@ -167,7 +183,7 @@ public sealed partial class AnimationCompiler
                     // The original compiler ignored a START_TIME given to a whole sequence; every shipped one is unused.
                     case "START_TIME": continue;
                 }
-                if (Event(key) is { } ev) sequence.Events.Add(ev);
+                if (Event(key) is { } ev) { compiler.Grow(ev.Bytes.Length); sequence.Events.Add(ev); }
             }
             return sequence;
         }
@@ -306,7 +322,13 @@ public sealed partial class AnimationCompiler
                 case 30:
                     {
                         // A bare EVENT_OFFSET in a LOOP (not in START_TIME) had no effect in the original compiler.
-                        if (key.Item("LOOP_COUNT") is { } count) { e.UInt(12, 1); int n = count.Integer(); e.Int(16, n < 0 ? 65535 : n); }
+                        // The engine compares the iteration count as 16 bits, 65535 (−1) meaning forever (retail 0x45C337).
+                        if (key.Item("LOOP_COUNT") is { } count)
+                        {
+                            e.UInt(12, 1); int n = count.Integer();
+                            if (n > 65535) throw count.Error($"LOOP_COUNT must be at most 65535 (or negative to loop forever), not {n}.");
+                            e.Int(16, n < 0 ? 65535 : n);
+                        }
                         else if (key.Item("LOOP_TIME") is { } time) { e.UInt(12, 2); e.Float(16, time.Number()); }
                         else { e.UInt(12, 1); e.Int(16, 65535); }
                         break;
@@ -412,8 +434,8 @@ public sealed partial class AnimationCompiler
         {
             string target = Req(key, "NAME"); Track(target); e.Int(12, Node(target));
             string file = Bound(Req(key, "SCRIPT_FILENAME")); float rate = key.Item("SCRIPT_FRAME_RATE")?.Number() ?? 30;
-            var script = compiler.definitions.ReadScript(file, key.Source) ?? throw key.Error($"keyframe script {file} was not found in the animation path.");
-            var track = AnimationScript.Track(AnimationScript.Parse(script.Bytes, script.Path), Bound(target)) ?? throw key.Error($"keyframe script {file} has no track for {Bound(target)}.");
+            var script = compiler.ReadScript(file, key.Source) ?? throw key.Error($"keyframe script {file} was not found in the animation path.");
+            var track = script.Track(Bound(target)) ?? throw key.Error($"keyframe script {file} has no track for {Bound(target)}.");
             var frames = AnimationScript.Compile(track, rate, $"{script.Path}, object {Bound(target)}");
             var ev = new AnimationEvent(e.Bytes) { Version = 28 }.WithKeyframes(frames);
             ev.SetInt(16, frames.Count);
