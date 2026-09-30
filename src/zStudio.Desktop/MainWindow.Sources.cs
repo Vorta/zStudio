@@ -143,7 +143,13 @@ public partial class MainWindow
 
     private async void ReconstructSourceClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
     {
-        OpenFolderDialog input = new() { Title = "Choose the shipped RECOIL data folder (contains interp.zbd and m1)", InitialDirectory = ViewModel.RootPath is { } current && SourceProjectRoot == null ? current : "" };
+        OpenFolderDialog input = new() { Title = "Choose the shipped RECOIL data folder (contains interp.zbd and m1)" };
+        // An open ZBD folder is the likely source: it starts selected, so confirming the dialog uses it.
+        if (ViewModel.HasRoot && SourceProjectRoot == null && Directory.Exists(ViewModel.RootPath))
+        {
+            string current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(ViewModel.RootPath));
+            input.InitialDirectory = Path.GetDirectoryName(current) ?? current; input.FolderName = current;
+        }
         if (input.ShowDialog(this) != true) return;
         OpenFolderDialog output = new() { Title = "Choose a new or empty folder for the source project" };
         if (output.ShowDialog(this) != true) return;

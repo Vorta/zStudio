@@ -2,7 +2,7 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
-## 0.7.2 — unreleased
+## 0.8.0 — unreleased
 
 - Reconstruct a Recoil source project from shipped data, in the original layout and without zStudio metadata: ZAR resources become text `.zrd` files in the folders recorded by their compiler, `interp.zbd` becomes the original `gamegen\*.gs`/`support\*.gw` build scripts with their modification times, and each sound keeps its best-quality WAV in `data\common\sounds`. Worlds, animations and texture packs are not reconstructed yet.
 - Export all or one of a source project's game files: resource archives, `interp.zbd`, and the three sound banks converted to the formats `sounds.zrd` declares. Exports work in the game rather than reproducing shipped bytes; replacing existing files needs confirmation, and a failed export writes nothing. Check builds everything without writing. Text `.zrd` sources open and save as text in the ZRD editor, and importing one into an archive compiles it. Three new MCP tools: `source_reconstruct`, `source_export` and `source_status`.
