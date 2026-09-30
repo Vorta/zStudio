@@ -32,17 +32,20 @@ public sealed class ModelBuilder(WorldModel model)
         if (n > MaximumCorners) { Warnings.Add($"A polygon with {n} corners exceeds the engine limit and was fanned."); return Fan(polygon); }
         bool textured = polygon.Material.Texture != null;
         if (textured && polygon.Uvs.Length != n) throw new InvalidDataException("A textured polygon needs a UV for every corner.");
+        // A non-finite coordinate would reach the world's bounds and grid cells.
+        if (!polygon.Points.All(Finite) || !polygon.Targets.All(Finite) || !polygon.Normals.All(Finite) || !polygon.Uvs.All(uv => float.IsFinite(uv.X) && float.IsFinite(uv.Y)))
+        { Warnings.Add("A polygon with a non-finite coordinate was discarded."); return false; }
         if (!HasArea(polygon.Points)) { Warnings.Add("A polygon without area (all corners on one line) was discarded."); return false; }
         if (polygon.Points.Length > SplitCorners) return Split(polygon);
 
         int count = polygon.Points.Length; bool morphs = polygon.Targets.Length == count;
-        int[] vertices = new int[count]; int[] normals = polygon.Normals.Length == count ? new int[count] : [];
+        int[] vertices = new int[count];
         for (int i = 0; i < count; i++)
         {
             vertices[i] = morphs ? AddVertexAndMorph(polygon.Points[i], polygon.Targets[i]) : AddVertex(polygon.Points[i]);
             if (vertices[i] < 0) { Warnings.Add($"The model exceeds {MaximumVertices} vertices; a polygon was discarded."); return false; }
-            if (normals.Length > 0) normals[i] = AddNormal(polygon.Normals[i]);
         }
+        int[] normals = polygon.Normals.Length == count ? AddNormals(polygon.Normals) : [];
         Vector2[] uvs = textured ? Uvs(polygon.Uvs) : [];
         Model.Polygons.Add(new() { Material = polygon.Material, Priority = polygon.Priority, Flags = polygon.ShowBackFace ? 0x100u : 0, Zone = polygon.Zone, Vertices = vertices, Normals = normals, Uvs = uvs });
         return true;
@@ -161,15 +164,35 @@ public sealed class ModelBuilder(WorldModel model)
         if (Model.Vertices.Count >= MaximumVertices) return -1;
         Model.Vertices.Add(point); Model.Morphs.Add(delta); return Model.Vertices.Count - 1;
     }
-    private int AddNormal(Vector3 normal)
+    /// <summary>
+    /// FindOrAppendNormalIndex for each corner. The game transforms a model's normals into a 1,024-entry buffer
+    /// (g_zModel_TransformedNormals, retail PrepareTransformedNormals) and the build stopped at 921, so a polygon whose
+    /// normals would pass that is stored without normals (drawn flat) instead of overrunning the buffer in the game.
+    /// </summary>
+    private int[] AddNormals(Vector3[] source)
     {
-        for (int i = 0; i < Model.Normals.Count; i++)
+        int[] indices = new int[source.Length]; int existing = Model.Normals.Count; List<Vector3> added = [];
+        for (int i = 0; i < source.Length; i++)
         {
-            var n = Model.Normals[i];
-            if (Math.Abs(n.X - normal.X) < NormalMergeEpsilon && Math.Abs(n.Y - normal.Y) < NormalMergeEpsilon && Math.Abs(n.Z - normal.Z) < NormalMergeEpsilon) return i;
+            int found = Find(Model.Normals, source[i]);
+            if (found < 0 && Find(added, source[i]) is var fresh and >= 0) found = existing + fresh;
+            if (found < 0) { found = existing + added.Count; added.Add(source[i]); }
+            indices[i] = found;
         }
-        Model.Normals.Add(normal); return Model.Normals.Count - 1;
+        if (existing + added.Count > MaximumVertices) { Warnings.Add($"The model exceeds {MaximumVertices} normals; polygons past them are stored without normals."); return []; }
+        Model.Normals.AddRange(added);
+        return indices;
+        static int Find(List<Vector3> normals, Vector3 normal)
+        {
+            for (int i = 0; i < normals.Count; i++)
+            {
+                var n = normals[i];
+                if (Math.Abs(n.X - normal.X) < NormalMergeEpsilon && Math.Abs(n.Y - normal.Y) < NormalMergeEpsilon && Math.Abs(n.Z - normal.Z) < NormalMergeEpsilon) return i;
+            }
+            return -1;
+        }
     }
+    private static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
 
     /// <summary>The engine's UV pipeline for a textured entry: tile shift, affine extrapolation past the first triangle, 1/256 quantization, tile shift.</summary>
     private static Vector2[] Uvs(Vector2[] source)

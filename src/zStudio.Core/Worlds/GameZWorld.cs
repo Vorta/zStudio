@@ -186,6 +186,8 @@ public sealed class WorldNode
 public sealed class GameZWorld
 {
     public const int NodeCapacityDefault = 16000, ModelCapacityDefault = 6000, MaterialCapacityDefault = 5000;
+    /// <summary>The largest node and model tables a build script can ask for (SetGameZNodeArraySize, SetModel3DArraySize).</summary>
+    public const int MaximumNodeCapacity = 65536;
     public List<WorldTexture> Textures { get; } = [];
     public List<WorldMaterial> Materials { get; } = [];
     public List<WorldModel> Models { get; } = [];

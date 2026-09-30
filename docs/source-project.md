@@ -98,11 +98,11 @@ Each texture becomes one PNG from its best-quality stored variant (the largest, 
 
 A mission world is built by running its script, `gamegen\mN.gs`, as the original build did: the interpreter follows `source`, macros and `ifdef`, and applies the world, camera, light and node commands with the retail engine's semantics. `LoadGameGen name.flt node` loads `name.gltf` (or `.glb`) from the model directories the scripts set with `SetModelDirectory`, newest first; the file after `GameGenSetWorld` is the mission database, whose top-level nodes join the world. When the script writes the world (`GameZWriteZBDFile`), zStudio runs the engine's update (matrices, bounds, grid partition, single-parent flags) and writes version-15 GameZ.
 
-Models are glTF 2.0 with PNG textures, editable in Blender. Engine attributes a glTF cannot express live in `extras.recoil`, which Blender keeps as custom properties:
+Models are glTF 2.0 with PNG textures, editable in Blender. Textures are separate PNG files (an image embedded in the file, as in Blender's default `.glb`, is reported and the surface stays untextured). Engine attributes a glTF cannot express live in `extras.recoil`, which Blender keeps as custom properties:
 
-- nodes: flags that differ from the loader's default, zone, LOD ranges, the `name` when a name repeats or Blender renamed it (`.001` suffixes are ignored), `ref` for an OpenFlight external reference (another glTF file, loaded under the node), and `instance` for a node shared by several parents (glTF nodes have one parent, so each copy carries the same number and import joins them; the first copy is used);
+- nodes: flags that differ from the loader's default, zone, LOD ranges, the `name` when a name repeats or looks like a Blender copy (`.001` suffixes are otherwise ignored), `ref` for an OpenFlight external reference (another glTF file, loaded under the node), `instance` for a node shared by several parents (glTF nodes have one parent, so each copy carries the same number and import joins them; the first copy is used), and `model` for a model without polygons (lens-flare points), which a glTF mesh cannot hold;
 - meshes: display mode and flags, texture scrolling, morph factor, and point entries (lens flares);
-- materials: polygon priority, back faces, zone word, colour, soil and the engine's material flags; textures by name;
+- materials: polygon priority, back faces, zone word, colour, soil and the engine's material flags; textures by name; `normals` when its polygons store normals (Blender writes normals for every surface, so a material without it stays flat);
 - primitives: `polygons`, where joining triangles back into the stored polygons would not restore them (a count of fan triangles per polygon, or a corner list);
 - the scene: `rootFlags`, the flags of the node a script load creates.
 

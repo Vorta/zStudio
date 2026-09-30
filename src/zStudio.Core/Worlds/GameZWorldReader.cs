@@ -132,6 +132,8 @@ public static class GameZWorldReader
                     }
             }
         }
+        // The file's links can form any graph; everything that walks a world follows them recursively.
+        WorldUpdate.CheckHierarchy(world.Nodes);
         return world;
     }
 

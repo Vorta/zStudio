@@ -11,6 +11,43 @@ namespace Recoil.Zbd.Core.Worlds;
 public static class WorldUpdate
 {
     public const uint ActiveFlag = 0x04, LandmarkFlag = 0x80, CachedBoundsFlag = 0x100, ModelBoundsFlag = 0x200, ChildBoundsFlag = 0x400;
+    /// <summary>The deepest node hierarchy a world may hold; the update passes and model files follow hierarchies recursively.</summary>
+    public const int MaximumDepth = 1024;
+
+    /// <summary>
+    /// Refuses a node graph with a cycle or a path longer than <see cref="MaximumDepth"/> (a world's cells count as its
+    /// children), before anything walks it recursively. The check keeps its own stack and visits each node once.
+    /// </summary>
+    public static void CheckHierarchy(IEnumerable<WorldNode> nodes)
+    {
+        HashSet<WorldNode> active = new(ReferenceEqualityComparer.Instance), done = new(ReferenceEqualityComparer.Instance);
+        Dictionary<WorldNode, int> height = new(ReferenceEqualityComparer.Instance);
+        Stack<(WorldNode Node, IReadOnlyList<WorldNode> Links, int Next)> path = new();
+        static IReadOnlyList<WorldNode> Links(WorldNode node) => node.Areas.Count == 0 ? node.Children : [.. node.Children, .. node.Areas.SelectMany(a => a.Nodes)];
+        foreach (var start in nodes)
+        {
+            if (done.Contains(start)) continue;
+            active.Add(start); path.Push((start, Links(start), 0));
+            while (path.Count > 0)
+            {
+                var (node, links, next) = path.Pop();
+                if (next < links.Count)
+                {
+                    path.Push((node, links, next + 1));
+                    var child = links[next];
+                    if (done.Contains(child)) continue;
+                    if (!active.Add(child)) throw new InvalidDataException($"Node {child.Name} is its own ancestor.");
+                    if (path.Count >= MaximumDepth) throw new InvalidDataException($"The node hierarchy is deeper than {MaximumDepth} levels.");
+                    path.Push((child, Links(child), 0));
+                    continue;
+                }
+                int levels = 1;
+                foreach (var child in links) levels = Math.Max(levels, height[child] + 1);
+                if (levels > MaximumDepth) throw new InvalidDataException($"The node hierarchy is deeper than {MaximumDepth} levels.");
+                height[node] = levels; active.Remove(node); done.Add(node);
+            }
+        }
+    }
 
     /// <summary>zDi::RebuildBounds (retail 0x483AD0): the model's box (vertices, points, blended vertices; facades symmetric about the origin) and approximate sphere.</summary>
     public static WorldBox ModelBounds(WorldModel model)
@@ -112,7 +149,8 @@ public static class WorldUpdate
         {
             if (single.TryGetValue(node, out bool known)) return known;
             // Worlds are not ancestors for this purpose: a node in a world cell has the world as its only parent.
-            bool result = depth < 512 && node.Parents.Count(p => p.Class != WorldNodeClass.World) + (node.Parents.Any(p => p.Class == WorldNodeClass.World) ? 1 : 0) <= 1
+            // Checked hierarchies are at most MaximumDepth deep; the guard only stops a cycle.
+            bool result = depth <= MaximumDepth && node.Parents.Count(p => p.Class != WorldNodeClass.World) + (node.Parents.Any(p => p.Class == WorldNodeClass.World) ? 1 : 0) <= 1
                 && node.Parents.Where(p => p.Class != WorldNodeClass.World).All(p => Single(p, depth + 1));
             single[node] = result; return result;
         }
@@ -132,6 +170,11 @@ public static class WorldUpdate
     /// </summary>
     public static void SetPartition(WorldNode world, float cellX, float cellZ)
     {
+        // Every cell is allocated and written; the reader accepts at most 65,536 (retail worlds use at most 738).
+        if (!float.IsFinite(cellX) || !float.IsFinite(cellZ) || cellX == 0 || cellZ == 0) throw new InvalidDataException($"World partition cells need a finite, nonzero size ({cellX} × {cellZ}).");
+        double cellsX = world.PayloadFloat(0x3C) / (double)cellX, cellsZ = world.PayloadFloat(0x40) / (double)cellZ;
+        if (!(cellsX <= 0 || cellsZ <= 0 || Math.Ceiling(cellsX) * Math.Ceiling(cellsZ) <= Formats.FormatRegistry.MaximumDirectoryEntries))
+            throw new InvalidDataException($"Cells of {cellX} × {cellZ} divide the world into more than {Formats.FormatRegistry.MaximumDirectoryEntries:N0} cells.");
         world.SetPayloadFloat(0x54, cellX); world.SetPayloadFloat(0x58, cellZ);
         world.SetPayloadFloat(0x70, cellX * 0.125f); world.SetPayloadFloat(0x74, cellZ * -0.125f);
         world.SetPayloadFloat(0x5C, cellX * 0.5f); world.SetPayloadFloat(0x60, cellZ * 0.5f);

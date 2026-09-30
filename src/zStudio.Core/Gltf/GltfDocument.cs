@@ -45,6 +45,8 @@ public sealed class GltfMaterial
     public Vector4 BaseColor { get; set; } = Vector4.One;
     /// <summary>The texture image, as a URI relative to the glTF file.</summary>
     public string? ImageUri { get; set; }
+    /// <summary>The base-colour texture's image is stored in the file (a buffer view or data URI) rather than as a file.</summary>
+    public bool EmbeddedImage { get; set; }
     public bool ClampS { get; set; }
     public bool ClampT { get; set; }
     public bool DoubleSided { get; set; }
@@ -60,6 +62,10 @@ public sealed class GltfMaterial
 public sealed class GltfDocument
 {
     public const int MaximumNodes = 200_000, MaximumElements = 16_000_000;
+    /// <summary>Components one read may decode in all (accessors can be shared, so each use counts).</summary>
+    public const long MaximumDecodedElements = 4L * MaximumElements;
+    /// <summary>The deepest node hierarchy a file may hold; the model loaders follow hierarchies recursively.</summary>
+    public const int MaximumDepth = 256;
     public List<GltfNode> Roots { get; } = [];
     public JsonObject? SceneExtras { get; set; }
     public string Generator { get; set; } = "zStudio";
@@ -184,9 +190,18 @@ public sealed class GltfDocument
 
     /// <summary>
     /// Reads a .gltf (JSON) or .glb document. <paramref name="resolve"/> returns the bytes of an external buffer URI
-    /// (relative to the file). Triangle lists, strips and fans are accepted; points and lines are ignored.
+    /// (relative to the file). Triangle lists, strips and fans are accepted; points and lines are ignored. A malformed
+    /// file is reported as <see cref="InvalidDataException"/>, whatever part of it is wrong.
     /// </summary>
     public static GltfDocument Read(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, CancellationToken token = default)
+    {
+        try { return ReadDocument(bytes, resolve, token); }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or ArgumentException or OverflowException
+            or NullReferenceException or IndexOutOfRangeException or KeyNotFoundException or InvalidCastException)
+        { throw new InvalidDataException($"The glTF file is malformed: {ex.Message}", ex); }
+    }
+
+    private static GltfDocument ReadDocument(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, CancellationToken token)
     {
         byte[]? glbBinary = null; ReadOnlySpan<byte> jsonBytes = bytes;
         if (bytes.Length >= 12 && bytes[..4].SequenceEqual("glTF"u8))
@@ -217,33 +232,62 @@ public sealed class GltfDocument
             buffers.Add(data);
         }
         JsonArray views = root["bufferViews"] as JsonArray ?? [], accessors = root["accessors"] as JsonArray ?? [];
+        long decoded = 0;
+        static int Size(int componentType) => componentType switch { 5120 or 5121 => 1, 5122 or 5123 => 2, 5125 or 5126 => 4, _ => throw new InvalidDataException($"Unsupported component type {componentType}.") };
+        static float Component(ReadOnlySpan<byte> span, int componentType, bool normalized) => componentType switch
+        {
+            5126 => BinaryPrimitives.ReadSingleLittleEndian(span),
+            5125 => BinaryPrimitives.ReadUInt32LittleEndian(span),
+            5123 => normalized ? BinaryPrimitives.ReadUInt16LittleEndian(span) / 65535f : BinaryPrimitives.ReadUInt16LittleEndian(span),
+            5122 => normalized ? Math.Max(BinaryPrimitives.ReadInt16LittleEndian(span) / 32767f, -1) : BinaryPrimitives.ReadInt16LittleEndian(span),
+            5121 => normalized ? span[0] / 255f : span[0],
+            _ => normalized ? Math.Max((sbyte)span[0] / 127f, -1) : (sbyte)span[0],
+        };
+        // A buffer view's bytes from an extra offset: its buffer and where the data starts, checked to hold byteCount bytes.
+        (byte[] Data, long Start) View(JsonNode? reference, long offset, long byteCount)
+        {
+            var view = views[reference!.GetValue<int>()]!; var data = buffers[view["buffer"]!.GetValue<int>()];
+            long start = (view["byteOffset"]?.GetValue<long>() ?? 0) + offset;
+            if (start < 0 || offset < 0 || start + byteCount > data.Length) throw new InvalidDataException("A glTF accessor exceeds its buffer.");
+            return (data, start);
+        }
         float[] Accessor(int index, out int components)
         {
             var a = accessors[index] ?? throw new InvalidDataException("Missing accessor.");
             components = a["type"]!.GetValue<string>() switch { "SCALAR" => 1, "VEC2" => 2, "VEC3" => 3, "VEC4" => 4, "MAT4" => 16, var t => throw new InvalidDataException($"Unsupported accessor type {t}.") };
             int count = a["count"]!.GetValue<int>(), componentType = a["componentType"]!.GetValue<int>(); bool normalized = a["normalized"]?.GetValue<bool>() ?? false;
             if (count < 0 || (long)count * components > MaximumElements) throw new InvalidDataException("A glTF accessor is too large.");
-            int size = componentType switch { 5120 or 5121 => 1, 5122 or 5123 => 2, 5125 or 5126 => 4, _ => throw new InvalidDataException($"Unsupported component type {componentType}.") };
+            // Accessors may be shared by any number of primitives; every use is decoded, so the file's total is bounded.
+            if ((decoded += (long)count * components) > MaximumDecodedElements) throw new InvalidDataException("The glTF file decodes to more data than a model can hold.");
+            int size = Size(componentType), element = size * components;
             float[] values = new float[count * components];
-            if (a["bufferView"] is null) return values;
-            var view = views[a["bufferView"]!.GetValue<int>()]!; var data = buffers[view["buffer"]!.GetValue<int>()];
-            long start = (view["byteOffset"]?.GetValue<long>() ?? 0) + (a["byteOffset"]?.GetValue<long>() ?? 0);
-            int stride = view["byteStride"]?.GetValue<int>() ?? size * components;
-            if (count > 0 && start + (long)(count - 1) * stride + size * components > data.Length) throw new InvalidDataException("A glTF accessor exceeds its buffer.");
-            for (int i = 0; i < count; i++)
-                for (int c = 0; c < components; c++)
+            if (a["bufferView"] is { } reference && count > 0)
+            {
+                // Elements are tightly packed unless the view has a stride, which must hold an element (glTF: 4 to 252 bytes).
+                int stride = views[reference.GetValue<int>()]!["byteStride"]?.GetValue<int>() ?? element;
+                if (stride < element || stride > 252 && stride != element) throw new InvalidDataException($"A glTF buffer view has an invalid byte stride of {stride}.");
+                var (data, start) = View(reference, a["byteOffset"]?.GetValue<long>() ?? 0, (long)(count - 1) * stride + element);
+                for (int i = 0; i < count; i++)
+                    for (int c = 0; c < components; c++) values[i * components + c] = Component(data.AsSpan((int)(start + (long)i * stride + c * size)), componentType, normalized);
+            }
+            // Sparse accessors replace some elements (Blender writes morph targets this way, often without a buffer view).
+            if (a["sparse"] is { } sparse)
+            {
+                int n = sparse["count"]!.GetValue<int>();
+                if (n < 1 || n > count) throw new InvalidDataException("A sparse glTF accessor has an invalid count.");
+                var indices = sparse["indices"]!; int indexType = indices["componentType"]!.GetValue<int>();
+                if (indexType is not (5121 or 5123 or 5125)) throw new InvalidDataException($"Sparse glTF indices cannot use component type {indexType}.");
+                int indexSize = Size(indexType);
+                var (indexData, indexStart) = View(indices["bufferView"], indices["byteOffset"]?.GetValue<long>() ?? 0, (long)n * indexSize);
+                var (valueData, valueStart) = View(sparse["values"]!["bufferView"], sparse["values"]!["byteOffset"]?.GetValue<long>() ?? 0, (long)n * element);
+                for (int k = 0; k < n; k++)
                 {
-                    var span = data.AsSpan((int)(start + (long)i * stride + c * size));
-                    values[i * components + c] = componentType switch
-                    {
-                        5126 => BinaryPrimitives.ReadSingleLittleEndian(span),
-                        5125 => BinaryPrimitives.ReadUInt32LittleEndian(span),
-                        5123 => normalized ? BinaryPrimitives.ReadUInt16LittleEndian(span) / 65535f : BinaryPrimitives.ReadUInt16LittleEndian(span),
-                        5122 => normalized ? Math.Max(BinaryPrimitives.ReadInt16LittleEndian(span) / 32767f, -1) : BinaryPrimitives.ReadInt16LittleEndian(span),
-                        5121 => normalized ? span[0] / 255f : span[0],
-                        _ => normalized ? Math.Max((sbyte)span[0] / 127f, -1) : (sbyte)span[0],
-                    };
+                    var at = indexData.AsSpan((int)(indexStart + (long)k * indexSize));
+                    long target = indexType switch { 5121 => at[0], 5123 => BinaryPrimitives.ReadUInt16LittleEndian(at), _ => BinaryPrimitives.ReadUInt32LittleEndian(at) };
+                    if (target >= count) throw new InvalidDataException("A sparse glTF index is out of range.");
+                    for (int c = 0; c < components; c++) values[target * components + c] = Component(valueData.AsSpan((int)(valueStart + ((long)k * components + c) * size)), componentType, normalized);
                 }
+            }
             return values;
         }
         List<Vector3> Vec3(int index) { var v = Accessor(index, out int c); if (c != 3) throw new InvalidDataException("Expected a VEC3 accessor."); return Enumerable.Range(0, v.Length / 3).Select(i => new Vector3(v[i * 3], v[i * 3 + 1], v[i * 3 + 2])).ToList(); }
@@ -258,8 +302,11 @@ public sealed class GltfDocument
             if (pbr?["baseColorTexture"]?["index"]?.GetValue<int>() is int t && t >= 0 && t < jsonTextures.Count)
             {
                 var texture = jsonTextures[t]!;
-                if (texture["source"]?.GetValue<int>() is int image && image >= 0 && image < jsonImages.Count && jsonImages[image]?["uri"]?.GetValue<string>() is { } uri && !uri.StartsWith("data:", StringComparison.Ordinal))
-                    material.ImageUri = Uri.UnescapeDataString(uri);
+                if (texture["source"]?.GetValue<int>() is int image && image >= 0 && image < jsonImages.Count)
+                {
+                    if (jsonImages[image]?["uri"]?.GetValue<string>() is { } uri && !uri.StartsWith("data:", StringComparison.Ordinal)) material.ImageUri = Uri.UnescapeDataString(uri);
+                    else material.EmbeddedImage = true;
+                }
                 if (texture["sampler"]?.GetValue<int>() is int s && s >= 0 && s < jsonSamplers.Count)
                 {
                     material.ClampS = jsonSamplers[s]?["wrapS"]?.GetValue<int>() == 33071; material.ClampT = jsonSamplers[s]?["wrapT"]?.GetValue<int>() == 33071;
@@ -341,15 +388,24 @@ public sealed class GltfDocument
             var children = nodes.SelectMany(n => n.Children).ToHashSet(ReferenceEqualityComparer.Instance);
             doc.Roots.AddRange(nodes.Where(n => !children.Contains(n)));
         }
-        // Reject cycles before anyone walks the hierarchy.
+        // Reject cycles and hierarchies too deep to follow before anyone walks them; the walk itself keeps its own stack.
         HashSet<GltfNode> visiting = new(ReferenceEqualityComparer.Instance), done = new(ReferenceEqualityComparer.Instance);
-        foreach (var r in doc.Roots) Check(r);
-        void Check(GltfNode n)
+        Stack<(GltfNode Node, int Next)> path = new();
+        foreach (var r in doc.Roots)
         {
-            if (done.Contains(n)) return;
-            if (!visiting.Add(n)) throw new InvalidDataException("The glTF node hierarchy has a cycle.");
-            foreach (var c in n.Children) Check(c);
-            visiting.Remove(n); done.Add(n);
+            if (done.Contains(r)) continue;
+            path.Push((r, 0)); visiting.Add(r);
+            while (path.Count > 0)
+            {
+                var (node, next) = path.Pop();
+                if (next == node.Children.Count) { visiting.Remove(node); done.Add(node); continue; }
+                path.Push((node, next + 1));
+                var child = node.Children[next];
+                if (done.Contains(child)) continue;
+                if (!visiting.Add(child)) throw new InvalidDataException("The glTF node hierarchy has a cycle.");
+                if (path.Count >= MaximumDepth) throw new InvalidDataException($"The glTF node hierarchy is deeper than {MaximumDepth} levels.");
+                path.Push((child, 0));
+            }
         }
         return doc;
     }

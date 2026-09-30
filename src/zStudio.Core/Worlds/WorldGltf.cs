@@ -59,6 +59,7 @@ public static partial class WorldGltf
         {
             if (++visits > MaximumExportedNodes) throw new InvalidDataException($"The model hierarchy expands to more than {MaximumExportedNodes} nodes.");
             if (!path.Add(node)) throw new InvalidDataException($"Node {node.Name} is its own ancestor.");
+            if (path.Count > WorldUpdate.MaximumDepth) throw new InvalidDataException($"The model hierarchy is deeper than {WorldUpdate.MaximumDepth} levels.");
             reached[node] = reached.GetValueOrDefault(node) + 1;
             if (reached[node] == 1 && context.Reference(node) == null) foreach (var child in node.Children) Count(child);
             path.Remove(node);
@@ -87,7 +88,8 @@ public static partial class WorldGltf
             throw new InvalidDataException($"Node {node.Name} is a {node.Class} node; model files hold object3d and lod nodes.");
         GltfNode result = new() { Name = node.Name };
         JsonObject extras = [];
-        if (state.Duplicates.Contains(node.Name)) extras["name"] = node.Name;
+        // Import drops a .NNN suffix (Blender's copies), so a name that has one is written out.
+        if (state.Duplicates.Contains(node.Name) || BlenderSuffix().IsMatch(node.Name)) extras["name"] = node.Name;
         // Every copy of a shared node carries its instance number; the first copy in the file is the one imported.
         if (state.Shared.Contains(node))
         {
@@ -107,7 +109,14 @@ public static partial class WorldGltf
             extras["lod"] = fields;
         }
         else if (WorldUpdate.LocalMatrix(node) is { } matrix && !matrix.IsIdentity) result.Matrix = matrix;
-        if (node.Model != null) result.Mesh = ExportMesh(node.Model, context);
+        if (node.Model != null)
+        {
+            // A glTF mesh needs a primitive and editors drop one without (Blender omits it), so a model without polygons
+            // (a lens flare's points) keeps its values with each node that uses it.
+            var mesh = ExportMesh(node.Model, context);
+            if (mesh.Primitives.Count > 0) result.Mesh = mesh;
+            else extras["model"] = mesh.Extras?[Key]?.DeepClone() ?? new JsonObject();
+        }
         if (context.Reference(node) is { } uri) extras["ref"] = uri;
         else foreach (var child in node.Children) result.Children.Add(ExportNode(child, zone, context, state));
         if (extras.Count > 0) result.Extras = new() { [Key] = extras };
@@ -276,55 +285,71 @@ public static partial class WorldGltf
         /// <summary>Each texture's clamp word (1 clamps U, 2 clamps V) from the first sampler that uses it; the pack stores it.</summary>
         public Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
         internal Dictionary<(string Path, GltfMesh Mesh), WorldModel> Models { get; } = [];
+        /// <summary>Models without polygons, carried in node extras, shared by identical values within a file.</summary>
+        internal Dictionary<(string Path, string Values), WorldModel> ValueModels { get; } = [];
         internal Dictionary<(string Path, GltfDocument Doc), bool> Loading { get; } = [];
+        /// <summary>Nodes this load created; with the world's, never more than a world can hold.</summary>
+        internal int Created { get; set; }
     }
 
     /// <summary>Engine nodes for a document's scene roots, loaded from <paramref name="path"/> under a parent with <paramref name="parentZone"/>.</summary>
-    public static List<WorldNode> Import(GltfDocument doc, string path, uint parentZone, ImportContext context)
+    /// <remarks>Malformed engine values are reported as <see cref="InvalidDataException"/>.</remarks>
+    public static List<WorldNode> Import(GltfDocument doc, string path, uint parentZone, ImportContext context) => Import(doc, path, parentZone, context, 0);
+
+    private static List<WorldNode> Import(GltfDocument doc, string path, uint parentZone, ImportContext context, int depth)
     {
         if (!context.Loading.TryAdd((path, doc), true)) throw new InvalidDataException($"{path} references itself.");
         Dictionary<int, WorldNode> instances = [];
-        try { return doc.Roots.Select(r => ImportNode(r, path, parentZone, context, instances, 0)).ToList(); }
+        try { return doc.Roots.Select(r => ImportNode(r, path, parentZone, context, instances, depth)).ToList(); }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException or OverflowException or ArgumentException or NullReferenceException or IndexOutOfRangeException)
+        { throw new InvalidDataException($"{path}: an engine value in the extras is malformed: {ex.Message}", ex); }
         finally { context.Loading.Remove((path, doc)); }
     }
 
+    /// <summary><paramref name="depth"/> counts levels across external references, which continue the hierarchy.</summary>
     private static WorldNode ImportNode(GltfNode source, string path, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth)
     {
-        if (depth > 256) throw new InvalidDataException("The node hierarchy is too deep.");
+        if (depth >= GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the node hierarchy, with its external references, is deeper than {GltfDocument.MaximumDepth} levels.");
         var extras = source.Extras?[Key] as JsonObject;
         // Later copies of a shared node are the same node under another parent.
-        long? mark = extras?["instance"] is { } marker ? JsonData.Integer(marker, -1) : null;
+        long? mark = extras?["instance"] is { } marker ? Integer(marker, "instance", path) : null;
         if (mark is < 1 or > int.MaxValue) throw new InvalidDataException($"{path}: node {source.Name} has an invalid instance number.");
         int? instance = (int?)mark;
         if (instance is { } shared && instances.TryGetValue(shared, out var existing)) return existing;
-        bool lod = extras?["class"]?.GetValue<string>() == "lod";
-        string name = extras?["name"]?.GetValue<string>() ?? BlenderSuffix().Replace(source.Name, "");
+        // References can repeat a file any number of times; a world holds a bounded number of nodes.
+        if (++context.Created + context.World.Nodes.Count > GameZWorld.MaximumNodeCapacity)
+            throw new InvalidDataException($"{path}: the model expands to more nodes than a world holds ({GameZWorld.MaximumNodeCapacity:N0}).");
+        bool lod = extras?["class"] is { } kind && Text(kind, "class", path) == "lod";
+        string name = extras?["name"] is { } authored ? Text(authored, "name", path) : BlenderSuffix().Replace(source.Name, "");
         WorldNode node = new(name, lod ? WorldNodeClass.Lod : WorldNodeClass.Object3D);
         if (instance is { } first) instances[first] = node;
-        uint carried = extras?["flags"] is { } flags ? ParseHex(flags) & CarriedFlags : DefaultCarried;
+        uint carried = extras?["flags"] is { } flags ? Hex(flags, "flags", path) & CarriedFlags : DefaultCarried;
         node.Flags = (lod ? 0x0108001Cu : 0x0308001Cu) & ~CarriedFlags | carried;
         node.BoundsFlags = 4;
-        uint zone = extras?["zone"] is { } z ? (uint)z.GetValue<int>() & 0xFF : parentZone;
-        node.Zone = extras?["zoneWord"] is { } word ? ParseHex(word) : zone;
+        uint zone = extras?["zone"] is { } z ? (uint)Integer(z, "zone", path) & 0xFF : parentZone;
+        node.Zone = extras?["zoneWord"] is { } word ? Hex(word, "zoneWord", path) : zone;
         if (lod)
         {
-            var fields = extras?["lod"] as JsonArray ?? [];
+            var fields = extras?["lod"] is { } values ? values as JsonArray ?? throw new InvalidDataException($"{path}: node {name} has an invalid lod record.") : [];
             for (int i = 0; i < 20 && i < fields.Count; i++)
-                if (i is 0 or 12 or 17 or 18) node.SetPayloadInt(i * 4, fields[i]!.GetValue<int>()); else node.SetPayloadFloat(i * 4, fields[i]!.GetValue<float>());
+                if (i is 0 or 12 or 17 or 18) node.SetPayloadInt(i * 4, (int)Integer(fields[i], "lod", path, int.MinValue, int.MaxValue));
+                else node.SetPayloadFloat(i * 4, Real(fields[i], "lod", path));
         }
         else
         {
             var matrix = source.Matrix ?? Matrix4x4.Identity;
+            float[] rows = [matrix.M11, matrix.M12, matrix.M13, matrix.M21, matrix.M22, matrix.M23, matrix.M31, matrix.M32, matrix.M33, matrix.M41, matrix.M42, matrix.M43];
+            if (!rows.All(float.IsFinite)) throw new InvalidDataException($"{path}: node {name} has a transform with a non-finite value.");
             node.SetPayloadInt(0, matrix.IsIdentity ? 0x28 : 0x30);
             node.SetPayloadFloat(0x24, 1); node.SetPayloadFloat(0x28, 1); node.SetPayloadFloat(0x2C, 1);
-            float[] rows = [matrix.M11, matrix.M12, matrix.M13, matrix.M21, matrix.M22, matrix.M23, matrix.M31, matrix.M32, matrix.M33, matrix.M41, matrix.M42, matrix.M43];
             for (int i = 0; i < 12; i++) node.SetPayloadFloat(0x30 + i * 4, rows[i]);
         }
         if (source.Mesh != null) node.Model = ImportMesh(source.Mesh, path, context);
-        if (extras?["ref"]?.GetValue<string>() is { } reference)
+        else if (extras?["model"] is { } values) node.Model = ImportValues(values as JsonObject ?? throw new InvalidDataException($"{path}: node {name} has an invalid model record."), path, context);
+        if (extras?["ref"] is { } referenceValue)
         {
-            var (doc, referencedPath) = context.Reference(reference, path);
-            foreach (var child in Import(doc, referencedPath, zone, context)) Link(node, child);
+            var (doc, referencedPath) = context.Reference(Text(referenceValue, "ref", path), path);
+            foreach (var child in Import(doc, referencedPath, zone, context, depth + 1)) Link(node, child);
         }
         foreach (var child in source.Children) Link(node, ImportNode(child, path, zone, context, instances, depth + 1));
         return node;
@@ -340,23 +365,15 @@ public static partial class WorldGltf
     private static WorldModel ImportMesh(GltfMesh mesh, string path, ImportContext context)
     {
         if (context.Models.TryGetValue((path, mesh), out var existing)) return existing;
-        var extras = mesh.Extras?[Key] as JsonObject;
         ModelBuilder builder = new();
         var model = builder.Model;
-        model.Mode = (uint)(extras?["mode"]?.GetValue<int>() ?? 0);
-        model.Flags = (uint)(extras?["flags"]?.GetValue<int>() ?? (int)DefaultModelFlags);
-        if (extras?["scroll"] is JsonArray scroll && scroll.Count == 3) { model.ScrollU = scroll[0]!.GetValue<float>(); model.ScrollV = scroll[1]!.GetValue<float>(); model.ScrollFrame = scroll[2]!.GetValue<uint>(); }
-        model.MorphFactor = extras?["morphFactor"]?.GetValue<float>() ?? (mesh.Weights.Count > 0 ? mesh.Weights[0] : 0);
-        foreach (var point in extras?["points"] as JsonArray ?? [])
-        {
-            byte[] record = Convert.FromHexString(point!["record"]!.GetValue<string>());
-            if (record.Length != 76) throw new InvalidDataException("A point entry record has 76 bytes.");
-            model.Points.Add(new() { Record = record, Vertices = (point["vertices"] as JsonArray ?? []).Select(v => new Vector3(v![0]!.GetValue<float>(), v[1]!.GetValue<float>(), v[2]!.GetValue<float>())).ToArray() });
-        }
+        ApplyValues(model, mesh.Extras?[Key] as JsonObject, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path);
         foreach (var primitive in mesh.Primitives)
         {
-            var (material, priority, backface, zone) = ImportMaterial(primitive.Material, path, context);
-            bool textured = material.Texture != null, normals = primitive.Normals.Count == primitive.Positions.Count;
+            var (material, priority, backface, zone, storesNormals) = ImportMaterial(primitive.Material, path, context);
+            // Editors write normals for every surface (Blender does); a material with engine values says whether its
+            // polygons stored them, so flat surfaces stay flat.
+            bool textured = material.Texture != null, normals = storesNormals != false && primitive.Normals.Count == primitive.Positions.Count;
             if (textured && primitive.TexCoords.Count != primitive.Positions.Count)
             {
                 context.Warnings.Add($"{path}: mesh {mesh.Name} uses texture {material.Texture!.Name} without texture coordinates; they were set to zero.");
@@ -378,6 +395,43 @@ public static partial class WorldGltf
         context.World.Models.Add(model);
         context.Models[(path, mesh)] = model;
         return model;
+    }
+
+    /// <summary>A model without polygons (point entries only) from a node's <c>model</c> values; identical values share one model.</summary>
+    private static WorldModel ImportValues(JsonObject values, string path, ImportContext context)
+    {
+        string key = values.ToJsonString();
+        if (context.ValueModels.TryGetValue((path, key), out var existing)) return existing;
+        ModelBuilder builder = new();
+        ApplyValues(builder.Model, values, 0, path);
+        var model = builder.Finish();
+        context.World.Models.Add(model);
+        context.ValueModels[(path, key)] = model;
+        return model;
+    }
+
+    /// <summary>The model values glTF cannot express: display mode and flags, scrolling, morph factor and point entries.</summary>
+    private static void ApplyValues(WorldModel model, JsonObject? extras, float morphFactor, string path)
+    {
+        // The export writes these words as signed integers.
+        model.Mode = extras?["mode"] is { } mode ? unchecked((uint)Integer(mode, "mode", path, int.MinValue, uint.MaxValue)) : 0;
+        model.Flags = extras?["flags"] is { } flags ? unchecked((uint)Integer(flags, "flags", path, int.MinValue, uint.MaxValue)) : DefaultModelFlags;
+        if (extras?["scroll"] is JsonArray scroll && scroll.Count == 3)
+        { model.ScrollU = Real(scroll[0], "scroll", path); model.ScrollV = Real(scroll[1], "scroll", path); model.ScrollFrame = (uint)Integer(scroll[2], "scroll", path, 0, uint.MaxValue); }
+        model.MorphFactor = extras?["morphFactor"] is { } factor ? Real(factor, "morphFactor", path) : morphFactor;
+        foreach (var point in extras?["points"] as JsonArray ?? [])
+        {
+            if (point?["record"] is not { } text || Text(text, "point record", path).Length != 152 || !IsHex(text.GetValue<string>()))
+                throw new InvalidDataException($"{path}: a point entry record needs 76 bytes of hexadecimal.");
+            var vertices = point["vertices"] is { } list ? list as JsonArray ?? throw new InvalidDataException($"{path}: a point entry has invalid vertices.") : [];
+            model.Points.Add(new()
+            {
+                Record = Convert.FromHexString(text.GetValue<string>()),
+                Vertices = vertices.Select(v => v is JsonArray { Count: 3 } xyz ? new Vector3(Real(xyz[0], "point", path), Real(xyz[1], "point", path), Real(xyz[2], "point", path))
+                    : throw new InvalidDataException($"{path}: a point entry has an invalid vertex.")).ToArray(),
+            });
+        }
+        static bool IsHex(string s) => s.All(char.IsAsciiHexDigit);
     }
 
     /// <summary>
@@ -456,23 +510,32 @@ public static partial class WorldGltf
         }
     }
 
-    private static (WorldMaterial Material, int Priority, bool BackFace, uint Zone) ImportMaterial(GltfMaterial? source, string path, ImportContext context)
+    /// <summary>
+    /// The engine material and polygon attributes of a glTF material. <c>StoresNormals</c> is whether its polygons keep
+    /// normals: from its engine values when it has them (<c>normals</c>), otherwise null (use the primitive's normals).
+    /// </summary>
+    private static (WorldMaterial Material, int Priority, bool BackFace, uint Zone, bool? StoresNormals) ImportMaterial(GltfMaterial? source, string path, ImportContext context)
     {
         var extras = source?.Extras?[Key] as JsonObject;
-        int priority = extras?["priority"]?.GetValue<int>() ?? 0;
-        bool backface = extras?["backface"]?.GetValue<bool>() ?? source?.DoubleSided ?? false;
-        uint zone = extras?["zone"] is { } z ? ParseHex(z) : DefaultPolygonZone;
+        int priority = extras?["priority"] is { } p ? (int)Integer(p, "priority", path, int.MinValue, int.MaxValue) : 0;
+        bool backface = extras?["backface"] is { } b ? Flag(b, "backface", path) : source?.DoubleSided ?? false;
+        uint zone = extras?["zone"] is { } z ? Hex(z, "zone", path) : DefaultPolygonZone;
+        bool? normals = extras == null ? null : extras["normals"] is { } n && Flag(n, "normals", path);
         WorldMaterial material = new();
         string? textureName = null;
-        if (source?.ImageUri != null || extras?["texture"] != null)
+        string? namedTexture = extras?["texture"] is { } t ? Text(t, "texture", path) : null;
+        if (source?.ImageUri != null || namedTexture != null)
         {
-            textureName = context.TextureName(source?.ImageUri ?? "", extras?["texture"]?.GetValue<string>(), path);
+            textureName = context.TextureName(source?.ImageUri ?? "", namedTexture, path);
             int addressing = (source?.ClampS == true ? 1 : 0) | (source?.ClampT == true ? 2 : 0);
             if (source?.ImageUri != null && context.TextureAddressing.TryAdd(textureName, addressing) is false && context.TextureAddressing[textureName] != addressing)
                 context.Warnings.Add($"{path}: texture {textureName} is sampled with different edge modes; the pack keeps the first.");
         }
-        uint opacity = (uint)(extras?["opacity"]?.GetValue<int>() ?? (source != null && source.AlphaMode == "BLEND" && source.BaseColor.W < 1 ? (int)MathF.Round(source.BaseColor.W * 255) : 0xFF));
-        uint extraFlags = extras?["flags"] is { } f ? ParseHex(f) & ~0x1FFu : 0;
+        else if (source?.EmbeddedImage == true)
+            context.Warnings.Add($"{path}: material {source.Name} has an embedded image; texture packs are built from PNG files, so save the image as a PNG beside the model (for example with Blender's glTF Separate format). The surface is untextured.");
+        uint opacity = extras?["opacity"] is { } o ? (uint)Integer(o, "opacity", path, 0, 255)
+            : source != null && source.AlphaMode == "BLEND" && source.BaseColor.W < 1 ? (uint)Math.Clamp(MathF.Round(source.BaseColor.W * 255), 0, 255) : 0xFF;
+        uint extraFlags = extras?["flags"] is { } f ? Hex(f, "flags", path) & ~0x1FFu : 0;
         material.Flags = (ushort)(opacity & 0xFF | extraFlags);
         if (textureName != null)
         {
@@ -481,14 +544,14 @@ public static partial class WorldGltf
         }
         else
         {
-            material.Color = extras?["color"] is JsonArray color && color.Count == 3 ? new(color[0]!.GetValue<float>(), color[1]!.GetValue<float>(), color[2]!.GetValue<float>())
+            material.Color = extras?["color"] is JsonArray color && color.Count == 3 ? new(Real(color[0], "color", path), Real(color[1], "color", path), Real(color[2], "color", path))
                 : source != null ? new(MathF.Round(source.BaseColor.X * 255), MathF.Round(source.BaseColor.Y * 255), MathF.Round(source.BaseColor.Z * 255)) : new(200);
             material.PackedColor = 0;
         }
-        if (extras?["packedColor"] is { } packed) material.PackedColor = (ushort)ParseHex(packed);
-        if (extras?["fields"] is JsonArray fields && fields.Count == 3) { material.Field14 = fields[0]!.GetValue<float>(); material.Field18 = fields[1]!.GetValue<float>(); material.Field1C = fields[2]!.GetValue<float>(); }
-        material.Soil = (uint)(extras?["soil"]?.GetValue<int>() ?? 0);
-        return (Shared(context.World, material), priority, backface, zone);
+        if (extras?["packedColor"] is { } packed) material.PackedColor = (ushort)Hex(packed, "packedColor", path);
+        if (extras?["fields"] is JsonArray fields && fields.Count == 3) { material.Field14 = Real(fields[0], "fields", path); material.Field18 = Real(fields[1], "fields", path); material.Field1C = Real(fields[2], "fields", path); }
+        material.Soil = extras?["soil"] is { } soil ? unchecked((uint)Integer(soil, "soil", path, int.MinValue, uint.MaxValue)) : 0;
+        return (Shared(context.World, material), priority, backface, zone, normals);
     }
 
     /// <summary>The world's texture directory entry for a name, added on first use.</summary>
@@ -508,11 +571,41 @@ public static partial class WorldGltf
     }
 
     /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>
-    public static uint? RootFlags(GltfDocument doc) => doc.SceneExtras?[Key]?["rootFlags"] is { } flags ? ParseHex(flags) & CarriedFlags : null;
+    public static uint? RootFlags(GltfDocument doc) => (doc.SceneExtras?[Key] as JsonObject)?["rootFlags"] is { } flags ? Hex(flags, "rootFlags", "the scene") & CarriedFlags : null;
 
-    private static uint ParseHex(JsonNode node)
+    // Engine values in extras. Editors may rewrite their types (Blender stores a list mixing whole and fractional numbers
+    // as floats, so 1 comes back as 1.0), so whole numbers are accepted in either form; anything else is invalid data.
+
+    private static InvalidDataException Invalid(string what, string path, JsonNode? node) =>
+        new($"{path}: the engine value '{what}' is invalid ({node?.ToJsonString() ?? "null"}).");
+    private static long Integer(JsonNode? node, string what, string path, long minimum = long.MinValue, long maximum = long.MaxValue)
     {
-        string text = node.GetValue<string>();
-        return uint.Parse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+        if (node is JsonValue value)
+        {
+            long? whole = value.TryGetValue(out long a) ? a : value.TryGetValue(out int b) ? b : value.TryGetValue(out uint c) ? c : null;
+            if (whole == null && (value.TryGetValue(out double d) ? d : value.TryGetValue(out float f) ? f : double.NaN) is var number && number == Math.Floor(number) && Math.Abs(number) < 9e15)
+                whole = (long)number;
+            if (whole is { } w && w >= minimum && w <= maximum) return w;
+        }
+        throw Invalid(what, path, node);
+    }
+    private static float Real(JsonNode? node, string what, string path)
+    {
+        if (node is JsonValue value)
+        {
+            // Parsed text converts to float directly (rounding once); values built in memory may hold other types.
+            if (value.TryGetValue(out float single) && float.IsFinite(single)) return single;
+            if (value.TryGetValue(out double number) && float.IsFinite((float)number)) return (float)number;
+            if (value.TryGetValue(out long whole)) return whole;
+            if (value.TryGetValue(out int small)) return small;
+        }
+        throw Invalid(what, path, node);
+    }
+    private static string Text(JsonNode? node, string what, string path) => node is JsonValue value && value.TryGetValue(out string? text) ? text : throw Invalid(what, path, node);
+    private static bool Flag(JsonNode? node, string what, string path) => node is JsonValue value && value.TryGetValue(out bool flag) ? flag : throw Invalid(what, path, node);
+    private static uint Hex(JsonNode? node, string what, string path)
+    {
+        string text = Text(node, what, path);
+        return uint.TryParse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint result) ? result : throw Invalid(what, path, node);
     }
 }

@@ -42,6 +42,7 @@ internal static class WorldSources
         List<(int Mission, LoadedModel Load, string Hash)> traced = [];
         Dictionary<(string Folder, string Stem, string Hash), Unit> loadUnits = [];
         HashSet<WorldNode> roots = new(ReferenceEqualityComparer.Instance);
+        HashSet<(WorldNode, int)> visited = [];
 
         foreach (var mission in missions)
         {
@@ -58,6 +59,8 @@ internal static class WorldSources
         }
         void Visit(WorldNode node, int mission, IReadOnlyList<string> textureDirectories)
         {
+            // A node under several parents is visited once per mission; the hierarchy is bounded by the reader.
+            if (!visited.Add((node, mission))) return;
             foreach (var child in node.Children) Visit(child, mission, textureDirectories);
             if (!IsReference(node) || roots.Contains(node) || referenceOf.ContainsKey(node)) return;
             string hash = Hash(node.Children, node.Zone & 0xFF);

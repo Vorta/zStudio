@@ -136,6 +136,29 @@ public sealed class GameZWorldTests
         Assert.Throws<InvalidDataException>(() => GameZWriter.Write(world, Token));
     }
 
+    [Fact]
+    public void WorldsWhoseLinksLoopOrRunTooDeepAreRefusedOnReading()
+    {
+        // A file's parent and child lists can describe any graph. Reconstruction walks the hierarchy recursively, so a
+        // cycle (here a group that is its part's child) or an extreme depth is refused when the world is read.
+        var world = SmallWorld();
+        WorldNode group = world.Nodes.Single(n => n.Name == "group"), part = world.Nodes.Single(n => n.Name == "part");
+        part.Children.Add(group); group.Parents.Add(part);
+        byte[] cyclic = GameZWriter.Write(world, Token);
+        var error = Assert.Throws<InvalidDataException>(() => GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", cyclic, token: Token), Token));
+        Assert.Contains("own ancestor", error.Message);
+
+        world = SmallWorld(); var parent = world.Nodes.Single(n => n.Name == "part");
+        for (int i = 0; i < WorldUpdate.MaximumDepth + 10; i++)
+        {
+            WorldNode child = new($"link{i}", WorldNodeClass.Object3D) { Flags = 0x0308001C }; child.SetPayloadInt(0, 0x28);
+            world.Nodes.Add(child); parent.Children.Add(child); child.Parents.Add(parent); parent = child;
+        }
+        byte[] deep = GameZWriter.Write(world, Token);
+        error = Assert.Throws<InvalidDataException>(() => GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", deep, token: Token), Token));
+        Assert.Contains("deeper", error.Message);
+    }
+
     // Runtime pointers the engine replaces on load; retail files hold stale heap addresses there.
     private static readonly int[] NodePointers = [56, 57, 58, 59, 88, 89, 90, 91, 96, 97, 98, 99];
 

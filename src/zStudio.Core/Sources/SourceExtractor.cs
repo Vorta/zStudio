@@ -280,7 +280,11 @@ public static class SourceExtractor
         {
             List<WorldSources.MissionWorld> missions = [];
             foreach (var (relative, doc) in worlds.OrderBy(w => TextureSources.MissionNumber(w.Relative)))
-                missions.Add(new(TextureSources.MissionNumber(relative), Worlds.GameZWorldReader.FromDocument(doc, token)));
+            {
+                // A world whose nodes the builder cannot hold (a cycle, an unsupported class) is left out, like other files.
+                try { missions.Add(new(TextureSources.MissionNumber(relative), Worlds.GameZWorldReader.FromDocument(doc, token))); }
+                catch (InvalidDataException ex) { Notes.Add($"{relative}: its models were not reconstructed because {ex.Message}"); }
+            }
             foreach (var mission in missions) WorldNodes[mission.Mission] = mission.World.Nodes.Select(n => n.Name).ToArray();
             var outputs = await Task.Run(() => WorldSources.Reconstruct(missions, name => Scripts.GetValueOrDefault(name),
                 (mission, name) => TexturePaths.GetValueOrDefault((mission, name)), TextureFiles, name => TextureAddressing.GetValueOrDefault(name), Notes, token), token);
