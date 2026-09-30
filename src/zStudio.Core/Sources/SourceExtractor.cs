@@ -182,7 +182,7 @@ public static class SourceExtractor
                 if (ZrdDecoder.TryRead(payload, token) is { Kind: ZrdKind.Array } tree)
                 {
                     Resources.Add((output, m.Name, tree));
-                    // The text form is bounded while it is built: a source larger than text sources may be stays compiled.
+                    // The text form is bounded while it is built: a resource whose text would exceed the text-source limit stays compiled.
                     byte[]? text = null;
                     try { text = ZrdText.Encode(tree, token, SourceProject.MaximumSourceTextBytes); } catch (InvalidDataException) { }
                     if (text != null && ZrdWriter.Write(ZrdText.Parse(text, token), token).AsSpan().SequenceEqual(payload)) source = text;
