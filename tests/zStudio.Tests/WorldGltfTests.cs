@@ -164,7 +164,7 @@ public sealed class WorldGltfTests
              {"attributes":{"POSITION":0,"NORMAL":1},"material":2}],
            "extras":{"recoil":{"scroll":[0.5, 1.25, 3.0]} } }],
          "materials":[{"name":"flat","extras":{"recoil":{"color":[10.0, 20.0, 30.0],"priority":2.0} } },
-                      {"name":"smooth","extras":{"recoil":{"color":[10, 20, 31],"normals":true} } },
+                      {"name":"smooth","extras":{"recoil":{"color":[10, 20, 31],"normals":true,"backface":1} } },
                       {"name":"new","pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]} }],
          "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"}],
          "bufferViews":[{"buffer":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36}],
@@ -180,6 +180,8 @@ public sealed class WorldGltfTests
         Assert.Equal(2, model.Polygons[0].Priority);
         // Flat surfaces stay without normals; surfaces that had them, and new materials without engine values, keep them.
         Assert.Equal([0, 3, 3], model.Polygons.Select(p => p.Normals.Length));
+        // A switch an editor stored as an integer still reads as one.
+        Assert.Equal([0u, 0x100u, 0u], model.Polygons.Select(p => p.Flags & 0x100));
     }
 
     [Fact]

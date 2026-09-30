@@ -634,7 +634,9 @@ public static partial class WorldGltf
         throw Invalid(what, path, node);
     }
     private static string Text(JsonNode? node, string what, string path) => node is JsonValue value && value.TryGetValue(out string? text) ? text : throw Invalid(what, path, node);
-    private static bool Flag(JsonNode? node, string what, string path) => node is JsonValue value && value.TryGetValue(out bool flag) ? flag : throw Invalid(what, path, node);
+    /// <summary>A switch: true or false, or 1 or 0 (an editor's integer property).</summary>
+    private static bool Flag(JsonNode? node, string what, string path) =>
+        node is JsonValue value && value.TryGetValue(out bool flag) ? flag : Integer(node, what, path, 0, 1) == 1;
     private static uint Hex(JsonNode? node, string what, string path)
     {
         string text = Text(node, what, path);
