@@ -1,56 +1,61 @@
 # Source projects
 
-RECOIL's shipped ZBD files are build outputs. The studio originally built them with a gamegen tool from a source tree (`data\` beside a tool folder of `.gs`/`.gw` scripts), repackaging shared textures, models, animations and resources for every mission. zStudio reconstructs that source tree from shipped files, lets you work on the sources, and packs the game files back.
+RECOIL's shipped ZBD files are build outputs. The studio originally built them with a gamegen tool from a source tree (`data\` beside a tool folder of `.gs`/`.gw` scripts), repackaging shared textures, models, animations and resources for every mission. zStudio reconstructs that source tree from shipped files, lets you work on the sources, and builds the game files from them again.
 
-## Reconstruct and pack
+A source project is separate from editing ZBD files directly. Opening a ZBD file still edits that file. In a source project, the sources are what you edit; game files change only when you export them. Exported files must work in the game; they are not byte-identical to the shipped files.
+
+## Reconstruct, check and export
 
 - **Tools → Reconstruct source project…** asks for the shipped data folder (the folder containing `interp.zbd`, `zrdr.zbd` and `m1\`) and a new or empty destination outside it, then optionally opens the project as the workspace root. MCP: `zstudio_source_reconstruct`.
-- **Tools → Verify source project** rebuilds every game file in memory and compares it with the shipped file. MCP: `zstudio_source_pack` without `destination`.
-- **Tools → Pack ZBD files…** writes every game file into a new, empty or previously packed folder outside the project. All outputs are staged and reopened through the shared readers first; if any fails, nothing is written. MCP: `zstudio_source_pack` with `destination`.
-- `zstudio_source_status` summarizes the open project.
+- **Tools → Check source project** builds every game file in memory and reports failures and warnings without writing. MCP: `zstudio_source_export` without `destination`.
+- **Tools → Export all ZBD files…** builds every game file into a folder outside the project. MCP: `zstudio_source_export` with `destination`.
+- **Tools → Export ZBD file** lists the game files the project can build; choosing one exports only that file. MCP: `zstudio_source_export` with `outputs`, for example `["m1/zrdr.zbd"]`.
+- `zstudio_source_status` lists the game files the project can build and the sources of each.
 
-Reconstruction supports RECOIL data; MechWarrior 3 folders are refused. It verifies that every output packs back byte-identically before it is accepted; an output that would not is kept verbatim and reported as a note. On the 1999 retail data (58 files) every output reconstructs and packs back exactly. Packing reports each output as `identical`, `changed` (with the edited sources) or `failed` (with the error). Unsaved edits to project files must be saved or discarded before packing, because packing reads the files on disk.
+The export commands appear when the open folder is a source project, which is any folder with both `data` and `gamegen` subfolders. The project holds no zStudio files: what it can build is derived from its folders.
 
-Reconstruction requires RECOIL evidence (prepared scripts, a version-15 world or a version-28 animation program). A canceled or failed reconstruction removes everything it wrote, so the same folder can be used again.
+When the destination already has some of the selected game files, the GUI asks before replacing them; MCP needs `overwrite`. Other files in the destination are left alone, so a game installation can be the destination. All outputs are built, reopened through the shared readers and staged first; if any output fails, nothing is written. Publication moves replaced files aside and restores them if a later step fails. Unsaved edits to project files must be saved or discarded before exporting, because exports read the files on disk.
 
-Packing reads every project file once and checks that none changed before anything is written; an edit made while a pack runs fails the pack rather than mixing two states. Publication moves replaced outputs aside and restores them if any later step fails, so a pack folder always holds one complete pack. Opening another folder cancels a running pack.
+Exports read every source file once and check that none changed before anything is written; an edit made while an export runs fails the export rather than mixing two states. Opening another folder cancels a running export.
 
-Projects and pack folders can never be the protected `zbd_1998`/`zbd_1999` corpora, overlap their input, or pass through links, including links inside a previously packed folder. A pack folder is marked with `zstudio-pack.json` and the project's identity: only the same project can pack into it again, and re-packing replaces only outputs this project produces. Text sources larger than 16 MiB are refused before they are decoded.
+Reconstruction supports RECOIL data and requires RECOIL evidence (prepared scripts, a version-15 world or a version-28 animation program); MechWarrior 3 folders are refused. A canceled or failed reconstruction removes everything it wrote, so the same folder can be used again. Projects and export folders can never be the protected `zbd_1998`/`zbd_1999` corpora, overlap their input, or pass through links. Text sources larger than 16 MiB are refused before they are decoded.
 
 ## Layout
 
 ```
 <project>\
-  zstudio-project.json         manifest: origin fingerprint and one entry per shipped file
   gamegen\                     the original tool folder: *.gs and support\*.gw, recovered from interp.zbd
   data\                        the original source tree
     common\zrdr\{enemies,explosns,lighting,vtol,weapons}\*.zrd
     common\multi_bft\zrdr\     common\sounds\*.wav
     mN\zrdr\{aipath,envmodels,vtol,bft,choppers,…}\*.zrd
-  .zstudio\                    what sources cannot express (not original data)
-    layouts\<output>.json      record order, residue bytes and original timestamps
-    cache\                     stored variants that zStudio cannot regenerate yet
-    passthrough\<output>       shipped files whose family is not reconstructed yet
 ```
 
 Directory placement is recovered from evidence in the shipped files. Every ZAR member records the temporary file its compiler created in the source directory (for example `D:\battlesportdev\data\m1\zrdr\envmodels\fueE3B0.TMP`), so each resource returns to its original folder, including subfolders that member names do not carry. Sound banks carry no source paths; their WAVs go to `data\common\sounds`, the `SOUND_PATH` set by `sounds.zrd`. The prepared-script index names each script (`support\common.gw`, `m1.gs`) and its modification time, which the reconstructed file keeps.
 
-## What is reconstructed
+Exported archives record each member's project path (`data\m1\zrdr\envmodels\fuel.zrd`) where the original compiler recorded its temporary file, so reconstructing exported files restores the same tree.
 
-| Shipped files | Sources | Packing |
+## What is built
+
+| Game file | Sources | Build |
 | --- | --- | --- |
-| `zrdr.zbd`, `mN\zrdr.zbd` | text `.zrd` files | compiled from text |
-| `interp.zbd` | `gamegen\*.gs`, `gamegen\support\*.gw` | tokenized from text |
-| `soundsh/m/l.zbd` | `data\common\sounds\*.wav` from the high-quality bank | medium/low variants are stored and used while their source is unchanged |
-| `gamez.zbd`, `anim.zbd`, texture packs, `image.zbd` | not yet (kept verbatim) | copied |
+| `zrdr.zbd` | `.zrd` files in every `zrdr` folder under `data\common` | compiled, ordered by source path |
+| `mN\zrdr.zbd` | `.zrd` files under `data\mN\zrdr` | compiled, ordered by source path |
+| `interp.zbd` | `gamegen\*.gs`, `gamegen\support\*.gw` | tokenized; each script records its file's modification time |
+| `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` | `data\common\sounds\*.wav` | converted to the HIGH/MED/LOW formats of `sounds.zrd` |
+| `gamez.zbd`, `anim.zbd`, texture packs, `image.zbd` | not reconstructed yet | not built |
 
-GameZ worlds with OpenFlight `.flt` models, `anim.zbd` with its `.zrd`/`.zan` sources, and texture packs/`image.zbd` with `.tif` images are the next reconstruction steps. The 1999 data shares 1.4× of its texture-pack records, 3.8× of its world content (after removing 42.8 MB of preallocated empty slots) and 2× of its animation entries across missions; those families carry most of the redundancy.
+Archive members are found by name, so two sources with the same file name in one archive are refused. A `.zrd` source may be text or compiled data.
+
+Each sound's source is its best-quality version across the three shipped banks. `sounds.zrd` declares a rate, sample size and channel count for each bank; the declaration is a ceiling. As in every retail bank, each of the three values is the lower of the source's and the declaration's, so a sound is never raised in quality. Conversion mixes channels, reduces sample size and resamples with a windowed-sinc low-pass filter; cue markers, which the engine turns into playback times, move with the samples. A WAV that `sounds.zrd` does not declare goes into every bank unchanged, with a warning. Only 8- and 16-bit PCM can be converted.
+
+On the 1999 retail data, reconstructing, exporting and reconstructing again gives the same tree. The exported archives contain the same members with identical compiled data, `interp.zbd` the same scripts and tokens, `soundsh.zbd` the shipped sounds unchanged, and the medium/low banks the shipped formats with the same frame counts (within two frames) and cues.
+
+Reconstruction lists shipped files whose family it does not reconstruct yet. They are not copied into the project. Textures (PNG made from the best-quality variant of each texture, scaled and converted per pack on export, including packs the engine supports but the game did not ship), GameZ worlds with glTF models, and an `anim.zbd` compiler from `.zrd`/`.zan` sources are the next steps. The 1999 data shares 1.4× of its texture-pack records, 3.8× of its world content (after removing 42.8 MB of preallocated empty slots) and 2× of its animation entries across missions; those families carry most of the redundancy.
 
 ## Editing sources
 
-Text `.zrd` files open in the shared ZRD viewer and editor (tree, Properties, `zrd_nodes`, `zrd_edit`) and save as text; comments and formatting you add are replaced by the canonical layout when zStudio saves the file. Importing a text `.zrd` into an archive compiles it. `.gs`/`.gw` scripts open read-only as token text; edit them in any text editor. An edited script is re-encoded and takes its file's modification time; an unedited one keeps its original padding and time.
-
-Stored variants are tied to their source's content: a medium/low sound bank entry derived from an edited WAV cannot be regenerated yet, so packing fails with a message naming the source. Record metadata that the engine ignores (temporary compile paths, DOS times, archive file times) is kept from the original build.
+Text `.zrd` files open in the shared ZRD viewer and editor (tree, Properties, `zrd_nodes`, `zrd_edit`) and save as text; comments and formatting you add are replaced by the canonical layout when zStudio saves the file. Importing a text `.zrd` into an archive compiles it. `.gs`/`.gw` scripts open read-only as token text; edit them in any text editor. WAV sources can be replaced with any 8- or 16-bit PCM file.
 
 ## Text formats
 
@@ -70,4 +75,4 @@ Scripts use the engine's own tokenizer (`CZInterp::TokenizeLine`, retail 0x4C13C
 
 ## Keep sources away from a retail install
 
-Do not place a reconstructed tree beside a retail game folder. The engine rejects `anim.zbd` when a stamped source exists with a different time, loose `support\*.gw`/`*.gs` files override `interp.zbd`, and loose `*_easy`/`*_hard` resources change difficulty selection. Pack into a separate folder and copy the packed files into a game installation.
+Do not place a source tree inside a game folder. The engine rejects `anim.zbd` when a stamped source exists with a different time, loose `support\*.gw`/`*.gs` files override `interp.zbd`, and loose `*_easy`/`*_hard` resources change difficulty selection. Export into the game folder (or a separate folder) instead.

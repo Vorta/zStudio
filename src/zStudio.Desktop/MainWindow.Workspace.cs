@@ -20,17 +20,18 @@ public partial class MainWindow
         NavigationTabs.SelectedIndex = layout.BrowserTab; InspectorTabs.SelectedIndex = layout.InspectorTab; ToolTabs.SelectedIndex = layout.ToolTab;
         InitializeResponsiveNavigator();
         InitializeChrome(); ApplyDensity();
-        RecentMenu.Loaded += (_,_) =>
-        {
-            // Fluent's submenu-header template omits the shared checkbox gutter
-            // used by its leaf items (File contains the backup checkbox).
-            RecentMenu.ApplyTemplate();
-            if (RecentMenu.Template.FindName("MenuItemContent",RecentMenu) is Grid grid && grid.ColumnDefinitions[0].SharedSizeGroup != "MenuItemCheckBoxIconColumnGroup")
+        foreach (var submenu in new[] { RecentMenu,ExportSourceFileMenu })
+            submenu.Loaded += (_,_) =>
             {
-                foreach (UIElement child in grid.Children) Grid.SetColumn(child,Grid.GetColumn(child) + 1);
-                grid.ColumnDefinitions.Insert(0,new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "MenuItemCheckBoxIconColumnGroup" });
-            }
-        };
+                // Fluent's submenu-header template omits the shared checkbox gutter
+                // used by its leaf items (File contains the backup checkbox).
+                submenu.ApplyTemplate();
+                if (submenu.Template.FindName("MenuItemContent",submenu) is Grid grid && grid.ColumnDefinitions[0].SharedSizeGroup != "MenuItemCheckBoxIconColumnGroup")
+                {
+                    foreach (UIElement child in grid.Children) Grid.SetColumn(child,Grid.GetColumn(child) + 1);
+                    grid.ColumnDefinitions.Insert(0,new ColumnDefinition { Width = GridLength.Auto, SharedSizeGroup = "MenuItemCheckBoxIconColumnGroup" });
+                }
+            };
         foreach (var splitter in new[] { FilesSplitter,NavigatorSplitter,InspectorSplitter,ToolsSplitter })
             splitter.KeyUp += (_,e) => { if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down) WorkspaceSplitterCompleted(splitter,new DragCompletedEventArgs(0,0,false)); };
         Loaded += (_, _) => ArrangeWorkspace();

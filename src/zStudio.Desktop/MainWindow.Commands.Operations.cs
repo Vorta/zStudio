@@ -60,7 +60,7 @@ public partial class MainWindow
     }
     private void RegisterOperationCommands(StudioCommands r)
     {
-        r.Add(new("zstudio_operation", "Read operation status/result. Poll at sensible intervals; cancel is available only for export, validation and source reconstruction/packing.", true,
+        r.Add(new("zstudio_operation", "Read operation status/result. Poll at sensible intervals; cancel is available only for export, validation and source reconstruction/export.", true,
             [P("id", "string", "Operation ID.", true), P("cancel", "boolean", "Request cancellation of an export, validation or source operation.")], async (a, token) => await Dispatcher.InvokeAsync(() =>
             {
                 if (!Guid.TryParse(Text(a, "id"), out var id) || !automationOperations.TryGetValue(id, out var job)) throw new StudioCommandException("unknown_operation", "Operation was not found or has expired.");

@@ -8,7 +8,7 @@ using Xunit;
 
 namespace Recoil.Zbd.Tests;
 
-/// <summary>Publication, ownership, snapshot and input-validation guarantees of source projects.</summary>
+/// <summary>Publication, snapshot, link and input-validation guarantees of source projects.</summary>
 public sealed class SourceProjectSafetyTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
@@ -17,51 +17,58 @@ public sealed class SourceProjectSafetyTests
         .ToDictionary(f => Path.GetRelativePath(root, f), File.ReadAllBytes, StringComparer.OrdinalIgnoreCase);
 
     [Fact]
-    public async Task AFailedPublicationRestoresThePreviousPackExactly()
+    public async Task AFailedPublicationRestoresThePreviousFilesExactly()
     {
         using var fixture = new SourceFixture();
         await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
-        string packed = Path.Combine(fixture.Root, "packed");
-        await SourcePacker.PackAsync(fixture.Project, packed, token: Token);
-        var before = Files(packed);
-        File.WriteAllText(Path.Combine(fixture.Project, "data", "m1", "zrdr", "ai.zrd"), "( GRAVITY ( -1.0 ) )");
+        string exported = Path.Combine(fixture.Root, "zbd");
+        await SourceBuilder.ExportAsync(fixture.Project, exported, token: Token);
+        var before = Files(exported);
+        File.WriteAllText(Path.Combine(fixture.Project, "data", "common", "zrdr", "extra.zrd"), "VALUE ( 1 )");
         // The last output cannot be replaced: earlier replacements (including the changed archive) must be undone.
-        using (new FileStream(Path.Combine(packed, "other.bin"), FileMode.Open, FileAccess.Read, FileShare.None))
-            await Assert.ThrowsAnyAsync<IOException>(() => SourcePacker.PackAsync(fixture.Project, packed, token: Token));
-        var after = Files(packed);
+        using (new FileStream(Path.Combine(exported, "m1", "zrdr.zbd"), FileMode.Open, FileAccess.Read, FileShare.None))
+            await Assert.ThrowsAnyAsync<IOException>(() => SourceBuilder.ExportAsync(fixture.Project, exported, overwrite: true, token: Token));
+        var after = Files(exported);
         Assert.Equal(before.Keys.Order(), after.Keys.Order());
         Assert.All(before, file => Assert.Equal(file.Value, after[file.Key]));
-        Assert.Empty(Directory.GetDirectories(packed, ".zstudio-*"));
+        Assert.Empty(Directory.GetDirectories(exported, ".zstudio-*"));
     }
 
     [Fact]
-    public async Task PackFoldersBelongToOneProject()
+    public async Task NestedLinksInAnExportFolderAreRefusedBeforeAnythingMoves()
     {
         using var fixture = new SourceFixture();
         await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
-        string other = Path.Combine(fixture.Root, "other-project"), packed = Path.Combine(fixture.Root, "packed");
-        await SourceExtractor.ExtractAsync(fixture.Corpus, other, token: Token);
-        await SourcePacker.PackAsync(fixture.Project, packed, token: Token);
-        var before = Files(packed);
-        var error = await Assert.ThrowsAsync<IOException>(() => SourcePacker.PackAsync(other, packed, token: Token));
-        Assert.Contains("different source project", error.Message);
-        var after = Files(packed); Assert.All(before, file => Assert.Equal(file.Value, after[file.Key]));
-    }
-
-    [Fact]
-    public async Task NestedLinksInAPackFolderAreRefusedBeforeAnythingMoves()
-    {
-        using var fixture = new SourceFixture();
-        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
-        string packed = Path.Combine(fixture.Root, "packed"), outside = Path.Combine(fixture.Root, "outside");
-        await SourcePacker.PackAsync(fixture.Project, packed, token: Token);
+        string exported = Path.Combine(fixture.Root, "zbd"), outside = Path.Combine(fixture.Root, "outside");
+        await SourceBuilder.ExportAsync(fixture.Project, exported, token: Token);
+        var before = Files(exported);
         Directory.CreateDirectory(outside); File.WriteAllBytes(Path.Combine(outside, "zrdr.zbd"), [42]);
-        Directory.Delete(Path.Combine(packed, "m1"), true);
-        if (!Junction(Path.Combine(packed, "m1"), outside)) return; // Junctions unavailable on this file system.
-        await Assert.ThrowsAsync<IOException>(() => SourcePacker.PackAsync(fixture.Project, packed, token: Token));
+        Directory.Delete(Path.Combine(exported, "m1"), true);
+        if (!Junction(Path.Combine(exported, "m1"), outside)) return; // Junctions unavailable on this file system.
+        await Assert.ThrowsAsync<IOException>(() => SourceBuilder.ExportAsync(fixture.Project, exported, overwrite: true, token: Token));
         Assert.Equal([42], File.ReadAllBytes(Path.Combine(outside, "zrdr.zbd")));
-        Directory.Delete(Path.Combine(packed, "m1"));
+        Assert.Equal(before["interp.zbd"], File.ReadAllBytes(Path.Combine(exported, "interp.zbd")));
+        Directory.Delete(Path.Combine(exported, "m1"));
     }
+
+    [Fact]
+    public async Task LinksInsideAProjectAreRefused()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        string outside = Path.Combine(fixture.Root, "outside");
+        Directory.CreateDirectory(outside); File.WriteAllText(Path.Combine(outside, "secret.zrd"), "VALUE ( 1 )");
+        if (!Junction(Path.Combine(fixture.Project, "data", "m1", "zrdr", "linked"), outside)) return;
+        Assert.Throws<IOException>(() => SourceBuilder.Plan(fixture.Project));
+        Directory.Delete(Path.Combine(fixture.Project, "data", "m1", "zrdr", "linked"));
+        // A linked mission folder is refused too, although enumeration starts inside it.
+        Directory.CreateDirectory(Path.Combine(outside, "zrdr"));
+        Assert.True(Junction(Path.Combine(fixture.Project, "data", "m2"), outside));
+        Assert.Throws<IOException>(() => SourceBuilder.Plan(fixture.Project));
+        Directory.Delete(Path.Combine(fixture.Project, "data", "m2"));
+        Assert.Equal(6, SourceBuilder.Plan(fixture.Project).Count);
+    }
+
     private static bool Junction(string link, string target)
     {
         using var process = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true });
@@ -69,22 +76,34 @@ public sealed class SourceProjectSafetyTests
     }
 
     [Fact]
-    public async Task SourcesThatChangeDuringAPackAreNeverPublished()
+    public async Task SourcesThatChangeDuringAnExportAreNeverPublished()
     {
         using var fixture = new SourceFixture();
         await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
-        string wave = Path.Combine(fixture.Project, "data", "common", "sounds", "b.wav"), packed = Path.Combine(fixture.Root, "packed");
-        // The high-quality bank reads b.wav first; touching it before the medium bank is built makes the pack incoherent.
+        string wave = Path.Combine(fixture.Project, "data", "common", "sounds", "b.wav"), exported = Path.Combine(fixture.Root, "zbd");
+        // The high-quality bank reads b.wav first; touching it before the medium bank is built makes the export incoherent.
         var progress = new OnReport(p => { if (p.Item == "soundsm.zbd") File.SetLastWriteTimeUtc(wave, File.GetLastWriteTimeUtc(wave).AddMinutes(1)); });
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourcePacker.PackAsync(fixture.Project, packed, progress, Token));
-        Assert.Contains("changed while packing", error.Message);
-        Assert.Empty(Directory.EnumerateFiles(packed, "*", SearchOption.AllDirectories));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(fixture.Project, exported, progress: progress, token: Token));
+        Assert.Contains("changed while exporting", error.Message);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(exported));
         // Direct snapshot checks: a second read or the final check detects the change.
-        SourcePacker.Snapshot snapshot = new(fixture.Project);
+        SourceBuilder.Snapshot snapshot = new(fixture.Project);
         snapshot.Read("data/common/sounds/b.wav", Token);
         File.SetLastWriteTimeUtc(wave, File.GetLastWriteTimeUtc(wave).AddMinutes(1));
         Assert.Throws<InvalidDataException>(() => snapshot.CheckUnchanged(Token));
         Assert.Throws<InvalidDataException>(() => snapshot.Read("data/common/sounds/b.wav", Token));
+    }
+
+    [Fact]
+    public async Task CanceledExportsWriteNothing()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        string exported = Path.Combine(fixture.Root, "zbd");
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var progress = new OnReport(p => { if (p.Completed == 2) cancel.Cancel(); });
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => SourceBuilder.ExportAsync(fixture.Project, exported, progress: progress, token: cancel.Token));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(exported));
     }
 
     [Theory]
@@ -99,7 +118,23 @@ public sealed class SourceProjectSafetyTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, progress, cancel.Token));
         Assert.Equal(existing, Directory.Exists(fixture.Project));
         if (existing) Assert.Empty(Directory.EnumerateFileSystemEntries(fixture.Project));
-        Assert.Equal(5, (await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token)).Outputs.Count);
+        Assert.Equal(6, (await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token)).Families.Values.Sum());
+    }
+
+    [Fact]
+    public async Task DestinationsStaySeparateFromTheirInputs()
+    {
+        using var fixture = new SourceFixture();
+        Directory.CreateDirectory(fixture.Project); File.WriteAllText(Path.Combine(fixture.Project, "note.txt"), "mine");
+        await Assert.ThrowsAsync<IOException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token));
+        Assert.Equal(["note.txt"], Directory.GetFileSystemEntries(fixture.Project).Select(Path.GetFileName));
+        await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, Path.Combine(fixture.Corpus, "project"), token: Token));
+        File.Delete(Path.Combine(fixture.Project, "note.txt"));
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        foreach (string destination in new[] { fixture.Project, Path.Combine(fixture.Project, "zbd"), fixture.Root, Path.Combine(fixture.Root, "zbd_1999", "export") })
+            await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(fixture.Project, destination, token: Token));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zbd")));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "zbd_1999")));
     }
 
     [Fact]
@@ -136,23 +171,15 @@ public sealed class SourceProjectSafetyTests
     }
 
     [Fact]
-    public async Task ManifestFieldsAreBoundedWhenAProjectLoads()
+    public void ResolvedPathsNeverLeaveTheirRoot()
     {
-        using var fixture = new SourceFixture();
-        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
-        string path = SourceProject.ManifestPath(fixture.Project), original = File.ReadAllText(path);
-        var manifest = await SourceProject.LoadAsync(fixture.Project, Token);
-        foreach (string damaged in new[]
-        {
-            original.Replace($"\"name\": \"{manifest.Origin.Name}\"", $"\"name\": \"{new string('n', 300)}\"", StringComparison.Ordinal),
-            original.Replace("\"family\": \"passthrough\"", "\"family\": \"mystery\"", StringComparison.Ordinal),
-            original.Replace($"\"sha256\": \"{manifest.Outputs[0].Sha256}\"", "\"sha256\": \"xyz\"", StringComparison.Ordinal),
-            original.Replace($"\"id\": \"{manifest.Id}\"", "\"id\": \"00000000-0000-0000-0000-000000000000\"", StringComparison.Ordinal),
-        })
-        {
-            Assert.NotEqual(original, damaged);
-            File.WriteAllText(path, damaged);
-            await Assert.ThrowsAsync<InvalidDataException>(() => SourceProject.LoadAsync(fixture.Project, Token));
-        }
+        string root = Path.Combine(Path.GetTempPath(), "zstudio-root");
+        foreach (string bad in new[] { "", "../x", "a/../../x", "a\\b", "/abs", "C:/abs", "a//b", "./a" })
+            Assert.Throws<InvalidDataException>(() => SourceProject.Resolve(root, bad));
+        Assert.Equal(Path.Combine(root, "data", "m1", "zrdr.zbd"), SourceProject.Resolve(root, "data/m1/zrdr.zbd"));
+        Assert.Null(SourceExtractor.SourceDirectory("D:\\data\\..\\evil.TMP"));
+        Assert.Null(SourceExtractor.SourceDirectory("somewhere\\else.TMP"));
+        Assert.Equal("data/m1/zrdr/envmodels", SourceExtractor.SourceDirectory("D:\\battlesportdev\\data\\M1\\zrdr\\envmodels\\frcE3B0.TMP"));
+        Assert.Equal("data/m1/zrdr/envmodels", SourceExtractor.SourceDirectory("data\\m1\\zrdr\\envmodels\\frcgate.zrd"));
     }
 }

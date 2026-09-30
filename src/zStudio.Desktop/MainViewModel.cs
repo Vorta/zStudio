@@ -169,14 +169,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             {
                 List<FileEntry> entries = [];
                 var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
-                // A source project's .zstudio folder is build metadata, not source; keep it out of Files and Search.
-                string? metadata = Recoil.Zbd.Core.Sources.SourceProject.IsProject(root) ? Recoil.Zbd.Core.Sources.SourceProject.MetadataFolder + Path.DirectorySeparatorChar : null;
                 foreach (string file in Directory.EnumerateFiles(root, "*", options))
-                {
-                    token.ThrowIfCancellationRequested(); string relative = Path.GetRelativePath(root, file);
-                    if (metadata != null && relative.StartsWith(metadata, StringComparison.OrdinalIgnoreCase)) continue;
-                    entries.Add(new(file, relative, FormatRegistry.Probe(file)));
-                }
+                { token.ThrowIfCancellationRequested(); entries.Add(new(file, Path.GetRelativePath(root, file), FormatRegistry.Probe(file))); }
                 return entries.OrderBy(f => f.RelativePath, DisplayPathComparer)
                     .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
             }, token).WaitAsync(token);

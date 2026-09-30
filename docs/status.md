@@ -1,15 +1,14 @@
 # Desktop implementation status
 
-## Source project reconstruction, part 1 (2026-09-30)
+## Source projects: metadata-free rework (2026-09-30)
 
-zStudio can reconstruct RECOIL's original source tree from shipped data and pack it back (`docs/source-project.md`). Research across the engine reconstruction, both corpora and the retail exe established the recoverable evidence: ZAR compile paths (84 source directories, including subfolders), the complete gamegen build scripts in `interp.zbd`, `anim.zbd` dependency stamps (448 source files with times) and `.flt`/`.tif` names in GameZ. This first part converts resource archives to text `.zrd` sources, `interp.zbd` to `gamegen\*.gs`/`*.gw` scripts and sound banks to WAVs; GameZ, `anim.zbd`, texture packs and `image.zbd` are carried verbatim until their sources are reconstructed.
+After testing part 1, the design changed: a source project is edited instead of the ZBD files, exported game files must work in the game rather than match shipped bytes, and the project keeps no zStudio metadata (`docs/source-project.md`). The manifest, `.zstudio` layouts, stored variants, passthrough copies and pack markers are gone; what a project builds is derived from its `data`/`gamegen` folders.
 
-- **Result:** all 58 files of the 1999 corpus reconstruct and pack back byte-identically (corpus test), including 1,262 source files in the original `data\` layout.
-- **Formats:** a lossless text syntax for compiled zReader values (bit-exact floats, Latin-1 strings, dangling keys) and engine-exact script tokenization, with parse errors naming the source line.
-- **Workspace:** text `.zrd` sources open and save as text in the shared ZRD editor; importing one into an archive compiles it; scripts open as token text.
-- **GUI/MCP:** Tools menu commands and `source_reconstruct`, `source_pack` and `source_status` (85 tools), with staged, verified, all-or-nothing packing and separate-folder rules.
-- **Not yet:** regenerating stored sound variants after a source edit, and reconstruction of worlds, animations and textures.
-- **Review of 55a97ca (10 findings, all fixed with regressions):** publication rolls back on any failure; nested links in pack folders are refused; pack folders belong to one project identity; a pack reads a frozen project state; opening another root cancels a pack and suppresses its result; canceled reconstructions clean up; non-RECOIL folders are refused; text sources are bounded to 16 MiB before decoding; archives keep their structural identity whatever their name; manifest fields are bounded when a project loads.
+- **Reconstruction:** resources as text `.zrd` in their recorded folders, `gamegen` scripts with index times, and the best-quality version of each sound. Families not reconstructed yet (GameZ, `anim.zbd`, texture packs, `image.zbd`) are listed, not copied.
+- **Export:** all outputs or selected ones (Tools → Export all ZBD files…, Export ZBD file, Check source project; MCP `source_export` with `outputs`/`overwrite`). Archives compile `.zrd` sources in source-path order, record project paths as member sources and refuse duplicate member names. Sound banks convert each WAV to the `sounds.zrd` HIGH/MED/LOW declaration taken as a per-component ceiling (verified against all 265 declared retail sounds in all three banks), with Lanczos resampling and cue rescaling. Frozen source snapshot, staged re-parse, explicit overwrite and rollback publication remain.
+- **Result on the 1999 corpus (corpus test; the 1998 corpus passes the same checks):** every `zrdr.zbd` has the same members with identical compiled bytes, `interp.zbd` the same scripts and tokens, `soundsh.zbd` byte-identical members, and the medium/low banks the shipped formats with cues and frame counts within two frames; reconstruct → export → reconstruct yields an identical tree.
+- **Tests:** 669 pass (Release), including 21 source-project unit/safety cases and the desktop MCP/GUI check; the corpus test (`ZSTUDIO_CORPUS`) passes for both zbd_1999 and zbd_1998.
+- **Next:** PNG textures from the best variant with per-pack scaling and extra engine-supported packs, GameZ to glTF and back, the `anim.zbd` compiler, and editor previews built from sources.
 
 ## PR #14 independent review and fix cycle (2026-09-29)
 

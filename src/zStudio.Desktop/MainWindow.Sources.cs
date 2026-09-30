@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json.Nodes;
 using System.Windows;
+using System.Windows.Controls;
 using Microsoft.Win32;
 using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core.Sources;
@@ -9,76 +10,84 @@ namespace Recoil.Zbd.Desktop;
 
 public partial class MainWindow
 {
-    /// <summary>The open root when it is a reconstructed source project.</summary>
+    /// <summary>The open root when it is a source project (it has data and gamegen folders).</summary>
     private string? SourceProjectRoot => ViewModel.HasRoot && SourceProject.IsProject(ViewModel.RootPath) ? ViewModel.RootPath : null;
     private static string Bounded(string text, int maximum = 1024) => text.Length <= maximum ? text : text[..maximum] + "…";
-    /// <summary>Test hook: runs after a pack finishes and before its result is published to the workspace.</summary>
-    internal Func<Task>? SourcePackFinishing { get; set; }
+    private static string GameFiles(int count) => count == 1 ? "1 game file" : $"{count} game files";
+    /// <summary>Test hook: runs after an export or check finishes and before its result is published to the workspace.</summary>
+    internal Func<Task>? SourceExportFinishing { get; set; }
+    private long sourceMenuGeneration;
 
-    private async Task<SourceProjectManifest> ReconstructSourceProjectAsync(string source, string destination, bool open, CancellationToken token)
+    private async Task<SourceReconstructionReport> ReconstructSourceProjectAsync(string source, string destination, bool open, CancellationToken token)
     {
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
-        if (open && ViewModel.Documents.Any(d => d.IsDirty)) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard dirty documents before opening the reconstructed project.");
+        if (open) RequireRootPublication();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token); operation = cancellation; CancelOperationItem.IsEnabled = true;
-        SourceProjectManifest manifest;
+        SourceReconstructionReport report;
         try
         {
             var progress = new Progress<SourceProgress>(p => { if (operation == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"Reconstructing {p.Completed}/{p.Total}: {p.Item}"; });
-            manifest = await Task.Run(() => SourceExtractor.ExtractAsync(source, destination, progress, cancellation.Token), cancellation.Token);
-            foreach (string note in manifest.Notes.Take(256)) ViewModel.AddProblem(Bounded(note), "Warning", destination);
-            ViewModel.Status = $"Reconstructed {manifest.Outputs.Count} game files into {destination}";
+            report = await Task.Run(() => SourceExtractor.ExtractAsync(source, destination, progress, cancellation.Token), cancellation.Token);
+            foreach (string note in report.Notes.Take(256)) ViewModel.AddProblem(Bounded(note), "Warning", destination);
+            ViewModel.Status = $"Reconstructed {report.SourceFiles:N0} source files into {destination}";
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         finally { operation = null; CancelOperationItem.IsEnabled = false; }
-        if (open) { RequireRootPublication(); await ViewModel.OpenRootAsync(destination, token, RequireRootPublication); }
-        return manifest;
+        if (open) { RequireRootPublication(); await ViewModel.OpenRootAsync(report.Project, token, RequireRootPublication); }
+        return report;
     }
-    private static object ReconstructResult(SourceProjectManifest manifest, string destination, bool open) => new
+    private static object ReconstructResult(SourceReconstructionReport report, bool open) => new
     {
-        project = Path.GetFullPath(destination), opened = open, origin = manifest.Origin, outputs = manifest.Outputs.Count,
-        families = manifest.Outputs.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
-        notes = manifest.Notes.Take(32).Select(n => Bounded(n, 512)).ToArray(), noteCount = manifest.Notes.Count, notesTruncated = manifest.Notes.Count > 32
+        project = report.Project, opened = open, sourceFiles = report.SourceFiles, families = report.Families,
+        notReconstructed = report.NotReconstructed.Take(64).Select(n => Bounded(n, 512)).ToArray(), notReconstructedCount = report.NotReconstructed.Count, notReconstructedTruncated = report.NotReconstructed.Count > 64,
+        notes = report.Notes.Take(32).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count, notesTruncated = report.Notes.Count > 32
     };
 
-    /// <summary>Pack (or, without a destination, only verify) the open source project from its files on disk.</summary>
-    private async Task<SourcePackReport> PackSourceProjectAsync(string? destination, CancellationToken token)
+    /// <summary>Build game files of the open source project from its files on disk into <paramref name="destination"/>, or only check them without one.</summary>
+    private async Task<SourceExportReport> ExportSourceProjectAsync(string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, CancellationToken token)
     {
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
-        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a reconstructed source project first.");
+        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         RequireNoDrafts();
-        // Packing reads source files from disk, so pending edits to them must be saved or discarded first.
+        // Exports read source files from disk, so pending edits to them must be saved or discarded first.
         string prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
         if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && Path.GetFullPath(d.Path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) is { } dirty)
-            throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {Path.GetFileName(dirty.Path)} before packing.");
-        // Opening another root cancels the pack; its result never publishes into the new workspace.
+            throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {Path.GetFileName(dirty.Path)} before exporting.");
+        // Opening another root cancels the export; its result never publishes into the new workspace.
         long generation = ViewModel.WorkspaceGeneration;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken); operation = cancellation; CancelOperationItem.IsEnabled = true;
         try
         {
-            string verb = destination == null ? "Verifying" : "Packing";
+            string verb = destination == null ? "Checking" : "Exporting";
             var progress = new Progress<SourceProgress>(p => { if (operation == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"{verb} {p.Completed}/{p.Total}: {p.Item}"; });
-            var report = await Task.Run(() => destination == null ? SourcePacker.VerifyAsync(root, progress, cancellation.Token) : SourcePacker.PackAsync(root, destination, progress, cancellation.Token), cancellation.Token);
-            if (SourcePackFinishing is { } finishing) await finishing();
-            if (ViewModel.WorkspaceGeneration != generation) throw new StudioCommandException("context_changed", "The workspace changed while packing.");
-            foreach (var failed in report.Outputs.Where(o => o.Status == "failed")) ViewModel.AddProblem(Bounded($"{failed.Path}: {failed.Error}"), file: root);
-            ViewModel.Status = $"{(destination == null ? "Verified" : "Packed")} {report.Outputs.Count} game files: {report.Identical} identical, {report.Changed} changed, {report.Failed} failed";
+            var report = await Task.Run(() => destination == null ? SourceBuilder.CheckAsync(root, outputs, progress, cancellation.Token) : SourceBuilder.ExportAsync(root, destination, outputs, overwrite, progress, cancellation.Token), cancellation.Token);
+            if (SourceExportFinishing is { } finishing) await finishing();
+            if (ViewModel.WorkspaceGeneration != generation) throw new StudioCommandException("context_changed", "The workspace changed while exporting.");
+            foreach (var output in report.Outputs)
+            {
+                if (output.Error != null) ViewModel.AddProblem(Bounded($"{output.Path}: {output.Error}"), file: root);
+                foreach (string warning in output.Warnings.Take(64)) ViewModel.AddProblem(Bounded($"{output.Path}: {warning}"), "Warning", root);
+            }
+            ViewModel.Status = destination == null
+                ? $"Checked {GameFiles(report.Outputs.Count)}: {report.Built} build, {report.Failed} failed"
+                : $"Exported {GameFiles(report.Built)} to {destination}";
             return report;
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         finally { operation = null; CancelOperationItem.IsEnabled = false; }
     }
-    private static object PackResult(string root, SourcePackReport report)
+    private static object ExportResult(string root, SourceExportReport report)
     {
         const int shown = 256;
         return new
         {
-            project = root, destination = report.Destination, written = report.Destination != null, report.Identical, report.Changed, report.Failed,
+            project = root, destination = report.Destination, written = report.Destination != null, built = report.Built, failed = report.Failed,
             outputs = report.Outputs.Take(shown).Select(o => new
             {
-                o.Path, o.Family, o.Status, o.Sha256, o.OriginalSha256, changedSources = o.ChangedSources.Take(16).Select(s => Bounded(s, 512)).ToArray(),
-                changedSourceCount = o.ChangedSources.Count, error = o.Error == null ? null : Bounded(o.Error)
+                path = o.Path, family = o.Family, status = o.Status, bytes = o.Bytes, items = o.Items,
+                warnings = o.Warnings.Take(16).Select(w => Bounded(w, 512)).ToArray(), warningCount = o.Warnings.Count, error = o.Error == null ? null : Bounded(o.Error)
             }).ToArray(),
             outputCount = report.Outputs.Count, outputsTruncated = report.Outputs.Count > shown
         };
@@ -86,35 +95,49 @@ public partial class MainWindow
 
     private async Task<object> SourceStatusAsync(JsonObject a, CancellationToken token)
     {
-        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a reconstructed source project first.");
-        var manifest = await SourceProject.LoadAsync(root, token);
+        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
+        IReadOnlyList<SourceOutputPlan> plan;
+        try { plan = await Task.Run(() => SourceBuilder.Plan(root), token); }
+        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         return new
         {
-            project = root, id = manifest.Id, game = Bounded(manifest.Game, 64), manifest.Version, origin = manifest.Origin,
-            families = manifest.Outputs.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
-            notes = manifest.Notes.Take(32).Select(n => Bounded(n, 512)).ToArray(), noteCount = manifest.Notes.Count, notesTruncated = manifest.Notes.Count > 32,
-            outputs = Page(manifest.Outputs, a, o => o.Path, o => new { o.Path, o.Family, o.Bytes, o.Sha256 }).Data
+            project = root, families = plan.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
+            outputs = Page(plan, a, o => o.Path, o => new
+            {
+                path = o.Path, family = o.Family, inputCount = o.Inputs.Count,
+                inputs = o.Inputs.Take(16).Select(i => Bounded(i, 512)).ToArray(), inputsTruncated = o.Inputs.Count > 16
+            }).Data
         };
     }
+    private static IReadOnlyCollection<string>? OutputArguments(JsonObject a) => a["outputs"] switch
+    {
+        null => null,
+        JsonArray list when list.Count is > 0 and <= 256 => list.Select(o => o is JsonValue value && value.TryGetValue<string>(out var path) && path.Length is > 0 and <= 260 ? path
+            : throw new StudioCommandException("invalid_argument", "Outputs are game file paths such as m1/zrdr.zbd.")).ToArray(),
+        _ => throw new StudioCommandException("invalid_argument", "Outputs must list 1–256 game file paths.")
+    };
 
     private void RegisterSourceCommands(StudioCommands r)
     {
-        RegisterJob(r, "source_reconstruct", "Reconstruct a deduplicated source project (data/ and gamegen/ in the original build layout) from a shipped RECOIL data folder into a new or empty folder. Every output is verified to pack back byte-identically; unconverted families are kept verbatim. Optionally opens the project as the workspace root; dirty documents must be resolved first.",
+        RegisterJob(r, "source_reconstruct", "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Resources become text .zrd files in their recorded folders, prepared scripts become .gs/.gw text, and each sound keeps its best-quality WAV; families not reconstructed yet are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first.",
             [P("source", "string", "Shipped game data folder (for example the folder containing interp.zbd and m1\\).", true), P("destination", "string", "New or empty project folder outside the source folder.", true),
              P("open", "boolean", "Open the project as the workspace root afterwards; default true.")], true,
             async (a, token) =>
             {
-                bool open = a["open"] == null || Flag(a, "open"); string destination = Text(a, "destination");
-                return Result(ReconstructResult(await ReconstructSourceProjectAsync(Text(a, "source"), destination, open, token), destination, open));
+                bool open = a["open"] == null || Flag(a, "open");
+                return Result(ReconstructResult(await ReconstructSourceProjectAsync(Text(a, "source"), Text(a, "destination"), open, token), open));
             });
-        RegisterJob(r, "source_pack", "Build every game file of the open source project from its files on disk. Without destination, only verify against the shipped files. With destination (new, empty or previously packed folder outside the project), stage, re-parse and then write all outputs, or nothing if any fails. Reports identical/changed/failed per output with changed sources. Unsaved edits to project files must be resolved first.",
-            [P("destination", "string", "Optional output folder; omit to verify without writing.")], true,
+        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first.",
+            [P("destination", "string", "Optional output folder; omit to check without writing."),
+             new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
+             P("overwrite", "boolean", "Replace game files that already exist in destination; default false.")], true,
             async (a, token) =>
             {
-                var report = await PackSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), token);
-                return Result(PackResult(SourceProjectRoot ?? "", report));
+                var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token);
+                return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
-        RegisterJob(r, "source_status", "Describe the open source project: origin fingerprint, output families, reconstruction notes (32 previewed) and a paged output list filtered by path.", [.. PageParameters], false,
+        RegisterJob(r, "source_status", "Describe the open source project: the game files it can build, with family and source inputs (16 previewed), paged and filtered by path.", [.. PageParameters], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 
@@ -126,27 +149,66 @@ public partial class MainWindow
         if (output.ShowDialog(this) != true) return;
         bool open = !ViewModel.Documents.Any(d => d.IsDirty) &&
             MessageBox.Show(this, "Open the source project when reconstruction finishes?", "Reconstruct source project", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
-        var manifest = await ReconstructSourceProjectAsync(input.FolderName, output.FolderName, open, CancellationToken.None);
-        string notes = manifest.Notes.Count > 0 ? $"\n{manifest.Notes.Count} notes are listed in Problems." : "";
-        MessageBox.Show(this, $"Reconstructed {manifest.Outputs.Count} game files into {output.FolderName}.\nEvery output was verified to pack back byte-identically.{notes}",
-            "Source project ready", MessageBoxButton.OK, MessageBoxImage.Information);
+        var report = await ReconstructSourceProjectAsync(input.FolderName, output.FolderName, open, CancellationToken.None);
+        string skipped = report.NotReconstructed.Count > 0 ? $"\n{report.NotReconstructed.Count} game files are not reconstructed yet (textures, worlds, animations)." : "";
+        string notes = report.Notes.Count > 0 ? $"\n{report.Notes.Count} notes are listed in Problems." : "";
+        MessageBox.Show(this, $"Reconstructed {report.SourceFiles:N0} source files into {output.FolderName}.{skipped}{notes}", "Source project ready", MessageBoxButton.OK, MessageBoxImage.Information);
     });
-    private async void PackSourceClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
+    private async void ExportSourceClick(object sender, RoutedEventArgs e) => await RunUi(() => ExportSourceInteractiveAsync(null));
+    private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs)
     {
-        OpenFolderDialog output = new() { Title = "Choose a new, empty or previously packed folder for the game files" };
-        if (output.ShowDialog(this) != true) return;
-        ShowPackResult(await PackSourceProjectAsync(output.FolderName, CancellationToken.None));
-    });
-    private async void VerifySourceClick(object sender, RoutedEventArgs e) => await RunUi(async () => ShowPackResult(await PackSourceProjectAsync(null, CancellationToken.None)));
-    private void ShowPackResult(SourcePackReport report)
+        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
+        OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {string.Join(", ", outputs)}" };
+        if (folder.ShowDialog(this) != true) return;
+        // Existing game files are replaced only after an explicit confirmation.
+        var plan = await Task.Run(() => SourceBuilder.Plan(root));
+        var existing = plan.Where(p => outputs == null || outputs.Contains(p.Path, StringComparer.OrdinalIgnoreCase)).Select(p => p.Path)
+            .Where(p => File.Exists(Path.Combine(folder.FolderName, p))).ToArray();
+        bool overwrite = false;
+        if (existing.Length > 0)
+        {
+            string list = string.Join("\n", existing.Take(12)) + (existing.Length > 12 ? $"\n… and {existing.Length - 12} more" : "");
+            if (MessageBox.Show(this, $"{folder.FolderName} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            overwrite = true;
+        }
+        ShowExportResult(await ExportSourceProjectAsync(folder.FolderName, outputs, overwrite, CancellationToken.None));
+    }
+    private async void CheckSourceClick(object sender, RoutedEventArgs e) => await RunUi(async () => ShowExportResult(await ExportSourceProjectAsync(null, null, false, CancellationToken.None)));
+    private void ShowExportResult(SourceExportReport report)
     {
-        string detail = report.Failed > 0 ? "\nFailures are listed in Problems." : report.Changed > 0 ? "\nChanged outputs contain your source edits." : "\nEvery output matches the shipped files byte for byte.";
+        int warnings = report.Outputs.Sum(o => o.Warnings.Count);
+        string detail = report.Failed > 0 ? "\nFailures are listed in Problems." : warnings > 0 ? $"\n{warnings} warnings are listed in Problems." : "";
         MessageBox.Show(this, ViewModel.Status + detail, "Source project", MessageBoxButton.OK, report.Failed > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
     }
-    /// <summary>Presentation only: packing commands appear when the open root is a source project.</summary>
+
+    /// <summary>Presentation only: export commands appear when the open root is a source project.</summary>
     private void ToolsMenuOpened(object sender, RoutedEventArgs e)
     {
-        var visibility = SourceProjectRoot != null ? Visibility.Visible : Visibility.Collapsed;
-        PackSourceMenu.Visibility = VerifySourceMenu.Visibility = visibility;
+        if (e.OriginalSource != sender) return;
+        string? root = SourceProjectRoot;
+        ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
+        if (root != null) _ = FillExportSourceFileMenuAsync(root);
+    }
+    /// <summary>Lists the project's game files off the UI thread; a newer menu opening or root supersedes the listing.</summary>
+    private async Task FillExportSourceFileMenuAsync(string root)
+    {
+        long generation = ++sourceMenuGeneration;
+        ExportSourceFileMenu.Items.Clear();
+        ExportSourceFileMenu.Items.Add(new MenuItem { Header = "Reading source project…", IsEnabled = false });
+        IReadOnlyList<SourceOutputPlan>? plan = null; string? error = null;
+        try { plan = await Task.Run(() => SourceBuilder.Plan(root)); }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { error = ex.Message; }
+        if (generation != sourceMenuGeneration || SourceProjectRoot != root) return;
+        ExportSourceFileMenu.Items.Clear();
+        if (plan == null || plan.Count == 0) { ExportSourceFileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = error ?? "Nothing to build yet" }, IsEnabled = false }); return; }
+        foreach (var output in plan)
+        {
+            // Paths are literal text, not menu access-key labels.
+            MenuItem item = new() { Header = new TextBlock { Text = output.Path }, ToolTip = $"{output.Inputs.Count:N0} source files ({output.Family})" };
+            System.Windows.Automation.AutomationProperties.SetName(item, output.Path);
+            string path = output.Path;
+            item.Click += async (_, _) => await RunUi(() => ExportSourceInteractiveAsync([path]));
+            ExportSourceFileMenu.Items.Add(item);
+        }
     }
 }

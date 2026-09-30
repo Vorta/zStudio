@@ -1,5 +1,3 @@
-using System.Buffers.Binary;
-using System.Text;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Sources;
@@ -10,190 +8,228 @@ namespace Recoil.Zbd.Tests;
 public sealed class SourceProjectTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
-    private static ZrdNode A(params ZrdNode[] children) => new(Guid.NewGuid(), ZrdKind.Array, 0, "", children);
-    private static ZrdNode S(string text) => new(Guid.NewGuid(), ZrdKind.String, 0, text, []);
-    private static ZrdNode I(int value) => new(Guid.NewGuid(), ZrdKind.Int, unchecked((uint)value), "", []);
-    private static ZrdNode F(uint bits) => new(Guid.NewGuid(), ZrdKind.Float, bits, "", []);
-    private static ZrdNode F(float value) => F(BitConverter.SingleToUInt32Bits(value));
+    private static readonly string[] AllOutputs = ["zrdr.zbd", "interp.zbd", "soundsh.zbd", "soundsm.zbd", "soundsl.zbd", "m1/zrdr.zbd"];
+    private static ZbdDocument Open(string path) => FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token);
+    private static byte[] Member(ZbdDocument doc, string name) { var asset = doc.Assets.Single(a => a.Name == name); return doc.Slice(asset.Offset, asset.Length).ToArray(); }
+    private static WaveFormat Format(byte[] wave) => WaveConverter.Format(wave);
 
     [Fact]
-    public void ZrdTextRoundTripsEveryCompiledValueExactly()
-    {
-        string allBytes = new(Enumerable.Range(0, 256).Select(i => (char)i).ToArray());
-        var root = A(A(S("ANIMATION_DEFINITIONS"), A(S("GRAVITY"), A(F(-9.8f)), S("DANGLING_KEY"))),
-            A(I(int.MinValue), I(int.MaxValue), I(0), I(-1)),
-            A(F(-0f), F(1u), F(0x7FC00001u), F(float.NegativeInfinity), F(3.4028235e38f), F(0.1f), F(1e-45f), F(123f)),
-            A(S(""), S("key"), S("with space"), S(allBytes), S("\"quoted\" \\ back"), S("#hash"), S("f32:00000000"), S("123"), S("-5"), S("1e5"), S(".5"), S("_x"), S("a(b)c")),
-            A(), A(A(A(A()))), S("TRAILING"));
-        byte[] compiled = ZrdWriter.Write(root, Token);
-        string text = ZrdText.Write(root, Token);
-        Assert.All(text, c => Assert.InRange(c, (char)9, (char)126));
-        var parsed = ZrdText.Parse(Encoding.Latin1.GetBytes(text), Token);
-        Assert.Equal(compiled, ZrdWriter.Write(parsed, Token));
-        // Keys sit beside their values, and whitespace or comments never change the data.
-        Assert.Contains("GRAVITY ( -9.8 )", text);
-        string commented = "# header\n" + text.Replace("\n", "   # note\n", StringComparison.Ordinal).Replace("  ", "\t", StringComparison.Ordinal);
-        Assert.Equal(compiled, ZrdWriter.Write(ZrdText.Parse(commented, Token), Token));
-        // Deep nesting within the reader's limit.
-        var deep = A(); for (int i = 0; i < 100; i++) deep = A(deep);
-        Assert.Equal(ZrdWriter.Write(A(deep), Token), ZrdWriter.Write(ZrdText.Parse(ZrdText.Write(A(deep), Token), Token), Token));
-    }
-
-    [Theory]
-    [InlineData("( a b", "Line 1: Missing ')'.")]
-    [InlineData("a\n)", "Line 2: Unexpected ')'.")]
-    [InlineData("\"open", "Line 1: Unterminated string.")]
-    [InlineData("\"bad \\q\"", "Line 1: Unknown escape '\\q'.")]
-    [InlineData("1.2.3", "Line 1: Invalid float '1.2.3'.")]
-    [InlineData("99999999999", "Line 1: Invalid integer '99999999999'.")]
-    [InlineData("a:b", "Line 1: 'a:b' must be quoted.")]
-    [InlineData("f32:123", "Line 1: Raw float bits need exactly eight hex digits after f32:.")]
-    [InlineData("\n\n( 1e99 )", "Line 3: Invalid float '1e99'.")]
-    public void ZrdTextErrorsNameTheLine(string text, string message)
-        => Assert.Equal(message, Assert.Throws<InvalidDataException>(() => ZrdText.Parse(text, Token)).Message);
-
-    [Theory]
-    [InlineData("SetModelDirectory ..\\data\\m1\\models", new[] { "SetModelDirectory", "..\\data\\m1\\models" })]
-    [InlineData("  LoadGameGen   erfpgammo.flt,pu000   # a comment", new[] { "LoadGameGen", "erfpgammo.flt", "pu000" })]
-    [InlineData("a,,b", new[] { "a", "", "b" })]
-    [InlineData("a\tb, c", new[] { "a", "b", "c" })]
-    [InlineData("a,", new[] { "a" })]
-    [InlineData("a,,", new[] { "a", "" })]
-    [InlineData("# only a comment", new string[0])]
-    [InlineData("set X %MISSION_DIR%\\zrdr\r", new[] { "set", "X", "%MISSION_DIR%\\zrdr\r" })]
-    public void ScriptTextTokenizesLikeTheEngine(string line, string[] tokens) => Assert.Equal(tokens, GameGenScriptText.TokenizeLine(line));
-
-    [Fact]
-    public void ScriptTextEncodesEmptyTokensAndRejectsUnrepresentableOnes()
-    {
-        foreach (string[] tokens in new[] { new[] { "a", "", "b" }, new[] { "a", "" }, new[] { "", "a" }, new[] { "" }, new[] { "a", "", "" }, new[] { "x", "y" } })
-            Assert.Equal(tokens, GameGenScriptText.TokenizeLine(GameGenScriptText.WriteLine(tokens)!));
-        foreach (string[] tokens in new[] { new[] { "a b" }, new[] { "a#b" }, new[] { "a,b" }, new[] { "\u0100" } })
-            Assert.Null(GameGenScriptText.WriteLine(tokens));
-        Assert.Equal(2, GameGenScriptText.Tokenize("a b\r\n\r\n# c\r\nd\r\n").Count);
-    }
-
-    [Fact]
-    public async Task SyntheticDataReconstructsAndPacksExactlyAndReportsEdits()
+    public async Task ReconstructionWritesTheOriginalLayoutWithoutMetadata()
     {
         using var fixture = new SourceFixture();
-        var manifest = await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
-        Assert.Equal(new Dictionary<string, string> { ["interp.zbd"] = "scripts", ["m1/zrdr.zbd"] = "archive", ["other.bin"] = "passthrough", ["soundsh.zbd"] = "archive", ["soundsm.zbd"] = "archive" },
-            manifest.Outputs.ToDictionary(o => o.Path, o => o.Family));
-        Assert.Empty(manifest.Notes);
-        string Source(string relative) => Path.Combine(fixture.Project, relative.Replace('/', Path.DirectorySeparatorChar));
-        Assert.Equal("(\n  GRAVITY ( -9.8 )\n)\n", File.ReadAllText(Source("data/m1/zrdr/ai.zrd")));
-        Assert.True(File.Exists(Source("data/m1/zrdr/envmodels/frcgate.zrd")));
-        Assert.Equal(fixture.Blob, File.ReadAllBytes(Source("data/_unplaced/zrdr/blob.bin")));
-        Assert.Equal(fixture.WaveB, File.ReadAllBytes(Source("data/common/sounds/b.wav")));
-        Assert.Equal("set ZBD_DIR zbd\nmkdir %ZBD_DIR%,,\n", File.ReadAllText(Source("gamegen/support/common.gw")));
-        Assert.Equal(DateTime.UnixEpoch.AddSeconds(912_000_000), File.GetLastWriteTimeUtc(Source("gamegen/support/common.gw")));
-
-        var report = await SourcePacker.VerifyAsync(fixture.Project, token: Token);
-        Assert.Equal(5, report.Identical);
-        string packed = Path.Combine(fixture.Root, "packed");
-        report = await SourcePacker.PackAsync(fixture.Project, packed, token: Token);
-        foreach (var output in manifest.Outputs)
-            Assert.Equal(File.ReadAllBytes(Path.Combine(fixture.Corpus, output.Path)), File.ReadAllBytes(Path.Combine(packed, output.Path)));
-        Assert.True(File.Exists(Path.Combine(packed, SourcePacker.MarkerFileName)));
-
-        // Edited sources are compiled into their outputs and reported as changes.
-        File.WriteAllText(Source("data/m1/zrdr/ai.zrd"), "# edited\n( GRAVITY ( -4.5 ) )\n");
-        File.AppendAllText(Source("gamegen/m1.gs"), "Quit\n");
-        report = await SourcePacker.PackAsync(fixture.Project, packed, token: Token);
-        var archive = report.Outputs.Single(o => o.Path == "m1/zrdr.zbd");
-        Assert.Equal("changed", archive.Status); Assert.Equal(["data/m1/zrdr/ai.zrd"], archive.ChangedSources);
-        var reopened = FormatRegistry.Default.OpenBytes("zrdr.zbd", File.ReadAllBytes(Path.Combine(packed, "m1/zrdr.zbd")), token: Token);
-        Assert.Equal(BitConverter.SingleToUInt32Bits(-4.5f), ((ZrdNode)reopened.Assets.Single(a => a.Name == "ai.zrd").Content!).Children[0].Children[1].Children[0].Bits);
-        var scripts = FormatRegistry.Default.OpenBytes("interp.zbd", File.ReadAllBytes(Path.Combine(packed, "interp.zbd")), token: Token);
-        Assert.Equal(["Quit"], scripts.Scripts!.Entries.Single(e => e.Name == "m1.gs").Instructions[^1].Tokens);
-        Assert.Equal("changed", report.Outputs.Single(o => o.Path == "interp.zbd").Status);
-        Assert.Equal("identical", report.Outputs.Single(o => o.Path == "soundsm.zbd").Status);
-
-        // A derived variant cannot be regenerated yet: nothing is written, and the error names the source.
-        File.WriteAllBytes(Source("data/common/sounds/b.wav"), [.. fixture.WaveB, 0]);
-        byte[] before = File.ReadAllBytes(Path.Combine(packed, "m1/zrdr.zbd"));
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourcePacker.PackAsync(fixture.Project, packed, token: Token));
-        Assert.Contains("soundsm.zbd", error.Message); Assert.Contains("data/common/sounds/b.wav", error.Message);
-        Assert.Equal(before, File.ReadAllBytes(Path.Combine(packed, "m1/zrdr.zbd")));
-        Assert.Empty(Directory.GetDirectories(packed, ".zstudio-staging-*"));
-
-        // Syntax errors fail the owning output with the source line.
-        File.WriteAllText(Source("data/m1/zrdr/ai.zrd"), "( GRAVITY");
-        var failed = (await SourcePacker.VerifyAsync(fixture.Project, token: Token)).Outputs.Single(o => o.Path == "m1/zrdr.zbd");
-        Assert.Equal("failed", failed.Status); Assert.Contains("data/m1/zrdr/ai.zrd: Line 1: Missing ')'.", failed.Error);
+        var report = await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        Assert.Equal(2, report.Families["resources"]); Assert.Equal(1, report.Families["scripts"]); Assert.Equal(3, report.Families["sounds"]);
+        Assert.Equal(["other.bin"], report.NotReconstructed);
+        Assert.Contains(report.Notes, n => n.Contains("blob.bin") && n.Contains("leave it out"));
+        Assert.True(SourceProject.IsProject(fixture.Project));
+        Assert.Equal(["data", "gamegen"], Directory.GetFileSystemEntries(fixture.Project).Select(Path.GetFileName).Order().ToArray());
+        string P(string relative) => SourceProject.Resolve(fixture.Project, relative);
+        // Resources return to the folders recorded by the compiler, as editable text.
+        Assert.Equal("GRAVITY ( -9.8 )", File.ReadAllText(P("data/m1/zrdr/ai.zrd")).Trim());
+        Assert.True(File.Exists(P("data/m1/zrdr/envmodels/frcgate.zrd")));
+        Assert.True(File.Exists(P("data/common/zrdr/sounds.zrd")));
+        Assert.Equal(fixture.Blob, File.ReadAllBytes(P("data/m1/zrdr/blob.bin")));
+        // Sounds keep only their best-quality version.
+        Assert.Equal(fixture.WaveA, File.ReadAllBytes(P("data/common/sounds/a.wav")));
+        Assert.Equal(fixture.WaveB, File.ReadAllBytes(P("data/common/sounds/b.wav")));
+        Assert.Equal(["a.wav", "b.wav"], Directory.GetFiles(P("data/common/sounds")).Select(Path.GetFileName).Order().ToArray());
+        // Scripts are text with the modification time the prepared index recorded.
+        Assert.Equal("set ZBD_DIR zbd\nmkdir %ZBD_DIR%,,\n", File.ReadAllText(P("gamegen/support/common.gw")));
+        Assert.Equal(DateTime.UnixEpoch.AddSeconds(912_000_000), File.GetLastWriteTimeUtc(P("gamegen/support/common.gw")));
+        Assert.Equal(report.SourceFiles, Directory.GetFiles(fixture.Project, "*", SearchOption.AllDirectories).Length);
     }
 
     [Fact]
-    public async Task SourceTextOpensEditsAndSavesAsTextAndCompilesOnArchiveImport()
+    public async Task OnlyTheThreeSoundBanksBecomeSounds()
     {
         using var fixture = new SourceFixture();
-        string zrd = Path.Combine(fixture.Root, "gate.zrd"), script = Path.Combine(fixture.Root, "loadm1.gw"), broken = Path.Combine(fixture.Root, "broken.zrd");
-        File.WriteAllText(zrd, "# gate\n( MODEL ( frcgate ) SPEED ( 2.5 ) )\n"); File.WriteAllText(script, "# load\nset dbName m1.flt\nLoadGameGen %dbName%\n"); File.WriteAllText(broken, "(\n  MODEL (");
-        var doc = await FormatRegistry.Default.OpenAsync(zrd, Token);
-        Assert.Equal("zrd-text", doc.SourceSyntax); Assert.Empty(doc.Diagnostics);
-        var tree = Assert.IsType<ZrdNode>(Assert.Single(doc.Assets).Content);
-        Assert.Equal("frcgate", tree.Children[0].Children[1].Children[0].Text);
-        var scripts = await FormatRegistry.Default.OpenAsync(script, Token);
-        Assert.Equal("gamegen-script", scripts.SourceSyntax);
-        var content = Assert.IsType<ScriptContent>(Assert.Single(scripts.Assets).Content);
-        Assert.Equal([["set", "dbName", "m1.flt"], ["LoadGameGen", "%dbName%"]], content.Instructions);
-        Assert.StartsWith("# load", content.Text);
-        var invalid = await FormatRegistry.Default.OpenAsync(broken, Token);
-        Assert.Contains(invalid.Diagnostics, d => d.Severity == "Error" && d.Message.Contains("Line 2: Missing ')'.", StringComparison.Ordinal));
-
-        // The shared ZRD editor edits source text and saves text, never compiled bytes.
-        var edits = new ResourceEditSession(doc); var member = Assert.Single(edits.Current.Members);
-        var speed = edits.Tree(member, Token).Children[0].Children[3].Children[0];
-        edits.Accept(await edits.PrepareZrdAsync(member.Id, speed.Id, "set", value: "7.25", token: Token));
-        string saved = Path.Combine(fixture.Root, "gate-edited.zrd");
-        await edits.SaveAsync(saved, Token);
-        string text = File.ReadAllText(saved);
-        Assert.Contains("SPEED ( 7.25 )", text); Assert.True(ZrdText.LooksLikeText(File.ReadAllBytes(saved)));
-        Assert.Equal(BitConverter.SingleToUInt32Bits(7.25f), ((ZrdNode)(await FormatRegistry.Default.OpenAsync(saved, Token)).Assets[0].Content!).Children[0].Children[3].Children[0].Bits);
-
-        // Importing a source .zrd into an archive compiles it.
-        var archive = new ResourceEditSession(await FormatRegistry.Default.OpenAsync(Path.Combine(fixture.Corpus, "m1", "zrdr.zbd"), Token));
-        archive.Accept(await archive.PrepareArchiveAsync("add", Guid.Empty, "gate.zrd", zrd, token: Token));
-        var added = archive.Current.Members[^1];
-        Assert.Equal(ZrdWriter.Write(tree, Token), added.Data.ToArray());
+        File.WriteAllBytes(Path.Combine(fixture.Corpus, "m1", "voices.zbd"), SourceFixture.Archive(("v.wav", fixture.WaveB, new byte[64])));
+        var report = await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        Assert.Contains("m1/voices.zbd", report.NotReconstructed);
+        Assert.Contains(report.Notes, n => n.StartsWith("m1/voices.zbd", StringComparison.Ordinal));
+        Assert.False(File.Exists(Path.Combine(fixture.Project, "data", "common", "sounds", "v.wav")));
+        Assert.Equal(3, report.Families["sounds"]);
     }
 
     [Fact]
-    public async Task ProjectsAndPacksStaySeparateFromTheirInputs()
+    public async Task ThePlanFollowsTheSourceTree()
     {
         using var fixture = new SourceFixture();
-        await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, Path.Combine(fixture.Corpus, "project"), token: Token));
-        await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, Path.Combine(fixture.Root, "zbd_1999", "project"), token: Token));
-        string mw3 = Path.Combine(fixture.Root, "mw3"); Directory.CreateDirectory(mw3);
-        byte[] world = new byte[36]; BinaryPrimitives.WriteUInt32LittleEndian(world, 0x02971222); BinaryPrimitives.WriteUInt32LittleEndian(world.AsSpan(4), 27);
-        File.WriteAllBytes(Path.Combine(mw3, "gamez.zbd"), world);
-        var unsupported = await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(mw3, Path.Combine(fixture.Root, "mw3-project"), token: Token));
-        Assert.Contains("MechWarrior 3", unsupported.Message); Assert.False(Directory.Exists(Path.Combine(fixture.Root, "mw3-project")));
-        Directory.CreateDirectory(fixture.Project); File.WriteAllText(Path.Combine(fixture.Project, "keep.txt"), "user file");
-        await Assert.ThrowsAsync<IOException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token));
-        File.Delete(Path.Combine(fixture.Project, "keep.txt"));
         await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
-        await Assert.ThrowsAsync<InvalidDataException>(() => SourcePacker.PackAsync(fixture.Project, Path.Combine(fixture.Project, "out"), token: Token));
-        string foreign = Path.Combine(fixture.Root, "foreign"); Directory.CreateDirectory(foreign); File.WriteAllText(Path.Combine(foreign, "x.txt"), "x");
-        await Assert.ThrowsAsync<IOException>(() => SourcePacker.PackAsync(fixture.Project, foreign, token: Token));
-        Assert.Equal(["x.txt"], Directory.GetFileSystemEntries(foreign).Select(Path.GetFileName));
-        // Re-packing into a previous pack folder is allowed; files it did not produce are left alone.
-        string packed = Path.Combine(fixture.Root, "packed");
-        await SourcePacker.PackAsync(fixture.Project, packed, token: Token);
-        File.WriteAllBytes(Path.Combine(packed, "leftover.zbd"), [1]);
-        await SourcePacker.PackAsync(fixture.Project, packed, token: Token);
-        Assert.True(File.Exists(Path.Combine(packed, "leftover.zbd"))); // not a previous output: untouched
+        var plan = SourceBuilder.Plan(fixture.Project);
+        Assert.Equal(AllOutputs, plan.Select(p => p.Path));
+        Assert.Equal(["data/m1/zrdr/ai.zrd", "data/m1/zrdr/envmodels/frcgate.zrd"], plan.Single(p => p.Path == "m1/zrdr.zbd").Inputs);
+        Assert.Equal(["gamegen/m1.gs", "gamegen/support/common.gw"], plan.Single(p => p.Path == "interp.zbd").Inputs);
+        // A new mission folder becomes a new archive; missions are ordered by number.
+        Directory.CreateDirectory(Path.Combine(fixture.Project, "data", "m10", "zrdr"));
+        File.WriteAllText(Path.Combine(fixture.Project, "data", "m10", "zrdr", "x.zrd"), "VALUE ( 1 )");
+        Directory.CreateDirectory(Path.Combine(fixture.Project, "data", "m2", "zrdr"));
+        File.WriteAllText(Path.Combine(fixture.Project, "data", "m2", "zrdr", "y.zrd"), "VALUE ( 2 )");
+        Assert.Equal(["m1/zrdr.zbd", "m2/zrdr.zbd", "m10/zrdr.zbd"], SourceBuilder.Plan(fixture.Project).Where(p => p.Path.Contains('/')).Select(p => p.Path));
+        Assert.Throws<InvalidDataException>(() => SourceBuilder.Plan(fixture.Corpus));
+    }
 
-        // Hand-edited manifests and layouts cannot escape the project, the pack folder or the cache.
-        string manifestPath = SourceProject.ManifestPath(fixture.Project), original = File.ReadAllText(manifestPath);
-        File.WriteAllText(manifestPath, original.Replace("\"path\": \"other.bin\"", "\"path\": \"../escape.bin\"", StringComparison.Ordinal));
-        await Assert.ThrowsAsync<InvalidDataException>(() => SourcePacker.PackAsync(fixture.Project, Path.Combine(fixture.Root, "escape"), token: Token));
-        Assert.False(File.Exists(Path.Combine(fixture.Root, "escape.bin")));
-        File.WriteAllText(manifestPath, original);
-        string layout = Path.Combine(fixture.Project, ".zstudio", "layouts", "soundsm.zbd.json");
-        File.WriteAllText(layout, File.ReadAllText(layout).Replace("\"cache\": \"", "\"cache\": \"x", StringComparison.Ordinal));
-        var damaged = (await SourcePacker.VerifyAsync(fixture.Project, token: Token)).Outputs.Single(o => o.Path == "soundsm.zbd");
-        Assert.Equal("failed", damaged.Status); Assert.Contains("not a SHA-256 cache identity", damaged.Error);
+    [Fact]
+    public async Task ExportBuildsWorkingGameFilesFromTheSources()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        string exported = Path.Combine(fixture.Root, "zbd");
+        var report = await SourceBuilder.ExportAsync(fixture.Project, exported, token: Token);
+        Assert.Equal(6, report.Built); Assert.Equal(0, report.Failed);
+        Assert.Equal(AllOutputs.Order(), Directory.GetFiles(exported, "*", SearchOption.AllDirectories).Select(f => SourceProject.Relative(exported, f)).Order());
+
+        var mission = Open(Path.Combine(exported, "m1", "zrdr.zbd"));
+        Assert.DoesNotContain(mission.Diagnostics, d => d.Severity == "Error");
+        Assert.Equal(["ai.zrd", "frcgate.zrd"], mission.Assets.Select(a => a.Name));
+        var shipped = Open(Path.Combine(fixture.Corpus, "m1", "zrdr.zbd"));
+        Assert.Equal(Member(shipped, "ai.zrd"), Member(mission, "ai.zrd")); Assert.Equal(Member(shipped, "frcgate.zrd"), Member(mission, "frcgate.zrd"));
+        // Archive records name each member's source, so exported files reconstruct into the same folders.
+        var members = ArchiveSources.Read(File.ReadAllBytes(Path.Combine(exported, "m1", "zrdr.zbd")));
+        Assert.Equal(["data\\m1\\zrdr\\ai.zrd", "data\\m1\\zrdr\\envmodels\\frcgate.zrd"], members.Select(m => m.SourceField));
+
+        var scripts = Open(Path.Combine(exported, "interp.zbd")).Scripts!;
+        Assert.Equal(["m1.gs", "support\\common.gw"], scripts.Entries.Select(e => e.Name));
+        Assert.Equal(["mkdir", "%ZBD_DIR%", ""], scripts.Entries[1].Instructions[1].Tokens);
+        Assert.Equal(912_000_000u, scripts.Entries[1].FileTime);
+
+        // Lower banks are converted from the best-quality source to the formats sounds.zrd declares.
+        var high = Open(Path.Combine(exported, "soundsh.zbd")); var medium = Open(Path.Combine(exported, "soundsm.zbd")); var low = Open(Path.Combine(exported, "soundsl.zbd"));
+        Assert.Equal(fixture.WaveA, Member(high, "a.wav"));
+        Assert.Equal(SourceFixture.Medium, Format(Member(medium, "a.wav")));
+        Assert.Equal(SourceFixture.Low, Format(Member(low, "a.wav")));
+        Assert.Equal(500u, WaveDecoder.Read(Member(low, "a.wav"), Token).Cues.Single().SampleOffset);
+        // A declaration is a ceiling: b.wav is already below every declared format and is never raised.
+        Assert.All(new[] { high, medium, low }, bank => Assert.Equal(fixture.WaveB, Member(bank, "b.wav")));
+    }
+
+    [Fact]
+    public async Task EditedSourcesChangeOnlyTheirOutputs()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        File.WriteAllText(Path.Combine(fixture.Project, "data", "m1", "zrdr", "ai.zrd"), "# edited\nGRAVITY ( -1.0 )\nNEW_VALUE ( 3 \"two words\" )\n");
+        File.WriteAllText(Path.Combine(fixture.Project, "gamegen", "m1.gs"), "source support\\common.gw # comment\nset MISSION_DIR m1\n");
+        string exported = Path.Combine(fixture.Root, "zbd");
+        await SourceBuilder.ExportAsync(fixture.Project, exported, ["m1/zrdr.zbd", "interp.zbd"], token: Token);
+        Assert.Equal(["interp.zbd", "m1/zrdr.zbd"], Directory.GetFiles(exported, "*", SearchOption.AllDirectories).Select(f => SourceProject.Relative(exported, f)).Order());
+        var ai = ZrdDecoder.Read(Member(Open(Path.Combine(exported, "m1", "zrdr.zbd")), "ai.zrd"), Token);
+        Assert.Equal(-1.0f, BitConverter.UInt32BitsToSingle(ai.Children[1].Children[0].Bits));
+        Assert.Equal("two words", ai.Children[3].Children[1].Text);
+        var script = Open(Path.Combine(exported, "interp.zbd")).Scripts!.Entries.Single(e => e.Name == "m1.gs");
+        Assert.Equal([["source", "support\\common.gw"], ["set", "MISSION_DIR", "m1"]], script.Instructions.Select(i => i.Tokens.ToArray()));
+        // The edited script's own time is recorded, so the engine keeps preferring a newer loose copy.
+        Assert.Equal((uint)new DateTimeOffset(File.GetLastWriteTimeUtc(Path.Combine(fixture.Project, "gamegen", "m1.gs"))).ToUnixTimeSeconds(), script.FileTime);
+    }
+
+    [Fact]
+    public async Task ExportsReplaceExistingFilesOnlyWhenAllowed()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        string exported = Path.Combine(fixture.Root, "zbd");
+        Directory.CreateDirectory(exported); File.WriteAllBytes(Path.Combine(exported, "interp.zbd"), [1]); File.WriteAllBytes(Path.Combine(exported, "keep.txt"), [2]);
+        var error = await Assert.ThrowsAsync<IOException>(() => SourceBuilder.ExportAsync(fixture.Project, exported, token: Token));
+        Assert.Contains("interp.zbd", error.Message);
+        Assert.Equal([1], File.ReadAllBytes(Path.Combine(exported, "interp.zbd")));
+        Assert.Equal(2, Directory.GetFiles(exported, "*", SearchOption.AllDirectories).Length);
+        await SourceBuilder.ExportAsync(fixture.Project, exported, overwrite: true, token: Token);
+        Assert.NotNull(Open(Path.Combine(exported, "interp.zbd")).Scripts);
+        Assert.Equal([2], File.ReadAllBytes(Path.Combine(exported, "keep.txt")));
+        Assert.Empty(Directory.GetDirectories(exported, ".zstudio-*"));
+    }
+
+    [Fact]
+    public async Task InvalidSourcesFailWithoutWritingAnything()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        File.WriteAllText(Path.Combine(fixture.Project, "data", "m1", "zrdr", "ai.zrd"), "GRAVITY ( -1.0");
+        var check = await SourceBuilder.CheckAsync(fixture.Project, token: Token);
+        Assert.Null(check.Destination);
+        Assert.Equal(5, check.Built);
+        var failed = Assert.Single(check.Outputs, o => o.Status == "failed");
+        Assert.Equal("m1/zrdr.zbd", failed.Path); Assert.Contains("data/m1/zrdr/ai.zrd", failed.Error);
+        string exported = Path.Combine(fixture.Root, "zbd");
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(fixture.Project, exported, token: Token));
+        Assert.Contains("Nothing was written", error.Message);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(exported));
+        // Two sources that would become the same member are refused: the engine finds members by name.
+        File.WriteAllText(Path.Combine(fixture.Project, "data", "m1", "zrdr", "ai.zrd"), "GRAVITY ( -1.0 )");
+        File.WriteAllText(Path.Combine(fixture.Project, "data", "m1", "zrdr", "envmodels", "AI.zrd"), "GRAVITY ( -2.0 )");
+        failed = Assert.Single((await SourceBuilder.CheckAsync(fixture.Project, ["m1/zrdr.zbd"], token: Token)).Outputs);
+        Assert.Contains("both become archive member", failed.Error);
+        await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.CheckAsync(fixture.Project, ["m9/zrdr.zbd"], token: Token));
+        // Scripts must tokenize into instructions the prepared format can store.
+        File.Delete(Path.Combine(fixture.Project, "data", "m1", "zrdr", "envmodels", "AI.zrd"));
+        File.WriteAllText(Path.Combine(fixture.Project, "gamegen", "m1.gs"), "set " + new string('x', 70_000) + "\n");
+        failed = Assert.Single((await SourceBuilder.CheckAsync(fixture.Project, ["interp.zbd"], token: Token)).Outputs);
+        Assert.Equal("failed", failed.Status); Assert.Contains("gamegen/m1.gs", failed.Error);
+    }
+
+    [Fact]
+    public async Task UndeclaredSoundsKeepTheirSourceFormatInEveryBank()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        byte[] extra = SourceFixture.Tone(new(44100, 16, 2), 441, null);
+        File.WriteAllBytes(Path.Combine(fixture.Project, "data", "common", "sounds", "c.wav"), extra);
+        var report = await SourceBuilder.ExportAsync(fixture.Project, Path.Combine(fixture.Root, "zbd"), ["soundsh.zbd", "soundsl.zbd"], token: Token);
+        Assert.Contains(report.Outputs[0].Warnings, w => w.Contains("c.wav"));
+        Assert.Empty(report.Outputs[1].Warnings);
+        Assert.Equal(extra, Member(Open(Path.Combine(fixture.Root, "zbd", "soundsl.zbd")), "c.wav"));
+        // Sounds are found by name, so a second a.wav in a subfolder is refused.
+        Directory.CreateDirectory(Path.Combine(fixture.Project, "data", "common", "sounds", "extra"));
+        File.WriteAllBytes(Path.Combine(fixture.Project, "data", "common", "sounds", "extra", "A.wav"), fixture.WaveB);
+        var duplicate = (await SourceBuilder.CheckAsync(fixture.Project, ["soundsh.zbd"], token: Token)).Outputs.Single();
+        Assert.Equal("failed", duplicate.Status); Assert.Contains("both become sound", duplicate.Error);
+        Directory.Delete(Path.Combine(fixture.Project, "data", "common", "sounds", "extra"), true);
+        // A sound that cannot be converted is reported with its source.
+        File.WriteAllBytes(Path.Combine(fixture.Project, "data", "common", "sounds", "a.wav"), [1, 2, 3]);
+        var failed = (await SourceBuilder.CheckAsync(fixture.Project, ["soundsm.zbd"], token: Token)).Outputs.Single();
+        Assert.Equal("failed", failed.Status); Assert.Contains("data/common/sounds/a.wav", failed.Error);
+    }
+
+    [Fact]
+    public void WaveConversionFollowsTheDeclaredCeiling()
+    {
+        Assert.Equal(new WaveFormat(22000, 8, 1), WaveConverter.Target(new(22000, 16, 1), new(22050, 8, 1)));
+        Assert.Equal(new WaveFormat(11025, 8, 1), WaveConverter.Target(new(11025, 8, 1), new(22050, 16, 2)));
+        byte[] tone = SourceFixture.Tone(new(22050, 16, 2), 2205, 2000);
+        Assert.Equal(tone, WaveConverter.Convert(tone, new(44100, 16, 2), Token));
+        // Stereo channels with opposite phase mix to silence; rate halves the frames and moves cues with them.
+        byte[] mono = WaveConverter.Convert(tone, new(11025, 8, 1), Token);
+        var info = WaveDecoder.Read(mono, Token);
+        Assert.Equal((11025u, (ushort)8, (ushort)1), (info.SampleRate, info.BitsPerSample, info.Channels));
+        Assert.InRange(info.DataLength, 1101, 1104);
+        Assert.Equal(1000u, info.Cues.Single().SampleOffset);
+        Assert.All(mono.AsSpan(info.DataOffset, info.DataLength).ToArray(), b => Assert.InRange(b, 126, 130));
+        // Downsampling filters content above the new Nyquist frequency instead of folding it back.
+        byte[] high = SourceFixture.Tone(new(44100, 16, 1), 4410, null);
+        byte[] shrill = new byte[high.Length]; high.CopyTo(shrill, 0);
+        var source = WaveDecoder.Read(high, Token);
+        for (int f = 0; f < 4410; f++) System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(shrill.AsSpan(source.DataOffset + f * 2), (short)(Math.Sin(2 * Math.PI * 15000 * f / 44100.0) * 16000));
+        byte[] result = WaveConverter.Convert(shrill, new(11025, 16, 1), Token); var filtered = WaveDecoder.Read(result, Token);
+        double peak = 0;
+        for (int f = 100; f < 1000; f++) peak = Math.Max(peak, Math.Abs(System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(result.AsSpan(filtered.DataOffset + f * 2))));
+        Assert.True(peak < 1600, $"A 15 kHz tone leaked through at {peak}.");
+        Assert.Throws<InvalidDataException>(() => WaveConverter.Convert(tone, new(22050, 24, 1), Token));
+        Assert.Throws<InvalidDataException>(() => WaveConverter.Convert(new byte[] { 1, 2, 3 }, new(22050, 16, 1), Token));
+    }
+
+    [Fact]
+    public async Task ExportedFilesReconstructTheSameTree()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        File.Delete(Path.Combine(fixture.Project, "data", "m1", "zrdr", "blob.bin"));
+        string exported = Path.Combine(fixture.Root, "zbd"), again = Path.Combine(fixture.Root, "again");
+        await SourceBuilder.ExportAsync(fixture.Project, exported, token: Token);
+        var report = await SourceExtractor.ExtractAsync(exported, again, token: Token);
+        Assert.Empty(report.Notes); Assert.Empty(report.NotReconstructed);
+        var first = Directory.GetFiles(fixture.Project, "*", SearchOption.AllDirectories).ToDictionary(f => SourceProject.Relative(fixture.Project, f), File.ReadAllBytes);
+        var second = Directory.GetFiles(again, "*", SearchOption.AllDirectories).ToDictionary(f => SourceProject.Relative(again, f), File.ReadAllBytes);
+        Assert.Equal(first.Keys.Order(), second.Keys.Order());
+        Assert.All(first, f => Assert.Equal(f.Value, second[f.Key]));
     }
 }

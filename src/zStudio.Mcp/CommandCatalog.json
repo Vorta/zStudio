@@ -655,7 +655,7 @@
   },
   {
     "Name": "zstudio_operation",
-    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available only for export, validation and source reconstruction/packing.",
+    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available only for export, validation and source reconstruction/export.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4856,7 +4856,7 @@
   },
   {
     "Name": "zstudio_source_reconstruct",
-    "Description": "Reconstruct a deduplicated source project (data/ and gamegen/ in the original build layout) from a shipped RECOIL data folder into a new or empty folder. Every output is verified to pack back byte-identically; unconverted families are kept verbatim. Optionally opens the project as the workspace root; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Resources become text .zrd files in their recorded folders, prepared scripts become .gs/.gw text, and each sound keeps its best-quality WAV; families not reconstructed yet are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4886,14 +4886,40 @@
     ]
   },
   {
-    "Name": "zstudio_source_pack",
-    "Description": "Build every game file of the open source project from its files on disk. Without destination, only verify against the shipped files. With destination (new, empty or previously packed folder outside the project), stage, re-parse and then write all outputs, or nothing if any fails. Reports identical/changed/failed per output with changed sources. Unsaved edits to project files must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Name": "zstudio_source_export",
+    "Description": "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "Optional output folder; omit to verify without writing.",
+        "Description": "Optional output folder; omit to check without writing.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "outputs",
+        "Type": "array",
+        "Description": "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Game file path.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 256
+      },
+      {
+        "Name": "overwrite",
+        "Type": "boolean",
+        "Description": "Replace game files that already exist in destination; default false.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -4902,7 +4928,7 @@
   },
   {
     "Name": "zstudio_source_status",
-    "Description": "Describe the open source project: origin fingerprint, output families, reconstruction notes (32 previewed) and a paged output list filtered by path. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Describe the open source project: the game files it can build, with family and source inputs (16 previewed), paged and filtered by path. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
