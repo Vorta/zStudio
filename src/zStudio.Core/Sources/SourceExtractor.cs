@@ -288,9 +288,14 @@ public static class SourceExtractor
                 catch (InvalidDataException ex) { Notes.Add($"{relative}: its models were not reconstructed because {ex.Message}"); }
             }
             foreach (var mission in missions) WorldNodes[mission.Mission] = mission.World.Nodes.Select(n => n.Name).ToArray();
+            SortedSet<string> folders = new(StringComparer.OrdinalIgnoreCase);
             var outputs = await Task.Run(() => WorldSources.Reconstruct(missions, name => Scripts.GetValueOrDefault(name),
-                (mission, name) => TexturePaths.GetValueOrDefault((mission, name)), TextureFiles, name => TextureAddressing.GetValueOrDefault(name), Notes, token), token);
+                (mission, name) => TexturePaths.GetValueOrDefault((mission, name)), TextureFiles, name => TextureAddressing.GetValueOrDefault(name), Notes, token, folders), token);
             foreach (var output in outputs) await WriteAsync(output.Path, output.Bytes);
+            // Every folder the scripts search exists, as in the original tree, including ones no shipped file came from
+            // (data/common/effects/models, data/effects/textures, the vehicle folders of the multiplayer missions).
+            foreach (string folder in folders.Where(f => f.StartsWith(SourceProject.DataFolder + "/", StringComparison.OrdinalIgnoreCase)))
+                Directory.CreateDirectory(SourceProject.Resolve(root, folder));
         }
         /// <summary>Node names of each shipped world, which animation definitions bind to.</summary>
         internal Dictionary<int, IReadOnlyCollection<string>> WorldNodes { get; } = [];
