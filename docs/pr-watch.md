@@ -77,7 +77,7 @@ On a notice, follow the steps above with `-Claude`:
 3. Run `acknowledge` for the read snapshot.
 4. Run `arm -Head <verified remote head> -Claude`, then `listen` again.
 
-`stop -Claude` disables the watch. `-Thread`, `-Codex` and `-NotifyTest` apply only to the Codex channel.
+`stop`, with or without `-Claude`, disables both channels of the PR; `status` reports the other channel under `otherChannel`. `-Thread`, `-Codex` and `-NotifyTest` apply only to the Codex channel.
 
 ## Status, stopping and recovery
 

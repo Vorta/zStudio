@@ -28,8 +28,10 @@ public partial class MainWindow
         {
             var doc = TargetDocument(a); var clip = ValidateMotionTarget(doc, GuidArg(a, "member"), a.ContainsKey("part") ? Int(a, "part") : null);
             if (a.ContainsKey("part") && !string.IsNullOrEmpty(a["query"]?.GetValue<string>())) throw new StudioCommandException("invalid_argument", "Frame pages are positional; omit query when part is supplied.");
-            object rows = a.ContainsKey("part") ? Page(clip.Parts[Int(a, "part")].Frames.Select((f, i) => new { index = i, closing = i == clip.FrameCount, seconds = i * (double)clip.LoopTime / clip.FrameCount,
-                translation = new[] { f.Translation.X, f.Translation.Y, f.Translation.Z }, quaternionWxyz = new[] { f.Rotation.W, f.Rotation.X, f.Rotation.Y, f.Rotation.Z } }), a).Data :
+            // Frame pages are positional over a known count: construct only the requested rows.
+            var frames = a.ContainsKey("part") ? clip.Parts[Int(a, "part")].Frames : null;
+            object rows = frames != null ? PageRange(frames.Count, a, i => { var f = frames[i]; return new { index = i, closing = i == clip.FrameCount, seconds = i * (double)clip.LoopTime / clip.FrameCount,
+                translation = new[] { f.Translation.X, f.Translation.Y, f.Translation.Z }, quaternionWxyz = new[] { f.Rotation.W, f.Rotation.X, f.Rotation.Y, f.Rotation.Z } }; }).Data :
                 Page(clip.Parts.Select((p, i) => (Part: p, Index: i)), a, row => row.Part.Name,
                     row => new { index = row.Index, Name = row.Part.Name[..Math.Min(512, row.Part.Name.Length)], nameCharacters = row.Part.Name.Length, nameTruncated = row.Part.Name.Length > 512,
                         row.Part.Flags, closingSampleMatches = row.Part.Frames[0] == row.Part.Frames[^1] }).Data;

@@ -28,6 +28,14 @@ public partial class MainWindow
         }
         return Result(new { total, offset, nextOffset = (long)offset + limit < total ? (int?)(offset + limit) : null, items });
     }
+    /// <summary>A positional page of a sequence whose size is known: only the returned rows are constructed.</summary>
+    internal static StudioResult PageRange(int total, JsonObject a, Func<int, object> project)
+    {
+        int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
+        if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
+        var items = Enumerable.Range(offset, (int)Math.Clamp((long)total - offset, 0, limit)).Select(project).ToArray();
+        return Result(new { total, offset, nextOffset = (long)offset + limit < total ? (int?)(offset + limit) : null, items });
+    }
     private static AssetRecord TargetAsset(DocumentModel doc, JsonObject a)
     {
         if (!a.ContainsKey("index") || !Enum.TryParse<AssetKind>(Text(a, "kind"), out var kind) || !Enum.IsDefined(kind)) throw new StudioCommandException("invalid_argument", "Provide a valid asset kind and explicit index.");

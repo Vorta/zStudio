@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Recoil.Zbd.PrWatch;
 
@@ -36,30 +37,45 @@ public static class Program
             Console.WriteLine(Path.Combine(await WatchService.PrepareRuntimeAsync(store, AppContext.BaseDirectory, WatchService.RuntimeFiles, token), WatchService.RuntimeFiles[0]));
             return;
         }
+        // The other channel of the same PR. Probed without locking so an unused channel folder is never created.
+        WatchStore sibling = new(workspace, pr, claude ? null : "claude");
         if (action == "status")
         {
-            using (await store.LockAsync("state", token)) Print(Status(store.Load(), store));
+            JsonObject result;
+            using (await store.LockAsync("state", token)) result = JsonSerializer.SerializeToNode(Status(store.Load(), store), WatchStore.Json)!.AsObject();
+            if (File.Exists(sibling.StatePath)) using (await sibling.LockAsync("state", token)) result["otherChannel"] = JsonSerializer.SerializeToNode(Status(sibling.Load(), sibling), WatchStore.Json);
+            else result["otherChannel"] = JsonSerializer.SerializeToNode(Status(null, sibling), WatchStore.Json);
+            Print(result);
             return;
         }
         if (action == "stop")
         {
-            // Local disarming must work even when Codex/GitHub are unavailable or the caller is a normal terminal.
-            using (await store.LockAsync("state", token))
+            // Local disarming must work even when Codex/GitHub are unavailable or the caller is a normal terminal. Stopping either
+            // channel stops both: an armed sibling could otherwise notify, or keep a release authorization, while watcher code changes.
+            List<object> stopped = [];
+            foreach (var channel in new[] { store, sibling })
             {
-                var state = store.Load() ?? throw new InvalidOperationException("No watch exists.");
-                state.Active = state.CommentsArmed = state.ApprovalEnabled = state.ReleaseAuthorized = false; state.Generation++;
-                var retire = state.Notices.Where(n => n.Acknowledged == null || n.Cleanup == null || n.Cleanup.StartsWith("uncertain", StringComparison.Ordinal)).ToArray();
-                foreach (var notice in retire) notice.Acknowledged ??= DateTimeOffset.UtcNow;
-                store.Save(state);
-                foreach (var notice in retire)
+                if (channel != store && !File.Exists(channel.StatePath)) continue;
+                using (await channel.LockAsync("state", token))
                 {
-                    if (claude) { notice.Cleanup ??= "not queued"; store.Save(state); continue; }
-                    try { notice.Cleanup = await new CodexQueue(CommandRunner.Executable("codex", options.GetValueOrDefault("--codex")), workspace).RemoveAsync(state.Thread, notice, token); }
-                    catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { notice.Cleanup = "uncertain: " + WatchService.Short(ex.Message); }
-                    store.Save(state);
+                    var state = channel.Load(); if (state == null) continue;
+                    state.Active = state.CommentsArmed = state.ApprovalEnabled = state.ReleaseAuthorized = false; state.Generation++;
+                    var retire = state.Notices.Where(n => n.Acknowledged == null || n.Cleanup == null || n.Cleanup.StartsWith("uncertain", StringComparison.Ordinal)).ToArray();
+                    foreach (var notice in retire) notice.Acknowledged ??= DateTimeOffset.UtcNow;
+                    channel.Save(state);
+                    foreach (var notice in retire)
+                    {
+                        // Only the Codex channel queues notices.
+                        if (channel.Channel != null) { notice.Cleanup ??= "not queued"; channel.Save(state); continue; }
+                        try { notice.Cleanup = await new CodexQueue(CommandRunner.Executable("codex", options.GetValueOrDefault("--codex")), workspace).RemoveAsync(state.Thread, notice, token); }
+                        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { notice.Cleanup = "uncertain: " + WatchService.Short(ex.Message); }
+                        channel.Save(state);
+                    }
+                    stopped.Add(Status(state, channel));
                 }
-                Print(Status(state, store));
             }
+            if (stopped.Count == 0) throw new InvalidOperationException("No watch exists.");
+            Print(new { stopped });
             return;
         }
         if (action == "worker")

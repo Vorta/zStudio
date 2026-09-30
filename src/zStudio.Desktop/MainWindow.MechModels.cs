@@ -74,7 +74,9 @@ public partial class MainWindow
                 // Match the GUI label: "Material N" plus its texture name.
                 string Texture(JsonObject material) => material.Int("texture_index", -1) is >= 0 and int t && t < scene.Textures.Count ? scene.Textures[t].Text("name") : "solid color";
                 return Result(new { doc.Revision, materials = Page(scene.Materials.Select((m, i) => (Material: m, Index: i)).Where(m => used == null || used.Contains(m.Index)), a,
-                    project: m => new { index = m.Index, fields = m.Material },
+                    // Return the GUI picker label the query matched, bounded like other inspection labels.
+                    project: m => { string texture = Texture(m.Material); return new { index = m.Index, label = $"Material {m.Index} · {texture[..Math.Min(256, texture.Length)]}",
+                        textureCharacters = texture.Length, textureTruncated = texture.Length > 256, fields = m.Material }; },
                     matches: (m, query) => $"Material {m.Index}".Contains(query, StringComparison.OrdinalIgnoreCase) || Texture(m.Material).Contains(query, StringComparison.OrdinalIgnoreCase)).Data });
             }
             var nodes = scene.Nodes.Skip(member.RootNode).Take(member.NodeCount);

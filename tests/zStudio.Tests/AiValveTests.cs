@@ -151,6 +151,17 @@ public sealed class AiValveTests
         Assert.Equal(original, Write(root));
     }
     [Fact]
+    public void RecordSearchMatchesReferencedValveNames()
+    {
+        var network = A(S("version"), A(I(106)), S("node_00"), A(I(1), A(F(), F(), F()), A(), S("valve"), A(I(1), S("gate_open"))),
+            S("node_01"), A(I(1), A(F(), F(), F()), A()), S("node_02"), A(A(I(0), I(1)), S("valve_assign"), A(S("bridge_up"), I(1))));
+        var records = Records("net_01.zrd", network).ToArray(); Assert.Equal(2, records.Length);
+        Assert.Equal(records[0], Assert.Single(records, r => MissionAiValves.MatchesSearch(r, "GATE_OPEN")));
+        Assert.Equal(records[1], Assert.Single(records, r => MissionAiValves.MatchesSearch(r, "bridge")));
+        var objective = Assert.Single(Records("objectives.zrd", A(S("objective"), A(S("set_valve"), A(S("alarm"), I(1))))));
+        Assert.True(MissionAiValves.MatchesSearch(objective, "alarm")); Assert.False(MissionAiValves.MatchesSearch(objective, "absent"));
+    }
+    [Fact]
     public void MoveOverflowAndInvalidScalarEditsLeaveTheSourceUnchanged()
     {
         var root = A(S("go"), A(S("delayupdate"), MissionAiValves.Parameters("delayupdate"))); var original = Write(root);

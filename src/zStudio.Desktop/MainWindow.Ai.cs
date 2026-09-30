@@ -79,6 +79,11 @@ public partial class MainWindow
         }
         finally { synchronizingAi = false; }
         scene.SetAiOptions(aiVisible, aiThroughGeometry, aiNetworkFilter);
+        if (aiVisible && scene.AiRenderTruncated)
+        {
+            string limit = $"The AI overlay draws {scene.RenderedAiNodes:N0} nodes and {scene.RenderedAiLinks:N0} links (limits {SceneViewport.MaximumRenderedAiNodes:N0} and {SceneViewport.MaximumRenderedAiLinks:N0}). Filter a network, or inspect the complete graph through AI node Properties or ai_nodes.";
+            AiNetworkCombo.ToolTip += "\n" + limit; ViewModel.Status = limit;
+        }
         if (aiVisible && !graph.Networks.Any(n => n.Nodes.Count > 0))
         { AiLabelText.Text = "No supported AI nodes in this mission."; AiLabel.Visibility = Visibility.Visible; }
     }
@@ -93,7 +98,8 @@ public partial class MainWindow
         valveOverlay = scene.ValveOverlayVisible, valveFilter = ValveFilterText(), valveFilterCharacters = scene.ValveFilter?.Length ?? 0, valveFilterTruncated = scene.ValveFilter?.Length > 256,
         networks = scene.AiNetworks.Networks.Count, nodes = scene.AiNetworks.Networks.Sum(n => n.Nodes.Count),
         links = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => p.PreviewLinks.Count(l => l.Target != null))),
-        linkSlots = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => (long)p.LinkCount)), linksTruncated = scene.AiNetworks.Networks.Any(n => n.Nodes.Any(p => p.LinksTruncated))
+        linkSlots = scene.AiNetworks.Networks.Sum(n => n.Nodes.Sum(p => (long)p.LinkCount)), linksTruncated = scene.AiNetworks.Networks.Any(n => n.Nodes.Any(p => p.LinksTruncated)),
+        renderedNodes = scene.RenderedAiNodes, renderedLinks = scene.RenderedAiLinks, renderTruncated = scene.AiRenderTruncated
     };
     private async Task<PropertiesWindow?> OpenAiPropertiesAsync(string id, bool automation)
     {

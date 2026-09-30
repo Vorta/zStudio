@@ -77,6 +77,15 @@ Validation: 643/643 Release tests (474 Core, 101 Desktop, 68 watcher) with RECOI
 
 Codex's review of bb33d5d found one P2, fixed: a version-106 node row with valid position/links but a malformed attribute pair (non-string name, non-array value or dangling field) no longer becomes an AI node, valve record or `add_binding` target. It reports a diagnostic and stays inspectable in the ZRD resource. Retail MW3 networks have 3,741 attributed node rows and none are malformed. Validation: 644/644 with RECOIL1999 and MW3 corpora; Core 475/475 with RECOIL1998.
 
+Codex's review of 2e5868a found five P2s, now fixed with regressions that fail without the fixes:
+- **AI overlay budget:** the viewport draws at most 16,384 AI nodes and 32,768 links. The limit is disclosed in state, the picker tooltip and the status bar, and only drawn markers are pickable.
+- **Valve search:** `ai_valves` record queries also match the valve names that bindings and objective uses reference.
+- **Mech material labels:** `mech_models` material rows include the bounded GUI label that queries match.
+- **PR watch channels:** `stop` disables both channels of a PR, and `status` reports the other channel.
+- **Positional pages:** `motion_records` frame pages construct only the returned rows; a two-row page of a 100,000-frame clip previously allocated 13 MB. Animation sequences/references, pickups, scripts, archive members and animation scene pages also project only their returned rows.
+
+Validation: 647/647 (476 Core, 101 Desktop, 70 watcher) with RECOIL1999 and MW3 corpora; Core 476/476 with RECOIL1998.
+
 ## PR feedback watch and coordinate-path review (2026-09-29)
 
 Added optional local development tooling in `tools/pr-watch.ps1`. It observes a selected PR's conversation comments, published review summaries and inline comments, disarms on the first new feedback batch and queues one follow-up into the owning Codex conversation. Explicit snapshot acknowledgment preserves later arrivals; validated fix pushes re-arm against the remote head. Separate approval monitoring checks a fresh review-bot reaction on the PR description and a completed current-head summary. The helper does not edit, merge or publish; any authorized release still requires the agent's current-head review, CI and repository checks. Durable claims prevent automatic duplicate submissions after crashes or uncertain delivery. See [PR watch setup and recovery](pr-watch.md).

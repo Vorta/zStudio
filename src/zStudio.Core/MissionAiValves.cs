@@ -56,7 +56,9 @@ public static class MissionAiValves
     public static bool MatchesSearch(AiValveRecord record, string query) => record.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
         (record.NodeIndex?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
         (record.From?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-        (record.To?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
+        (record.To?.ToString(CultureInfo.InvariantCulture)?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        // Bindings and objective uses are named by the valves they reference, not by their attribute name.
+        References(record).Any(r => r.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
     public static JsonObject Summary(AiValveRecord record)
     {
         var refs = References(record).Take(3).ToArray();

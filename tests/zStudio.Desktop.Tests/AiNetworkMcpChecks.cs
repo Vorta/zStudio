@@ -139,6 +139,21 @@ internal static class AiNetworkMcpChecks
             var linksMesh = Assert.Single(geometry.Keys.Cast<HelixToolkit.Wpf.SharpDX.MeshGeometryModel3D>());
             Assert.Equal(32 * 9, linksMesh.Geometry!.Positions!.Count);
             Assert.True((await State())["ai"]!["linksTruncated"]!.GetValue<bool>());
+            // A valid large network: only the overlay budget is drawn, and only drawn markers are pickable.
+            var chain = Enumerable.Range(0, 20_000).Select(i => new AiNode("chain-" + i, i, 12, new(i, 0, 0), i,
+                Enumerable.Range(1, 3).Where(d => i + d < 20_000).Select(d => new AiLink(d - 1, i + d, "chain-" + (i + d), null)).ToArray())).ToArray();
+            viewport.SetAiNetworks(new("large-overlay", [first with { Nodes = chain }]));
+            viewport.SetAiOptions(true, true, null);
+            Assert.Equal(SceneViewport.MaximumRenderedAiNodes, viewport.RenderedAiNodes); Assert.Equal(SceneViewport.MaximumRenderedAiLinks, viewport.RenderedAiLinks);
+            Assert.True(viewport.AiRenderTruncated);
+            var drawn = (System.Collections.IList)typeof(SceneViewport).GetField("aiRendered", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewport)!;
+            Assert.Equal(SceneViewport.MaximumRenderedAiNodes, drawn.Count);
+            var overlay = (await State())["ai"]!;
+            Assert.Equal(20_000, overlay["nodes"]!.GetValue<int>()); Assert.True(overlay["renderTruncated"]!.GetValue<bool>());
+            Assert.Equal(SceneViewport.MaximumRenderedAiNodes, overlay["renderedNodes"]!.GetValue<int>());
+            // The complete graph remains available for inspection.
+            nodes = await Call("ai_nodes", Args(("snapshot", "large-overlay"), ("query", "node_19999")));
+            Assert.Equal(1, nodes["total"]!.GetValue<int>());
             viewport.SetAiOptions(false, true, null);
             viewport.SetAiNetworks(new("graph1", [first, second]));
             await Select("select", "a", "not_ready");

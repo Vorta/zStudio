@@ -26,14 +26,14 @@ public partial class AnimationEditor
     {
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
         JsonObject args = new() { ["offset"] = offset, ["limit"] = limit, ["query"] = query };
-        JsonObject Page<T>(IEnumerable<T> rows, Func<T, string> search) => MainWindow.Page(rows, args, search).Data.AsObject();
+        JsonObject Page<T>(IEnumerable<T> rows, Func<T, string> search, Func<T, object>? project = null) => MainWindow.Page(rows, args, search, project).Data.AsObject();
         if (section == "problems") { var problems = Page(CurrentProblems(), p => p.Message + " " + p.Category + " " + p.Scope); problems["approximation"] = "Preview includes game-dependent approximations."; return problems; }
         if (frame == null) return new { unavailable = true };
         return section switch
         {
             "events" => EventPage(),
             "sequences" => Page(frame.Sequences, s => s.Name + " " + s.State),
-            "scene" => Page((context?.Scene.Nodes ?? []).Select(n => new { n.Index, n.Name, n.Class, n.Metadata }), n => n.Name + " " + n.Class),
+            "scene" => Page(context?.Scene.Nodes ?? [], n => n.Name + " " + n.Class, n => new { n.Index, n.Name, n.Class, n.Metadata }),
             _ => PreviewState()
         };
         JsonObject EventPage() { var page = Page(frame.Trace, e => e.Name + " " + e.Status); page["dropped"] = frame.TraceDropped; return page; }

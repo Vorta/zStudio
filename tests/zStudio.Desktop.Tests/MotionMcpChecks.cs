@@ -67,6 +67,29 @@ internal static class MotionMcpChecks
                 finally { main.ViewModel.CloseResolved(largeDoc); }
             }
             var frames = await Call("motion_records", Args(("part", 0))); Assert.Equal(3, frames["rows"]!["items"]!.AsArray().Count);
+            {
+                // A clip at the 100,000-frame limit: a one-row page constructs only its rows, including the closing sample.
+                using MemoryStream longStream = new(); using BinaryWriter longWriter = new(longStream);
+                longWriter.Write(4); longWriter.Write(1f); longWriter.Write(100_000); longWriter.Write(1); longWriter.Write(-1f); longWriter.Write(1f);
+                longWriter.Write(4); longWriter.Write("body"u8); longWriter.Write(12); longWriter.Write(new byte[100_001 * 12]);
+                for (int i = 0; i <= 100_000; i++) { longWriter.Write(1f); longWriter.Write(0f); longWriter.Write(0f); longWriter.Write(0f); }
+                using var longDoc = new DocumentModel(FormatRegistry.Default.OpenBytes(Path.Combine(folder, "long.zbd"), MotionFixture.Archive(("long", longStream.ToArray())), token: token));
+                main.ViewModel.Documents.Add(longDoc);
+                try
+                {
+                    Dictionary<string, object?> LongArgs(int offset, int limit) => new() { ["document"] = longDoc.SessionId.ToString(), ["member"] = longDoc.ResourceEdits!.Current.Members[0].Id.ToString(), ["part"] = 0, ["offset"] = offset, ["limit"] = limit };
+                    await Call("motion_records", LongArgs(0, 1));
+                    long before = GC.GetTotalAllocatedBytes(true);
+                    var tail = await Call("motion_records", LongArgs(99_999, 5));
+                    long allocated = GC.GetTotalAllocatedBytes(true) - before;
+                    Assert.True(allocated < 6_000_000, $"Allocated {allocated:N0} bytes for a two-row frame page.");
+                    Assert.Equal(100_001, tail["rows"]!["total"]!.GetValue<int>()); Assert.Null(tail["rows"]!["nextOffset"]);
+                    var rows = tail["rows"]!["items"]!.AsArray(); Assert.Equal(2, rows.Count);
+                    Assert.Equal(99_999, rows[0]!["index"]!.GetValue<int>()); Assert.True(rows[1]!["closing"]!.GetValue<bool>());
+                    Assert.Empty((await Call("motion_records", LongArgs(200_000, 5)))["rows"]!["items"]!.AsArray());
+                }
+                finally { main.ViewModel.CloseResolved(longDoc); }
+            }
             var editor = (MotionEditor)typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             Assert.NotNull(editor); await editor.SelectAssemblyAsync(3, token); editor.Seek(1);
             string preview = (await Call("state", new()))["preview"]!.GetValue<string>();
@@ -183,6 +206,9 @@ internal static class MotionMcpChecks
             Assert.Equal(39, (await Call("mech_models", MechArgs(("section", "materials"), ("query", "SOLID COLOR"))))["materials"]!["total"]!.GetValue<int>());
             var textured = await Call("mech_models", MechArgs(("section", "materials"), ("query", "SAMPLE")));
             Assert.Equal(1, textured["materials"]!["total"]!.GetValue<int>()); Assert.Equal(0, textured["materials"]!["items"]![0]!["index"]!.GetValue<int>());
+            // Rows carry the GUI picker label that the query matched.
+            Assert.Contains("sample", textured["materials"]!["items"]![0]!["label"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("Material 39 · solid color", sharedMaterials["materials"]!["items"]![0]!["label"]!.GetValue<string>());
             Assert.Equal(1, sharedMaterials["materials"]!["total"]!.GetValue<int>());
             Recoil.Zbd.Rendering.SceneViewport StaticViewport() => (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             AnimationFrame Presented() => (AnimationFrame)typeof(Recoil.Zbd.Rendering.SceneViewport).GetField("animationFrame", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(editor.Viewport)!;

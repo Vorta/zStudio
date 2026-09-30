@@ -150,7 +150,8 @@ public partial class MainWindow
             [DocumentParameter, P("script","string","Optional script UUID to list instructions."), .. PageParameters], a =>
             {
                 var d = TargetDocument(a); var edits = ScriptSession(d);
-                if (!a.ContainsKey("script")) return Result(new { d.Revision, scripts = Page(edits.Package.Entries.Select((e,i) => new { script=e.Id, index=i, e.SourceIndex, e.Name, e.FileTime, instructions=e.Instructions.Count }),a,e=>e.Name).Data });
+                if (!a.ContainsKey("script")) return Result(new { d.Revision, scripts = Page(edits.Package.Entries.Select((e,i) => (Entry:e,Index:i)),a,x=>x.Entry.Name,
+                    x => new { script=x.Entry.Id, index=x.Index, x.Entry.SourceIndex, x.Entry.Name, x.Entry.FileTime, instructions=x.Entry.Instructions.Count }).Data });
                 var entry = edits.Entry(GuidArg(a,"script"));
                 return Result(new { d.Revision, instructions = Page(entry.Instructions.Select((i,n) => (Instruction:i,Index:n)),a,x=>x.Instruction.Tokens.FirstOrDefault()??"", x => new { instruction=x.Instruction.Id,index=x.Index,sourceOffset=x.Instruction.SourceOffset,tokens=x.Instruction.Tokens.Take(16).Select(t=>t.Length>64?t[..64]:t),truncated=x.Instruction.Tokens.Count>16||x.Instruction.Tokens.Any(t=>t.Length>64) }).Data });
             });
