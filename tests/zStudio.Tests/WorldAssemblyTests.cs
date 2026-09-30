@@ -201,4 +201,152 @@ public sealed class WorldAssemblyTests
         WorldGltf.ImportContext context = new() { World = new(), Reference = (_, _) => throw new InvalidOperationException(), TextureName = (_, n, _) => n ?? "x" };
         Assert.Throws<InvalidDataException>(() => WorldGltf.Import(doc, "x.gltf", 0xFF, context));
     }
+
+    private static GameZWorld AssembleScript(string script, out WorldAssembler assembler, params (string Path, string Text)[] others)
+    {
+        Dictionary<string, byte[]> files = new(StringComparer.Ordinal) { ["gamegen/m1.gs"] = Encoding.ASCII.GetBytes(script) };
+        foreach (var (path, text) in others) files[path] = Encoding.ASCII.GetBytes(text);
+        assembler = new(new MemoryFiles(files), Token);
+        return assembler.Assemble("m1.gs");
+    }
+
+    [Fact]
+    public void ConditionsAndSwitchesFollowTheRetailInterpreter()
+    {
+        // CZInterp::HandleBuiltinCommand: a condition holds when its macro is exactly TRUE (names are case-sensitive),
+        // || and && combine left to right, and while skipping only endif counts, so the first endif ends the skip, even
+        // one in another file. ParseBoolToken turns on only for on/true; a missing argument or 1 is off.
+        const string script = """
+            set A TRUE
+            set B 1
+            set lower true
+            NewWorld world
+            ifdef A
+            NewObject3D a_on
+            endif
+            ifdef B
+            NewObject3D b_on
+            endif
+            ifndef B
+            NewObject3D not_b
+            endif
+            ifdef lower
+            NewObject3D lower_on
+            endif
+            ifdef B || A
+            NewObject3D either
+            endif
+            ifdef A && B
+            NewObject3D both
+            endif
+            ifdef B
+            ifdef A
+            endif
+            NewObject3D after_inner
+            endif
+            ifdef a
+            NewObject3D case_sensitive
+            endif
+            source sub.gw
+            NewObject3D skipped_by_sub
+            endif
+            NewObject3D resumed
+            NewObject3D flags1
+            SetLandmark on
+            SetLandmark
+            NewObject3D flags2
+            SetLandmark 1
+            NewObject3D flags3
+            SetLandmark TRUE
+            GameZWriteZBDFile ..\m1\gamez.zbd
+            set cycle wave07
+            CycleTextureSetMap %cycle%.tif
+            """;
+        var world = AssembleScript(script, out var assembler, ("gamegen/sub.gw", "ifdef B\nNewObject3D in_sub\n"));
+        var names = world.Nodes.Select(n => n.Name).ToHashSet();
+        Assert.Superset(new HashSet<string> { "a_on", "not_b", "either", "after_inner", "resumed" }, names);
+        Assert.Empty(names.Intersect(["b_on", "lower_on", "both", "case_sensitive", "skipped_by_sub", "in_sub"]));
+        uint Landmark(string name) => world.Nodes.Single(n => n.Name == name).Flags & WorldUpdate.LandmarkFlag;
+        Assert.Equal([0u, 0u, WorldUpdate.LandmarkFlag], [Landmark("flags1"), Landmark("flags2"), Landmark("flags3")]);
+        // Macros set after the world is written still expand in the texture registrations that follow.
+        Assert.Contains("wave07", assembler.ScriptTextures);
+
+        // Reconstruction traces the same instructions.
+        Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> scripts = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["m1.gs"] = GameGenScriptText.Tokenize(script), ["sub.gw"] = GameGenScriptText.Tokenize("ifdef B\nNewObject3D in_sub\n"),
+        };
+        var traced = ScriptTrace.Trace(n => scripts.GetValueOrDefault(n), "m1.gs", []).Where(t => t.Command == "NewObject3D").Select(t => t.Args[0]).ToList();
+        Assert.Equal(["a_on", "not_b", "either", "after_inner", "resumed", "flags1", "flags2", "flags3"], traced);
+    }
+
+    [Fact]
+    public void NodeSetLightingAppliesToTheWholeSubtree()
+    {
+        // CZNode::AssignInt32ToDiRecursive: the models of the current node and of everything below it.
+        var project = Project();
+        project.Files["gamegen/m1.gs"] = Encoding.ASCII.GetBytes(Script.Replace("GameZWriteZBDFile", "FindNode crate1\nNodeSetLighting off\nGameZWriteZBDFile", StringComparison.Ordinal));
+        var world = new WorldAssembler(project, Token).Assemble("m1.gs");
+        var crate = world.Nodes.Single(n => n.Name == "crate1");
+        var models = WorldAssembler.Subtree(crate).Select(n => n.Model).OfType<WorldModel>().ToList();
+        Assert.Equal(3, models.Count);
+        Assert.All(models, m => Assert.Equal(0u, m.Flags & 1));
+        Assert.Equal(1u, world.Nodes.Single(n => n.Name == "ground").Model!.Flags & 1);
+    }
+
+    [Theory]
+    [InlineData("1 -1")]
+    [InlineData("0.001 -0.001")]
+    [InlineData("0 0")]
+    public void PartitionsTheReaderCannotHoldAreRefused(string cells)
+    {
+        // Every cell is allocated and written, and the reader accepts at most 65,536; a typo must not allocate billions.
+        string script = $"NewWorld world\nWorldOrigin 0.0 512.0\nWorldExtents 512.0 -512.0\nWorldPartition {cells}\nGameZWriteZBDFile x\n";
+        var error = Assert.Throws<InvalidDataException>(() => AssembleScript(script, out _));
+        Assert.Contains("cell", error.Message);
+    }
+
+    [Fact]
+    public void ScriptHierarchiesStayWithinBounds()
+    {
+        // Diamonds: every node of a level is a child of both nodes of the level above, so there are 2^60 paths from the
+        // bottom to the top. Ancestor and FindSubNode searches visit each node once.
+        StringBuilder diamond = new("NewWorld world\nNewObject3D a0\nNewObject3D b0\n");
+        for (int i = 1; i <= 60; i++)
+        {
+            diamond.Append($"NewObject3D a{i}\nNewObject3D b{i}\n");
+            foreach (string parent in new[] { $"a{i - 1}", $"b{i - 1}" })
+                foreach (string child in new[] { $"a{i}", $"b{i}" }) diamond.Append($"FindNode {parent}\nAddChild {child}\n");
+        }
+        diamond.Append("FindNode a0\nFindSubNode missing\nFindNode a0\nFindSubNode b60\nNodeSetLighting off\nFindNode a60\nAddChild a0\nGameZWriteZBDFile x\n");
+        var world = AssembleScript(diamond.ToString(), out var assembler);
+        Assert.Equal(122, world.Nodes.Count(n => n.Class == WorldNodeClass.Object3D));
+        Assert.Contains(assembler.Warnings, w => w.Contains("own ancestor", StringComparison.Ordinal));
+
+        // A chain as deep as a world may be builds; a deeper one is refused instead of exhausting the stack.
+        static string Chain(int depth)
+        {
+            StringBuilder text = new("NewWorld world\nNewObject3D n0\n");
+            for (int i = 1; i < depth; i++) text.Append($"NewObject3D n{i}\nFindNode n{i - 1}\nAddChild n{i}\n");
+            return text.Append("GameZWriteZBDFile x\n").ToString();
+        }
+        var deep = AssembleScript(Chain(WorldUpdate.MaximumDepth), out _);
+        Assert.NotEmpty(GameZWriter.Write(deep, Token));
+        var error = Assert.Throws<InvalidDataException>(() => AssembleScript(Chain(20_000), out _));
+        Assert.Contains("deeper", error.Message);
+    }
+
+    [Fact]
+    public async Task MalformedModelsFailTheirWorldWithTheirPath()
+    {
+        // A model a user edited by hand (here cut short) fails the world that loads it, named in the report, while
+        // everything else is still checked.
+        using var fixture = new SourceWorldFixture();
+        fixture.Write("data/m1/models/m1.gltf", "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":");
+        var report = await SourceBuilder.CheckAsync(fixture.Project, ["m1/gamez.zbd", "m2/gamez.zbd"], token: Token);
+        var failed = Assert.Single(report.Outputs, o => o.Status == "failed");
+        Assert.Equal("m1/gamez.zbd", failed.Path);
+        Assert.Contains("data/m1/models/m1.gltf", failed.Error);
+        Assert.Equal("built", report.Outputs.Single(o => o.Path == "m2/gamez.zbd").Status);
+    }
 }

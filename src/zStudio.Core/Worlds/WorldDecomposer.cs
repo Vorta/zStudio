@@ -129,11 +129,5 @@ public static class WorldDecomposer
 
     private static string Arg(TracedInstruction step, int index) => index < step.Args.Count ? step.Args[index] : "";
 
-    private static WorldNode? FindSub(WorldNode node, string name, int depth = 0)
-    {
-        if (node.Name == name) return node;
-        if (depth > 512) return null;
-        for (int i = node.Children.Count - 1; i >= 0; i--) if (FindSub(node.Children[i], name, depth + 1) is { } found) return found;
-        return null;
-    }
+    private static WorldNode? FindSub(WorldNode node, string name) => WorldAssembler.FindSub(node, name);
 }

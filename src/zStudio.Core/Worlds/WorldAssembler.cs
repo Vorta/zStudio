@@ -18,7 +18,7 @@ public interface IProjectFiles
 /// <c>LoadGameGen</c>, reading glTF where the scripts name OpenFlight files. The world is captured where the script
 /// writes it (<c>GameZWriteZBDFile</c>), after the engine's update pass.
 /// </summary>
-public sealed class WorldAssembler(IProjectFiles files, CancellationToken token = default)
+public sealed partial class WorldAssembler(IProjectFiles files, CancellationToken token = default)
 {
     public const int MaximumScriptDepth = 32, MaximumInstructions = 1_000_000;
     public GameZWorld World { get; } = new();
@@ -40,8 +40,9 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
     public string? AnimationFile { get; private set; }
     /// <summary>World children in the order they were added; their cells are assigned after the update pass.</summary>
     private readonly List<WorldNode> worldChildren = [];
-    private readonly Dictionary<string, string> variables = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> variables = new(StringComparer.Ordinal);
     private readonly List<string> modelDirectories = [], textureDirectories = [], readerDirectories = [];
+    private readonly ScriptConditions conditions = new();
     private WorldNode? current, pendingWorld;
     private bool written;
     private int instructions;
@@ -61,26 +62,19 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
         if (!files.Exists(relative)) { Warn($"Script {script} does not exist."); return; }
         ScriptFiles.Add(relative);
         var lines = GameGenScriptText.Tokenize(GameGenScriptText.Decode(files.Read(relative, token)));
-        int skipping = 0;
         foreach (var raw in lines)
         {
             token.ThrowIfCancellationRequested();
             if (++instructions > MaximumInstructions) throw new InvalidDataException("The scripts run too many instructions.");
             string command = raw[0];
-            // ifdef/ifndef/endif nest; a skipped block only tracks nesting.
-            if (command.Equals("endif", StringComparison.OrdinalIgnoreCase)) { if (skipping > 0) skipping--; continue; }
-            if (command.Equals("ifdef", StringComparison.OrdinalIgnoreCase) || command.Equals("ifndef", StringComparison.OrdinalIgnoreCase))
-            {
-                if (skipping > 0) { skipping++; continue; }
-                bool defined = raw.Count > 1 && variables.ContainsKey(raw[1]);
-                if (defined != command.Equals("ifdef", StringComparison.OrdinalIgnoreCase)) skipping = 1;
-                continue;
-            }
-            if (skipping > 0) continue;
+            // Conditions follow the retail interpreter (see ScriptConditions): TRUE-valued macros, no nesting while skipping.
+            if (!conditions.Runs(raw, variables)) continue;
             // Macros expand in arguments only; an unknown macro expands to nothing.
             string[] args = raw.Skip(1).Select(Expand).ToArray();
-            if (command.Equals("Quit", StringComparison.OrdinalIgnoreCase)) return;
-            if (command.Equals("source", StringComparison.OrdinalIgnoreCase)) { if (args.Length > 0) Source(args[0], depth + 1); continue; }
+            if (ScriptConditions.IsQuit(command)) return;
+            // Macros are set before and after the world is written (tex_fx scripts may use them).
+            if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; continue; }
+            if (ScriptConditions.IsSource(command)) { if (args.Length > 0) Source(args[0], depth + 1); continue; }
             if (written) { Late(command, args); continue; }
             Run(command, args, relative);
         }
@@ -107,18 +101,18 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
 
     private void Run(string command, string[] args, string script)
     {
-        float F(int i) => i < args.Length && float.TryParse(args[i], NumberStyles.Float, CultureInfo.InvariantCulture, out float v) ? v : 0;
-        bool On(int i) => i >= args.Length || args[i].Equals("on", StringComparison.OrdinalIgnoreCase) || args[i] == "1" || args[i].Equals("true", StringComparison.OrdinalIgnoreCase);
+        float F(int i) => i < args.Length ? Number(args[i]) : 0;
+        // ParseBoolToken (retail 0x4C19C0): only "on" and "true" (any case) are on; a missing argument is off.
+        bool On(int i) => i < args.Length && (args[i].Equals("on", StringComparison.OrdinalIgnoreCase) || args[i].Equals("true", StringComparison.OrdinalIgnoreCase));
         string A(int i) => i < args.Length ? args[i] : "";
         switch (command)
         {
-            case "set": if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; break;
             case "SetModelDirectory": AddDirectories(modelDirectories, A(0)); break;
             case "SetTextureDirectory": AddDirectories(textureDirectories, A(0)); break;
             case "RdrSetPath": AddDirectories(readerDirectories, A(0)); break;
             case "AnimSetZBDFile": AnimationFile = A(0); break;
-            case "SetGameZNodeArraySize": World.NodeCapacity = Math.Clamp((int)F(0), 16, 65536); break;
-            case "SetModel3DArraySize": World.ModelCapacity = Math.Clamp((int)F(0), 16, 65536); break;
+            case "SetGameZNodeArraySize": World.NodeCapacity = Math.Clamp((int)F(0), 16, GameZWorld.MaximumNodeCapacity); break;
+            case "SetModel3DArraySize": World.ModelCapacity = Math.Clamp((int)F(0), 16, GameZWorld.MaximumNodeCapacity); break;
             case "SetMaterialArraySize": World.MaterialCapacity = Math.Clamp((int)F(0), 16, 32767); break;
             case "LensFlareTexture" or "CycleTextureSetMap" or "WriteTextureSetMap" or "TextureAdd":
                 if (args.Length > 0) { string name = TextureStem(args[^1]); ScriptTextures.Add(name); WorldGltf.Texture(World, name); }
@@ -187,14 +181,14 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
             case "LightSetActive": if (current?.Class == WorldNodeClass.Light) current.SetPayloadInt(4, On(0) ? 1 : 0); break;
 
             case "FindNode": current = Find(A(0), null); if (current == null) Warn($"{script}: FindNode {A(0)} found no node."); break;
-            case "FindSubNode": current = current == null ? null : FindSub(current, A(0), 0); if (current == null) Warn($"{script}: FindSubNode {A(0)} found no node."); break;
+            case "FindSubNode": current = current == null ? null : FindSub(current, A(0)); if (current == null) Warn($"{script}: FindSubNode {A(0)} found no node."); break;
             case "NodeSetDescription": if (current != null) current.Name = A(0); break;
             case "AddChild":
                 if (current != null && Find(A(0), null) is { } child) AddChild(current, child);
                 else Warn($"{script}: AddChild {A(0)} has no node or parent.");
                 break;
             case "DeleteChild":
-                if (current != null && FindSub(current, A(0), 0) is { } removed && removed != current) Unlink(current, removed);
+                if (current != null && FindSub(current, A(0)) is { } removed && removed != current) Unlink(current, removed);
                 break;
             case "DeleteTree": if (Find(A(0), null) is { } tree) DeleteTree(tree); break;
             case "NewObject3D": Object3D(Create(A(0), WorldNodeClass.Object3D)); break;
@@ -208,7 +202,8 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
             case "SetLandmark": Flag(0x80, On(0)); break;
             case "NodeSetCanModify": Flag(0x10000, On(0)); break;
             case "NodeSetOverwrite": Flag(0x800000, On(0)); break;
-            case "NodeSetLighting": if (current?.Model is { } model) model.Flags = On(0) ? model.Flags | 1 : model.Flags & ~1u; break;
+            // CZNode::AssignInt32ToDiRecursive: the models of the node and everything below it.
+            case "NodeSetLighting": if (current != null) foreach (var model in Subtree(current).Select(n => n.Model).OfType<WorldModel>()) model.Flags = On(0) ? model.Flags | 1 : model.Flags & ~1u; break;
 
             case "LoadGameGen": LoadGameGen(A(0), A(1), script); break;
             case "GameZWriteZBDFile": WorldFile = A(0); Finish(); break;
@@ -233,6 +228,13 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
     }
 
     private static float Radians(float degrees) => degrees * (MathF.PI / 180f);
+    /// <summary>ParseFloatToken's atof: the longest leading decimal number (after spaces), 0 when there is none.</summary>
+    internal static float Number(string text)
+    {
+        var match = LeadingNumber().Match(text);
+        return match.Success && double.TryParse(match.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? (float)value : 0;
+    }
+    [System.Text.RegularExpressions.GeneratedRegex(@"\A[ \t\n\v\f\r]*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")] private static partial System.Text.RegularExpressions.Regex LeadingNumber();
     private static string TextureStem(string path) => Path.GetFileNameWithoutExtension(path.Replace('\\', '/')).ToLowerInvariant();
 
     private void AddDirectories(List<string> list, string value)
@@ -301,13 +303,22 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
             if (World.Nodes[i].Name == name && (kind == null || World.Nodes[i].Class == kind)) return World.Nodes[i];
         return null;
     }
-    /// <summary>FindSubNodeByName: the node itself, then its children depth first from the last child.</summary>
-    private static WorldNode? FindSub(WorldNode node, string name, int depth)
+    /// <summary>
+    /// FindSubNodeByName: the node itself, then its children depth first from the last child. A node shared by several
+    /// parents is searched once (a repeat visit cannot find what the first did not), so the search stays linear.
+    /// </summary>
+    internal static WorldNode? FindSub(WorldNode node, string name) => Subtree(node).FirstOrDefault(n => n.Name == name);
+    /// <summary>A node and its descendants, each once, in FindSubNodeByName's order; the walk keeps its own stack.</summary>
+    internal static IEnumerable<WorldNode> Subtree(WorldNode node)
     {
-        if (node.Name == name) return node;
-        if (depth > 512) return null;
-        for (int i = node.Children.Count - 1; i >= 0; i--) if (FindSub(node.Children[i], name, depth + 1) is { } found) return found;
-        return null;
+        HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Stack<WorldNode> stack = new([node]);
+        while (stack.Count > 0)
+        {
+            var next = stack.Pop();
+            if (!seen.Add(next)) continue;
+            yield return next;
+            foreach (var child in next.Children) stack.Push(child);
+        }
     }
 
     private void AddChild(WorldNode parent, WorldNode child)
@@ -316,7 +327,18 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
         child.Parents.Add(parent);
         if (parent.Class == WorldNodeClass.World) worldChildren.Add(child); else parent.Children.Add(child);
     }
-    private static bool Descends(WorldNode node, WorldNode ancestor) => node.Parents.Any(p => p == ancestor || Descends(p, ancestor));
+    /// <summary>Whether <paramref name="ancestor"/> is above <paramref name="node"/>; each ancestor is visited once.</summary>
+    private static bool Descends(WorldNode node, WorldNode ancestor)
+    {
+        HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Stack<WorldNode> stack = new(node.Parents);
+        while (stack.Count > 0)
+        {
+            var parent = stack.Pop();
+            if (parent == ancestor) return true;
+            if (seen.Add(parent)) foreach (var above in parent.Parents) stack.Push(above);
+        }
+        return false;
+    }
     private void Unlink(WorldNode parent, WorldNode child)
     {
         parent.Children.Remove(child); child.Parents.Remove(parent);
@@ -404,13 +426,16 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
     {
         if (!files.Exists(path)) throw new InvalidDataException($"The model {path} does not exist.");
         ModelFiles.Add(path);
-        string folder = Path.GetDirectoryName(path)!.Replace('\\', '/');
-        var doc = GltfDocument.Read(files.Read(path, token), uri =>
+        try
         {
-            string buffer = Relative(path, uri); ModelFiles.Add(buffer);
-            return files.Read(buffer, token);
-        }, token);
-        return (doc, path);
+            var doc = GltfDocument.Read(files.Read(path, token), uri =>
+            {
+                string buffer = Relative(path, uri); ModelFiles.Add(buffer);
+                return files.Read(buffer, token);
+            }, token);
+            return (doc, path);
+        }
+        catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
     }
     /// <summary>A URI relative to <paramref name="from"/>, as a project path that stays inside the project.</summary>
     internal static string Relative(string from, string uri)
@@ -458,6 +483,8 @@ public sealed class WorldAssembler(IProjectFiles files, CancellationToken token 
             // The update leaves the cached world matrix marked stale.
             node.SetPayloadInt(0, flags | 0x20);
         }
+        // AddChild chains can make any hierarchy; the passes below follow it recursively.
+        WorldUpdate.CheckHierarchy(World.Nodes);
         WorldUpdate.RebuildBounds(World);
         foreach (var world in World.Nodes.Where(n => n.Class == WorldNodeClass.World))
             WorldUpdate.Partition(world, worldChildren.Where(c => c.Parents.Contains(world)).ToList());
