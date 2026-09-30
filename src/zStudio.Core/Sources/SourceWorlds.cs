@@ -283,7 +283,7 @@ public static partial class SourceWorlds
                 await File.WriteAllBytesAsync(path, built.Bytes, token).ConfigureAwait(false);
                 results.Add(new(output.Path, output.Family, "built", built.Bytes.Length, built.Items, built.Warnings));
             }
-            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or FormatException)
+            catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex))
             {
                 if (output.Family == "world") throw new InvalidDataException($"The {mission} world does not build: {ex.Message}", ex);
                 results.Add(new(output.Path, output.Family, "failed", 0, 0, [], ex.Message));

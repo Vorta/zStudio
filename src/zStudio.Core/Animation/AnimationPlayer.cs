@@ -278,7 +278,8 @@ public sealed partial class AnimationPlayer
         if ((instance.Entry.U32(148) & 0x40) != 0)
             foreach (var tracked in instance.Entry.References[0])
             {
-                int index = context.FindNamedBelow(instance.Root, tracked.Text(0,32));
+                // Tracked-node records hold 36-byte names, as node references do.
+                int index = context.FindNamedBelow(instance.Root, tracked.Text(0,36));
                 if (instance.Nodes.TryGetValue(index,out var node) && instance.SavedNodes.TryGetValue(index,out var saved))
                 {
                     node.Active = saved.Active; node.Position = saved.Position; node.Euler = saved.Euler; node.Scale = saved.Scale;

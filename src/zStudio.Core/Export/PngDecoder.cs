@@ -95,9 +95,7 @@ public static class PngDecoder
 
     /// <summary>
     /// One unfiltered row of <paramref name="w"/> pixels into RGBA, from pixel <paramref name="target"/> in steps of
-    /// <paramref name="dx"/>. Plain static methods rather than per-pixel local functions over a closure: that shape
-    /// failed with access violations under concurrent garbage collection on the development machine (Core Ultra 9 275HX,
-    /// Windows build 26300, .NET 10.0.12) in every JIT mode, and this one did not.
+    /// <paramref name="dx"/>.
     /// </summary>
     private static void ConvertRow(PixelFormat f, byte[] line, int w, byte[] rgba, int target, int dx)
     {
