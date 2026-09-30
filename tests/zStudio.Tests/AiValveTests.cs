@@ -98,8 +98,11 @@ public sealed class AiValveTests
         var root = union ? A(S("version"), A(I(106)), S("node_00"), A(I(1), A(F(), F(), F()), A(), S("valveunion"), S("not an array")))
             : A(S("go"), A(S("all_zero"), S("namelist"), S("not an array")));
         string member = union ? "net_01.zrd" : "valves.zrd";
-        var record = Assert.Single(Records(member, root)); byte[] before = Write(root);
-        Assert.Throws<InvalidDataException>(() => Edit(member, root, new("add_term", record.Id, Value: "new")));
+        var records = Records(member, root).ToArray(); byte[] before = Write(root);
+        // A node row whose attribute value is not an array is not a node, so its list is not a record at all.
+        Guid id = union ? root.Children[3].Children[3].Id : Assert.Single(records).Id;
+        if (union) Assert.Empty(records);
+        Assert.Throws<InvalidDataException>(() => Edit(member, root, new("add_term", id, Value: "new")));
         Assert.Equal(before, Write(root));
     }
     [Fact]
@@ -129,6 +132,23 @@ public sealed class AiValveTests
         var invalid = root with { Children = [..root.Children, S("version"), A(I(105))] };
         Assert.Empty(Records("net_01.zrd", invalid));
         Assert.Throws<InvalidDataException>(() => Edit("net_01.zrd", invalid, new("add_binding", Operand: root.Children[3].Id)));
+    }
+    [Fact]
+    public void MalformedNodeAttributePairsAreNeitherNodesNorBindingTargets()
+    {
+        // Valid position and links, but a non-string attribute key or a dangling field.
+        var root = A(S("version"), A(I(106)), S("node_00"), A(I(1), A(F(), F(), F()), A(), S("valve"), A(I(1), S("go"))),
+            S("node_01"), A(I(1), A(F(), F(), F()), A(), I(7), A(S("x"))),
+            S("node_02"), A(I(1), A(F(), F(), F()), A(), S("valve"), A(I(1), S("go")), S("dangling")));
+        var graph = Decode("net", "", 0, "net_01.zrd", root);
+        Assert.Equal(0, Assert.Single(graph.Nodes).Index);
+        Assert.Equal(2, graph.Diagnostics.Count(d => d.Message.Contains("attribute pairs", StringComparison.Ordinal)));
+        var target = Assert.Single(MissionAiValves.Targets(root, TestContext.Current.CancellationToken)); Assert.Equal(root.Children[3].Id, target.Id);
+        Assert.Single(Records("net_01.zrd", root));
+        byte[] original = Write(root);
+        foreach (int field in new[] { 5, 7 })
+            Assert.Throws<InvalidDataException>(() => Edit("net_01.zrd", root, new("add_binding", Operand: root.Children[field].Id)));
+        Assert.Equal(original, Write(root));
     }
     [Fact]
     public void MoveOverflowAndInvalidScalarEditsLeaveTheSourceUnchanged()

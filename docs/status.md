@@ -75,6 +75,8 @@ The PR watcher's Claude channel now wakes only for code review feedback. The PR 
 
 Validation: 643/643 Release tests (474 Core, 101 Desktop, 68 watcher) with RECOIL1999 and MW3 corpora; Core 474/474 with RECOIL1998.
 
+Codex's review of bb33d5d found one P2, fixed: a version-106 node row with valid position/links but a malformed attribute pair (non-string name, non-array value or dangling field) no longer becomes an AI node, valve record or `add_binding` target. It reports a diagnostic and stays inspectable in the ZRD resource. Retail MW3 networks have 3,741 attributed node rows and none are malformed. Validation: 644/644 with RECOIL1999 and MW3 corpora; Core 475/475 with RECOIL1998.
+
 ## PR feedback watch and coordinate-path review (2026-09-29)
 
 Added optional local development tooling in `tools/pr-watch.ps1`. It observes a selected PR's conversation comments, published review summaries and inline comments, disarms on the first new feedback batch and queues one follow-up into the owning Codex conversation. Explicit snapshot acknowledgment preserves later arrivals; validated fix pushes re-arm against the remote head. Separate approval monitoring checks a fresh review-bot reaction on the PR description and a completed current-head summary. The helper does not edit, merge or publish; any authorized release still requires the agent's current-head review, CI and repository checks. Durable claims prevent automatic duplicate submissions after crashes or uncertain delivery. See [PR watch setup and recovery](pr-watch.md).

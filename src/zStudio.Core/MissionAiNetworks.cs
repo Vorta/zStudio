@@ -90,8 +90,15 @@ public static partial class MissionAiNetworks
     internal static bool IsConstraint(ZrdNode value, CancellationToken token)
     {
         var c = value.Children;
-        if (value.Kind != ZrdKind.Array || c.Count < 3 || c.Count % 2 != 1 || c[0].Kind != ZrdKind.Array || c[0].Children.Count != 2 || c[0].Children.Any(n => n.Kind != ZrdKind.Int)) return false;
-        for (int i = 1; i < c.Count; i += 2) { token.ThrowIfCancellationRequested(); if (c[i].Kind != ZrdKind.String || c[i + 1].Kind != ZrdKind.Array) return false; }
+        if (value.Kind != ZrdKind.Array || c.Count < 3 || c[0].Kind != ZrdKind.Array || c[0].Children.Count != 2 || c[0].Children.Any(n => n.Kind != ZrdKind.Int)) return false;
+        return AttributePairs(c, 1, token);
+    }
+    /// <summary>Every field from <paramref name="first"/> is a string name followed by an array value, with none dangling.
+    /// Retail v106 networks have 3,741 attributed node rows and no exceptions.</summary>
+    private static bool AttributePairs(IReadOnlyList<ZrdNode> c, int first, CancellationToken token)
+    {
+        if ((c.Count - first) % 2 != 0) return false;
+        for (int i = first; i < c.Count; i += 2) { token.ThrowIfCancellationRequested(); if (c[i].Kind != ZrdKind.String || c[i + 1].Kind != ZrdKind.Array) return false; }
         return true;
     }
     internal static bool IsSpatial(ZrdNode value, bool mw3, CancellationToken token)
@@ -100,7 +107,8 @@ public static partial class MissionAiNetworks
         if (value.Kind != ZrdKind.Array || (mw3 ? c.Count < 3 : c.Count != 3) || c[0].Kind != ZrdKind.Int || c[1].Kind != ZrdKind.Array || c[1].Children.Count != 3 || c[2].Kind != ZrdKind.Array || !mw3 && c[2].Children.Count != 3) return false;
         foreach (var n in c[1].Children) if (n.Kind != ZrdKind.Float || !float.IsFinite(Float(n)) || Math.Abs(Float(n)) > 1e12) return false;
         foreach (var n in c[2].Children) { token.ThrowIfCancellationRequested(); if (n.Kind != ZrdKind.Int) return false; }
-        return true;
+        // Malformed attributes keep the row inspectable but never make it a node or a semantic edit target.
+        return !mw3 || AttributePairs(c, 3, token);
     }
 
     public static AiNetworkSnapshot Read(IEnumerable<(ZbdDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default)
@@ -217,6 +225,7 @@ public static partial class MissionAiNetworks
                 }
                 if (value.Kind != ZrdKind.Array || (mw3 ? c.Count < 3 : c.Count != 3) || c[1].Kind != ZrdKind.Array || c[1].Children.Count != 3 || c[2].Kind != ZrdKind.Array || (!mw3 && c[2].Children.Count != 3))
                     throw new InvalidDataException("Expected raw integer, XYZ and supported link slots.");
+                if (mw3 && !AttributePairs(c, 3, token)) throw new InvalidDataException("Expected name/array attribute pairs after the link slots; the row remains inspectable in the ZRD resource.");
                 var p = c[1].Children; Vector3 position = new(Float(p[0]), Float(p[1]), Float(p[2]));
                 if (!float.IsFinite(position.X) || !float.IsFinite(position.Y) || !float.IsFinite(position.Z)) throw new InvalidDataException("Non-finite node coordinates.");
                 if (Math.Abs(position.X) > 1e12 || Math.Abs(position.Y) > 1e12 || Math.Abs(position.Z) > 1e12) throw new InvalidDataException("Coordinates outside the supported ±1e12 preview range.");
