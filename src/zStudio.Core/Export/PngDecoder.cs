@@ -74,6 +74,7 @@ public static class PngDecoder
             catch (InvalidDataException ex) { throw new InvalidDataException("Corrupt PNG pixel data.", ex); }
         }
         byte[] rgba = new byte[checked(width * height * 4)]; int position = 0;
+        PixelFormat format = new(colorType, depth, channels, palette, transparency);
         foreach (var (x0, y0, dx, dy, w, h) in passes)
         {
             if (w == 0 || h == 0) continue;
@@ -83,51 +84,65 @@ public static class PngDecoder
                 token.ThrowIfCancellationRequested();
                 int filter = raw[position++]; raw.AsSpan(position, stride).CopyTo(current); position += stride;
                 Unfilter(filter, current, previous, bytesPerPixel);
-                for (int col = 0; col < w; col++) Pixel(current, col, (y0 + row * dy) * width + x0 + col * dx);
+                ConvertRow(format, current, w, rgba, (y0 + row * dy) * width + x0, dx);
                 (previous, current) = (current, previous);
             }
         }
         return new(width, height, rgba);
+    }
 
-        void Pixel(byte[] line, int index, int target)
+    private sealed record PixelFormat(int ColorType, int Depth, int Channels, byte[]? Palette, byte[]? Transparency);
+
+    /// <summary>
+    /// One unfiltered row of <paramref name="w"/> pixels into RGBA, from pixel <paramref name="target"/> in steps of
+    /// <paramref name="dx"/>. Plain static methods rather than per-pixel local functions over a closure: that shape
+    /// failed with access violations under concurrent garbage collection on the development machine (Core Ultra 9 275HX,
+    /// Windows build 26300, .NET 10.0.12) in every JIT mode, and this one did not.
+    /// </summary>
+    private static void ConvertRow(PixelFormat f, byte[] line, int w, byte[] rgba, int target, int dx)
+    {
+        for (int index = 0; index < w; index++)
         {
-            int o = target * 4;
-            int Sample(int channel)
-            {
-                if (depth == 16) return line[(index * channels + channel) * 2];
-                if (depth == 8) return line[index * channels + channel];
-                int bit = index * depth; int value = (line[bit >> 3] >> (8 - depth - (bit & 7))) & ((1 << depth) - 1);
-                return colorType == 3 ? value : value * 255 / ((1 << depth) - 1);
-            }
-            int Raw16(int channel) => depth == 16 ? BinaryPrimitives.ReadUInt16BigEndian(line.AsSpan((index * channels + channel) * 2)) : RawLow(channel);
-            int RawLow(int channel)
-            {
-                if (depth == 8) return line[index * channels + channel];
-                int bit = index * depth; return (line[bit >> 3] >> (8 - depth - (bit & 7))) & ((1 << depth) - 1);
-            }
-            switch (colorType)
+            int o = (target + index * dx) * 4;
+            switch (f.ColorType)
             {
                 case 0:
                     {
-                        byte g = (byte)Sample(0); rgba[o] = rgba[o + 1] = rgba[o + 2] = g;
-                        rgba[o + 3] = transparency is { Length: >= 2 } && Raw16(0) == BinaryPrimitives.ReadUInt16BigEndian(transparency) ? (byte)0 : (byte)255;
+                        byte g = (byte)Sample(f, line, index, 0); rgba[o] = rgba[o + 1] = rgba[o + 2] = g;
+                        rgba[o + 3] = f.Transparency is { Length: >= 2 } t && Raw(f, line, index, 0) == BinaryPrimitives.ReadUInt16BigEndian(t) ? (byte)0 : (byte)255;
                         break;
                     }
                 case 2:
-                    rgba[o] = (byte)Sample(0); rgba[o + 1] = (byte)Sample(1); rgba[o + 2] = (byte)Sample(2);
-                    rgba[o + 3] = transparency is { Length: >= 6 } && Raw16(0) == BinaryPrimitives.ReadUInt16BigEndian(transparency) && Raw16(1) == BinaryPrimitives.ReadUInt16BigEndian(transparency.AsSpan(2)) && Raw16(2) == BinaryPrimitives.ReadUInt16BigEndian(transparency.AsSpan(4)) ? (byte)0 : (byte)255;
+                    rgba[o] = (byte)Sample(f, line, index, 0); rgba[o + 1] = (byte)Sample(f, line, index, 1); rgba[o + 2] = (byte)Sample(f, line, index, 2);
+                    rgba[o + 3] = f.Transparency is { Length: >= 6 } k && Raw(f, line, index, 0) == BinaryPrimitives.ReadUInt16BigEndian(k) && Raw(f, line, index, 1) == BinaryPrimitives.ReadUInt16BigEndian(k.AsSpan(2)) && Raw(f, line, index, 2) == BinaryPrimitives.ReadUInt16BigEndian(k.AsSpan(4)) ? (byte)0 : (byte)255;
                     break;
                 case 3:
                     {
-                        int entry = Sample(0); if (entry * 3 + 2 >= palette!.Length) throw new InvalidDataException("PNG palette index out of range.");
+                        byte[] palette = f.Palette!;
+                        int entry = Sample(f, line, index, 0); if (entry * 3 + 2 >= palette.Length) throw new InvalidDataException("PNG palette index out of range.");
                         rgba[o] = palette[entry * 3]; rgba[o + 1] = palette[entry * 3 + 1]; rgba[o + 2] = palette[entry * 3 + 2];
-                        rgba[o + 3] = transparency != null && entry < transparency.Length ? transparency[entry] : (byte)255;
+                        rgba[o + 3] = f.Transparency != null && entry < f.Transparency.Length ? f.Transparency[entry] : (byte)255;
                         break;
                     }
-                case 4: { byte g = (byte)Sample(0); rgba[o] = rgba[o + 1] = rgba[o + 2] = g; rgba[o + 3] = (byte)Sample(1); break; }
-                default: rgba[o] = (byte)Sample(0); rgba[o + 1] = (byte)Sample(1); rgba[o + 2] = (byte)Sample(2); rgba[o + 3] = (byte)Sample(3); break;
+                case 4: { byte g = (byte)Sample(f, line, index, 0); rgba[o] = rgba[o + 1] = rgba[o + 2] = g; rgba[o + 3] = (byte)Sample(f, line, index, 1); break; }
+                default: rgba[o] = (byte)Sample(f, line, index, 0); rgba[o + 1] = (byte)Sample(f, line, index, 1); rgba[o + 2] = (byte)Sample(f, line, index, 2); rgba[o + 3] = (byte)Sample(f, line, index, 3); break;
             }
         }
+    }
+    /// <summary>A channel as 8 bits: 16-bit samples keep their high byte, lower depths scale up, palette indices stay.</summary>
+    private static int Sample(PixelFormat f, byte[] line, int index, int channel)
+    {
+        if (f.Depth == 16) return line[(index * f.Channels + channel) * 2];
+        if (f.Depth == 8) return line[index * f.Channels + channel];
+        int bit = index * f.Depth; int value = (line[bit >> 3] >> (8 - f.Depth - (bit & 7))) & ((1 << f.Depth) - 1);
+        return f.ColorType == 3 ? value : value * 255 / ((1 << f.Depth) - 1);
+    }
+    /// <summary>A channel's stored value, as <c>tRNS</c> compares it.</summary>
+    private static int Raw(PixelFormat f, byte[] line, int index, int channel)
+    {
+        if (f.Depth == 16) return BinaryPrimitives.ReadUInt16BigEndian(line.AsSpan((index * f.Channels + channel) * 2));
+        if (f.Depth == 8) return line[index * f.Channels + channel];
+        int bit = index * f.Depth; return (line[bit >> 3] >> (8 - f.Depth - (bit & 7))) & ((1 << f.Depth) - 1);
     }
 
     private static void Unfilter(int filter, byte[] line, byte[] previous, int bpp)
