@@ -58,7 +58,7 @@ public static partial class TexturePackWriter
             alpha |= image.Rgba[i * 4 + 3] != 255;
             if (indexed) histogram[Pack(image.Rgba[i * 4], image.Rgba[i * 4 + 1], image.Rgba[i * 4 + 2])]++;
         }
-        ushort[] palette = indexed ? Quantize(histogram, token) : [];
+        ushort[] palette = indexed ? Quantize(histogram, 256, token) : [];
         byte[] map = indexed ? BuildMap(histogram, palette, token) : [];
         int pixelBytes = count * (indexed ? 1 : 2);
         byte[] bytes = new byte[16 + pixelBytes + (alpha ? count : 0) + palette.Length * 2];
@@ -82,8 +82,8 @@ public static partial class TexturePackWriter
         int reduced = indexed ? histogram.Select((n, i) => n > 0 && palette[map[i]] != i ? 1 : 0).Sum() : 0;
         return new(new(name, bytes), palette.Length, reduced);
     }
-    private static ushort Pack(int r, int g, int b) => (ushort)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
-    private static int Channel(int color, int channel) => channel switch { 0 => ((color >> 11) & 31) * 255 / 31, 1 => ((color >> 5) & 63) * 255 / 63, _ => (color & 31) * 255 / 31 };
+    internal static ushort Pack(int r, int g, int b) => (ushort)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    internal static int Channel(int color, int channel) => channel switch { 0 => ((color >> 11) & 31) * 255 / 31, 1 => ((color >> 5) & 63) * 255 / 63, _ => (color & 31) * 255 / 31 };
     private sealed class ColorBox(int[] colors, int[] histogram)
     {
         public int[] Colors { get; } = colors;
@@ -91,12 +91,13 @@ public static partial class TexturePackWriter
         public int[] Ranges { get; } = Enumerable.Range(0, 3).Select(ch => colors.Max(c => Channel(c, ch)) - colors.Min(c => Channel(c, ch))).ToArray();
         public int Range => Ranges.Max();
     }
-    private static ushort[] Quantize(int[] histogram, CancellationToken token)
+    /// <summary>Deterministic weighted median cut of an RGB565 histogram to at most <paramref name="maximumColors"/> colours.</summary>
+    internal static ushort[] Quantize(int[] histogram, int maximumColors, CancellationToken token)
     {
         int[] colors = Enumerable.Range(0, histogram.Length).Where(c => histogram[c] > 0).ToArray();
-        if (colors.Length <= 256) return colors.Select(c => (ushort)c).ToArray();
+        if (colors.Length <= maximumColors) return colors.Select(c => (ushort)c).ToArray();
         List<ColorBox> boxes = [new(colors, histogram)];
-        while (boxes.Count < 256)
+        while (boxes.Count < maximumColors && boxes.Any(b => b.Colors.Length > 1))
         {
             token.ThrowIfCancellationRequested();
             var box = boxes.Where(b => b.Colors.Length > 1).OrderByDescending(b => b.Range).ThenByDescending(b => b.Weight).ThenBy(b => b.Colors.Min()).First();
@@ -109,7 +110,7 @@ public static partial class TexturePackWriter
         return boxes.Select(b => Pack((int)(b.Colors.Sum(c => (long)Channel(c, 0) * histogram[c]) / b.Weight),
             (int)(b.Colors.Sum(c => (long)Channel(c, 1) * histogram[c]) / b.Weight), (int)(b.Colors.Sum(c => (long)Channel(c, 2) * histogram[c]) / b.Weight))).Distinct().Order().ToArray();
     }
-    private static byte[] BuildMap(int[] histogram, ushort[] palette, CancellationToken token)
+    internal static byte[] BuildMap(int[] histogram, ushort[] palette, CancellationToken token)
     {
         byte[] map = new byte[65536];
         for (int c = 0; c < histogram.Length; c++)

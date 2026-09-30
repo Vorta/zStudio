@@ -45,6 +45,7 @@ public static class SourceExtractor
         Directory.CreateDirectory(Path.Combine(projectRoot, SourceProject.DataFolder)); Directory.CreateDirectory(Path.Combine(projectRoot, SourceProject.GameGenFolder));
         Dictionary<string, int> families = []; List<string> skipped = [];
         List<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> soundBanks = [];
+        List<(string Relative, ZbdDocument Document)> texturePacks = [];
         for (int i = 0; i < files.Count; i++)
         {
             token.ThrowIfCancellationRequested(); var (path, relative) = files[i]; progress?.Report(new(i, files.Count, relative));
@@ -62,13 +63,27 @@ public static class SourceExtractor
                     else { await context.ExtractResourcesAsync(relative, members); family = "resources"; }
                 }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Scripts, Version: 7 }) { await context.ExtractScriptsAsync(relative, bytes); family = "scripts"; }
+                else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.TexturePack } && IsTexturePack(relative))
+                {
+                    var doc = FormatRegistry.Default.OpenBytes(relative, bytes, token: token);
+                    if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
+                    texturePacks.Add((relative, doc)); family = TextureSources.MissionNumber(relative) > 0 ? "textures" : "images";
+                }
             }
             catch (InvalidDataException ex) { context.Notes.Add($"{relative}: not reconstructed because {ex.Message}"); family = null; }
             if (family != null) families[family] = families.GetValueOrDefault(family) + 1; else skipped.Add(relative);
         }
         if (soundBanks.Count > 0) await context.ExtractSoundsAsync(soundBanks);
+        if (texturePacks.Count > 0) await context.ExtractTexturesAsync(texturePacks);
         progress?.Report(new(files.Count, files.Count, "Done"));
         return new(projectRoot, context.Written, families, skipped, context.Notes);
+    }
+    /// <summary>Mission packs (<c>mN/texture*.zbd</c>, <c>mN/rtexture*.zbd</c>) and the interface pack (<c>image.zbd</c>, <c>rimage.zbd</c>).</summary>
+    private static bool IsTexturePack(string relative)
+    {
+        string name = Path.GetFileName(relative).ToLowerInvariant();
+        return TextureSources.MissionNumber(relative) > 0 && relative.Count(c => c == '/') == 1 && TexturePackVariant.FromFileName(name) is { Kind: not TexturePackKind.Interface }
+            || !relative.Contains('/') && name is "image.zbd" or "rimage.zbd";
     }
     private static bool IsWave(ReadOnlySpan<byte> bytes) => bytes.Length >= 12 && bytes[..4].SequenceEqual("RIFF"u8) && bytes.Slice(8, 4).SequenceEqual("WAVE"u8);
 
@@ -108,6 +123,13 @@ public static class SourceExtractor
         private readonly Dictionary<string, string> sources = new(StringComparer.OrdinalIgnoreCase);
         internal List<string> Notes { get; } = [];
         internal int Written => sources.Count;
+        /// <summary>Decoded resources and scripts, kept as evidence for placing textures and images.</summary>
+        internal List<(string Archive, string Member, ZrdNode Tree)> Resources { get; } = [];
+        internal Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> Scripts { get; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Direct3D clamp word of each reconstructed texture (by name), for the materials that use it.</summary>
+        internal Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Reconstructed texture source per mission and name.</summary>
+        internal Dictionary<(int Mission, string Name), string> TexturePaths { get; } = [];
 
         /// <summary>Write a source once. Another version at the same path is reported and the first is kept.</summary>
         private async Task WriteAsync(string relative, byte[] bytes, DateTime? modified = null)
@@ -133,6 +155,7 @@ public static class SourceExtractor
                 byte[] payload = m.Payload.ToArray(), source = payload;
                 if (ZrdDecoder.TryRead(payload, token) is { Kind: ZrdKind.Array } tree)
                 {
+                    Resources.Add((output, m.Name, tree));
                     byte[] text = ZrdText.Encode(tree, token);
                     if (text.Length <= SourceProject.MaximumSourceTextBytes && ZrdWriter.Write(ZrdText.Parse(text, token), token).AsSpan().SequenceEqual(payload)) source = text;
                     else Notes.Add($"{output}: {m.Name} kept as compiled data because its text form does not round-trip.");
@@ -154,6 +177,7 @@ public static class SourceExtractor
                 token.ThrowIfCancellationRequested();
                 var parts = entry.Name.Split('\\');
                 if (parts.Any(p => p.Length == 0 || p is "." or ".." || p.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)) { Notes.Add($"{output}: script '{entry.Name}' is not a relative path and was skipped."); continue; }
+                Scripts[entry.Name] = entry.Instructions.Select(i => (IReadOnlyList<string>)i.Tokens).ToArray();
                 string text;
                 try { text = GameGenScriptText.Write(entry.Instructions.Select(i => i.Tokens)); }
                 catch (InvalidDataException) { Notes.Add($"{output}: script {entry.Name} has instructions that cannot be written as text and was skipped."); continue; }
@@ -178,5 +202,55 @@ public static class SourceExtractor
                 }
             foreach (var (name, sound) in best.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)) await WriteAsync($"{SourceBuilder.SoundsFolder}/{name}", sound.Bytes.ToArray());
         }
+
+        /// <summary>
+        /// Each texture's best version across every pack that holds it becomes one PNG in its source folder: the largest
+        /// stored copy, preferring direct colour over a palette at equal size. Lower-quality packs are rebuilt on export.
+        /// </summary>
+        internal async Task ExtractTexturesAsync(IReadOnlyList<(string Relative, ZbdDocument Document)> packs)
+        {
+            Dictionary<(string Folder, string Name), List<(int Mission, ZbdDocument Doc, AssetRecord Asset)>> candidates = [];
+            foreach (var mission in packs.Where(p => TextureSources.MissionNumber(p.Relative) > 0).GroupBy(p => TextureSources.MissionNumber(p.Relative)).OrderBy(g => g.Key))
+            {
+                token.ThrowIfCancellationRequested();
+                // Every variant of a mission lists the same names in the same order; the largest pack is the reference.
+                var reference = mission.OrderByDescending(p => p.Document.Assets.Count).ThenBy(p => p.Relative, StringComparer.Ordinal).First();
+                var names = reference.Document.Assets.Where(a => a.Kind == AssetKind.Texture).Select(a => a.Name).ToArray();
+                var folders = TextureSources.PlaceMission($"m{mission.Key}", names, Multiplayer(mission.Key), Notes);
+                foreach (var (relative, doc) in mission.OrderBy(p => p.Relative, StringComparer.Ordinal))
+                    foreach (var asset in doc.Assets.Where(a => a.Kind == AssetKind.Texture && a.Content is TextureInfo))
+                    {
+                        string name = asset.Name.ToLowerInvariant();
+                        if (!folders.TryGetValue(name, out string? folder)) { folder = $"data/m{mission.Key}/textures"; Notes.Add($"{relative}: {asset.Name} is not in the reference pack; placed in {folder}."); }
+                        (candidates.TryGetValue((folder, name), out var list) ? list : candidates[(folder, name)] = []).Add((mission.Key, doc, asset));
+                    }
+            }
+            foreach (var (relative, doc) in packs.Where(p => TextureSources.MissionNumber(p.Relative) == 0).OrderBy(p => p.Relative, StringComparer.Ordinal))
+            {
+                var assets = doc.Assets.Where(a => a.Kind == AssetKind.Texture && a.Content is TextureInfo).ToArray();
+                var folders = TextureSources.PlaceImages(assets.Select(a => a.Name).ToArray(), Resources);
+                for (int i = 0; i < assets.Length; i++)
+                {
+                    string name = assets[i].Name.ToLowerInvariant();
+                    (candidates.TryGetValue((folders[i], name), out var list) ? list : candidates[(folders[i], name)] = []).Add((0, doc, assets[i]));
+                }
+            }
+            foreach (var ((folder, name), list) in candidates.OrderBy(c => c.Key.Folder, StringComparer.Ordinal).ThenBy(c => c.Key.Name, StringComparer.Ordinal))
+            {
+                token.ThrowIfCancellationRequested();
+                if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name is "." or ".." || name.Length == 0) { Notes.Add($"Texture '{name}' has an unusable name and was skipped."); continue; }
+                var best = list.Select(c => (c, Info: (TextureInfo)c.Asset.Content!))
+                    .OrderByDescending(c => (long)c.Info.Width * c.Info.Height).ThenBy(c => c.Info.PaletteCount > 0 ? 1 : 0).First().c;
+                string path = $"{folder}/{name}{TextureSources.Extension}";
+                var image = TextureDecoder.Decode(best.Doc, best.Asset, token);
+                await WriteAsync(path, Export.PngEncoder.Encode(image, token));
+                int addressing = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(best.Doc.Bytes.Span[(int)(best.Asset.Offset + 14)..]) & 3;
+                if (addressing != 0) TextureAddressing.TryAdd(name, addressing);
+                foreach (int mission in list.Select(c => c.Mission).Distinct()) TexturePaths.TryAdd((mission, name), path);
+            }
+        }
+        /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle (support\bftmulti.gw).</summary>
+        private bool Multiplayer(int mission) =>
+            Scripts.TryGetValue($"support\\loadm{mission}.gw", out var lines) && lines.Any(l => l.Any(t => t.Equals("support\\bftmulti.gw", StringComparison.OrdinalIgnoreCase)));
     }
 }

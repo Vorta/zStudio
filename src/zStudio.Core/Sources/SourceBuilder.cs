@@ -24,6 +24,12 @@ public static partial class SourceBuilder
     public const string SoundsFolder = "data/common/sounds", SoundDefinitions = "data/common/zrdr/sounds.zrd";
     /// <summary>The HIGH, MED and LOW sound banks, in the order of their sounds.zrd declarations.</summary>
     internal static readonly string[] Banks = ["soundsh.zbd", "soundsm.zbd", "soundsl.zbd"];
+    /// <summary>
+    /// Mission texture packs built on export. Hardware loads rtexture&lt;MB of texture memory&gt; counting down, so the
+    /// 8 and 16 MB packs (not shipped with the game) give modern cards every texture at full quality while 2 and 4 serve
+    /// small cards. Software loads its TextureMemory choice counting down, then texturemax (full quality, not shipped).
+    /// </summary>
+    public static readonly string[] TexturePacks = ["rtexture2.zbd", "rtexture4.zbd", "rtexture8.zbd", "rtexture16.zbd", "texture2.zbd", "texture4.zbd", "texture6.zbd", "texture8.zbd", "texturemax.zbd"];
     [GeneratedRegex(@"\Am\d{1,3}\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)] private static partial Regex MissionFolder();
 
     /// <summary>Every game file this tree can build, in a stable order.</summary>
@@ -39,12 +45,21 @@ public static partial class SourceBuilder
         if (scripts.Count > 0) plans.Add(new("interp.zbd", "scripts", scripts));
         var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase));
         if (sounds.Count > 0) plans.AddRange(Banks.Select(bank => new SourceOutputPlan(bank, "sounds", sounds)));
-        foreach (var mission in new DirectoryInfo(SourceProject.Resolve(root, SourceProject.DataFolder)).EnumerateDirectories().Where(d => MissionFolder().IsMatch(d.Name)).OrderBy(d => int.Parse(d.Name.AsSpan(1))))
+        var missions = new DirectoryInfo(SourceProject.Resolve(root, SourceProject.DataFolder)).EnumerateDirectories().Where(d => MissionFolder().IsMatch(d.Name)).OrderBy(d => int.Parse(d.Name.AsSpan(1))).ToArray();
+        // Interface images: fonts, the images tree and each mission's objective images.
+        var images = SourceProject.Files(root, TextureSources.Fonts, Png).Concat(SourceProject.Files(root, TextureSources.Images, Png))
+            .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m.Name}/images", Png))).ToArray();
+        if (images.Length > 0) plans.Add(new("image.zbd", "images", images));
+        foreach (var mission in missions)
         {
-            var resources = SourceProject.Files(root, $"data/{mission.Name}/zrdr", Zrd);
-            if (resources.Count > 0) plans.Add(new($"{mission.Name.ToLowerInvariant()}/zrdr.zbd", "archive", resources));
+            string name = mission.Name.ToLowerInvariant();
+            var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd);
+            if (resources.Count > 0) plans.Add(new($"{name}/zrdr.zbd", "archive", resources));
+            var textures = MissionTextures(root, name);
+            if (textures.Count > 0) plans.AddRange(TexturePacks.Select(pack => new SourceOutputPlan($"{name}/{pack}", "textures", textures)));
         }
         return plans;
+        static bool Png(string name) => name.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -64,6 +79,17 @@ public static partial class SourceBuilder
             if (FileStamp.Read(path) != stamp) throw new InvalidDataException($"{relative} changed while it was read; export again.");
             if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw new InvalidDataException($"{relative} changed while exporting; export again.");
             files[relative] = (sha, stamp); return bytes;
+        }
+        private HashSet<string>? damageMasks;
+        /// <summary>Textures the scripts register as damage-mark masks (WriteTextureSetMap), read once per run.</summary>
+        internal HashSet<string> DamageMasks(CancellationToken token)
+        {
+            if (damageMasks != null) return damageMasks;
+            damageMasks = new(StringComparer.OrdinalIgnoreCase);
+            foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase)))
+                foreach (var line in GameGenScriptText.Tokenize(GameGenScriptText.Decode(Read(script, token))))
+                    if (line.Count > 1 && line[0].Equals("WriteTextureSetMap", StringComparison.OrdinalIgnoreCase)) damageMasks.Add(Path.GetFileNameWithoutExtension(line[1]));
+            return damageMasks;
         }
         internal void CheckUnchanged(CancellationToken token)
         {
@@ -176,6 +202,8 @@ public static partial class SourceBuilder
         "archive" => BuildArchive(plan, snapshot, now, token),
         "scripts" => BuildScripts(root, plan, snapshot, token),
         "sounds" => BuildSounds(root, plan, snapshot, now, token),
+        "images" => BuildImages(plan, snapshot, token),
+        "textures" => BuildTexturePack(plan, snapshot, token),
         _ => throw new InvalidDataException($"Unknown output family '{plan.Family}'.")
     };
 
@@ -226,6 +254,76 @@ public static partial class SourceBuilder
         byte[] header = new byte[12]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header, 0x08971119); System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), 7);
         var package = new PreparedScriptPackage(header, ReadOnlyMemory<byte>.Empty, entries.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToArray(), ReadOnlyMemory<byte>.Empty);
         return new(PreparedScriptWriter.Write(package, token), entries.Count, []);
+    }
+
+    /// <summary>image.zbd: every interface image at its authored size in direct colour, ordered by source path.</summary>
+    private static Built BuildImages(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    {
+        List<PackTexture> textures = [];
+        foreach (string input in plan.Inputs)
+        {
+            token.ThrowIfCancellationRequested();
+            textures.Add(new(TextureName(input), TextureSources.SortKey(input), DecodeTexture(input, snapshot.Read(input, token), token)));
+        }
+        var built = TexturePackBuilder.Build(textures, TexturePackVariant.FromFileName("image.zbd")!, token);
+        return new(built.Bytes, textures.Count, built.Warnings);
+    }
+    /// <summary>
+    /// The textures a mission pack holds: every PNG in the folders the mission searches (support\common.gw), without
+    /// the other campaign missions' vehicle folders. The first folder holding a name wins, as the engine takes the first
+    /// match.
+    /// </summary>
+    internal static IReadOnlyList<string> MissionTextures(string root, string mission)
+    {
+        List<string> inputs = []; HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string folder in TextureSources.MissionFolders(mission, Multiplayer(root, mission)))
+            foreach (string file in SourceProject.Files(root, folder, n => n.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase)))
+                // Subfolders of a search folder are separate folders (bft is listed on its own).
+                if (Path.GetDirectoryName(file)!.Replace('\\', '/').Equals(folder, StringComparison.OrdinalIgnoreCase) && names.Add(Path.GetFileNameWithoutExtension(file))) inputs.Add(file);
+        return inputs;
+    }
+    /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle.</summary>
+    internal static bool Multiplayer(string root, string mission)
+    {
+        string script = SourceProject.Resolve(root, $"{SourceProject.GameGenFolder}/support/load{mission}.gw");
+        if (!File.Exists(script) || new FileInfo(script).Length > SourceProject.MaximumSourceTextBytes) return false;
+        return GameGenScriptText.Tokenize(GameGenScriptText.Decode(File.ReadAllBytes(script))).Any(l => l.Any(t => t.Equals("support\\bftmulti.gw", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
+    /// A mission texture pack at the variant's budget. Direct colour in software packs is kept for the textures the
+    /// engine requires unpaletted: the damage masks that WriteTextureSetMap stamps and the player-vehicle textures they
+    /// stamp (ApplyDamageMaskStampOnHit, retail 0x479660).
+    /// </summary>
+    private static Built BuildTexturePack(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    {
+        var variant = TexturePackVariant.FromFileName(Path.GetFileName(plan.Path)) ?? throw new InvalidDataException($"{plan.Path} is not a texture pack name.");
+        List<PackTexture> textures = [];
+        foreach (string input in plan.Inputs)
+        {
+            token.ThrowIfCancellationRequested();
+            string folder = Path.GetDirectoryName(input)!.Replace('\\', '/');
+            bool vehicle = folder.EndsWith("/bft", StringComparison.OrdinalIgnoreCase) || folder.Equals(TextureSources.MultiBftTextures, StringComparison.OrdinalIgnoreCase);
+            string name = TextureName(input);
+            textures.Add(new(name, TextureSources.SortKey(input), DecodeTexture(input, snapshot.Read(input, token), token), 0, vehicle || snapshot.DamageMasks(token).Contains(name)));
+        }
+        var built = TexturePackBuilder.Build(textures, variant, token);
+        return new(built.Bytes, textures.Count, built.Warnings);
+    }
+    /// <summary>Damage-mark masks (support\weapons.gw WriteTextureSetMap), which must stay unpaletted.</summary>
+    private static readonly HashSet<string> DamageMasks = new(["pock1", "pock2", "pock3"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A texture is named by its file name without the extension, as the engine looks textures up by name.</summary>
+    internal static string TextureName(string input)
+    {
+        string name = Path.GetFileNameWithoutExtension(input).ToLowerInvariant();
+        if (name.Length is < 1 or > 31 || name.Any(c => c > 255)) throw new InvalidDataException($"{input}: texture names need 1–31 Latin-1 characters.");
+        return name;
+    }
+    internal static DecodedImage DecodeTexture(string input, byte[] bytes, CancellationToken token)
+    {
+        try { return Export.PngDecoder.Decode(bytes, 4096, token); }
+        catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
     }
 
     private static Built BuildSounds(string root, SourceOutputPlan plan, Snapshot snapshot, DateTime now, CancellationToken token)

@@ -122,53 +122,10 @@ public static class ModelImport
         static int Index(string s, int count) { int v = int.Parse(s, CultureInfo.InvariantCulture); int i = v < 0 ? count + v : v - 1; if (i < 0 || i >= count) throw new FormatException("Missing index."); return i; }
     }
 
-    /// <summary>Strict 8-bit RGB/RGBA PNG decoder for Blender diffuse exports; limits decoded allocations.</summary>
+    /// <summary>Decodes a PNG to RGBA8 through the shared <see cref="PngDecoder"/>, limiting its dimensions.</summary>
     public static DecodedImage ReadPng(byte[] png, CancellationToken token = default, int maximumDimension = Formats.TexturePackWriter.MaximumDimension)
     {
         if (maximumDimension is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(maximumDimension));
-        if (png.Length < 33 || !png.AsSpan(0, 8).SequenceEqual(new byte[] { 137,80,78,71,13,10,26,10 })) throw new InvalidDataException("Expected PNG.");
-        int width = 0, height = 0, channels = 0, offset = 8; bool ended = false, header = false;
-        using MemoryStream compressed = new();
-        while (offset < png.Length)
-        {
-            token.ThrowIfCancellationRequested();
-            if (offset > png.Length - 12) throw new InvalidDataException("Truncated PNG chunk.");
-            int length = BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(offset));
-            if (length < 0 || length > png.Length - offset - 12) throw new InvalidDataException("Invalid PNG chunk length.");
-            var type = png.AsSpan(offset + 4, 4); var data = png.AsSpan(offset + 8, length);
-            uint crc = uint.MaxValue;
-            foreach (byte b in png.AsSpan(offset + 4, length + 4)) { crc ^= b; for (int bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xedb88320u : 0); }
-            if (~crc != BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(offset + 8 + length))) throw new InvalidDataException("PNG checksum mismatch.");
-            if (type.SequenceEqual("IHDR"u8))
-            {
-                if (header || offset != 8 || length != 13) throw new InvalidDataException("Invalid PNG header.");
-                width = BinaryPrimitives.ReadInt32BigEndian(data); height = BinaryPrimitives.ReadInt32BigEndian(data[4..]);
-                int limit = maximumDimension;
-                if (width < 1 || width > limit || height < 1 || height > limit || data[8] != 8 || data[9] is not (2 or 6) || data[10] != 0 || data[11] != 0 || data[12] != 0)
-                    throw new InvalidDataException($"Export a non-interlaced 8-bit RGB/RGBA PNG up to {limit} × {limit}.");
-                channels = data[9] == 6 ? 4 : 3; header = true;
-            }
-            else if (type.SequenceEqual("IDAT"u8)) { if (!header) throw new InvalidDataException("Missing PNG header."); compressed.Write(data); }
-            else if (type.SequenceEqual("IEND"u8)) { if (length != 0 || offset + 12 != png.Length) throw new InvalidDataException("Invalid PNG end."); ended = true; break; }
-            else if (type.SequenceEqual("tRNS"u8) || (type[0] & 32) == 0) throw new InvalidDataException("Unsupported PNG chunk; export opaque RGB/RGBA.");
-            offset += length + 12;
-        }
-        if (!header || !ended) throw new InvalidDataException("Incomplete PNG.");
-        int stride = width * channels; byte[] raw = new byte[(stride + 1) * height]; compressed.Position = 0;
-        using (ZLibStream z = new(compressed, CompressionMode.Decompress)) { try { z.ReadExactly(raw); } catch (EndOfStreamException ex) { throw new InvalidDataException("Truncated PNG pixels.", ex); } if (z.ReadByte() != -1) throw new InvalidDataException("Excess PNG pixels."); }
-        byte[] pixels = new byte[stride * height], rgba = new byte[width * height * 4];
-        for (int y = 0; y < height; y++)
-        {
-            token.ThrowIfCancellationRequested(); int filter = raw[y * (stride + 1)]; if (filter > 4) throw new InvalidDataException("Invalid PNG filter.");
-            for (int x = 0; x < stride; x++)
-            {
-                int a = x >= channels ? pixels[y * stride + x - channels] : 0, b = y > 0 ? pixels[(y - 1) * stride + x] : 0, c = y > 0 && x >= channels ? pixels[(y - 1) * stride + x - channels] : 0;
-                int pa = Math.Abs(b - c), pb = Math.Abs(a - c), pc = Math.Abs(a + b - 2 * c);
-                int predict = filter switch { 0 => 0, 1 => a, 2 => b, 3 => (a + b) / 2, _ => pa <= pb && pa <= pc ? a : pb <= pc ? b : c };
-                pixels[y * stride + x] = unchecked((byte)(raw[y * (stride + 1) + x + 1] + predict));
-            }
-        }
-        for (int i = 0; i < width * height; i++) { pixels.AsSpan(i * channels, 3).CopyTo(rgba.AsSpan(i * 4)); rgba[i * 4 + 3] = channels == 4 ? pixels[i * 4 + 3] : (byte)255; }
-        return new(width, height, rgba);
+        return PngDecoder.Decode(png, maximumDimension, token);
     }
 }
