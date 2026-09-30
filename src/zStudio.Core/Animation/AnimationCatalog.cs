@@ -80,7 +80,7 @@ public static partial class AnimationCatalog
         new(21,"Animate camera",108,[B("Channels"),N("Camera node",16),V("Near clip: start/end/rate",20),V("Far clip: start/end/rate",32),V("Clip distance: start/end/rate",44),V("FOV X (radians): start/end/rate",56),V("FOV Y (radians): start/end/rate",68),V("Viewport X: start/end/rate",80),V("Viewport Y: start/end/rate",92),F("Duration (s)",104)],"Approximate: perspective camera",104),
         new(22,"Release waiting sequence",48,[S("Sequence name",12),I("Sequence cache",44,true)]),
         new(23,"Stop sequence",48,[S("Sequence name",12),I("Sequence cache",44,true)]),
-        new(24,"Launch child animation",80,[S("Animation name",12,20),I("Runtime state",32,true),N("Bound node",44,1,true),new("Launch flags",46,AnimationFieldKind.Short,2),new("Entry cache",48,AnimationFieldKind.Short,2,ReadOnly:true),N("Runtime slot",50,7,true),N("Reference node",52,1,true),V("Position",56),V("Rotation",68)]),
+        new(24,"Launch child animation",80,[S("Animation name",12),N("Bound node",44,1,true),new("Launch flags",46,AnimationFieldKind.Short,2),new("Entry cache",48,AnimationFieldKind.Short,2,ReadOnly:true),N("Runtime slot",50,7,true),N("Reference node",52,1,true),V("Position",56),V("Rotation",68)]),
         new(25,"Stop named animation",48,[S("Animation name",12),I("Entry cache",44,true)]),
         new(26,"Reset / clean up named animation",48,[S("Animation name",12),I("Entry cache",44,true)]),
         new(27,"Request animation finish",48,[S("Animation name",12),I("Entry cache",44,true)]),

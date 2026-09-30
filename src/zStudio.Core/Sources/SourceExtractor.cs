@@ -47,6 +47,7 @@ public static class SourceExtractor
         List<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> soundBanks = [];
         List<(string Relative, ZbdDocument Document)> texturePacks = [];
         List<(string Relative, ZbdDocument Document)> worlds = [];
+        List<(string Relative, byte[] Bytes)> animations = [];
         for (int i = 0; i < files.Count; i++)
         {
             token.ThrowIfCancellationRequested(); var (path, relative) = files[i]; progress?.Report(new(i, files.Count, relative));
@@ -70,6 +71,11 @@ public static class SourceExtractor
                     if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
                     worlds.Add((relative, doc)); family = "worlds";
                 }
+                else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Animation, Version: 28 } && TextureSources.MissionNumber(relative) > 0 && Path.GetFileName(relative).Equals("anim.zbd", StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = Animation.AnimationPackage.Read(bytes, token);
+                    animations.Add((relative, bytes)); family = "animations";
+                }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.TexturePack } && IsTexturePack(relative))
                 {
                     var doc = FormatRegistry.Default.OpenBytes(relative, bytes, token: token);
@@ -83,6 +89,7 @@ public static class SourceExtractor
         if (soundBanks.Count > 0) await context.ExtractSoundsAsync(soundBanks);
         if (texturePacks.Count > 0) await context.ExtractTexturesAsync(texturePacks);
         if (worlds.Count > 0) await context.ExtractWorldsAsync(worlds);
+        if (animations.Count > 0) await context.ExtractAnimationsAsync(animations);
         progress?.Report(new(files.Count, files.Count, "Done"));
         return new(projectRoot, context.Written, families, skipped, context.Notes);
     }
@@ -151,6 +158,15 @@ public static class SourceExtractor
             await File.WriteAllBytesAsync(path, bytes, token);
             if (modified is { } time) File.SetLastWriteTimeUtc(path, time);
             sources[relative] = sha;
+        }
+
+        /// <summary>Replaces a source written earlier (a definition rebuilt from what it compiled to), keeping its time.</summary>
+        private async Task ReplaceAsync(string relative, byte[] bytes)
+        {
+            if (!sources.ContainsKey(relative)) { await WriteAsync(relative, bytes); return; }
+            string path = SourceProject.Resolve(root, relative); DateTime modified = File.GetLastWriteTimeUtc(path);
+            await File.WriteAllBytesAsync(path, bytes, token); File.SetLastWriteTimeUtc(path, modified);
+            sources[relative] = SourceProject.Sha256(bytes);
         }
 
         internal async Task ExtractResourcesAsync(string output, IReadOnlyList<ArchiveSources.Member> members)
@@ -265,9 +281,46 @@ public static class SourceExtractor
             List<WorldSources.MissionWorld> missions = [];
             foreach (var (relative, doc) in worlds.OrderBy(w => TextureSources.MissionNumber(w.Relative)))
                 missions.Add(new(TextureSources.MissionNumber(relative), Worlds.GameZWorldReader.FromDocument(doc, token)));
+            foreach (var mission in missions) WorldNodes[mission.Mission] = mission.World.Nodes.Select(n => n.Name).ToArray();
             var outputs = await Task.Run(() => WorldSources.Reconstruct(missions, name => Scripts.GetValueOrDefault(name),
                 (mission, name) => TexturePaths.GetValueOrDefault((mission, name)), TextureFiles, name => TextureAddressing.GetValueOrDefault(name), Notes, token), token);
             foreach (var output in outputs) await WriteAsync(output.Path, output.Bytes);
+        }
+        /// <summary>Node names of each shipped world, which animation definitions bind to.</summary>
+        internal Dictionary<int, IReadOnlyCollection<string>> WorldNodes { get; } = [];
+        /// <summary>Keyframe scripts of the shipped animations (see <see cref="AnimationSources"/>); definitions come with the resources.</summary>
+        internal async Task ExtractAnimationsAsync(IReadOnlyList<(string Relative, byte[] Bytes)> animations)
+        {
+            List<AnimationSources.MissionAnimation> missions = [];
+            foreach (var (relative, bytes) in animations.OrderBy(a => TextureSources.MissionNumber(a.Relative)))
+            {
+                int mission = TextureSources.MissionNumber(relative);
+                if (!WorldNodes.TryGetValue(mission, out var nodes)) { Notes.Add($"{relative}: the mission has no world, so its animations' keyframe scripts were not reconstructed."); continue; }
+                missions.Add(new(mission, Animation.AnimationPackage.Read(bytes, token), Stamps(bytes), nodes));
+            }
+            var outputs = await Task.Run(() => AnimationSources.Reconstruct(missions, new DiskFiles(root), Notes, token), token);
+            // Scripts are new; definitions are the shipped ones rebuilt where they no longer matched anim.zbd.
+            foreach (var output in outputs)
+                if (output.Path.EndsWith(ZrdText.Extension, StringComparison.OrdinalIgnoreCase)) await ReplaceAsync(output.Path, output.Bytes);
+                else await WriteAsync(output.Path, output.Bytes);
+        }
+        /// <summary>The source paths an animation file records (80-character paths with a time each).</summary>
+        private static List<string> Stamps(byte[] bytes)
+        {
+            int count = (int)Math.Min(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(8)), (uint)((bytes.Length - 12) / 84));
+            List<string> stamps = [];
+            for (int i = 0; i < count; i++)
+            {
+                var field = bytes.AsSpan(12 + i * 84, 80); int end = field.IndexOf((byte)0);
+                stamps.Add(System.Text.Encoding.Latin1.GetString(end < 0 ? field : field[..end]));
+            }
+            return stamps;
+        }
+        /// <summary>The project as written so far.</summary>
+        private sealed class DiskFiles(string root) : Worlds.IProjectFiles
+        {
+            public bool Exists(string relative) => File.Exists(SourceProject.Resolve(root, relative));
+            public byte[] Read(string relative, CancellationToken token) => File.ReadAllBytes(SourceProject.Resolve(root, relative));
         }
         /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle (support\bftmulti.gw).</summary>
         private bool Multiplayer(int mission) =>

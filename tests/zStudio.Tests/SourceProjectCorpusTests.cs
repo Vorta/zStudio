@@ -19,9 +19,13 @@ public sealed class SourceProjectCorpusTests
         try
         {
             var report = await SourceExtractor.ExtractAsync(corpus, project, token: Token);
-            Assert.Empty(report.Notes);
+            // Animation definitions changed after the shipped animations were compiled are rebuilt from them; nothing else is noted.
+            const string Rebuilt = " was changed after the shipped animations were compiled; it was rebuilt from anim.zbd.";
+            Assert.All(report.Notes, n => Assert.EndsWith(Rebuilt, n));
+            var rebuilt = report.Notes.Select(n => Path.GetFileName(n[..n.IndexOf(':')])).ToHashSet(StringComparer.OrdinalIgnoreCase);
             Assert.Equal(1, report.Families["scripts"]); Assert.Equal(3, report.Families["sounds"]);
             Assert.Equal(Directory.GetFiles(corpus, "gamez.zbd", SearchOption.AllDirectories).Length, report.Families["worlds"]);
+            Assert.Equal(Directory.GetFiles(corpus, "anim.zbd", SearchOption.AllDirectories).Length, report.Families["animations"]);
             Assert.Equal(Directory.GetFiles(corpus, "zrdr.zbd", SearchOption.AllDirectories).Length, report.Families["resources"]);
             Assert.All(report.NotReconstructed, f => Assert.DoesNotContain("zrdr.zbd", f));
             // The original layout, and nothing zStudio-specific.
@@ -38,7 +42,15 @@ public sealed class SourceProjectCorpusTests
                 string relative = Path.GetRelativePath(corpus, archive);
                 var shipped = Members(archive); var built = Members(Path.Combine(exported, relative));
                 Assert.Equal(shipped.Keys.Order(StringComparer.OrdinalIgnoreCase), built.Keys.Order(StringComparer.OrdinalIgnoreCase));
-                Assert.All(shipped, m => Assert.Equal(m.Value, built[m.Key]));
+                Assert.All(shipped.Where(m => !rebuilt.Contains(m.Key)), m => Assert.Equal(m.Value, built[m.Key]));
+            }
+            // Animations rebuilt from the definitions and keyframe scripts match every shipped entry.
+            foreach (string animations in Directory.GetFiles(corpus, "anim.zbd", SearchOption.AllDirectories))
+            {
+                var shipped = Recoil.Zbd.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(animations), Token);
+                var built = Recoil.Zbd.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(Path.Combine(exported, Path.GetRelativePath(corpus, animations))), Token);
+                Assert.Equal(shipped.Entries.Select(e => e.Name), built.Entries.Select(e => e.Name));
+                Assert.All(Enumerable.Range(1, shipped.Entries.Count - 1), i => Assert.Null(Recoil.Zbd.Core.Animation.AnimationComparer.Difference(shipped.Entries[i], built.Entries[i])));
             }
             // Worlds rebuilt by their scripts have the shipped nodes, placements, flags, cells, models and textures; only the
             // grouping of coplanar triangles into polygons may differ, which draws the same surfaces.
@@ -67,10 +79,11 @@ public sealed class SourceProjectCorpusTests
             }
 
             // Exported files carry their sources' folders, so reconstructing them restores the same tree.
-            await SourceExtractor.ExtractAsync(exported, again, token: Token);
-            var first = Tree(project); var second = Tree(again);
-            Assert.Equal(first.Keys.Order(StringComparer.OrdinalIgnoreCase), second.Keys.Order(StringComparer.OrdinalIgnoreCase));
-            Assert.All(first, f => Assert.Equal(f.Value, second[f.Key]));
+            var second = await SourceExtractor.ExtractAsync(exported, again, token: Token);
+            Assert.Empty(second.Notes);
+            var first = Tree(project); var reconstructed = Tree(again);
+            Assert.Equal(first.Keys.Order(StringComparer.OrdinalIgnoreCase), reconstructed.Keys.Order(StringComparer.OrdinalIgnoreCase));
+            Assert.All(first, f => Assert.Equal(f.Value, reconstructed[f.Key]));
         }
         finally { if (Directory.Exists(work)) Directory.Delete(work, true); }
     }

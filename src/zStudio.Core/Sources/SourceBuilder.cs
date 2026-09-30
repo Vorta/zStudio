@@ -19,8 +19,9 @@ public sealed record SourceExportReport(string? Destination, IReadOnlyList<Sourc
 /// Builds game files from a source tree, as the original gamegen build did: resource archives from each <c>zrdr</c> folder,
 /// prepared scripts from <c>gamegen</c>, the three sound banks from the best-quality WAVs converted to the formats
 /// that <c>sounds.zrd</c> declares, interface images and mission texture packs from PNGs, and each mission world by
-/// running its build script (<c>gamegen/mN.gs</c>) over the glTF model sources. Output must work in the game; it does
-/// not reproduce the shipped bytes.
+/// running its build script (<c>gamegen/mN.gs</c>) over the glTF model sources, and each mission's animations from
+/// their definitions (<c>data/mN/zrdr/anim.zrd</c>) and keyframe scripts against that world. Output must work in the
+/// game; it does not reproduce the shipped bytes.
 /// </summary>
 public static partial class SourceBuilder
 {
@@ -49,8 +50,8 @@ public static partial class SourceBuilder
         var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase));
         if (sounds.Count > 0) plans.AddRange(Banks.Select(bank => new SourceOutputPlan(bank, "sounds", sounds)));
         var missions = new DirectoryInfo(SourceProject.Resolve(root, SourceProject.DataFolder)).EnumerateDirectories().Where(d => MissionFolder().IsMatch(d.Name)).OrderBy(d => int.Parse(d.Name.AsSpan(1))).ToArray();
-        // A world may load any model in the project; which ones depends on its scripts.
-        IReadOnlyList<string>? models = null;
+        // A world may load any model in the project, and animations any keyframe script; which depends on the sources.
+        IReadOnlyList<string>? models = null, scriptsFound = null;
         // Interface images: fonts, the images tree and each mission's objective images.
         var images = SourceProject.Files(root, TextureSources.Fonts, Png).Concat(SourceProject.Files(root, TextureSources.Images, Png))
             .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m.Name}/images", Png))).ToArray();
@@ -67,6 +68,12 @@ public static partial class SourceBuilder
             }
             var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd);
             if (resources.Count > 0) plans.Add(new($"{name}/zrdr.zbd", "archive", resources));
+            string definitions = AnimationRoot(name);
+            if (File.Exists(SourceProject.Resolve(root, definitions)))
+            {
+                scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase));
+                plans.Add(new($"{name}/anim.zbd", "animations", [definitions, .. scriptsFound]));
+            }
             var textures = MissionTextures(root, name);
             if (textures.Count > 0) plans.AddRange(TexturePacks.Select(pack => new SourceOutputPlan($"{name}/{pack}", "textures", textures)));
         }
@@ -75,6 +82,8 @@ public static partial class SourceBuilder
     }
     /// <summary>The script that builds a mission's world (gamegen/mN.gs).</summary>
     internal static string WorldScript(string mission) => $"{SourceProject.GameGenFolder}/{mission}.gs";
+    /// <summary>The root of a mission's animation definitions.</summary>
+    internal static string AnimationRoot(string mission) => $"data/{mission}/zrdr/anim.zrd";
     private static bool IsModelSource(string name) => name.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".glb", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -127,6 +136,8 @@ public static partial class SourceBuilder
             if (cached.Failure != null) throw new InvalidDataException($"The {mission} world does not assemble: {cached.Failure.Message}", cached.Failure);
             return cached.World!;
         }
+        /// <summary>The project as the compilers read it: through the snapshot, refusing links.</summary>
+        internal IProjectFiles Files() => new ProjectFiles(this, root);
         /// <summary>The assembler's view of the project: reads go through the snapshot, and links are refused.</summary>
         private sealed class ProjectFiles(Snapshot snapshot, string root) : IProjectFiles
         {
@@ -253,6 +264,7 @@ public static partial class SourceBuilder
         "images" => BuildImages(plan, snapshot, token),
         "textures" => BuildTexturePack(plan, snapshot, token),
         "world" => BuildWorld(plan, snapshot, token),
+        "animations" => BuildAnimations(plan, snapshot, token),
         _ => throw new InvalidDataException($"Unknown output family '{plan.Family}'.")
     };
 
@@ -381,6 +393,21 @@ public static partial class SourceBuilder
         }
         catch (InvalidDataException ex) { warnings.Add($"{ex.Message} The pack holds only the mission's texture folders, without edge modes."); }
         return (inputs, new Dictionary<string, int>(), warnings);
+    }
+
+    /// <summary>
+    /// A mission's animations (see <see cref="Animation.AnimationCompiler"/>), bound to the world this export builds:
+    /// definitions whose root the world lacks are left out, and names the game could not resolve are reported.
+    /// </summary>
+    private static Built BuildAnimations(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    {
+        string mission = plan.Path.Split('/')[0];
+        List<string> warnings = [];
+        IReadOnlyCollection<string>? nodes = null;
+        if (snapshot.HasWorld(mission)) nodes = snapshot.World(mission, token).World.Nodes.Select(n => n.Name).ToArray();
+        else warnings.Add($"{mission} has no world script ({WorldScript(mission)}), so animation roots and node names are not checked and patterns do not expand.");
+        var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, token);
+        return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]);
     }
 
     /// <summary>The mission world, built by its script from the model sources (see <see cref="WorldAssembler"/>).</summary>
