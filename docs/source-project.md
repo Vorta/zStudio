@@ -1,6 +1,6 @@
 # Source projects
 
-RECOIL's shipped ZBD files are build outputs. The studio originally built them with a gamegen tool from a source tree (`data\` beside a tool folder of `.gs`/`.gw` scripts), repackaging shared textures, models, animations and resources for every mission. zStudio reconstructs that source tree from shipped files, lets you work on the sources, and builds the game files from them again.
+RECOIL's shipped ZBD files are build outputs. The studio originally built them with a gamegen tool from a source tree (`data\` beside a tool folder of `.gs`/`.gw` scripts), repackaging shared textures, models, animations and resources for every mission. zStudio reconstructs that source tree from shipped files, lets you work on the sources, and builds every game file from them again: resource archives, scripts, sounds, interface images, texture packs, worlds and animations.
 
 A source project is separate from editing ZBD files directly. Opening a ZBD file still edits that file. In a source project, the sources are what you edit; game files change only when you export them. Exported files must work in the game; they are not byte-identical to the shipped files.
 
@@ -27,8 +27,13 @@ Reconstruction supports RECOIL data and requires RECOIL evidence (prepared scrip
   gamegen\                     the original tool folder: *.gs and support\*.gw, recovered from interp.zbd
   data\                        the original source tree
     common\zrdr\{enemies,explosns,lighting,vtol,weapons}\*.zrd
-    common\multi_bft\zrdr\     common\sounds\*.wav
-    mN\zrdr\{aipath,envmodels,vtol,bft,choppers,…}\*.zrd
+    common\multi_bft\{zrdr,model,textures}\
+    common\{models,textures}\  common\effects\{models,textures}\  effects\{models,textures}\
+    common\sounds\*.wav         common\{fonts,images}\*.png
+    mN\models\*.gltf/.bin       mN\models\bft\     (the mission database mN.gltf and its loads)
+    mN\textures\*.png           mN\textures\bft\
+    mN\zrdr\{aipath,envmodels,vtol,bft,choppers,…}\*.zrd, *.zan
+    mN\images\*.png             (objective images)
 ```
 
 Directory placement is recovered from evidence in the shipped files. Every ZAR member records the temporary file its compiler created in the source directory (for example `D:\battlesportdev\data\m1\zrdr\envmodels\fueE3B0.TMP`), so each resource returns to its original folder, including subfolders that member names do not carry. Sound banks carry no source paths; their WAVs go to `data\common\sounds`, the `SOUND_PATH` set by `sounds.zrd`. The prepared-script index names each script (`support\common.gw`, `m1.gs`) and its modification time, which the reconstructed file keeps.
@@ -43,19 +48,56 @@ Exported archives record each member's project path (`data\m1\zrdr\envmodels\fue
 | `mN\zrdr.zbd` | `.zrd` files under `data\mN\zrdr` | compiled, ordered by source path |
 | `interp.zbd` | `gamegen\*.gs`, `gamegen\support\*.gw` | tokenized; each script records its file's modification time |
 | `soundsh.zbd`, `soundsm.zbd`, `soundsl.zbd` | `data\common\sounds\*.wav` | converted to the HIGH/MED/LOW formats of `sounds.zrd` |
-| `gamez.zbd`, `anim.zbd`, texture packs, `image.zbd` | not reconstructed yet | not built |
+| `image.zbd` | `data\common\fonts`, `data\common\images`, `data\mN\images` PNGs | interface images at their authored size in direct colour |
+| `mN\rtexture{2,4,8,16}.zbd`, `mN\texture{2,4,6,8,max}.zbd` | the mission's texture folders, and every texture its world uses from elsewhere | each PNG scaled and converted to the pack's budget and colour mode |
+| `mN\gamez.zbd` | `gamegen\mN.gs` and the scripts it sources, glTF models, texture names | the build script run with the engine's interpreter rules |
+| `mN\anim.zbd` | `data\mN\zrdr\anim.zrd`, the definition files it lists and their `.zan` scripts | compiled against the world this export builds |
 
 Archive members are found by name, so two sources with the same file name in one archive are refused. A `.zrd` source may be text or compiled data.
 
 Each sound's source is its best-quality version across the three shipped banks. `sounds.zrd` declares a rate, sample size and channel count for each bank; the declaration is a ceiling. As in every retail bank, each of the three values is the lower of the source's and the declaration's, so a sound is never raised in quality. Conversion mixes channels, reduces sample size and resamples with a windowed-sinc low-pass filter; cue markers, which the engine turns into playback times, move with the samples. A WAV that `sounds.zrd` does not declare goes into every bank unchanged, with a warning. Only 8- and 16-bit PCM can be converted.
 
-On the 1999 retail data, reconstructing, exporting and reconstructing again gives the same tree. The exported archives contain the same members with identical compiled data, `interp.zbd` the same scripts and tokens, `soundsh.zbd` the shipped sounds unchanged, and the medium/low banks the shipped formats with the same frame counts (within two frames) and cues.
+On the 1998 and 1999 retail data, reconstructing, exporting and reconstructing again gives the same tree. The exported archives contain the same members with identical compiled data (apart from the rebuilt animation definitions), `interp.zbd` the same scripts and tokens, `soundsh.zbd` the shipped sounds unchanged, the medium/low banks the shipped formats with the same frame counts (within two frames) and cues, every world the shipped nodes, placements, models and textures, and every `anim.zbd` the shipped entries.
 
-Reconstruction lists shipped files whose family it does not reconstruct yet. They are not copied into the project. Textures (PNG made from the best-quality variant of each texture, scaled and converted per pack on export, including packs the engine supports but the game did not ship), GameZ worlds with glTF models, and an `anim.zbd` compiler from `.zrd`/`.zan` sources are the next steps. The 1999 data shares 1.4× of its texture-pack records, 3.8× of its world content (after removing 42.8 MB of preallocated empty slots) and 2× of its animation entries across missions; those families carry most of the redundancy.
+Reconstruction lists shipped files whose family it does not reconstruct. They are not copied into the project.
+
+### Textures
+
+Each texture becomes one PNG from its best-quality stored variant (the largest, preferring direct colour at equal size) in the folder the mission packs' record order places it: `data\effects\textures`, `data\common\textures`, the mission's `textures` and `textures\bft`, or `data\common\multi_bft\textures` for multiplayer missions. Packs are built from the PNGs on export: hardware packs (`rtexture`) as RGB565 with an alpha plane, software packs (`texture`) with shared palettes, and damage masks and player-vehicle skins in direct colour. Besides the shipped 2 and 4 MB packs, exports add `rtexture8`/`rtexture16` and `texture8`/`texturemax`, which the engine loads when the card or the TextureMemory setting allows, so modern cards get every texture at full quality. A texture's edge mode (clamp or wrap) comes from the glTF samplers that use it.
+
+### Worlds and models
+
+A mission world is built by running its script, `gamegen\mN.gs`, as the original build did: the interpreter follows `source`, macros and `ifdef`, and applies the world, camera, light and node commands with the retail engine's semantics. `LoadGameGen name.flt node` loads `name.gltf` (or `.glb`) from the model directories the scripts set with `SetModelDirectory`, newest first; the file after `GameGenSetWorld` is the mission database, whose top-level nodes join the world. When the script writes the world (`GameZWriteZBDFile`), zStudio runs the engine's update (matrices, bounds, grid partition, single-parent flags) and writes version-15 GameZ.
+
+Models are glTF 2.0 with PNG textures, editable in Blender. Engine attributes a glTF cannot express live in `extras.recoil`, which Blender keeps as custom properties:
+
+- nodes: flags that differ from the loader's default, zone, LOD ranges, the `name` when a name repeats or Blender renamed it (`.001` suffixes are ignored), `ref` for an OpenFlight external reference (another glTF file, loaded under the node), and `instance` for a node shared by several parents (glTF nodes have one parent, so each copy carries the same number and import joins them; the first copy is used);
+- meshes: display mode and flags, texture scrolling, morph factor, and point entries (lens flares);
+- materials: polygon priority, back faces, zone word, colour, soil and the engine's material flags; textures by name;
+- primitives: `polygons`, where joining triangles back into the stored polygons would not restore them (a count of fan triangles per polygon, or a corner list);
+- the scene: `rootFlags`, the flags of the node a script load creates.
+
+Reconstruction replays each mission's scripts against its shipped world and undoes their edits (attaching, renaming, rearranging) in reverse, so each load's root holds exactly its file's scene. Identical content is written once: shared files go to `data\common\models`, mission files to `data\mN\models`, and a file whose script chose its folder stays there. Polygons keep their authored corners and UVs as the original build stored them (repeated corners, non-planar polygons and UVs are kept; only the tile shift and 1/256 quantization apply).
+
+A world assembled from the reconstructed sources has the shipped nodes, placements, flags, grid cells, models and textures for every 1998 and 1999 mission. It shares identical models between loads, so it has fewer model and material records than the shipped file.
+
+**Models from other missions.** A mission can load any model in the project: add a `SetModelDirectory` for the other mission's folder and a `LoadGameGen` to a mission script. The export then includes the model's geometry and materials in the world, and every texture it uses in the mission's packs, even when the texture lives in another mission's folder; the mission's own folders win for a name both have, as the engine finds the first match.
+
+### Animations
+
+`anim.zbd` is compiled from the mission's `data\mN\zrdr\anim.zrd`, the definition files it lists (a path relative to the gamegen folder, or a bare name found beside the listing file or in `ANIMATION_PATH`; a missing file is skipped with a warning) and the keyframe scripts named by `OBJECT_MOTION_SI_SCRIPT`. Definitions bind to the world this export builds: a `NAME` listing several roots binds to the first the world has, a name with `*` (one digit each) expands to every matching node in name order, and a definition whose root the world lacks is left out, as the shipped files show. A node, light or sound name the world cannot resolve would make the game reject the whole file, so the export reports it. The compiled file carries no source stamps, because the game rejects `anim.zbd` when a stamped source exists with a different time.
+
+Every entry of every shipped `anim.zbd` recompiles from its sources to the same fields. Seven shipped definitions had changed after the animations were compiled (for example `bft_to_5cav` in `m13\zrdr\envmodels\bft_trans.zrd` moves the vehicle 55 units down, where the shipped animation moves it 47); reconstruction rebuilds those from the compiled entries and says so in its notes, so the project reproduces the animations the game shipped. Their archive members differ from the shipped ones, which the engine does not read at run time.
+
+### Known differences
+
+- The original build reused node slots it freed while loading, which exported worlds do not reproduce. The game binds consecutive animations with the same root name to same-named nodes in slot order, so an animation can bind to a different one of two same-named nodes (for example `smoke1` in most missions). Nothing else depends on slot order.
+- Shipped name fields keep residue after the terminator; exported files have their own residue.
+- `m9\gamez.zbd` names a texture, `surf00`, that no shipped pack holds; the game shows its default texture for it, and so does the exported world.
 
 ## Editing sources
 
-Text `.zrd` files open in the shared ZRD viewer and editor (tree, Properties, `zrd_nodes`, `zrd_edit`) and save as text; comments and formatting you add are replaced by the canonical layout when zStudio saves the file. Importing a text `.zrd` into an archive compiles it. `.gs`/`.gw` scripts open read-only as token text; edit them in any text editor. WAV sources can be replaced with any 8- or 16-bit PCM file.
+Text `.zrd` files open in the shared ZRD viewer and editor (tree, Properties, `zrd_nodes`, `zrd_edit`) and save as text; comments and formatting you add are replaced by the canonical layout when zStudio saves the file. Importing a text `.zrd` into an archive compiles it. `.gs`/`.gw` scripts open read-only as token text; edit them in any text editor. WAV sources can be replaced with any 8- or 16-bit PCM file, PNG textures with any PNG, and glTF models with files exported from Blender (keep the custom properties).
 
 ## Text formats
 
@@ -69,10 +111,23 @@ The original compiler's text syntax did not survive, and the retail engine only 
 - Strings are bare when they start with a letter or `_` and contain only letters, digits, `_`, `.` and `-`; otherwise they are quoted with `\"`, `\\` and `\xNN` escapes. Files are written as ASCII and read as Latin-1.
 - `#` starts a comment outside strings.
 
+### Keyframe scripts (`.zan`)
+
+The original scripts were exported from Softimage and did not survive; zStudio's format lists a track per object, and a definition's `NAME` picks the track:
+
+```
+OBJECT copter01
+FRAME 0 POSITION 1429.22 56.43 3107.5 VELOCITY 35.18 -8.75 -45.85 ROTATION 0.929 -0.128 -0.319 0.136 SPIN -0.003 0.130 0.020 SCALE 1 1 1 GROWTH 0 0 0
+FRAME 5 POSITION 1440.95 53.52 3092.22 ROTATION 0.941 -0.121 -0.279 0.148
+FRAME 2599
+```
+
+A key's channels start a segment that runs to the next key; the last key's frame ends the track. Frames count at the definition's `SCRIPT_FRAME_RATE` and may go back (the engine plays reversed segments as authored). POSITION and SCALE are XYZ, ROTATION a quaternion W X Y Z. A channel's rate may follow it: VELOCITY and GROWTH per second, SPIN as a rotation vector (half-angle radians per second). Without a rate, the channel moves to its value at the next key that lists it. Reconstructed scripts list every rate, so they compile to the shipped keyframes exactly. A file without OBJECT lines is one track any node may use.
+
 ### Gamegen scripts (`.gs`, `.gw`)
 
 Scripts use the engine's own tokenizer (`CZInterp::TokenizeLine`, retail 0x4C13C0): `#` ends a line, tokens are separated by comma, space, tab or newline, and ASCII whitespace after a separator is skipped. Only a separator directly after another produces an empty token, so zStudio writes empty tokens with commas (`a,,b`; a trailing empty token needs `a,,`).
 
 ## Keep sources away from a retail install
 
-Do not place a source tree inside a game folder. The engine rejects `anim.zbd` when a stamped source exists with a different time, loose `support\*.gw`/`*.gs` files override `interp.zbd`, and loose `*_easy`/`*_hard` resources change difficulty selection. Export into the game folder (or a separate folder) instead.
+Do not place a source tree inside a game folder. Loose `support\*.gw`/`*.gs` files override `interp.zbd`, and loose `*_easy`/`*_hard` resources change difficulty selection. (The shipped `anim.zbd` files are rejected when a source they stamp exists with a different time; exported ones carry no stamps.) Export into the game folder (or a separate folder) instead.
