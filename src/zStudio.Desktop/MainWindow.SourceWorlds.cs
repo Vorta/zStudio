@@ -270,7 +270,7 @@ public partial class MainWindow
     private static object? SourceWorldState(DocumentModel d) => d.SourceWorld is not { } world ? null : new
     {
         mission = world.Mission, project = world.Root, script = world.Edits.ScriptPath, definitions = world.Edits.HasDefinitions ? world.Edits.DefinitionsPath : null,
-        world.Edits.CanUndo, world.Edits.CanRedo, current = world.Owner == d,
+        world.Edits.CanUndo, world.Edits.CanRedo, current = world.Owner == d, rebuilding = world.IsRebuilding,
         additionCount = world.Edits.Additions.Count,
         additions = world.Edits.Additions.Take(256).Select(a => new
         {

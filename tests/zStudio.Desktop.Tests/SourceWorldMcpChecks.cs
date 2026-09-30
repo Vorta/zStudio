@@ -106,11 +106,15 @@ internal static class SourceWorldMcpChecks
             string scriptPath = fixture.Path("gamegen/m1.gs"); byte[] scriptBefore = await File.ReadAllBytesAsync(scriptPath, token);
             fixture.Write("data/m1/models/broken.gltf", "{");
             var failing = SourceTask<DocumentModel>("AddSourceModelAsync", placed, new SourceWorldAddition(new("data/m1/models/broken.gltf", "broken"), []), CancellationToken.None);
+            Assert.True(placed.SourceWorld!.IsRebuilding); Assert.Same(placed, main.ViewModel.SelectedDocument);
+            foreach (string command in new[] { "DocumentSave", "DocumentUndo", "AddSourceModel" }) Assert.False(((UIElement)main.FindName(command)).IsEnabled, command);
             Assert.Equal("busy", (await Assert.ThrowsAsync<StudioCommandException>(async () => await SourceTask<IReadOnlyList<string>>("SaveSourceWorldAsync", placed, CancellationToken.None))).Code);
             Assert.Equal("busy", (await Assert.ThrowsAsync<StudioCommandException>(() => SourceTask<DocumentModel>("UndoSourceWorldAsync", placed, false, CancellationToken.None))).Code);
             Assert.Equal("build_failed", (await Assert.ThrowsAsync<StudioCommandException>(() => failing)).Code);
             Assert.Equal(scriptBefore, await File.ReadAllBytesAsync(scriptPath, token));
             Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Edits.Additions.Count); Assert.False(placed.SourceWorld!.Edits.CanRedo);
+            Assert.False(placed.SourceWorld!.IsRebuilding);
+            foreach (string command in new[] { "DocumentSave", "DocumentUndo", "AddSourceModel" }) Assert.True(((UIElement)main.FindName(command)).IsEnabled, command);
             File.Delete(fixture.Path("data/m1/models/broken.gltf"));
 
             // Undo and redo rebuild too.
