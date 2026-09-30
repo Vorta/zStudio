@@ -655,7 +655,7 @@
   },
   {
     "Name": "zstudio_operation",
-    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available only for export/validation.",
+    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available only for export, validation and source reconstruction/packing.",
     "Mutates": true,
     "Parameters": [
       {
@@ -669,7 +669,7 @@
       {
         "Name": "cancel",
         "Type": "boolean",
-        "Description": "Request cancellation of an export or validation.",
+        "Description": "Request cancellation of an export, validation or source operation.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -4848,6 +4848,87 @@
         "Name": "propertyAction",
         "Type": "string",
         "Description": "Generated action ID for invoke.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_reconstruct",
+    "Description": "Reconstruct a deduplicated source project (data/ and gamegen/ in the original build layout) from a shipped RECOIL data folder into a new or empty folder. Every output is verified to pack back byte-identically; unconverted families are kept verbatim. Optionally opens the project as the workspace root; dirty documents must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "source",
+        "Type": "string",
+        "Description": "Shipped game data folder (for example the folder containing interp.zbd and m1\\).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "New or empty project folder outside the source folder.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "open",
+        "Type": "boolean",
+        "Description": "Open the project as the workspace root afterwards; default true.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_pack",
+    "Description": "Build every game file of the open source project from its files on disk. Without destination, only verify against the shipped files. With destination (new, empty or previously packed folder outside the project), stage, re-parse and then write all outputs, or nothing if any fails. Reports identical/changed/failed per output with changed sources. Unsaved edits to project files must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "destination",
+        "Type": "string",
+        "Description": "Optional output folder; omit to verify without writing.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_status",
+    "Description": "Describe the open source project: origin fingerprint, output families, reconstruction notes (32 previewed) and a paged output list filtered by path. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
         "Required": false,
         "Choices": null,
         "Properties": null

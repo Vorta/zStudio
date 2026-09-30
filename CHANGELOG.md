@@ -2,6 +2,11 @@
 
 Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active development. Release tags and downloadable archives use the same version.
 
+## Unreleased
+
+- Reconstruct a Recoil source project from shipped data: ZAR resources become text `.zrd` files in the folders recorded by their compiler, `interp.zbd` becomes the original `gamegen\*.gs`/`support\*.gw` build scripts with their modification times, and sound banks become `data\common\sounds` WAVs with stored lower-quality variants. Every output is verified to pack back byte-identically; worlds, animations and texture packs are kept verbatim for now.
+- Pack game files from a source project into a separate folder, reporting identical, changed and failed outputs, or verify without writing. Text `.zrd` sources open and save as text in the ZRD editor, and importing one into an archive compiles it. Three new MCP tools: `source_reconstruct`, `source_pack` and `source_status`.
+
 ## 0.7.1 — 2026-09-29
 
 - Add MechWarrior 3 base-game support through the shared format library: version-27 worlds and mech hierarchies, version-4 motion clips, and version-39 compiled animations. Preserve version-specific layouts, record identities and opaque data, with byte-exact animation/motion no-op writes.

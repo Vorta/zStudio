@@ -13,6 +13,7 @@ public sealed class FormatRegistry
     private readonly Dictionary<FormatFamily, IZbdFormatReader> readers = new IZbdFormatReader[]
     { new TextureReader(), new ArchiveReader(), new ScriptReader(), new AnimationReader(), new GameZReader() }.ToDictionary(r => r.Family);
     public static FormatRegistry Default { get; } = new();
+    internal const string SourceZrdDescription = "zReader source text", SourceScriptDescription = "Gamegen script source";
     public const long MaximumDocumentBytes = 512L * 1024 * 1024;
     /// <summary>
     /// Supported entries per stored directory/table (archive members, texture/script records, GameZ tables), far above
@@ -61,6 +62,10 @@ public sealed class FormatRegistry
         }
         if (extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) && magic is >= 1 and <= 4)
             return new(FormatFamily.Zrd, null, Recognition.Supported, "zReader typed data");
+        if (extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) && Sources.ZrdText.LooksLikeText(prefix))
+            return new(FormatFamily.Zrd, null, Recognition.Supported, SourceZrdDescription);
+        if (extension.Equals(".gw", StringComparison.OrdinalIgnoreCase) || extension.Equals(".gs", StringComparison.OrdinalIgnoreCase))
+            return new(FormatFamily.Scripts, null, Recognition.Supported, SourceScriptDescription);
         if (trailer.Length == 8 && BinaryPrimitives.ReadUInt32LittleEndian(trailer) == 1)
         {
             uint count = BinaryPrimitives.ReadUInt32LittleEndian(trailer[4..]);
@@ -95,7 +100,20 @@ public sealed class FormatRegistry
         }
         try
         {
-            if (readers.TryGetValue(probe.Family, out var reader)) reader.Read(doc, token);
+            // Reconstructed sources open with the same asset model as their compiled forms.
+            if (probe.Description == SourceZrdDescription)
+            {
+                doc.SourceSyntax = "zrd-text";
+                doc.Add(AssetKind.Zrd, 0, System.IO.Path.GetFileName(path), 0, bytes.Length, content: Sources.ZrdText.Parse(bytes, token));
+            }
+            else if (probe.Description == SourceScriptDescription)
+            {
+                doc.SourceSyntax = "gamegen-script"; string text = System.Text.Encoding.Latin1.GetString(bytes);
+                var lines = Sources.GameGenScriptText.Tokenize(text);
+                doc.Add(AssetKind.Script, 0, System.IO.Path.GetFileName(path), 0, bytes.Length, new System.Text.Json.Nodes.JsonObject { ["instructions"] = lines.Count },
+                    new ScriptContent(lines.Select(l => l.ToArray()).ToArray(), text)).Summary = $"{lines.Count:N0} instructions";
+            }
+            else if (readers.TryGetValue(probe.Family, out var reader)) reader.Read(doc, token);
             else if (probe.Family == FormatFamily.Zrd)
                 doc.Add(AssetKind.Zrd, 0, System.IO.Path.GetFileName(path), 0, bytes.Length, content: ZrdDecoder.Read(bytes, token));
             else doc.Add(probe.Family switch { FormatFamily.Zrd => AssetKind.Zrd, FormatFamily.Wave => AssetKind.Sound, _ => AssetKind.Raw }, 0, System.IO.Path.GetFileName(path), 0, bytes.Length);

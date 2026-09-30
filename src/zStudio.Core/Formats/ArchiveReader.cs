@@ -39,7 +39,7 @@ internal sealed class ArchiveReader : IZbdFormatReader
                 }
                 var (tree, motion) = decoded;
                 if (tree != null) kind = AssetKind.Zrd;
-                else if (probe.Family == FormatFamily.Zrd) doc.Diagnostics.Add(new("Warning", $"Archive member {i} ({name}) is not a complete ZRD value; raw inspection and member replacement remain available.", i, offset));
+                else if (probe.Family == FormatFamily.Zrd && probe.Description != FormatRegistry.SourceZrdDescription) doc.Diagnostics.Add(new("Warning", $"Archive member {i} ({name}) is not a complete ZRD value; raw inspection and member replacement remain available.", i, offset));
                 if (motion != null) { kind = AssetKind.Motion; doc.Game = GameVariant.MechWarrior3; }
                 var a = doc.Add(kind, i, name, offset, size, new JsonObject { ["source_path"] = source, ["aux_value"] = (long)aux, ["source_filetime"] = time.ToString(System.Globalization.CultureInfo.InvariantCulture), ["record_raw"] = Convert.ToHexStringLower(doc.Bytes.Span.Slice((int)recStart, 148)) }, (object?)motion ?? tree);
                 if (motion != null) a.Metadata["motion"] = motion.ToJson(token: token);

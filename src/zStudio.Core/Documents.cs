@@ -41,6 +41,8 @@ public sealed class ZbdDocument
     public List<Diagnostic> Diagnostics { get; } = [];
     public JsonObject Metadata { get; } = [];
     public GameScene? Scene { get; set; }
+    /// <summary>Reconstructed source text (<c>zrd-text</c> or <c>gamegen-script</c>) rather than a compiled game file.</summary>
+    public string? SourceSyntax { get; internal set; }
     public GameZSourceLayout? GameZLayout { get; internal set; }
     public long? ArchiveDirectoryOffset { get; internal set; }
     public Animation.AnimationPackage? Animations { get; set; }

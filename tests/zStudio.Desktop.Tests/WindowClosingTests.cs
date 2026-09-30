@@ -56,6 +56,7 @@ public sealed class WindowClosingTests
                     await MissionSelectionChecks.RunWithoutReaders();
                     await MissionSelectionChecks.RunDeletedReaderAtStartup();
                     await MissionOwnershipChecks.Run();
+                    await SourceProjectMcpChecks.Run();
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();
                     await AiNetworkMcpChecks.Run();

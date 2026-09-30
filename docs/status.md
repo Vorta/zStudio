@@ -1,5 +1,15 @@
 # Desktop implementation status
 
+## Source project reconstruction, part 1 (2026-09-30)
+
+zStudio can reconstruct RECOIL's original source tree from shipped data and pack it back (`docs/source-project.md`). Research across the engine reconstruction, both corpora and the retail exe established the recoverable evidence: ZAR compile paths (84 source directories, including subfolders), the complete gamegen build scripts in `interp.zbd`, `anim.zbd` dependency stamps (448 source files with times) and `.flt`/`.tif` names in GameZ. This first part converts resource archives to text `.zrd` sources, `interp.zbd` to `gamegen\*.gs`/`*.gw` scripts and sound banks to WAVs; GameZ, `anim.zbd`, texture packs and `image.zbd` are carried verbatim until their sources are reconstructed.
+
+- **Result:** all 58 files of the 1999 corpus reconstruct and pack back byte-identically (corpus test), including 1,262 source files in the original `data\` layout.
+- **Formats:** a lossless text syntax for compiled zReader values (bit-exact floats, Latin-1 strings, dangling keys) and engine-exact script tokenization, with parse errors naming the source line.
+- **Workspace:** text `.zrd` sources open and save as text in the shared ZRD editor; importing one into an archive compiles it; scripts open as token text.
+- **GUI/MCP:** Tools menu commands and `source_reconstruct`, `source_pack` and `source_status` (85 tools), with staged, verified, all-or-nothing packing and separate-folder rules.
+- **Not yet:** regenerating stored sound variants after a source edit, and reconstruction of worlds, animations and textures.
+
 ## PR #14 independent review and fix cycle (2026-09-29)
 
 An independent full-PR review (base a0574b6, head c9e7daa) found 13 confirmed and 4 plausible P2 findings; all are fixed here with regression coverage.
