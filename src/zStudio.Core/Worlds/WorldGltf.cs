@@ -280,6 +280,8 @@ public static partial class WorldGltf
         /// <summary>Texture name for a material's image URI (relative to the file at the given path).</summary>
         public required Func<string, string?, string, string> TextureName { get; init; }
         public List<string> Warnings { get; } = [];
+        /// <summary>Cancels a load between nodes and between batches of polygons.</summary>
+        public CancellationToken Token { get; init; }
         /// <summary>Texture files the load referenced, by texture name.</summary>
         public Dictionary<string, string> TextureFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Each texture's clamp word (1 clamps U, 2 clamps V) from the first sampler that uses it; the pack stores it.</summary>
@@ -313,6 +315,7 @@ public static partial class WorldGltf
     private static WorldNode ImportNode(GltfNode source, string path, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth)
     {
         if (depth >= GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the node hierarchy, with its external references, is deeper than {GltfDocument.MaximumDepth} levels.");
+        context.Token.ThrowIfCancellationRequested();
         var extras = source.Extras?[Key] as JsonObject;
         // Later copies of a shared node are the same node under another parent.
         long? mark = extras?["instance"] is { } marker ? Integer(marker, "instance", path) : null;
@@ -373,6 +376,7 @@ public static partial class WorldGltf
         ApplyValues(model, mesh.Extras?[Key] as JsonObject, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path);
         foreach (var primitive in mesh.Primitives)
         {
+            context.Token.ThrowIfCancellationRequested();
             var (material, priority, backface, zone, storesNormals) = ImportMaterial(primitive.Material, path, context);
             // Editors write normals for every surface (Blender does); a material with engine values says whether its
             // polygons stored them, so flat surfaces stay flat.
@@ -382,8 +386,10 @@ public static partial class WorldGltf
                 context.Warnings.Add($"{path}: mesh {mesh.Name} uses texture {material.Texture!.Name} without texture coordinates; they were set to zero.");
             }
             var targets = primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0] : null;
+            int added = 0;
             foreach (var corners in Polygons(primitive, textured))
             {
+                if ((++added & 1023) == 0) context.Token.ThrowIfCancellationRequested();
                 Vector3[] points = corners.Select(i => primitive.Positions[i]).ToArray();
                 PolygonInput input = new(points,
                     textured ? corners.Select(i => i < primitive.TexCoords.Count ? primitive.TexCoords[i] : Vector2.Zero).ToArray() : [],

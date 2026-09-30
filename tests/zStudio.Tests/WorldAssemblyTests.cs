@@ -281,6 +281,18 @@ public sealed class WorldAssemblyTests
     }
 
     [Fact]
+    public void MacroExpansionIsBoundedLikeTheRetailBuffer()
+    {
+        // Each line doubles the macro; forty lines would make a trillion characters. The retail expansion buffer holds
+        // 1,024 bytes, so a longer expansion is refused.
+        string script = "set x ab\n" + string.Concat(Enumerable.Repeat("set x %x%%x%\n", 40)) + "NewWorld world\nGameZWriteZBDFile x\n";
+        var error = Assert.Throws<InvalidDataException>(() => AssembleScript(script, out _));
+        Assert.Contains("1023", error.Message);
+        var lines = GameGenScriptText.Tokenize(script);
+        Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(n => n == "m1.gs" ? lines : null, "m1.gs", []));
+    }
+
+    [Fact]
     public void NodeSetLightingAppliesToTheWholeSubtree()
     {
         // CZNode::AssignInt32ToDiRecursive: the models of the current node and of everything below it.

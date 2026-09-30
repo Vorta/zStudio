@@ -80,18 +80,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         }
     }
 
-    private string Expand(string token)
-    {
-        if (!token.Contains('%')) return token;
-        System.Text.StringBuilder result = new();
-        for (int i = 0; i < token.Length; i++)
-        {
-            int end = token[i] == '%' ? token.IndexOf('%', i + 1) : -1;
-            if (end > i) { result.Append(variables.GetValueOrDefault(token[(i + 1)..end]) ?? ""); i = end; }
-            else result.Append(token[i]);
-        }
-        return result.ToString();
-    }
+    private string Expand(string token) => ScriptConditions.Expand(token, variables);
 
     /// <summary>After the world is written, scripts (tex_fx) only register textures the mission pack must hold.</summary>
     private void Late(string command, string[] args)
@@ -261,6 +250,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
 
     private WorldNode Create(string name, WorldNodeClass kind)
     {
+        // Node lookups scan the table, so it never grows past what a world can hold.
+        if (World.Nodes.Count >= GameZWorld.MaximumNodeCapacity) throw new InvalidDataException($"The scripts create more nodes than a world holds ({GameZWorld.MaximumNodeCapacity:N0}).");
         WorldNode node = new(name, kind) { Flags = 0x0108001C, Zone = 0xFF };
         World.Nodes.Add(node); current = node;
         return node;
@@ -383,6 +374,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             World = World,
             Reference = (uri, from) => Load(Relative(from, uri)),
             TextureName = (uri, name, from) => Texture(uri, name, from),
+            Token = token,
         };
         List<WorldNode> nodes;
         try { nodes = WorldGltf.Import(doc, documentPath, 0xFF, context); }

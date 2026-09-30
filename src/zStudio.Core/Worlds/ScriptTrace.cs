@@ -35,6 +35,25 @@ internal sealed class ScriptConditions
         return true;
     }
 
+    /// <summary>The longest argument a macro expansion can produce: the retail scratch buffer holds 1,024 bytes.</summary>
+    public const int MaximumExpansion = 1023;
+    /// <summary>
+    /// ExpandMacroRefs (retail 0x4C1250): each <c>%name%</c> pair becomes the macro's value (nothing when it is not set).
+    /// A longer result would overrun the engine's buffer, and repeated self-references would otherwise grow without bound.
+    /// </summary>
+    public static string Expand(string token, IReadOnlyDictionary<string, string> macros)
+    {
+        if (!token.Contains('%')) return token;
+        System.Text.StringBuilder text = new();
+        for (int i = 0; i < token.Length; i++)
+        {
+            int end = token[i] == '%' ? token.IndexOf('%', i + 1) : -1;
+            if (end > i) { text.Append(macros.GetValueOrDefault(token[(i + 1)..end]) ?? ""); i = end; } else text.Append(token[i]);
+            if (text.Length > MaximumExpansion) throw new InvalidDataException($"A macro expands '{token[..Math.Min(token.Length, 64)]}' past {MaximumExpansion} characters.");
+        }
+        return text.ToString();
+    }
+
     private static bool Evaluate(IReadOnlyList<string> tokens, IReadOnlyDictionary<string, string> macros)
     {
         bool True(string name) => macros.TryGetValue(name, out string? value) && value == "TRUE";
@@ -103,16 +122,6 @@ public static class ScriptTrace
                 if (command == "GameZWriteZBDFile") written = true;
             }
         }
-        string Expand(string token)
-        {
-            if (!token.Contains('%')) return token;
-            System.Text.StringBuilder text = new();
-            for (int i = 0; i < token.Length; i++)
-            {
-                int end = token[i] == '%' ? token.IndexOf('%', i + 1) : -1;
-                if (end > i) { text.Append(variables.GetValueOrDefault(token[(i + 1)..end]) ?? ""); i = end; } else text.Append(token[i]);
-            }
-            return text.ToString();
-        }
+        string Expand(string token) => ScriptConditions.Expand(token, variables);
     }
 }
