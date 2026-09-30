@@ -217,13 +217,13 @@ public static class SourceExtractor
         /// <summary>Each sound's best-quality version across all banks becomes the source; lower banks are regenerated on export.</summary>
         internal async Task ExtractSoundsAsync(IReadOnlyList<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> banks)
         {
-            Dictionary<string, (ReadOnlyMemory<byte> Bytes, int Quality)> best = new(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, (ReadOnlyMemory<byte> Bytes, long Quality)> best = new(StringComparer.OrdinalIgnoreCase);
             foreach (var (relative, members) in banks)
                 foreach (var m in members)
                 {
                     token.ThrowIfCancellationRequested();
                     if (m.Name.Length == 0 || m.Name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) { Notes.Add($"{relative}: sound {m.Index} has an unusable name and was skipped."); continue; }
-                    int quality;
+                    long quality;
                     try { quality = WaveConverter.Format(m.Payload).Quality; }
                     catch (InvalidDataException ex) { Notes.Add($"{relative}: {m.Name} is not a readable WAV ({ex.Message}) and was skipped."); continue; }
                     if (!best.TryGetValue(m.Name, out var current) || quality > current.Quality) best[m.Name] = (m.Payload, quality);

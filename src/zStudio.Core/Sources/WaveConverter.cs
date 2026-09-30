@@ -6,7 +6,7 @@ namespace Recoil.Zbd.Core.Sources;
 /// <summary>A PCM format declared for a sound bank (sounds.zrd HIGH/MED/LOW: rate, bits, channels).</summary>
 public readonly record struct WaveFormat(int Rate, int Bits, int Channels)
 {
-    public int Quality => Rate * Bits * Channels;
+    public long Quality => (long)Rate * Bits * Channels;
 }
 
 /// <summary>
@@ -16,15 +16,17 @@ public readonly record struct WaveFormat(int Rate, int Bits, int Channels)
 /// </summary>
 public static class WaveConverter
 {
-    public static WaveFormat Format(ReadOnlyMemory<byte> wave) { var info = WaveDecoder.Read(wave); return new((int)info.SampleRate, info.BitsPerSample, info.Channels); }
+    public static WaveFormat Format(ReadOnlyMemory<byte> wave) => Format(WaveDecoder.Read(wave));
+    private static WaveFormat Format(WaveInfo info) => info.SampleRate <= int.MaxValue ? new((int)info.SampleRate, info.BitsPerSample, info.Channels)
+        : throw new InvalidDataException($"A sample rate of {info.SampleRate:N0} Hz is not supported.");
 
     public static byte[] Convert(ReadOnlyMemory<byte> wave, WaveFormat declared, CancellationToken token = default)
     {
         var info = WaveDecoder.Read(wave, token);
         if (info.Encoding != 1 || info.BitsPerSample is not (8 or 16)) throw new InvalidDataException("Only 8- or 16-bit PCM WAVs can be converted.");
         if (declared.Bits is not (8 or 16) || declared.Channels is not (1 or 2) || declared.Rate is < 1000 or > 192_000) throw new InvalidDataException($"Unsupported declared format {declared.Rate} Hz, {declared.Bits}-bit, {declared.Channels} channels.");
-        WaveFormat target = Target(new((int)info.SampleRate, info.BitsPerSample, info.Channels), declared);
-        if (target == new WaveFormat((int)info.SampleRate, info.BitsPerSample, info.Channels)) return wave.ToArray();
+        WaveFormat source = Format(info), target = Target(source, declared);
+        if (target == source) return wave.ToArray();
         // Decode to floating-point frames, mix channels, then resample with a windowed-sinc low-pass when the rate drops.
         int frames = info.DataLength / info.BlockAlign, channels = info.Channels, step = info.BitsPerSample / 8;
         var data = wave.Span.Slice(info.DataOffset, info.DataLength);

@@ -215,6 +215,10 @@ public sealed class SourceProjectTests
         Assert.True(peak < 1600, $"A 15 kHz tone leaked through at {peak}.");
         Assert.Throws<InvalidDataException>(() => WaveConverter.Convert(tone, new(22050, 24, 1), Token));
         Assert.Throws<InvalidDataException>(() => WaveConverter.Convert(new byte[] { 1, 2, 3 }, new(22050, 16, 1), Token));
+        // A header rate beyond a signed rate is refused rather than converted into a negative format.
+        byte[] absurd = (byte[])tone.Clone(); System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(absurd.AsSpan(24), 0x8000_0000);
+        Assert.Throws<InvalidDataException>(() => WaveConverter.Format(absurd));
+        Assert.Throws<InvalidDataException>(() => WaveConverter.Convert(absurd, new(11025, 8, 1), Token));
     }
 
     [Fact]
