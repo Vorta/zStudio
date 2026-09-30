@@ -111,7 +111,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         {
             token.ThrowIfCancellationRequested();
             var loaded = await document.GetAnimationContextAsync(resolver, token, worldPath, SelectedDifficulty);
-            if (generation != contextGeneration || disposed) return; context = loaded;
+            if (generation != contextGeneration || disposed) return; context = loaded; await ConfigureMissionsAsync(token);
             changing = true; Lod.ItemsSource = SceneLods.Choices(context.Lods.Count()); Lod.SelectedIndex = 0; changing = false;
             token.ThrowIfCancellationRequested(); player = CreatePlayer(); frame = player.Frame();
             await UpdateDurationAsync(token);
@@ -200,7 +200,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                 var view = refreshScene ? contextRefreshView ??= viewport.CaptureView() : viewport.CaptureView();
                 if (refreshScene)
                 {
-                    var updated = await document.GetAnimationContextAsync(resolver, token, difficulty: SelectedDifficulty);
+                    var updated = await document.GetAnimationContextAsync(resolver, token, difficulty: SelectedDifficulty, exactMission: Mw3WorldPath is { } world ? ExactMission?.Invoke(world) : null);
                     token.ThrowIfCancellationRequested();
                     updated.RemapBindingsFrom(context); nextContext = updated;
                 }
@@ -230,7 +230,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                     token.ThrowIfCancellationRequested(); viewport.RestoreView(view);
                     changing = true; int lod = Lod.SelectedIndex; Lod.ItemsSource = SceneLods.Choices(nextContext.Lods.Count()); Lod.SelectedIndex = Math.Clamp(lod, 0, Lod.Items.Count - 1); changing = false;
                 }
-                context = nextContext; player = nextPlayer; frame = nextFrame; duration = measured;
+                context = nextContext; SynchronizeMissionSelection(); player = nextPlayer; frame = nextFrame; duration = measured;
                 contextDirty = false; contextRefreshView = null; resetSimulation = false; ApplyRange(range, retainRangeInput || rangeInputRevision != rangeRevision);
                 Render();
                 publishedSeekGeneration = generation;

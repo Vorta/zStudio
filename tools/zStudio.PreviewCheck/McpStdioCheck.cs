@@ -9,6 +9,7 @@ internal static class McpStdioCheck
     public static int Run(string executable, string? root = null) => RunAsync(Path.GetFullPath(executable), root).GetAwaiter().GetResult();
     private static async Task<int> RunAsync(string executable, string? root)
     {
+        using var savedSettings = new SettingsSnapshot();
         if (LocalMcpHost.Discover(executable).Count > 0) throw new InvalidOperationException("Close this test installation first.");
         string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
         var settings = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new JsonObject();
@@ -33,7 +34,12 @@ internal static class McpStdioCheck
                 var states = await Task.WhenAll(client.CallToolAsync("zstudio_state").AsTask(), second.CallToolAsync("zstudio_state").AsTask());
                 if (states.Any(s => s.IsError == true) || LocalMcpHost.Discover(executable).Count != 1) throw new InvalidDataException("Concurrent first calls must start exactly one workspace.");
                 Console.WriteLine($"Portable stdio: {tools.Count} tools, {resources.Count} resources; discovery stayed windowless and concurrent first calls opened one GUI.");
-                if (root != null) await McpLiveCheck.Run(client, root);
+                if (root != null)
+                {
+                    if (File.Exists(Path.Combine(root, "c1", "gamez.zbd")) && Recoil.Zbd.Core.Formats.FormatRegistry.Probe(Path.Combine(root, "c1", "gamez.zbd")).Version == 27)
+                        await Mw3LiveCheck.Run(client, root);
+                    else await McpLiveCheck.Run(client, root);
+                }
             }
             if (LocalMcpHost.Discover(executable).Count != 1) throw new InvalidDataException("Disconnect must leave the shared GUI open.");
             await using (var client = await Connect())

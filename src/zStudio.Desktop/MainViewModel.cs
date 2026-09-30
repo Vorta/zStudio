@@ -18,6 +18,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<SearchHit> SearchResults { get; } = [];
     public ObservableCollection<string> Diagnostics { get; } = [];
     public ObservableCollection<StudioProblem> Problems { get; } = [];
+    /// <summary>Replace a remembered MW3 mission that no longer qualified with the reported fallback.</summary>
+    internal void AdoptMissionFallback(string worldPath, MissionLayoutSelection layout)
+    {
+        if (layout.UnavailableMission is not { } stale || layout.MissionArchive is not { } effective) return;
+        if (!Settings.Mw3Missions.TryGetValue(worldPath, out var saved) || !Path.GetFullPath(saved).Equals(stale, StringComparison.OrdinalIgnoreCase)) return;
+        Settings.Mw3Missions[worldPath] = effective;
+        try { Settings.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AddProblem("Could not save the mission selection: " + ex.Message); }
+    }
     public void AddProblem(string message, string severity = "Error", string? file = null, int? assetIndex = null, long? offset = null)
     {
         Diagnostics.Add(message); Problems.Add(new(severity, "File / operation", message, file, assetIndex, offset));
@@ -141,7 +150,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         foreach (var doc in Documents) doc.Dispose(); Documents.Clear(); SelectedDocument = null;
         // A previous asynchronous operation may still hold its resolver; its
         // canceled task owns that short remaining lifetime, not the new workspace.
-        Resolver = new AssetResolver(root); Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
+        Resolver = new AssetResolver(root);
+        // Check the cheap root prefix first: remembered maps on unavailable shares must not
+        // stall the UI thread. A remembered reader is seeded even if it was deleted (SelectMission
+        // keeps it in the map directory), so loading reports the fallback and replaces the setting.
+        string rootPrefix = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        foreach (var (map, mission) in (Settings.Mw3Missions ?? []).Take(128))
+            try { if (Path.GetFullPath(map).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) && File.Exists(map)) Resolver.SelectMission(map, mission); }
+            catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
+        Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
         RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";
         Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
         try
@@ -196,14 +213,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         token.ThrowIfCancellationRequested(); RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics";
     }
-    public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null)
+    public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
         long generation = ++navigationGeneration;
         RequireCurrentNavigation(generation);
         path = Path.GetFullPath(path);
         var existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
-        if (existing != null) { ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation); SelectedDocument = existing; return existing; }
+        if (existing != null) { ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation); if (activate) SelectedDocument = existing; return existing; }
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken);
         var token = cancellation.Token; Status = "Opening " + Path.GetFileName(path) + "…";
         try
@@ -211,8 +228,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             var doc = await LoadDocumentAsync(path, token); token.ThrowIfCancellationRequested();
             RequireCurrentNavigation(generation); ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation);
             existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
-            if (existing != null) { SelectedDocument = existing; return existing; }
-            DocumentModel model = new(doc); model.AttachResolver(Resolver); Documents.Add(model); SelectedDocument = model;
+            if (existing != null) { if (activate) SelectedDocument = existing; return existing; }
+            DocumentModel model = new(doc); model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
             foreach (var diagnostic in doc.Diagnostics) AddProblem(diagnostic.Message, diagnostic.Severity, path, diagnostic.AssetIndex, diagnostic.Offset);
             Status = model.Description; return model;
         }

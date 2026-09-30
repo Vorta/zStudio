@@ -1,5 +1,238 @@
 # Desktop implementation status
 
+## PR #14 independent review and fix cycle (2026-09-29)
+
+An independent full-PR review (base a0574b6, head c9e7daa) found 13 confirmed and 4 plausible P2 findings; all are fixed here with regression coverage.
+
+- **RECOIL regressions:**
+  - v28 keyframe streams with authored reversed spans (retail `m3/anim.zbd` `m3pickup` frame 9) are readable, editable and play with the retail sample cursor again. Structural validity no longer depends on span order.
+  - A RECOIL `objectives.zrd` keeps the generic member Properties; the valve editor requires authored valve structure.
+- **MW3 animation:**
+  - Streams with reversed or negative spans stay editable and exportable, with an explicit transform-preview diagnostic.
+  - Ambiguous node names stay unresolved during playback.
+- **MCP:**
+  - Difficulty requests for MW3 previews return `unsupported` before touching the shared preference.
+  - Highlighted valve names are bounded in state results, and `overlay` keeps the current highlight.
+  - Edits to other documents while the shown preview holds a scene-card draft return `pending_drafts` instead of opening a modal prompt.
+  - Valve edit/invoke recheck the revision after the form loads.
+  - Superseded motion assembly requests return `context_changed`.
+- **Motion:**
+  - Accepted edits and saves stay successful when the dependent library becomes unavailable or ambiguous; unreadable archives are skipped and listed.
+  - A binding survives only a proven member identity; a discarded session or replaced file clears it with a notice.
+  - Cleared or filtered Assets selections no longer switch the displayed motion or model preview.
+- **MW3 missions:**
+  - One unreadable archive no longer hides the map, its missions or its animations.
+  - A stale remembered reader falls back visibly (a merely unreadable one keeps its remembered choice), and the picker stays available.
+  - Refreshes capture their mission explicitly.
+  - Coordinate edits claim, publish and check only the readers they changed, so valve editing on other readers remains possible. Same-archive edits by two documents are still rejected.
+  - Closing a document that published nothing no longer expires other previews.
+- **Mesh replacement:** version-27 replacement copies authored polygon priority/field24/zone words and textured material flags; version-15 output is byte-identical.
+- **PR-watch helper:**
+  - Transient state-file contention no longer kills the worker, and status warns about an active watch without a worker.
+  - Review requests and review-bot status posts do not consume the feedback notice.
+  - Rate-limit resets apply only when the limit is exhausted, and every `arm` records exactly the supplied release authorization.
+- **Docs and release notes:** the standing PR authorization text was removed. The unreleased 0.7.0 changelog entries now belong to 0.7.1, the first MW3 release.
+
+Validation:
+- **Release suite:** **613 tests pass** (451 Core, 101 Desktop WPF/named-pipe, 61 watcher), zero failed/skipped, with RECOIL1999 and MW3 corpora enabled. Core also passes 451/451 with RECOIL1998. The Release build has zero warnings/errors.
+- **Discovery:** the MCP catalog was regenerated (82 tools); parity passes.
+- **Portable package:** 587 files, relative apphost binding and ZIP hash parity verified. `tools/publish.ps1` now deletes the superseded portable folder and older ZIPs instead of keeping backups.
+- **Not rerun in this cycle:** the packaged stdio/corpus PreviewCheck modes and GPU harnesses. The Desktop `SceneInspectionInputChecks` text-selection case is sensitive to real keyboard input reaching its focused offscreen window during a run.
+
+MW3 engine semantics for the copied replacement words and reversed v39 spans remain unverified.
+
+Follow-up PR review (commit 69c9d7e) found four further P2s, now fixed with regressions that fail without the fixes:
+- **Unbounded GameZ tables:** oversized GameZ model tables and polygon totals were materialized before any bound. The same failure class existed in archive, texture-pack and script directories. All are now checked against shared supported limits before per-record metadata is created, and the header loops observe cancellation.
+- **Damaged mission readers:** a partially parsed mission reader could still be offered and used. Such readers are now reported and excluded, and damaged shared resources are noted in both loaders.
+- **Animation mission switches:** an MW3 animation mission switch could fall back to another reader if the requested one disappeared mid-switch. The request now reaches the animation context exactly, so the switch fails and keeps the displayed mission.
+- **PR watcher approval:** the watcher could pair a thumbs-up with a superseded summary. Only the newest current-head summary qualifies now.
+
+Codex's review of 13f99bc found six further P2s, now fixed with regressions that fail without the fixes:
+- **AI snapshot diagnostics:** one budget now covers every network member of a snapshot, with an omitted count.
+- **Partition grids and node index lists:** world partition cells and all node index lists are bounded per file before metadata is built.
+- **Mission re-selection:** selecting the remembered mission again rebuilds a Whole world that never published.
+- **Motion library refresh:** a delayed library refresh keeps a newer assembly choice.
+- **Mech search:** `mech_models` queries match node names and texture labels.
+- **Valve Properties:** classification runs as cancellable background work.
+
+The PR watcher gained a Claude Code channel (`-Claude`). A foreground `listen` command, run through Claude Code's Monitor, reuses the durable one-shot claim, snapshots and acknowledgment. It waits until a burst of new comments stops changing, prints exactly one notification line, and runs from a private runtime copy so builds stay possible. Watcher tests: 67/67.
+
+Codex's review of 7dd7b05 raised five P2s. Four were fixed as reported. The fifth (MW3 difficulty) exposed a different real bug:
+- **Point-light vertices:** each light's vertices join the file's polygon/light budget before they are allocated and expanded into JSON. Material-cycle texture indices, a sibling path, now have their own per-file budget.
+- **Motion samples:** each archive decodes at most 2,097,152 samples. A member beyond that stays raw with a warning, and a motion edit that would exceed the total is rejected rather than silently demoting the clip.
+- **Valve overlay:** toggling or filtering valves resolves only the capped edges' endpoints instead of indexing every AI node.
+- **Animation node references:** resolutions are cached per entry object and bound root for both games. The cache is cleared when the mission scene is replaced.
+- **MW3 difficulty:** no retail MW3 reader contains `aiv_easy`/`aiv_hard`/`vehicle_*`/`puppies_*` variants, so difficulty stays unsupported for MW3. However, a map with no mission reader reported a Medium layout. That caused an extra world reload, and a failed refresh could reset the shared saved difficulty. It is now labelled as a stored world layout, and MW3 animation state reports no difficulty.
+
+Validation: 639/639 Release tests (471 Core, 101 Desktop, 67 watcher) with RECOIL1999 and MW3 corpora; Core 471/471 with RECOIL1998. Temporarily disabling each fix makes its regression fail.
+
+Codex's review of f9cdaba found three further P2s, now fixed with regressions that fail without the fixes:
+- **Model geometry arrays:** model vertices/normals/morphs (at most 1,048,576) and polygon corner arrays (at most 4,194,304 vertex/normal indices, UVs and colors) are bounded per file before allocation. Retail maxima are 77,559 and 455,526.
+- **Deleted remembered missions:** opening a root seeds a remembered in-directory mission reader even after its file was deleted, so loading reports the fallback and replaces the saved choice.
+- **AI snapshot cache:** decoded snapshots, including their source trees, live only as long as their first source archive instead of in a process-wide cache.
+
+The PR watcher's Claude channel now wakes only for code review feedback. The PR author's replies marked `<!-- zstudio-agent-reply -->` are informational in both channels.
+
+Validation: 643/643 Release tests (474 Core, 101 Desktop, 68 watcher) with RECOIL1999 and MW3 corpora; Core 474/474 with RECOIL1998.
+
+Codex's review of bb33d5d found one P2, fixed: a version-106 node row with valid position/links but a malformed attribute pair (non-string name, non-array value or dangling field) no longer becomes an AI node, valve record or `add_binding` target. It reports a diagnostic and stays inspectable in the ZRD resource. Retail MW3 networks have 3,741 attributed node rows and none are malformed. Validation: 644/644 with RECOIL1999 and MW3 corpora; Core 475/475 with RECOIL1998.
+
+Codex's review of 2e5868a found five P2s, now fixed with regressions that fail without the fixes:
+- **AI overlay budget:** the viewport draws at most 16,384 AI nodes and 32,768 links. The limit is disclosed in state, the picker tooltip and the status bar, and only drawn markers are pickable.
+- **Valve search:** `ai_valves` record queries also match the valve names that bindings and objective uses reference.
+- **Mech material labels:** `mech_models` material rows include the bounded GUI label that queries match.
+- **PR watch channels:** `stop` disables both channels of a PR, and `status` reports the other channel.
+- **Positional pages:** `motion_records` frame pages construct only the returned rows; a two-row page of a 100,000-frame clip previously allocated 13 MB. Animation sequences/references, pickups, scripts, archive members and animation scene pages also project only their returned rows.
+
+Validation: 647/647 (476 Core, 101 Desktop, 70 watcher) with RECOIL1999 and MW3 corpora; Core 476/476 with RECOIL1998.
+
+## PR feedback watch and coordinate-path review (2026-09-29)
+
+Added optional local development tooling in `tools/pr-watch.ps1`. It observes a selected PR's conversation comments, published review summaries and inline comments, disarms on the first new feedback batch and queues one follow-up into the owning Codex conversation. Explicit snapshot acknowledgment preserves later arrivals; validated fix pushes re-arm against the remote head. Separate approval monitoring checks a fresh review-bot reaction on the PR description and a completed current-head summary. The helper does not edit, merge or publish; any authorized release still requires the agent's current-head review, CI and repository checks. Durable claims prevent automatic duplicate submissions after crashes or uncertain delivery. See [PR watch setup and recovery](pr-watch.md).
+
+Fixed five further PR findings: coordinate initialization reuses typed ZRD trees; edit diagnostics are bounded before Problems publication; valve queries compare full names without concatenation; valve-source attachment indexes network roots; and MW3 actor transform edits enforce the same ±1e12 bound as scene loading. The sibling-path challenge also removed repeated archive-baseline copies, indexed overlap protection, avoided unused MW3 effect expansion and moved sound-alias lookup to typed records. Source bytes, identities, undo and verified saves remain shared by GUI and MCP.
+
+Validation: **572 tests pass**, zero failed/skipped, with both game corpora enabled; the Release solution build has zero warnings/errors. Cases include burst/coalescing, late feedback, drafts, queue ownership, uncertain delivery, concurrency, failure recovery, fresh versus stale approval, allocation growth, source overlap, numeric rejection, and real named-pipe valve queries. Local queue add/read/remove and repeated detached polling were verified; these do not establish that the host will automatically start a future turn. The queue API is experimental; failures and delivery uncertainty remain visible. Package and live-workspace results are recorded in the local delivery ledger. Version remains 0.7.1.
+
+## PR #14 optional data, semantic validation and inspection scope (2026-09-29)
+
+Fixed four further review findings: optional v27 polygon RGB arrays honor their stored presence word; sparse v28/v39 keyframe indexing validates flags, times and active base/rate values; valve highlighting/framing searches complete node, union and resolved edge sources before drawing limits; and motion inspection/tree/selection/Properties/node framing include only the selected assembly, retaining source indices. Shared GUI/MCP paths, discovery and capability documentation are updated.
+
+The adversarial cycle also rejected binding-only kinds when creating valve definitions, matching the GUI's action/compound choices and preserving document revision/history on failure. Corpus testing identified unused NaN vector padding, which stays opaque, and 456 authored MW3 transform streams with reversed time spans. The latter retain their bytes and show an unsupported keyframe diagnostic; their runtime meaning is not inferred or rewritten.
+
+Validation: **507 tests pass**, zero failed/skipped, with MW3 and RECOIL1999 corpora enabled; Release solution builds have zero warnings/errors. Regressions cover absent/present UV/RGB data followed by another polygon, invalid semantic payloads with byte-exact save/reopen, million-record allocation bounds, late node/union/edge valve references, and real WPF/named-pipe assembly switching and out-of-scope rejection. Actual GPU checks verify late valve highlighting/framing, strategy colors, assignment dashes, filtering, depth/picking and stable idle output. A final challenge after the last production fix found no further actionable P1/P2 in the recorded full-PR scope. Portable/live delivery and remote CI results are recorded locally. Version remains 0.7.1; these checks do not establish original-game compatibility.
+
+## v0.7.1 MW3 AI valves and PR #14 review (2026-09-29)
+
+MW3 authored AI valves now share the resource editor's typed fields, record identities, drafts, undo/redo and verified archive saves. The Properties view supports action and compound definitions, repeated triggers, node tuples/unions, edge assignments and objective uses, with structural actions, paged operands and exact-name reference navigation in the pinned mission scope. Whole world exposes valve Properties from its toolbar and node cards, plus outlines and dashed assignment overlays that preserve attack-strategy colors. Unknown data and record order remain intact. These are authored-data tools; runtime valve execution is not simulated.
+
+The six open review findings are fixed: constraint summaries are bounded before JSON expansion; motion sampling reuses prepared hierarchies off the dispatcher; keyframe streams use sparse validation/indexing and bounded cached playback; placement diagnostics retain bounded messages with total counts; extreme positions are rejected before scene mutation; and duplicating cleanup cannot retarget unrelated unresolved sequence references. The full-PR challenge also covered decoder/editor classification, duplicate/version ambiguity, paging, pinned source identity, stale operations, overlay refresh, objective operation keys versus ordinary text/valve-name operands, definition names that equal binding keywords, repopulating empty action blocks, dense motion storage, shared-mesh allocation and generated UI/MCP parity. No further actionable P1/P2 was found after the last production fix in the recorded scope.
+
+Validation: **492 tests pass**, zero skipped, with MW3 and RECOIL1999 corpora enabled; Release builds have zero warnings/errors. The corpus covers 1,510 valve definitions and all supported binding families, no-op byte preservation and reversible structural edits. Named-pipe/WPF checks cover reference navigation, later target pages, revision guards, undo/redo and verified Save As. Actual GPU checks verify valve cages, assignment/highlight pixels, filtering, stable idle output and unchanged camera/depth bounds, alongside the RECOIL strategy-color/occlusion checks. There are 82 MCP tools; schemas, mappings, documentation and embedded discovery are current. Portable and live-workspace delivery results are recorded in the local status ledger. Game parsing, editing and preview checks do not establish original-game compatibility.
+
+## PR #14 full review and bounded inspection (2026-09-29)
+
+Fixed the two pending review findings: animation opening/inspection now bounds payloads before hex/JSON expansion in both v28 and v39, and valid v106 AI constraints no longer create false spatial-node duplicates. Malformed spatial duplicates remain ambiguous. Animation summaries disclose reference, puffer, sequence, event and raw-byte omissions; explicit JSON export and verified saves retain complete authored data. The reader now uses the shared animation package parser for both versions.
+
+The full-PR adversarial cycle also fixed aliased motion payloads being repeatedly decoded, oversized motion-name pages and nested scene/model metadata, repeated keyframe decoding by Properties getters, a stale pinned motion part name after replacement, and mission selection completing before its preview was presented. Superseded mission requests cannot publish preferences or roll back a newer request. Large placement batches publish hierarchy edges once; template/model/member lookups and color classification avoid repeated full scans. Maximum paired world inspections budget every nested row, including JSON escaping. Source identities, duplicate ambiguity, complete export data and undo semantics are preserved.
+
+Validation: Release solution build has zero warnings/errors; all **468 tests pass** (367 Core, 101 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. New allocation/growth, maximum-page, mixed-record, replacement/undo and controlled-interleaving regressions reproduce the relevant defects before their fixes. The serial WPF aggregate's outer deadline is now three minutes to accommodate the expanded suite; individual operation deadlines remain. Actual Helix rendering checks pass for alpha-zero depth, translucent composition, textured vertex tint at oblique angles, paused-camera fog/restoration and presented-buffer sizing under render-queue pressure. GUI/MCP descriptions, capability notes and embedded discovery are current; full catalog parity passes. A final challenge pass after the last production fix found no further actionable P1/P2 in the recorded full-PR scope. This establishes the exercised editor behavior, not original-game compatibility. Version remains 0.7.0; portable packaging/live delivery results are recorded in the local status ledger.
+
+## Review process correction (2026-09-29)
+
+Subsequent review of PR #14 found two more P2s: version-39 animation metadata eagerly serializes complete payloads during opening, and MW3 AI constraint records participate in spatial-node duplicate counts. The preceding review's focused placement checks and passing tests did not establish coverage of these other changed paths. At this guidance-only step both findings remained open; the guidance update itself did not fix application behavior.
+
+AGENTS.md now requires the full-PR procedure in docs/code-review.md, with a coverage/finding ledger, producer-to-consumer allocation review, structural record classification before identity accounting, cross-path failure-class checks and a separate final challenge pass. Testing guidance and the PR template reference the same completion gate. Guidance validation checks document links, consistency and diff hygiene; no new application build or test result is claimed.
+
+## PR #14 bounded mission actor labels and placement failure review (2026-09-29)
+
+MW3 mission scene nodes and actors publish 128-character label prefixes, with original length/truncation metadata shared by scene listings, Properties and object cards. Full authored AIV names remain unchanged for template matching, source inspection and export; archive/member/record identities distinguish identical prefixes. Rejected-placement diagnostics also bound their labels. Template lookup indexes ordinal world names once, retaining duplicate ambiguity, and mech matching avoids concatenating arbitrarily large names for every library member. Scene copying and indexing observe cancellation.
+
+The adversarial review reproduced two additional placement defects: failed hierarchy cloning left partial preview nodes, and finite extreme headings overflowed while converting to radians. Rejected placements now roll back appended nodes/provenance and uncommitted stored-instance claims before continuing. Heading transforms use the shared coordinate editor's conversion. Source scenes and archives are untouched.
+
+Thirteen new Core cases cover label boundaries and million-character Latin-1 names, prefix collisions/remapping, bounded failure diagnostics, cyclic/missing-child rollback, ordinal/duplicate template matching and ordinary/extreme headings. Real named-pipe/WPF checks cover one-row and full 200-row escaped-name pages, Properties, pinned state, selection, cards and unchanged source/revision. The reported name leak, diagnostic leak, orphan cloning and heading overflow were reproduced before their fixes. Final review of the affected publication, identity, failure and protocol paths found no further actionable P1/P2 issue. Release build has zero warnings/errors; all 453 tests pass (352 Core, 101 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. MCP descriptions, capability notes and guides are updated; the embedded discovery catalog is regenerated and full parity passes. Version remains 0.7.0.
+
+## PR #14 explicit unlit textured vertex tint (2026-09-29)
+
+The vertex-tint shader now explicitly restricts preview lighting to untextured, lit mode. Textures multiply authored vertex RGBA independently of the material lighting flag, while untextured shaded mode retains its existing lighting. The Helix 3.1.2 DiffuseMaterialVariables binding reuses the ABI field named bHasNormalMap for EnableUnLit; the existing unlit path already honored that flag. A shader comment documents this alias without changing the buffer layout.
+
+Eight windowless Direct3D WARP cases execute the production shader over 72 texture/unlit/flat-normal/camera-angle/alpha combinations, checking rendered RGBA. Before the change, the two textured cases with lighting enabled failed at an oblique angle; all cases now pass. The live Helix check also verifies front/oblique textured pixels with both lighting flags, alpha-zero depth preservation, translucent composition and paused-camera fog/restoration. Release build has zero warnings/errors; all 440 tests pass (339 Core, 101 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. GUI/MCP share the renderer; capability notes and documentation are updated, with command schemas/catalog unchanged. Follow-up review found no further actionable defect in this change. Version remains 0.7.0.
+
+## PR #14 edited mech binding identity (2026-09-29)
+
+Motion assembly selection now captures the stable archive member UUID from the same frozen resource snapshot as the geometry, including duplicated/imported members without an original SourceIndex. Identity lookup also includes retained edit history when a load is overtaken by a newer revision; separately parsed copies cannot borrow identities by matching names/bytes. Rename, reorder, model replacement and Undo/Redo remap the bound member by UUID while retaining the camera and playback state. Successful selection replaces the binding identity; cancellation leaves the prior identity intact. A missing/deleted member clears the binding without selecting another member at its former index. Library refresh retains matching snapshot metadata and no longer overwrites a newly selected identity after asynchronous loading.
+
+The regression reproduced the reported loss on renaming a selected duplicate before the fix. Follow-up review reproduced and fixed an edit overtaking library initialization. Expanded real named-pipe/WPF checks cover duplicate and imported members with deliberately repeated names, loading an already-edited library, retained-viewer refresh, cancellation, rename/reorder/replacement/history, explicit member switching, deletion/index reuse and unchanged source bytes. Core tests verify exact snapshot identity through Undo/Redo and reject separately parsed copies. Release build has zero warnings/errors; all 432 tests pass (339 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. MCP documentation/capability notes are updated; existing schemas/catalog remain unchanged and parity passes. Final follow-up review found no further actionable defect in this change. Version remains 0.7.0.
+
+## PR #14 cancellable motion binding and MW3 keyframe counts (2026-09-29)
+
+Motion binding builds one ordinal name index over the selected assembly, reducing matching from parts × nodes to nodes + parts while retaining member boundaries and duplicate-name ambiguity. Indexing/counting/binding observe cancellation. Assembly selection prepares bindings off the UI thread and checks request ownership before publication; edits accepted during loading trigger cancellable background rebinding until the current clip is ready. Existing playback intent, explicit pause/play, identity and source protections remain shared by GUI and MCP.
+
+Version-39 transform streams validate the stored frame count against the complete event payload. Negative/excessive counts, missing records, truncated headers/channels and trailing bytes/records are rejected before any transform is applied. Malformed streams retain source bytes and show the existing read-only keyframe diagnostic; scheduling fields remain editable through GUI and MCP. Version-28's reserved field remains uninterpreted. MCP capability notes and guides are updated; command schemas/catalog are unchanged and parity tests pass.
+
+Release build has zero warnings/errors. All 431 tests pass (338 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. New checks cover 4096 tracks/200000 assembly nodes, ordinal/member-scoped matching, duplicates, cancellation during binding, responsive MCP state while a background bind is blocked, GUI supersession of that MCP operation and retained playback intent. Count regressions reproduced the defect before the fix and cover zero/negative/excessive/mismatched counts, extra records/bytes, empty/mixed-channel streams, malformed preview blocking, round-trip source preservation and protocol property diagnostics/segment rejection/scheduling edits. Full installed MW3 corpus keyframe counts remain valid. Follow-up review found no further actionable defect in these changes. Version remains 0.7.0.
+
+## PR #14 closing-sample preservation and bounded preview fixes (2026-09-29)
+
+Motion frame-zero edits and frame insertion/deletion now preserve each separately authored closing sample exactly, including distinct translation/quaternion values; earlier notes describing automatic closure are superseded. The shared archive editor, generated Properties and MCP use this behavior through Undo/Redo and verified Save As. Closing samples remain readable outside the editable frame range.
+
+AI node/network query formatting uses bounded name/type prefixes and is skipped for empty queries. MW3 link previews retain the first 32 ordered slots per node, with full counts/truncation in node/network/preview state, card notes and source-specific diagnostics. Omitted slots are still type-validated; complete source trees remain available through ZRD paging and export. The renderer and all inspection paths share the cap. Node names/types, strategy metadata and network diagnostic previews also have explicit bounds so full 200-row pages stay below the protocol response limit even for JSON-escaped text.
+
+Both motion state tools cap diagnostics at 32 messages with 512-character prefixes and expose total/truncation fields; GUI support notices disclose shortened output. Assembly state previews cap 32 rows, with complete bindings available through the new paged motion_preview assemblies action. Typed schemas/descriptions, embedded discovery, capability mappings and guides are updated.
+
+Release build has zero warnings/errors. All 416 tests pass (323 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. Tests cover bit-preserved distinct closing samples on multiple tracks and edit boundaries, source/history/verified-save preservation, maximum-sized motion diagnostic state, complete assembly pages, oversized name filtering, 100000-link source preservation and bounded overlay geometry, limit boundaries/malformed omitted links, full escaped-text pages and catalog parity. The closing-sample regressions reproduced the defect before its fix. AI GPU checks pass strategy colors/arrows, filtering, selection, both depth modes, stable idle buffers and the real M1 map (91 networks, 592 nodes) with unchanged source. Follow-up review found no further actionable defect in these changes. Version remains 0.7.0.
+
+## PR #14 active motion removal and identity fix (2026-09-29)
+
+Resource edits and Undo/Redo now reconcile the active preview with the resulting archive selection, including when Assets is hidden. Deleting the displayed motion or replacing it with non-motion data disposes the old viewer and displays the remaining selection or empty archive metadata; accepted edits no longer report failure while refreshing a missing member. Motion reuse checks the stable member UUID, so a different clip taking the old index creates its own viewer while rename/reorder retains the surviving clip's transport and camera. Preview headings refresh with the selected record. Pinned Properties retains its identity.
+
+The named-pipe regression reproduced the original post-accept failure before the fix. Coverage now exercises delete/replace with Assets visible and hidden, empty archives, Undo/Redo, same-name clips with distinct data, old-index reuse, rename/reorder, pinned Properties, pending assembly-load cancellation, restored clean history and unchanged source bytes. Release build passes with zero warnings/errors; all 406 tests pass (313 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. MCP command descriptions, embedded discovery, capabilities and guides are updated. Focused follow-up review found no further actionable defect in this change. Version remains 0.7.0.
+
+## PR #14 gameplay markers, fog and inspection bounds (2026-09-29)
+
+Version-39 gameplay-only events 41/42 now complete as trace-only markers, preserving support notices and allowing later ordinary/cleanup events to execute. Seeking remains deterministic, duration analysis completes and serialized data is untouched. Camera-only fog refreshes update both material and vertex tint through one helper, without advancing playback or rebuilding poses, positions or geometry.
+
+Motion metadata previews at most 32 parts with 128-character names, full counts and explicit truncation. Paged motion records retain full names, and explicit JSON exports retain every part. Mech model rows cap nested node and material previews at 32; full references use the nodes/materials sections with member-local model identity and shared paging/filtering. Projection occurs only for requested model rows. Typed discovery, the embedded catalog, capability mapping and MCP guides are updated.
+
+Release build passes with zero warnings/errors. All 406 tests pass (313 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. Regressions cover both gameplay event types in ordinary/cleanup sequences, trace/seek/duration/source preservation, maximum-sized motion names/part counts, real named-pipe bounded inspection and complete final pages, nested node/material limits, filters, invalid identities and catalog parity. Renderer checks preserve the paused frame/poses and avoid needless tint allocations; GPU checks confirm fog changes and reverses in the presented back buffer without forced rendering. Follow-up review found no additional actionable defects in these fixes. Version remains 0.7.0.
+
+## PR #14 active-preview and bounded-output fixes (2026-09-29)
+
+Accepted motion edits, generated Properties changes and archive Undo/Redo now refresh the active motion sampler as well as dependent previews. Motion preparation no longer pauses playback, including failed edits. Mech mesh replacement and history rebuild the active geometry with the camera retained. Assembly loads share pending playback intent across superseded requests, honor explicit Play/Pause, restore transport after cancellation, and publish the latest clip if an edit arrives during loading. MCP state distinguishes actual playing, loading and requested playback.
+
+AI constraint search caps authored name/kind prefixes before interpolation. Results preserve edge/attribute/endpoints/source offsets and expose kind length/truncation plus a bounded structured parameter preview: 64 nodes, depth 8, 2048 total text characters and 512 per string. Truncation is explicit, and source records remain unchanged. MCP schemas/descriptions, embedded discovery, capability mapping and guides are updated.
+
+Release build passes with zero warnings/errors. All 401 tests pass (308 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus enabled. The named-pipe regression now uses a synthetic textured mech library and checks actual presented motion transforms, active mesh replacement, camera retention, failed-edit playback, Undo/Redo, overlapping loads, explicit transport overrides, cancellation and concurrent edits. Bounded-output checks cover a full 200-item page, oversized kinds and parameters, deep/wide trees, prior truncation and unchanged inputs. Follow-up review found no additional actionable defects in these changes. Version remains 0.7.0.
+
+## PR #14 review fixes (2026-09-29)
+
+Animation world discovery now filters by the animation's required GameZ version before selecting a file: version-28 animations use version-15 worlds and version-39 animations use version-27 worlds. Mixed-format folders no longer fail because an incompatible world is enumerated first. Explicit incompatible selections remain rejected, and absent compatible worlds retain an actionable selection diagnostic. GUI and MCP use the same preview loader.
+
+MW3 AI constraint queries now apply the shared case-insensitive filter before pagination. Network member/name, constraint kind and edge/attribute/endpoint labels are searchable; the optional network filter, matching totals, next offsets and source identities are preserved. Typed discovery descriptions, the embedded command catalog and MCP capability documentation are updated.
+
+Both reported defects were reproduced by regression tests before their fixes. Release build passes with zero warnings/errors. All 401 tests pass (308 Core, 93 Desktop), zero skipped, with the local MW3 and RECOIL1999 corpus enabled. Coverage includes both animation versions, explicit and absent world selection, real named-pipe constraint queries, page boundaries, multiple attributes per edge, empty/nonmatching queries and catalog parity. Review of the fixes found no additional actionable issues. Version remains 0.7.0; this update does not merge or release the PR.
+
+## 0.7.0 review and validation (2026-09-29)
+
+AI networks with an absent attack_strategy now use red #FF6666 nodes and directed connections. Empty, unrecognized and invalid values retain gray #A0A0A0; recognized colors and the white selected marker are unchanged. The renderer, tooltip and existing GUI/MCP strategy metadata use one state-aware palette. Attack strategy remains a read-only scrolling detail immediately above Status. The ai_nodes description now distinguishes RECOIL's three ordered links from MW3's variable link counts; the 79-tool discovery catalog was regenerated and parity checks pass. Earlier gray-missing and fixed-header entries below are historical.
+
+The complete pending MW3/AI changes were reviewed again. Reproduced regressions fixed repeated MW3 actor placements sharing one root, stale parent links rendering an extra displaced actor, and duplicate motion tracks applying one arbitrary track. Synthetic checks verify separate coordinate identities and edits, remapping, unchanged source nodes/bytes, and the ambiguous node retaining its stored pose. MW3 event support labels consistently disclose approximate behavior.
+
+Release build has zero warnings/errors. All 397 tests pass (304 Core, 93 Desktop), zero skipped, with MW3 and RECOIL1999 corpus checks enabled; the earlier 396-test pass also covered RECOIL1998. The combined corpus scan reads 244 files and decodes 65,141 textures with zero errors and unchanged source hashes. GPU checks cover all recognized strategy colors, red missing and gray empty/invalid/unknown values, matching arrows, filters, depth modes, selection/clear and idle buffers. Real M1 checks retain camera/selection across difficulty changes and validate strategy scrolling at minimum size in both densities. Navigation, alpha compositing, vertex-tint texture multiplication and initial/portrait/wide render-buffer sizes at 150% DPI pass.
+
+Portable 0.7.0 GUI/MCP checks pass all six MW3 worlds, mission/camera retention, AI inspection, mech export/replacement/undo/verified Save As/readback, motion playback/seek/edit/undo/Properties and version-39 animation preview/mission refresh. The packaged RECOIL live editing/save regression also passes. Discovery exposes 79 tools/two resources without a window, concurrent first requests share one workspace, reconnect and clean shutdown pass, and settings are restored. Package verification checks 585 files, the relative apphost binding and every ZIP file hash. Final review and validation found no outstanding actionable defects. Original-game runtime acceptance and the MW3 preview limitations documented in the game guide remain unverified or unsupported.
+
+## AI attack-strategy field placement — local update (2026-09-28)
+
+Attack strategy now appears as an ordinary read-only field in the scrolling AI node details below “This AI network node”, immediately above Status. The dedicated fixed header row and its reserved space are removed. The field shares the other scalar fields' label, bounded wrapping, tooltip and copy-button gutter. It remains read-only during position editing, appears only for AI selections, and contributes once to Copy all. Structured GUI/MCP strategy values, tool schemas and the 79-command registry are unchanged; capability documentation and guides describe the new placement.
+
+Validation: Release build zero warnings/errors; all 93 Desktop tests pass, including the shared named-pipe protocol checks and embedded catalog parity. Updated layout checks verify row order, scope placement, scrolling, copy-button spacing, short/narrow/resized panels, missing/empty/invalid/long values, selection changes, and retained camera input behavior. Rendered card captures were inspected. Earlier fixed-row status entries below describe the superseded layout.
+
+## MechWarrior 3 base-game support — local update (2026-09-28)
+
+The shared C# format library decodes version-27 worlds, mech-library hierarchies, version-4 motion clips and version-39 animations. GUI and MCP now share mission selection, authored actor/AI placement and coordinate editing, model-library preview/export/replacement, motion playback and frame editing, and the versioned compiled-animation editor. Six typed tools bring discovery to 79 commands; schemas, embedded discovery and capability mapping are updated. See [MechWarrior 3 workflows and limitations](mechwarrior3.md).
+
+The supplied corpus has 84 readable ZBD files with no parse errors, including six worlds, six animation packages, 57 mech assemblies, 258 motion clips and 12,255 decoded textures. Animation and motion no-op writes preserve every original byte. All 394 automated tests pass with the local MW3 and RECOIL corpus checks enabled. Eight focused MW3 tests cover versioned texture records, geometry, keyframe/spline preservation, water/lava sequence identity, motion history and malformed input, mission isolation and coordinate Save As/undo, member-local mech replacement and version-27 world replacement with unchanged unrelated records. AI tests also cover multiple ordered attributes in one non-spatial constraint record. Release builds have zero warnings/errors.
+
+Combined corpus validation reads 244 files and decodes 65,141 textures across both RECOIL datasets and MW3, with zero errors and unchanged source hashes. GPU fixtures verify RECOIL alpha compositing and authored vertex tint multiplying textures. Portable GUI/MCP checks cover all six MW3 worlds, camera-preserving mission switching, AI networks, textured mech export/replacement/undo/redo/Save As and readback, motion binding/playback/seek/edit/undo and pinned Properties, and version-39 animation seeking and mission refresh. All 84 MW3 source hashes remain unchanged. The RECOIL live regression also passes, including AI strategy cards, coordinate drafts, undo/redo and verified saved copies. Discovery exposes 79 tools/two resources without a window; concurrent first requests share one GUI, reconnect and clean shutdown pass. The review fixed version-27 texture-directory stride, vertex-color modulation, scene replacement starvation during rendering, transactional motion replacement, versioned spline/cache preservation and multi-attribute AI constraints.
+
+User settings are restored after validation, and game files are read-only inputs. Original-game acceptance, MW3 mission-script execution, combat, particle simulation, spline interpolation, gait/IK and custom player-mech assembly remain outside this implementation. Parsing and preview checks do not establish original-game compatibility. Version remains 0.6.3; no PR or public release is part of this local update.
+
+Visual review also found that the initial D3D image could remain at a tiny size when large-world rendering starved the renderer's deferred resize. Coalesced size updates now run after layout and graphics initialization in the normal UI queue, retaining the camera. A dedicated GPU regression checks actual back-buffer dimensions during initial load and portrait/wide resizes at 150% DPI while deliberately keeping Background work pending; no forced render or resize is used to inspect the result.
+
+
+## AI attack-strategy inspection and network colors — local update (2026-09-28)
+
+Whole world AI marker cards pin read-only Attack strategy directly beneath the selected node title, outside the scrolling network/position details. The row remains visible in a short viewport and during position editing; it collapses for non-AI selections and when selection is cleared. Long values stay on one line with bounded text available in the tooltip and copy action. The exact stored string also appears in pinned Properties and copy actions. Nodes and arrows share a fixed palette for HEA/CIR/BAC/FOL/ZIG/SIT, with white selected markers and gray missing/unrecognized/invalid metadata. The AI toggle tooltip contains the key. Malformed or duplicate strategy entries retain valid network geometry and emit source-specific diagnostics. The shared reader uses workspace snapshots, including accepted ZRD edits and Undo, while preserving source bytes and identities.
+
+Core has typed strategy metadata/classification; Rendering owns the shared palette. Existing GUI/MCP inspection and discovery return bounded value/status/key/character-count/truncation/color metadata without new inputs or tools. The 73-tool catalog and capability map are updated. Prefix interpretation was verified against retail loader assembly and string literals; these are authored settings, not simulated combat state.
+
+Validation: Release build zero warnings/errors; all 385 tests pass (292 Core, 93 Desktop), including protocol/card/Properties/copy/readonly checks, malformed/duplicate/oversized values and resource edit/Undo snapshots. All 292 Core tests also pass with each reference corpus; each has 470 networks, 3,717 nodes and 6,240 resolved link slots with unchanged sources. GPU checks verify actual node and connection RGB values for all six strategies and gray, matching strategies across separate networks, filtering, both depth modes, white selection and idle back-buffer stability. Real M1 checks pass for 91 networks / 592 nodes, difficulty refresh, framing, source preservation and native overflow; the strategy card capture was inspected. Version stays 0.6.3 on a feature branch; no PR or public release is part of this local update.
+
+The portable build passed 584-file/package parity verification and the packaged 1999 M1 GUI/MCP regression, including strategy parity across network/node/card/Properties/copy results, coordinate drafts, undo/redo, verified Save As/reopen and unchanged source hashes. All 73 tools/two resources were discovered without a window; concurrent first requests shared one GUI, reconnect and clean shutdown passed. User settings were restored exactly. Physical mouse input and original-game combat were not exercised.
+
+Fixed-row follow-up: all 385 tests pass, including minimum/default heights, short/narrow viewers, scroll-independent placement, selection changes, missing/empty/invalid/long readouts, unchanged camera input handling and protocol copy-once/read-only checks. Real M1 captures verify immediate visibility without BringIntoView at the 1080 × 650 minimum window with Tools open in Compact and Comfortable density. GPU palette, selection, difficulty and source-preservation checks pass. The rendered-height assertion accounts for WPF rounding to the nearest physical pixel while checking the logical 80% cap. No command/schema changes were needed; the existing shared inspection/copy interfaces cover the fixed field.
+
 ## Resizable inspection panel — 0.6.3 (2026-09-28)
 
 The top-right panel has a bottom resize grip and keyboard resizing. Total expanded height defaults to 432 DIP, with a normal minimum of 216 DIP and a maximum of 80% of the viewer. Short viewers lower the effective minimum; automatic clamping and closing details retain the preferred height. The saved preference is shared by all 3D viewers and Reset layout restores it. The pointer readout and action header remain fixed while transform modes and fields scroll, retaining the copy-button gutter. Width stays stable while resizing; the navigation cube relocates when needed. Rotate stays hidden for placements without supported rotation, including AI nodes. Vehicles retain Y heading and pickups retain XYZ rotation.

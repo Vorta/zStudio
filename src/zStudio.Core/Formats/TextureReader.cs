@@ -8,7 +8,7 @@ internal sealed class TextureReader : IZbdFormatReader
     public FormatFamily Family => FormatFamily.TexturePack;
     public void Read(ZbdDocument doc, CancellationToken token)
     {
-        BinaryCursor c = new(doc.Bytes); uint unknown = c.U32(), format = c.U32(), pages = c.U32(), records = c.U32(); c.Skip(8);
+        BinaryCursor c = new(doc.Bytes); uint unknown = c.U32(), format = c.U32(), pages = c.U32(), records = c.U32(); c.Skip(8); FormatRegistry.CheckEntries("Texture record", records);
         int count = c.Count(records, 40); int pageOffset = checked(24 + count * 40);
         BinaryCursor.CheckRange(doc.Bytes.Length, pageOffset, pages * 512L);
         doc.Metadata["header_raw"] = Convert.ToHexStringLower(doc.Bytes.Span[..24]); doc.Metadata["palette_pages"] = pages;

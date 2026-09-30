@@ -10,6 +10,21 @@ namespace Recoil.Zbd.Tests;
 public sealed partial class AnimationTests
 {
     [Fact]
+    public void CleanupDuplicationDoesNotTreatInvalidCachesAsSelfReferences()
+    {
+        var package = Fixture(); var entry = package.Entries[0]; entry.Primary.Name = "cleanup";
+        var external = AnimationCatalog.Create(22); external.SetText(12, "motion"); external.SetInt(44, -1);
+        var self = AnimationCatalog.Create(23); self.SetText(12, "cleanup"); self.SetInt(44, -1);
+        entry.Primary.Events.AddRange([external, self]); var original = Pack(package);
+        var session = new AnimationEditSession(package); session.AddSequence(0, entry.Primary.Id);
+        var copy = package.Entries[0].Sequences[^1];
+        Assert.Equal("motion", copy.Events[0].Text(12)); Assert.Equal(-1, copy.Events[0].I32(44));
+        Assert.Equal(copy.Name, copy.Events[1].Text(12));
+        Assert.Equal("motion", Parse(Pack(package)).Entries[0].Sequences[^1].Events[0].Text(12));
+        session.Undo(); Assert.Equal(original, Pack(package));
+        session.Redo(); Assert.Equal("motion", package.Entries[0].Sequences[^1].Events[0].Text(12));
+    }
+    [Fact]
     public void WriterPreservesOpaqueBytesAndDuplicatedPrimaryUntilEdited()
     {
         var package = Fixture(); package.Entries[0].Bytes[210] = 0xCC;

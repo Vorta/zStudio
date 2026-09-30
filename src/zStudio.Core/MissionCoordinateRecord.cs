@@ -9,6 +9,7 @@ public sealed record MissionCoordinateRecord(MissionPickupSource Source, string 
     IReadOnlyList<MissionDifficulty> Difficulties)
 {
     public int? TemplateSourceNode { get; init; }
+    public bool MissionSpecific { get; init; }
 }
 
 public sealed partial class PickupPlacementEditSession
@@ -16,7 +17,7 @@ public sealed partial class PickupPlacementEditSession
     private static bool IsCoordinateResource(string name) => MissionAiNetworks.IsCandidate(name) ||
         name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd";
 
-    public void AddCoordinates(IEnumerable<(ZbdDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default)
+    public void AddCoordinates(IEnumerable<(ZbdDocument Archive, AssetRecord Asset)> resources, CancellationToken token = default, bool mw3 = false)
     {
         if (CanUndo || CanRedo || IsDirty) throw new InvalidOperationException("Coordinate sources must be loaded before editing.");
         var inputs = resources.Where(r => IsCoordinateResource(r.Asset.Name)).ToArray();
@@ -32,33 +33,34 @@ public sealed partial class PickupPlacementEditSession
             try
             {
                 if (doc.Probe.Family != FormatFamily.Archive || doc.Diagnostics.Any(d => d.Severity == "Error") ||
-                    doc.Assets.Any(a => a.Index != asset.Index && a.Offset < asset.Offset + asset.Length && asset.Offset < a.Offset + a.Length))
+                    Overlaps(doc, asset, token))
                     throw new InvalidDataException("An intact, non-overlapping archive member is required.");
                 string archive = Path.GetFullPath(doc.Path).ToUpperInvariant();
                 bool ai = MissionAiNetworks.IsCandidate(asset.Name);
-                var tree = ZrdDecoder.Decode(doc.Slice(asset.Offset, asset.Length), token);
-                var fields = tree["children"] as JsonArray ?? throw new InvalidDataException("Expected a record array.");
-                if (fields.Count == 1 && fields[0]?["children"] is JsonArray inner) fields = inner;
+                var tree = asset.Content as ZrdNode ?? ZrdDecoder.Read(doc.Slice(asset.Offset, asset.Length), token);
+                var fields = tree.Kind == ZrdKind.Array ? tree.Children : throw new InvalidDataException("Expected a record array.");
+                if (fields.Count == 1 && fields[0].Kind == ZrdKind.Array) fields = fields[0].Children;
                 if (fields.Count % 2 != 0) throw new InvalidDataException("Incomplete mission record pair.");
-                var graph = ai ? MissionAiNetworks.Decode("coordinates", archive, asset.Index, asset.Name, ZrdDecoder.Read(doc.Slice(asset.Offset, asset.Length), token), token) : null;
+                var graph = ai ? MissionAiNetworks.Decode("coordinates", archive, asset.Index, asset.Name, tree, token) : null;
+                var spatialOffsets = graph?.Nodes.Select(n => n.SourceOffset).ToHashSet();
                 for (int i = 0; i < fields.Count; i += 2)
                 {
                     token.ThrowIfCancellationRequested();
                     try
                     {
-                        string name = fields[i].Text("value");
-                        if (fields[i].Text("type") != "string" || fields[i + 1]?["children"] is not JsonArray { Count: 3 } row) continue;
-                        long offset = Convert.ToInt64(fields[i + 1].Text("offset")[2..], 16);
-                        if (ai && graph!.Nodes.All(n => n.SourceOffset != offset)) continue;
+                        string name = fields[i].Text;
+                        if (fields[i].Kind != ZrdKind.String || fields[i + 1].Kind != ZrdKind.Array || fields[i + 1].Children is not { Count: >= 3 } row || !mw3 && !ai && row.Count != 3) continue;
+                        long offset = fields[i + 1].SourceOffset;
+                        if (ai && !spatialOffsets!.Contains(offset)) continue;
                         var (position, offsets) = ReadVector(row[1], doc, asset);
                         var source = new MissionPickupSource(archive, asset.Index, asset.Name.ToUpperInvariant(), ai ? checked((int)offset) : i / 2);
                         var rotation = ai ? Vector3.Zero : new Vector3(0, ReadNumber(row[2]), 0);
                         var difficulties = ai ? Array.Empty<MissionDifficulty>() : effective.Where(p => p.Value.Asset?.Index == asset.Index &&
                             p.Value.Archive.Path.Equals(doc.Path, StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToArray();
                         var record = new MissionCoordinateRecord(source, ai ? "ai" : "tank", name, position, rotation,
-                            ai ? "" : MissionSceneLoader.VehicleTemplateName(name), offset, difficulties);
+                            ai ? "" : MissionSceneLoader.VehicleTemplateName(name), offset, difficulties) { MissionSpecific = mw3 };
                         if (entries.ContainsKey(source)) continue;
-                        archives.TryAdd(archive, new(doc));
+                        if (!archives.ContainsKey(archive)) archives.Add(archive, new(doc));
                         // The common coordinate store uses the existing archive-key identity.
                         entries.Add(source, new(new(source, name, position, rotation, difficulties), offsets, ai ? [] : [ReadScalarOffset(row[2], doc, asset)]));
                         positions.Add(source, position); savedPositions.Add(source, position); otherCoordinates.Add(source, record);
@@ -75,6 +77,7 @@ public sealed partial class PickupPlacementEditSession
     private PickupPlacementScope CoordinateScope(MissionCoordinateRecord selected)
     {
         if (selected.Kind == "ai") return new([selected.Source], "This AI network node");
+        if (selected.MissionSpecific) return new([selected.Source], "This authored mission actor only");
         if (selected.Difficulties.Count == 0) return new([selected.Source], "Read-only: shadowed tank resource");
         if (selected.TemplateSourceNode == null) return new([selected.Source], "Read-only: missing or ambiguous tank template");
         var candidates = otherCoordinates.Values.Where(r => r.Kind == "tank" && r.Template == selected.Template && r.TemplateSourceNode == selected.TemplateSourceNode &&
@@ -92,17 +95,19 @@ public sealed partial class PickupPlacementEditSession
 
     public void BindCoordinateTemplates(GameScene scene)
     {
+        var templates = scene.Nodes.Where(n => n.Class == "object3d").ToLookup(n => n.Name, StringComparer.Ordinal);
         foreach (var (key, record) in otherCoordinates.ToArray())
         {
             if (record.Kind != "tank") continue;
-            var matches = scene.Nodes.Where(n => n.Class == "object3d" && n.Name == record.Template).ToArray();
+            var matches = templates[record.Template].Take(2).ToArray();
             otherCoordinates[key] = record with { TemplateSourceNode = matches.Length == 1 ? matches[0].Index : null };
         }
     }
 
     public IEnumerable<ZbdDocument> WorkingArchives(CancellationToken token = default)
     {
-        foreach (var (path, archive) in archives)
+        // Publish only owned archives; unedited readers remain served by their own documents or files.
+        foreach (var (path, archive) in archives.Where(a => touched.Contains(a.Key)).ToArray())
             yield return FormatRegistry.Default.OpenBytes(archive.Original.Path, EncodeArchive(path), archive.Original.Stamp, token);
     }
 
@@ -118,12 +123,12 @@ public sealed partial class PickupPlacementEditSession
             changed = true; return node with { Position = p };
         }).ToArray() }).ToArray();
         if (!changed) return snapshot;
-        if (preview != null) return new(snapshot.Id, networks); // A draft does not replace accepted source identities.
+        if (preview != null) return snapshot with { Networks = networks }; // A draft does not replace accepted source identities.
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         hash.AppendData(System.Text.Encoding.UTF8.GetBytes(snapshot.Id));
         foreach (var node in networks.SelectMany(n => n.Nodes))
             foreach (float value in new[] { node.Position.X, node.Position.Y, node.Position.Z }) hash.AppendData(BitConverter.GetBytes(value));
-        return new(Convert.ToHexString(hash.GetHashAndReset()), networks);
+        return snapshot with { Id = Convert.ToHexString(hash.GetHashAndReset()), Networks = networks };
     }
 
     public IReadOnlyDictionary<int, Vector3> TankPreviewPositions(MissionSceneContext mission) => mission.Actors

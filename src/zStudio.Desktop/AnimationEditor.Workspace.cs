@@ -179,9 +179,9 @@ public partial class AnimationEditor
         StackPanel header = new() { Margin = new(8) };
         header.Children.Add(new TextBlock { Text = $"{Sequence.Name}: {(Event == null ? "append to sequence" : "insert after " + Event.Name)}", TextWrapping = TextWrapping.Wrap });
         TextBox query = new() { Margin = new(0,8,0,4), ToolTip = "Search event names, IDs and categories" }; header.Children.Add(query);
-        ComboBox category = new() { ItemsSource = new[] { "All" }.Concat(AnimationCatalog.Events.Select(e => AnimationFieldPresentation.Category(e.Type)).Distinct()), SelectedIndex = 0 }; header.Children.Add(category);
+        ComboBox category = new() { ItemsSource = new[] { "All" }.Concat(AnimationCatalog.ForVersion(Entry.Version).Select(e => AnimationFieldPresentation.Category(e.Type)).Distinct()), SelectedIndex = 0 }; header.Children.Add(category);
         ListBox list = new() { Margin = new(8), DisplayMemberPath = nameof(EventPickerItem.Label) };
-        void Filter() => list.ItemsSource = AnimationCatalog.Events.Where(e => (category.SelectedIndex == 0 || AnimationFieldPresentation.Category(e.Type) == category.SelectedItem?.ToString()) && (e.Name + $" 0x{e.Type:X2} " + AnimationFieldPresentation.Category(e.Type)).Contains(query.Text, StringComparison.OrdinalIgnoreCase)).Select(e => new EventPickerItem(e, $"{e.Name} · 0x{e.Type:X2} · {AnimationFieldPresentation.Category(e.Type)}")).ToArray();
+        void Filter() => list.ItemsSource = AnimationCatalog.ForVersion(Entry.Version).Where(e => (category.SelectedIndex == 0 || AnimationFieldPresentation.Category(e.Type) == category.SelectedItem?.ToString()) && (e.Name + $" 0x{e.Type:X2} " + AnimationFieldPresentation.Category(e.Type)).Contains(query.Text, StringComparison.OrdinalIgnoreCase)).Select(e => new EventPickerItem(e, $"{e.Name} · 0x{e.Type:X2} · {AnimationFieldPresentation.Category(e.Type)}")).ToArray();
         query.TextChanged += (_, _) => Filter(); category.SelectionChanged += (_, _) => Filter(); Filter();
         Button add = new() { Content = "Insert event", Margin = new(8), IsDefault = true, IsEnabled = false };
         list.SelectionChanged += (_, _) => add.IsEnabled = list.SelectedItem != null;

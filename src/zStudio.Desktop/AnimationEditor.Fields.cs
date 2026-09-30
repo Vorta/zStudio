@@ -22,9 +22,9 @@ public partial class AnimationEditor
     }
     private void UpdateInspection()
     {
-        if (Event is { } ev) InspectionChanged?.Invoke(ev.ToJson(),ev.Bytes);
-        else if (Sequence is { } sequence) InspectionChanged?.Invoke(new JsonObject { ["name"] = sequence.Name,["id"] = sequence.Id.ToString(),["resetState"] = sequence.ResetMode,["eventCount"] = sequence.Events.Count,["sourceOffset"] = sequence.SourceOffset,["headerHex"] = Convert.ToHexString(sequence.Bytes),["opaqueTailHex"] = Convert.ToHexString(sequence.OpaqueTail),["events"] = new JsonArray(sequence.Events.Select(e => (JsonNode)e.ToJson()).ToArray()) },sequence.Bytes);
-        else InspectionChanged?.Invoke(Entry.ToJson(),Entry.Bytes);
+        if (Event is { } ev) InspectionChanged?.Invoke(ev.ToPreviewJson(),ev.Bytes);
+        else if (Sequence is { } sequence) InspectionChanged?.Invoke(sequence.ToPreviewJson(),sequence.Bytes);
+        else InspectionChanged?.Invoke(Entry.ToPreviewJson(),Entry.Bytes);
     }
     private List<ChoiceValue> References(int table)
     {

@@ -11,17 +11,29 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     private static readonly StudioParameter[] PageParameters = [P("offset", "integer", "Zero-based result offset."), P("limit", "integer", "Page size, 1–200; default 100."), P("query", "string", "Case-insensitive name/path or displayed-text filter, applied before pagination.")];
-    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null, Func<T, object>? project = null)
+    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null, Func<T, object>? project = null, Func<T, string, bool>? matches = null)
     {
         int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
-        if (search != null && Text(a, "query") is { Length: > 0 } query) source = source.Where(item => search(item).Contains(query, StringComparison.OrdinalIgnoreCase));
+        if (Text(a, "query") is { Length: > 0 } query)
+        {
+            if (matches != null) source = source.Where(item => matches(item, query));
+            else if (search != null) source = source.Where(item => search(item).Contains(query, StringComparison.OrdinalIgnoreCase));
+        }
         int total = 0; List<object?> items = [];
         foreach (var item in source)
         {
             if (total >= offset && items.Count < limit) items.Add(project == null ? item : project(item));
             total++;
         }
+        return Result(new { total, offset, nextOffset = (long)offset + limit < total ? (int?)(offset + limit) : null, items });
+    }
+    /// <summary>A positional page of a sequence whose size is known: only the returned rows are constructed.</summary>
+    internal static StudioResult PageRange(int total, JsonObject a, Func<int, object> project)
+    {
+        int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
+        if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
+        var items = Enumerable.Range(offset, (int)Math.Clamp((long)total - offset, 0, limit)).Select(project).ToArray();
         return Result(new { total, offset, nextOffset = (long)offset + limit < total ? (int?)(offset + limit) : null, items });
     }
     private static AssetRecord TargetAsset(DocumentModel doc, JsonObject a)
@@ -81,7 +93,7 @@ public partial class MainWindow
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);
             return Result(new { document = DocumentState(doc), asset = asset.Id, ViewModel.Status });
         });
-        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings with explicit truncation markers; export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
+        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews 32 parts with 128-character names; motion_records pages tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
         {
             var doc = TargetDocument(a); var asset = TargetAsset(doc, a);
             return await InspectAssetAsync(doc, asset, token);

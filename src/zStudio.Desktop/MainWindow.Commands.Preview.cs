@@ -23,7 +23,7 @@ public partial class MainWindow
     {
         RequirePreview(a);
         if (EmptyPreview.Visibility == Visibility.Visible) throw new StudioCommandException("not_ready", EmptyPreview.Text);
-        return animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("unsupported", "No 3D viewport is active.");
+        return motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("unsupported", "No 3D viewport is active.");
     }
     private AnimationEditor TargetAnimation(JsonObject a)
     { RequirePreview(a); return animation ?? throw new StudioCommandException("unsupported", "Select an animation first."); }
@@ -56,11 +56,13 @@ public partial class MainWindow
         });
         Register(r, "preview_state", "Read active preview options, camera and playback state.", false, [PreviewParameter], a =>
         {
-            RequirePreview(a); return Result(new { preview = previewId, asset = shownAsset?.Id, animation = animation?.PreviewState(),
-                camera = animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? scene?.CaptureView() : null),
-                framingSelection = animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
+            RequirePreview(a); return Result(new { preview = previewId, asset = shownAsset?.Id, animation = animation?.PreviewState(), motion = motion?.State,
+                camera = motion?.Viewport.CaptureView() ?? animation?.Viewport.CaptureView() ?? (SceneHost.Visibility == Visibility.Visible ? scene?.CaptureView() : null),
+                framingSelection = motion?.Viewport.FramingSelection ?? animation?.Viewport.FramingSelection ?? (SceneHost.Visibility == Visibility.Visible ? scene?.FramingSelection : null),
                 ai = AiPreviewState(),
-                lod = animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = ViewModel.Difficulty.ToString(), texturePacks = animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>().ToArray() : [],
+                lod = motion?.Lod ?? animation?.PreviewLod ?? (SceneHost.Visibility == Visibility.Visible ? (int?)LodCombo.SelectedIndex : null), difficulty = MissionWorldPath != null || motion != null ? null : ViewModel.Difficulty.ToString(),
+                mission = animation?.MissionArchive ?? scene?.Mission?.Layout.MissionArchive,
+                texturePacks = animation == null && SceneHost.Visibility == Visibility.Visible ? TexturePackCombo.Items.Cast<PackChoice>().ToArray() : [],
                 textured = animation != null ? true : SceneHost.Visibility == Visibility.Visible ? TexturesEnabled.IsChecked : null,
                 wireframe = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? Wireframe.IsChecked : null,
                 bounds = animation != null ? false : SceneHost.Visibility == Visibility.Visible ? BoundsEnabled.IsChecked : null,
@@ -70,22 +72,22 @@ public partial class MainWindow
                 sound = wave == null ? null : new { seconds = wave.CurrentTime.TotalSeconds, duration = wave.TotalTime.TotalSeconds, playing = player?.PlaybackState == PlaybackState.Playing } });
         });
         RegisterCameraCommand(r);
-        Register(r, "scene_nodes", "List active assembled scene nodes by index, including instance metadata.", false, [PreviewParameter, .. PageParameters], a =>
+        Register(r, "scene_nodes", "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.", false, [PreviewParameter, .. PageParameters], a =>
         {
-            var viewport = TargetViewport(a); return Page((viewport.PreviewScene?.Nodes ?? []).Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)), a,
-                project: n => new { n.Index,n.Name,n.Class,n.Metadata, actor = viewport.ActorAt(n.Index) });
+            var viewport = TargetViewport(a); return Page(viewport.InspectableNodes.Where(n => n.Name.Contains(Text(a,"query"),StringComparison.OrdinalIgnoreCase)), a,
+                project: n => new { n.Index,n.Name,n.Class, Metadata = JsonData.PreviewObject(n.Metadata, 64, 1024), actor = viewport.ActorAt(n.Index) });
         });
-        Register(r, "scene_selection", "Select/inspect a scene node. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
+        Register(r, "scene_selection", "Select/inspect a scene node with bounded metadata and inspection_truncated. Isolate includes its descendants; isolate and show_all are available only in static model/Whole world previews, matching the GUI.", true, [PreviewParameter, P("action","string","Selection operation; isolate/show_all require a static model or Whole world preview.",true,"select","isolate","show_all"), P("node","integer","Node index.")], a =>
         {
             RequireNoDrafts(); var viewport = TargetViewport(a); string action = Text(a,"action");
-            if (animation != null && action is "isolate" or "show_all")
+            if ((animation != null || motion != null) && action is "isolate" or "show_all")
                 throw new StudioCommandException("unsupported", "Isolation is available only in model and Whole world previews. Animation scenes remain fully visible.");
             if (viewport.IsPickupDragging || viewport.IsFlyActive)
                 throw new StudioCommandException("busy", "Finish the pickup drag or exit Fly before changing scene selection.");
             if (action == "show_all") { viewport.Isolate(null); isolatedNode = null; }
             else
             {
-                int node = Int(a,"node",-1); if (node < 0 || viewport.PreviewScene == null || node >= viewport.PreviewScene.Nodes.Count) throw new StudioCommandException("stale_record","Scene node unavailable.");
+                int node = Int(a,"node",-1); if (!viewport.CanInspectNode(node)) throw new StudioCommandException("stale_record","Scene node unavailable.");
                 if (animation == null)
                 {
                     // A picked pickup mesh represents its whole placed instance,
@@ -104,13 +106,13 @@ public partial class MainWindow
                 }
                 viewport.SelectFramingNode(node);
                 if (action == "isolate") { viewport.Isolate(node); isolatedNode = node; }
-                return Result(viewport.PreviewScene!.Nodes[node].Metadata);
+                return Result(JsonData.PreviewObject(viewport.PreviewScene!.Nodes[node].Metadata));
             }
             return Result(new { visible = "all" });
         });
-        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
+        RegisterJob(r, "scene_options", "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only.", [PreviewParameter,SceneChanges], false, async (a, token) =>
         {
-            RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null) throw new StudioCommandException("unsupported","Use animation_options.");
+            RequirePreview(a); RequireNoDrafts(shownDocument); if (animation != null || motion != null) throw new StudioCommandException("unsupported","Use animation_options or motion_preview.");
             TargetViewport(a); var doc = shownDocument!; var asset = shownAsset!;
             var changes = (JsonObject)a["changes"]!;
             bool changesAi = changes.Any(p => p.Key is "aiNodes" or "aiThroughGeometry" or "aiNetwork" or "aiSnapshot");
@@ -127,6 +129,9 @@ public partial class MainWindow
             }
             if (changes.ContainsKey("highlight") && asset.Kind != AssetKind.World)
                 throw new StudioCommandException("unsupported", "Surface highlighting is available only in Whole world.");
+            // MW3 previews select an authored mission; the shared RECOIL difficulty preference does not apply.
+            if (changes.ContainsKey("difficulty") && (doc.PreviewDocument.Game == GameVariant.MechWarrior3 || scene?.Mission is { } shown && (!shown.Layout.DifficultyApplies || shown.Layout.MissionArchive != null)))
+                throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
             // Schema validation covers types/enums. Validate current-view constraints
             // for the entire batch before any control, preference or renderer changes.
             int? requestedLod = changes.ContainsKey("lod") ? Int(changes, "lod") : null;
@@ -195,10 +200,13 @@ public partial class MainWindow
             if (changesAi) SetAiOptions(Flag(changes, "aiNodes", aiVisible), Flag(changes, "aiThroughGeometry", aiThroughGeometry), requestedAiNetwork);
             return Result(new { preview = previewId, ViewModel.Status });
         });
-        RegisterJob(r, "animation_options", "Set animation options: map/grid/collision/horizon/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty, speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>
+        RegisterJob(r, "animation_options", "Set animation options: map/grid/collision/horizon/followCamera/effects/replay/mute/followLog(bool), height(-999..999), lod, difficulty(RECOIL only; MW3 uses missions), speed, volume, phase(runtime/cleanup), seed, condition(0/1/2), range/traceRange(seconds), autoRange/fitTrace(true), problemFilter(0..4), worldPath, root, activationOrigin/activationTarget(XYZ text or blank).", [PreviewParameter,AnimationChanges], false, async (a, _) =>
         {
             var editor = TargetAnimation(a); RequireNoDrafts(shownDocument);
-            foreach(var (name,value) in (JsonObject)a["changes"]!) { RequirePreview(a); await editor.SetPreviewOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument","Use an explicit value.")); }
+            var animationChanges = (JsonObject)a["changes"]!;
+            if (animationChanges.ContainsKey("difficulty") && !animationChanges.ContainsKey("worldPath") && editor.Mw3WorldPath != null)
+                throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
+            foreach(var (name,value) in animationChanges) { RequirePreview(a); await editor.SetPreviewOptionAsync(name, value ?? throw new StudioCommandException("invalid_argument","Use an explicit value.")); }
             return Result(editor.PreviewState());
         });
         RegisterJob(r, "animation_transport", "Play/pause/stop, frame-step or seek the current animation.", [PreviewParameter,P("action","string","Transport action.",true,"play","pause","stop","previous","next","seek"),P("seconds","number","Seek time in seconds.")], false, async (a, _) =>
@@ -240,7 +248,7 @@ public partial class MainWindow
             if (target == "preview") RequirePreview(a);
             if(target=="window" || target=="properties") image=StudioCapture.Window(target=="window" ? this : propertiesWindow ?? throw new StudioCommandException("not_ready","Properties is closed."));
             else if(decoded!=null) image=MakeBitmap(decoded,ChannelCombo.SelectedIndex);
-            else { int w=Int(a,"width",1280),h=Int(a,"height",720); if(w is <1 or >4096 || h is <1 or >4096) throw new StudioCommandException("invalid_argument","Capture dimensions must be 1–4096."); image=(animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("not_ready","No image/3D preview is loaded. Use target=window for other viewers.")).RenderImage(w,h,preserveAspect:true); }
+            else { int w=Int(a,"width",1280),h=Int(a,"height",720); if(w is <1 or >4096 || h is <1 or >4096) throw new StudioCommandException("invalid_argument","Capture dimensions must be 1–4096."); image=(motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) ?? throw new StudioCommandException("not_ready","No image/3D preview is loaded. Use target=window for other viewers.")).RenderImage(w,h,preserveAspect:true); }
             using MemoryStream bytes=new(); PngBitmapEncoder encoder=new(); encoder.Frames.Add(BitmapFrame.Create(image)); encoder.Save(bytes);
             return new(Result(new { image.PixelWidth,image.PixelHeight,mimeType="image/png", preview = target == "preview" ? (Guid?)previewId : null, asset = target == "preview" ? shownAsset?.Id : null }).Data,bytes.ToArray());
         });

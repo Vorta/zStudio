@@ -16,7 +16,7 @@ public partial class AnimationEditor
     internal object PreviewState() => new
     {
         entry = entryIndex, playing, time = frame?.Time, duration, range = SeekSlider.Maximum, customRange,
-        options = Options, height = appliedHeight, lod = Lod.SelectedIndex, difficulty = SelectedDifficulty.ToString(),
+        options = Options, height = appliedHeight, lod = Lod.SelectedIndex, difficulty = Mw3WorldPath == null ? SelectedDifficulty.ToString() : null, mission = MissionArchive,
         speed = new[] { .25, .5, 1, 2, 4 }[Math.Clamp(Speed.SelectedIndex, 0, 4)], replay = Loop.IsChecked == true,
         mute = Mute.IsChecked == true, volume = Volume.Value, phase = Phase.SelectedIndex == 0 ? "runtime" : "cleanup", seed = appliedSeed,
         condition = Condition.SelectedIndex, activationStart, activationTarget, root = context?.ResolveRoot(Entry),
@@ -26,14 +26,14 @@ public partial class AnimationEditor
     {
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
         JsonObject args = new() { ["offset"] = offset, ["limit"] = limit, ["query"] = query };
-        JsonObject Page<T>(IEnumerable<T> rows, Func<T, string> search) => MainWindow.Page(rows, args, search).Data.AsObject();
+        JsonObject Page<T>(IEnumerable<T> rows, Func<T, string> search, Func<T, object>? project = null) => MainWindow.Page(rows, args, search, project).Data.AsObject();
         if (section == "problems") { var problems = Page(CurrentProblems(), p => p.Message + " " + p.Category + " " + p.Scope); problems["approximation"] = "Preview includes game-dependent approximations."; return problems; }
         if (frame == null) return new { unavailable = true };
         return section switch
         {
             "events" => EventPage(),
             "sequences" => Page(frame.Sequences, s => s.Name + " " + s.State),
-            "scene" => Page((context?.Scene.Nodes ?? []).Select(n => new { n.Index, n.Name, n.Class, n.Metadata }), n => n.Name + " " + n.Class),
+            "scene" => Page(context?.Scene.Nodes ?? [], n => n.Name + " " + n.Class, n => new { n.Index, n.Name, n.Class, n.Metadata }),
             _ => PreviewState()
         };
         JsonObject EventPage() { var page = Page(frame.Trace, e => e.Name + " " + e.Status); page["dropped"] = frame.TraceDropped; return page; }
@@ -58,7 +58,10 @@ public partial class AnimationEditor
             case "effects": Lighting.IsChecked = value.GetValue<bool>(); break;
             case "height": PreviewHeight.Text = Numeric(-999,999).ToString(CultureInfo.InvariantCulture); break;
             case "lod": Lod.SelectedIndex = Integer(0, Math.Max(0,Lod.Items.Count - 1)); break;
-            case "difficulty": if (!Enum.TryParse<MissionDifficulty>(value.GetValue<string>(), out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument", "Difficulty must be Easy, Medium or Hard."); Difficulty.SelectedItem = difficulty; break;
+            case "difficulty":
+                if (!Enum.TryParse<MissionDifficulty>(value.GetValue<string>(), out var difficulty) || !Enum.IsDefined(difficulty)) throw new StudioCommandException("invalid_argument", "Difficulty must be Easy, Medium or Hard.");
+                if (Mw3WorldPath != null) throw new StudioCommandException("unsupported", "MechWarrior 3 previews use missions instead of difficulty.");
+                Difficulty.SelectedItem = difficulty; break;
             case "speed": int index = Array.IndexOf(new[] { .25, .5, 1, 2, 4 }, Numeric(.25,4)); if (index < 0) throw new StudioCommandException("invalid_argument", "Speed must be 0.25, 0.5, 1, 2 or 4."); Speed.SelectedIndex = index; break;
             case "replay": Loop.IsChecked = value.GetValue<bool>(); break;
             case "mute": Mute.IsChecked = value.GetValue<bool>(); break;

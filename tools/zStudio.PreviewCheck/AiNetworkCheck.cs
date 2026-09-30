@@ -11,6 +11,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using HelixToolkit.Wpf.SharpDX;
 using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Rendering;
 
@@ -38,12 +39,40 @@ internal static class AiNetworkCheck
                 var host = (ContentControl)main.FindName("SceneHost"); var scene = (SceneViewport)host.Content;
                 Require(scene.AiNetworks.Networks.Count == 91 && scene.AiNetworks.Networks.Sum(n => n.Nodes.Count) == 592, "m1 AI counts");
                 main.Width = 1250; main.Height = 850;
+                ((ToggleButton)main.FindName("EditingUnlocked")).IsChecked = true;
                 ((ToggleButton)main.FindName("AiEnabled")).IsChecked = true;
                 var choice = (ComboBox)main.FindName("AiNetworkCombo"); choice.SelectedIndex = 1;
                 var network = scene.AiNetworks.Networks.Single(n => n.Id == scene.AiNetworkFilter); var node = network.Nodes[0];
                 Require(scene.SelectAiNode(node.Id) && scene.TryFrame("selected"), "AI selection/frame");
                 await Task.Delay(300); Save(Presented((Viewport3DX)scene.RenderSurface), Path.Combine(output, "m1-network.png"));
+                // Strategy is an ordinary read-only detail in the scrollable card.
+                var strategyField = Descendants((SceneInspectionCard)scene.InspectionContent!).OfType<TextBox>()
+                    .Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Attack strategy");
+                Require(strategyField.IsReadOnly && strategyField.Text == network.AttackStrategy.Value, "Read-only stored strategy row");
                 Save(StudioCapture.Window(main), Path.Combine(output, "m1-controls.png"));
+                var card = (SceneInspectionCard)scene.InspectionContent!;
+                foreach (var density in new[] { "Compact", "Comfortable" })
+                {
+                    main.Width = 1080; main.Height = 650;
+                    await main.Commands.ExecuteAsync("zstudio_workspace_view", new JsonObject { ["changes"] = new JsonObject { ["density"] = density, ["tools"] = true, ["inspectionPanelHeight"] = 216 } });
+                    await Task.Delay(150);
+                    var panel = Descendants(card).OfType<Border>().Single(b => b.Name == "InspectionPanel");
+                    var grip = Descendants(card).OfType<Thumb>().Single(t => t.Name == "InspectionResize");
+                    var scroll = Descendants(card).OfType<ScrollViewer>().Single(s => s.Name == "InspectionScroll");
+                    var beforeScroll = scene.CaptureView();
+                    strategyField.BringIntoView(); await Task.Delay(100);
+                    Require(scroll.VerticalOffset > 0 && scene.CaptureView() == beforeScroll, "Strategy reveal must scroll the details without moving the camera");
+                    var top = strategyField.TranslatePoint(new(), card).Y;
+                    var bottom = strategyField.TranslatePoint(new(0, strategyField.ActualHeight), card).Y;
+                    Require(strategyField.IsVisible && strategyField.ActualWidth > 40 && top >= scroll.TranslatePoint(new(), card).Y - 1 && bottom <= grip.TranslatePoint(new(), card).Y,
+                        "Strategy clipped in minimum window: " + density);
+                    Save(StudioCapture.Window(main), Path.Combine(output, "m1-card-minimum-" + density + ".png"));
+                    // WPF rounds the logical maximum to the nearest device pixel.
+                    Require(panel.MaxHeight <= card.ActualHeight * .8 + 1e-6 &&
+                        panel.ActualHeight <= panel.MaxHeight + .5 / VisualTreeHelper.GetDpi(panel).DpiScaleY + 1e-6,
+                        $"Panel exceeded viewport cap: panel={panel.ActualHeight}, viewport={card.ActualHeight}, maximum={panel.MaxHeight}");
+                }
+                main.Width = 1250; main.Height = 850;
                 var pose = scene.CaptureView(); string snapshot = scene.AiNetworks.Id;
                 ((ToggleButton)main.FindName("HighlightSoils")).IsChecked = true;
                 Require(scene.AiVisible && scene.HighlightMode == WorldHighlightMode.NonDefaultSoils && scene.CaptureView() == pose, "Highlight independence");
@@ -114,11 +143,89 @@ internal static class AiNetworkCheck
             foreach (var wall in walls) wall.IsTransparent = false;
             scene.SetAiOptions(false, false, null); await Task.Delay(100);
             Require(original.SequenceEqual(Pixels(Presented(view))), "Disabling AI did not restore the scene");
+            scene.SetPickupLocked(false);
+            (string Label, AiAttackStrategy Strategy, string Hex)[] strategyCases =
+            [
+                ("head", AiAttackStrategy.Stored("Head-on"), "#FFA640"), ("circle", AiAttackStrategy.Stored("cIrClE"), "#33D9FF"),
+                ("back", AiAttackStrategy.Stored("back"), "#B380FF"), ("follow", AiAttackStrategy.Stored("follow"), "#4DFFA6"),
+                ("zigzag", AiAttackStrategy.Stored("zigzag"), "#FF66B3"), ("sit", AiAttackStrategy.Stored("sit"), "#F2F24D"),
+                ("unknown", AiAttackStrategy.Stored("unknown"), "#A0A0A0"), ("empty", AiAttackStrategy.Stored(""), "#A0A0A0"),
+                ("invalid", AiAttackStrategy.Invalid, "#A0A0A0"), ("missing", AiAttackStrategy.Missing, "#FF6666")
+            ];
+            foreach (var (text, strategy, hex) in strategyCases)
+            {
+                var network = new AiNetwork("network", "fixture.zbd", 0, "net_01.zrd", "fixture", "standard", 10, [a, b], []) { AttackStrategy = strategy };
+                var other = network with { Id = "other", MemberIndex = 1, Nodes = [a with { Id = "c", Position = new(-6, 5, -2), Links = [] }] };
+                scene.SetAiNetworks(new("strategy-" + text, [network, other]));
+                foreach (bool through in new[] { true, false })
+                {
+                    // Transparent fixture walls allow both depth modes to expose the same markers.
+                    foreach (var wall in walls) wall.IsTransparent = true;
+                    scene.SetAiOptions(true, through, null); await Task.Delay(120);
+                    var rendered = Presented(view);
+                    Require(HasColor(rendered, view, point, hex), "Wrong marker color: " + text);
+                    Require(HasColor(rendered, view, view.Project(new Point3D(0, 0, -2)), hex), "Wrong arrow/connection color: " + text);
+                    Require(HasColor(rendered, view, view.Project(new Point3D(-6, 5, -2)), hex), "Same strategy differs between networks: " + text);
+                    scene.SetAiOptions(true, through, "network"); await Task.Delay(100);
+                    Require(HasColor(Presented(view), view, point, hex), "Filtering changed strategy color: " + text);
+                }
+                Require(scene.SelectAiNode("a"), "Strategy marker selection failed"); await Task.Delay(100);
+                Require(HasColor(Presented(view), view, point, "#FFFFFF"), "Selected marker lost white highlight");
+                Require(scene.SelectAiNode(null), "Strategy marker clearing failed"); await Task.Delay(100);
+                Require(HasColor(Presented(view), view, point, hex), "Clearing selection did not restore strategy color: " + text);
+                Save(Presented(view), Path.Combine(output, "strategy-" + text + ".png"));
+            }
+            // Actual presented pixels: valve cages and assignments must remain separate
+            // from strategy-colored base nodes, and an unmatched filter removes them.
+            ZrdNode A(params ZrdNode[] values) => new(Guid.NewGuid(), ZrdKind.Array, 0, "", values);
+            ZrdNode S(string value) => new(Guid.NewGuid(), ZrdKind.String, 0, value, []);
+            ZrdNode I(int value) => new(Guid.NewGuid(), ZrdKind.Int, unchecked((uint)value), "", []);
+            ZrdNode F(float value) => new(Guid.NewGuid(), ZrdKind.Float, BitConverter.SingleToUInt32Bits(value), "", []);
+            var valveGraph = MissionAiNetworks.Decode("valve-network", "fixture.zbd", 0, "net_01.zrd", A(
+                S("version"), A(I(106)),
+                S("node_00"), A([I(12), A(F(-6), F(0), F(-2)), A(I(1)), ..Enumerable.Range(0, 20).SelectMany(n => new[] { S("valve"), A(I(1), S("node" + n)) }),
+                    S("valveunion"), A(Enumerable.Range(0, 40).Select(n => A(I(1), S("term" + n))).ToArray())]),
+                S("node_01"), A(I(12), A(F(6), F(0), F(-2)), A(I(0))),
+                S("node_02"), A([A(I(0), I(1)), ..Enumerable.Range(0, 1100).SelectMany(n => new[] { S("valve_assign"), A(S(n == 1099 ? "start" : "edge" + n), I(1)) })])));
+            scene.SetAiNetworks(new("valve-fixture", [valveGraph]));
+            scene.SetAiOptions(true, true, null); scene.SetValveOptions(false); await Task.Delay(150);
+            var valveBase = Pixels(Presented(view));
+            scene.SetValveOptions(true); await Task.Delay(150);
+            var valves = Presented(view);
+            Require(!valveBase.SequenceEqual(Pixels(valves)), "Valve overlay did not render");
+            Require(HasColor(valves, view, point, "#FF6666"), "Valve cage replaced attack strategy color");
+            Require(HasColor(valves, view, view.Project(new Point3D(-1.5, 0, -2)), "#F2F2F2"), "Valve assignment dash missing");
+            byte[] valveIdle = Pixels(valves); await Task.Delay(150);
+            Require(valveIdle.SequenceEqual(Pixels(Presented(view))), "Valve overlay changed at idle");
+            Save(valves, Path.Combine(output, "fixture-valves.png"));
+            scene.SetValveOptions(true, "absent"); await Task.Delay(150);
+            Require(valveBase.SequenceEqual(Pixels(Presented(view))), "Valve name filter left unrelated overlays");
+            scene.SetValveOptions(true, "start"); await Task.Delay(150);
+            Require(HasColor(Presented(view), view, view.Project(new Point3D(-1.5, 0, -2)), "#FFCC33"), "Valve highlight dash missing");
+            Require(scene.CaptureView() == pose && clip == (camera.NearPlaneDistance, camera.FarPlaneDistance), "Valve overlays altered camera/depth bounds");
+            foreach (string name in new[] { "node19", "term39" })
+            {
+                scene.SetValveOptions(true, name); await Task.Delay(150);
+                Require(!valveBase.SequenceEqual(Pixels(Presented(view))), "Late valve condition was not rendered: " + name);
+            }
+            Require(scene.CaptureView() == pose, "Late valve filtering moved the camera");
+            foreach (string name in new[] { "node19", "term39", "start" })
+            { scene.SetValveOptions(true, name); Require(scene.FrameValveAssociations(), "Late valve association could not be framed: " + name); }
+            Console.WriteLine("PASS: valve cages retain strategy colors, assignments/highlights render, filtering restores base pixels, idle/depth/camera stable and associations frame");
+            Console.WriteLine("PASS: rendered strategy colors for markers/arrows, equal strategies across networks, filtering, both depth modes and white selection");
             Console.WriteLine("PASS: GPU through/occluded modes, reciprocal arrows, visibility-aware picking, unchanged clipping/camera and idle back buffer");
         }
         finally { window.Close(); }
     }
     private static Task PreviewWork(MainWindow main) => (Task)typeof(MainWindow).GetField("previewWork", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject parent)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i); yield return child;
+            foreach (var descendant in Descendants(child)) yield return descendant;
+        }
+    }
     private static BitmapSource Presented(Viewport3DX viewport)
     {
         using MemoryStream stream = new();
@@ -126,6 +233,18 @@ internal static class AiNetworkCheck
         stream.Position = 0; return BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
     }
     private static byte[] Pixels(BitmapSource image) { var converted = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0); byte[] bytes = new byte[converted.PixelWidth * converted.PixelHeight * 4]; converted.CopyPixels(bytes, converted.PixelWidth * 4, 0); return bytes; }
+    private static bool HasColor(BitmapSource image, Viewport3DX viewport, Point point, string hex)
+    {
+        byte[] pixels = Pixels(image); uint rgb = Convert.ToUInt32(hex[1..], 16);
+        int x = (int)Math.Round(point.X * image.PixelWidth / viewport.ActualWidth), y = (int)Math.Round(point.Y * image.PixelHeight / viewport.ActualHeight);
+        for (int py = Math.Max(0, y - 5); py <= Math.Min(image.PixelHeight - 1, y + 5); py++)
+        for (int px = Math.Max(0, x - 5); px <= Math.Min(image.PixelWidth - 1, x + 5); px++)
+        {
+            int at = (py * image.PixelWidth + px) * 4;
+            if (Math.Abs(pixels[at] - (int)(rgb & 255)) <= 3 && Math.Abs(pixels[at + 1] - (int)((rgb >> 8) & 255)) <= 3 && Math.Abs(pixels[at + 2] - (int)((rgb >> 16) & 255)) <= 3) return true;
+        }
+        return false;
+    }
     private static void Save(BitmapSource image, string path) { PngBitmapEncoder encoder = new(); encoder.Frames.Add(BitmapFrame.Create(image)); using var stream = File.Create(path); encoder.Save(stream); }
     private static void Require(bool condition, string message) { if (!condition) throw new InvalidDataException(message); }
 }

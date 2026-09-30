@@ -86,7 +86,9 @@ public partial class MainWindow
         try
         {
             Dictionary<string, string>? destinations = null;
-            foreach (string source in edits.ArchivePaths)
+            // A map loads every mission reader; Save As copies the archives its history edited.
+            var scope = edits.EditedArchivePaths is { Count: > 0 } edited ? edited : edits.ArchivePaths;
+            foreach (string source in scope)
             {
                 if (!saveAs && !edits.IsArchiveDirty(source)) continue;
                 string target = edits.TargetPath(source);

@@ -11,12 +11,13 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     private SceneInspectionCard? inspectionDraft;
-    private SceneInspectionCard? CurrentInspectionCard => (animation?.Viewport ?? scene)?.InspectionContent as SceneInspectionCard;
+    private SceneInspectionCard? CurrentInspectionCard => (motion?.Viewport ?? animation?.Viewport ?? scene)?.InspectionContent as SceneInspectionCard;
     private bool HasInspectionDraft => inspectionDraft?.HasDraft == true;
 
     private void AttachInspection(SceneViewport viewport)
     {
         var card = new SceneInspectionCard(viewport, item => DescribeInspection(viewport, item), BeginInspectionEdit, ApplyInspectionEdit);
+        card.ValvesRequested += async id => await ResourceUiAsync(() => OpenNodeValvesAsync(id));
         card.SetPanelHeight(Layout.InspectionPanelHeight);
         card.PanelHeightChanged += height => Layout.InspectionPanelHeight = height;
         card.DraftClosed += () => { if (ReferenceEquals(inspectionDraft, card)) inspectionDraft = null; };
@@ -61,7 +62,7 @@ public partial class MainWindow
             info["Model"] = item.Model;
             if (item.Model >= 0 && item.Model < data!.Models.Count)
                 info["Model geometry"] = $"{data.Models[item.Model].Vertices.Length} vertices · {data.Models[item.Model].Polygons.Length} polygons";
-            info["LOD rank"] = animation?.PreviewLod ?? LodCombo.SelectedIndex;
+            info["LOD rank"] = motion?.Lod ?? animation?.PreviewLod ?? LodCombo.SelectedIndex;
             info["Material"] = item.Material;
             var flags = WorldSurfaceHighlights.NodeKind(data!, item.Node);
             info["CanModify"] = flags.HasFlag(WorldSurfaceKind.CanModify); info["ClipTo"] = flags.HasFlag(WorldSurfaceKind.ClipTo);
@@ -87,13 +88,22 @@ public partial class MainWindow
         {
             info["Node"] = $"AI {ai.Network.Member} · node_{ai.Node.Index:00}";
             info["Network"] = Short(ai.Network.Name); info["Network type"] = Short(ai.Network.Type);
+            info["Attack strategy"] = AiStrategyText(ai.Network.AttackStrategy);
+            if (ai.Network.IsMw3)
+            {
+                var valves = MissionAiValves.ForNode(ai.Network, ai.Node).Take(9).ToArray();
+                info["AI valves"] = valves.Length == 0 ? "No authored valve conditions or assignments" : string.Join("\n", valves.Take(8).Select(r => r.Name + ": " + string.Join(", ", MissionAiValves.References(r).Take(4).Select(v => MissionAiValves.Short(v.Name, 96))))) + (valves.Length > 8 ? "\nMore in Valve Properties…" : "");
+            }
             info["Path width"] = ai.Network.PathWidth; info["Raw node value"] = ai.Node.RawValue;
-            info["Directed link slots"] = new JsonArray(ai.Node.Links.Select(l => (JsonNode)new JsonObject { ["slot"] = l.Slot, ["target"] = l.TargetIndex, ["problem"] = l.Problem }).ToArray());
+            info["Directed link slots"] = new JsonArray(ai.Node.PreviewLinks.Select(l => (JsonNode)new JsonObject { ["slot"] = l.Slot, ["target"] = l.TargetIndex, ["problem"] = l.Problem }).ToArray());
+            info["Authored link slot count"] = ai.Node.LinkCount;
+            if (ai.Node.LinksTruncated) info["Link preview"] = $"First {AiNode.MaximumPreviewLinks} slots shown. Inspect/export the ZRD resource for the complete list.";
         }
         var actor = viewport.ActorAt(item.Node);
         if (actor != null)
         {
             info["Placed instance"] = Short(actor.Name) + $" · root #{actor.Root}";
+            if (actor.NameTruncated) { info["Name truncated"] = true; info["Authored name characters"] = actor.NameCharacters; }
             info["Template source node"] = actor.SourceRoot; info["Layout"] = actor.PlacementSource;
             info.Remove("Scene local XYZ");
             if (actor.Pickup is { } pickup)
@@ -119,7 +129,7 @@ public partial class MainWindow
             }
             if (edits.Coordinate(source) is { Kind: "tank" } tank) { info["Template"] = tank.Template; info[SceneInspectionCard.AuthoredHeading] = rotation.Y; }
         }
-        if (known && edits!.Coordinate(source!) is { Kind: "tank" } vehicle && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0)) known = false;
+        if (known && edits!.Coordinate(source!) is { Kind: "tank" } vehicle && (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))) known = false;
         bool locked = known && shownDocument!.PickupsLocked;
         info["Editable"] = known && !locked;
         info["Rotation axes"] = known ? edits!.RotationKind(source!) switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "None" } : "None";
@@ -137,7 +147,7 @@ public partial class MainWindow
         var edits = doc.PickupEdits;
         if (source == null || edits == null || edits.Find(source) == null && edits.Coordinate(source) == null)
             throw new StudioCommandException("read_only", "This node has no verified editable placement.");
-        if (edits.Coordinate(source) is { Kind: "tank" } vehicle && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0))
+        if (edits.Coordinate(source) is { Kind: "tank" } vehicle && (!vehicle.MissionSpecific && (vehicle.TemplateSourceNode == null || vehicle.Difficulties.Count == 0)))
             throw new StudioCommandException("read_only", "The tank template is missing or ambiguous.");
         if (doc.PickupsLocked) throw new StudioCommandException("locked", "Unlock editing first.");
         if (edits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed. Reload or preserve your existing edits with Save As.");
@@ -159,7 +169,7 @@ public partial class MainWindow
 
     private void RegisterInspectionCommands(StudioCommands commands)
     {
-        Register(commands, "scene_inspect", "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. Panel state includes preferred/effective heights, viewport limits and expanded state.", false,
+        Register(commands, "scene_inspect", "Read independent hover/selection information from the fixed top-right inspection panel, or query an explicit viewport point/target without moving the mouse. The permanent hover readout clears its coordinates over empty space. Coordinates distinguish triangle hits, object origins and authored placement positions. AI results include attackStrategy/hoverAttackStrategy with stored value, status, key, character count, truncation and network RGB hex color. Panel state includes preferred/effective heights, viewport limits and expanded state.", false,
             [PreviewParameter, P("target", "string", "Opaque target from a previous inspection."), new("screenPoint", "array", "Viewport DIP [x,y].", Items: new("", "number", "Coordinate.", NumberMinimum: 0), MinItems: 2, MaxItems: 2)], a =>
         {
             var viewport = TargetViewport(a); SceneInspection? item;
@@ -175,6 +185,7 @@ public partial class MainWindow
             return Result(new { preview = previewId, document = shownDocument?.SessionId, revision = shownDocument?.Revision,
                 inspection = item == null ? null : DescribeInspection(viewport, item), selected = viewport.SelectedInspection?.Target,
                 hover = viewport.HoverInspection == null ? null : DescribeInspection(viewport, viewport.HoverInspection),
+                attackStrategy = InspectionAiStrategy(viewport, item), hoverAttackStrategy = InspectionAiStrategy(viewport, viewport.HoverInspection),
                 draft = (viewport.InspectionContent as SceneInspectionCard)?.DescribeDraft(),
                 panel = (viewport.InspectionContent as SceneInspectionCard)?.DescribePanel() });
         });
@@ -224,4 +235,6 @@ public partial class MainWindow
             return Result(new { selected = viewport.SelectedInspection?.Target, draft = card.DescribeDraft(), revision = shownDocument?.Revision });
         });
     }
+    private static JsonObject? InspectionAiStrategy(SceneViewport viewport, SceneInspection? item)
+        => item?.AiNode is { } id && viewport.AiNetworks.Find(id) is { } ai ? DescribeAiStrategy(ai.Network) : null;
 }

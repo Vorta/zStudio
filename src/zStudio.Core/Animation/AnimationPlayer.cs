@@ -240,12 +240,7 @@ public sealed partial class AnimationPlayer
     private Node? NodeRef(Instance instance, int reference)
     {
         if (reference == 0) return null;
-        int index = reference is -100 or -200 ? instance.Root : context.ResolveNode(instance.Entry, reference, instance.Root);
-        if (reference > 0 && reference < instance.Entry.References[1].Count)
-        {
-            string name = instance.Entry.References[1][reference].Text(0, 36);
-            int local = name == instance.Entry.RootName ? instance.Root : context.FindBelow(instance.Root, name); if (local >= 0) index = local;
-        }
+        int index = context.ResolveInstanceNode(instance.Entry, reference, instance.Root);
         if (instance.Nodes.TryGetValue(index, out var node)) return node;
         AddNote($"{instance.Entry.Name}: unresolved node reference {reference}."); return null;
     }
@@ -283,7 +278,7 @@ public sealed partial class AnimationPlayer
         if ((instance.Entry.U32(148) & 0x40) != 0)
             foreach (var tracked in instance.Entry.References[0])
             {
-                int index = context.FindBelow(instance.Root, tracked.Text(0,32));
+                int index = context.FindNamedBelow(instance.Root, tracked.Text(0,32));
                 if (instance.Nodes.TryGetValue(index,out var node) && instance.SavedNodes.TryGetValue(index,out var saved))
                 {
                     node.Active = saved.Active; node.Position = saved.Position; node.Euler = saved.Euler; node.Scale = saved.Scale;

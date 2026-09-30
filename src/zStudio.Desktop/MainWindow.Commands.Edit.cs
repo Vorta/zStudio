@@ -25,26 +25,34 @@ public partial class MainWindow
     }
     private void RegisterEditCommands(StudioCommands r)
     {
-        Register(r, "animation_records", "List authored sequence identities; supply sequence to page its events with full edited fields. Cleanup is listed separately from runtime sequences.", false, [DocumentParameter, P("entry", "integer", "Entry index.", true), P("sequence", "string", "Optional sequence UUID for event details."), .. PageParameters], a =>
+        Register(r, "animation_records", "List authored sequence identities; supply sequence to page its events with edited scalar fields and a 256-byte raw preview (raw_hex_truncated). Keyframe streams are omitted (keyframes_omitted); use property_fields with segment or JSON export. Event queries match these bounded displayed fields before pagination. Cleanup is listed separately from runtime sequences.", false, [DocumentParameter, P("entry", "integer", "Entry index.", true), P("sequence", "string", "Optional sequence UUID for event details."), .. PageParameters], a =>
         {
             var d = TargetDocument(a); var e = TargetEntry(d, a);
             Guid id = GuidArg(a,"sequence");
             if (id != Guid.Empty)
             {
                 var s = e.AllSequences.SingleOrDefault(s=>s.Id==id) ?? throw new StudioCommandException("stale_record","Sequence is unavailable.");
-                return Result(new { d.Revision, sequence=s.Id, events=Page(s.Events.Select(v=>new { id=v.Id, data=v.ToJson() }),a, v => System.Text.Json.JsonSerializer.Serialize(v.data)).Data });
+                return Result(new { d.Revision, sequence=s.Id, events=Page(s.Events,a, v => v.ToPreviewJson().ToJsonString(), v => new { id=v.Id, data=v.ToPreviewJson() }).Data });
             }
             return Result(new { d.Revision, entry = new { e.Index,e.Name,e.RootName,e.AttachName,e.SourceOffset,e.SourceLength,headerHex=Convert.ToHexString(e.Bytes) },
-                sequences = Page(e.AllSequences.Select(s => new { id = s.Id, s.Name, cleanup = s == e.Primary, s.IsEditable, eventCount=s.Events.Count,s.SourceOffset,headerHex=Convert.ToHexString(s.Bytes) }),a, s => s.Name).Data });
+                sequences = Page(e.AllSequences, a, s => s.Name, s => new { id = s.Id, s.Name, cleanup = s == e.Primary, s.IsEditable, eventCount=s.Events.Count,s.SourceOffset,headerHex=Convert.ToHexString(s.Bytes) }).Data });
         });
         Register(r,"references","List authored reference table slots, including raw bytes and reserved/unverified status.",false,
             [DocumentParameter,P("entry","integer","Animation entry index.",true),P("table","integer","Reference table 0–7.",true),..PageParameters],a=>
         {
             var d=TargetDocument(a); var e=TargetEntry(d,a); int table=Int(a,"table");
             if(table is <0 or >7) throw new StudioCommandException("invalid_argument","Table must be 0–7.");
-            return Result(new { d.Revision,table,records=Page(e.References[table].Select((v,i)=>new { index=i,name=v.Text(0,Math.Min(32,v.Bytes.Length)),readOnly=table is 0 or 6 or 7 || i==0,hex=Convert.ToHexString(v.Bytes) }),a, v => v.name).Data });
+            string Name(AnimationRecord v) => v.Text(0,Math.Min(32,v.Bytes.Length));
+            return Result(new { d.Revision,table,records=Page(e.References[table].Select((v,i)=>(Value:v,Index:i)),a, x => Name(x.Value),
+                x => new { index=x.Index,name=Name(x.Value),readOnly=table is 0 or 6 or 7 || x.Index==0,hex=Convert.ToHexString(x.Value.Bytes) }).Data });
         });
-        Register(r, "event_catalog", "Describe supported event types, fields and preview limitations.", false, [], _ => Result(AnimationCatalog.Events.Select(e => new { e.Type, e.Name, e.Size, e.Support, fields = e.Fields.Select(f => new { f.Name, f.Kind, f.Offset, f.Size, f.ReadOnly, f.ReferenceTable, f.Hint }) })));
+        Register(r, "event_catalog", "Describe supported event types, fields and preview limitations for the requested animation format version.", false,
+            [P("version", "integer", "Animation version: 28 (Recoil, default) or 39 (MechWarrior 3).")], a =>
+        {
+            int version = Int(a, "version", 28);
+            if (version is not (28 or 39)) throw new StudioCommandException("unsupported", "Supported animation versions are 28 and 39.");
+            return Result(AnimationCatalog.ForVersion((uint)version).Select(e => new { e.Type, e.Name, e.Size, e.Support, fields = e.Fields.Select(f => new { f.Name, f.Kind, f.Offset, f.Size, f.ReadOnly, f.ReferenceTable, f.Hint }) }));
+        });
         Register(r, "property_fields", "Read the same fields, choices, validation hints and actions as animation Properties, without opening or retargeting its window. IDs apply to this target/segment/revision.", false, AnimationTargetParameters, a =>
         {
             var d = TargetDocument(a); using var fields = PropertyAdapter(d, a); return Result(new { d.Revision, fields = fields.DescribeAutomationFields() });
@@ -66,7 +74,7 @@ public partial class MainWindow
             if (action != "add_sequence" && !target.AllSequences.Any(s => s.Id == sequence && (ev == Guid.Empty || s.Events.Any(v => v.Id == ev))))
                 throw new StudioCommandException("stale_record", "Sequence/event is unavailable; read animation_records again.");
             if (action == "add_sequence") edits.AddSequence(entry);
-            else if (action == "add_event") { int type = Int(a, "eventType", -1); if (type < 0 || type > 255 || AnimationCatalog.Find((byte)type) == null) throw new StudioCommandException("invalid_argument", "Choose an event type from event_catalog."); edits.InsertEvent(entry, sequence, (byte)type, ev); }
+            else if (action == "add_event") { int type = Int(a, "eventType", -1); if (type < 0 || type > 255 || AnimationCatalog.Find((byte)type, target.Version) == null) throw new StudioCommandException("invalid_argument", "Choose an event type from event_catalog for this document version."); edits.InsertEvent(entry, sequence, (byte)type, ev); }
             else if (ev != Guid.Empty) edits.ChangeEventStructure(entry, sequence, ev, action);
             else if (action == "duplicate") edits.AddSequence(entry, sequence);
             else if (action == "delete") edits.DeleteSequence(entry, sequence);
@@ -86,7 +94,8 @@ public partial class MainWindow
             token.ThrowIfCancellationRequested();
             if (d.IsDisposed || !ViewModel.Documents.Contains(d)) throw new StudioCommandException("stale_document", "The pickup document is no longer open. Read zstudio_state before retrying.");
             cancellation.Token.ThrowIfCancellationRequested();
-            return Page(edits.Records.Select(p => new { source = p.Source, p.Type, position = edits.Position(p.Source), rotationRadians = edits.Rotation(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) }), a, p => p.Type + " " + p.source.ResourceName + " " + p.target);
+            return Page(edits.Records, a, p => p.Type + " " + p.Source.ResourceName + " " + edits.TargetPath(p.Source.ArchivePath),
+                p => new { source = p.Source, p.Type, position = edits.Position(p.Source), rotationRadians = edits.Rotation(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) });
         });
         Register(r, "pickup_lock", "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked. Pending drafts require explicit resolution.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.", true)], a =>
         {

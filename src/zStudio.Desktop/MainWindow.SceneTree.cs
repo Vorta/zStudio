@@ -20,7 +20,7 @@ public partial class MainWindow
     private readonly HashSet<SceneTreeItem> collapsingSceneRows = [];
     private readonly ConditionalWeakTable<DocumentModel, Dictionary<string, SceneTreeState>> sceneTreeStates = new();
     private SceneViewport? TreeViewport => EmptyPreview.Visibility == Visibility.Collapsed ?
-        animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) : null;
+        motion?.Viewport ?? animation?.Viewport ?? (SceneHost.Visibility == Visibility.Visible ? scene : null) : null;
 
     private void RefreshSceneTree()
     {
@@ -30,7 +30,7 @@ public partial class MainWindow
         var data = viewport?.PreviewScene ?? doc?.PreviewDocument.Scene;
         bool active = data != null && viewport?.PreviewScene == data;
         if (doc?.IsDisposed == true) { doc = null; data = null; }
-        if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active) return;
+        if (sceneTreeDocument == doc && sceneTree?.Hierarchy.Scene == data && sceneTree?.IsPreview == active && ReferenceEquals(sceneTree?.Hierarchy.Included, active ? viewport?.InspectionNodes : null)) return;
         changingSceneTree = true;
         try
         {
@@ -50,7 +50,7 @@ public partial class MainWindow
                     if (states.Count >= 16) states.Remove(states.Keys.First());
                     states[key] = state = new();
                 }
-                sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits));
+                sceneTree = new(data, source, true, state, TreeIdentities(data, viewport.Mission, doc.PickupEdits), viewport.InspectionNodes);
             }
             if (sceneTree != null) sceneTree.Collapsing += SceneTreeCollapsing;
             DocumentSceneTree.ItemsSource = sceneTree?.Roots;
@@ -202,12 +202,13 @@ public partial class MainWindow
     }
     private JsonObject SceneTreeProperties(SceneTreeItem row)
     {
-        var node = row.Node!; var properties = (JsonObject)node.Metadata.DeepClone();
+        var node = row.Node!; var properties = JsonData.PreviewObject(node.Metadata);
         properties["node_index"] = node.Index; properties["source_node_index"] = row.Owner.Identity(node.Index).SourceNode;
         properties["scene_source"] = row.Owner.Source;
         properties["hierarchy"] = row.Owner.IsPreview ? "Bound preview scene (not runtime parenting)" : "Stored document scene";
-        properties["parent_indices"] = JsonData.Integers(node.Parents);
-        properties["child_indices"] = JsonData.Integers(node.Children);
+        properties["parent_indices"] = JsonData.Integers(node.Parents.Take(64)); properties["parent_count"] = node.Parents.Length;
+        properties["child_indices"] = JsonData.Integers(node.Children.Take(64)); properties["child_count"] = node.Children.Length;
+        if (node.Parents.Length > 64 || node.Children.Length > 64) properties["inspection_truncated"] = true;
         return properties;
     }
     private void ScheduleSceneTreeReveal(SceneTreeItem? reveal = null)

@@ -47,13 +47,24 @@ public partial class MainWindow
         // Accepted snapshots outlive the request which prepared them.
         using (PreviewOperation.Begin(CancellationToken.None)) await RefreshResourceDependentsAsync(doc);
     }
+    private Guid? shownResourceMember;
     private async Task RefreshResourceDependentsAsync(DocumentModel doc)
     {
         if (aiPropertiesArchive != null && (aiPropertiesArchive.Equals(doc.Path, StringComparison.OrdinalIgnoreCase) || aiPropertiesArchive.Equals(doc.ResourceEdits?.TargetPath, StringComparison.OrdinalIgnoreCase))) propertiesWindow?.MarkAiSnapshotStale();
         foreach (var open in ViewModel.Documents) { open.InvalidateMissionContext(); if (open != doc) open.InvalidateCleanPickupEdits(); }
         await previewWork;
-        if (shownDocument != doc && animation != null) await animation.RefreshModelContextAsync(resourceChanges: true);
-        else if (shownDocument != doc && HasPublishedStaticScene && shownDocument is { } shown) await RefreshStaticSceneAsync(shown, shownAsset!);
+        // Archive edits may remove the selected member, change its kind or move a
+        // different member into its old index. Reconcile the current selection even
+        // when the Assets tab is not realized and has not raised SelectionChanged.
+        // Prefer the displayed member's UUID: a filtered or cleared Assets row is not a request to switch previews.
+        if (shownDocument == doc) await ShowAsset(doc, ((shownResourceMember is Guid shownMember ? doc.Assets.FirstOrDefault(a => a.ResourceId == shownMember) : null) ?? doc.SelectedAsset)?.Record);
+        else if (motion != null) await motion.RefreshLibraryAsync();
+        else if (shownDocument != doc && animation != null) await animation.RefreshModelContextAsync(resourceChanges: true);
+        else if (HasPublishedStaticScene && shownDocument is { } shown)
+        {
+            var asset = shownAsset ?? shown.SelectedAsset?.Record;
+            if (asset != null) { shownAsset = asset; await RefreshStaticSceneAsync(shown, asset); }
+        }
         UpdateDocumentCommands();
     }
     private async Task UndoResourcesAsync(DocumentModel doc, bool redo)
@@ -87,13 +98,20 @@ public partial class MainWindow
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); MessageBox.Show(this, ex.Message, "Resource save"); return false; }
     }
-    private ResourcePropertiesEditor ResourceAdapter(DocumentModel doc, Guid member, Guid? node)
-        => new(doc, member, node, async (action, value) =>
+    private ResourcePropertiesEditor ResourceAdapter(DocumentModel doc, Guid member, Guid? node, int part = 0, int frame = 0, bool valves = false, AiValveSource[]? valveScope = null)
+    {
+        valveScope ??= valves ? CaptureValveScope(doc) : [];
+        return new(doc, member, node, async (action, value) =>
         {
             var edits = ResourceSession(doc); long revision = doc.Revision;
             await ApplyResourceAsync(doc, token => node is Guid id ? edits.PrepareZrdAsync(member, id, action, value: value, token: token) : edits.PrepareArchiveAsync(action, member, value, token: token), revision, CancellationToken.None);
-        });
-    private async Task<PropertiesWindow?> OpenResourcePropertiesAsync(DocumentModel doc, Guid member, Guid? node, CancellationToken token = default, bool automation = false)
+        }, (action, selectedPart, selectedFrame, value, time) => ApplyMotionAsync(doc, member, action, selectedPart, selectedFrame, value, time, CancellationToken.None), part, frame,
+            edit => ApplyResourceAsync(doc, ct => ResourceSession(doc).PrepareValveAsync(member, edit, ct), doc.Revision, CancellationToken.None), valves,
+            (name, offset) => FindValveReferencesAsync(doc, valveScope, name, offset),
+            async target => { await OpenValveSourceAsync(null, target.Source, target.Record, false, doc.Lifetime.Token, valveScope); },
+            (name, frameView) => HighlightValve(valveScope, name, frameView));
+    }
+    private async Task<PropertiesWindow?> OpenResourcePropertiesAsync(DocumentModel doc, Guid member, Guid? node, CancellationToken token = default, bool automation = false, int part = 0, int frame = 0, bool valves = false, AiValveSource[]? valveScope = null)
     {
         long request = ++propertyRequest;
         if (automation) RequireNoDrafts(); else if (!await ResolvePropertiesDraftsAsync()) return null;
@@ -104,17 +122,28 @@ public partial class MainWindow
         token.ThrowIfCancellationRequested();
         if (request != propertyRequest || doc.IsDisposed) return null;
         _ = ResourceSession(doc).Member(member);
-        var window = GetPropertiesWindow(); var adapter = ResourceAdapter(doc, member, node);
-        bool accepted = window.SetResource(doc, adapter); if (!accepted) adapter.Dispose();
-        PresentProperties(window, accepted); return accepted ? window : null;
+        var adapter = ResourceAdapter(doc, member, node, part, frame, valves, valveScope); bool accepted = false; long revision = doc.Revision;
+        try
+        {
+            await adapter.ValveWork.WaitAsync(token); token.ThrowIfCancellationRequested();
+            if (request != propertyRequest || doc.IsDisposed) return null;
+            CheckResourceContext(doc, revision);
+            if (automation) RequireNoDrafts(); else if (!await ResolvePropertiesDraftsAsync()) return null;
+            if (request != propertyRequest || doc.IsDisposed) return null;
+            CheckResourceContext(doc, revision);
+            var window = GetPropertiesWindow(); accepted = window.SetResource(doc, adapter);
+            PresentProperties(window, accepted); return accepted ? window : null;
+        }
+        finally { if (!accepted) adapter.Dispose(); }
     }
     private static readonly StudioParameter MemberParameter = P("member", "string", "Stable member UUID from archive_members or assets.", true);
     private static readonly StudioParameter NodeParameter = P("node", "string", "Stable ZRD node UUID from zrd_nodes.", true);
     private void RegisterResourceCommands(StudioCommands r)
     {
         Register(r, "archive_members", "List edited resource members in stored order with stable identities and original source indices. Duplicate names are allowed. Standalone ZRD has one member.", false,
-            [DocumentParameter, .. PageParameters], a => { var d = TargetDocument(a); return Result(new { d.Revision, members = Page(ResourceSession(d).Current.Members.Select((m, i) => new { member = m.Id, index = i, m.SourceIndex, m.Name, bytes = m.Data.Length }), a, m => m.Name).Data }); });
-        RegisterJob(r, "archive_edit", "Add, replace, rename, duplicate, delete or reorder a ZAR member as one undoable edit. add_zrd creates an empty array. Names use Latin-1 and are not identities. Move position is the final zero-based index.",
+            [DocumentParameter, .. PageParameters], a => { var d = TargetDocument(a); return Result(new { d.Revision, members = Page(ResourceSession(d).Current.Members.Select((m, i) => (Member: m, Index: i)), a, x => x.Member.Name,
+                x => new { member = x.Member.Id, index = x.Index, x.Member.SourceIndex, x.Member.Name, bytes = x.Member.Data.Length }).Data }); });
+        RegisterJob(r, "archive_edit", "Add, replace, rename, duplicate, delete or reorder a ZAR member as one undoable edit. add_zrd creates an empty array. Names use Latin-1 and are not identities. Move position is the final zero-based index. The active preview follows the selected member UUID; deleting or changing its content kind clears or retargets the viewer, including Undo/Redo.",
             [DocumentParameter, RevisionParameter, P("action", "string", "Member operation.", true, "add", "add_zrd", "replace", "rename", "duplicate", "delete", "move"), P("member", "string", "Required member UUID except for add/add_zrd."), P("name", "string", "Required for add/add_zrd/rename/duplicate; 1–63 Latin-1 characters."), P("path", "string", "Input file for add/replace."), new("position", "integer", "Final index for move.", Minimum: 0, Maximum: int.MaxValue)], false,
             async (a, token) => { var d = TargetDocument(a, true); var edits = ResourceSession(d); await ApplyResourceAsync(d, ct => edits.PrepareArchiveAsync(Text(a,"action"), GuidArg(a,"member"), Text(a,"name"), Text(a,"path"), Int(a,"position",-1), ct), d.Revision, token); return Result(DocumentState(d)); });
         RegisterJob(r, "resource_select", "Select a member and optional ZRD node by stable UUID in the visible Data tree. Properties retains its pinned target.",
@@ -154,21 +183,28 @@ public partial class MainWindow
             [DocumentParameter, RevisionParameter, MemberParameter, NodeParameter, P("action", "string", "Node operation.", true, "set", "type", "add", "duplicate", "delete", "move"), P("kind", "string", "Type for add/type; default String.", false, "Int", "Float", "String", "Array"), P("value", "string", "Invariant int/float, explicit 0xXXXXXXXX float bits, or JSON-quoted Latin-1 string."), P("parent", "string", "Destination array UUID for move."), new("position", "integer", "Final child index; add defaults to append.", Minimum: 0, Maximum: int.MaxValue)], false,
             async (a, token) => { var d = TargetDocument(a, true); var edits = ResourceSession(d); var kind = a.ContainsKey("kind") ? Enum.Parse<ZrdKind>(Text(a,"kind")) : ZrdKind.String; await ApplyResourceAsync(d, ct => edits.PrepareZrdAsync(GuidArg(a,"member"), GuidArg(a,"node"), Text(a,"action"), kind, Text(a,"value"), GuidArg(a,"parent"), Int(a,"position",-1), ct), d.Revision, token); return Result(DocumentState(d)); });
         RegisterJob(r, "resource_properties", "Read generated resource Properties fields, open the pinned Properties window, or edit one current field. Node omitted targets the member. Values exceeding 16384 displayed characters use a read-only prefix; zrd_edit can replace the complete value and export retains full data. Editing requires revision and rejects pending drafts.",
-            [DocumentParameter, MemberParameter, P("node", "string", "Optional ZRD node UUID."), P("action", "string", "Properties operation.", true, "fields", "open", "edit"), new("revision", "integer", "Required current revision for edit.", Minimum: 0, Maximum: long.MaxValue), P("field", "string", "Current field ID for edit."), P("value", "string", "Invariant field editor text for edit.")], false, async (a, token) =>
+            [DocumentParameter, MemberParameter, P("node", "string", "Optional ZRD node UUID."), P("action", "string", "Properties operation.", true, "fields", "open", "edit", "invoke"), new("revision", "integer", "Required current revision for edit/invoke.", Minimum: 0, Maximum: long.MaxValue), P("field", "string", "Current field ID for edit or action ID for invoke."), P("value", "string", "Invariant field editor text for edit."), P("part", "integer", "Motion part index; default 0."), P("frame", "integer", "Motion frame index; default 0."), P("valves", "boolean", "Use the semantic MW3 valve editor; node identifies an optional valve occurrence.")], false, async (a, token) =>
             {
-                string action = Text(a,"action"); var d = TargetDocument(a, action == "edit"); Guid member = GuidArg(a,"member"); Guid? node = a.ContainsKey("node") ? GuidArg(a,"node") : null;
+                string action = Text(a,"action"); var d = TargetDocument(a, action is "edit" or "invoke"); Guid member = GuidArg(a,"member"); Guid? node = a.ContainsKey("node") ? GuidArg(a,"node") : null;
                 _ = ResourceSession(d).Member(member);
+                int part = Int(a, "part"), frame = Int(a, "frame");
+                if (a.ContainsKey("part") || a.ContainsKey("frame")) ValidateMotionTarget(d, member, part, frame);
                 if (node is Guid id && (await ResourceTreeAsync(d, member, token)).Find(id) == null) throw new InvalidDataException("Node no longer exists.");
                 if (action == "open")
                 {
-                    var window = await OpenResourcePropertiesAsync(d, member, node, token, true);
+                    var window = await OpenResourcePropertiesAsync(d, member, node, token, true, part, frame, Flag(a, "valves"));
                     if (window?.ResourceFields is not { } pinnedFields || pinnedFields.MemberId != member || pinnedFields.NodeId != node)
                         throw new StudioCommandException("context_changed", "Properties was superseded before opening.");
                     return Result(DocumentState(d));
                 }
-                using var fields = ResourceAdapter(d, member, node);
+                using var fields = ResourceAdapter(d, member, node, part, frame, Flag(a, "valves"));
+                await fields.ValveWork.WaitAsync(token);
+                // Positional field/action IDs belong to the requested revision; a GUI edit may land during the awaits above.
+                if (action is "edit" or "invoke") CheckResourceContext(d, a["revision"]!.GetValue<long>());
                 if (action == "edit") await fields.WriteAutomationFieldAsync(Text(a,"field"), Text(a,"value"));
-                return Result(new { d.Revision, fields = fields.DescribeAutomationFields() });
+                if (action == "invoke") await fields.InvokeAutomationActionAsync(Text(a,"field"));
+                await fields.ValveWork.WaitAsync(token);
+                return Result(new { d.Revision, part = fields.MotionPart, frame = fields.MotionFrameIndex, fields = fields.DescribeAutomationFields() });
             });
     }
 }

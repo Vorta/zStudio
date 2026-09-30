@@ -4,7 +4,7 @@
 
 ![zStudio screenshot](docs/images/zstudio-whole-world.png)
 
-zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse and edit game archives, typed data, texture packs and prepared scripts, inspect and export assets, replace supported 3D models, preview assembled worlds, edit mission coordinates, and edit supported animation programs. This source tree targets **v0.6.3**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
+zStudio is a native Windows desktop application built with C# 14, .NET 10, WPF Fluent and Direct3D 11. Browse and edit game archives, typed data, texture packs and prepared scripts, inspect and export assets, replace supported 3D models, preview assembled worlds, edit mission coordinates, and edit supported animation programs. This source tree targets **v0.7.1**; published builds are available on the **[Releases page](https://github.com/Vorta/zStudio/releases/latest)**.
 
 [Download releases](https://github.com/Vorta/zStudio/releases) · [Report a bug or request a feature](https://github.com/Vorta/zStudio/issues/new/choose) · [Contribute](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
@@ -19,9 +19,12 @@ Texture PNG import and the prepared-script instruction editor are described in t
 | Game | Status |
 | --- | --- |
 | **Recoil** | Supported for the format versions tested in the 1998 and 1999 datasets. See the capabilities and limits below. |
+| **MechWarrior 3 base game** | This source tree supports version-27 worlds, mission/AI placement, mech assemblies, version-4 motion clips and version-39 animations. See [workflows and limits](docs/mechwarrior3.md); original-game acceptance of edited files has not been established. |
 | Other Zipper Interactive titles | Planned; compatibility has not yet been established. |
 
 Game files are supplied by the user and are not included. Recognizing an archive does not imply that every editing operation is supported or that edited files have been verified in the original game.
+
+For MechWarrior 3, open the game's `zbd` folder. Whole world has an authored mission picker; the model library supports component export and replacement, and motion members have assembly playback and frame editing. These features share the visible GUI workspace, undo, verified saves and MCP tools. See the [MechWarrior 3 guide](docs/mechwarrior3.md) for the supported editing paths and preview approximations.
 
 The version-28 animation editor supports event and sequence editing, deterministic playback and seeking, preloaded audio, undo/redo and verified Save As. Its preview includes mission starting layouts, authored camera following, texture cycles, transparency, LOD selection and an adjustable-height ground grid for falling debris. The [pickup placement editor](docs/pickup-editor.md) adds selection, axis dragging, exact coordinates and verified archive saving in Whole world. The [model replacement workflow](docs/model-replacement.md) exports components for Blender and imports replacement meshes and textures into supported GameZ v15 files. The [resource editors](docs/resource-editing.md) edit ZAR members and standalone or embedded typed ZRD trees with shared undo/redo and verified saves. Other formats provide browsing, inspection, previews and standard exports. See [the animation editor guide](docs/animation-editor.md) for controls and preview limitations.
 
@@ -84,7 +87,9 @@ If a workspace call reports `access_disabled`, enable access in **Tools → MCP 
 | ZRD data | Edit typed nested trees, scalar values, raw float bits and ordered array structure | Edited bytes and JSON; verified Save and Save As, including the owning archive |
 | Prepared scripts | Edit ordered entries, instructions, arguments and timestamps with pinned Properties and undo | Text and JSON; verified Save and Save As |
 | Animation/effects | Edit events, sequences, references and keyframes; scrub motion/effects/audio previews in isolation or mission context | Verified new ZBD with Save As; edited JSON |
-| GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties; replace supported v15 models and textures | OBJ/MTL/PNG component bundles, JSON; verified model/texture Save and Save As |
+| GameZ | Individual models, assembled static worlds, scene tree, materials, texture references and node properties; replace supported v15/v27 models and textures | OBJ/MTL/PNG component bundles, JSON; verified model/texture Save and Save As |
+| MW3 mech libraries | Member-scoped hierarchy and mesh inspection, textured previews and explicit local-mesh replacement | OBJ/MTL/PNG component bundles; shared archive undo and verified Save As |
+| MW3 motion clips | Assembly binding, playback/seek, loop duration and translation/quaternion frame edits | Original/edited member bytes and JSON; shared archive undo and verified Save As |
 | Mission pickups | Select pickups in Whole world, show bounds, unlock XYZ arrows or enter coordinates, undo/redo; matching difficulties move together | Save coordinates to their owning ZBD archive; Save As; optional backups |
 | AI nodes and AIV tanks | Inspect source identities and placements in 3D cards; edit XYZ with explicit confirmation and undo; uniquely matched tank difficulties move together | Coordinate-only patches to owning archives; verified Save and Save As |
 
@@ -143,7 +148,7 @@ The solution separates binary readers/exporters (`zStudio.Core`), Direct3D previ
 
 Animation version 28 supports editing existing entries and Save As to a new file. Mission pickups stored in `puppies*.zrd` resources support position editing from Whole world; see [the pickup editor guide](docs/pickup-editor.md). Supported AIV vehicle placements and AI navigation nodes also support [explicit XYZ editing](docs/scene-inspection.md). General vehicle/turret behavior, scenery transforms, directly authored GameZ pickup placements, AI link editing and creation of whole animation entries remain outside the supported editing tools. Texture packs support PNG import/replacement, and prepared scripts support entry/instruction editing; neither feature executes arbitrary game behavior. Animation preview approximates physics, beams, lighting, fog, camera parameters, screen effects and audio; game callbacks are trace-only. LOD selection is manual; camera-distance fades are not simulated. Edited files have not yet been tested in the original game. Missing textures are reported; unresolved animation texture cards stay hidden. Six 1999 missions reference some textures absent from their own packs.
 
-Unknown versions remain available for raw inspection. The snapshot reader limits individual files to 512 MiB. JSON exports are intended for inspection and external tools; they are not the Python CLI repack schema. The portable build is unsigned and has not yet been checked on an independent clean Windows machine.
+Unknown versions remain available for raw inspection. The snapshot reader limits individual files to 512 MiB, directories/tables (archive members, texture and script records, GameZ textures/materials/models/nodes/world partition cells) to 65,536 entries, GameZ polygon/light records including point-light vertices, material-cycle texture indices and node index references to 262,144 each per file, model vertices/normals/morphs to 1,048,576 and polygon corner elements to 4,194,304 per file, and decoded MW3 motion samples to 2,097,152 per archive; larger values open for raw inspection with a diagnostic instead of being materialized. JSON exports are intended for inspection and external tools; they are not the Python CLI repack schema. The portable build is unsigned and has not yet been checked on an independent clean Windows machine.
 
 ## Contributing and future development
 

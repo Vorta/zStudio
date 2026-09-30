@@ -9,6 +9,28 @@ namespace Recoil.Zbd.Tests;
 public sealed class ResourceEditingTests
 {
     [Fact]
+    public async Task ResourceSnapshotIdentityFollowsTheExactDocumentAcrossHistory()
+    {
+        var token = TestContext.Current.CancellationToken;
+        byte[] bytes = Archive(("same", new byte[] { 99 }));
+        var source = FormatRegistry.Default.OpenBytes("library.zbd", bytes, token: token);
+        var edits = new ResourceEditSession(source); var original = edits.Current;
+        edits.Accept(await edits.PrepareArchiveAsync("duplicate", original.Members[0].Id, "same", token: token));
+        var duplicate = edits.Current; Guid id = duplicate.Members[1].Id;
+        edits.Accept(await edits.PrepareArchiveAsync("rename", id, "renamed", token: token));
+        var renamed = edits.Current;
+        Assert.Same(original, edits.SnapshotFor(source)); Assert.Same(duplicate, edits.SnapshotFor(duplicate.Document));
+        Assert.Same(renamed, edits.SnapshotFor(renamed.Document));
+        Assert.Null(edits.SnapshotFor(FormatRegistry.Default.OpenBytes("library.zbd", duplicate.Document.Bytes.ToArray(), token: token)));
+        edits.UndoRedo(false); edits.UndoRedo(false);
+        Assert.Same(renamed, edits.SnapshotFor(renamed.Document)); Assert.Same(duplicate, edits.SnapshotFor(duplicate.Document));
+        edits.UndoRedo(true); edits.UndoRedo(true);
+        Assert.Equal(id, edits.SnapshotFor(duplicate.Document)!.Members[1].Id);
+        Assert.Null(edits.SnapshotFor(duplicate.Document)!.Members[1].SourceIndex);
+        Assert.Equal(bytes, source.Bytes.ToArray());
+    }
+
+    [Fact]
     public void SupportedZrdDepthFitsBoundedInspectionAndCompleteJsonExport()
     {
         var token = TestContext.Current.CancellationToken;
@@ -107,6 +129,12 @@ public sealed class ResourceEditingTests
         Assert.Same(second, await resolver.OpenCachedAsync(second.Path, token));
         resolver.SetWorkspaceSnapshots(a, [first]);
         Assert.Same(first, await resolver.OpenCachedAsync(first.Path, token));
+        // Closing a document that never published anything is not a source change for other previews.
+        revision = resolver.SnapshotRevision; bool notified = false; resolver.WorkspaceSnapshotsChanged += () => notified = true;
+        resolver.SetWorkspaceSnapshots(Guid.NewGuid(), []);
+        Assert.Equal(revision, resolver.SnapshotRevision); Assert.False(notified);
+        resolver.SetWorkspaceSnapshots(a, []);
+        Assert.Equal(revision + 1, resolver.SnapshotRevision); Assert.True(notified);
     }
     [Fact]
     public async Task RenamedTypedMembersKeepStructureAfterUndoAndReopen()

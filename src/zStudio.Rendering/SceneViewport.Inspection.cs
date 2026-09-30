@@ -128,6 +128,7 @@ public sealed partial class SceneViewport
     }
     public bool SelectInspectionNode(int node, long? runtime = null)
     {
+        if (!CanInspectNode(node)) return false;
         foreach (var (mesh, meta) in inspectionMeshes)
         {
             if (runtime != null && meta.Runtime != runtime) continue;

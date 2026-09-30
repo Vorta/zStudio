@@ -40,6 +40,7 @@ public sealed class SceneLods
     /// <summary>Expand a raw model under an LOD to its variant group so the picker can show sibling variants.</summary>
     public static int? PreviewRoot(GameScene scene, AssetRecord asset)
     {
+        if (asset.Content is Formats.MechAssembly assembly) return assembly.RootNode;
         int? index = asset.Content is GameNode node ? node.Index : asset.Kind == AssetKind.Model ? scene.Nodes.FirstOrDefault(n => n.ModelIndex == asset.Index)?.Index : null;
         if (index == null) return null;
         int current = index.Value; HashSet<int> seen = [];

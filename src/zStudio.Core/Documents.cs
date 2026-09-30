@@ -6,7 +6,8 @@ namespace Recoil.Zbd.Core;
 
 public enum FormatFamily { Unknown, TexturePack, Archive, Scripts, Animation, GameZ, Zrd, Wave }
 public enum Recognition { Supported, UnsupportedVersion, Malformed, Unknown }
-public enum AssetKind { Raw, Texture, Sound, Zrd, Script, Animation, Model, World, Node, Material, TextureReference }
+public enum GameVariant { Shared, Recoil, MechWarrior3 }
+public enum AssetKind { Raw, Texture, Sound, Zrd, Script, Animation, Model, World, Node, Material, TextureReference, Motion }
 public sealed record FormatProbe(FormatFamily Family, uint? Version, Recognition Recognition, string Description);
 public sealed record Diagnostic(string Severity, string Message, int? AssetIndex = null, long? Offset = null);
 public readonly record struct AssetId(string File, AssetKind Kind, int Index);
@@ -34,6 +35,7 @@ public sealed class ZbdDocument
     public string Path { get; }
     public FileStamp Stamp { get; }
     public FormatProbe Probe { get; }
+    public GameVariant Game { get; internal set; }
     public ReadOnlyMemory<byte> Bytes { get; }
     public List<AssetRecord> Assets { get; } = [];
     public List<Diagnostic> Diagnostics { get; } = [];
@@ -44,7 +46,12 @@ public sealed class ZbdDocument
     public Animation.AnimationPackage? Animations { get; set; }
     public Formats.PreparedScriptPackage? Scripts { get; internal set; }
     public ZbdDocument(string path, FileStamp stamp, FormatProbe probe, ReadOnlyMemory<byte> bytes)
-    { Path = path; Stamp = stamp; Probe = probe; Bytes = bytes; }
+    {
+        Path = path; Stamp = stamp; Probe = probe; Bytes = bytes;
+        Game = (probe.Family, probe.Version) switch
+        { (FormatFamily.GameZ, 27) or (FormatFamily.Animation, 39) => GameVariant.MechWarrior3,
+          (FormatFamily.GameZ, 15) or (FormatFamily.Animation, 28) => GameVariant.Recoil, _ => GameVariant.Shared };
+    }
     public ReadOnlyMemory<byte> Slice(long offset, long length)
     { BinaryCursor.CheckRange(Bytes.Length, offset, length); return Bytes.Slice((int)offset, (int)length); }
     public AssetRecord Add(AssetKind kind, int index, string name, long offset, long length, JsonObject? metadata = null, object? content = null)
@@ -68,7 +75,8 @@ public sealed record WaveInfo(ushort Encoding, ushort Channels, uint SampleRate,
 {
     public double Duration => SampleRate == 0 || BlockAlign == 0 ? 0 : (double)DataLength / BlockAlign / SampleRate;
 }
-public sealed record Polygon(int MaterialIndex, uint Flags, int[] Vertices, int[] Normals, Vector2[] Uvs, JsonObject Metadata);
+public sealed record Polygon(int MaterialIndex, uint Flags, int[] Vertices, int[] Normals, Vector2[] Uvs, JsonObject Metadata)
+{ public Vector3[] Colors { get; init; } = []; }
 public sealed record GameModel(int Index, Vector3[] Vertices, Vector3[] Normals, Vector3[] Morphs, Polygon[] Polygons, JsonObject Metadata);
 public sealed record GameNode(int Index, string Name, string Class, int? ModelIndex, int[] Parents, int[] Children, JsonObject Metadata, JsonObject Data);
 public sealed class GameScene
@@ -138,6 +146,46 @@ public static class JsonData
             return result;
         }
         return node?.DeepClone();
+    }
+    public static JsonObject PreviewObject(JsonObject source, int nodes = 512, int characters = 8192, CancellationToken token = default)
+    {
+        var preview = Preview(source, nodes, characters, token);
+        var result = (JsonObject)preview.Value!;
+        if (preview.Truncated) result["inspection_truncated"] = true;
+        return result;
+    }
+    /// <summary>Bound metadata before copying/serializing, including nested collections and escaped text.</summary>
+    public static (JsonNode? Value, bool Truncated) Preview(JsonNode? source, int nodes = 512, int characters = 8192, CancellationToken token = default)
+    {
+        bool truncated = false;
+        var result = Visit(source, 0); return (result, truncated);
+        JsonNode? Visit(JsonNode? node, int depth)
+        {
+            token.ThrowIfCancellationRequested();
+            if (nodes-- <= 0 || depth > 12) { truncated = true; return null; }
+            if (node is JsonObject obj)
+            {
+                JsonObject copy = new();
+                foreach (var (key, value) in obj)
+                {
+                    if (nodes <= 0 || key.Length > characters) { truncated = true; break; }
+                    characters -= key.Length; copy[key] = Visit(value, depth + 1);
+                }
+                return copy;
+            }
+            if (node is JsonArray array)
+            {
+                JsonArray copy = [];
+                foreach (var value in array) { if (nodes <= 0) { truncated = true; break; } copy.Add(Visit(value, depth + 1)); }
+                return copy;
+            }
+            if (node is JsonValue scalar && scalar.TryGetValue<string>(out var text))
+            {
+                int count = Math.Min(text.Length, Math.Min(characters, 1024)); characters -= count;
+                truncated |= count != text.Length; return JsonValue.Create(text[..count]);
+            }
+            return node?.DeepClone();
+        }
     }
     public static string Hex(byte[] bytes, CancellationToken token = default)
     {

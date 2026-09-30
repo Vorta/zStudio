@@ -123,6 +123,19 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         {
             if (pickupSnapshotRevision != resolver.SnapshotRevision && !PickupEdits.CanUndo && !PickupEdits.CanRedo) InvalidateCleanPickupEdits();
         }
+        // History retains the archives it edited. Readers it never edited follow other documents'
+        // published changes and saved files instead of blocking the map or showing stale positions.
+        // Publications may continue while loading; a bounded number of passes cannot spin.
+        for (int pass = 0; pass < 3 && PickupEdits is { } current && current.HasStaleBaselines(path => resolver.WorkspaceSnapshot(path, SessionId)); pass++)
+        {
+            long revision = resolver.SnapshotRevision;
+            var fresh = await PickupPlacementEditSession.LoadAsync(Path, resolver, lifetime).WaitAsync(token);
+            token.ThrowIfCancellationRequested(); lifetime.ThrowIfCancellationRequested();
+            if (PickupEdits != current) continue;
+            if (PreviewDocument.Scene is { } scene) fresh.BindCoordinateTemplates(scene);
+            current.RebaseUntouched(fresh);
+            if (revision == resolver.SnapshotRevision) pickupSnapshotRevision = revision;
+        }
         if (PickupEdits != null)
         {
             if (PickupEdits.HasSourceChanges()) throw new IOException("A pickup source archive changed outside zStudio. Save pending edits as a copy, then reload the map (F5) before rebuilding its preview.");
@@ -140,11 +153,15 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         {
             PickupEdits = edits;
             if (PreviewDocument.Scene is { } templateScene) edits.BindCoordinateTemplates(templateScene);
-            edits.BeforeEdit += () =>
+            edits.BeforeEdit += archives =>
             {
                 if (pickupSnapshotRevision != resolver.SnapshotRevision && !edits.CanUndo && !edits.CanRedo)
                     throw new InvalidOperationException("Resource previews changed. Refresh this map before editing pickup placements.");
-                ClaimResourcePaths(edits.ArchivePaths.Concat(edits.ArchivePaths.Select(edits.TargetPath)));
+                // Claim only the archives this edit changes. An unedited reader must still match
+                // the source currently served, or the transform would patch a stale baseline.
+                if (edits.HasStaleBaselines(path => resolver.WorkspaceSnapshot(path, SessionId), archives))
+                    throw new InvalidOperationException("Another document changed this mission archive. Refresh this map before editing its placements.");
+                ClaimResourcePaths(archives.Concat(archives.Select(edits.TargetPath)));
             };
             edits.EditAccepted += () => RecordSceneEdit(false);
             edits.Changed += () =>
@@ -177,17 +194,20 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     private string? animationWorldPath;
     private MissionDifficulty animationDifficulty = MissionDifficulty.Medium;
     private CancellationTokenSource? contextLoading;
-    public Task<AnimationPreviewContext> GetAnimationContextAsync(AssetResolver resolver, CancellationToken token, string? worldPath = null, MissionDifficulty difficulty = MissionDifficulty.Medium)
+    public Task<AnimationPreviewContext> GetAnimationContextAsync(AssetResolver resolver, CancellationToken token, string? worldPath = null, MissionDifficulty difficulty = MissionDifficulty.Medium, string? exactMission = null)
     {
         bool worldChanged = worldPath != null;
         if (worldPath != null) animationWorldPath = worldPath;
-        if (worldChanged || animationContext == null || animationContext.IsFaulted || animationContext.IsCanceled || animationDifficulty != difficulty)
+        // An explicit mission request must load exactly that reader, never a cached or fallback context.
+        bool missionChanged = exactMission != null && (animationContext?.IsCompletedSuccessfully != true ||
+            !string.Equals(animationContext.Result.Mission?.Layout.MissionArchive, exactMission, StringComparison.OrdinalIgnoreCase));
+        if (worldChanged || missionChanged || animationContext == null || animationContext.IsFaulted || animationContext.IsCanceled || animationDifficulty != difficulty)
         {
             var previous = !worldChanged && animationContext?.IsCompletedSuccessfully == true ? animationContext.Result : null;
             contextLoading?.Cancel(); contextLoading?.Dispose(); contextLoading = CancellationTokenSource.CreateLinkedTokenSource(Lifetime.Token);
             animationDifficulty = difficulty;
-            animationContext = previous != null ? previous.WithDifficultyAsync(resolver, difficulty, contextLoading.Token) :
-                AnimationPreviewContext.LoadAsync(AnimationEdits!.Package, Path, resolver, animationWorldPath, contextLoading.Token, difficulty);
+            animationContext = previous != null ? previous.WithDifficultyAsync(resolver, difficulty, contextLoading.Token, exactMission) :
+                AnimationPreviewContext.LoadAsync(AnimationEdits!.Package, Path, resolver, animationWorldPath, contextLoading.Token, difficulty, exactMission);
         }
         return animationContext.WaitAsync(token);
     }
@@ -206,6 +226,8 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     [ObservableProperty] private string query = "";
     [ObservableProperty] private string kindFilter = "All types";
     [ObservableProperty] private AssetItem? selectedAsset;
+    private Guid? lastResourceSelection;
+    partial void OnSelectedAssetChanged(AssetItem? value) { if (value?.ResourceId is Guid id) lastResourceSelection = id; }
     [ObservableProperty] private bool isStale;
     public string[] Kinds { get; private set; }
     public DocumentModel(ZbdDocument doc)
@@ -227,7 +249,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); ResourceEditsChanged?.Invoke();
             };
         }
-        if (doc.GameZLayout != null && doc.Probe.Version == 15 && !doc.Diagnostics.Any(d => d.Severity == "Error"))
+        if (doc.GameZLayout != null && doc.Probe.Version is 15 or 27 && !doc.Diagnostics.Any(d => d.Severity == "Error"))
         {
             ModelEdits = new(doc);
             ModelEdits.BeforeEdit += ClaimResourcePaths;
@@ -274,12 +296,14 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     private void RebuildResourceAssets()
     {
         if (ResourceEdits == null) return;
-        Guid? selected = SelectedAsset?.ResourceId; int oldIndex = SelectedAsset?.Index ?? 0;
+        // A cleared or filtered selection keeps its last member identity (for example Undo of a deletion).
+        Guid? current = SelectedAsset?.ResourceId, selected = current ?? lastResourceSelection; int oldIndex = SelectedAsset?.Index ?? 0;
         Assets.Clear();
         foreach (var a in ResourceEdits.Current.Document.Assets) Assets.Add(new(a) { ResourceId = ResourceEdits.Current.Members[a.Index].Id });
         Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()]; OnPropertyChanged(nameof(Kinds));
         if (!Kinds.Contains(KindFilter)) KindFilter = "All types";
-        SelectedAsset = Assets.FirstOrDefault(a => a.ResourceId == selected) ?? Assets.ElementAtOrDefault(Math.Clamp(oldIndex, 0, Math.Max(0, Assets.Count - 1)));
+        // Retarget a removed selection to its neighbor, but never turn a cleared/filtered selection into a new preview request.
+        SelectedAsset = Assets.FirstOrDefault(a => a.ResourceId == selected) ?? (current == null ? null : Assets.ElementAtOrDefault(Math.Clamp(oldIndex, 0, Math.Max(0, Assets.Count - 1))));
         OnPropertyChanged(nameof(Description));
     }
     private bool Matches(object o) => o is AssetItem a && (KindFilter == "All types" || KindFilter == a.Kind) && (Query.Length == 0 || a.Name.Contains(Query, StringComparison.OrdinalIgnoreCase) || a.Identity.Contains(Query, StringComparison.OrdinalIgnoreCase));
@@ -354,6 +378,13 @@ public sealed class StudioSettings
     public bool CreateBackupOnSave { get; set; }
     private MissionDifficulty difficulty = MissionDifficulty.Medium;
     public MissionDifficulty Difficulty { get => difficulty; set => difficulty = Enum.IsDefined(value) ? value : MissionDifficulty.Medium; }
+    private Dictionary<string, string> mw3Missions = new(StringComparer.OrdinalIgnoreCase);
+    // Deserialization supplies an ordinal dictionary; later duplicate spellings replace earlier ones.
+    public Dictionary<string, string> Mw3Missions
+    {
+        get => mw3Missions;
+        set { mw3Missions = new(StringComparer.OrdinalIgnoreCase); foreach (var (map, mission) in value ?? []) mw3Missions[map] = mission; }
+    }
     public double Width { get; set; } = 1560;
     public double Height { get; set; } = 940;
     public double FilesWidth { get; set; } = 215;

@@ -25,10 +25,13 @@ internal sealed partial class SceneInspectionCard : Grid
     private readonly TextBlock error = new() { Foreground = Brushes.LightSalmon, TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock scope = new() { Opacity = .75, TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new(0, 3, 0, 3) };
     private readonly StackPanel rows = new();
+    private const string AttackStrategy = "Attack strategy";
     private readonly Dictionary<string, SceneInspectionField> values = [];
     private const string AuthoredPlacement = "Authored placement XYZ";
     private ValueTextBox[] Coordinates => values[AuthoredPlacement].Inputs;
     private readonly Button edit, cancel;
+    private readonly Button valves;
+    internal event Action<string>? ValvesRequested;
     private JsonObject details = [];
     private Guid draftId;
     internal DocumentModel? DraftDocument { get; private set; }
@@ -51,7 +54,8 @@ internal sealed partial class SceneInspectionCard : Grid
         this.viewport = viewport; this.describe = describe; this.begin = begin; this.apply = apply;
         Background = null;
         InitializeTransformControls();
-        Grid layout = new(); layout.RowDefinitions.Add(new() { Height = GridLength.Auto }); layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
+        Grid layout = new(); layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
         DockPanel title = new(); var close = Button("×", "Close node card", () => { if (ResolvePending()) viewport.SelectInspection(null, false); });
         DockPanel.SetDock(close, Dock.Right); title.Children.Add(close);
         var copyDetails = Button("⧉", "Copy selected node details", () => Try(() => Copy(null, true)));
@@ -61,7 +65,10 @@ internal sealed partial class SceneInspectionCard : Grid
         cancel = Button("↶", "Discard transform draft", CancelDraft); cancel.Visibility = Visibility.Hidden;
         DockPanel.SetDock(cancel, Dock.Right); title.Children.Add(cancel); title.Children.Add(heading);
         layout.Children.Add(title);
-        StackPanel body = new(); body.Children.Add(modes); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(rows);
+        valves = new Button { Content = "Valve Properties…", HorizontalAlignment = HorizontalAlignment.Left, Margin = new(0, 4, 0, 4) };
+        System.Windows.Automation.AutomationProperties.SetName(valves, "Open selected node valves");
+        valves.Click += (_, _) => { if (Selection?.AiNode is { } id && ResolvePending()) ValvesRequested?.Invoke(id); };
+        StackPanel body = new(); body.Children.Add(modes); body.Children.Add(scope); body.Children.Add(error); body.Children.Add(valves); body.Children.Add(rows);
         error.Visibility = Visibility.Collapsed;
         ScrollViewer scroll = new() { Name = "InspectionScroll", Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 6, 0, 0) };
         scroll.SetResourceReference(Control.TemplateProperty, "InspectionScrollTemplate");
@@ -153,10 +160,13 @@ internal sealed partial class SceneInspectionCard : Grid
         ArrangePanel();
         if (selected == null) return;
         details = describe(selected);
+        valves.Visibility = details.ContainsKey("AI valves") ? Visibility.Visible : Visibility.Collapsed;
         heading.Text = Display(details["Node"]); heading.ToolTip = heading.Text;
         scope.Text = details["Edit scope"] is { } affected ? Display(affected) : "";
         scope.Visibility = scope.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        string[] first = details.ContainsKey("Runtime instance")
+        string[] first = selected.AiNode != null
+            ? ["Network", "Network type", "Authored placement XYZ", "Object world origin XYZ", AttackStrategy, "Status"]
+            : details.ContainsKey("Runtime instance")
             ? ["Runtime instance", "Object world origin XYZ", "Source node", "Placed instance", "Template"]
             : ["Authored placement XYZ", AuthoredRotation, AuthoredHeading, "Object world origin XYZ", "Source node", "Placed instance", "Template"];
         var keys = first.Where(details.ContainsKey).Concat(details.Select(p => p.Key).Where(k => !first.Contains(k) &&

@@ -17,6 +17,7 @@ internal static class PropertiesWindowChecks
 {
     internal static async Task Run(Application app)
     {
+        CheckKeyframeInspection();
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false };
         main.Show();
         var first = Document("one"); var second = Document("two");
@@ -113,7 +114,7 @@ internal static class PropertiesWindowChecks
             Assert.False(popup.AnimationFields!.TargetAvailable);
             first.AnimationEdits.Undo(); await Idle();
             Assert.True(popup.AnimationFields.TargetAvailable);
-            Assert.Equal(ev.ToJson().ToJsonString(), popup.AnimationFields.Json.ToJsonString());
+            Assert.Equal(ev.ToPreviewJson().ToJsonString(), popup.AnimationFields.Json.ToJsonString());
             first.AnimationEdits.Apply(0, "Rename and reorder", e => { e.Sequences[0].Name = "renamed"; e.Sequences[0].Events.Reverse(); }); await Idle();
             Assert.Contains("renamed", popup.Title); Assert.True(popup.AnimationFields.TargetAvailable);
             first.AnimationEdits.Undo();
@@ -167,6 +168,36 @@ internal static class PropertiesWindowChecks
             main.OpenPropertiesWindow?.CloseResolved();
             foreach (var doc in main.ViewModel.Documents) doc.AnimationEdits?.MarkSaved();
             main.Close(); await Idle();
+        }
+    }
+    private static void CheckKeyframeInspection()
+    {
+        foreach (uint version in new uint[] { 28, 39 })
+        {
+            var package = new AnimationPackage { Prefix = new byte[version == 39 ? 80 : 72], Tail = [] };
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(package.Prefix.AsSpan(4), version);
+            var entry = new AnimationEntry(new byte[version == 39 ? 316 : 308], 0, 0);
+            var sequence = new AnimationSequence(new byte[64]);
+            var frame = AnimationKeyframe.Create(7); frame.End = 1;
+            var ev = AnimationCatalog.Create(12, version).WithKeyframes(Enumerable.Repeat(frame, 10_000));
+            sequence.Events.Add(ev); entry.Sequences.Add(sequence); package.Entries.Add(entry);
+            var source = new ZbdDocument("keyframe-properties.zbd", new(0, DateTime.MinValue), new(FormatFamily.Animation, version, Recognition.Supported, "Fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+            using var doc = new DocumentModel(source);
+            using var editor = new AnimationPropertiesEditor(doc, 0, sequence.Id, ev.Id);
+            _ = editor.DescribeAutomationFields();
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            var fields = System.Text.Json.JsonSerializer.SerializeToNode(editor.DescribeAutomationFields())!;
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(allocated < 512 * 1024, $"v{version} property field read re-decoded keyframes: {allocated:N0} bytes.");
+            string Start() => System.Text.Json.JsonSerializer.SerializeToNode(editor.DescribeAutomationFields())!["fields"]!.AsArray()
+                .Single(f => f!["Label"]!.GetValue<string>() == "Start (s)")!["value"]!.GetValue<string>();
+            Assert.Equal("0", Start());
+            doc.AnimationEdits!.Apply(0, "Change first keyframe", e =>
+            {
+                var current = e.Sequences[0].Events[0]; var frames = current.Keyframes(); frames[0].Start = .5f;
+                e.Sequences[0].Events[0] = current.WithKeyframes(frames);
+            });
+            Assert.Equal("0.5", Start()); doc.AnimationEdits.Undo(); Assert.Equal("0", Start());
         }
     }
     private static DocumentModel Document(string name)

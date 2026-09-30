@@ -8,7 +8,12 @@ using Recoil.Zbd.Core.Formats;
 
 namespace Recoil.Zbd.Core;
 
-public sealed record MissionActor(int Root, int SourceRoot, string Name, string PlacementSource, MissionPickup? Pickup = null, MissionPickupSource? CoordinateSource = null, Vector3? PlacementPosition = null, Vector3? PlacementRotation = null);
+public sealed record MissionActor(int Root, int SourceRoot, string Name, string PlacementSource, MissionPickup? Pickup = null, MissionPickupSource? CoordinateSource = null, Vector3? PlacementPosition = null, Vector3? PlacementRotation = null)
+{
+    public const int MaximumNamePreviewCharacters = 128;
+    public int NameCharacters { get; init; } = Name.Length;
+    public bool NameTruncated => NameCharacters > Name.Length;
+}
 public sealed record HorizonBinding(int Root, bool FollowHeight);
 
 /// <summary>A published, read-only preview baseline. Its nodes never alias serialized node data.</summary>
@@ -23,7 +28,7 @@ public sealed class MissionSceneContext
     public MissionLayoutSelection Layout { get; }
     public AiNetworkSnapshot AiNetworks { get; internal set; } = AiNetworkSnapshot.Empty;
     private readonly int originalNodeCount;
-    internal MissionSceneContext(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> dormant, List<string> diagnostics, MissionLayoutSelection layout, int originalNodeCount)
+    internal MissionSceneContext(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> dormant, IEnumerable<string> diagnostics, MissionLayoutSelection layout, int originalNodeCount)
     {
         Layout = layout; this.originalNodeCount = originalNodeCount;
         Scene = scene; SourceNodes = sources.AsReadOnly(); Actors = actors.AsReadOnly(); DormantRoots = dormant;
@@ -50,7 +55,10 @@ public sealed class MissionSceneContext
                 HashSet<int> nodes = []; Stack<int> pending = new(); pending.Push(matches[0].Root);
                 while (pending.TryPop(out int node))
                     if (node >= 0 && node < Scene.Nodes.Count && nodes.Add(node)) foreach (int child in SceneBuilder.Children(Scene.Nodes[node])) pending.Push(child);
-                int[] candidates = nodes.Where(n => SourceNodes[n] == source).ToArray();
+                var provenance = previous.Scene.Nodes[index].Metadata;
+                int[] candidates = nodes.Where(n => source >= 0 ? SourceNodes[n] == source :
+                    Scene.Nodes[n].Metadata.Text("source_library") == provenance.Text("source_library") &&
+                    Scene.Nodes[n].Metadata.Int("source_node", -1) == provenance.Int("source_node", -2)).ToArray();
                 return candidates.Length == 1 ? candidates[0] : -1;
             }
             ancestor = previous.Scene.Nodes[ancestor].Parents.FirstOrDefault(-1);
@@ -79,9 +87,13 @@ public static partial class MissionSceneLoader
         .SelectMany(d => Directory.EnumerateFiles(d, "*.zbd").Order(StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     public static void Invalidate(ZbdDocument world) => Cache.Remove(world);
 
-    public static async Task<MissionSceneContext> LoadAsync(ZbdDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium)
+    /// <param name="mission">MW3 reader requested by the caller. Omitted, the resolver selection is captured before any await.</param>
+    /// <param name="exactMission">Fail when the requested MW3 reader is unavailable instead of reporting a fallback.</param>
+    public static async Task<MissionSceneContext> LoadAsync(ZbdDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
+        string? mission = null, bool exactMission = false)
     {
         token.ThrowIfCancellationRequested();
+        if (world.Game == GameVariant.MechWarrior3) return await LoadMw3Async(world, resolver, mission ?? resolver.SelectedMission(world.Path), exactMission && mission != null, token).ConfigureAwait(false);
         var requested = MissionLayoutSelection.For(difficulty);
         string directory = Path.GetDirectoryName(world.Path)!;
         var files = ResourceFiles(world.Path, resolver);
@@ -100,6 +112,7 @@ public static partial class MissionSceneLoader
                     package = (await resolver.OpenCachedAsync(file, token).ConfigureAwait(false)).Animations;
                 if (family != FormatFamily.Archive) continue;
                 var archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
+                if (MissionSceneLoader.ParseError(archive) is { } parseError) diagnostics.Add($"Mission layout: {Path.GetFileName(file)}: {parseError}");
                 aiResources.AddRange(archive.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (archive, a)));
                 foreach (var asset in archive.Assets.Where(a => a.Name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd" or "vehicle.zrd" or "vehicle_easy.zrd" or "vehicle_hard.zrd" or "startanims.zrd" or "ai.zrd" or "puppies.zrd" or "puppies_easy.zrd" or "puppies_hard.zrd"))
                 {

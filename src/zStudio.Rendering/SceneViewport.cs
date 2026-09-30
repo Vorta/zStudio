@@ -34,13 +34,15 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private double minimumClipDistance = 0.001;
     private bool updatingClipping;
     private int generation;
+    private bool disposed;
+    private System.Windows.Threading.DispatcherOperation? renderResize;
     public event Action<int>? NodeSelected;
     public event Action<string>? Information;
     public IReadOnlyList<Diagnostic> PreviewDiagnostics { get; private set; } = [];
     public string PreviewSummary { get; private set; } = "";
     public SceneViewport()
     {
-        viewport = new FrameViewport(PrepareCameraFrame)
+        viewport = new FrameViewport(PrepareCameraFrame, QueueRenderSize)
         {
             Camera = new NavigationPerspectiveCamera { Position = new(10, 8, 15), LookDirection = new(-10, -8, -15), UpDirection = new(0, 1, 0), FarPlaneDistance = 100000, NearPlaneDistance = 0.1 },
             BackgroundColor = Color.FromRgb(26, 31, 38),
@@ -58,6 +60,21 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         ConfigurePickupInput(); ConfigureNavigation();
         viewport.RenderExceptionOccurred += (_, e) => { Information?.Invoke("3D preview unavailable: " + e.Exception.Message); e.Handled = true; };
         ConfigureInspection();
+    }
+    private void QueueRenderSize()
+    {
+        if (disposed || renderResize?.Status == System.Windows.Threading.DispatcherOperationStatus.Pending) return;
+        // Helix defers the D3DImage resize at Background priority. A large scene's
+        // continuous rendering can starve it, stretching the initial tiny buffer
+        // across the viewport. Coalesce layout changes in the normal UI queue.
+        renderResize = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, () =>
+        {
+            renderResize = null;
+            if (disposed || !viewport.IsLoaded || !viewport.IsVisible || viewport.ActualWidth < 1 || viewport.ActualHeight < 1) return;
+            try { viewport.RenderHost?.Resize((int)viewport.ActualWidth, (int)viewport.ActualHeight); }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+            { Information?.Invoke("3D preview resize unavailable: " + ex.Message); }
+        });
     }
     public async Task ShowAsync(ZbdDocument doc, AssetRecord asset, AssetResolver resolver, string? pack, int lod, CancellationToken token, bool showBackdrop = false, MissionSceneContext? mission = null)
     {
@@ -94,12 +111,12 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             return new ScenePacket(view, geometry, textures, alphaTextures, masks, notes);
         }, token);
         token.ThrowIfCancellationRequested(); if (current != generation) return;
-        ClearMeshes(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects;
+        ClearMeshes(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects; QueueRenderSize();
         Mission = mission; PreviewScene = scene; InspectionSourcePath = doc.Path;
         if (asset.Kind == AssetKind.World) SetAiNetworks(mission?.AiNetworks ?? AiNetworkSnapshot.Empty);
         if (asset.Kind == AssetKind.World) ConfigureHorizon(scene);
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
-        Dictionary<(int Material, bool Horizon), DiffuseMaterial> materials = [];
+        Dictionary<(int Material, bool Horizon, bool Colors), DiffuseMaterial> materials = [];
         Dictionary<MeshPart, MeshGeometry3D> geometries = [];
         Dictionary<int, TextureModel> alphaMasks = [];
         foreach (var (index, bytes) in packet.AlphaMasks)
@@ -115,10 +132,11 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             foreach (var part in packet.Geometry[group.Key.Model])
             {
                 token.ThrowIfCancellationRequested(); if (current != generation) return;
-                if (!materials.TryGetValue((part.MaterialIndex, group.Key.Horizon), out var material))
+                if (!materials.TryGetValue((part.MaterialIndex, group.Key.Horizon, part.Colors.Length != 0), out var material))
                 {
                     JsonMaterial(scene, part.MaterialIndex, out Color4 color, out int textureIndex);
-                    material = PreviewMaterials.Create(group.Key.Horizon); material.DiffuseColor = color; material.EnableUnLit = true;
+                    material = PreviewMaterials.Create(group.Key.Horizon, part.Colors.Length != 0); material.DiffuseColor = color; material.EnableUnLit = true;
+                    material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
                     if (packet.Textures.TryGetValue(textureIndex, out var image))
                     {
                         // Display decoded texture colors without additive preview lighting.
@@ -126,10 +144,10 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         material.EnableUnLit = true;
                         textureMaps[material] = material.DiffuseMap;
                     }
-                    materials[(part.MaterialIndex, group.Key.Horizon)] = material;
+                    materials[(part.MaterialIndex, group.Key.Horizon, part.Colors.Length != 0)] = material;
                 }
                 if (!geometries.TryGetValue(part, out var geometry))
-                    geometries[part] = geometry = new() { Positions = new Vector3Collection(part.Positions), Normals = new Vector3Collection(part.Normals), TextureCoordinates = new Vector2Collection(part.TextureCoordinates), Indices = new IntCollection(part.Indices) };
+                    geometries[part] = geometry = new() { Positions = new Vector3Collection(part.Positions), Normals = new Vector3Collection(part.Normals), TextureCoordinates = new Vector2Collection(part.TextureCoordinates), Indices = new IntCollection(part.Indices), Colors = VertexColors(part, material.DiffuseColor) };
                 bool transparent = material.DiffuseColor.Alpha < 1 || part.MaterialIndex >= 0 && part.MaterialIndex < scene.Materials.Count && packet.AlphaTextures.Contains(scene.Materials[part.MaterialIndex].Int("texture_index", -1));
                 // Sort translucent placements individually; a batch spanning a map
                 // has no single correct distance relative to other alpha surfaces.
@@ -170,7 +188,10 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                         sceneAlphaGroup.Children.Add(mesh);
                     }
                     else viewport.Items.Add(mesh);
-                    if (++created % 30 == 0) await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+                    // A retained world may render continuously while its replacement
+                    // is built. Background-priority continuations can starve behind
+                    // that render queue indefinitely; resume in the normal UI queue.
+                    if (++created % 30 == 0) await Task.Yield();
                 }
             }
             if (group.Key.Horizon) continue;
@@ -311,7 +332,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         ClearAnimationResources();
         ClearWorldHighlights();
         ClearAi();
-        horizonNodes.Clear(); Mission = null; PreviewScene = null;
+        horizonNodes.Clear(); Mission = null; PreviewScene = null; InspectionNodes = null;
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
         viewport.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); textureMaps.Clear();
@@ -329,7 +350,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         var scaled = new System.Windows.Media.Imaging.TransformedBitmap(image, new ScaleTransform(scaleX, scaleY));
         scaled.Freeze(); return scaled;
     }
-    public void Dispose() { Clear(); AttachNavigationWindow(null); viewport.Dispose(); effects?.Dispose(); effects = null; GC.SuppressFinalize(this); }
+    public void Dispose() { if (disposed) return; disposed = true; renderResize?.Abort(); Clear(); AttachNavigationWindow(null); viewport.Dispose(); effects?.Dispose(); effects = null; GC.SuppressFinalize(this); }
     private static bool HasAlpha(DecodedImage image) { for (int i = 3; i < image.Rgba.Length; i += 4) if (image.Rgba[i] != 255) return true; return false; }
     private sealed record ScenePacket(SceneView View, Dictionary<int, IReadOnlyList<MeshPart>> Geometry, Dictionary<int, DecodedImage> Textures, HashSet<int> AlphaTextures, Dictionary<int, byte[]> AlphaMasks, List<Diagnostic> Notes);
 }

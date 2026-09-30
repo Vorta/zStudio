@@ -50,6 +50,7 @@ internal sealed record AnimationEventPresentation(string Summary, string Timing,
                 var frames = ev.Keyframes();
                 parts.Add($"{frames.Count} keyframe segment{(frames.Count == 1 ? "" : "s")}");
                 if (frames.Count > 0) parts.Add($"Last segment ends: {Number(frames[^1].End)} s");
+                if (ev.KeyframePreviewDiagnostic() != null) parts.Add("Transform preview unavailable: unverified MW3 time span");
             }
             catch (InvalidDataException) { parts.Add("Malformed keyframe data"); }
         }

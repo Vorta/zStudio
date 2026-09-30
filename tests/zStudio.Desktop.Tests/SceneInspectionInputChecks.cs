@@ -25,6 +25,7 @@ internal static class SceneInspectionInputChecks
         typeof(SceneViewport).GetProperty(nameof(SceneViewport.SelectedInspection))!.SetValue(scene, selected);
         bool overflow = true;
         bool extraDetail = false;
+        string strategyText = "Head-on";
         var card = new SceneInspectionCard(scene, item =>
         {
             JsonObject info = new() { ["Node"] = item.Target == "hover" ? "Pointed object" : "Tank fixture with a long name which must trim in the fixed header", ["Editable"] = true,
@@ -32,6 +33,7 @@ internal static class SceneInspectionInputChecks
             if (overflow) info["Object world origin XYZ"] = new JsonObject { ["x"] = 100.125f, ["y"] = 200.5f, ["z"] = 300.75f };
             if (overflow) for (int i = 0; i < 30; i++) info["Field " + i] = "Detailed inspection value";
             if (extraDetail) info["Runtime detail"] = "A newly available field";
+            if (item.AiNode != null) { info["Attack strategy"] = strategyText; info["Status"] = "Visible"; info["Edit scope"] = "This AI network node"; }
             return info;
         }, _ => { }, _ => { });
         scene.InspectionContent = card;
@@ -231,6 +233,54 @@ internal static class SceneInspectionInputChecks
             Assert.Equal(0, scene.FramingSelection); Assert.Same(selected, scene.SelectedInspection);
             Assert.Equal(default, (Vector)typeof(SceneViewport).GetField("navigationVelocity", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(scene)!);
             Assert.Null(Mouse.Captured);
+            // Strategy is an ordinary scrolling detail below the scope, directly
+            // before Status, with the same copy gutter and read-only field style.
+            overflow = true;
+            var aiSelection = selected with { AiNode = "ai-fixture" };
+            typeof(SceneViewport).GetProperty(nameof(SceneViewport.SelectedInspection))!.SetValue(scene, aiSelection);
+            card.Refresh(); await Idle();
+            var strategy = Descendants(card).OfType<SceneInspectionField>().Single(f => f.Inputs.Any(i => AutomationProperties.GetName(i) == "Attack strategy"));
+            var strategyCopy = Descendants(strategy).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Copy Attack strategy");
+            Assert.Contains(strategy, Descendants(scroll));
+            var detailRows = (StackPanel)strategy.Parent;
+            var status = Descendants(scroll).OfType<SceneInspectionField>().Single(f => f.Inputs.Any(i => AutomationProperties.GetName(i) == "Status"));
+            Assert.Equal(detailRows.Children.IndexOf(strategy) + 1, detailRows.Children.IndexOf(status));
+            var scopeLabel = Descendants(scroll).OfType<TextBlock>().Single(t => t.Text == "This AI network node");
+            Assert.True(Bounds(scopeLabel, (Visual)scroll.Content).Bottom <= Bounds(strategy, (Visual)scroll.Content).Top);
+            foreach (double height in new[] { 300d, 600d })
+            foreach (double requested in new[] { 216d, 432d })
+            foreach (double width in new[] { 320d, 900d })
+            {
+                window.Width = width; window.Height = height; card.SetPanelHeight(requested);
+                await Idle(); card.Refresh(); await Idle();
+                Assert.True(strategy.IsVisible); Assert.True(strategy.Inputs[0].IsReadOnly);
+                Assert.Equal("Head-on", strategy.Inputs[0].Text);
+                Assert.True(Bounds(strategyCopy, card).Right <= Bounds(panel, card).Right - 10);
+                Assert.True(Bounds(strategyCopy, card).Right <= Bounds(bar, card).Left);
+                Assert.True(strategy.Inputs[0].ActualWidth > 40);
+                Assert.True(scroll.ViewportHeight > 0);
+                scroll.ScrollToTop(); await Idle(); var top = Bounds(strategy, card).Top;
+                scroll.ScrollToBottom(); await Idle(); Assert.True(Bounds(strategy, card).Top < top);
+                scroll.ScrollToVerticalOffset(Bounds(strategy, (Visual)scroll.Content).Top); await Idle();
+                await Wheel(strategy.Inputs[0], -120); Assert.Equal(before, scene.CaptureView());
+                scroll.ScrollToVerticalOffset(Bounds(strategy, (Visual)scroll.Content).Top); await Idle();
+                Capture(panel, $"ai-details-strategy-{width}-{height}-{requested}");
+            }
+            foreach (string value in new[] { "follow_net", "Not stored", "\"\" (empty)", "Unavailable (invalid data)", new string('x', 2048) })
+            {
+                strategyText = value;
+                typeof(SceneViewport).GetProperty(nameof(SceneViewport.SelectedInspection))!.SetValue(scene, aiSelection with { AiNode = value });
+                card.Refresh(); await Idle();
+                Assert.Equal(value, strategy.Inputs[0].Text); Assert.Equal(value, strategy.Inputs[0].ToolTip);
+                Assert.Equal(TextWrapping.Wrap, strategy.Inputs[0].TextWrapping); Assert.InRange(strategy.Inputs[0].ActualHeight, 30, 54);
+                Assert.Equal("Attack strategy: " + value, card.Copy("Attack strategy", false));
+                Assert.Single(card.Copy(null, false).Split(Environment.NewLine), line => line.StartsWith("Attack strategy: "));
+            }
+            typeof(SceneViewport).GetProperty(nameof(SceneViewport.SelectedInspection))!.SetValue(scene, selected);
+            card.Refresh(); await Idle(); Assert.DoesNotContain(strategy, Descendants(card));
+            Assert.DoesNotContain("Attack strategy:", card.Copy(null, false));
+            scene.SelectInspection(null, false); card.Refresh(); await Idle(); Assert.False(strategy.IsVisible);
+            Assert.Equal(0, navigationStarts); Assert.Equal(before, scene.CaptureView());
             // Wheel navigation outside the card still uses the normal camera handler.
             await Wheel(scene.RenderSurface, -120);
             Assert.True(navigationStarts > 0); Assert.NotEqual(before.Position, scene.CaptureView().Position);

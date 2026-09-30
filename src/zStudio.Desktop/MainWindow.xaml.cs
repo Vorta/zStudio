@@ -17,6 +17,8 @@ using Recoil.Zbd.Core.Export;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Rendering;
 
+using Recoil.Zbd.Core.Animation;
+
 namespace Recoil.Zbd.Desktop;
 
 public partial class MainWindow : Window
@@ -181,6 +183,7 @@ public partial class MainWindow : Window
         pendingAnimationPlay = false;
         EndImagePan();
         animation?.Dispose(); animation = null; AnimationHost.Content = null; DetachAnimationWorkspace();
+        motion?.Dispose(); motion = null;
         preview.Cancel(); preview.Dispose(); preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
         RefreshSceneTree();
     }
@@ -191,6 +194,13 @@ public partial class MainWindow : Window
         if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) { doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Id == shownAsset?.Id); return; }
         asset = asset == null ? null : doc.PreviewDocument.Assets.SingleOrDefault(a => a.Id == asset.Id);
         bool differentAsset = shownAsset?.Id != asset?.Id;
+        shownResourceMember = asset != null && doc.ResourceEdits is { } shownEdits && asset.Index < shownEdits.Current.Members.Count ? shownEdits.Current.Members[asset.Index].Id : null;
+        PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
+        ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
+        // A motion's member UUID survives rename/reorder; its asset index does not.
+        // Conversely, deleting a member can put another clip at the same asset ID.
+        if (asset?.Kind == AssetKind.Motion && shownDocument == doc && motion != null && doc.ResourceEdits?.Current.Members[asset.Index].Id == motion.MemberId)
+        { shownAsset = asset; await motion.RefreshClipAsync(); await RefreshAssetInspectionAsync(doc, asset, preview.Token); return; }
         if (!differentAsset && asset != null && shownDocument == doc && HasPublishedStaticScene && ViewModel.Resolver != null)
         { shownAsset = asset; await RefreshStaticSceneAsync(doc, asset); return; }
         // Entering the animation viewer starts at Sequences. Consecutive animation
@@ -205,8 +215,6 @@ public partial class MainWindow : Window
         var token = loading.Token;
         foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
         EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…"; PreviewInfo.Text = ""; properties = null;
-        PreviewTitle.Text = asset?.Name ?? Path.GetFileName(doc.Path); PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} bytes · source 0x{asset.Offset:X}";
-        ViewModel.Status = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index}: {asset.Name} · {Path.GetFileName(doc.Path)}";
         try
         {
             var snapshot = doc.PreviewDocument;
@@ -237,12 +245,16 @@ public partial class MainWindow : Window
                 int count = new SceneLods(doc.PreviewDocument.Scene!).Count(asset.Kind == AssetKind.World ? null : root is int r ? [r] : []);
                 updating = true; LodCombo.ItemsSource = SceneLods.Choices(count); LodCombo.SelectedIndex = Math.Min(selectedLod, count - 1); LodCombo.IsEnabled = count > 1; updating = false;
                 SceneToolbar.Visibility = SceneHost.Visibility = Visibility.Visible;
-                WorldHighlights.Visibility = WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed;
+                WorldHighlights.Visibility = asset.Kind == AssetKind.World ? Visibility.Visible : Visibility.Collapsed; WorldDifficultyGroup.Visibility = asset.Kind == AssetKind.World && snapshot.Game != GameVariant.MechWarrior3 ? Visibility.Visible : Visibility.Collapsed; WorldMission.Visibility = Visibility.Collapsed;
                 if (scene == null) { scene = new(); scene.Information += s => { PreviewInfo.Text = s; PreviewInfo.ToolTip = s; }; scene.NodeSelected += InspectNode; ConfigureAiScene(scene); ConfigurePickupScene(scene); SceneHost.Content = scene; ConfigureFlyScene(scene); }
-                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty) : null;
-                if (mission != null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token);
+                if (asset.Kind == AssetKind.World) await PopulateWorldMissionsAsync(doc, token);
+                string? exactMission = ExactMissionFor(doc.Path, ViewModel.Resolver.SelectedMission(doc.Path));
+                var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null) : null;
+                if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
                 await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
-                publishedStaticOptions = ReadStaticSceneOptions() with { Difficulty = mission?.Layout.Difficulty ?? ViewModel.Difficulty };
+                var shownOptions = ReadStaticSceneOptions();
+                publishedStaticOptions = shownOptions with { Difficulty = mission is { Layout.DifficultyApplies: true } ? mission.Layout.Difficulty : ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission };
+                if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
                 if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
                 if (mission != null)
                 {
@@ -257,11 +269,20 @@ public partial class MainWindow : Window
                 }
                 ShowStaticPreviewProblems(doc, asset);
                 if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
-                if (mission != null && mission.Layout.Difficulty != ViewModel.Difficulty) await RefreshWorldDifficultyAsync();
+                if (mission != null && mission.Layout.DifficultyApplies && mission.Layout.MissionArchive == null && mission.Layout.Difficulty != ViewModel.Difficulty) await RefreshWorldDifficultyAsync();
+            }
+            else if (asset?.Kind == AssetKind.Motion && doc.ResourceEdits != null && ViewModel.Resolver != null)
+            {
+                var editor = new MotionEditor(doc, doc.ResourceEdits.Current.Members[asset.Index].Id, ViewModel.Resolver, previewLifetime,
+                    library => ViewModel.Documents.Select(d => d.ResourceEdits is { } e && e.SnapshotFor(library) is { } s ? (e, s) : ((ResourceEditSession, ResourceSnapshot)?)null).SingleOrDefault(p => p != null)); motion = editor;
+                editor.SceneChanged += () => { AttachInspection(editor.Viewport); editor.Viewport.NodeSelected -= InspectNode; editor.Viewport.NodeSelected += InspectNode; RefreshSceneTree(); };
+                editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
+                AnimationHost.Content = editor; AnimationHost.Visibility = Visibility.Visible;
+                await editor.InitializeAsync(token);
             }
             else if (asset?.Kind == AssetKind.Animation && doc.AnimationEdits != null && ViewModel.Resolver != null)
             {
-                var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, previewLifetime, ViewModel); animation = editor;
+                var editor = new AnimationEditor(doc, asset.Index, ViewModel.Resolver, previewLifetime, ViewModel); animation = editor; editor.MissionRequested = path => SelectMissionAsync(path, false, CancellationToken.None); editor.ExactMission = PendingExactMission;
                 if (pendingAnimationPlay) { pendingAnimationPlay = false; editor.TogglePlayback(); }
                 editor.StatusChanged += text => { if (!previewLifetime.IsCancellationRequested) ViewModel.Status = text; };
                 editor.InspectionChanged += (json, data) => { if (previewLifetime.IsCancellationRequested) return; properties = json; var source = editor.SourceByteSelection(); RawText.Text = source.Scope + "\n\n" + (source.Offset >= 0 ? Hex(source.Bytes.Span,source.Offset) : "") + (source.Length > 4096 ? "\n… first 4,096 source bytes shown." : ""); };
@@ -273,7 +294,7 @@ public partial class MainWindow : Window
             else
             {
                 StructuredPanel.Visibility = Visibility.Visible;
-                if (asset?.Kind == AssetKind.Animation) { EventsTab.Visibility = Visibility.Visible; EventGrid.ItemsSource = EventRows(asset.Metadata); StructuredPanel.SelectedIndex = 2; }
+                if (asset?.Content is AnimationEntry entry) { EventsTab.Visibility = Visibility.Visible; EventsTab.Header = entry.AllSequences.Sum(s => (long)s.Events.Count) > 200 ? "Events (first 200)" : "Events"; EventGrid.ItemsSource = EventRows(entry); StructuredPanel.SelectedIndex = 2; }
                 else if (doc.ScriptEdits != null && asset?.Content is ScriptContent) StructuredPanel.SelectedItem = scriptTab;
                 else StructuredPanel.SelectedIndex = asset?.Content is ScriptContent ? 1 : 0;
             }
@@ -460,13 +481,14 @@ public partial class MainWindow : Window
     private void ShowAllClick(object sender, RoutedEventArgs e) { isolatedNode = null; scene?.Isolate(null); }
     private void InspectNode(int index)
     {
+        var scene = motion?.Viewport ?? this.scene;
         inspectedSceneSource = null;
         if ((scene?.PreviewScene ?? ViewModel.SelectedDocument?.Document.Scene) is not { } data || index < 0 || index >= data.Nodes.Count) return;
         RevealSceneNode(index);
         var actor = scene?.PickupAt(index);
         if (actor != null) index = actor.Root;
         scene?.SelectPickup(actor?.Root, actor?.Pickup is { } pickup && pickupDocument?.PickupEdits?.Find(pickup.Source) != null, pickupDocument?.PickupsLocked ?? true);
-        selectedNode = index; scene?.SelectFramingNode(index); var properties = (JsonObject)data.Nodes[index].Metadata.DeepClone();
+        selectedNode = index; scene?.SelectFramingNode(index); var properties = JsonData.PreviewObject(data.Nodes[index].Metadata);
         if (scene?.Mission is { } mission)
         {
             properties["preview_instance"] = data.Nodes[index].Name;
@@ -476,10 +498,10 @@ public partial class MainWindow : Window
         }
         SetProperties(properties); ViewModel.Status = $"Selected node #{index}: {data.Nodes[index].Name}";
     }
-    private static EventRow[] EventRows(JsonObject entry)
+    private static EventRow[] EventRows(AnimationEntry entry)
     {
-        List<EventRow> rows = []; List<JsonNode?> surfaces = [entry["surface_primary"]]; if (entry["surface_runtimes"] is JsonArray others) surfaces.AddRange(others);
-        foreach (var surface in surfaces) if (surface?["events"] is JsonArray events) foreach (var ev in events.OfType<JsonObject>()) rows.Add(new(surface.Text("sequence_name"), ev.Text("type"), ev.Text("start_mode"), ev.Text("start_threshold"), ev)); return rows.ToArray();
+        return entry.AllSequences.SelectMany(s => s.Events.Select(e => (Sequence: s, Event: e))).Take(200)
+            .Select(p => { var data = p.Event.ToPreviewJson(); return new EventRow(p.Sequence.Name, p.Event.Name, data.Text("start_mode"), data.Text("start_threshold"), data); }).ToArray();
     }
     private void EventSelected(object sender, SelectionChangedEventArgs e) { if (EventGrid.SelectedItem is EventRow row) SetProperties(row.Data); }
     private void PlayAudioClick(object sender, RoutedEventArgs e)
@@ -588,11 +610,11 @@ public partial class MainWindow : Window
         if ((e.Key == Key.Enter || e.SystemKey == Key.Enter) && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.Alt) { e.Handled = true; OpenCurrentProperties(); return; }
         if (e.Key == Key.Escape && scene?.CancelPickupDrag() == true) { e.Handled = true; return; }
         if (e.Key == Key.Space && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None &&
-            shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.AnimationEdits != null &&
+            (shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.AnimationEdits != null || motion != null) &&
             AnimationSpaceTarget(e.OriginalSource as DependencyObject))
         {
             e.Handled = true;
-            if (!e.IsRepeat) { if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
+            if (!e.IsRepeat) { if (motion != null) motion.TogglePlayback(); else if (animation != null) animation.TogglePlayback(); else pendingAnimationPlay = !pendingAnimationPlay; }
             return;
         }
         bool ctrl = KeyboardModifiers(); if (ctrl && e.Key == Key.O) OpenFolderClick(this, e); else if (ctrl && e.Key == Key.E) ExportSelectedClick(this, e); else if (ctrl && e.Key == Key.S) { if ((System.Windows.Input.Keyboard.Modifiers & ModifierKeys.Shift) != 0) SaveCurrentAsClick(this, e); else SaveCurrentClick(this, e); } else if (ctrl && e.Key == Key.Z && e.OriginalSource is not TextBoxBase) UndoAnimationClick(this, e); else if (ctrl && e.Key == Key.Y && e.OriginalSource is not TextBoxBase) RedoAnimationClick(this, e); else if (ctrl && e.Key == Key.W) CloseCurrentClick(this, e); else if (e.Key == Key.F5) ReloadClick(this, e); else if (e.Key == Key.Escape && operation is { IsCancellationRequested: false }) CancelClick(this, e); else return; e.Handled = true;
@@ -611,7 +633,7 @@ public partial class MainWindow : Window
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
         flyRequest++; flyCamera?.End();
-        scene?.CancelNavigation(); animation?.Viewport.CancelNavigation();
+        scene?.CancelNavigation(); animation?.Viewport.CancelNavigation(); motion?.Viewport.CancelNavigation();
         if (resolvingClose) { e.Cancel = true; return; }
         if (automationCloseRequested && (ViewModel.Documents.Any(d => d.IsDirty) || HasInspectionDraft || animation?.HasAutomationDrafts == true || propertiesWindow?.HasPendingDrafts == true || scene?.IsPickupDragging == true))
         {
@@ -655,7 +677,7 @@ public partial class MainWindow : Window
         propertiesWindow?.CloseResolved();
         flyCamera?.Dispose();
         ObserveDocumentCommands(null);
-        operation?.Cancel(); preview.Cancel(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); scene?.Dispose(); ViewModel.Dispose(); shutdown.Dispose();
+        operation?.Cancel(); preview.Cancel(); ViewModel.PropertyChanged -= DifficultyPreferenceChanged; diskTimer.Stop(); audioTimer.Stop(); StopAudio(); animation?.Dispose(); motion?.Dispose(); scene?.Dispose(); ViewModel.Dispose(); shutdown.Dispose();
         var s = ViewModel.Settings; if (WindowState == WindowState.Normal) { s.Width = ActualWidth; s.Height = ActualHeight; }
         SaveWorkspacePreferences();
         try { s.Save(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* Settings cannot prevent shutdown. */ }

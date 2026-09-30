@@ -69,7 +69,7 @@ public sealed partial class PickupPlacementEditSession
             // Once staging succeeds, preserve every requested copy even when later
             // publication fails. Ordinary Save retries the new path without replacement.
             foreach (var output in staged.Where(s => !s.Replace))
-            { output.Archive.Target = output.Destination; output.Archive.PendingCopy = true; }
+            { output.Archive.Target = output.Destination; output.Archive.PendingCopy = true; touched.Add(output.Source); }
             foreach (var output in staged)
             {
                 try

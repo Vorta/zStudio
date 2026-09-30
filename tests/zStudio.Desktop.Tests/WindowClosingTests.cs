@@ -48,6 +48,14 @@ public sealed class WindowClosingTests
                     await SceneInspectionMcpChecks.Run();
                     await SceneTreeMcpChecks.Run();
                     await SceneSelectionMcpChecks.Run();
+                    await Mw3MissionMcpChecks.Run();
+                    await MissionSelectionChecks.Run();
+                    await MissionSelectionChecks.RunSupersedingRefresh();
+                    await MissionSelectionChecks.RunUnavailableSelection();
+                    await MissionSelectionChecks.RunRetryWithoutPreview();
+                    await MissionSelectionChecks.RunWithoutReaders();
+                    await MissionSelectionChecks.RunDeletedReaderAtStartup();
+                    await MissionOwnershipChecks.Run();
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();
                     await AiNetworkMcpChecks.Run();
@@ -59,6 +67,11 @@ public sealed class WindowClosingTests
                     await ModelReplacementMcpChecks.Run();
                     await SceneSnapshotChecks.Run();
                     await ResourceEditingMcpChecks.Run();
+                    await AiValveMcpChecks.Run();
+                    await MotionMcpChecks.Run();
+                    await MotionBindingMcpChecks.Run();
+                    await MotionLibraryRefreshChecks.Run();
+                    await AnimationFogChecks.Run();
                     await ContentEditingMcpChecks.Run();
                     await NavigationMcpChecks.Run();
                     await GuiNavigationChecks.Run();
@@ -165,7 +178,10 @@ public sealed class WindowClosingTests
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        await completion.Task.WaitAsync(TimeSpan.FromSeconds(90), TestContext.Current.CancellationToken);
+        // All workspace fixtures share one STA/Application and run serially.
+        // Allow the expanded suite (including large-input/race checks) to finish
+        // alongside corpus tests; individual operations retain their own deadlines.
+        await completion.Task.WaitAsync(TimeSpan.FromMinutes(3), TestContext.Current.CancellationToken);
     }
 
     private static DocumentModel DirtyDocument(int index)

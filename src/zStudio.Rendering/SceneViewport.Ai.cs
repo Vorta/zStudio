@@ -18,7 +18,7 @@ public sealed partial class SceneViewport
     // Dedicated group: never part of authored meshes, depth bounds, isolation or export.
     private sealed class AiOverlayGroup : GroupModel3D;
     private AiOverlayGroup? aiOverlay;
-    private readonly List<(MeshGeometryModel3D Mesh, AiNode[] Nodes)> aiMarkers = [];
+    private readonly List<(MeshGeometryModel3D Mesh, AiNode[] Nodes, double Pixels)> aiMarkers = [];
     private readonly Dictionary<MeshGeometryModel3D, Func<MeshGeometry3D>> aiLinks = [];
     private MeshGeometryModel3D? aiSelectionMarker;
     private readonly List<MeshGeometryModel3D> aiDrawables = [];
@@ -26,6 +26,13 @@ public sealed partial class SceneViewport
     private ViewPose? aiMarkerPose;
     private double aiMarkerWidth, aiMarkerHeight;
     public AiNetworkSnapshot AiNetworks { get; private set; } = AiNetworkSnapshot.Empty;
+    /// <summary>Overlay budget for the dispatcher-bound markers and links. The complete graph remains available for
+    /// selection, inspection and export; retail MW3 missions stay far below it.</summary>
+    public const int MaximumRenderedAiNodes = 16_384, MaximumRenderedAiLinks = 32_768;
+    public int RenderedAiNodes { get; private set; }
+    public int RenderedAiLinks { get; private set; }
+    public bool AiRenderTruncated { get; private set; }
+    private readonly List<AiNode> aiRendered = [];
     public bool AiVisible { get; private set; }
     public bool AiThroughGeometry { get; private set; } = true;
     public string? AiNetworkFilter { get; private set; }
@@ -37,7 +44,7 @@ public sealed partial class SceneViewport
     public void SetAiNetworks(AiNetworkSnapshot snapshot)
     {
         if (AiNetworks.Id == snapshot.Id) return;
-        AiNetworks = snapshot; AiNetworkFilter = null; SelectedAiNode = null; hoveredAiNode = null;
+        AiNetworks = snapshot; AiNetworkFilter = null; SelectedAiNode = null; hoveredAiNode = null; ValveFilter = null;
         RebuildAiOverlay();
     }
     public void SetAiOptions(bool visible, bool throughGeometry, string? network)
@@ -66,24 +73,35 @@ public sealed partial class SceneViewport
     {
         ++inspectionSerial;
         ClearAiDrawables();
+        RenderedAiNodes = RenderedAiLinks = 0; AiRenderTruncated = false; aiRendered.Clear();
         if (!AiVisible) { PublishAiLabel(); return; }
         aiOverlay = new(); viewport.Items.Add(aiOverlay);
         foreach (var network in VisibleAiNetworks)
         {
-            var color = AiColor(network.Id); var nodes = network.Nodes.ToArray();
+            var color = AiNetworkColors.Color(network.AttackStrategy);
+            // Materialize only the budgeted nodes and links; later networks and links beyond it are disclosed, not drawn.
+            var nodes = network.Nodes.Take(MaximumRenderedAiNodes - RenderedAiNodes).ToArray();
+            if (nodes.Length < network.Nodes.Count) AiRenderTruncated = true;
             if (nodes.Length == 0) continue;
+            RenderedAiNodes += nodes.Length; aiRendered.AddRange(nodes);
             var markers = AiMesh(AiOctahedron(), color);
-            aiMarkers.Add((markers, nodes));
+            aiMarkers.Add((markers, nodes, 4));
             var byId = nodes.ToDictionary(n => n.Id);
+            List<(Vector3 Start, Vector3 End)> edges = [];
+            foreach (var node in nodes)
+            foreach (string target in node.PreviewLinks.Where(l => l.Target != null).Select(l => l.Target!).Distinct())
+            {
+                if (!byId.TryGetValue(target, out var end)) { AiRenderTruncated = true; continue; }
+                if (RenderedAiLinks == MaximumRenderedAiLinks) { AiRenderTruncated = true; break; }
+                edges.Add((node.Position, end.Position)); RenderedAiLinks++;
+            }
             var lines = AiMesh(BuildLinks(), color); aiLinks.Add(lines, BuildLinks);
             MeshGeometry3D BuildLinks()
             {
                 List<Vector3> positions = []; List<int> indices = [];
                 var pose = CaptureView(); Vector3 forward = Vector3.Normalize(new((float)pose.LookDirection.X, (float)pose.LookDirection.Y, (float)pose.LookDirection.Z));
-                foreach (var node in nodes)
-                foreach (string target in node.Links.Where(l => l.Target != null).Select(l => l.Target!).Distinct())
+                foreach (var (start, end) in edges)
                 {
-                    var end = byId[target].Position; var start = node.Position;
                     if ((end - start).LengthSquared() < 1e-8f)
                     {
                         const int steps = 16; float radius = 3;
@@ -119,6 +137,7 @@ public sealed partial class SceneViewport
                 void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d) { Triangle(a, b, c); Triangle(a, c, d); }
             }
         }
+        BuildValveOverlay();
         aiSelectionMarker = AiMesh(AiOctahedron(), new(1, 1, 1, 1));
         RefreshAiSelection(); UpdateAiMarkers(); viewport.InvalidateRender();
     }
@@ -128,13 +147,6 @@ public sealed partial class SceneViewport
         var mesh = new MeshGeometryModel3D { Geometry = geometry, Material = material, IsTransparent = true, IsHitTestVisible = false,
             CullMode = SharpDX.Direct3D11.CullMode.None, RenderOrder = 10, IsDepthClipEnabled = !AiThroughGeometry };
         aiDrawables.Add(mesh); aiOverlay!.Children.Add(mesh); return mesh;
-    }
-    private static Color4 AiColor(string id)
-    {
-        // Stable source identity, independent of filtering and enumeration order.
-        uint hash = 2166136261; foreach (char c in id) hash = (hash ^ c) * 16777619;
-        return (hash % 6) switch { 0 => new(.2f, .85f, 1, 1), 1 => new(1, .65f, .25f, 1), 2 => new(.7f, .5f, 1, 1),
-            3 => new(.3f, 1, .65f, 1), 4 => new(1, .4f, .7f, 1), _ => new(.95f, .95f, .3f, 1) };
     }
     private static MeshGeometry3D AiOctahedron() => new()
     {
@@ -155,7 +167,7 @@ public sealed partial class SceneViewport
         var pose = CaptureView();
         if (aiMarkerPose == pose && aiMarkerWidth == viewport.ActualWidth && aiMarkerHeight == viewport.ActualHeight) return;
         aiMarkerPose = pose; aiMarkerWidth = viewport.ActualWidth; aiMarkerHeight = viewport.ActualHeight;
-        foreach (var (mesh, nodes) in aiMarkers) mesh.Instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(n.Position, 4)) * Matrix4x4.CreateTranslation(n.Position)).ToArray();
+        foreach (var (mesh, nodes, pixels) in aiMarkers) mesh.Instances = nodes.Select(n => Matrix4x4.CreateScale(AiScale(n.Position, pixels)) * Matrix4x4.CreateTranslation(n.Position)).ToArray();
         foreach (var (mesh, build) in aiLinks) mesh.Geometry = build();
         RefreshAiSelection();
     }
@@ -180,7 +192,8 @@ public sealed partial class SceneViewport
     {
         if (!AiVisible || IsFlyActive || IsPickupDragging || !IsInsidePickupViewport(point) || viewport.RenderContext == null) return null;
         var pose = CaptureView(); double nearest = 81, chosenDepth = double.PositiveInfinity; string? chosen = null;
-        foreach (var network in VisibleAiNetworks) foreach (var node in network.Nodes)
+        // Only drawn markers are pickable; the complete graph stays selectable through inspection commands.
+        foreach (var node in aiRendered)
         {
             Point3D position = new(node.Position.X, node.Position.Y, node.Position.Z);
             var forward = pose.LookDirection; forward.Normalize(); double depth = Vector3D.DotProduct(position - pose.Position, forward);

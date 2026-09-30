@@ -12,6 +12,9 @@ public sealed partial class SceneViewport
     private bool horizonEnabled = true;
     public MissionSceneContext? Mission { get; private set; }
     public GameScene? PreviewScene { get; private set; }
+    public IReadOnlySet<int>? InspectionNodes { get; private set; }
+    public bool CanInspectNode(int index) => PreviewScene != null && index >= 0 && index < PreviewScene.Nodes.Count && (InspectionNodes == null || InspectionNodes.Contains(index));
+    public IEnumerable<GameNode> InspectableNodes => (PreviewScene?.Nodes ?? []).Where(n => CanInspectNode(n.Index));
     public bool HorizonEnabled
     {
         get => horizonEnabled;

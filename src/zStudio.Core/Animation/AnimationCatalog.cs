@@ -46,7 +46,7 @@ public sealed record AnimationEventSpec(byte Type, string Name, int Size, Animat
 }
 
 /// <summary>Event IDs follow retail RunSequenceEvents 0x45CC00, not historical CLI labels.</summary>
-public static class AnimationCatalog
+public static partial class AnimationCatalog
 {
     private static AnimationField I(string name, int offset, bool readOnly = false) => new(name, offset, AnimationFieldKind.Integer, ReadOnly: readOnly);
     private static AnimationField F(string name, int offset, bool readOnly = false) => new(name, offset, AnimationFieldKind.Float, ReadOnly: readOnly);
@@ -97,14 +97,15 @@ public static class AnimationCatalog
         new(39,"Marker",16,[I("Marker payload",12,true)]),
         new(40,"Marker (extended)",12,[])
     ];
-    public static AnimationEventSpec? Find(int type) => Events.FirstOrDefault(e => e.Type == type);
-    public static AnimationEvent Create(byte type)
+    public static AnimationEventSpec? Find(int type, uint version = 28) => ForVersion(version).FirstOrDefault(e => e.Type == type);
+    public static AnimationEvent Create(byte type, uint version = 28)
     {
-        var spec = Find(type) ?? throw new InvalidDataException("Unknown event type.");
-        AnimationEvent ev = new(new byte[spec.Size]); ev.Bytes[0] = type; ev.StartMode = 1; ev.SetInt(4, spec.Size);
+        var spec = Find(type, version) ?? throw new InvalidDataException("Unknown event type for this animation version.");
+        AnimationEvent ev = new(new byte[spec.Size]) { Version = version }; ev.Bytes[0] = type; ev.StartMode = 1; ev.SetInt(4, spec.Size);
         if (spec.DurationOffset >= 0) ev.SetFloat(spec.DurationOffset, 1);
         if (type == 6) ev.SetInt(12, 1);
         if (type == 8) ev.SetVector(12, Vector3.One);
+        if (type == 10) { ev.SetShort(240, -1); if (version == 39) { ev.SetShort(280, -1); ev.SetShort(320, -1); } }
         if (type == 11) { ev.SetInt(12, 1); ev.SetVector(104, Vector3.One); ev.SetVector(116, Vector3.One); }
         if (type == 12) ev = ev.WithKeyframes([AnimationKeyframe.Create()]);
         if (type == 13) { ev.SetShort(14, 1); ev.SetFloat(16, 1); }

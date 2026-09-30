@@ -13,7 +13,7 @@ public partial class MainWindow
     }
     private Task RefreshWorldDifficultyAsync()
     {
-        if (!ready || SceneHost.Visibility != Visibility.Visible || scene?.Mission == null || publishedStaticOptions == null ||
+        if (!ready || SceneHost.Visibility != Visibility.Visible || scene?.Mission == null || !scene.Mission.Layout.DifficultyApplies || scene.Mission.Layout.MissionArchive != null || publishedStaticOptions == null ||
             ViewModel.SelectedDocument is not { } doc || ViewModel.Resolver == null || shownAsset?.Kind != AssetKind.World)
             return Task.CompletedTask;
         return RefreshStaticSceneAsync(doc, shownAsset);

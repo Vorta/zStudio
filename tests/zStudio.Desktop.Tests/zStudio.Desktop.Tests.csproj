@@ -7,6 +7,7 @@
   <ItemGroup>
     <Compile Include="../zStudio.Tests/ModelFixture.cs" Link="ModelFixture.cs" />
     <Compile Include="../zStudio.Tests/ContentFixture.cs" Link="ContentFixture.cs" />
+    <Compile Include="../zStudio.Tests/Mw3MissionFixture.cs" Link="Mw3MissionFixture.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio"><PrivateAssets>all</PrivateAssets></PackageReference>

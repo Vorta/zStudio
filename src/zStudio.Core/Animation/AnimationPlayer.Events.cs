@@ -155,6 +155,10 @@ public sealed partial class AnimationPlayer
                 float endTime = ev.F32(108); screenWave = new(Curve(ev, 28, sequence.EventElapsed, endTime), Curve(ev, 40, sequence.EventElapsed, endTime), Curve(ev, 60, sequence.EventElapsed, endTime), Curve(ev, 72, sequence.EventElapsed, endTime));
                 return Timed(sequence, endTime, ref remaining);
             case 38: AddNote($"Game text message ID {ev.I32(12)}; text lookup is unavailable in the preview.", "Support", "Information"); return 2;
+            // The scheduler records these MW3 gameplay markers and their support notes.
+            // They have no preview side effects and must not block following events.
+            case 41 when ev.Version == 39:
+            case 42 when ev.Version == 39: return 2;
             default: throw new InvalidDataException("No verified event handler.");
         }
     }
@@ -233,12 +237,20 @@ public sealed partial class AnimationPlayer
     private int Keyframes(Instance instance, Sequence state, AnimationEvent ev, ref float remaining)
     {
         var node = NodeRef(instance, ev.I32(12)); if (node == null) return 2;
-        var frames = ev.Keyframes(); if (frames.Count == 0) return 2;
+        var frames = ev.PlaybackKeyframes(); if (frames.Count == 0) return 2;
+        // Retail 0x45B120/0x45AE90 advance a sample cursor from the event start. A
+        // sample's local time runs from max(cursor, start); a finished sample leaves
+        // the cursor at its end. Authored reversed spans therefore finish as soon as
+        // they start, and sample end - start (negative) unless a same-channel
+        // successor replaces them.
+        float cursor = 0;
         for (int i = 0; i < frames.Count; i++)
         {
             var frame = frames[i]; if (state.EventElapsed < frame.Start) break;
-            float time = Math.Clamp(state.EventElapsed - frame.Start, 0, Math.Max(0, frame.End - frame.Start));
-            if (state.EventElapsed > frame.End && i + 1 < frames.Count && frames[i + 1].Flags == frame.Flags && state.EventElapsed >= frames[i + 1].Start) continue;
+            float entry = Math.Max(cursor, frame.Start); bool finished = state.EventElapsed > frame.End;
+            float time = finished ? frame.End - entry : state.EventElapsed - entry;
+            if (finished) cursor = frame.End;
+            if (finished && i + 1 < frames.Count && frames[i + 1].Flags == frame.Flags && state.EventElapsed >= frames[i + 1].Start) continue;
             int p = frame.ChannelOffset(0), r = frame.ChannelOffset(1), s = frame.ChannelOffset(2);
             if (p >= 0) Position(node, frame.Vector(p) + frame.Vector(p + 16) * time);
             if (r >= 0)
@@ -249,7 +261,7 @@ public sealed partial class AnimationPlayer
             }
             if (s >= 0) { node.Scale = frame.Vector(s) + frame.Vector(s + 16) * time; node.Changed = true; }
         }
-        return Timed(state, frames[^1].End, ref remaining);
+        return Timed(state, ev.PlaybackEnd, ref remaining);
     }
     private int Procedural(Instance instance, Sequence state, AnimationEvent ev, bool starting, ref float remaining)
     {
@@ -257,7 +269,7 @@ public sealed partial class AnimationPlayer
         uint flags = ev.U32(12);
         if (starting)
         {
-            if ((flags & 0x400) == 0) ev.SetFloat(248, 0);
+            if ((flags & 0x400) == 0) ev.SetFloat(ev.Version == 39 ? 328 : 248, 0);
             if ((flags & 0x100) != 0) ev.SetVector(196, ev.Vector(172));
             if ((flags & 0x20) != 0) ev.SetVector(160, ev.Vector(136));
             if ((flags & 4) != 0) { ev.SetVector(88, ev.Vector(64)); ev.SetVector(100, ev.Vector(76)); }
@@ -287,7 +299,7 @@ public sealed partial class AnimationPlayer
                 : "Ground collision is disabled; gravity and launch motion are simulated.", "Support", "Information");
             if ((flags & 2) != 0) AddNote("Inherited gameplay launch velocity is unavailable.", "Support", "Information");
         }
-        float dt = (flags & 0x400) != 0 ? Math.Clamp(ev.F32(248) - (state.EventElapsed - remaining), 0, remaining) : remaining;
+        float dt = (flags & 0x400) != 0 ? Math.Clamp(ev.F32(ev.Version == 39 ? 328 : 248) - (state.EventElapsed - remaining), 0, remaining) : remaining;
         bool ground = GroundPlaneEnabled && (flags & 1) != 0 && (flags & 12) != 0 && dt > 0;
         // Depenetrate initial overlap without emitting a contact. All subsequent
         // motion (including spin/morph) is considered before resolving the floor.
@@ -301,7 +313,7 @@ public sealed partial class AnimationPlayer
         bool settled = ground && ResolveGround(instance, node, ev, previousBottom);
         if ((flags & 12) != 0) ev.SetVector(88, ev.Vector(88) + ev.Vector(100) * dt);
         remaining -= dt;
-        return settled || (flags & 0x400) != 0 && state.EventElapsed > ev.F32(248) ? 2 : 1;
+        return settled || (flags & 0x400) != 0 && state.EventElapsed > ev.F32(ev.Version == 39 ? 328 : 248) ? 2 : 1;
         float RandomRange(int offset) => ev.F32(offset) + (ev.F32(offset + 4) - ev.F32(offset)) * RandomUnit();
     }
     private int Beam(Instance instance, Sequence state, AnimationEvent ev, ref float remaining)
@@ -329,9 +341,10 @@ public sealed partial class AnimationPlayer
     {
         long id = (instance.Id << 32) | (uint)(ev.I32(44) > 0 ? ev.I32(44) : StableHash(ev.Text(12)));
         var old = lights.GetValueOrDefault(id) ?? new AnimationLight(id, Vector3.Zero, Vector3.One, 10, 1, false); uint fields = ev.U32(48);
-        Vector3 position = (fields & 2) != 0 ? OffsetPosition(instance, ev.I32(68), ev.Vector(72)) : (fields & 1) != 0 ? ev.Vector(72) : old.Position;
-        lights[id] = new(id, position, (fields & 0x10) != 0 ? Vector3.Clamp(ev.Vector(104),Vector3.Zero,Vector3.One) : old.Color,
-            (fields & 8) != 0 ? Math.Max(.01f,ev.F32(100)) : old.Range, (fields & 0x20) != 0 ? Math.Max(0,ev.F32(116)) : old.Intensity, ev.I32(52) == 1);
+        int extra = ev.Version == 39 ? 8 : 0;
+        Vector3 position = (fields & 2) != 0 ? OffsetPosition(instance, ev.I32(68 + extra), ev.Vector(72 + extra)) : (fields & 1) != 0 ? ev.Vector(72 + extra) : old.Position;
+        lights[id] = new(id, position, (fields & 0x10) != 0 ? Vector3.Clamp(ev.Vector(104 + extra),Vector3.Zero,Vector3.One) : old.Color,
+            (fields & 8) != 0 ? Math.Max(.01f,ev.F32(100 + extra)) : old.Range, (fields & 0x20) != 0 ? Math.Max(0,ev.F32(116 + extra)) : old.Intensity, ev.I32(52) == 1);
     }
     private void AnimateLight(Instance instance, Sequence sequence, AnimationEvent ev)
     {

@@ -52,7 +52,7 @@ public partial class MainWindow
             if (action == "view" && !a.ContainsKey("view") || action == "projection" && !a.ContainsKey("projection"))
                 throw new StudioCommandException("invalid_argument", "Supply " + action + " for this camera operation.");
             int? node = a.ContainsKey("node") ? Int(a, "node") : null;
-            if (node is int index && (viewport.PreviewScene == null || index >= viewport.PreviewScene.Nodes.Count))
+            if (node is int index && !viewport.CanInspectNode(index))
                 throw new StudioCommandException("stale_record", "Scene node unavailable.");
             if (a.ContainsKey("width") && Text(a, "projection", pose.Projection) != "orthographic")
                 throw new StudioCommandException("invalid_argument", "Width requires orthographic projection.");

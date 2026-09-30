@@ -35,16 +35,23 @@ internal static class McpLiveCheck
             Equal(91, graph["total"]!.GetValue<int>(), "AI network count");
             string aiSnapshot = graph["items"]![0]!["snapshot"]!.GetValue<string>(), network = graph["items"]![0]!["Id"]!.GetValue<string>();
             var aiNodes = await Call("ai_nodes", new { preview, snapshot = aiSnapshot, network });
+            var attackStrategy = graph["items"]![0]!["attack_strategy"]!;
+            Equal(true, JsonNode.DeepEquals(attackStrategy, aiNodes["items"]![0]!["attack_strategy"]), "network/node strategy parity");
+            Equal("stored", attackStrategy["status"]!.GetValue<string>(), "corpus authored attack strategy");
             string aiNode = aiNodes["items"]![0]!["node_id"]!.GetValue<string>();
             await Call("scene_options", new { preview, changes = new { aiNodes = true, aiNetwork = network, aiSnapshot } });
             await Call("ai_selection", new { preview, snapshot = aiSnapshot, action = "select", node = aiNode });
             await Call("ai_selection", new { preview, snapshot = aiSnapshot, action = "properties", node = aiNode });
             Equal(aiNode, (await Call("properties_state", new { }))["content"]!["node_id"]!.GetValue<string>(), "AI pinned Properties");
+            Equal(true, JsonNode.DeepEquals(attackStrategy, (await Call("properties_state", new { }))["content"]!["attack_strategy"]), "Properties strategy parity");
             await Call("camera", new { preview, action = "frame", target = "selected" });
             await CheckInspection();
             async Task CheckInspection()
             {
                 var inspected = await Call("scene_inspect", new { preview });
+                Equal(true, JsonNode.DeepEquals(attackStrategy, inspected["attackStrategy"]), "card strategy metadata parity");
+                Equal(attackStrategy["value"]!.GetValue<string>(), inspected["inspection"]!["Attack strategy"]!.GetValue<string>(), "card stored strategy");
+                Equal("Attack strategy: " + attackStrategy["value"]!.GetValue<string>(), (await Call("scene_card", new { preview, action = "copy", field = "Attack strategy" }))["text"]!.GetValue<string>(), "copy strategy");
                 Equal(true, inspected["inspection"]!["Editable"]!.GetValue<bool>(), "AI editor unlocked");
                 Equal(false, inspected["draft"]!["handlesVisible"]!.GetValue<bool>(), "selection has no handles before Edit");
                 Equal(true, inspected["draft"]!["boundsVisible"]!.GetValue<bool>(), "selection bounds");
@@ -52,6 +59,16 @@ internal static class McpLiveCheck
                 Equal(true, copied["text"]!.GetValue<string>().Contains("XYZ"), "copy coordinate space");
                 await Call("capture", new { target = "window", width = 1400, height = 900 });
                 File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, "ai-card.png"), true);
+                Equal(1, (await Call("scene_card", new { preview, action = "copy" }))["text"]!.GetValue<string>()
+                    .Split(Environment.NewLine).Count(line => line.StartsWith("Attack strategy: ")), "copy all includes strategy once");
+                foreach (string density in new[] { "Compact", "Comfortable" })
+                {
+                    await Call("workspace_view", new { changes = new { density, tools = true, inspectionPanelHeight = 216 } });
+                    await Call("capture", new { target = "window", width = 1600, height = 1000 });
+                    File.Copy(Path.Combine(output, "preview.png"), Path.Combine(output, "ai-card-minimum-" + density + ".png"), true);
+                }
+                await Call("workspace_view", new { changes = new { density = originalLayout["layout"]!["Density"]!.GetValue<string>(),
+                    tools = originalLayout["layout"]!["ToolsVisible"]!.GetValue<bool>(), inspectionPanelHeight = originalLayout["layout"]!["InspectionPanelHeight"]!.GetValue<double>() } });
                 await EditSelected("ai");
                 foreach (string label in new[] { "tank", "pickup" })
                 {
@@ -286,7 +303,9 @@ internal static class McpLiveCheck
             var state = await Call("state", new { });
             foreach (var doc in state["documents"]!.AsArray())
                 await Call("close_document", new { document = doc!["id"]!.GetValue<string>(), revision = doc["Revision"]!.GetValue<long>(), discard = true });
-            await Call("workspace_view", new { changes = new { theme = originalLayout["theme"]!.GetValue<string>(), inspectionPanelHeight = originalLayout["layout"]!["InspectionPanelHeight"]!.GetValue<double>() } });
+            await Call("workspace_view", new { changes = new { theme = originalLayout["theme"]!.GetValue<string>(),
+                density = originalLayout["layout"]!["Density"]!.GetValue<string>(), tools = originalLayout["layout"]!["ToolsVisible"]!.GetValue<bool>(),
+                inspectionPanelHeight = originalLayout["layout"]!["InspectionPanelHeight"]!.GetValue<double>() } });
         }
 
         async Task CheckSceneTree(string document, string preview)

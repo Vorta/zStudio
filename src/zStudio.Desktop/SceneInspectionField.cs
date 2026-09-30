@@ -22,8 +22,15 @@ internal sealed class SceneInspectionField : Grid
         Margin = new(0, 4, 0, 4);
         ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
         ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-        StackPanel contents = new();
-        contents.Children.Add(new TextBlock { Text = label, Opacity = .75, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 3) });
+        Grid contents = new();
+        contents.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        contents.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        contents.Children.Add(new TextBlock { Text = label, Opacity = .75, FontSize = 11,
+            TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new(0, 0, 0, 3) });
+        StackPanel inputs = new();
+        SetRow(inputs, 1);
+        contents.Children.Add(inputs);
         Inputs = Enumerable.Range(0, vector ? 3 : 1).Select(_ => new ValueTextBox
         {
             IsReadOnly = true, Opacity = .75, Padding = new(6, 2, 6, 2), MinWidth = 0,
@@ -38,12 +45,12 @@ internal sealed class SceneInspectionField : Grid
             string name = binding == SceneInspectionBinding.AuthoredPosition ? "Authored position" : label;
             AutomationProperties.SetName(Inputs[i], name + (vector ? " " + "XYZ"[i] : ""));
             if (binding != SceneInspectionBinding.None) Inputs[i].MaxLength = 64;
-            if (!vector) { contents.Children.Add(Inputs[i]); continue; }
+            if (!vector) { inputs.Children.Add(Inputs[i]); continue; }
             Grid component = new() { Margin = new(0, i == 0 ? 0 : 2, 0, 0) };
             component.ColumnDefinitions.Add(new() { Width = new(18) });
             component.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
             component.Children.Add(new TextBlock { Text = "XYZ"[i].ToString(), Opacity = .75, VerticalAlignment = VerticalAlignment.Center });
-            SetColumn(Inputs[i], 1); component.Children.Add(Inputs[i]); contents.Children.Add(component);
+            SetColumn(Inputs[i], 1); component.Children.Add(Inputs[i]); inputs.Children.Add(component);
         }
         Children.Add(contents);
         copy.VerticalAlignment = VerticalAlignment.Top; copy.Margin = new(4, 17, 0, 0);

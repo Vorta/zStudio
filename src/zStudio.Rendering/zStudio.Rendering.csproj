@@ -8,5 +8,6 @@
     <ProjectReference Include="../zStudio.Core/zStudio.Core.csproj" />
     <PackageReference Include="HelixToolkit.Wpf.SharpDX" />
     <EmbeddedResource Include="GroundGrid.hlsl" />
+    <EmbeddedResource Include="VertexTint.hlsl" />
   </ItemGroup>
 </Project>

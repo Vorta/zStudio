@@ -74,7 +74,7 @@ public partial class MainWindow
         if (propertiesWindow?.Document == doc) await propertiesWindow.AssetRefreshWork;
         await previewWork;
         if (animation != null) await animation.RefreshModelContextAsync();
-        else if (shownDocument == doc) await ShowAsset(doc, doc.SelectedAsset?.Record);
+        else if (shownDocument == doc) await ShowAsset(doc, doc.SelectedAsset?.Record ?? shownAsset);
         UpdateDocumentCommands();
     }
     private async Task<ModelSaveResult> SaveModelsAsync(DocumentModel doc, string? directory, CancellationToken token)
@@ -99,7 +99,10 @@ public partial class MainWindow
     }
     private async void ReplaceModelsClick(object sender, RoutedEventArgs e)
     {
-        if (ViewModel.SelectedDocument is not { ModelEdits: not null } doc || !ResolvePropertiesDrafts(doc)) return;
+        if (ViewModel.SelectedDocument is not { } doc || !ResolvePropertiesDrafts(doc)) return;
+        if (doc.SelectedAsset?.Record.Content is Recoil.Zbd.Core.Formats.MechAssembly)
+        { await ResourceUiAsync(() => ReplaceMechModelDialogAsync(doc)); return; }
+        if (doc.ModelEdits == null) return;
         OpenFileDialog dialog = new() { Title = "Replace models · select replacement manifest", Filter = "Replacement manifest|*.json" }; if (dialog.ShowDialog(this) != true) return;
         try { await ReplaceModelsAsync(doc, dialog.FileName, doc.Revision, CancellationToken.None); }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); MessageBox.Show(this, ex.Message, "Model replacement"); }

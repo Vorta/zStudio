@@ -87,7 +87,9 @@ public partial class MainWindow
         if (doc.ResourceEdits != null)
         {
             if (resourceMember == null) throw new StudioCommandException("stale_asset", "Read the current member identity before opening Properties.");
-            return await OpenResourcePropertiesAsync(doc, resourceMember.Value, null, cancellationToken, automation);
+            bool valves = await UsesValvePropertiesAsync(doc, resourceMember.Value, cancellationToken);
+            if (request != propertyRequest || doc.IsDisposed) return null; // A newer Properties request or closing superseded this one.
+            return await OpenResourcePropertiesAsync(doc, resourceMember.Value, null, cancellationToken, automation, valves: valves);
         }
         if (asset.Kind == AssetKind.Animation && doc.AnimationEdits != null) return OpenAnimationProperties(doc, asset.Index, Guid.Empty, Guid.Empty);
         try
@@ -132,7 +134,7 @@ public partial class MainWindow
         var window = GetPropertiesWindow();
         if (selectedNode is int node && properties != null)
         {
-            string name = (scene?.PreviewScene ?? doc.Document.Scene)?.Nodes.ElementAtOrDefault(node)?.Name ?? "Scene object";
+            string name = (motion?.Viewport.PreviewScene ?? scene?.PreviewScene ?? doc.Document.Scene)?.Nodes.ElementAtOrDefault(node)?.Name ?? "Scene object";
             bool opened = scene?.PickupAt(node)?.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
                 ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties)
                 : window.SetReadOnly(doc, $"{name} · node #{node}", properties);
@@ -164,7 +166,8 @@ public partial class MainWindow
     private async void AssetPropertiesClick(object sender, RoutedEventArgs e)
     {
         if (contextAsset is not { } asset || assetContextDocument is not { IsDisposed: false } doc) return;
-        if (doc.ResourceEdits != null && asset.ResourceId is Guid member) await ResourceUiAsync(async () => { await OpenResourcePropertiesAsync(doc, member, null); });
+        if (doc.ResourceEdits != null && asset.ResourceId is Guid member)
+            await ResourceUiAsync(async () => { bool valves = await UsesValvePropertiesAsync(doc, member, doc.Lifetime.Token); if (!doc.IsDisposed) await OpenResourcePropertiesAsync(doc, member, null, valves: valves); });
         else if (doc.ScriptEdits != null && asset.ResourceId is Guid script) await ResourceUiAsync(async () => { await OpenScriptPropertiesAsync(doc, script, null); });
         else await OpenAssetPropertiesAsync(doc, asset.Record);
     }

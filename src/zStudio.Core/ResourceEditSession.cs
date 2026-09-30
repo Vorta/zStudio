@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Export;
 
 namespace Recoil.Zbd.Core;
 
@@ -37,6 +38,43 @@ public sealed class ResourceEditSession
         Current = saved = new(members, document, Hash(document.Bytes));
     }
     public ResourceMember Member(Guid id) => Current.Members.SingleOrDefault(m => m.Id == id) ?? throw new InvalidDataException("The archive member no longer exists.");
+    /// <summary>Resolve identities for the exact decoded snapshot, including a load overtaken by an edit or Undo/Redo.</summary>
+    public ResourceSnapshot? SnapshotFor(ZbdDocument document) => ReferenceEquals(Current.Document, document) ? Current :
+        undo.Concat(redo).Append(saved).FirstOrDefault(s => ReferenceEquals(s.Document, document));
+    public Task<PreparedResourceEdit> PrepareMechModelAsync(Guid member, int localModel, ImportedMesh mesh, int material, CancellationToken token = default)
+    {
+        var before = Current;
+        return Task.Run(() =>
+        {
+            var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
+            if (index < 0) throw new InvalidDataException("The mech member no longer exists.");
+            byte[] bytes = ModelReplacementWriter.ReplaceMechMember(before.Document, index, localModel, mesh, material, token);
+            list[index] = list[index] with { Data = bytes, Tree = null };
+            var after = Build(list, token);
+            if (after.Document.Assets[index].Content is not MechAssembly assembly || !after.Document.Scene!.Models[assembly.FirstModel + localModel].Vertices.SequenceEqual(mesh.Positions))
+                throw new InvalidDataException("Mech replacement failed shared-reader verification.");
+            for (int i = 0; i < list.Count; i++) if (i != index && !after.Document.Slice(after.Document.Assets[i].Offset, after.Document.Assets[i].Length).Span.SequenceEqual(before.Members[i].Data.Span))
+                throw new InvalidDataException("Mech replacement changed an unrelated archive member.");
+            return new PreparedResourceEdit(before, after);
+        }, token);
+    }
+    public Task<PreparedResourceEdit> PrepareMotionAsync(Guid member, string action, int part = -1, int frame = -1, MotionFrame? value = null, float? loopTime = null, CancellationToken token = default)
+    {
+        var before = Current;
+        return Task.Run(() =>
+        {
+            var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
+            if (index < 0) throw new InvalidDataException("The motion member no longer exists.");
+            var clip = MotionClip.Read(list[index].Data, token).Edit(action, part, frame, value, loopTime);
+            byte[] bytes = clip.Write(token); _ = MotionClip.Read(bytes, token);
+            list[index] = list[index] with { Data = bytes, Tree = null };
+            var after = Build(list, token);
+            // The archive-wide decoded sample budget must not silently demote the edited clip to a raw member.
+            if (after.Document.Assets[index].Content is not MotionClip)
+                throw new InvalidDataException($"The edited archive would exceed the supported {MotionClip.MaximumArchiveSamples:N0} decoded motion samples.");
+            return new PreparedResourceEdit(before, after);
+        }, token);
+    }
     public ZrdNode Tree(ResourceMember member, CancellationToken token = default) => member.Tree ?? trees.GetOrAdd((member.Id, member.Data), _ => ZrdDecoder.Read(member.Data, token));
     public AssetRecord? OriginalAsset(ResourceMember member) => member.SourceIndex is int i ? source.Assets.Single(a => a.Index == i) : null;
     public async Task<PreparedResourceEdit> PrepareArchiveAsync(string action, Guid member, string name = "", string? path = null, int position = -1, CancellationToken token = default)
@@ -122,6 +160,19 @@ public sealed class ResourceEditSession
         }, token);
     }
     public static ZrdNode? FindParent(ZrdNode root, Guid id) => root.Children.Any(c => c.Id == id) ? root : root.Children.Select(c => FindParent(c, id)).FirstOrDefault(n => n != null);
+    public Task<PreparedResourceEdit> PrepareValveAsync(Guid member, AiValveEdit edit, CancellationToken token = default)
+    {
+        var before = Current;
+        return Task.Run(() =>
+        {
+            var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
+            if (index < 0) throw new InvalidDataException("The valve resource no longer exists.");
+            var item = list[index]; var root = MissionAiValves.Edit(item.Name, Tree(item, token), edit, token);
+            byte[] bytes = ZrdWriter.Write(root, token); _ = ZrdDecoder.Read(bytes, token);
+            list[index] = item with { Data = bytes, Tree = root };
+            return new PreparedResourceEdit(before, Build(list, token));
+        }, token);
+    }
     private ResourceSnapshot Build(IReadOnlyList<ResourceMember> members, CancellationToken token)
     {
         byte[] bytes = IsArchive ? ArchiveWriter.Write(source, members, token) : members.Single().Data.ToArray();
@@ -186,7 +237,9 @@ public static class ArchiveWriter
         {
             token.ThrowIfCancellationRequested(); byte[] record = member.DirectoryRecord.ToArray();
             if (record.Length != 148) throw new InvalidDataException("Invalid archive directory record.");
-            var original = member.SourceIndex is int index ? source.Assets.Single(a => a.Index == index) : null;
+            // Intact archive assets retain directory order, as already required
+            // by the size calculation above. Avoid scanning it for every member.
+            var original = member.SourceIndex is int index ? source.Assets[index] : null;
             uint offset;
             if (original != null && member.Data.Span.SequenceEqual(source.Slice(original.Offset, original.Length).Span)) offset = checked((uint)original.Offset);
             else { offset = checked((uint)output.Position); output.Write(member.Data.Span); }

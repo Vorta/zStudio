@@ -39,10 +39,10 @@ public sealed partial class SceneViewport
     {
         if (includeLevel)
             await ShowAsync(context.World, context.World.Assets.First(a => a.Kind == AssetKind.World), resolver, null, lod, token, showHorizon, context.Mission);
-        else { Clear(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects; }
+        else { Clear(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects; QueueRenderSize(); }
         token.ThrowIfCancellationRequested();
         animationContext = context; animationResolver = resolver; animationToken = token;
-        Mission = context.Mission; PreviewScene = context.Scene; InspectionSourcePath = context.World.Path; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
+        Mission = context.Mission; PreviewScene = context.Scene; InspectionNodes = context.InspectionNodes; InspectionSourcePath = context.World.Path; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
         // Helix 3.1.2's OIT paths drop the unlit DiffuseMaterial effect cards.
         // Standard alpha blending with a sorted group renders their actual alpha.
         previousTransparency = viewport.OITRenderMode; viewport.OITRenderMode = OITRenderType.None;
@@ -93,7 +93,8 @@ public sealed partial class SceneViewport
                 items = parts.Select(part =>
                 {
                     bool horizon = IsHorizon(pose.SourceNode);
-                    var material = PreviewMaterials.Create(horizon); material.EnableUnLit = true;
+                    var material = PreviewMaterials.Create(horizon, part.Colors.Length != 0); material.EnableUnLit = true;
+                    material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
                     var mesh = new MeshGeometryModel3D { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, IsThrowingShadow = false, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
                     RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
                     int source = pose.SourceNode; mesh.MouseDown3D += (_, e) =>
@@ -119,7 +120,7 @@ public sealed partial class SceneViewport
                 if (morphed != null)
                 {
                     var part = morphed.FirstOrDefault(p => p.MaterialIndex == item.Part.MaterialIndex);
-                    if (part != null) item.Mesh.Geometry = Mesh(part);
+                    if (part != null) { item.Mesh.Geometry = Mesh(part); item.VertexTint = null; }
                     item.Morph = pose.Morph;
                 }
                 JsonMaterial(scene, item.Part.MaterialIndex, out var color, out int textureIndex);
@@ -139,7 +140,7 @@ public sealed partial class SceneViewport
                 }
                 item.Material.DiffuseMap = diffuseMap;
                 float alpha = pose.Opacity * color.Alpha;
-                item.Material.DiffuseColor = AnimationColor(pose, color, frame, effectLighting);
+                SetAnimationColor(item, AnimationColor(pose, color, frame, effectLighting));
                 item.Mesh.IsTransparent = !horizon && (alphaTexture || alpha < 1);
                 if (!horizon && pose.Visible && item.Mesh.Geometry?.Positions is { } positions) IncludeBounds(positions, transform);
             }
@@ -193,6 +194,16 @@ public sealed partial class SceneViewport
         rgb = Vector3.Clamp(rgb, Vector3.Zero, Vector3.One);
         return new(rgb.X, rgb.Y, rgb.Z, pose.Opacity * color.Alpha);
     }
+    private static void SetAnimationColor(AnimatedMesh item, Color4 color)
+    {
+        item.Material.DiffuseColor = color;
+        // The vertex-tint shader consumes geometry colors, including fog and opacity.
+        if (item.Part.Colors.Length != 0 && item.VertexTint != color && item.Mesh.Geometry is MeshGeometry3D colored)
+        {
+            colored.Colors = VertexColors(item.Part, color);
+            item.VertexTint = color;
+        }
+    }
     private void RefreshAnimationCamera(bool updateHitTests = false)
     {
         if (animationFrame is not { } frame || animationContext == null || updatingAnimation) return;
@@ -214,7 +225,7 @@ public sealed partial class SceneViewport
                 if (animationEffectLighting && frame.Fog is { Enabled: true })
                 {
                     JsonMaterial(scene, item.Part.MaterialIndex, out var color, out _);
-                    item.Material.DiffuseColor = AnimationColor(pose, color, frame, true);
+                    SetAnimationColor(item, AnimationColor(pose, color, frame, true));
                 }
             }
         }
@@ -257,7 +268,8 @@ public sealed partial class SceneViewport
             sceneMin = Vector3.Min(sceneMin, p); sceneMax = Vector3.Max(sceneMax, p);
         }
     }
-    private static MeshGeometry3D Mesh(MeshPart p) => new() { Positions = new Vector3Collection(p.Positions), Normals = new Vector3Collection(p.Normals), TextureCoordinates = new Vector2Collection(p.TextureCoordinates), Indices = new IntCollection(p.Indices) };
+    private static MeshGeometry3D Mesh(MeshPart p) => new() { Positions = new Vector3Collection(p.Positions), Normals = new Vector3Collection(p.Normals), TextureCoordinates = new Vector2Collection(p.TextureCoordinates), Indices = new IntCollection(p.Indices), Colors = new Color4Collection(p.Colors.Select(v => new Color4(v.X, v.Y, v.Z, v.W))) };
+    private static Color4Collection VertexColors(MeshPart part, Color4 tint) => new(part.Colors.Select(v => new Color4(v.X * tint.Red, v.Y * tint.Green, v.Z * tint.Blue, v.W * tint.Alpha)));
     private static Matrix3D ToWpf(Matrix4x4 m) => new(m.M11,m.M12,m.M13,m.M14,m.M21,m.M22,m.M23,m.M24,m.M31,m.M32,m.M33,m.M34,m.M41,m.M42,m.M43,m.M44);
     private void ClearAnimationResources()
     {
@@ -271,5 +283,6 @@ public sealed partial class SceneViewport
         public DiffuseMaterial Material { get; } = material;
         public MeshPart Part { get; } = part;
         public float Morph { get; set; }
+        public Color4? VertexTint { get; set; }
     }
 }

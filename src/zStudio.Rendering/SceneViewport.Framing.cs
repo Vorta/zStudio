@@ -28,13 +28,13 @@ public sealed partial class SceneViewport
         HashSet<int>? selected = null;
         if (node is int root)
         {
-            if (PreviewScene == null || root < 0 || root >= PreviewScene.Nodes.Count) return false;
+            if (!CanInspectNode(root)) return false;
             root = PickupAt(root)?.Root ?? root;
             selected = []; Stack<int> pending = new(); pending.Push(root);
             while (pending.TryPop(out int current))
             {
-                if (current < 0 || current >= PreviewScene.Nodes.Count || !selected.Add(current)) continue;
-                foreach (int child in SceneBuilder.Children(PreviewScene.Nodes[current])) pending.Push(child);
+                if (!CanInspectNode(current) || !selected.Add(current)) continue;
+                foreach (int child in SceneBuilder.Children(PreviewScene!.Nodes[current])) pending.Push(child);
             }
         }
         bool assetOnly = animationFrame != null && node == null && target != "all";

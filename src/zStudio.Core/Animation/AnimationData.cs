@@ -8,6 +8,8 @@ namespace Recoil.Zbd.Core.Animation;
 /// <summary>Little-endian serialized data. Pointer-shaped fields are never dereferenced.</summary>
 public class AnimationRecord(byte[] bytes)
 {
+    protected long MutationVersion { get; private set; }
+    internal Action? Modified { get; set; }
     public byte[] Bytes { get; } = bytes;
     protected static byte[] SnapshotBytes(byte[] bytes, CancellationToken token)
     {
@@ -31,8 +33,8 @@ public class AnimationRecord(byte[] bytes)
         var span = Bytes.AsSpan(offset, length); int end = span.IndexOf((byte)0);
         return Encoding.Latin1.GetString(end < 0 ? span : span[..end]);
     }
-    public void SetInt(int offset, int value) => BinaryPrimitives.WriteInt32LittleEndian(Bytes.AsSpan(offset, 4), value);
-    public void SetShort(int offset, short value) => BinaryPrimitives.WriteInt16LittleEndian(Bytes.AsSpan(offset, 2), value);
+    public void SetInt(int offset, int value) { BinaryPrimitives.WriteInt32LittleEndian(Bytes.AsSpan(offset, 4), value); MutationVersion++; Modified?.Invoke(); }
+    public void SetShort(int offset, short value) { BinaryPrimitives.WriteInt16LittleEndian(Bytes.AsSpan(offset, 2), value); MutationVersion++; Modified?.Invoke(); }
     public void SetFloat(int offset, float value)
     {
         if (!float.IsFinite(value)) throw new InvalidDataException("Edited numbers must be finite.");
@@ -46,52 +48,96 @@ public class AnimationRecord(byte[] bytes)
         if (Text(offset, length) == value) return;
         // Preserve unrelated bytes after the new terminator, as the loader uses strcmp.
         Encoding.Latin1.GetBytes(value, Bytes.AsSpan(offset, value.Length)); Bytes[offset + value.Length] = 0;
+        MutationVersion++;
     }
 }
 
 public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : AnimationRecord(bytes)
 {
+    private KeyframeStream? keyframeStream;
+    private string? keyframeError;
+    private AnimationKeyframe[]? playbackKeyframes;
+    private long playbackVersion = -1;
+    private long keyframeVersion = -1;
     public Guid Id { get; init; } = Guid.NewGuid();
     public long SourceOffset { get; } = sourceOffset;
+    public uint Version { get; init; } = 28;
     public byte Type => Bytes[0];
     public byte StartMode { get => Bytes[1]; set { if (value is < 1 or > 3) throw new InvalidDataException("Unknown timing mode."); Bytes[1] = value; } }
     public float Threshold { get => F32(8); set => SetFloat(8, value); }
-    public AnimationEventSpec? Spec => AnimationCatalog.Find(Type);
+    public AnimationEventSpec? Spec => AnimationCatalog.Find(Type, Version);
     public string Name => Spec?.Name ?? $"Unknown event 0x{Type:X2}";
     public AnimationEvent Clone() => Clone(default);
-    public AnimationEvent Clone(CancellationToken token) => new(SnapshotBytes(Bytes, token), SourceOffset) { Id = Id };
+    public AnimationEvent Clone(CancellationToken token)
+    {
+        var clone = new AnimationEvent(SnapshotBytes(Bytes, token), SourceOffset) { Id = Id, Version = Version };
+        if (keyframeVersion == MutationVersion) { clone.keyframeStream = keyframeStream?.ForSnapshot(clone.Bytes); clone.keyframeError = keyframeError; clone.keyframeVersion = 0; }
+        return clone;
+    }
     public AnimationEvent Duplicate() => Duplicate(default);
-    public AnimationEvent Duplicate(CancellationToken token) => new(SnapshotBytes(Bytes, token));
+    public AnimationEvent Duplicate(CancellationToken token) => new(SnapshotBytes(Bytes, token)) { Version = Version };
     public IReadOnlyList<AnimationKeyframe> Keyframes(CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         if (Type != 12) return [];
-        List<AnimationKeyframe> frames = []; int offset = 32;
-        while (offset < Bytes.Length)
+        if (keyframeVersion != MutationVersion)
         {
-            token.ThrowIfCancellationRequested();
-            BinaryCursor.CheckRange(Bytes.Length, offset, 12);
-            int flags = I32(offset), length = 12 + 28 * System.Numerics.BitOperations.PopCount((uint)flags & 7);
-            BinaryCursor.CheckRange(Bytes.Length, offset, length);
-            frames.Add(new(Bytes.AsSpan(offset, length).ToArray())); offset += length;
+            try { keyframeStream = new(Bytes, Version, token); keyframeError = null; keyframeVersion = MutationVersion; }
+            catch (InvalidDataException ex) { keyframeError = ex.Message; keyframeStream = null; keyframeVersion = MutationVersion; }
         }
-        return frames;
+        if (keyframeError != null) throw new InvalidDataException(keyframeError);
+        return new EditableKeyframeView(keyframeStream!);
     }
     public AnimationEvent WithKeyframes(IEnumerable<AnimationKeyframe> frames)
     {
         if (Type != 12) throw new InvalidOperationException("This event has no keyframe stream.");
-        using MemoryStream output = new(); output.Write(Bytes.AsSpan(0, 32));
-        foreach (var frame in frames) { frame.Validate(); output.Write(frame.Bytes); }
-        var result = new AnimationEvent(output.ToArray(), SourceOffset) { Id = Id }; result.SetInt(4, result.Bytes.Length); return result;
+        using MemoryStream output = new(); output.Write(Bytes.AsSpan(0, Version == 39 ? 36 : 32));
+        int count = 0;
+        foreach (var frame in frames) { frame.Validate(); output.Write(frame.ForVersion(Version).Bytes); count++; }
+        var result = new AnimationEvent(output.ToArray(), SourceOffset) { Id = Id, Version = Version }; result.SetInt(4, result.Bytes.Length); if (Version == 39) result.SetInt(16, count); return result;
     }
-    public JsonObject ToJson(CancellationToken token = default)
+    /// <summary>Why a structurally valid stream cannot be previewed, or null. Inspection, editing and export remain available.</summary>
+    public string? KeyframePreviewDiagnostic(CancellationToken token = default)
+    {
+        if (Type != 12) return null;
+        _ = Keyframes(token);
+        // Retail RECOIL samples reversed/negative spans (see AnimationPlayer.Keyframes); MW3's runtime has not been verified.
+        return Version == 39 && keyframeStream!.FirstUnordered >= 0
+            ? $"Keyframe {keyframeStream.FirstUnordered}: MW3 reversed or negative time spans have unverified runtime meaning; transform preview is unavailable." : null;
+    }
+    /// <summary>Retail completes a stream only after every sample has started and finished.</summary>
+    internal float PlaybackEnd { get; private set; }
+    internal IReadOnlyList<AnimationKeyframe> PlaybackKeyframes()
+    {
+        if (playbackVersion == MutationVersion && playbackKeyframes != null) return playbackKeyframes;
+        var frames = Keyframes();
+        if (KeyframePreviewDiagnostic() is { } unsupported) throw new InvalidDataException(unsupported);
+        if (frames.Count > 16384) throw new InvalidDataException("Transform playback is unavailable above 16,384 keyframes per event. Paged inspection and export retain the complete stream.");
+        playbackKeyframes = keyframeStream?.ToArray() ?? []; playbackVersion = MutationVersion;
+        PlaybackEnd = playbackKeyframes.Aggregate(0f, (end, frame) => Math.Max(end, Math.Max(frame.Start, frame.End)));
+        return playbackKeyframes;
+    }
+    public JsonObject ToPreviewJson(CancellationToken token = default) => ToJson(token, bounded: true);
+    public JsonObject ToJson(CancellationToken token = default) => ToJson(token, bounded: false);
+    private JsonObject ToJson(CancellationToken token, bool bounded)
     {
         token.ThrowIfCancellationRequested();
-        JsonObject value = new() { ["event"] = Name, ["type_id"] = (int)Type, ["start_mode"] = AnimationCatalog.ModeName(StartMode), ["start_threshold"] = JsonData.Number(Threshold), ["record_size"] = Bytes.Length, ["source_offset"] = SourceOffset, ["preview"] = Spec?.Support ?? "Unavailable: unknown event", ["raw_hex"] = JsonData.Hex(Bytes, token) };
+        JsonObject value = new() { ["event"] = Name, ["type_id"] = (int)Type, ["start_mode"] = AnimationCatalog.ModeName(StartMode), ["start_threshold"] = JsonData.Number(Threshold), ["record_size"] = Bytes.Length, ["source_offset"] = SourceOffset, ["preview"] = Spec?.Support ?? "Unavailable: unknown event", ["raw_hex"] = bounded ? Convert.ToHexStringLower(Bytes.AsSpan(0, Math.Min(256, Bytes.Length))) : JsonData.Hex(Bytes, token) };
+        if (bounded) value["raw_hex_truncated"] = Bytes.Length > 256;
         if (Spec != null) foreach (var field in Spec.Fields.Where(f => f.Offset + f.Size <= Bytes.Length)) value[field.Name] = field.Read(this);
-        if (Type == 12)
+        if (Type == 12 && bounded)
         {
-            try { value["keyframes"] = JsonData.Array(Keyframes(token), f => f.ToJson(), token); }
+            value["keyframes_omitted"] = true;
+            // Bounded previews report only an already prepared index; they never validate a large stream.
+            if (keyframeVersion == MutationVersion && (keyframeError ?? KeyframePreviewDiagnostic(token)) is { } diagnostic) value["keyframe_diagnostic"] = diagnostic;
+        }
+        else if (Type == 12)
+        {
+            try
+            {
+                value["keyframes"] = JsonData.Array(Keyframes(token), f => f.ToJson(), token);
+                if (KeyframePreviewDiagnostic(token) is { } diagnostic) value["keyframe_diagnostic"] = diagnostic;
+            }
             catch (InvalidDataException ex) { value["keyframe_diagnostic"] = ex.Message; }
         }
         return value;
@@ -103,11 +149,52 @@ public sealed class AnimationKeyframe(byte[] bytes) : AnimationRecord(bytes)
     public int Flags => I32(0);
     public float Start { get => F32(4); set => SetFloat(4, value); }
     public float End { get => F32(8); set => SetFloat(8, value); }
-    public int ChannelOffset(int channel) => (Flags & (1 << channel)) == 0 ? -1 : 12 + 28 * BitOperations.PopCount((uint)Flags & ((1u << channel) - 1));
-    public void Validate()
+    public int ChannelStride => Bytes.Length == 12 + 76 * BitOperations.PopCount((uint)Flags & 7) ? 76 : 28;
+    public AnimationKeyframe WithChannels(int flags, uint version)
     {
-        if (!float.IsFinite(Start) || !float.IsFinite(End) || Start < 0 || End < Start) throw new InvalidDataException("Keyframe times must be finite, nonnegative, and end at or after the start.");
-        for (int offset = 12; offset < Bytes.Length; offset += 4) if (!float.IsFinite(F32(offset))) throw new InvalidDataException("Keyframe channels must be finite.");
+        if (flags is < 1 or > 7) throw new InvalidDataException("Choose position, rotation and/or scale channels.");
+        var original = ForVersion(version); var next = Create(flags).ForVersion(version);
+        next.Start = Start; next.End = End;
+        for (int channel = 0; channel < 3; channel++)
+            if (original.ChannelOffset(channel) is >= 0 and int from && next.ChannelOffset(channel) is >= 0 and int to)
+                original.Bytes.AsSpan(from, original.ChannelStride).CopyTo(next.Bytes.AsSpan(to));
+        return next;
+    }
+    public AnimationKeyframe ForVersion(uint version)
+    {
+        int stride = version == 39 ? 76 : 28; if (stride == ChannelStride) return this;
+        var copy = new AnimationKeyframe(new byte[12 + stride * BitOperations.PopCount((uint)Flags & 7)]);
+        Bytes.AsSpan(0, 12).CopyTo(copy.Bytes);
+        for (int i = 0; i < 3; i++) if (ChannelOffset(i) is int at && at >= 0) Bytes.AsSpan(at, 28).CopyTo(copy.Bytes.AsSpan(copy.ChannelOffset(i)));
+        return copy;
+    }
+    public int ChannelOffset(int channel) => (Flags & (1 << channel)) == 0 ? -1 : 12 + ChannelStride * BitOperations.PopCount((uint)Flags & ((1u << channel) - 1));
+    public void Validate() => Validate(Bytes, ChannelStride);
+    internal static bool IsOrdered(ReadOnlySpan<byte> bytes)
+    { float start = BinaryPrimitives.ReadSingleLittleEndian(bytes[4..]), end = BinaryPrimitives.ReadSingleLittleEndian(bytes[8..]); return start >= 0 && end >= start; }
+    internal static void Validate(ReadOnlySpan<byte> bytes, int channelStride)
+    {
+        BinaryCursor.CheckRange(bytes.Length, 0, 12);
+        int flags = BinaryPrimitives.ReadInt32LittleEndian(bytes);
+        if ((flags & ~7) != 0 || bytes.Length != 12 + channelStride * BitOperations.PopCount((uint)flags)) throw new InvalidDataException("Invalid keyframe channel layout.");
+        // Reversed and negative spans are authored data: retail RECOIL samples them
+        // (0x45AE90), so ordering is a playback property, not stream validity.
+        float start = BinaryPrimitives.ReadSingleLittleEndian(bytes[4..]), end = BinaryPrimitives.ReadSingleLittleEndian(bytes[8..]);
+        if (!float.IsFinite(start) || !float.IsFinite(end)) throw new InvalidDataException("Keyframe times must be finite.");
+        // The first seven words contain base/rate operands and vector padding in both versions.
+        // Preserve the remaining v39 channel bytes without assigning semantics to them.
+        int channelOffset = 12;
+        for (int channel = 0; channel < 3; channel++)
+        {
+            if ((flags & (1 << channel)) == 0) continue;
+            for (int component = 0; component < 7; component++)
+            {
+                // Position/scale store XYZ plus an unused fourth slot; rotation uses WXYZ.
+                if (component == 3 && channel != 1) continue;
+                if (!float.IsFinite(BinaryPrimitives.ReadSingleLittleEndian(bytes[(channelOffset + component * 4)..]))) throw new InvalidDataException("Keyframe channels must be finite.");
+            }
+            channelOffset += channelStride;
+        }
     }
     public static AnimationKeyframe Create(int channels = 1)
     {
@@ -149,6 +236,10 @@ public sealed class AnimationSequence(byte[] header, long offset = -1) : Animati
 
 public sealed class AnimationEntry(byte[] header, int index, long offset) : AnimationRecord(header)
 {
+    public uint Version => Bytes.Length == 316 ? 39u : 28u;
+    public int CountsOffset => Version == 39 ? 264 : 260;
+    internal int[] ReferenceLanes => Version == 39 ? [1, 2, 3, 5, 6, 7, 8, 10] : AnimationPackage.ReferenceLanes;
+    public List<AnimationRecord> Puffers { get; } = [];
     public int Index { get; } = index;
     public long SourceOffset { get; } = offset;
     public long SourceLength { get; internal set; }
@@ -166,6 +257,7 @@ public sealed class AnimationEntry(byte[] header, int index, long offset) : Anim
         var copy = new AnimationEntry(SnapshotBytes(Bytes, token), Index, SourceOffset) { Primary = Primary.Clone(false, token), SourceLength = SourceLength, OriginalPrimaryHeader = SnapshotBytes(OriginalPrimaryHeader, token) };
         for (int i = 0; i < 8; i++)
             foreach (var record in References[i]) copy.References[i].Add(new(SnapshotBytes(record.Bytes, token)));
+        foreach (var r in Puffers) copy.Puffers.Add(new(SnapshotBytes(r.Bytes, token)));
         foreach (var sequence in Sequences) copy.Sequences.Add(sequence.Clone(false, token));
         token.ThrowIfCancellationRequested();
         return copy;
@@ -178,6 +270,7 @@ public sealed class AnimationEntry(byte[] header, int index, long offset) : Anim
             ["name"] = Name, ["root"] = RootName, ["attachment"] = AttachName, ["index"] = Index,
             ["source_offset"] = SourceOffset, ["source_length"] = SourceLength, ["header_hex"] = Convert.ToHexStringLower(Bytes),
             ["references"] = JsonData.Array(References, table => JsonData.Array(table, r => JsonValue.Create(JsonData.Hex(r.Bytes, token)), token), token),
+            ["puffer_references"] = JsonData.Array(Puffers, r => JsonValue.Create(JsonData.Hex(r.Bytes, token)), token),
             ["sequences"] = JsonData.Array(AllSequences, s => new JsonObject { ["name"] = s.Name, ["phase"] = s == Primary ? "reset_stop" : "runtime", ["reset_state"] = s.ResetMode,
                 ["header_hex"] = Convert.ToHexStringLower(s.Bytes), ["events"] = JsonData.Array(s.Events, e => e.ToJson(token), token), ["opaque_tail_hex"] = JsonData.Hex(s.OpaqueTail, token) }, token)
         };
@@ -188,6 +281,7 @@ public sealed class AnimationPackage
 {
     internal static readonly int[] ReferenceLanes = [1, 2, 3, 4, 5, 6, 7, 9];
     internal static readonly int[] ReferenceSizes = [96, 40, 44, 44, 36, 36, 48, 72];
+    public uint Version => Prefix.Length >= 8 && BinaryPrimitives.ReadUInt32LittleEndian(Prefix.AsSpan(4)) == 39 ? 39u : 28u;
     public required byte[] Prefix { get; init; }
     public required byte[] Tail { get; init; }
     public List<AnimationEntry> Entries { get; } = [];
@@ -195,20 +289,27 @@ public sealed class AnimationPackage
     public static AnimationPackage Read(ReadOnlyMemory<byte> bytes, CancellationToken token = default)
     {
         BinaryCursor c = new(bytes);
-        if (c.U32() != 0x08170616 || c.U32() != 28) throw new InvalidDataException("Only animation version 28 is editable.");
-        int stamps = c.Count(c.U32(), 84); c.Skip(checked(stamps * 84)); var globals = new AnimationRecord(c.Take(60).ToArray());
-        int entryCount = (int)(globals.U32(8) >> 16); c.Count((uint)entryCount, 308);
+        if (c.U32() != 0x08170616) throw new InvalidDataException("Invalid animation signature.");
+        uint version = c.U32(); if (version is not (28 or 39)) throw new InvalidDataException("Supported animation versions are 28 and 39.");
+        int headerSize = version == 39 ? 316 : 308;
+        int stamps = c.Count(c.U32(), 84); c.Skip(checked(stamps * 84)); var globals = new AnimationRecord(c.Take(version == 39 ? 68 : 60).ToArray());
+        int entryCount = (int)(globals.U32(8) >> 16); c.Count((uint)entryCount, headerSize);
         byte[] prefix = bytes[..c.Position].ToArray(); List<AnimationEntry> entries = []; List<Diagnostic> diagnostics = [];
         for (int i = 0; i < entryCount; i++)
         {
-            token.ThrowIfCancellationRequested(); int start = c.Position; AnimationEntry entry = new(c.Take(308).ToArray(), i, start);
+            token.ThrowIfCancellationRequested(); int start = c.Position; AnimationEntry entry = new(c.Take(headerSize).ToArray(), i, start);
             for (int table = 0; table < 8; table++)
             {
-                int count = entry.Bytes[260 + ReferenceLanes[table]], size = ReferenceSizes[table]; c.Count((uint)count, size);
+                if (version == 39 && table == 3)
+                {
+                    int puffers = c.Count(entry.Bytes[268], 44);
+                    for (int j = 0; j < puffers; j++) entry.Puffers.Add(new(c.Take(44).ToArray()));
+                }
+                int count = entry.Bytes[entry.CountsOffset + entry.ReferenceLanes[table]], size = ReferenceSizes[table]; c.Count((uint)count, size);
                 for (int j = 0; j < count; j++) entry.References[table].Add(new(c.Take(size).ToArray()));
             }
             entry.Primary = ReadSequence(c); entry.OriginalPrimaryHeader = (byte[])entry.Primary.Bytes.Clone();
-            for (int j = 0; j < entry.Bytes[260]; j++) entry.Sequences.Add(ReadSequence(c));
+            for (int j = 0; j < entry.Bytes[entry.CountsOffset]; j++) entry.Sequences.Add(ReadSequence(c));
             entry.SourceLength = c.Position - start; entries.Add(entry);
         }
         AnimationPackage package = new() { Prefix = prefix, Tail = c.Take(c.Remaining).ToArray() }; package.Entries.AddRange(entries); package.Diagnostics.AddRange(diagnostics); return package;
@@ -223,7 +324,7 @@ public sealed class AnimationPackage
                 if (payload.Length - at < 12) { Preserve("Truncated event header."); break; }
                 int length = BinaryPrimitives.ReadInt32LittleEndian(payload.Span.Slice(at + 4, 4));
                 if (length < 12 || length > payload.Length - at) { Preserve("Invalid event size."); break; }
-                seq.Events.Add(new(payload.Slice(at, length).ToArray(), offset + 64 + at)); at += length;
+                seq.Events.Add(new(payload.Slice(at, length).ToArray(), offset + 64 + at) { Version = version }); at += length;
             }
             return seq;
             void Preserve(string message)

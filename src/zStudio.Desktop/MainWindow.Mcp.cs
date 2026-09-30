@@ -100,13 +100,14 @@ public partial class MainWindow
     }
     private void RequireNoDrafts(DocumentModel? doc = null)
     {
-        if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc))
+        // Resource/content edits elsewhere refresh the shown preview, whose scene-card draft would otherwise need a modal decision mid-request.
+        if (HasInspectionDraft && (doc == null || inspectionDraft!.DraftDocument == doc || doc != shownDocument && inspectionDraft.DraftDocument == shownDocument && (doc.ResourceEdits != null || doc.ContentEdits != null)))
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
         if ((doc == null || propertiesWindow?.Document == doc) && propertiesWindow?.HasPendingDrafts == true || (doc == null || shownDocument == doc) && animation?.HasAutomationDrafts == true)
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
         if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "A pickup drag is in progress.");
     }
-    private static object DocumentState(DocumentModel d) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, d.PickupsLocked, format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, d.LastSavedCopy,
+    private static object DocumentState(DocumentModel d) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, d.PickupsLocked, game = d.PreviewDocument.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, d.LastSavedCopy,
         contentEdits = d.ContentEdits == null ? null : new { d.IsContentMirror, files = d.ContentEdits.Documents.Select(doc => new { doc.Path, destination = d.ContentEdits.TargetPath(doc.Path) }).ToArray() } };
     private void Register(StudioCommands registry, string name, string description, bool mutates, StudioParameter[] parameters, Func<JsonObject, CancellationToken, Task<StudioResult>> action)
     {
@@ -144,11 +145,13 @@ public partial class MainWindow
         RegisterWorkspaceCommands(registry);
         RegisterPreviewCommands(registry);
         RegisterAiCommands(registry);
+        RegisterValveCommands(registry);
         RegisterInspectionCommands(registry);
         RegisterSceneTreeCommand(registry);
         RegisterEditCommands(registry);
         RegisterModelCommands(registry);
         RegisterResourceCommands(registry);
+        RegisterMotionCommands(registry); RegisterMissionCommands(registry); RegisterMechCommands(registry);
         RegisterContentCommands(registry);
         return registry;
     }

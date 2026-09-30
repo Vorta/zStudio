@@ -34,7 +34,7 @@ Properties values longer than 16,384 displayed characters show a read-only prefi
 
 ## Shared ownership and previews
 
-The first accepted archive edit or pickup move claims its source archives in the visible workspace. That ownership lasts through undo history until the owning document closes, including after saving. Another editor may inspect the data but cannot concurrently mutate the same archive. Save/discard and close the first owner before switching editing paths.
+The first accepted archive edit or pickup/coordinate move claims the archives it changes in the visible workspace. A map's coordinate history claims each mission archive only when an accepted move first changes it; unedited archives stay available to other documents and are rebased to their published or saved changes on the next preview refresh. That ownership lasts through undo history until the owning document closes, including after saving. Another editor may inspect the data but cannot concurrently mutate the same archive. Save/discard and close the first owner before switching editing paths.
 
 Accepted resource snapshots feed the existing dependency resolver. Dependent mission and animation contexts are invalidated; mission cache keys include the workspace snapshot revision even when disk files are unchanged, and invalidation includes an edited GameZ snapshot. The visible dependent preview refreshes using its retained camera/playhead. Audio refresh uses the existing asynchronous preparation and warm output. Clean cached pickup sessions are rebuilt when their resource snapshot changes. Original-source **Bytes** and the original half of MCP inspection remain separate from edited data, including after member reordering. New members have no original source byte range.
 

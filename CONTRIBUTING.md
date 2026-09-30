@@ -23,7 +23,7 @@ These checks use synthetic fixtures and require no game data, Python, Binary Nin
 ## Code and pull requests
 
 1. Fork the repository when public, or use a feature branch if you have access. Start from current `main`.
-2. Keep the change focused and follow `.editorconfig` and [AGENTS.md](AGENTS.md). Use C# 14, nullable types, bounded little-endian reads and actionable diagnostics. Keep format models independent of UI/rendering.
+2. Keep the change focused and follow `.editorconfig` and [AGENTS.md](AGENTS.md) (Claude Code reads the same file through `CLAUDE.md`). Use C# 14, nullable types, bounded little-endian reads and actionable diagnostics. Keep format models independent of UI/rendering.
 3. Preserve source bytes, unknown fields, record identities and order. Do not infer identity from names. Add meaningful regression/malformed-input tests for behavior changes. Successful parsing alone does not establish game compatibility.
 4. Run the relevant checks, document visible behavior and limitations, and update the Unreleased section of the changelog.
 5. Open a PR describing the concrete problem, resulting behavior, related issue and verification. Maintainer review and successful CI precede a squash merge. Resolve review conversations and update the branch when `main` changes.

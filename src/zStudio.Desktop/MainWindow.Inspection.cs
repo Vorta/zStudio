@@ -1,5 +1,6 @@
 using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Animation;
 using System.Text.Json.Nodes;
 
 namespace Recoil.Zbd.Desktop;
@@ -10,16 +11,15 @@ public partial class MainWindow
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token);
         long revision = doc.Revision;
-        // Capture mutable edits on their owning dispatcher. Both conversions then
-        // read frozen input, and neither may publish for a changed document.
-        var editedEntry = asset.Kind == AssetKind.Animation ? doc.AnimationEdits?.Package.Entries[asset.Index].Clone(cancellation.Token) : null;
+        // Freeze the bounded view on the owning dispatcher; copying complete payloads
+        // just to inspect a summary would reintroduce size-dependent allocations.
+        JsonNode? edited = asset.Kind == AssetKind.Animation ? doc.AnimationEdits?.Package.Entries[asset.Index].ToPreviewJson(cancellation.Token) : null;
         var modelSnapshot = doc.ContentEdits != null ? doc.PreviewDocument : doc.ResourceEdits?.Current.Document ?? doc.ModelEdits?.Current.World;
         try
         {
             var original = doc.OriginalAsset(asset);
             var source = original == null ? null : await LoadAssetPropertiesAsync(doc.Document, original, cancellation.Token);
             ValidateContext();
-            var edited = editedEntry == null ? null : await Task.Run(() => editedEntry.ToJson(cancellation.Token), cancellation.Token);
             if (modelSnapshot != null)
             {
                 var editedAsset = modelSnapshot.Assets.SingleOrDefault(a => a.Kind == asset.Kind && a.Index == asset.Index);

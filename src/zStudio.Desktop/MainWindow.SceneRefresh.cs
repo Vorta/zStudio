@@ -6,7 +6,7 @@ namespace Recoil.Zbd.Desktop;
 
 public partial class MainWindow
 {
-    private sealed record StaticSceneOptions(int Lod, bool Horizon, PackChoice? Pack, MissionDifficulty Difficulty);
+    private sealed record StaticSceneOptions(int Lod, bool Horizon, PackChoice? Pack, MissionDifficulty Difficulty, string? Mission);
     private bool restoringStaticOptions;
     private StaticSceneOptions? publishedStaticOptions;
     private CancellationTokenSource? staticRefresh;
@@ -14,14 +14,20 @@ public partial class MainWindow
     private long staticRefreshGeneration;
     private bool HasPublishedStaticScene => animation == null && scene?.PreviewScene != null && publishedStaticOptions != null &&
         SceneHost.Visibility == Visibility.Visible && shownAsset != null;
-    private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty);
+    private StaticSceneOptions ReadStaticSceneOptions() => new(LodCombo.SelectedIndex, BackdropEnabled.IsChecked == true, TexturePackCombo.SelectedItem as PackChoice, ViewModel.Difficulty, shownDocument == null ? null : ViewModel.Resolver?.SelectedMission(shownDocument.Path));
     private void RestoreStaticSceneOptions(StaticSceneOptions options)
     {
         bool wasUpdating = updating; updating = true; restoringStaticOptions = true;
         try
         {
             LodCombo.SelectedIndex = options.Lod; BackdropEnabled.IsChecked = options.Horizon; TexturePackCombo.SelectedItem = options.Pack;
-            if (scene?.Mission != null) ViewModel.Difficulty = options.Difficulty;
+            // Only a RECOIL layout restores the shared preference; an MW3 world without readers has no difficulty to restore.
+            if (scene?.Mission is { Layout.DifficultyApplies: true } && options.Mission == null) ViewModel.Difficulty = options.Difficulty;
+            if (options.Mission != null && shownDocument != null)
+            {
+                ViewModel.Resolver?.SelectMission(shownDocument.Path, options.Mission);
+                WorldMission.SelectedItem = WorldMission.Items.Cast<MissionVariant>().FirstOrDefault(m => m.Archive.Equals(options.Mission, StringComparison.OrdinalIgnoreCase));
+            }
         }
         finally { updating = wasUpdating; restoringStaticOptions = false; }
     }
@@ -54,7 +60,9 @@ public partial class MainWindow
         try
         {
             token.ThrowIfCancellationRequested();
-            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, resolver, token: token, difficulty: requested.Difficulty) : null;
+            // The mission is captured with the other options; a concurrent selection cannot change it mid-load.
+            var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, resolver, token: token, difficulty: requested.Difficulty,
+                mission: requested.Mission, exactMission: ExactMissionFor(doc.Path, requested.Mission) != null) : null;
             if (mission != null) await doc.GetPickupEditsAsync(resolver, token);
             token.ThrowIfCancellationRequested();
             // Keep all partially built meshes off the displayed viewport. ShowAsync
@@ -88,6 +96,9 @@ public partial class MainWindow
             SceneHost.Content = scene;
             ApplySceneOptions();
             if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
+            scene.SetValveOptions(previous.ValveOverlayVisible,
+                mission?.Layout.MissionArchive == previous.Mission?.Layout.MissionArchive ? previous.ValveFilter : null);
+            ApplyAiOptions();
             scene.RestoreView(view);
             isolatedNode = mission != null && previous.Mission != null && isolate is int oldIsolate
                 ? Remap(oldIsolate) is >= 0 and int mapped ? mapped : null : isolate;
@@ -98,7 +109,8 @@ public partial class MainWindow
             if (selectedNode is int node) { InspectNode(node); scene.SelectInspectionNode(node); }
             if (aiSelection != null && previous.AiNetworks.Find(aiSelection) is { } oldAi && scene.AiNetworks.Find(aiSelection) is { } newAi &&
                 oldAi.Node.SourceOffset == newAi.Node.SourceOffset) scene.SelectAiNode(aiSelection);
-            publishedStaticOptions = requested; previewId = Guid.NewGuid();
+            publishedStaticOptions = requested with { Mission = mission?.Layout.MissionArchive ?? requested.Mission }; previewId = Guid.NewGuid();
+            if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
             PreviewInfo.Text = scene.PreviewSummary; PreviewInfo.ToolTip = scene.PreviewSummary;
             if (mission != null) WorldDifficulty.ToolTip = mission.Layout.Description;
             ShowStaticPreviewProblems(doc, asset);
