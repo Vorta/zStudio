@@ -14,7 +14,7 @@ public sealed class ListenTests
         using var fixture = new ClaudeFixture(); fixture.Save(fixture.NewState());
         var a = Comment(1); var b = Comment(2, "review"); var c = Comment(3, "conversation");
         var source = new ScriptedSource(Observe(a), Observe(a, b), Observe(a, b, c));
-        var queue = new FakeQueue(); var service = new WatchService(fixture.Store, source, queue, new RobustnessTests.FastTime());
+        var queue = new FakeQueue(); var service = new WatchService(fixture.Store, source, queue, new SteppedTime());
         var result = await service.ListenAsync(Token);
         Assert.Equal("notice", result.Outcome); Assert.Equal(["comments"], result.Notice!.Reasons);
         Assert.True(source.Reads >= 4, $"Only {source.Reads} reads; the burst was not allowed to settle.");
@@ -29,7 +29,7 @@ public sealed class ListenTests
         WatchLogic.Acknowledge(state, new(Guid.NewGuid(), state.Id, result.Notice.Id, result.Notice.Created.AddSeconds(1), Observe(a, b, c)), result.Notice.Id, result.Notice.Created.AddSeconds(2));
         var d = Comment(4); var afterPush = Observe(a, b, c, d) with { Head = Next };
         WatchLogic.Arm(state, afterPush, Next, false, DateTimeOffset.UtcNow); fixture.Save(state);
-        var later = await new WatchService(fixture.Store, new ScriptedSource(afterPush), queue, new RobustnessTests.FastTime()).ListenAsync(Token);
+        var later = await new WatchService(fixture.Store, new ScriptedSource(afterPush), queue, new SteppedTime()).ListenAsync(Token);
         Assert.Equal("notice", later.Outcome); Assert.Equal(2, fixture.Store.Load()!.Notices.Count);
         Assert.DoesNotContain(d.Key, fixture.Store.Load()!.Handled);
     }
@@ -41,7 +41,7 @@ public sealed class ListenTests
         var request = Comment(1, "conversation") with { Informational = true };
         var source = new ScriptedSource(Observe(request));
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token); cancel.CancelAfter(TimeSpan.FromMilliseconds(400));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new WatchService(fixture.Store, source, new FakeQueue(), new RobustnessTests.FastTime()).ListenAsync(cancel.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new WatchService(fixture.Store, source, new FakeQueue(), new SteppedTime()).ListenAsync(cancel.Token));
         var state = fixture.Store.Load()!;
         Assert.Empty(state.Notices); Assert.True(state.CommentsArmed); Assert.True(source.Reads >= 2);
     }
@@ -51,9 +51,9 @@ public sealed class ListenTests
     {
         using var fixture = new ClaudeFixture(); fixture.Save(fixture.NewState());
         var source = new GrowingSource();
-        var result = await new WatchService(fixture.Store, source, new FakeQueue(), new RobustnessTests.FastTime()).ListenAsync(Token, settle: TimeSpan.FromSeconds(45), maximumSettle: TimeSpan.FromMinutes(2));
+        var result = await new WatchService(fixture.Store, source, new FakeQueue(), new SteppedTime()).ListenAsync(Token, settle: TimeSpan.FromSeconds(45), maximumSettle: TimeSpan.FromMinutes(2));
         Assert.Equal("notice", result.Outcome);
-        Assert.InRange(source.Reads, 3, 12); // At most two minutes of 15-second rechecks, then one notice.
+        Assert.Equal(9, source.Reads); // Reads at 0, 15, …, 120 seconds: the two-minute maximum ends the settle, then one notice.
         Assert.Single(fixture.Store.Load()!.Notices);
     }
 
@@ -61,13 +61,13 @@ public sealed class ListenTests
     public async Task ClosedPullRequestsAndApprovalsEndListeningWithoutRepeats()
     {
         using var closed = new ClaudeFixture(); closed.Save(closed.NewState());
-        var ended = await new WatchService(closed.Store, new ScriptedSource(Observe(Comment(1)) with { Open = false }), new FakeQueue(), new RobustnessTests.FastTime()).ListenAsync(Token);
+        var ended = await new WatchService(closed.Store, new ScriptedSource(Observe(Comment(1)) with { Open = false }), new FakeQueue(), new SteppedTime()).ListenAsync(Token);
         Assert.Equal("closed", ended.Outcome); Assert.Null(ended.Notice); Assert.False(closed.Store.Load()!.Active);
         Assert.Equal("stopped", (await new WatchService(closed.Store, new ScriptedSource(Observe()), new FakeQueue()).ListenAsync(Token)).Outcome);
 
         using var approved = new ClaudeFixture(); var state = approved.NewState(); state.CommentsArmed = false; approved.Save(state);
         var approval = Observe() with { Approval = new(Head, 5, DateTimeOffset.UtcNow, "summary") };
-        var notice = await new WatchService(approved.Store, new ScriptedSource(approval), new FakeQueue(), new RobustnessTests.FastTime()).ListenAsync(Token);
+        var notice = await new WatchService(approved.Store, new ScriptedSource(approval), new FakeQueue(), new SteppedTime()).ListenAsync(Token);
         Assert.Equal(["approval"], notice.Notice!.Reasons);
     }
 
@@ -98,6 +98,18 @@ public sealed class ListenTests
         public int Reads => Volatile.Read(ref reads);
         public Task<Observation> ReadAsync(string repository, int pr, CancellationToken token)
         { int index = Interlocked.Increment(ref reads) - 1; return Task.FromResult(script[Math.Min(index, script.Length - 1)]); }
+    }
+    /// <summary>Deterministic time: each delay advances the clock by exactly its due time and completes at once, so settle
+    /// windows count polls rather than depending on how long real file I/O takes on the test machine.</summary>
+    private sealed class SteppedTime : TimeProvider
+    {
+        private long ticks = DateTimeOffset.UtcNow.UtcTicks;
+        public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref ticks), TimeSpan.Zero);
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (dueTime > TimeSpan.Zero && dueTime != Timeout.InfiniteTimeSpan) Interlocked.Add(ref ticks, dueTime.Ticks);
+            return System.CreateTimer(callback, state, TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+        }
     }
     /// <summary>A comment arrives before every read, so the set never settles on its own.</summary>
     private sealed class GrowingSource : IPrSource
