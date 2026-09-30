@@ -21,12 +21,19 @@ public static class ZrdText
     /// <summary>Raw float bits; a colon never appears in an unquoted string.</summary>
     public const string RawFloatPrefix = "f32:";
 
-    public static string Write(ZrdNode root, CancellationToken token = default)
+    /// <summary>The text form of <paramref name="root"/>; a text longer than <paramref name="maximumCharacters"/> is refused before it is built.</summary>
+    public static string Write(ZrdNode root, CancellationToken token = default, int maximumCharacters = int.MaxValue)
     {
         if (root.Kind != ZrdKind.Array) throw new InvalidDataException("A zReader source file stores a root array.");
         StringBuilder text = new(); int budget = MaximumNodes;
         Children(root.Children, 0);
         return text.ToString();
+        // A string is at least as long as its text form; check before escaping it, and the text after each line.
+        void Check(ZrdNode node)
+        {
+            if (text.Length > maximumCharacters || node.Kind == ZrdKind.String && node.Text.Length > maximumCharacters - text.Length)
+                throw new InvalidDataException($"The text form exceeds {maximumCharacters:N0} characters.");
+        }
         // A string followed by an array is written as "KEY ( … )" on one line; whitespace never affects the data.
         void Children(IReadOnlyList<ZrdNode> children, int depth)
         {
@@ -34,18 +41,18 @@ public static class ZrdText
             {
                 token.ThrowIfCancellationRequested();
                 if (depth > MaximumDepth || (budget -= 1) < 0) throw new InvalidDataException("ZRD nesting or node limit exceeded.");
-                text.Append(' ', depth * 2);
                 var child = children[i];
+                Check(child); text.Append(' ', depth * 2);
                 if (child.Kind == ZrdKind.String && i + 1 < children.Count && children[i + 1].Kind == ZrdKind.Array)
                 {
                     text.Append(Scalar(child)).Append(' '); child = children[++i];
                     if (--budget < 0) throw new InvalidDataException("ZRD node limit exceeded.");
                 }
-                if (child.Kind != ZrdKind.Array) { text.Append(Scalar(child)).Append('\n'); continue; }
+                if (child.Kind != ZrdKind.Array) { Check(child); text.Append(Scalar(child)).Append('\n'); continue; }
                 if (Short(child))
                 {
                     text.Append('(');
-                    foreach (var item in child.Children) text.Append(' ').Append(Scalar(item));
+                    foreach (var item in child.Children) { Check(item); text.Append(' ').Append(Scalar(item)); }
                     text.Append(child.Children.Count == 0 ? ")\n" : " )\n");
                     continue;
                 }
@@ -53,6 +60,7 @@ public static class ZrdText
                 Children(child.Children, depth + 1);
                 text.Append(' ', depth * 2).Append(")\n");
             }
+            if (text.Length > maximumCharacters) throw new InvalidDataException($"The text form exceeds {maximumCharacters:N0} characters.");
         }
         static bool Short(ZrdNode array) => array.Children.All(c => c.Kind != ZrdKind.Array) &&
             (array.Children.Count <= 1 || array.Children.Count <= 8 && array.Children.Sum(c => c.Kind == ZrdKind.String ? c.Text.Length + 3 : 12) <= 100);
@@ -193,7 +201,7 @@ public static class ZrdText
         if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"Source text larger than {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB is not supported.");
         return Parse(Encoding.Latin1.GetString(bytes), token);
     }
-    public static byte[] Encode(ZrdNode root, CancellationToken token = default) => Encoding.ASCII.GetBytes(Write(root, token));
+    public static byte[] Encode(ZrdNode root, CancellationToken token = default, int maximumCharacters = int.MaxValue) => Encoding.ASCII.GetBytes(Write(root, token, maximumCharacters));
 
     /// <summary>A text source rather than compiled zReader data: compiled files begin with a type word of 1–4.</summary>
     public static bool LooksLikeText(ReadOnlySpan<byte> prefix) => prefix.Length < 4 || System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(prefix) is < 1 or > 4;

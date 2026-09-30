@@ -182,9 +182,11 @@ public static class SourceExtractor
                 if (ZrdDecoder.TryRead(payload, token) is { Kind: ZrdKind.Array } tree)
                 {
                     Resources.Add((output, m.Name, tree));
-                    byte[] text = ZrdText.Encode(tree, token);
-                    if (text.Length <= SourceProject.MaximumSourceTextBytes && ZrdWriter.Write(ZrdText.Parse(text, token), token).AsSpan().SequenceEqual(payload)) source = text;
-                    else Notes.Add($"{output}: {m.Name} kept as compiled data because its text form does not round-trip.");
+                    // The text form is bounded while it is built: a source larger than text sources may be stays compiled.
+                    byte[]? text = null;
+                    try { text = ZrdText.Encode(tree, token, SourceProject.MaximumSourceTextBytes); } catch (InvalidDataException) { }
+                    if (text != null && ZrdWriter.Write(ZrdText.Parse(text, token), token).AsSpan().SequenceEqual(payload)) source = text;
+                    else Notes.Add($"{output}: {m.Name} kept as compiled data because its text form " + (text == null ? $"would exceed {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB." : "does not round-trip."));
                 }
                 // Exported archives contain the .zrd resources of their zrdr folders, as the original build read them.
                 else Notes.Add(m.Name.EndsWith(ZrdText.Extension, StringComparison.OrdinalIgnoreCase)

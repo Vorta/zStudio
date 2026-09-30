@@ -87,6 +87,14 @@ internal static class SourceProjectMcpChecks
             Assert.Equal("context_changed", superseded["code"]!.GetValue<string>());
             Assert.DoesNotContain("Checked", main.ViewModel.Status);
             Assert.Equal(Path.GetFullPath(elsewhere), Path.GetFullPath(main.ViewModel.RootPath!));
+            // An export that already wrote its files says so when the workspace changes before it reports.
+            await main.ViewModel.OpenRootAsync(fixture.Project, token);
+            string late = Path.Combine(fixture.Root, "late");
+            main.SourceExportFinishing = () => main.ViewModel.OpenRootAsync(elsewhere, token);
+            var written2 = await Job("source_export", new() { ["destination"] = late, ["outputs"] = new[] { "m1/zrdr.zbd" } }, "failed");
+            main.SourceExportFinishing = null;
+            Assert.Equal("context_changed", written2["code"]!.GetValue<string>()); Assert.Contains("wrote 1 game file", written2["message"]!.GetValue<string>());
+            Assert.True(File.Exists(Path.Combine(late, "m1", "zrdr.zbd")));
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);

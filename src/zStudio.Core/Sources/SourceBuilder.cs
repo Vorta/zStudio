@@ -133,7 +133,7 @@ public static partial class SourceBuilder
                     cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
                         new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots]), null);
                 }
-                catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or FormatException) { cached = (null, ex); }
+                catch (Exception ex) when (IsBuildFailure(ex)) { cached = (null, ex); }
                 worlds[mission] = cached;
             }
             if (cached.Failure != null) throw new InvalidDataException($"The {mission} world does not assemble: {cached.Failure.Message}", cached.Failure);
@@ -165,6 +165,12 @@ public static partial class SourceBuilder
         }
     }
     internal sealed record Built(byte[] Bytes, int Items, IReadOnlyList<string> Warnings);
+    /// <summary>
+    /// Whether an exception from building one output means that output failed. Sources are user files in any state
+    /// (a glTF with invalid JSON, for example), so every failure is reported with its output and nothing is written;
+    /// only cancellation and exhausted memory end the run.
+    /// </summary>
+    internal static bool IsBuildFailure(Exception ex) => ex is not (OperationCanceledException or OutOfMemoryException);
 
     /// <summary>Build the selected outputs (all when null) in memory and report problems without writing anything.</summary>
     public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default)
@@ -210,7 +216,7 @@ public static partial class SourceBuilder
                     if (staging != null) { string path = SourceProject.Resolve(staging, plan.Path); Directory.CreateDirectory(Path.GetDirectoryName(path)!); await File.WriteAllBytesAsync(path, built.Bytes, token); }
                     results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, built.Warnings));
                 }
-                catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or FormatException)
+                catch (Exception ex) when (IsBuildFailure(ex))
                 { results.Add(new(plan.Path, plan.Family, "failed", 0, 0, [], ex.Message)); }
             }
             progress?.Report(new(selected.Count, selected.Count, destination == null ? "Checked" : "Publishing"));
@@ -218,15 +224,18 @@ public static partial class SourceBuilder
             if (staging != null && destination != null)
             {
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException("Nothing was written because some outputs failed: " + string.Join("; ", results.Where(r => r.Status == "failed").Select(r => $"{r.Path}: {r.Error}")));
-                Publish(staging, destination, results.Select(r => r.Path).ToArray(), token);
+                Publish(staging, destination, results.Select(r => r.Path).ToArray(), overwrite, token);
             }
             return new(destination, results);
         }
         finally { if (staging != null && Directory.Exists(staging)) Directory.Delete(staging, true); }
     }
 
-    /// <summary>Move staged outputs into place; replaced files move aside first and are restored if any later step fails.</summary>
-    private static void Publish(string staging, string destination, IReadOnlyList<string> outputs, CancellationToken token)
+    /// <summary>
+    /// Move staged outputs into place; replaced files move aside first and are restored if any later step fails. Without
+    /// <paramref name="overwrite"/>, a game file that appeared while the outputs were built is never replaced.
+    /// </summary>
+    private static void Publish(string staging, string destination, IReadOnlyList<string> outputs, bool overwrite, CancellationToken token)
     {
         foreach (string relative in outputs) { _ = SourceProject.Resolve(destination, relative); SourceProject.RejectNestedLinks(destination, relative); }
         string backup = Path.Combine(destination, ".zstudio-backup-" + Guid.NewGuid().ToString("N"));
@@ -237,6 +246,7 @@ public static partial class SourceBuilder
             {
                 token.ThrowIfCancellationRequested();
                 string target = SourceProject.Resolve(destination, relative), saved = SourceProject.Resolve(backup, relative);
+                if (File.Exists(target) && !overwrite) throw new IOException($"{relative} appeared in {destination} during the export; nothing was replaced. Export again and allow replacing it.");
                 if (File.Exists(target)) { Directory.CreateDirectory(Path.GetDirectoryName(saved)!); File.Move(target, saved); steps.Add((target, saved)); }
                 else steps.Add((target, null));
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
@@ -365,12 +375,11 @@ public static partial class SourceBuilder
         var variant = TexturePackVariant.FromFileName(Path.GetFileName(plan.Path)) ?? throw new InvalidDataException($"{plan.Path} is not a texture pack name.");
         List<PackTexture> textures = [];
         var (inputs, addressing, warnings) = PackInputs(plan, snapshot, token);
-        foreach (string input in inputs)
+        foreach (var (input, name) in inputs)
         {
             token.ThrowIfCancellationRequested();
             string folder = Path.GetDirectoryName(input)!.Replace('\\', '/');
             bool vehicle = folder.EndsWith("/bft", StringComparison.OrdinalIgnoreCase) || folder.Equals(TextureSources.MultiBftTextures, StringComparison.OrdinalIgnoreCase);
-            string name = TextureName(input);
             textures.Add(new(name, TextureSources.SortKey(input), DecodeTexture(input, snapshot.Read(input, token), token), addressing.GetValueOrDefault(name), vehicle || snapshot.DamageMasks(token).Contains(name)));
         }
         var built = TexturePackBuilder.Build(textures, variant, token);
@@ -379,20 +388,22 @@ public static partial class SourceBuilder
     /// <summary>
     /// A mission pack holds its texture folders and every texture its world uses from elsewhere: a model brought in
     /// from another mission names textures in that mission's folders, and the game only finds textures in its packs.
-    /// A name already in the folders keeps the folder's image, as the engine finds the first match. Each texture's
-    /// edge mode (clamp word) comes from the glTF samplers that use it.
+    /// A name already in the folders keeps the folder's image, as the engine finds the first match. A texture from
+    /// elsewhere is stored under the name the world uses, which a model may give an image of another name. Each
+    /// texture's edge mode (clamp word) comes from the glTF samplers that use it.
     /// </summary>
-    private static (List<string> Inputs, IReadOnlyDictionary<string, int> Addressing, List<string> Warnings) PackInputs(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    private static (List<(string Input, string Name)> Inputs, IReadOnlyDictionary<string, int> Addressing, List<string> Warnings) PackInputs(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
-        List<string> inputs = [.. plan.Inputs], warnings = [];
+        List<(string Input, string Name)> inputs = [.. plan.Inputs.Select(input => (input, TextureName(input)))];
+        List<string> warnings = [];
         string mission = plan.Path.Split('/')[0];
         if (!snapshot.HasWorld(mission)) return (inputs, new Dictionary<string, int>(), warnings);
         try
         {
             var world = snapshot.World(mission, token);
-            HashSet<string> names = new(inputs.Select(TextureName), StringComparer.OrdinalIgnoreCase);
+            HashSet<string> names = new(inputs.Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
             foreach (var (name, file) in world.TextureFiles.OrderBy(t => t.Key, StringComparer.Ordinal))
-                if (names.Add(name)) inputs.Add(file);
+                if (names.Add(name)) inputs.Add((file, name.ToLowerInvariant()));
             return (inputs, world.TextureAddressing, warnings);
         }
         catch (InvalidDataException ex) { warnings.Add($"{ex.Message} The pack holds only the mission's texture folders, without edge modes."); }

@@ -138,6 +138,45 @@ public sealed class SourceProjectSafetyTests
     }
 
     [Fact]
+    public async Task OverlapIsDetectedThroughDriveRootsAndAliases()
+    {
+        // A drive root contains every folder on it.
+        string drive = Path.GetPathRoot(Path.GetTempPath())!;
+        Assert.Throws<InvalidDataException>(() => SourceProject.ValidateSeparate(Path.Combine(drive, "zstudio-overlap-" + Guid.NewGuid().ToString("N")), drive, "project folder"));
+        // A short (8.3) spelling of the project is the project.
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        string shortRoot = ShortPath(fixture.Root);
+        if (shortRoot.Equals(fixture.Root, StringComparison.OrdinalIgnoreCase)) return; // 8.3 names are not generated on this volume.
+        string aliased = Path.Combine(shortRoot, "project", "exported");
+        await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(fixture.Project, aliased, token: Token));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Project, "exported")));
+        await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, Path.Combine(shortRoot, "game", "project"), token: Token));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Corpus, "project")));
+    }
+    private static string ShortPath(string path)
+    {
+        char[] buffer = new char[1024];
+        uint length = GetShortPathName(path, buffer, (uint)buffer.Length);
+        return length is > 0 and < 1024 ? new string(buffer, 0, (int)length) : path;
+    }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetShortPathName(string longPath, char[] shortPath, uint length);
+
+    [Fact]
+    public async Task ExportsNeverReplaceFilesThatAppearWithoutConsent()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        string exported = Path.Combine(fixture.Root, "zbd"), late = Path.Combine(exported, "m1", "zrdr.zbd");
+        // Another program writes one of the game files after the existence check, while the outputs build.
+        var progress = new OnReport(p => { if (p.Item == "Publishing") { Directory.CreateDirectory(Path.GetDirectoryName(late)!); File.WriteAllBytes(late, [7]); } });
+        await Assert.ThrowsAnyAsync<IOException>(() => SourceBuilder.ExportAsync(fixture.Project, exported, progress: progress, token: Token));
+        Assert.Equal([7], File.ReadAllBytes(late));
+        Assert.Equal([late], Directory.GetFiles(exported, "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
     public async Task FoldersWithoutRecoilDataAreRefused()
     {
         using var fixture = new SourceFixture();
@@ -168,6 +207,19 @@ public sealed class SourceProjectSafetyTests
         BinaryPrimitives.WriteInt32LittleEndian(archive.AsSpan(archive.Length - 8), 1); BinaryPrimitives.WriteInt32LittleEndian(archive.AsSpan(archive.Length - 4), 1);
         foreach (string extension in new[] { ".gw", ".gs", ".zrd" })
             Assert.Equal(FormatFamily.Archive, FormatRegistry.Probe(archive.AsSpan(0, 36), archive.AsSpan(archive.Length - 8), archive.Length, extension).Family);
+    }
+
+    [Fact]
+    public void TextFormsAreBoundedBeforeTheyAreBuilt()
+    {
+        static ZrdNode A(params ZrdNode[] c) => new(Guid.NewGuid(), ZrdKind.Array, 0, "", c);
+        var huge = A(new ZrdNode(Guid.NewGuid(), ZrdKind.String, 0, new string('\x01', 4_000_000), []));
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Throws<InvalidDataException>(() => ZrdText.Write(huge, Token, 1_000_000));
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 4_000_000, "The oversized text was built.");
+        var many = A([.. Enumerable.Range(0, 400_000).Select(i => new ZrdNode(Guid.NewGuid(), ZrdKind.Int, (uint)i, "", []))]);
+        Assert.Throws<InvalidDataException>(() => ZrdText.Write(many, Token, 1_000_000));
+        Assert.Equal(ZrdText.Write(A(A()), Token), ZrdText.Write(A(A()), Token, 16));
     }
 
     [Fact]

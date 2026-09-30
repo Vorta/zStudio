@@ -218,6 +218,52 @@ public sealed class SourceProjectTests
     }
 
     [Fact]
+    public async Task AMalformedModelFailsOnlyWhatDependsOnIt()
+    {
+        using var fixture = new SourceWorldFixture();
+        fixture.Write("data/m1/models/m1.gltf", "{ not json");
+        var check = await SourceBuilder.CheckAsync(fixture.Project, token: Token);
+        // The world and its animations fail with the reason; the packs keep the mission folders; m2 is unaffected.
+        var world = check.Outputs.Single(o => o.Path == "m1/gamez.zbd");
+        Assert.Equal("failed", world.Status); Assert.Contains("m1 world does not assemble", world.Error);
+        Assert.Equal("failed", check.Outputs.Single(o => o.Path == "m1/anim.zbd").Status);
+        Assert.All(check.Outputs.Where(o => o.Path.StartsWith("m1/", StringComparison.Ordinal) && o.Family == "textures"), o =>
+        {
+            Assert.Equal("built", o.Status); Assert.Contains(o.Warnings, w => w.Contains("m1 world does not assemble", StringComparison.Ordinal));
+        });
+        Assert.All(check.Outputs.Where(o => o.Path.StartsWith("m2/", StringComparison.Ordinal)), o => Assert.Equal("built", o.Status));
+        string exported = Path.Combine(fixture.Root, "zbd");
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.ExportAsync(fixture.Project, exported, token: Token));
+        Assert.Contains("m1/gamez.zbd", error.Message);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(exported));
+    }
+
+    [Fact]
+    public async Task PacksHoldTheTexturesUnderTheNamesTheWorldUses()
+    {
+        using var fixture = new SourceWorldFixture();
+        // The tank's material keeps its texture name (camo) but now points at an image with another name outside
+        // the mission's texture folders: the world names camo, so the packs must hold camo with that image.
+        string gltf = File.ReadAllText(fixture.Path(fixture.Tank));
+        Assert.Contains("../../textures/bft/camo.png", gltf);
+        fixture.Write(fixture.Tank, gltf.Replace("../../textures/bft/camo.png", "../../../common/paint/paint.png", StringComparison.Ordinal));
+        byte[] image = File.ReadAllBytes(fixture.Path("data/m2/textures/bft/camo.png"));
+        File.Delete(fixture.Path("data/m2/textures/bft/camo.png"));
+        fixture.Write("data/common/paint/paint.png", image);
+        string exported = Path.Combine(fixture.Root, "zbd");
+        await SourceBuilder.ExportAsync(fixture.Project, exported, ["m2/gamez.zbd", "m2/rtexture16.zbd", "m2/texture2.zbd"], token: Token);
+        var world = Recoil.Zbd.Core.Worlds.GameZWorldReader.FromDocument(Open(Path.Combine(exported, "m2", "gamez.zbd")), Token);
+        Assert.Contains(world.Textures, t => t.Name == "camo");
+        foreach (string pack in new[] { "rtexture16.zbd", "texture2.zbd" })
+        {
+            var doc = Open(Path.Combine(exported, "m2", pack));
+            Assert.Equal(["camo", "rock"], doc.Assets.Select(a => a.Name).Order());
+            var camo = TextureDecoder.Decode(doc, doc.Assets.Single(a => a.Name == "camo"), Token);
+            Assert.Equal((0, 0, 255), (camo.Rgba[0], camo.Rgba[2], camo.Rgba[3])); Assert.InRange(camo.Rgba[1], 124, 132);
+        }
+    }
+
+    [Fact]
     public async Task ExportedFilesReconstructTheSameTree()
     {
         using var fixture = new SourceFixture();

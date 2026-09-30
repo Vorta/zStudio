@@ -52,13 +52,24 @@ public static class SourceProject
         return files.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    /// <summary>A destination: never a protected original corpus, never inside or containing the input.</summary>
+    /// <summary>
+    /// A destination: never a protected original corpus, never inside or containing the input. Both are compared as
+    /// written and, on Windows, as the file system resolves them, so a short (8.3) name, a SUBST drive or a link above
+    /// the input cannot disguise the same folder.
+    /// </summary>
     public static void ValidateSeparate(string destination, string input, string role)
     {
         string d = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(destination)), i = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(input));
         if (PickupPlacementEditSession.IsProtectedPath(d)) throw new InvalidDataException($"The {role} cannot be inside the protected zbd_1998/zbd_1999 folders.");
-        if (d.Equals(i, StringComparison.OrdinalIgnoreCase) || d.StartsWith(i + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || i.StartsWith(d + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        if (Overlap(d, i) || OperatingSystem.IsWindows() && Overlap(Resolved(d), Resolved(i)))
             throw new InvalidDataException($"The {role} must be separate from {input}.");
+        static bool Overlap(string a, string b) => Within(a, b) || Within(b, a);
+        // A drive root already ends with its separator.
+        static bool Within(string path, string folder) => path.Equals(folder, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(System.IO.Path.EndsInDirectorySeparator(folder) ? folder : folder + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        // The folder's final path, or its nearest existing ancestor's with the missing names appended.
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+        static string Resolved(string folder) => System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetDirectoryName(WindowsSavePath.ResolveExistingParent(System.IO.Path.Combine(folder, "_")))!);
     }
     /// <summary>Refuse to write through directory links anywhere above a destination.</summary>
     public static void RejectLinks(string path)

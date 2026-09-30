@@ -81,6 +81,9 @@ internal static class SourceWorldMcpChecks
             }))["document"]!);
             await Preview();
             Assert.Contains(placed.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+            // Exports read the scripts on disk, so the pending additions must be saved or discarded first.
+            var unsaved = await Job("source_export", new() { ["outputs"] = new[] { "m1/gamez.zbd" } }, "failed");
+            Assert.Equal("unsaved_changes", unsaved["code"]!.GetValue<string>()); Assert.Contains("m1 world", unsaved["message"]!.GetValue<string>());
 
             // A placed model cannot be named like a node of its own (the tank's root node is "hull"): AddChild finds the
             // newest node with the name, which would attach that inner node and leave the placed root out of the world.

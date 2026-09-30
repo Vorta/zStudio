@@ -50,10 +50,12 @@ public partial class MainWindow
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         RequireNoDrafts();
-        // Exports read source files from disk, so pending edits to them must be saved or discarded first.
-        string prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
-        if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && Path.GetFullPath(d.Path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) is { } dirty)
-            throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {Path.GetFileName(dirty.Path)} before exporting.");
+        // Exports read source files from disk, so pending edits to them must be saved or discarded first. A source
+        // world shows a private build outside the project, but its pending edits belong to the project's scripts.
+        string project = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), prefix = project + Path.DirectorySeparatorChar;
+        if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && (d.SourceWorld is { } world ? world.Root.Equals(project, StringComparison.OrdinalIgnoreCase)
+            : Path.GetFullPath(d.Path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) is { } dirty)
+            throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {dirty.SourceWorld?.Label ?? Path.GetFileName(dirty.Path)} before exporting.");
         // Opening another root cancels the export; its result never publishes into the new workspace.
         long generation = ViewModel.WorkspaceGeneration;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken); operation = cancellation; CancelOperationItem.IsEnabled = true;
@@ -63,7 +65,9 @@ public partial class MainWindow
             var progress = new Progress<SourceProgress>(p => { if (operation == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"{verb} {p.Completed}/{p.Total}: {p.Item}"; });
             var report = await Task.Run(() => destination == null ? SourceBuilder.CheckAsync(root, outputs, progress, cancellation.Token) : SourceBuilder.ExportAsync(root, destination, outputs, overwrite, progress, cancellation.Token), cancellation.Token);
             if (SourceExportFinishing is { } finishing) await finishing();
-            if (ViewModel.WorkspaceGeneration != generation) throw new StudioCommandException("context_changed", "The workspace changed while exporting.");
+            // Files already written stay written; say so rather than suggesting that nothing happened.
+            if (ViewModel.WorkspaceGeneration != generation) throw new StudioCommandException("context_changed", report.Destination == null ? "The workspace changed while checking."
+                : $"The workspace changed after the export wrote {GameFiles(report.Built)} to {report.Destination}.");
             foreach (var output in report.Outputs)
             {
                 if (output.Error != null) ViewModel.AddProblem(Bounded($"{output.Path}: {output.Error}"), file: root);
