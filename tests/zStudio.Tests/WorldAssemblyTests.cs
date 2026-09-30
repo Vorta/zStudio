@@ -337,6 +337,36 @@ public sealed class WorldAssemblyTests
     }
 
     [Fact]
+    public void MaterialsAreSharedAcrossLoadsAndTextureNamesAreChecked()
+    {
+        // The ground and the crate use one material; identical materials in different loads share one slot.
+        var world = new WorldAssembler(Project(), Token).Assemble("m1.gs");
+        Assert.Single(world.Materials);
+
+        // A file with many surfaces: each primitive's material is found by value, not by comparing with every other.
+        const int count = 60_000;
+        GltfDocument doc = new(); GltfMesh mesh = new() { Name = "many" };
+        for (int i = 0; i < count; i++)
+        {
+            GltfPrimitive primitive = new() { Material = new() { Name = $"m{i}", BaseColor = new(i % 256 / 255f, i / 256 % 256 / 255f, i / 65536 / 255f, 1) } };
+            primitive.Positions.AddRange([new(0, 0, 0), new(1, 0, 0), new(0, 0, -1)]); primitive.Indices.AddRange([0, 1, 2]);
+            mesh.Primitives.Add(primitive);
+        }
+        doc.Roots.Add(new() { Name = "many", Mesh = mesh });
+        GameZWorld target = new();
+        WorldGltf.Import(doc, "many.gltf", 0xFF, new() { World = target, Reference = (_, _) => throw new InvalidDataException(), TextureName = (_, n, _) => n ?? "x" });
+        Assert.Equal(count, target.Materials.Count);
+        Assert.Equal(count, target.Models.Single().Polygons.Select(p => p.Material).Distinct().Count());
+
+        // Texture names are stored in a Latin-1 field and name the pack's files, so a name with a path is refused.
+        var project = Project();
+        string crate = Encoding.UTF8.GetString(project.Files["data/common/models/crate.gltf"]);
+        project.Files["data/common/models/crate.gltf"] = Encoding.UTF8.GetBytes(crate.Replace("\"texture\": \"rock\"", "\"texture\": \"../rock\"", StringComparison.Ordinal));
+        var error = Assert.Throws<InvalidDataException>(() => new WorldAssembler(project, Token).Assemble("m1.gs"));
+        Assert.Contains("Latin-1", error.Message);
+    }
+
+    [Fact]
     public async Task MalformedModelsFailTheirWorldWithTheirPath()
     {
         // A model a user edited by hand (here cut short) fails the world that loads it, named in the report, while

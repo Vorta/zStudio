@@ -458,7 +458,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private string Texture(string uri, string? name, string from)
     {
         string textureName = (name ?? Path.GetFileNameWithoutExtension(uri)).ToLowerInvariant();
-        if (textureName.Length is < 1 or > 19) throw new InvalidDataException($"{from}: texture name '{textureName}' needs 1–19 characters.");
+        // The world stores the name in a 20-byte Latin-1 field and the packs are built from files of that name.
+        if (textureName.Length is < 1 or > 19 || textureName.Any(c => c > 255 || char.IsControl(c) || c is '/' or '\\' or ':'))
+            throw new InvalidDataException($"{from}: texture name '{textureName}' needs 1–19 Latin-1 characters without path separators.");
         string? file = textureDirectories.Select(d => $"{d}/{textureName}{TextureSources.Extension}").FirstOrDefault(files.Exists);
         if (file == null && uri.Length > 0) { string candidate = Relative(from, uri); if (files.Exists(candidate)) file = candidate; }
         if (file == null) Warn($"{from}: texture {textureName} has no PNG; the game shows its default texture.");

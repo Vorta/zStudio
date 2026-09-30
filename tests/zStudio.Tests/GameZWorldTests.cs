@@ -157,6 +157,15 @@ public sealed class GameZWorldTests
         byte[] deep = GameZWriter.Write(world, Token);
         error = Assert.Throws<InvalidDataException>(() => GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", deep, token: Token), Token));
         Assert.Contains("deeper", error.Message);
+
+        // The reader only warns about a corner naming a missing vertex; the world model refuses it.
+        byte[] bytes = GameZWriter.Write(SmallWorld(), Token);
+        int models = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(20)), data = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(models + 12 + 84));
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(data + 4 * 12 + 2 * 28), 9);
+        var document = FormatRegistry.Default.OpenBytes("gamez.zbd", bytes, token: Token);
+        Assert.DoesNotContain(document.Diagnostics, d => d.Severity == "Error");
+        error = Assert.Throws<InvalidDataException>(() => GameZWorldReader.FromDocument(document, Token));
+        Assert.Contains("missing vertex", error.Message);
     }
 
     // Runtime pointers the engine replaces on load; retail files hold stale heap addresses there.

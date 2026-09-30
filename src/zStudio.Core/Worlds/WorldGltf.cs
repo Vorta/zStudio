@@ -290,6 +290,9 @@ public static partial class WorldGltf
         internal Dictionary<(string Path, GltfDocument Doc), bool> Loading { get; } = [];
         /// <summary>Nodes this load created; with the world's, never more than a world can hold.</summary>
         internal int Created { get; set; }
+        /// <summary>The world's materials and textures by value and name, built on first use (a load only adds to them).</summary>
+        internal Dictionary<MaterialKey, WorldMaterial>? MaterialIndex { get; set; }
+        internal Dictionary<string, WorldTexture>? TextureIndex { get; set; }
     }
 
     /// <summary>Engine nodes for a document's scene roots, loaded from <paramref name="path"/> under a parent with <paramref name="parentZone"/>.</summary>
@@ -539,7 +542,7 @@ public static partial class WorldGltf
         material.Flags = (ushort)(opacity & 0xFF | extraFlags);
         if (textureName != null)
         {
-            material.Texture = Texture(context.World, textureName);
+            material.Texture = Texture(context, textureName);
             material.Color = new(255); material.PackedColor = 0x7FFF; material.Flags |= 0x100;
         }
         else
@@ -551,7 +554,7 @@ public static partial class WorldGltf
         if (extras?["packedColor"] is { } packed) material.PackedColor = (ushort)Hex(packed, "packedColor", path);
         if (extras?["fields"] is JsonArray fields && fields.Count == 3) { material.Field14 = Real(fields[0], "fields", path); material.Field18 = Real(fields[1], "fields", path); material.Field1C = Real(fields[2], "fields", path); }
         material.Soil = extras?["soil"] is { } soil ? unchecked((uint)Integer(soil, "soil", path, int.MinValue, uint.MaxValue)) : 0;
-        return (Shared(context.World, material), priority, backface, zone, normals);
+        return (Shared(context, material), priority, backface, zone, normals);
     }
 
     /// <summary>The world's texture directory entry for a name, added on first use.</summary>
@@ -561,13 +564,36 @@ public static partial class WorldGltf
         if (existing != null) return existing;
         WorldTexture texture = new(name.ToLowerInvariant()); world.Textures.Add(texture); return texture;
     }
-    /// <summary>Materials are shared by value, as the engine's FindOrClone shares identical slots.</summary>
-    private static WorldMaterial Shared(GameZWorld world, WorldMaterial material)
+    /// <summary>The texture entry for a name within a load, found through an index so a file with many textures stays linear.</summary>
+    private static WorldTexture Texture(ImportContext context, string name)
     {
-        foreach (var m in world.Materials)
-            if (m.Flags == material.Flags && m.PackedColor == material.PackedColor && m.Color == material.Color && ReferenceEquals(m.Texture, material.Texture)
-                && m.Field14 == material.Field14 && m.Field18 == material.Field18 && m.Field1C == material.Field1C && m.Soil == material.Soil) return m;
-        world.Materials.Add(material); return material;
+        if (context.TextureIndex == null)
+        {
+            context.TextureIndex = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in context.World.Textures) context.TextureIndex.TryAdd(t.Name, t);
+        }
+        if (context.TextureIndex.TryGetValue(name, out var existing)) return existing;
+        return context.TextureIndex[name] = Texture(context.World, name);
+    }
+    /// <summary>
+    /// Materials are shared by value, as the engine's FindOrClone shares identical slots: the first identical one is
+    /// used. The index keeps a file with many primitives from comparing each against every material.
+    /// </summary>
+    private static WorldMaterial Shared(ImportContext context, WorldMaterial material)
+    {
+        if (context.MaterialIndex == null)
+        {
+            context.MaterialIndex = [];
+            foreach (var m in context.World.Materials) context.MaterialIndex.TryAdd(MaterialKey.Of(m), m);
+        }
+        if (context.MaterialIndex.TryGetValue(MaterialKey.Of(material), out var existing)) return existing;
+        context.World.Materials.Add(material); context.MaterialIndex[MaterialKey.Of(material)] = material;
+        return material;
+    }
+    /// <summary>A material's values; adding 0 makes −0 equal 0, as the engine's comparison does (import values are finite).</summary>
+    internal readonly record struct MaterialKey(ushort Flags, ushort PackedColor, float R, float G, float B, WorldTexture? Texture, float Field14, float Field18, float Field1C, uint Soil)
+    {
+        public static MaterialKey Of(WorldMaterial m) => new(m.Flags, m.PackedColor, m.Color.X + 0f, m.Color.Y + 0f, m.Color.Z + 0f, m.Texture, m.Field14 + 0f, m.Field18 + 0f, m.Field1C + 0f, m.Soil);
     }
 
     /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>

@@ -66,6 +66,9 @@ public static class GameZWorldReader
             {
                 var source = model.Polygons[p]; var record = bytes.Slice((int)(polygons + 28L * p), 28);
                 int material = source.MaterialIndex;
+                // The reader only warns about these; everything that builds on the world indexes the model's lists.
+                if (source.Vertices.Any(v => v < 0 || v >= m.Vertices.Count) || source.Normals.Any(n => n < 0 || n >= m.Normals.Count))
+                    throw new InvalidDataException($"Model {model.Index} has a polygon that references a missing vertex or normal.");
                 m.Polygons.Add(new()
                 {
                     Flags = source.Flags & ~0xFFu, Priority = BinaryPrimitives.ReadInt32LittleEndian(record[4..]), Zone = U(record[24..]),
