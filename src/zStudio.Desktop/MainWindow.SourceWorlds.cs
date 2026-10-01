@@ -214,7 +214,7 @@ public partial class MainWindow
 
     /// <summary>
     /// What an addition broke: an output that built before and fails now, or warnings that the game rejects a file which
-    /// the previous build did not have (a listed definition file binding names this world gives other nodes, for example).
+    /// the previous build did not have (an animation bound to a node, attachment or effect this world lacks).
     /// </summary>
     private static string? NewRejections(SourceWorldBuild previous, SourceWorldBuild next)
     {
@@ -366,7 +366,12 @@ public partial class MainWindow
     private (string Label, List<(string, byte[]?)> Changes) PlanSourcePlacement(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token)
     {
         var edits = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "Load the world's placements first.");
-        var workspace = SourceWorldOf(doc).Workspace;
+        var session = SourceWorldOf(doc);
+        var workspace = session.Workspace;
+        // The same refusals, in the same order, as the edit itself: the plan reads sources a stale or rebuilding world no longer matches.
+        if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
+        RequireSourceWorldIdle(session);
+        if (doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources this world was built from changed since (an edit in another world, an undo, or another program); reload the world before editing it.");
         string label = edits.Find(source) is { } pickup ? $"Move {pickup.Type}" : edits.Coordinate(source) is { } record ? $"Move {record.Name}" : "Move placement";
         try
         {
@@ -381,6 +386,7 @@ public partial class MainWindow
         }
         catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
     }
     private Task<DocumentModel> ApplySourcePlacementAsync(DocumentModel doc, (string Label, List<(string, byte[]?)> Changes) plan, CancellationToken token) =>
         EditSourceWorldAsync(doc, plan.Label, workspace => workspace.Apply(plan.Label, plan.Changes, token) is { } t ? () => workspace.Retract(t) : null, token);
