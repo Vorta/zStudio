@@ -157,7 +157,7 @@ public sealed class SourceTerrainTests
         SourceObjectTarget target = new(workspace, "m1", world, tank, provenance, build.Executions) { Write = build.WriteInstruction };
         // A piece's name is a build label: a script line finding it would break when the recipe changes.
         var piece = world.Nodes.First(n => n.Name.StartsWith("coast_land_", StringComparison.Ordinal));
-        Assert.Contains("terrain recipe", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(target, piece, Token)).Message);
+        Assert.Contains("is a terrain piece", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(target, piece, Token)).Message);
     }
 
     [Fact]

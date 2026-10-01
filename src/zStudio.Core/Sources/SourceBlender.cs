@@ -191,7 +191,7 @@ public static class SourceBlender
         if (chosen.Gltf.EndsWith(".glb", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"{chosen.Relative} is a binary glTF with embedded textures. Export again with the format glTF Separate (.gltf + .bin + textures).");
         // Seal: copy the export and every file it uses, reading each twice so a file Blender is still writing is refused.
-        string generation = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture);
+        string generation = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8];
         string sealedFolder = Path.Combine(checkout.Folder, "sealed", generation);
         SourceProject.RejectNestedLinks(checkout.Folder, $"sealed/{generation}");
         Directory.CreateDirectory(sealedFolder);
@@ -274,13 +274,8 @@ public static class SourceBlender
         var before = Names(checkedOut);
         var after = Names(root);
         // Engine attributes travel in extras.recoil, which Blender writes only with Custom Properties on.
-        int attributesBefore = EngineAttributes(checkedOut), attributesAfter = EngineAttributes(root);
-        if (attributesBefore > 0 && attributesAfter == 0)
-        {
-            const string missing = "The export has none of the model's engine attributes (extras.recoil: node flags, zones, references, materials). Export again with Include → Custom Properties on, or update anyway to drop them.";
-            if (!force) throw new BlenderConflictException([model], missing);
-            notes.Add("The export had no engine attributes (Custom Properties off); the model's flags, zones, references and material attributes were dropped.");
-        }
+        bool attributesDropped = EngineAttributes(checkedOut) > 0 && EngineAttributes(root) == 0;
+        if (attributesDropped) notes.Add("The export had no engine attributes (Custom Properties off); the model's flags, zones, references and material attributes were dropped.");
         var removed = before.Except(after, StringComparer.Ordinal).Take(16).ToArray();
         if (removed.Length > 0) notes.Add("Nodes no longer present (animations and placements find nodes by name): " + string.Join(", ", removed) + ".");
         changes.Insert(0, (model, Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }))));
@@ -294,7 +289,15 @@ public static class SourceBlender
             expected[relative] = current;
             if (current != null && (!accepted.TryGetValue(relative, out var states) || !states.Contains(current))) conflicts.Add(relative);
         }
-        if (conflicts.Count > 0 && !force) throw new BlenderConflictException(conflicts);
+        // One question covers everything the update would replace or drop, so one "update anyway" never hides another.
+        if (!force && (conflicts.Count > 0 || attributesDropped))
+        {
+            List<string> reasons = [];
+            if (attributesDropped) reasons.Add("The export has none of the model's engine attributes (extras.recoil: node flags, zones, references, materials); export again with Include → Custom Properties on.");
+            if (conflicts.Count > 0) reasons.Add($"It would replace {string.Join(", ", conflicts.Take(8))}{(conflicts.Count > 8 ? $" and {conflicts.Count - 8} more" : "")}, which changed in the project since the checkout or were not part of it (another model's texture of the same name).");
+            reasons.Add("Check the model out again, or update anyway to accept this.");
+            throw new BlenderConflictException(attributesDropped ? [.. conflicts.Prepend(model).Distinct(StringComparer.OrdinalIgnoreCase)] : conflicts, string.Join(" ", reasons));
+        }
         if (conflicts.Count > 0) notes.Add($"Replaced changes made since the checkout in {string.Join(", ", conflicts.Take(8))}.");
         return new($"Update {Path.GetFileName(model)} from Blender", changes, notes, sealedFolder) { Expected = expected };
 

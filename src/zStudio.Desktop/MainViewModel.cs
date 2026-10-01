@@ -152,7 +152,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                     if (!await CanRemoveAsync(document)) return;
                     cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
                     var decided = Replacement(document);
-                    acceptedRevisions[decided] = decided.Revision;
+                    if (!decided.IsDisposed && Documents.Contains(decided)) acceptedRevisions[decided] = decided.Revision;
                 }
             }
             finally { ClosingAllDocuments = false; }

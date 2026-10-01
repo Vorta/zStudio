@@ -124,8 +124,8 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
                     return Task.CompletedTask;
                 });
             StackPanel brushActions = new() { Orientation = Orientation.Horizontal };
-            AsyncButton(brushActions, painting && brush!.Add ? "Painting (stop)" : "Paint in viewport", () => { actions.SetBrush(painting && brush!.Add ? null : new(recipePath, chosen.Name, true, radius)); return Task.CompletedTask; });
-            AsyncButton(brushActions, painting && !brush!.Add ? "Erasing (stop)" : "Erase in viewport", () => { actions.SetBrush(painting && !brush!.Add ? null : new(recipePath, chosen.Name, false, radius)); return Task.CompletedTask; });
+            AsyncButton(brushActions, painting && brush!.Add ? "Painting (stop)" : "Paint in viewport", () => { actions.SetBrush(painting && brush!.Add ? null : new(recipePath, chosen.Name, true, brush?.Radius ?? lastRadius)); return Task.CompletedTask; });
+            AsyncButton(brushActions, painting && !brush!.Add ? "Erasing (stop)" : "Erase in viewport", () => { actions.SetBrush(painting && !brush!.Add ? null : new(recipePath, chosen.Name, false, brush?.Radius ?? lastRadius)); return Task.CompletedTask; });
             form.Children.Add(brushActions);
             if (painting) ReadOnlyText(form, $"Drag over the terrain to {(brush!.Add ? "paint" : "erase")} {chosen.Name}; each stroke is one undoable change. Escape drops a stroke in progress.");
         }

@@ -372,7 +372,8 @@ public static class SourceObjectEdits
         Generated(origin, node.Name);
         if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can move to another parent here.");
         if (parent != null && (ReferenceEquals(parent, node) || Ancestors(parent).Contains(node))) throw new InvalidDataException($"{node.Name} cannot move under itself or one of its own parts.");
-        if (parent != null && target.Provenance.TryGetValue(parent, out var parentOrigin)) Generated(parentOrigin, parent.Name);
+        if (parent != null && target.Provenance.TryGetValue(parent, out var parentOrigin) && parentOrigin.Terrain is { } pieceRecipe)
+            throw new InvalidDataException($"{parent.Name} is a terrain piece of {pieceRecipe}; its name and place change whenever the recipe does, so objects cannot move under it.");
         string label = parent == null ? $"Move {node.Name} to the world" : $"Move {node.Name} under {parent.Name}";
         if (origin.ModelFile != null)
         {

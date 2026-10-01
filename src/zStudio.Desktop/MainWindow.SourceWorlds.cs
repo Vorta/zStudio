@@ -212,6 +212,18 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// What an addition broke: an output that built before and fails now, or warnings that the game rejects a file which
+    /// the previous build did not have (a listed definition file binding names this world gives other nodes, for example).
+    /// </summary>
+    private static string? NewRejections(SourceWorldBuild previous, SourceWorldBuild next)
+    {
+        var failed = next.Outputs.Where(o => o.Error != null && previous.Outputs.FirstOrDefault(p => p.Path == o.Path) is { Error: null }).Select(o => $"{o.Path} ({o.Error})").ToArray();
+        HashSet<string> before = [.. previous.Outputs.SelectMany(o => o.Warnings).Where(w => w.Contains("the game rejects", StringComparison.Ordinal))];
+        var rejected = next.Outputs.SelectMany(o => o.Warnings).Where(w => w.Contains("the game rejects", StringComparison.Ordinal) && !before.Contains(w)).ToArray();
+        if (failed.Length == 0 && rejected.Length == 0) return null;
+        return Bounded("The addition would break the mission's files: " + string.Join("; ", failed.Concat(rejected).Take(4)) + ((failed.Length + rejected.Length) > 4 ? $" and {failed.Length + rejected.Length - 4} more" : "") + ". List only the definition files the model needs.");
+    }
     /// <summary>Lists the build's problems under the world's script, replacing those of its previous build.</summary>
     private void ReportSourceBuild(SourceWorldSession session, SourceWorldBuild build)
     {
@@ -233,7 +245,12 @@ public partial class MainWindow
         var current = session.Owner;
         if (session.IsDisposed || current == null || current.IsDisposed || !ViewModel.Documents.Contains(current))
         { SourceWorldSession.DeleteBuild(built.Build.Folder); throw new StudioCommandException("context_changed", "The world was closed while it was building."); }
-        try { RequireNoDrafts(current, committing: true); }
+        try
+        {
+            RequireNoDrafts(current, committing: true);
+            if (additions is { Count: > 0 } && current.SourceBuild is { } previous && NewRejections(previous, built.Build) is { } rejection)
+                throw new StudioCommandException("build_failed", rejection);
+        }
         catch { SourceWorldSession.DeleteBuild(built.Build.Folder); throw; }
         SceneViewport.ViewPose? view = null;
         if (shownDocument == current && scene != null && HasPublishedStaticScene)
@@ -512,6 +529,7 @@ public partial class MainWindow
                     var overlay = world.Workspace.Overlay();
                     try { files = (await Task.Run(() => SourceWorlds.DefinitionsFor(world.Root, world.Mission, model.Name, overlay, token), token)).Select(f => f.Path).ToArray(); }
                     catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { throw new StudioCommandException("invalid_argument", ex.Message); }
+                    if (files.Count > 64) throw new StudioCommandException("invalid_argument", $"{files.Count} definition files name {model.Name}; choose them with definitionFiles (zstudio_source_world_definitions lists them).");
                 }
                 bool duplicate = d.PreviewDocument.Scene?.Nodes.Any(n => n.Name == model.Name) == true;
                 var next = await AddSourceModelAsync(d, new(model, files), token);

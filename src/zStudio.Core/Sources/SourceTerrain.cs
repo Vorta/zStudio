@@ -56,6 +56,7 @@ public static class SourceTerrain
         var doc = GltfDocument.Read(workspace.Read(model, token) ?? throw new InvalidDataException($"The project has no {model}."),
             uri => workspace.Read(WorldAssembler.Relative(model, uri), token) ?? throw new InvalidDataException($"{model} names {uri}, which does not exist."), token);
         List<TerrainSurface> surfaces = [];
+        var zones = InheritedZones(doc);
         foreach (string name in nodes)
         {
             var matches = doc.AllNodes().Where(n => WorldGltf.EngineName(n) == name).Take(2).ToList();
@@ -64,7 +65,7 @@ public static class SourceTerrain
             string id = new([.. name.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' ? c : '_').Take(32)]);
             if (id.Length == 0) id = "surface";
             for (int n = 2; surfaces.Any(s => s.Id == id); n++) id = $"{id[..Math.Min(id.Length, 28)]}_{n}";
-            surfaces.Add(new(id, RelativePath(recipePath, model), name, NodeDefaults(matches[0])));
+            surfaces.Add(new(id, RelativePath(recipePath, model), name, NodeDefaults(matches[0], zones.TryGetValue(matches[0], out uint z) ? z : 0xFFu)));
         }
         var recipe = TerrainRecipe.Parse(new TerrainRecipe(TerrainRecipe.CurrentCompiler, surfaces, TerrainAttributes.None, []).Write(), recipePath);
         // The marker: a root of the database's scene that names the recipe.
@@ -84,15 +85,32 @@ public static class SourceTerrain
         return workspace.Apply($"Create terrain {stem}", [(recipePath, recipe.Write()), (database, marked)], token) ?? throw new InvalidDataException("Creating the terrain changed nothing.");
     }
 
-    /// <summary>A surface node's own attributes (flags other than the default, zone), as an object of the file had them.</summary>
-    private static TerrainAttributes NodeDefaults(Gltf.GltfNode node)
+    /// <summary>
+    /// A surface node's attributes as an object of the file has them: its flags when not the default, and its zone (its
+    /// own, else its parents', as the importer inherits it) when it has one; a node without a zone keeps auto.
+    /// </summary>
+    private static TerrainAttributes NodeDefaults(Gltf.GltfNode node, uint zone)
     {
-        if ((node.Extras?[WorldGltf.Key] as JsonObject) is not { } recoil) return TerrainAttributes.None;
-        uint? flags = recoil["flags"] is JsonValue f && f.TryGetValue(out string? hex)
+        uint? flags = (node.Extras?[WorldGltf.Key] as JsonObject)?["flags"] is JsonValue f && f.TryGetValue(out string? hex)
             && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint parsed)
             && (parsed & WorldGltf.CarriedFlags) != WorldGltf.DefaultCarried ? parsed & WorldGltf.CarriedFlags : null;
-        int? zone = recoil["zone"] is JsonValue z && z.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e18 ? (int)((long)d & 0xFF) : null;
-        return new() { Flags = flags, NodeZone = zone is null ? null : zone == 0xFF ? TerrainAttributes.AnyZone : zone };
+        return new() { Flags = flags, NodeZone = zone == 0xFF ? null : (int)zone };
+    }
+    /// <summary>The project path of a recipe surface's glTF file.</summary>
+    public static string SurfaceFile(string recipe, TerrainSurface surface) => WorldAssembler.Relative(recipe, surface.Model);
+    /// <summary>Each node's zone as the importer gives it: its own, else its parent's; the file's roots start with any (0xFF).</summary>
+    private static Dictionary<Gltf.GltfNode, uint> InheritedZones(Gltf.GltfDocument doc)
+    {
+        Dictionary<Gltf.GltfNode, uint> zones = new(ReferenceEqualityComparer.Instance);
+        Stack<(Gltf.GltfNode Node, uint Parent)> pending = new(doc.Roots.Select(r => (r, 0xFFu)));
+        while (pending.TryPop(out var item))
+        {
+            if (zones.ContainsKey(item.Node) || zones.Count > 1_000_000) continue;
+            uint zone = (item.Node.Extras?[WorldGltf.Key] as JsonObject)?["zone"] is JsonValue z && z.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e18 ? (uint)((long)d & 0xFF) : item.Parent;
+            zones[item.Node] = zone;
+            foreach (var child in item.Node.Children) pending.Push((child, zone));
+        }
+        return zones;
     }
     /// <summary>
     /// The engine names of a glTF file's nodes that have meshes (the candidates for terrain surfaces), as the workspace holds

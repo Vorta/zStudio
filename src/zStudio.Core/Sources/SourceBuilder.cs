@@ -288,7 +288,7 @@ public static partial class SourceBuilder
         {
             // Only files this export installed are removed; a file another program put at a target meanwhile stays, and the
             // original that moved aside for it stays in the backup.
-            List<string> unrestored = [];
+            List<string> unrestored = [], leftover = [];
             for (int i = steps.Count - 1; i >= 0; i--)
             {
                 var (target, saved, installed) = steps[i];
@@ -297,9 +297,11 @@ public static partial class SourceBuilder
                     if (installed && File.Exists(target)) File.Delete(target);
                     if (saved != null) { if (File.Exists(target)) unrestored.Add(target); else File.Move(saved, target); }
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { unrestored.Add(target); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { (saved != null ? unrestored : leftover).Add(target); }
             }
-            if (unrestored.Count > 0) throw new IOException($"Export failed and {unrestored.Count} previous files could not be restored; they remain in {backup}: {string.Join(", ", unrestored.Take(8))}");
+            if (unrestored.Count > 0) throw new IOException($"Export failed and {unrestored.Count} previous files could not be restored; they remain in {backup}: {string.Join(", ", unrestored.Take(8))}"
+                + (leftover.Count > 0 ? $". New files that could not be removed: {string.Join(", ", leftover.Take(8))}" : ""));
+            if (leftover.Count > 0) throw new IOException($"Export failed and {leftover.Count} new files could not be removed: {string.Join(", ", leftover.Take(8))}");
             if (Directory.Exists(backup)) Directory.Delete(backup, true);
             throw;
         }

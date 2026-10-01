@@ -16,6 +16,8 @@ public readonly record struct TerrainHit(float Height, uint ZoneWord, uint Soil,
 public sealed record TerrainProbeReport(int Samples, int Hits, int Mismatches, int HeightOnly, float MaximumHeightDifference, IReadOnlyList<string> Examples)
 {
     public int Revealed { get; init; }
+    /// <summary>The spacing the samples took (wider than requested over an area that would exceed <see cref="TerrainProbe.MaximumSamples"/>).</summary>
+    public float Spacing { get; init; }
 }
 
 /// <summary>
@@ -94,19 +96,20 @@ public static class TerrainProbe
         float minX = all.Min(n => n.Model!.Vertices.Min(p => p.X)), maxX = all.Max(n => n.Model!.Vertices.Max(p => p.X));
         float minZ = all.Min(n => n.Model!.Vertices.Min(p => p.Z)), maxZ = all.Max(n => n.Model!.Vertices.Max(p => p.Z));
         // At most MaximumSamples points: a wider spacing over a large area (and integer steps, which never stall).
-        double columns = Math.Floor((maxX - minX - 0.37) / spacing) + 1, rows = Math.Floor((maxZ - minZ - 0.29) / spacing) + 1;
+        const float offsetX = 0.37f, offsetZ = 0.29f;
+        double columns = Math.Max(0, Math.Floor((maxX - minX - offsetX) / spacing) + 1), rows = Math.Max(0, Math.Floor((maxZ - minZ - offsetZ) / spacing) + 1);
         if (columns * rows > MaximumSamples) spacing *= (float)Math.Sqrt(columns * rows / MaximumSamples);
-        long countX = Math.Max(1, (long)Math.Floor((maxX - minX - 0.37) / spacing) + 1), countZ = Math.Max(1, (long)Math.Floor((maxZ - minZ - 0.29) / spacing) + 1);
+        long countX = Math.Max(0, (long)Math.Floor((maxX - minX - offsetX) / spacing) + 1), countZ = Math.Max(0, (long)Math.Floor((maxZ - minZ - offsetZ) / spacing) + 1);
         var indexA = Index(before, spacing * 8); var indexB = Index(after, spacing * 8);
         var cellsA = Cells(before, grid); var cellsB = Cells(after, grid);
         int samples = 0, hits = 0, mismatches = 0, heightOnly = 0, revealed = 0; float maximum = 0; List<string> examples = [];
         for (long i = 0; i < countX; i++)
         {
             token.ThrowIfCancellationRequested();
-            float x = minX + 0.37f + i * spacing;
+            float x = minX + offsetX + i * spacing;
             for (long j = 0; j < countZ; j++)
             {
-                float z = minZ + 0.29f + j * spacing;
+                float z = minZ + offsetZ + j * spacing;
                 samples++;
                 var cell = grid == null ? (-1, -1) : PointCell(grid, x, z);
                 var a = At(Visible(indexA(x, z), cellsA, cell), x, z); var b = At(Visible(indexB(x, z), cellsB, cell), x, z);
@@ -124,7 +127,7 @@ public static class TerrainProbe
                 if (examples.Count < 16) examples.Add($"({x:0.##}, {z:0.##}): before {Describe(a)}; after {Describe(b)}");
             }
         }
-        return new(samples, hits, mismatches, heightOnly, maximum, examples) { Revealed = revealed };
+        return new(samples, hits, mismatches, heightOnly, maximum, examples) { Revealed = revealed, Spacing = spacing };
         static bool Same(List<TerrainHit> a, List<TerrainHit> b) => a.Count == b.Count && a.Zip(b).All(p => Math.Abs(p.First.Height - p.Second.Height) <= 0.02f && p.First.ZoneWord == p.Second.ZoneWord
             && p.First.Soil == p.Second.Soil && p.First.Flags == p.Second.Flags && p.First.NodeZone == p.Second.NodeZone);
         static string Describe(List<TerrainHit> hits) => hits.Count == 0 ? "nothing" : string.Join(", ", hits.Select(h => $"{h.Node} y {h.Height} zones 0x{h.ZoneWord:X8} soil {h.Soil} flags 0x{h.Flags:X8} zone {h.NodeZone}"));

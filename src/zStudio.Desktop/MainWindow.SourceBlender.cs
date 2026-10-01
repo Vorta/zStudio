@@ -101,7 +101,7 @@ public partial class MainWindow
         try { result = await UpdateFromBlenderAsync(doc, checkout.Id, export.Relative, false, CancellationToken.None); }
         catch (StudioCommandException ex) when (ex.Code == "conflict")
         {
-            if (MessageBox.Show(this, ex.Message + "\n\nReplace those changes with the export?", "Update from Blender export", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            if (MessageBox.Show(this, ex.Message + "\n\nUpdate anyway, accepting all of this?", "Update from Blender export", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             if (ViewModel.SelectedDocument is not { SourceWorld: not null } current) return;
             result = await UpdateFromBlenderAsync(current, checkout.Id, export.Relative, true, CancellationToken.None);
         }
@@ -129,9 +129,9 @@ public partial class MainWindow
             var checkouts = SourceBlender.Checkouts(root);
             return Result(new { checkouts = checkouts.Take(32).Select(CheckoutResult).ToArray(), checkoutCount = checkouts.Count });
         });
-        RegisterJob(r, "source_blender_update", "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project's workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model's glTF and buffer, with each texture PNG Blender added or changed; a texture other models use changes for them too (reported in notes). Files changed in the project since the checkout (other edits, or another update) are not replaced unless force is true: the command fails with code conflict and lists them. The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. files lists the files the change wrote. Nothing is written until save_document.",
+        RegisterJob(r, "source_blender_update", "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project's workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model's glTF and buffer, with each texture PNG Blender added or changed; a texture other models use changes for them too (reported in notes). Files changed in the project since the checkout (other edits, or another update), existing project files the checkout did not hold (another model's texture of the same name), and an export without the model's engine attributes (Blender's Custom Properties off) are not applied unless force is true: the command fails with code conflict, naming all of them at once. The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. files lists the files the change wrote. Nothing is written until save_document.",
             [DocumentParameter, RevisionParameter, P("checkout", "string", "Checkout id from source_blender_checkout or source_blender_checkouts.", true), P("export", "string", "Export path relative to the outbox; default the newest."),
-             P("force", "boolean", "Replace project files changed since the checkout; default false.")], true,
+             P("force", "boolean", "Apply despite a conflict (files changed since the checkout or outside it, or dropped engine attributes); default false.")], true,
             async (a, token) =>
             {
                 var d = TargetDocument(a, true);

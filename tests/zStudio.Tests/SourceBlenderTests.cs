@@ -100,6 +100,17 @@ public sealed class SourceBlenderTests
         string named = Export(checkout, "named", g => g["images"]![0]!["uri"] = "textures/grass.png");
         File.Copy(Path.Combine(checkout.Outbox, "named", "textures", "rock.png"), Path.Combine(checkout.Outbox, "named", "textures", "grass.png"));
         Assert.Contains("data/m1/textures/grass.png", Assert.Throws<BlenderConflictException>(() => SourceBlender.PlanUpdate(workspace, checkout, named, token: Token)).Files);
+        // Both at once: one conflict names both, so "update anyway" never accepts one it did not show.
+        string both = Export(checkout, "both", g =>
+        {
+            g["images"]![0]!["uri"] = "textures/grass.png";
+            foreach (string key in new[] { "nodes", "meshes", "materials", "scenes" })
+                foreach (var item in g[key] as JsonArray ?? []) (item as JsonObject)?.Remove("extras");
+        });
+        File.Copy(Path.Combine(checkout.Outbox, "both", "textures", "rock.png"), Path.Combine(checkout.Outbox, "both", "textures", "grass.png"));
+        var combined = Assert.Throws<BlenderConflictException>(() => SourceBlender.PlanUpdate(workspace, checkout, both, token: Token));
+        Assert.Contains("Custom Properties", combined.Message); Assert.Contains("grass.png", combined.Message);
+        Assert.Contains("data/m1/textures/grass.png", combined.Files);
         // Refused updates leave no sealed copy behind; the forced one above left its own.
         Assert.Single(Directory.GetDirectories(Path.Combine(checkout.Folder, "sealed")));
     }

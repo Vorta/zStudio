@@ -21,33 +21,42 @@ public partial class MainWindow
     private void SourceRecoveryClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
-        if (await CheckSourceRecoveryAsync(root) == 0) ViewModel.Status = "No save of this source project was interrupted.";
+        int found = await CheckSourceRecoveryAsync(root, everySave: true);
+        ViewModel.Status = found == 0 ? "No save of this source project was interrupted." : found < 0 ? "The project's interrupted saves could not be checked; Problems says why." : ViewModel.Status;
     });
 
-    /// <summary>After a source project opens (or on request): report interrupted saves and offer to resolve them; returns how many there are.</summary>
-    private async Task<int> CheckSourceRecoveryAsync(string root)
+    /// <summary>After a source project opens (or on request): report interrupted saves and offer to resolve them; returns how many there are, or -1 when they could not be checked.</summary>
+    /// <remarks>
+    /// On opening, only saves that need a decision ask; a save that finished but was not cleaned up is reported in
+    /// Problems, and <paramref name="everySave"/> (Tools → Resolve interrupted save) asks about it too.
+    /// </remarks>
+    private async Task<int> CheckSourceRecoveryAsync(string root, bool everySave = false)
     {
         long generation = ++recoveryCheckGeneration;
         IReadOnlyList<SourceRecoveryCase> cases;
         try { cases = await Task.Run(() => new SourcePublisher(root).FindInterrupted()); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-        { ViewModel.AddProblem(Bounded($"Source project recovery could not be checked: {ex.Message}"), "Error", root); return 0; }
-        if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return 0;
+        { ViewModel.AddProblem(Bounded($"Source project recovery could not be checked: {ex.Message}"), "Error", root); return -1; }
+        if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return -1;
         foreach (var old in ViewModel.Problems.Where(p => p.File == root && p.Message.StartsWith(RecoveryProblem, StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
         if (cases.Count == 0) return 0;
         foreach (var c in cases)
-            ViewModel.AddProblem(Bounded($"{RecoveryProblem} ({c.SaveId}, {c.Description}): {string.Join(", ", c.Files.Take(8).Select(f => $"{f.Relative} is {f.State}"))}. Use Tools → Resolve interrupted save, or zstudio_source_recovery."), c.Committed ? "Warning" : "Error", root);
+            ViewModel.AddProblem(Bounded($"{RecoveryProblem} ({c.SaveId}, {c.Description}): {string.Join(", ", c.Files.Take(8).Select(f => $"{f.Relative} is {f.State}"))}." + (c.Committed ? " It finished; only its journal remains to clean up (Tools → Resolve interrupted save, or zstudio_source_recovery_resolve complete)." : " Use Tools → Resolve interrupted save, or zstudio_source_recovery.")), c.Committed ? "Warning" : "Error", root);
         if (automationCloseRequested || !IsVisible) return cases.Count;
-        foreach (var c in cases.Where(c => !c.Committed))
+        foreach (var c in cases.Where(c => everySave || !c.Committed))
         {
+            // Another check or another root took over: its own dialogs decide.
+            if (generation != recoveryCheckGeneration || SourceProjectRoot != root) break;
             string files = string.Join("\n", c.Files.Take(12).Select(f => $"{f.Relative}: {Describe(f.State)}{(f.HeldOriginal ? " (original kept)" : "")}"));
             string choice = "Later";
             StackPanel panel = new() { Margin = new(20) };
-            panel.Children.Add(new TextBlock { Text = "A save of this source project was interrupted", FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-            panel.Children.Add(new TextBlock { Text = $"{c.Description} ({c.CreatedUtc.ToLocalTime():g}). The files are now:\n{files}\n\nRoll back restores the files as they were before the save. Complete finishes the save. Keep files leaves them as they are and sets the journal aside. Files changed by another program are never overwritten.", Margin = new(0, 12, 0, 20), TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(new TextBlock { Text = c.Committed ? "A save of this source project finished but was not cleaned up" : "A save of this source project was interrupted", FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(new TextBlock { Text = c.Committed
+                ? $"{c.Description} ({c.CreatedUtc.ToLocalTime():g}) wrote every file:\n{files}\n\nComplete removes its journal and the originals it kept. Keep files sets the journal aside instead."
+                : $"{c.Description} ({c.CreatedUtc.ToLocalTime():g}). The files are now:\n{files}\n\nRoll back restores the files as they were before the save. Complete finishes the save. Keep files leaves them as they are and sets the journal aside. Files changed by another program are never overwritten.", Margin = new(0, 12, 0, 20), TextWrapping = TextWrapping.Wrap });
             WrapPanel buttons = new() { HorizontalAlignment = HorizontalAlignment.Right }; panel.Children.Add(buttons);
             Window dialog = new() { Owner = this, Title = "Interrupted save", Width = 560, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = panel };
-            foreach (string label in new[] { "Roll back", "Complete", "Keep files", "Later" })
+            foreach (string label in c.Committed ? new[] { "Complete", "Keep files", "Later" } : new[] { "Roll back", "Complete", "Keep files", "Later" })
             {
                 Button button = new() { Content = label, MinWidth = 95, Margin = new(4), Padding = new(10, 7, 10, 7), IsCancel = label == "Later" };
                 button.Click += (_, _) => { choice = label; dialog.Close(); }; buttons.Children.Add(button);

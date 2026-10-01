@@ -21,14 +21,21 @@ public sealed partial class SceneViewport
     public bool TerrainBrushActive
     {
         get => terrainBrushActive;
-        set { terrainBrushActive = value; if (!value) CancelTerrainStroke(); Cursor = value ? terrainBrushWaiting ? Cursors.Wait : Cursors.Pen : null; }
+        set
+        {
+            bool changed = terrainBrushActive != value;
+            terrainBrushActive = value;
+            if (!value) CancelTerrainStroke();
+            // Fly owns the cursor while it runs; an unchanged brush leaves the cursor alone.
+            if (changed && !IsFlyActive) Cursor = value ? terrainBrushWaiting ? Cursors.Wait : Cursors.Pen : null;
+        }
     }
     private bool terrainBrushWaiting;
     /// <summary>While the owner applies an earlier stroke (its world rebuilds), clicks start no new stroke and select nothing.</summary>
     public bool TerrainBrushWaiting
     {
         get => terrainBrushWaiting;
-        set { terrainBrushWaiting = value; if (terrainBrushActive) Cursor = value ? Cursors.Wait : Cursors.Pen; }
+        set { terrainBrushWaiting = value; if (terrainBrushActive && !IsFlyActive) Cursor = value ? Cursors.Wait : Cursors.Pen; }
     }
     /// <summary>The brush radius in world units; it spaces the stroke's points.</summary>
     public float TerrainBrushRadius { get; set; } = 8;
