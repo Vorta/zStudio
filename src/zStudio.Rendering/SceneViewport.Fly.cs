@@ -39,6 +39,7 @@ public sealed partial class SceneViewport
             orbitPivot = null; navigationReferenceDistance = null;
         }
         IsFlyActive = enabled;
+        if (!enabled) RefreshTerrainBrushCursor();
         viewport.CameraMode = enabled ? CameraMode.WalkAround : CameraMode.Inspect;
         cameraPoseDirty = true; viewport.InvalidateRender(); FlyStateChanged?.Invoke();
     }

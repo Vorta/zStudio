@@ -306,7 +306,7 @@ public static partial class SourceBuilder
                 try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                 throw new IOException($"Export failed ({failure.Message}) and {leftover.Count} new files could not be removed: {string.Join(", ", leftover.Take(8))}", failure);
             }
-            if (Directory.Exists(backup)) Directory.Delete(backup, true);
+            try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             throw;
         }
         try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

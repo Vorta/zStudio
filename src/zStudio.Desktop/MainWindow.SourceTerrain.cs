@@ -55,7 +55,7 @@ public partial class MainWindow
         {
             bool uses;
             try { uses = ReadRecipe(doc, existing).Surfaces.Any(s => string.Equals(SourceTerrain.SurfaceFile(existing, s), file, StringComparison.OrdinalIgnoreCase)); }
-            catch (Exception ex) when (ex is StudioCommandException or InvalidDataException) { continue; }
+            catch (Exception ex) when (ex is StudioCommandException or InvalidDataException or IOException or UnauthorizedAccessException) { continue; }
             if (uses) throw new StudioCommandException("unsupported", $"{file} is already a surface file of {existing}; another terrain from it would add its geometry a second time.");
         }
         return EditSourceWorldAsync(doc, $"Creating terrain from {Path.GetFileName(model)}", w => SourceTerrain.Create(w, database, model, nodes, recipe, token) is var t ? () => w.Retract(t) : null, token, fromBuild: false);

@@ -36,7 +36,10 @@ public partial class MainWindow
         IReadOnlyList<SourceRecoveryCase> cases;
         try { cases = await Task.Run(() => new SourcePublisher(root).FindInterrupted()); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-        { ViewModel.AddProblem(Bounded($"Source project recovery could not be checked: {ex.Message}"), "Error", root); return -1; }
+        {
+            if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return -2;
+            ViewModel.AddProblem(Bounded($"Source project recovery could not be checked: {ex.Message}"), "Error", root); return -1;
+        }
         if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return -2;
         foreach (var old in ViewModel.Problems.Where(p => p.File == root && p.Message.StartsWith(RecoveryProblem, StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
         if (cases.Count == 0) return 0;

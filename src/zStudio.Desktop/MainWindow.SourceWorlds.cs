@@ -229,7 +229,7 @@ public partial class MainWindow
         }
         if (broken.Count == 0) return null;
         return Bounded("The addition would break the mission's files: " + string.Join("; ", broken.Take(4)) + (broken.Count > 4 ? $" and {broken.Count - 4} more" : "")
-            + ". List only the definition files the model needs, or choose a name no animation definition binds.");
+            + ". For a model added with animation definitions, list only those it needs; for a copy, choose a name no animation definition binds.");
         static bool Rejects(string warning) => warning.Contains("the game rejects", StringComparison.Ordinal);
     }
     /// <summary>Lists the build's problems under the world's script, replacing those of its previous build.</summary>
@@ -334,7 +334,10 @@ public partial class MainWindow
     }
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)
     {
-        string mission = doc.SourceWorld?.Mission ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
+        var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
+        string mission = session.Mission;
+        if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
+        RequireSourceWorldIdle(session);
         // The rebuild is checked against the shown build; a stale one would blame the addition for others' changes.
         if (doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before adding a model.");
         return EditSourceWorldAsync(doc, $"Adding {addition.Model.Name}", workspace => SourceWorlds.AddModel(workspace, mission, addition, token) is var t ? () => workspace.Retract(t) : null, token, [addition.Model], fromBuild: false);
@@ -354,22 +357,33 @@ public partial class MainWindow
     /// A placement edit of a source world (a pickup, AI vehicle or AI node, with its linked difficulty counterparts) becomes
     /// one change of the resource sources the world's archives were built from; only the edited coordinate tokens change.
     /// </summary>
-    private Task<DocumentModel> MoveSourcePlacementAsync(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token)
+    private Task<DocumentModel> MoveSourcePlacementAsync(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token) =>
+        ApplySourcePlacementAsync(doc, PlanSourcePlacement(doc, source, transform, token), token);
+    /// <summary>
+    /// The source changes a placement move makes, checked against other editors (a resource editor holding a file
+    /// unsaved); a refusal comes before anything changes, so the scene card can keep its draft.
+    /// </summary>
+    private (string Label, List<(string, byte[]?)> Changes) PlanSourcePlacement(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token)
     {
         var edits = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "Load the world's placements first.");
-        IReadOnlyDictionary<MissionPickupSource, PlacementTransform> after;
-        try { after = edits.PreviewTransform(source, transform); }
-        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        var workspace = SourceWorldOf(doc).Workspace;
         string label = edits.Find(source) is { } pickup ? $"Move {pickup.Type}" : edits.Coordinate(source) is { } record ? $"Move {record.Name}" : "Move placement";
-        return EditSourceWorldAsync(doc, label, workspace =>
+        try
         {
+            var after = edits.PreviewTransform(source, transform);
             List<(string, byte[]?)> changes = [];
             foreach (var archive in edits.ScalarWrites(after).GroupBy(w => w.ArchivePath, StringComparer.OrdinalIgnoreCase))
                 changes.AddRange(SourceResourceEdits.SourceChanges(edits.ArchiveBytes(archive.Key), archive.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))),
                     relative => workspace.Read(relative, token), token).Select(c => (c.Relative, (byte[]?)c.Content)));
-            return workspace.Apply(label, changes, token) is { } t ? () => workspace.Retract(t) : null;
-        }, token);
+            foreach (var (relative, _) in changes)
+                if (workspace.EditGuard?.Invoke(relative) is { } refusal) throw new StudioCommandException("unsaved_changes", refusal);
+            return (label, changes);
+        }
+        catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
+        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
     }
+    private Task<DocumentModel> ApplySourcePlacementAsync(DocumentModel doc, (string Label, List<(string, byte[]?)> Changes) plan, CancellationToken token) =>
+        EditSourceWorldAsync(doc, plan.Label, workspace => workspace.Apply(plan.Label, plan.Changes, token) is { } t ? () => workspace.Retract(t) : null, token);
 
     /// <summary>For a source world, how Properties moves a placement: through its sources, like the scene card; null otherwise.</summary>
     private Func<MissionPickupSource, System.Numerics.Vector3, Task>? SourcePickupMove(DocumentModel doc) => doc.SourceWorld == null ? null : async (source, position) =>
@@ -517,7 +531,7 @@ public partial class MainWindow
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
             return Result(new { name, files = files.Take(64).Select(f => new { path = f.Path, animations = f.Animations.Take(32).Select(n => Bounded(n, 128)).ToArray(), animationCount = f.Animations.Count, missions = f.Missions }).ToArray(), fileCount = files.Count, truncated = files.Count > 64 });
         });
-        RegisterJob(r, "source_world_add_model", "Add a project model to a source world as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zrd, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (anim.zbd binding a node this world gives another meaning), returns build_failed and is taken back, as is one canceled before the rebuilt world is shown. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document.",
+        RegisterJob(r, "source_world_add_model", "Add a project model to a source world as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zrd, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (an animation bound to a node, attachment or effect this world lacks), returns build_failed and is taken back, as is one canceled before the rebuilt world is shown. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document.",
             [DocumentParameter, RevisionParameter, P("model", "string", "Project path of the glTF model, as zstudio_source_world_models lists it (for example data/m2/models/bft/ltank.gltf).", true),
              P("name", "string", "Node name: 1–31 letters, digits, '_', '-' or '.'. Resources and animations find the model by it. A placed model's name must not also name a node inside the model, which AddChild would attach instead (build_failed).", true),
              new("position", "object", "Optional world position; omit for an unplaced root.", Properties: [P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)]),
