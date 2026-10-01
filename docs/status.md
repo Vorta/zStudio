@@ -1,5 +1,37 @@
 # Desktop implementation status
 
+## World editor, phases 1–2 in progress (2026-10-01, branch feat/world-editor)
+
+Following [world-editor-plan.md](world-editor-plan.md), source worlds are now edited through one project-wide workspace instead of per-mission script edits.
+
+- **Workspace and saving:**
+  - One undo history over every source file of a project, shared by all of its open worlds.
+  - Save writes every dirty file as a recoverable publication: staged and journaled in the project's `zstudio` folder; originals moved aside and replacements installed only where no other program changed the file; rollback on failure.
+  - An interrupted save is reported when the project opens and is resolved on request (roll back, complete, keep files).
+  - Lossless text `.zrd` syntax: edits change only their tokens, and new records use the canonical layout.
+- **Editing in source worlds:**
+  - Pickups, AI vehicles and AI nodes: a move changes only the coordinate tokens of their text sources.
+  - World objects: move, rotate, scale and flags, through their glTF node or script instruction, known from build provenance recorded per node.
+  - Fog, lights and cameras, through their script commands.
+  - Blender round trip through `zstudio/export` checkouts with explicit Update from export.
+  - Nine new MCP tools (98 in all).
+- **Tests:** Core 678 pass, including:
+  - 69 recoverable-save tests with fault injection and crash recovery;
+  - 16 lossless-syntax tests with 1,000 randomized edit rounds;
+  - workspace, placement, object, script-syntax and text-editing cases.
+
+  Desktop 101 pass, with a real named-pipe MCP check of placements, undo, object moves and flags, fog, Blender update and the project-wide save.
+- **Not yet:**
+  - generated terrain (recipes, painting, splitting);
+  - vehicle upgrades;
+  - deleting and duplicating objects;
+  - build profiles;
+  - mission logic;
+  - incremental builds;
+  - in-game acceptance of edited worlds.
+
+  The resource editor and the workspace guard each other's unsaved files rather than sharing one buffer.
+
 ## Source projects: textures, worlds, animations and mission worlds (2026-09-30, v0.8.0)
 
 Source projects now cover every game file. Reconstruction writes each texture as a PNG from its best-quality variant, each mission world as glTF models loaded by the build scripts (with engine attributes in `extras.recoil`), and each `anim.zbd` as its definitions plus `.zan` keyframe scripts. Exports build texture packs (adding `rtexture8`/`rtexture16`/`texture8`/`texturemax`), `image.zbd`, worlds by running `gamegen/mN.gs` with the engine's interpreter and update rules, and `anim.zbd` compiled against the world the export builds.

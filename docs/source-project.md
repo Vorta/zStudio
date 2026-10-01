@@ -11,9 +11,9 @@ A source project is separate from editing ZBD files directly. Opening a ZBD file
 - **Tools → Export all ZBD files…** builds every game file into a folder outside the project. MCP: `zstudio_source_export` with `destination`.
 - **Tools → Export ZBD file** lists the game files the project can build; choosing one exports only that file. MCP: `zstudio_source_export` with `outputs`, for example `["m1/zrdr.zbd"]`.
 - `zstudio_source_status` lists the game files the project can build and the sources of each.
-- **Tools → Open mission world** shows a mission's world as its build script assembles it from the project, and **Add model** loads a model from any folder of the project into it (see [Mission worlds](#mission-worlds)). MCP: `zstudio_source_world_open`, `zstudio_source_world_add_model`.
+- **Tools → Open mission world** shows a mission's world as its build script assembles it from the project; its placements, objects, fog and lights are edited there, models are added from any folder of the project, and models round-trip through Blender (see [Mission worlds](#mission-worlds)). MCP: `zstudio_source_world_open` and the commands named there.
 
-The export commands appear when the open folder is a source project, which is any folder with both `data` and `gamegen` subfolders. The project holds no zStudio files: what it can build is derived from its folders.
+The export commands appear when the open folder is a source project, which is any folder with both `data` and `gamegen` subfolders. What it can build is derived from those folders; zStudio's own working data (Blender checkouts, save journals) lives in a separate `zstudio` folder that builds never read (see [The zstudio folder](#the-zstudio-folder)).
 
 When the destination already has some of the selected game files, the GUI asks before replacing them; MCP needs `overwrite`. Without it, a game file that appears in the destination while the export runs is not replaced either. Other files in the destination are left alone, so a game installation can be the destination. All outputs are built, reopened through the shared readers and staged first; if any output fails, nothing is written, and a check reports every output with its failure or warnings. Publication moves replaced files aside and restores them if a later step fails. Unsaved edits to project files, including additions to an open mission world, must be saved or discarded before exporting, because exports read the files on disk.
 
@@ -23,13 +23,62 @@ Reconstruction supports RECOIL data and requires RECOIL evidence (prepared scrip
 
 ## Mission worlds
 
-In a source project, a mission's world is what its build script (`gamegen\mN.gs`) assembles from the project's models, so the world editor works on those sources. **Tools → Open mission world** lists the missions with a world script; choosing one builds that mission privately, exactly as the export would (the world, its animations and resources, and a full-quality texture pack), into a temporary folder outside the project, and shows it in Whole world with its mission context. The built world is read-only: placements and models change through the sources. Build problems are listed in Problems under the script's path.
+In a source project, a mission's world is what its build script (`gamegen\mN.gs`) assembles from the project's sources, so the world editor edits those sources. **Tools → Open mission world** lists the missions with a world script; choosing one builds that mission privately, as the export would (the world, its animations and resources, and a full-quality texture pack), into a temporary folder outside the project, and shows it in Whole world with its mission context. Build problems are listed in Problems under the script's path.
+
+### One workspace per project
+
+All open worlds of a project edit one set of pending changes, the project's workspace:
+- **One history.** An edit can change several files, and two missions can share a file, so Undo and Redo work across the whole project, whichever world they are used in.
+- **One save.** **Save** writes every changed source file of the project together, and its tooltip lists them. `zstudio_source_changes` lists them too, with the history and a line diff of any file.
+- **Rebuilds.** Each edit, undo and redo rebuilds the world it was made in and keeps the camera.
+  - An edit the world cannot be built with, or whose rebuild is canceled, is taken back.
+  - Until the rebuilt world is shown, the project's other edits, saves and reloads wait (they are disabled, or report that a world is rebuilding).
+- **Other open worlds** whose build read a changed file are marked stale. **Reload** rebuilds them.
+- **Closing.** Closing one of several open worlds keeps the project's edits. Closing the last one asks whether to save or discard them.
+- **Exports** read the files on disk, so pending edits must be saved or discarded first.
+
+### Placements
+
+Unlock editing in Whole world and move pickups, AI vehicles and AI network nodes as in any map:
+- The confirmed move changes the coordinate tokens of the text resources the world's archives were built from, for example `data\m1\zrdr\puppies.zrd` and the matching record of `puppies_easy.zrd`.
+- Nothing else in those files changes: comments, spacing and other values stay.
+- An integer coordinate that moves is written as a float, as in direct editing.
+
+MCP: `zstudio_pickup_lock`, `zstudio_pickup_move`, `zstudio_scene_card`.
+
+### World objects
+
+Every object of the built world knows the source that made it: a node of the mission database (`data\mN\models\mN.gltf`), a node of a model file, or the script instruction that loaded or created it, with the instruction that last set each property.
+
+Properties of an object (or `zstudio_source_world_object`) shows its source, its position, rotation (degrees about Y, then X, then Z) and scale, and its flags:
+- standable (altitude surface);
+- collision (intersection surface);
+- collide by bounding box;
+- proximity;
+- landmark;
+- craters allowed (CanModify);
+- no craters (ClipTo).
+
+Editing them (or `zstudio_source_world_object_edit`) changes that source:
+- **Database or model nodes:** a database node changes its glTF node's transform or engine flags. A model file's node changes for every load of that file, and Properties says so.
+- **Script-placed objects:** the instruction that set the value changes, for example `Object3DTranslate 110.0 5.0 -50.0`. A value no instruction set yet is added after the instruction that created the object.
+- **Refused:**
+  - an instruction that runs more than once while the world is built, which would change several objects;
+  - an instruction that takes its value from a macro.
+
+  Edit those in the script.
+
+Fog, lights and cameras are set by script commands. Properties of the world, a light or a camera lists the commands that set it, for example `WorldSetFogColor 0.5 0.5 0.5`; changing one edits that instruction. `zstudio_source_world_command` sets any of them, adding the command after the instruction that created the node when no instruction set it yet.
+
+### Models from other missions
 
 **Add model** (in the Whole world toolbar, or **Tools → Add model to world…**) loads any glTF model of the project into the world, for example a vehicle that only another mission used:
 
-- Choose the model and its node name (the model's name by default). Resources and animations find the model by this name; the dialog says when the world already has a node with it. `AddChild` attaches the newest node with the name, so a placed model cannot use a name one of its own nodes has (the root node of `vtol.gltf` is `vtol`): the addition is withdrawn with a request to choose another name.
+- **Name.** Choose the model and its node name (the model's name by default).
+  - Resources and animations find the model by this name; the dialog says when the world already has a node with it.
+  - `AddChild` attaches the newest node with the name, so a placed model cannot use a name one of its own nodes has (the root node of `vtol.gltf` is `vtol`). Such an addition is taken back with a request to choose another name.
 - **Not placed** loads the model as a root outside the world, as the shipped scripts load vehicle templates: resources such as `aiv.zrd` place copies of it by name (`ltank_01` places a copy of `ltank`). **Placed in the world** puts it at a position and heading (the orbit point by default).
-- **Animations** lists the definition files other missions list with an animation for that name, such as `data\common\zrdr\enemies\ltank.zrd` for `ltank`; checked files are added to the mission's `data\mN\zrdr\anim.zrd`.
+- **Animations** lists the definition files other missions list with an animation for that name, such as `data\common\zrdr\enemies\ltank.zrd` for `ltank`. Checked files are added to the mission's `data\mN\zrdr\anim.zrd`, keeping its comments and layout.
 
 The edit adds the lines the shipped scripts use to load a model, before the line that writes the world:
 
@@ -47,7 +96,47 @@ FindNode %worldName%
 AddChild ltank_wreck
 ```
 
-Each addition, undo and redo rebuilds the world and keeps the camera. An addition the world cannot be built with, or whose rebuild is canceled, is withdrawn. Until the rebuilt world is shown, Add model, Undo, Redo, Save and Reload of that world wait (they are disabled, or report that the world is rebuilding), so a save never includes an addition the world has not been built with. Nothing changes in the project until **Save**, which writes only the mission's script and animation list: when either changed on disk since it was read, neither is written, and if replacing the second fails the first is restored. When a model, texture or other source the world was built from changes on disk, the world is marked stale; **Reload** rebuilds it and keeps pending additions, unless the script or animation list itself changed. Exports of the mission then include the model's geometry and materials, every texture it uses in each of the mission's packs, and its animations. Placing copies through `aiv.zrd` and other resources is done in their `.zrd` sources.
+Exports of the mission then include the model's geometry and materials, every texture it uses in each of the mission's packs, and its animations.
+
+### Editing models in Blender
+
+The round trip uses only files:
+
+1. **Check out.** **Tools → Edit in Blender…** (or `zstudio_source_blender_checkout`) copies the model of the selected object into the project's `zstudio\export\<checkout>\input` folder: its glTF, buffer and textures, as the workspace holds them.
+2. **Edit and export.** Import that glTF in Blender, edit it, and export it with **glTF 2.0**, format **glTF Separate (.gltf + .bin + textures)**, with **Custom Properties** on, into the checkout's `outbox` folder.
+3. **Update.** **Tools → Update from Blender export…** (or `zstudio_source_blender_update`) applies the newest export after confirmation.
+   - The export is sealed: copied into `sealed\` while checking that Blender finished writing it.
+   - It is read as a build reads models, and becomes one undoable change: the model's glTF and buffer, and every texture PNG that is new or changed.
+   - A changed texture changes for every model that uses it, and a node the export no longer has (animations and placements find nodes by name) is reported in Problems.
+   - Embedded textures (Blender's default `.glb`) are refused, because the engine needs PNG files.
+
+Nothing Blender writes reaches the project until the update is applied, and nothing reaches the disk until **Save**.
+
+### Saving and recovery
+
+**Save** writes the changed files as one recoverable publication:
+1. Each file is staged and verified in `zstudio\staging`.
+2. A journal in `zstudio\recovery` records what the save replaces.
+3. Each original is moved aside and its replacement put in place, unless another program changed or created the file meanwhile.
+4. The journal is removed.
+
+If anything fails, the files already replaced are put back. A file changed by another program since the workspace read it is never overwritten: the save stops and says which file.
+
+If zStudio or the computer stops in the middle of a save, opening the project reports the interrupted save (in Problems, and in a dialog). It offers:
+- **Roll back**, which restores the files as they were before the save;
+- **Complete**, which finishes the save;
+- **Keep files**, which leaves them as they are and moves the journal to `zstudio\recovery\abandoned`.
+
+A file another program changed since is left alone. Until the decision, the project cannot be saved. MCP: `zstudio_source_recovery`, `zstudio_source_recovery_resolve`.
+
+### The zstudio folder
+
+zStudio keeps its working data in the project's `zstudio\` folder:
+- `export\` holds Blender checkouts;
+- `recovery\` holds save journals;
+- `staging\` holds files being prepared.
+
+Builds never read it. Leave it out when sharing a project. It is safe to delete when no save was interrupted and no Blender edit is pending.
 
 ## Layout
 
@@ -126,7 +215,7 @@ Every entry of every shipped `anim.zbd` recompiles from its sources to the same 
 
 ## Editing sources
 
-Text `.zrd` files open in the shared ZRD viewer and editor (tree, Properties, `zrd_nodes`, `zrd_edit`) and save as text; comments and formatting you add are replaced by the canonical layout when zStudio saves the file. Importing a text `.zrd` into an archive compiles it. `.gs`/`.gw` scripts open read-only as token text; edit them in any text editor. WAV sources can be replaced with any 8- or 16-bit PCM file, PNG textures with any PNG, and glTF models with files exported from Blender (keep the custom properties).
+Text `.zrd` files open in the shared ZRD viewer and editor (tree, Properties, `zrd_nodes`, `zrd_edit`) and save as text that changes only where the edit does: comments, spacing and the spelling of untouched values stay; new records are written in the canonical layout. A file the project's workspace holds unsaved edits of cannot be edited there until those are saved or undone, and the other way round. Importing a text `.zrd` into an archive compiles it. `.gs`/`.gw` scripts open read-only as token text; edit them in any text editor. WAV sources can be replaced with any 8- or 16-bit PCM file, PNG textures with any PNG, and glTF models with files exported from Blender (keep the custom properties).
 
 ## Text formats
 
