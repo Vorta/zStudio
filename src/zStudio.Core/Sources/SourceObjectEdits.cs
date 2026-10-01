@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core.Worlds;
 
 namespace Recoil.Zbd.Core.Sources;
@@ -36,7 +37,17 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
 }
 
 /// <summary>A planned change of a project's sources: the label for history, the files and their new content, what it edits and notes on its reach.</summary>
-public sealed record SourceEditPlan(string Label, IReadOnlyList<(string Relative, byte[] Content)> Changes, string Target, IReadOnlyList<string> Notes);
+public sealed record SourceEditPlan(string Label, IReadOnlyList<(string Relative, byte[] Content)> Changes, string Target, IReadOnlyList<string> Notes)
+{
+    /// <summary>Models the change loads right before the world is written, which the rebuild checks it attached as planned.</summary>
+    public IReadOnlyList<SourceModelAddition> Additions { get; init; } = [];
+}
+
+/// <summary>An object of a built source world, with the world and provenance a structural edit of it is checked against.</summary>
+public sealed record SourceObjectTarget(SourceWorkspace Workspace, string Mission, GameZWorld World, WorldNode Node, IReadOnlyDictionary<WorldNode, WorldNodeProvenance> Provenance, IReadOnlyDictionary<(string Script, int Line), int> Executions)
+{
+    public WorldNodeProvenance Origin => Provenance.TryGetValue(Node, out var origin) ? origin : throw new InvalidDataException($"{Node.Name} has no recorded source.");
+}
 
 /// <summary>
 /// Plans edits of a world's objects as changes of the sources that made them (see <see cref="WorldNodeProvenance"/>): a
@@ -145,6 +156,204 @@ public static class SourceObjectEdits
         return new(label, insert.Changes(), $"{anchor.Script} line {anchor.Line}", insert.Notes);
     }
 
+    /// <summary>
+    /// The node that stands for a whole object in structural edits. A node of a model file is part of whatever loaded the
+    /// file: the mission database node that references it, or the root a script's LoadGameGen created. Anything else
+    /// stands for itself.
+    /// </summary>
+    public static WorldNode ObjectOf(WorldNode node, IReadOnlyDictionary<WorldNode, WorldNodeProvenance> provenance)
+    {
+        if (!provenance.TryGetValue(node, out var origin) || origin.ModelFile == null || origin.Database || origin.Load is not { } load) return node;
+        HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Queue<WorldNode> pending = new(node.Parents);
+        while (pending.TryDequeue(out var parent))
+        {
+            if (!seen.Add(parent) || !provenance.TryGetValue(parent, out var p)) continue;
+            if (p.Database || p.LoadedFile != null && Same(p.Created, load)) return parent;
+            foreach (var up in parent.Parents) pending.Enqueue(up);
+        }
+        return node;
+    }
+
+    /// <summary>
+    /// A plan that deletes an object: a node of the mission database leaves its glTF file with its descendants; an object a
+    /// script created has every instruction that created, changed or attached it turned into a comment, so the rest of the
+    /// script runs as before. Objects other instructions use (a camera's horizon, a world's light) are refused.
+    /// </summary>
+    public static SourceEditPlan PlanDelete(SourceObjectTarget target, CancellationToken token = default)
+    {
+        var node = target.Node; var origin = target.Origin;
+        string label = $"Delete {node.Name}";
+        if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can be deleted here.");
+        List<string> notes = [$"Animations and resources that find {node.Name} by name no longer find it; Problems lists what the rebuild reports."];
+        if (origin.ModelFile != null)
+        {
+            if (!origin.Database) throw new InvalidDataException($"{node.Name} is part of the model file {origin.ModelFile}; delete the object that loads it, or remove the part in Blender.");
+            return GltfFile(target.Workspace, origin, label, (root, _) => GltfNodeEdits.Remove(root, origin.ModelNode), token, notes);
+        }
+        var created = Created(target, ["LoadGameGen", "NewObject3D"], "deleted");
+        if (origin.Named.FirstOrDefault(n => n.Command is not ("AddChild" or "DeleteChild" or "DeleteTree")) is { } user)
+            throw new InvalidDataException($"{user.Script} line {user.Line} ({user.Command}) uses {node.Name}; change that instruction first.");
+        ScriptEdit edit = new(target.Workspace, created.Script, target.Executions, token);
+        foreach (var instruction in origin.Applied)
+        {
+            if (!Disableable.Contains(instruction.Command)) throw new InvalidDataException($"{instruction.Script} line {instruction.Line} ({instruction.Command}) acts on {node.Name} in a way a deletion cannot take out; edit the script directly.");
+            if (instruction.Command == "AddChild" && instruction.Args.Count > 0) notes.Add($"{instruction.Args[0]} was attached to {node.Name} and is no longer in the world.");
+        }
+        foreach (var instruction in origin.Applied.Concat(origin.Named).Prepend(created)) edit.Comment(instruction);
+        return new(label, edit.Changes(), $"{created.Script} line {created.Line}", notes);
+    }
+
+    /// <summary>
+    /// A plan that copies an object under the same parent, named <paramref name="name"/>, at <paramref name="transform"/>
+    /// (its local transform; the original's when null). A mission database node is copied in its glTF file (sharing its
+    /// meshes); an object a script loaded is loaded again by lines added before the world is written, repeating the
+    /// instructions that set it up.
+    /// </summary>
+    public static SourceEditPlan PlanDuplicate(SourceObjectTarget target, string name, ObjectTransform? transform, CancellationToken token = default)
+    {
+        var node = target.Node; var origin = target.Origin;
+        CheckName(name);
+        if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can be copied here.");
+        if (target.World.Nodes.Any(n => n.Name == name)) throw new InvalidDataException($"The world already has a node named {name}; choose another name.");
+        if (transform != null) { Check(transform.Value.Position); Check(transform.Value.RotationDegrees); Check(transform.Value.Scale); }
+        string label = $"Copy {node.Name} as {name}";
+        if (origin.ModelFile != null)
+        {
+            if (!origin.Database) throw new InvalidDataException($"{node.Name} is part of the model file {origin.ModelFile}; copy the object that loads it.");
+            return GltfFile(target.Workspace, origin, label, (root, _) =>
+            {
+                int copy = GltfNodeEdits.Duplicate(root, origin.ModelNode, name);
+                if (transform != null) GltfNodeEdits.SetLocal((JsonObject)root["nodes"]![copy]!, transform.Value.Matrix());
+            }, token, ["The copy shares the original's meshes and textures."]);
+        }
+        var created = Created(target, ["LoadGameGen"], "copied");
+        string file = origin.LoadedFile ?? throw new InvalidDataException($"{node.Name}'s LoadGameGen found no model file.");
+        var parent = SingleParent(target, node, "copied");
+        List<IReadOnlyList<string>> lines = [["SetModelDirectory", "..\\" + Path.GetDirectoryName(file.Replace('\\', '/'))!.Replace('/', '\\')], ["LoadGameGen", Token(created.Args[0]), name]];
+        List<string> notes = [];
+        foreach (var instruction in origin.Applied)
+        {
+            if (TransformCommands.Contains(instruction.Command) && transform != null) continue;
+            if (instruction.Command == "AddChild") { notes.Add($"{(instruction.Args.Count > 0 ? instruction.Args[0] : "A node")}, which a script attached to {node.Name}, is not copied."); continue; }
+            if (!Copyable.Contains(instruction.Command)) throw new InvalidDataException($"{instruction.Script} line {instruction.Line} ({instruction.Command}) acts on {node.Name} in a way a copy cannot repeat; copy it in the script.");
+            lines.Add([instruction.Command, .. instruction.Args.Select(Token)]);
+        }
+        if (transform is { } placed)
+        {
+            lines.Add(["Object3DTranslate", Number(placed.Position.X), Number(placed.Position.Y), Number(placed.Position.Z)]);
+            if (placed.RotationDegrees != Vector3.Zero) lines.Add(["Object3DRotate", Number(placed.RotationDegrees.X), Number(placed.RotationDegrees.Y), Number(placed.RotationDegrees.Z)]);
+            if (placed.Scale != Vector3.One) lines.Add(["Object3DScale", Number(placed.Scale.X), Number(placed.Scale.Y), Number(placed.Scale.Z)]);
+        }
+        lines.Add(["FindNode", parent.Name]); lines.Add(["AddChild", name]);
+        ScriptEdit edit = new(target.Workspace, SourceBuilder.WorldScript(target.Mission), target.Executions, token);
+        edit.InsertBeforeWrite(lines);
+        return new(label, edit.Changes(), $"{SourceBuilder.WorldScript(target.Mission)}, before the world is written", notes)
+        {
+            Additions = [new(file, name, parent.Class == WorldNodeClass.World ? Vector3.Zero : null)],
+        };
+    }
+
+    /// <summary>
+    /// A plan that moves an object under <paramref name="parent"/> (null: a root of the mission database, which joins the
+    /// world), keeping its place in the world. A mission database node moves within its glTF file under another node of
+    /// that file; an object a script attached is attached by lines added before the world is written instead, its old
+    /// AddChild turned into a comment and its transform changed so it stays where it was.
+    /// </summary>
+    public static SourceEditPlan PlanReparent(SourceObjectTarget target, WorldNode? parent, CancellationToken token = default)
+    {
+        var node = target.Node; var origin = target.Origin;
+        if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can move to another parent here.");
+        if (parent != null && (ReferenceEquals(parent, node) || Ancestors(parent).Contains(node))) throw new InvalidDataException($"{node.Name} cannot move under itself or one of its own parts.");
+        string label = parent == null ? $"Move {node.Name} to the world" : $"Move {node.Name} under {parent.Name}";
+        if (origin.ModelFile != null)
+        {
+            if (!origin.Database) throw new InvalidDataException($"{node.Name} is part of the model file {origin.ModelFile}; move the object that loads it.");
+            int? into = null;
+            if (parent != null && parent.Class != WorldNodeClass.World)
+            {
+                if (!target.Provenance.TryGetValue(parent, out var p) || !p.Database || !string.Equals(p.ModelFile, origin.ModelFile, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"{parent.Name} is not a node of {origin.ModelFile}; a mission database node can only move under another node of the database, or to the world.");
+                into = p.ModelNode;
+            }
+            return GltfFile(target.Workspace, origin, label, (root, _) => GltfNodeEdits.Reparent(root, origin.ModelNode, into), token,
+                [into == null ? $"{node.Name} becomes a root of the mission database, which joins the world and its grid." : $"{node.Name} moves with {parent!.Name} from now on."]);
+        }
+        var created = Created(target, ["LoadGameGen", "NewObject3D"], "moved");
+        var current = SingleParent(target, node, "moved");
+        if (parent == null)
+        {
+            var worlds = target.World.Nodes.Where(n => n.Class == WorldNodeClass.World).Take(2).ToList();
+            parent = worlds.Count == 1 ? worlds[0] : throw new InvalidDataException($"Choose the node to move {node.Name} under.");
+        }
+        if (ReferenceEquals(parent, current)) throw new InvalidDataException($"{node.Name} is already under {parent.Name}.");
+        Unique(target, parent.Name, "its new parent");
+        Unique(target, node.Name, "it");
+        var attached = origin.Named.Where(n => n.Command == "AddChild").ToList();
+        ScriptEdit edit = new(target.Workspace, SourceBuilder.WorldScript(target.Mission), target.Executions, token);
+        if (!created.Script.Equals(SourceBuilder.WorldScript(target.Mission), StringComparison.OrdinalIgnoreCase) || attached.Any(a => !a.Script.Equals(created.Script, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException($"{node.Name} is set up outside the mission's world script; move it in the scripts directly.");
+        foreach (var instruction in attached) edit.Comment(instruction);
+        // Keep the world placement: the local transform becomes the old world transform relative to the new parent.
+        if (node.Class == WorldNodeClass.Object3D && Matrix4x4.Invert(WorldMatrix(parent), out var inverse))
+        {
+            var local = ObjectTransform.FromMatrix(WorldMatrix(node) * inverse);
+            var anchor = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).OrderBy(w => w.Line).LastOrDefault() ?? created;
+            edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", local.Position, Vector3.Zero, anchor);
+            edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", Round(local.RotationDegrees), Vector3.Zero, anchor);
+            edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", Round(local.Scale), Vector3.One, anchor);
+        }
+        edit.InsertBeforeWrite([["FindNode", parent.Name], ["AddChild", node.Name]]);
+        return new(label, edit.Changes(), $"{created.Script} line {created.Line}", []);
+    }
+
+    private static readonly HashSet<string> Copyable = new(["Object3DTranslate", "Object3DRotate", "Object3DScale", "SetAltitudeSurface", "SetIntersectSurface", "SetIntersectBBOX", "SetProximity", "SetLandmark", "NodeSetCanModify", "NodeSetOverwrite", "NodeSetLighting"], StringComparer.Ordinal);
+    private static readonly HashSet<string> Disableable = new([.. Copyable, "AddChild", "DeleteChild", "NodeSetDescription"], StringComparer.Ordinal);
+    private static bool Same(SourceInstruction? a, SourceInstruction b) => a != null && a.Line == b.Line && a.Script.Equals(b.Script, StringComparison.OrdinalIgnoreCase);
+    private static SourceInstruction Created(SourceObjectTarget target, string[] commands, string verb)
+    {
+        var origin = target.Origin;
+        var created = origin.Created ?? throw new InvalidDataException($"{target.Node.Name} was neither loaded from a model nor created by a script instruction.");
+        if (!commands.Contains(created.Command)) throw new InvalidDataException($"{target.Node.Name} was made by {created.Command} ({created.Script} line {created.Line}); only objects a script loaded or created can be {verb} here.");
+        if (target.Provenance.Values.Any(p => p.Database && Same(p.Load, created))) throw new InvalidDataException($"{target.Node.Name} is the load of the mission database; it cannot be {verb}.");
+        return created;
+    }
+    private static WorldNode SingleParent(SourceObjectTarget target, WorldNode node, string verb)
+    {
+        if (node.Parents.Count == 0) throw new InvalidDataException($"{node.Name} is not placed in the world (a template that resources place copies of by name); it cannot be {verb} here.");
+        if (node.Parents.Count > 1) throw new InvalidDataException($"{node.Name} has several parents; it cannot be {verb} here.");
+        Unique(target, node.Parents[0].Name, $"{node.Name}'s parent");
+        return node.Parents[0];
+    }
+    /// <summary>FindNode and AddChild find the newest node with a name; lines added at the end find the intended node only when its name is unique.</summary>
+    private static void Unique(SourceObjectTarget target, string name, string what)
+    {
+        int count = target.World.Nodes.Count(n => n.Name == name);
+        if (count != 1) throw new InvalidDataException($"{count} nodes are named {name}, so a script line cannot find {what} by name; rename them first.");
+    }
+    private static void CheckName(string name)
+    {
+        if (name.Length is 0 or > 32 || name.Any(c => c <= ' ' || c > '~' || c is '#' or '%' or ',' or ';' or '"'))
+            throw new InvalidDataException("A node name has 1–32 printable characters without spaces, commas, quotes or # % ;.");
+    }
+    /// <summary>An argument as one script token, refused when the tokenizer would read it otherwise.</summary>
+    private static string Token(string value) => GameGenScriptText.WriteLine(["X", value]) is not null && value.Length > 0 ? value : throw new InvalidDataException($"'{value}' cannot be written as one script token.");
+    private static IEnumerable<WorldNode> Ancestors(WorldNode node)
+    {
+        HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Stack<WorldNode> pending = new(node.Parents);
+        while (pending.TryPop(out var parent)) if (seen.Add(parent)) { yield return parent; foreach (var up in parent.Parents) pending.Push(up); }
+    }
+    /// <summary>A node's world transform: its local transform under its first parent's, up to the root.</summary>
+    private static Matrix4x4 WorldMatrix(WorldNode node)
+    {
+        var m = Matrix4x4.Identity; WorldNode? at = node;
+        for (int depth = 0; at != null && depth <= GltfDocument.MaximumDepth; depth++, at = at.Parents.FirstOrDefault())
+            if (at.Class == WorldNodeClass.Object3D) m *= WorldUpdate.LocalMatrix(at) ?? Matrix4x4.Identity;
+        return m;
+    }
+    /// <summary>Rounds values a matrix round trip leaves a hair off (89.99999 → 90, 1.0000001 → 1).</summary>
+    private static Vector3 Round(Vector3 v) => new(R(v.X), R(v.Y), R(v.Z));
+    private static float R(float x) => MathF.Abs(x - MathF.Round(x, 3)) < 1e-4f ? MathF.Round(x, 3) : x;
+
     /// <summary>A script number as the shipped scripts write them: shortest round-trip form with a decimal point.</summary>
     public static string Number(float value)
     {
@@ -153,7 +362,10 @@ public static class SourceObjectEdits
         return text.Contains('.') || text.Contains('E') ? text : text + ".0";
     }
 
-    private static SourceEditPlan GltfEdit(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject> change, CancellationToken token)
+    private static SourceEditPlan GltfEdit(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject> change, CancellationToken token) =>
+        GltfFile(workspace, origin, label, (_, node) => change(node), token, []);
+    /// <summary>A change of the glTF file a node came from: <paramref name="change"/> gets the document and the node.</summary>
+    private static SourceEditPlan GltfFile(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject, JsonObject> change, CancellationToken token, IReadOnlyList<string> notes)
     {
         string file = origin.ModelFile!;
         byte[] bytes = workspace.Read(file, token) ?? throw new InvalidDataException($"{file} no longer exists.");
@@ -161,15 +373,15 @@ public static class SourceObjectEdits
         JsonNode? root;
         try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }); }
         catch (JsonException ex) { throw new InvalidDataException($"{file} is not valid JSON: {ex.Message}", ex); }
-        if (root?["nodes"] is not JsonArray nodes || origin.ModelNode < 0 || origin.ModelNode >= nodes.Count || nodes[origin.ModelNode] is not JsonObject node)
+        if (root is not JsonObject document || document["nodes"] is not JsonArray nodes || origin.ModelNode < 0 || origin.ModelNode >= nodes.Count || nodes[origin.ModelNode] is not JsonObject node)
             throw new InvalidDataException($"{file} no longer has node {origin.ModelNode}; rebuild the world.");
-        change(node);
+        change(document, node);
         // zStudio and Blender write glTF indented or minified; keep the file's style.
         bool indented = bytes.AsSpan(0, Math.Min(bytes.Length, 4096)).Contains((byte)'\n');
         byte[] content = Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = indented }));
-        List<string> notes = [];
-        if (!origin.Database) notes.Add($"{file} is a model file: the change applies wherever it is loaded.");
-        return new(label, [(file, content)], $"{file} node {origin.ModelNode}", notes);
+        List<string> all = [.. notes];
+        if (!origin.Database) all.Add($"{file} is a model file: the change applies wherever it is loaded.");
+        return new(label, [(file, content)], $"{file} node {origin.ModelNode}", all);
     }
     private static JsonArray Array(params float[] values) => new(values.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());
     private static void Check(Vector3 v)
@@ -206,6 +418,12 @@ public static class SourceObjectEdits
             if (instruction.Tokens.Skip(1).Any(t => t.Contains('%'))) throw new InvalidDataException($"{instruction.Script} line {instruction.Line} uses macros; edit it in the script directly.");
             lines[instruction.Line] = tokens;
         }
+        private readonly HashSet<int> comments = [];
+        private readonly List<IReadOnlyList<string>> beforeWrite = [];
+        /// <summary>Turns an instruction into a comment.</summary>
+        public void Comment(SourceInstruction instruction) { Editable(instruction); comments.Add(instruction.Line); }
+        /// <summary>Adds lines right before the instruction that writes the world.</summary>
+        public void InsertBeforeWrite(IEnumerable<IReadOnlyList<string>> tokens) => beforeWrite.AddRange(tokens);
         public void Insert(SourceInstruction after, IReadOnlyList<string> tokens)
         {
             Editable(after);
@@ -234,6 +452,18 @@ public static class SourceObjectEdits
                 if (!current.IsInstruction) throw new InvalidDataException($"{relative} line {line} changed since the world was built; rebuild it first.");
                 syntax = GameGenScriptSyntax.Parse(syntax.ReplaceTokens(line, values));
             }
+            foreach (int line in comments)
+            {
+                if (!syntax.Line(line).IsInstruction) throw new InvalidDataException($"{relative} line {line} changed since the world was built; rebuild it first.");
+                syntax = GameGenScriptSyntax.Parse(syntax.CommentOut(line));
+            }
+            if (beforeWrite.Count > 0)
+            {
+                int write = syntax.Lines.FirstOrDefault(l => l.IsInstruction && l.Tokens[0] == "GameZWriteZBDFile")?.Number
+                    ?? throw new InvalidDataException($"{relative} does not write the world itself (GameZWriteZBDFile); add the lines to the script that does.");
+                if (!insertions.TryGetValue(write, out var list)) insertions[write] = list = [];
+                list.AddRange(beforeWrite);
+            }
             // Line-changing steps run from the bottom up, so the line numbers of those still to come stay valid.
             var steps = insertions.Select(i => (Line: i.Key, Rewrite: false)).Concat(lines.Keys.Select(l => (Line: l, Rewrite: true))).OrderByDescending(s => s.Line).ThenBy(s => s.Rewrite);
             foreach (var (line, rewrite) in steps)
@@ -243,7 +473,7 @@ public static class SourceObjectEdits
                 syntax = GameGenScriptSyntax.Parse(syntax.InsertLines(line + 1, [lines[line]]));
                 syntax = GameGenScriptSyntax.Parse(syntax.CommentOut(line));
             }
-            if (replacements.Count == 0 && lines.Count == 0 && insertions.Count == 0) return [];
+            if (replacements.Count == 0 && lines.Count == 0 && insertions.Count == 0 && comments.Count == 0) return [];
             return [(relative, syntax.Encode())];
         }
     }

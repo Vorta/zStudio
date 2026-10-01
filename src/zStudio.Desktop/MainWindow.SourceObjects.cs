@@ -16,7 +16,10 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     /// <summary>The built world read once per document, for current transforms and flags.</summary>
-    private sealed record SourceWorldModelEntry(GameZWorld World, IReadOnlyDictionary<int, WorldNode> Slots);
+    private sealed record SourceWorldModelEntry(GameZWorld World, IReadOnlyDictionary<int, WorldNode> Slots)
+    {
+        public IReadOnlyDictionary<WorldNode, WorldNodeProvenance>? Provenance { get; set; }
+    }
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<DocumentModel, SourceWorldModelEntry> sourceWorldModels = new();
     private SourceWorldModelEntry SourceWorldModel(DocumentModel doc)
     {
@@ -68,8 +71,74 @@ public partial class MainWindow
             int runs = doc.SourceBuild.Executions.GetValueOrDefault((writer.Script, writer.Line));
             notes.Add($"{command}: {writer.Script} line {writer.Line}" + (runs > 1 ? $" (runs {runs} times; edit the script directly)" : ""));
         }
-        return new(node, built.Name, built.Class.ToString(), transform, built.Flags, origin, source, notes);
+        var whole = SourceObjectEdits.ObjectOf(built, SourceWorldProvenance(doc));
+        return new(node, built.Name, built.Class.ToString(), transform, built.Flags, origin, source, notes)
+        {
+            Parent = built.Parents.FirstOrDefault()?.Name, Object = ReferenceEquals(whole, built) ? null : whole.Name,
+        };
     }
+    /// <summary>The provenance of the shown world's nodes, by node.</summary>
+    private IReadOnlyDictionary<WorldNode, WorldNodeProvenance> SourceWorldProvenance(DocumentModel doc)
+    {
+        var model = SourceWorldModel(doc);
+        if (model.Provenance is { } cached) return cached;
+        Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
+        if (doc.SourceBuild is { } build) foreach (var (slot, node) in model.Slots) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
+        model.Provenance = provenance;
+        return provenance;
+    }
+    /// <summary>The object a structural edit of a shown node applies to, with the world and provenance it is checked against.</summary>
+    private SourceObjectTarget SourceObjectTargetFor(DocumentModel doc, int node, SourceWorkspace workspace)
+    {
+        if (doc.SourceWorld is not { } session || doc.SourceBuild is not { } build) throw new StudioCommandException("unsupported", "This document is not a source world.");
+        var model = SourceWorldModel(doc);
+        var built = model.Slots.GetValueOrDefault(node) ?? throw new StudioCommandException("stale_record", $"Scene node {node} is not in the built world.");
+        var provenance = SourceWorldProvenance(doc);
+        return new(workspace, session.Mission, model.World, SourceObjectEdits.ObjectOf(built, provenance), provenance, build.Executions);
+    }
+    /// <summary>A node of the shown world by name, refused when no node or several nodes have it.</summary>
+    private WorldNode SourceWorldNodeNamed(DocumentModel doc, string name)
+    {
+        var matches = SourceWorldModel(doc).World.Nodes.Where(n => n.Name == name).Take(2).ToList();
+        return matches.Count switch
+        {
+            0 => throw new StudioCommandException("invalid_argument", $"The world has no node named {name}."),
+            1 => matches[0],
+            _ => throw new StudioCommandException("invalid_argument", $"Several nodes are named {name}; choose the parent by its node index (zstudio_source_world_object_edit parent)."),
+        };
+    }
+    /// <summary>Plans a delete, copy or re-parenting of the object a node belongs to and rebuilds the world with it.</summary>
+    private Task<DocumentModel> EditSourceStructureAsync(DocumentModel doc, int node, Func<SourceObjectTarget, SourceEditPlan> plan, CancellationToken token)
+    {
+        var state = DescribeSourceObject(doc, node);
+        List<SourceModelAddition> additions = [];
+        return EditSourceWorldAsync(doc, $"Editing {state.Object ?? state.Name}", workspace =>
+        {
+            var planned = plan(SourceObjectTargetFor(doc, node, workspace));
+            foreach (string note in planned.Notes) ViewModel.Status = note;
+            additions.AddRange(planned.Additions);
+            return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is { } t ? () => workspace.Retract(t) : null;
+        }, token, additions);
+    }
+    private Task<DocumentModel> DeleteSourceObjectAsync(DocumentModel doc, int node, CancellationToken token) =>
+        EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanDelete(target, token), token);
+    private Task<DocumentModel> DuplicateSourceObjectAsync(DocumentModel doc, int node, string name, ObjectTransform? transform, CancellationToken token) =>
+        EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanDuplicate(target, name, transform, token), token);
+    /// <summary>Moves the object under <paramref name="parent"/> (a scene node index; null for the world).</summary>
+    private Task<DocumentModel> ReparentSourceObjectAsync(DocumentModel doc, int node, int? parent, CancellationToken token)
+    {
+        WorldNode? into = null;
+        if (parent is int p)
+        {
+            into = SourceWorldModel(doc).Slots.GetValueOrDefault(p) ?? throw new StudioCommandException("stale_record", $"Scene node {p} is not in the built world.");
+            if (into.Class == WorldNodeClass.World) into = null;
+        }
+        return EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanReparent(target, into, token), token);
+    }
+    /// <summary>The scene node index of the newest node with a name in a rebuilt world, for following a copy.</summary>
+    private static int? SourceNodeNamed(DocumentModel doc, string name) =>
+        doc.SourceBuild is { } build && GameZWorldReader.FromDocument(doc.Document, doc.Lifetime.Token) is var world
+            ? GameZWriter.NodeSlots(world).Where(p => p.Key.Name == name).Select(p => (int?)p.Value).DefaultIfEmpty(null).Max() : null;
 
     /// <summary>Plans one edit of a source world's object against the workspace and rebuilds the world with it.</summary>
     private Task<DocumentModel> EditSourceObjectAsync(DocumentModel doc, int node, Func<SourceWorkspace, SourceObjectState, IReadOnlyDictionary<(string Script, int Line), int>, SourceEditPlan> plan, CancellationToken token)
@@ -103,7 +172,15 @@ public partial class MainWindow
         SourceObjectPropertiesEditor fields = new(state,
             transform => FollowSourceObjectAsync(state, () => MoveSourceObjectAsync(doc, node, transform, CancellationToken.None)),
             (bit, on) => FollowSourceObjectAsync(state, () => FlagSourceObjectAsync(doc, node, bit, on, CancellationToken.None)),
-            (command, args) => FollowSourceObjectAsync(state, () => CommandSourceObjectAsync(doc, node, command, args, CancellationToken.None)));
+            (command, args) => FollowSourceObjectAsync(state, () => CommandSourceObjectAsync(doc, node, command, args, CancellationToken.None)),
+            new(parent => FollowSourceObjectAsync(state, () => ReparentSourceObjectAsync(doc, node, GameZWriter.NodeSlots(SourceWorldModel(doc).World)[SourceWorldNodeNamed(doc, parent)], CancellationToken.None)),
+                async name =>
+                {
+                    var next = await DuplicateSourceObjectAsync(doc, node, name, null, CancellationToken.None);
+                    if (!next.IsDisposed && SourceNodeNamed(next, name) is int copy && (propertiesWindow?.Document == null || propertiesWindow.Document == next))
+                        try { ShowSourceObjectProperties(next, copy); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+                },
+                async () => { await DeleteSourceObjectAsync(doc, node, CancellationToken.None); propertiesWindow?.Close(); }));
         bool opened = window.SetSourceObject(doc, fields);
         PresentProperties(window, opened);
         return opened;
@@ -135,6 +212,7 @@ public partial class MainWindow
                     writers = origin.Writers.Take(32).ToDictionary(w => w.Key, w => Instruction(w.Value))
                 },
                 editableFlags = SourceObjectPropertiesEditor.EditableFlags.Select(f => new { bit = $"0x{f.Bit:X}", label = f.Label, on = (state.Flags & f.Bit) != 0 }).ToArray(),
+                applied = origin.Applied.Take(32).Select(Instruction).ToArray(), appliedCount = origin.Applied.Count,
                 propertyCommands = SourceObjectEdits.PropertyCommands.Select(p => new { command = p.Key, arguments = p.Value, set = origin.Writers.TryGetValue(p.Key, out var w) ? w.Tokens.Skip(1).Take(16).ToArray() : null }).Where(p => p.set != null || CommandFits(state.Class, p.command)).ToArray()
             });
             object? Instruction(SourceInstruction? i) => i == null ? null : new { script = i.Script, line = i.Line, command = i.Command, tokens = i.Tokens.Take(16).Select(t => Bounded(t, 128)).ToArray(), runs = d.SourceBuild!.Executions.GetValueOrDefault((i.Script, i.Line)) };
@@ -149,19 +227,43 @@ public partial class MainWindow
                 var args = (a["arguments"] as JsonArray)!.Select(v => v!.GetValue<string>()).ToArray();
                 return Result(new { document = DocumentState(await CommandSourceObjectAsync(d, Int(a, "node"), Text(a, "command"), args, token)) });
             });
-        RegisterJob(r, "source_world_object_edit", "Move, rotate or scale a world object of a source world, or set or clear one of its node flags, as one undoable change of the project's workspace. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. The world rebuilds and the result is the replacement document; a change the world cannot be built with is taken back.",
+        RegisterJob(r, "source_world_object_edit", "Edit a world object of a source world as one undoable change of the project's workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, or move it under another parent. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script's object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The world rebuilds and the result is the replacement document (with the copy's node index); a change the world cannot be built with is taken back.",
             [DocumentParameter, RevisionParameter, new("node", "integer", "Scene node index.", true, Minimum: 0, Maximum: int.MaxValue),
-             new("position", "object", "New local position.", Properties: [P("x", "number", "X.", true), P("y", "number", "Y.", true), P("z", "number", "Z.", true)]),
+             P("action", "string", "What to do; inferred from the other arguments when omitted (a transform or a flag).", false, ["transform", "flag", "duplicate", "delete", "parent"]),
+             new("position", "object", "New local position (or the copy's).", Properties: [P("x", "number", "X.", true), P("y", "number", "Y.", true), P("z", "number", "Z.", true)]),
              new("rotationDegrees", "object", "New local rotation in degrees (about Y, then X, then Z, as Object3DRotate).", Properties: [P("x", "number", "X.", true), P("y", "number", "Y.", true), P("z", "number", "Z.", true)]),
              new("scale", "object", "New local scale.", Properties: [P("x", "number", "X.", true), P("y", "number", "Y.", true), P("z", "number", "Z.", true)]),
              P("flag", "string", "Node flag to set or clear.", false, SourceObjectPropertiesEditor.EditableFlags.Select(f => $"0x{f.Bit:X}").ToArray()),
-             P("on", "boolean", "Whether the flag is set; required with flag.")], true,
+             P("on", "boolean", "Whether the flag is set; required with flag."),
+             new("name", "string", "The copy's node name (duplicate): 1–32 printable characters without spaces, commas, quotes or # % ;, used by no node of the world."),
+             new("parent", "integer", "The new parent's scene node index (parent); -1 or the world's node makes it a root of the world.", Minimum: -1, Maximum: int.MaxValue)], true,
             async (a, token) =>
             {
                 var d = TargetDocument(a, true); int node = Int(a, "node");
                 bool moves = a["position"] != null || a["rotationDegrees"] != null || a["scale"] != null;
-                if (moves == (a["flag"] != null)) throw new StudioCommandException("invalid_argument", "Give a transform (position, rotationDegrees, scale) or one flag.");
+                string action = a["action"] is null ? (moves ? "transform" : "flag") : Text(a, "action");
                 DocumentModel next;
+                if (action == "duplicate")
+                {
+                    if (a["name"] is null) throw new StudioCommandException("invalid_argument", "Give the copy's name.");
+                    string name = Text(a, "name");
+                    ObjectTransform? placed = null;
+                    if (moves)
+                    {
+                        var current = DescribeSourceObject(d, node).Transform ?? throw new StudioCommandException("unsupported", "Only object nodes have a transform.");
+                        placed = new(Vector(a, "position") ?? current.Position, Vector(a, "rotationDegrees") ?? current.RotationDegrees, Vector(a, "scale") ?? current.Scale);
+                    }
+                    next = await DuplicateSourceObjectAsync(d, node, name, placed, token);
+                    return Result(new { document = DocumentState(next), copy = SourceNodeNamed(next, name) });
+                }
+                if (action == "delete") return Result(new { document = DocumentState(await DeleteSourceObjectAsync(d, node, token)) });
+                if (action == "parent")
+                {
+                    if (a["parent"] is null) throw new StudioCommandException("invalid_argument", "Give the new parent's node index, or -1 for the world.");
+                    int parent = Int(a, "parent");
+                    return Result(new { document = DocumentState(await ReparentSourceObjectAsync(d, node, parent < 0 ? null : parent, token)) });
+                }
+                if ((action == "transform") != moves || (action == "flag") != (a["flag"] != null)) throw new StudioCommandException("invalid_argument", "Give a transform (position, rotationDegrees, scale) or one flag.");
                 if (moves)
                 {
                     var current = DescribeSourceObject(d, node).Transform ?? throw new StudioCommandException("unsupported", "Only object nodes have a transform.");

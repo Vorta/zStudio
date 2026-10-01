@@ -5264,7 +5264,7 @@
   },
   {
     "Name": "zstudio_source_world_object_edit",
-    "Description": "Move, rotate or scale a world object of a source world, or set or clear one of its node flags, as one undoable change of the project\u0027s workspace. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. The world rebuilds and the result is the replacement document; a change the world cannot be built with is taken back. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, or move it under another parent. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The world rebuilds and the result is the replacement document (with the copy\u0027s node index); a change the world cannot be built with is taken back. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5296,9 +5296,23 @@
         "Maximum": 2147483647
       },
       {
+        "Name": "action",
+        "Type": "string",
+        "Description": "What to do; inferred from the other arguments when omitted (a transform or a flag).",
+        "Required": false,
+        "Choices": [
+          "transform",
+          "flag",
+          "duplicate",
+          "delete",
+          "parent"
+        ],
+        "Properties": null
+      },
+      {
         "Name": "position",
         "Type": "object",
-        "Description": "New local position.",
+        "Description": "New local position (or the copy\u0027s).",
         "Required": false,
         "Choices": null,
         "Properties": [
@@ -5417,6 +5431,24 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "The copy\u0027s node name (duplicate): 1\u201332 printable characters without spaces, commas, quotes or # % ;, used by no node of the world.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "parent",
+        "Type": "integer",
+        "Description": "The new parent\u0027s scene node index (parent); -1 or the world\u0027s node makes it a root of the world.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -1,
+        "Maximum": 2147483647
       }
     ]
   },

@@ -19,12 +19,22 @@ public sealed class WorldNodeProvenance
     public int ModelNode { get; internal set; } = -1;
     /// <summary>The LoadGameGen that read the node's file.</summary>
     public SourceInstruction? Load { get; internal set; }
-    /// <summary>A scene root of the mission database (the load after GameGenSetWorld), which joins the world itself.</summary>
+    /// <summary>A node of the mission database file itself (the load after GameGenSetWorld, whose scene roots join the world), not of a file it references.</summary>
     public bool Database { get; internal set; }
+    /// <summary>For the root a LoadGameGen created: the project path of the glTF file it loaded.</summary>
+    public string? LoadedFile { get; internal set; }
     /// <summary>The instruction that created the node (LoadGameGen for a load's root, NewObject3D, LightNew, NewCamera …).</summary>
     public SourceInstruction? Created { get; internal set; }
     /// <summary>The last AddChild that attached the node.</summary>
     public SourceInstruction? Attached { get; internal set; }
     /// <summary>Per command, the last instruction that changed the node (Object3DTranslate, SetIntersectSurface, WorldSetFogColor …).</summary>
     public Dictionary<string, SourceInstruction> Writers { get; } = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Every instruction that ran while the node was the current node and acted on it, in order: its property and flag
+    /// commands, the AddChild and DeleteChild of its children, and commands the build does not apply. Selections
+    /// (FindNode) and creations are not included: they change the current node without using it.
+    /// </summary>
+    public List<SourceInstruction> Applied { get; } = [];
+    /// <summary>Instructions that found the node by name to act on it as something other than the current node: AddChild, DeleteTree, DeleteChild, WorldAddLight, CameraSetWorld, CameraSetWindow, CameraSetHorizon.</summary>
+    public List<SourceInstruction> Named { get; } = [];
 }

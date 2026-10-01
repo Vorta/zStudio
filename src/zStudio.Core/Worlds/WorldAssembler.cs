@@ -52,6 +52,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         "Object3DScale", "SetAltitudeSurface", "SetIntersectSurface", "SetIntersectBBOX", "SetProximity", "SetLandmark", "NodeSetCanModify", "NodeSetOverwrite",
         "NodeSetLighting"], StringComparer.Ordinal);
     private static readonly HashSet<string> CreateCommands = new(["NewWorld", "NewWindow", "NewDisplay", "NewCamera", "LightNew", "NewObject3D", "LoadGameGen"], StringComparer.Ordinal);
+    /// <summary>Commands that act on the current node besides <see cref="NodeCommands"/>; with those, what <see cref="WorldNodeProvenance.Applied"/> records.</summary>
+    private static readonly HashSet<string> CurrentCommands = new(["AddChild", "DeleteChild", "FindSubNode", "GameGenSetWorld"], StringComparer.Ordinal);
     public string? WorldFile { get; private set; }
     public string? AnimationFile { get; private set; }
     /// <summary>World children in the order they were added; their cells are assigned after the update pass.</summary>
@@ -98,7 +100,11 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             var target = current;
             Run(command, args, relative);
             if (CreateCommands.Contains(command) && current != null && current != target) Origin(current).Created = instruction;
-            else if (NodeCommands.Contains(command) && target != null) Origin(target).Writers[command] = instruction;
+            else if (target != null && (NodeCommands.Contains(command) || CurrentCommands.Contains(command) || Unsupported.Contains(command)))
+            {
+                var origin = Origin(target); origin.Applied.Add(instruction);
+                if (NodeCommands.Contains(command)) origin.Writers[command] = instruction;
+            }
             instruction = null;
         }
     }
@@ -152,7 +158,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "WorldSetFogDensity": WorldSet(w => w.SetPayloadFloat(0x30, F(0))); break;
             case "WorldAddLight":
                 if (current?.Class == WorldNodeClass.World && Find(A(0), WorldNodeClass.Light) is { } light)
-                { current.WorldLights.Add(light); light.AttachedWorlds.Add(current); }
+                { current.WorldLights.Add(light); light.AttachedWorlds.Add(current); Name(light); }
                 break;
 
             case "NewWindow":
@@ -166,9 +172,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "DisplaySetClearColor": if (current?.Class == WorldNodeClass.Display) { current.SetPayloadFloat(16, F(0)); current.SetPayloadFloat(20, F(1)); current.SetPayloadFloat(24, F(2)); } break;
             case "NewCamera": NewCamera(A(0)); break;
             case "CameraSetActive": break;
-            case "CameraSetWorld": if (current?.Class == WorldNodeClass.Camera) current.CameraWorld = Find(A(0), WorldNodeClass.World); break;
-            case "CameraSetWindow": if (current?.Class == WorldNodeClass.Camera) current.CameraWindow = Find(A(0), WorldNodeClass.Window); break;
-            case "CameraSetHorizon": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizon = Find(A(0), null); break;
+            case "CameraSetWorld": if (current?.Class == WorldNodeClass.Camera) current.CameraWorld = Name(Find(A(0), WorldNodeClass.World)); break;
+            case "CameraSetWindow": if (current?.Class == WorldNodeClass.Camera) current.CameraWindow = Name(Find(A(0), WorldNodeClass.Window)); break;
+            case "CameraSetHorizon": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizon = Name(Find(A(0), null)); break;
             case "CameraSetLODMultiplier": if (current?.Class == WorldNodeClass.Camera) { float m = F(0); current.SetPayloadFloat(208, m); current.SetPayloadFloat(212, m == 0 ? 0 : 1 / (m * m)); } break;
             case "CameraSetNearFarClip": if (current?.Class == WorldNodeClass.Camera) { current.SetPayloadFloat(176, F(0)); current.SetPayloadFloat(180, F(1)); current.SetPayloadInt(248, 1); } break;
             case "CameraSetFOV": if (current?.Class == WorldNodeClass.Camera) CameraFov(current, F(0), F(1)); break;
@@ -196,13 +202,13 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "FindSubNode": current = current == null ? null : FindSub(current, A(0)); if (current == null) Warn($"{script}: FindSubNode {A(0)} found no node."); break;
             case "NodeSetDescription": if (current != null) current.Name = A(0); break;
             case "AddChild":
-                if (current != null && Find(A(0), null) is { } child) { AddChild(current, child); if (instruction != null) Origin(child).Attached = instruction; }
+                if (current != null && Find(A(0), null) is { } child) { AddChild(current, child); if (instruction != null) Origin(child).Attached = instruction; Name(child); }
                 else Warn($"{script}: AddChild {A(0)} has no node or parent.");
                 break;
             case "DeleteChild":
-                if (current != null && FindSub(current, A(0)) is { } removed && removed != current) Unlink(current, removed);
+                if (current != null && FindSub(current, A(0)) is { } removed && removed != current) { Name(removed); Unlink(current, removed); }
                 break;
-            case "DeleteTree": if (Find(A(0), null) is { } tree) DeleteTree(tree); break;
+            case "DeleteTree": if (Find(A(0), null) is { } tree) { Name(tree); DeleteTree(tree); } break;
             case "NewObject3D": Object3D(Create(A(0), WorldNodeClass.Object3D)); break;
             case "Object3DTranslate": Trs(o => { o.SetPayloadFloat(0x54, F(0)); o.SetPayloadFloat(0x58, F(1)); o.SetPayloadFloat(0x5C, F(2)); }); break;
             case "Object3DRotate": Trs(o => { o.SetPayloadFloat(0x18, Radians(F(0))); o.SetPayloadFloat(0x1C, Radians(F(1))); o.SetPayloadFloat(0x20, Radians(F(2))); }); break;
@@ -224,6 +230,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             default: if (Unsupported.Contains(command)) Warn($"{script}: {command} changes the world in the game's interpreter, but the source build does not apply it."); break;
         }
 
+        // A node an instruction found by name to act on.
+        WorldNode? Name(WorldNode? node) { if (node != null && instruction != null) Origin(node).Named.Add(instruction); return node; }
         void WorldSet(Action<WorldNode> action) { if (current?.Class == WorldNodeClass.World) action(current); else Warn($"{script}: {command} needs a world node."); }
         void LightMode(int offset)
         {
@@ -396,10 +404,15 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         var (doc, documentPath) = Load(path);
         if (WorldGltf.RootFlags(doc) is { } rootFlags) root.Flags = (root.Flags & ~WorldGltf.CarriedFlags) | rootFlags;
         bool database = pendingWorld != null; var load = instruction;
+        Origin(root).LoadedFile = documentPath;
         WorldGltf.ImportContext context = new()
         {
             World = World,
-            NodeImported = (node, file, source) => { var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.Load = load; },
+            NodeImported = (node, file, source) =>
+            {
+                var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.Load = load;
+                origin.Database = database && string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase);
+            },
             Reference = (uri, from) => Load(Relative(from, uri)),
             TextureName = (uri, name, from) => Texture(uri, name, from),
             Token = token,
@@ -415,7 +428,6 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         HashSet<WorldNode> added = new(ReferenceEqualityComparer.Instance);
         foreach (var node in nodes)
         {
-            if (database) Origin(node).Database = true;
             AddNodes(node);
             root.Children.Add(node); node.Parents.Add(root);
             if (pendingWorld != null) { node.Parents.Add(pendingWorld); worldChildren.Add(node); }

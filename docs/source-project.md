@@ -68,6 +68,17 @@ Editing them (or `zstudio_source_world_object_edit`) changes that source:
 
   Edit those in the script.
 
+**Copy, delete and move to another parent.** Properties of an object offers **Parent** (a node's name), **Copy as** (the copy's name) and **Delete object**; `zstudio_source_world_object_edit` has the actions `duplicate`, `delete` and `parent`. They apply to the whole object: a part of a model a script loaded stands for that load, and Properties names it.
+
+| Object | Copy | Delete | Move to another parent |
+| --- | --- | --- | --- |
+| A node of the mission database | A copy of the glTF node and its descendants, beside it, sharing its meshes | The glTF node and its descendants leave the file | Moves in the glTF file, under another database node or to the world, keeping its place |
+| An object a script loaded | The load is repeated before the world is written: `SetModelDirectory`, `LoadGameGen`, its flag and transform commands, `FindNode` and `AddChild` | Every instruction that loaded, changed or attached it becomes a comment (`# LoadGameGen …`), so the rest of the script runs as before | Its `AddChild` becomes a comment and a new one attaches it before the world is written; its transform changes so it stays in place |
+
+Names are written into scripts and found by name, so a copy needs a name no node has, and a parent found by name must be the only node with it. A template (a loaded model no node holds, which resources place copies of) cannot be copied or moved, and objects other instructions use (a camera's horizon, a world's light) cannot be deleted. Animations and resources that find a deleted object by name no longer find it; Problems lists what the rebuild reports.
+
+**Out-of-date worlds.** When another world's edit or an undo changed a source this world was built from, its node, line and archive references are out of date: edits made from it are refused until it is reloaded. Undo, Add model and Update from Blender export do not depend on them.
+
 Fog, lights and cameras are set by script commands. Properties of the world, a light or a camera lists the commands that set it, for example `WorldSetFogColor 0.5 0.5 0.5`; changing one edits that instruction. `zstudio_source_world_command` sets any of them, adding the command after the instruction that created the node when no instruction set it yet.
 
 ### Models from other missions

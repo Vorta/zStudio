@@ -11,6 +11,10 @@ namespace Recoil.Zbd.Desktop;
 /// <summary>A world object of a source world as Properties shows it: what it is, where it came from, and its editable transform and flags.</summary>
 internal sealed record SourceObjectState(int Node, string Name, string Class, ObjectTransform? Transform, uint Flags, WorldNodeProvenance Origin, string Source, IReadOnlyList<string> Notes)
 {
+    /// <summary>The parent's name, or null for a node without one.</summary>
+    public string? Parent { get; init; }
+    /// <summary>The object that deleting, copying and re-parenting this node apply to, when it is not this node (a loaded model's root).</summary>
+    public string? Object { get; init; }
     /// <summary>Identifies the object across rebuilds: its glTF node, or the instruction that created it.</summary>
     public string Identity => Origin.ModelFile is { } file ? $"{file}#{Origin.ModelNode}" : Origin.Created is { } created ? $"{created.Script}:{created.Line}" : $"node:{Node}";
     public JsonObject Json()
@@ -21,9 +25,14 @@ internal sealed record SourceObjectState(int Node, string Name, string Class, Ob
             json["position"] = JsonData.Vector(t.Position); json["rotation_degrees"] = JsonData.Vector(t.RotationDegrees); json["scale"] = JsonData.Vector(t.Scale);
         }
         if (Notes.Count > 0) json["notes"] = new JsonArray(Notes.Select(n => (JsonNode?)JsonValue.Create(n)).ToArray());
+        if (Parent != null) json["parent"] = Parent;
+        if (Object != null) json["object"] = Object;
         return json;
     }
 }
+
+/// <summary>Structural edits Properties offers for an object: move under a parent (by name), copy as a new name, delete.</summary>
+internal sealed record SourceObjectStructure(Func<string, Task> Reparent, Func<string, Task> Duplicate, Func<Task> Delete);
 
 /// <summary>
 /// Properties of a world object in a source world. Edits change the sources that placed the object (see
@@ -41,13 +50,14 @@ internal sealed class SourceObjectPropertiesEditor : FieldEditor, IDisposable
     private readonly Func<ObjectTransform, Task> transform;
     private readonly Func<uint, bool, Task> flag;
     private readonly Func<string, IReadOnlyList<string>, Task>? command;
+    private readonly SourceObjectStructure? structure;
     public event Action? Changed;
     public JsonObject Json => state.Json();
     public SourceObjectState State => state;
 
-    public SourceObjectPropertiesEditor(SourceObjectState state, Func<ObjectTransform, Task> transform, Func<uint, bool, Task> flag, Func<string, IReadOnlyList<string>, Task>? command = null)
+    public SourceObjectPropertiesEditor(SourceObjectState state, Func<ObjectTransform, Task> transform, Func<uint, bool, Task> flag, Func<string, IReadOnlyList<string>, Task>? command = null, SourceObjectStructure? structure = null)
     {
-        this.state = state; this.transform = transform; this.flag = flag; this.command = command;
+        this.state = state; this.transform = transform; this.flag = flag; this.command = command; this.structure = structure;
         Build();
     }
 
@@ -78,6 +88,18 @@ internal sealed class SourceObjectPropertiesEditor : FieldEditor, IDisposable
                     });
             }
         if (state.Class != nameof(Recoil.Zbd.Core.Worlds.WorldNodeClass.Object3D) && state.Class != nameof(Recoil.Zbd.Core.Worlds.WorldNodeClass.Lod)) { Changed?.Invoke(); return; }
+        if (structure != null)
+        {
+            // Deleting, copying and re-parenting apply to the whole object (a loaded model's root), named when it is not this node.
+            if (state.Object != null) ReadOnlyText(form, $"Part of {state.Object}: copying, deleting and moving to another parent apply to {state.Object}.");
+            Input(form, "Parent", state.Parent ?? "", _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "a node's name; the world's name makes it a root of the world",
+                asyncCommit: async text => { text = text.Trim(); if (text.Length == 0) throw new FormatException("Enter the parent's name."); if (text != state.Parent) await structure.Reparent(text); });
+            Input(form, "Copy as", "", _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "the copy's name; Enter makes the copy",
+                asyncCommit: async text => { text = text.Trim(); if (text.Length > 0) await structure.Duplicate(text); });
+            StackPanel actions = new() { Orientation = Orientation.Horizontal };
+            AsyncButton(actions, "Delete object", structure.Delete);
+            form.Children.Add(actions);
+        }
         foreach (var (bit, label) in EditableFlags)
         {
             bool on = (state.Flags & bit) != 0;

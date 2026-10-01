@@ -259,6 +259,20 @@ Measured on the reconstructed 1999 data and read from the retail executable:
   - So **CanModify means "craters can form here" and ClipTo, which the original developers called "no clip", means "no crater may overlap this"**. Neither one affects collision.
   - Because the test is in plan view, a ClipTo surface above can cancel a crater on a floor below it. zStudio reports this; painting cannot change it.
 - **Soil** is set per material: water, seafloor, quicksand, lava, fire, or custom.
+  - Built-in names 0–5 (string table 0x4e0fd0); `LoadSoils` adds names 6–99 (0x481460). Polygons of one model can have different soils through different materials; the probe returns the hit polygon's own material.
+  - `CompareForReuse` (0x480d20) merges runtime material clones that differ only in soil when one of them is 0; source builds keep such materials distinct.
+- **Zone gate and filters** (retail, checked in the executable):
+  - The node zone byte (+0x30, 0xFF = any) is compared by `VariantTag::CurrentAllowsId` (0x476400) against the current set (count, three ids): it passes when its zone is 0xFF, the set is empty, or the set holds 0xFF or its zone.
+  - The gate is node flag 0x01000000 and only affects the altitude probes (0x443d20, 0x443f80, 0x4444b0, 0x444890). Rendering (0x44c0e0), segment queries for collision, line of sight and camera obstruction (0x4455f0 and others), proximity queries and turrets check the zone whatever the gate says.
+  - Every visited node is tested on its own zone and flags at every level; a rejected parent prunes its subtree. Actors take their zones from the top-level node they stand on, so a top-level piece with zone 0xFF passes every zone test.
+  - No script command sets the gate; in files it is a serialized flag.
+- **Camera zone probe** (`UpdateCameraVariantFromCameraPos`, 0x406470):
+  - A vertical line at the camera's x, z, searching only the query cell and the overflow list, in nodes with flags 0x04 and 0x08 whose gate admits the previous zones (it is hysteretic).
+  - Per node, the first polygon in entry order whose plan view contains the point is taken (0x484960); downward-facing polygons are not hit. **Stacked surfaces must therefore be separate nodes.** At most 32 candidates.
+  - The highest candidate at or below the camera wins (0x4290f0); with none below, the first in traversal order.
+  - A polygon with zone count 0 or an id 0xFF keeps the last valid set; no hit changes nothing. Count 0 means "no information", not "none".
+- **Per-player zones:** each tick, probe point 0's ground polygon gives the player's zones and the top-level node's zone; collision, AI line of sight and pickups use them, and AI vehicles only tick while their zones overlap the camera's (0x476370).
+- **Cells:** queries search only the cell(s) they touch plus the overflow list (0x443d20), so geometry overhanging into a neighbouring cell is invisible to probes there: terrain must be cut exactly at cell lines. A cell holds at most 32,767 nodes.
 
 ### Maps
 
@@ -591,7 +605,7 @@ The review found conflicts between earlier research notes and the source-project
 - **Runtime capacity.** The configured node, model and material pools are not the same as runtime headroom: copied actors, lights, effects and destruction also consume them.
 - **Zone probe.** Its origin, direction and range, which surfaces it accepts, which of stacked hits wins, initialization and no-hit behaviour, and per-player differences. This gates zone validation and general new-map support.
 - **Craters.** How the crater feature grid relates to the world cells, its limits and eviction, overlapping and repeated craters, crater reloading, and how splitting CanModify surfaces changes the number of crater models created. This gates automatic rechunking of crater-capable terrain.
-- **Model limits.** Static loading and drawing limits versus the runtime polygon routine's limits (about 921 vertices), normals, and growth while clipping craters. This gates the splitter profiles.
+- **Model limits.** The zDi building API allows 922 vertices (0x482720), 921 valid normals (0x482a10) and 57 corners per polygon, chunk-splitting polygons over 48 (0x483650); the ZBD loader checks nothing, and runtime scratch buffers hold 1,024 vertices and 64 corners. The splitter keeps 921 vertices and normals. Still open: growth while clipping craters.
 - **Vehicle roles.** Which roles need their own model (the tracks do), lookup scope and order, scroll and morph sharing, helper numbering and pivots, and other movement modes' helpers. This gates part splitting and custom rigs.
 - **Animation conversion.** Engine interpolation, spin winding, morph control, reset behaviour and conflicts with game-driven channels. This gates Blender action import.
 - **Modern target measurements.**

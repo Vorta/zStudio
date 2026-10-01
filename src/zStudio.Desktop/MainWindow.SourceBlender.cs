@@ -44,7 +44,7 @@ public partial class MainWindow
         {
             plan = SourceBlender.PlanUpdate(workspace, checkout, export, token);
             return workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is { } t ? () => workspace.Retract(t) : null;
-        }, token);
+        }, token, fromBuild: false);
         foreach (string note in plan?.Notes ?? []) ViewModel.AddProblem(Bounded($"{session.Label}: {note}"), "Warning", Path.Combine(session.Root, checkout.Model.Replace('/', Path.DirectorySeparatorChar)));
         return (next, plan!);
     }

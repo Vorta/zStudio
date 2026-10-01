@@ -186,12 +186,19 @@ public partial class MainWindow
     /// saves and reloads are refused; a change whose rebuild fails or is canceled is taken back, so the shown world and the
     /// workspace agree.
     /// </summary>
-    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null)
+    /// <remarks>
+    /// <paramref name="additions"/> is read after <paramref name="apply"/> runs, so a plan can list the models it adds.
+    /// Edits planned from this world's build (<paramref name="fromBuild"/>: provenance, line numbers, archive layouts) are
+    /// refused once a source the build read changed in the workspace, until the world is reloaded.
+    /// </remarks>
+    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
         RequireSourceWorldIdle(session);
         RequireNoDrafts(doc);
+        if (fromBuild && doc.SourceBuild is { } built && session.Workspace.ChangedSince(doc.SourceRevision) is { Count: > 0 } changed && built.Dependencies.Any(changed.Contains))
+            throw new StudioCommandException("stale_document", $"{string.Join(", ", built.Dependencies.Where(changed.Contains).Take(3))} changed since this world was built (an edit in another world, or an undo); reload the world before editing it.");
         Action? revert;
         try { revert = apply(session.Workspace); }
         catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
@@ -214,7 +221,7 @@ public partial class MainWindow
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)
     {
         string mission = doc.SourceWorld?.Mission ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
-        return EditSourceWorldAsync(doc, $"Adding {addition.Model.Name}", workspace => SourceWorlds.AddModel(workspace, mission, addition, token) is var t ? () => workspace.Retract(t) : null, token, [addition.Model]);
+        return EditSourceWorldAsync(doc, $"Adding {addition.Model.Name}", workspace => SourceWorlds.AddModel(workspace, mission, addition, token) is var t ? () => workspace.Retract(t) : null, token, [addition.Model], fromBuild: false);
     }
     private Task<DocumentModel> UndoSourceWorldAsync(DocumentModel doc, bool redo, CancellationToken token)
     {
@@ -224,7 +231,7 @@ public partial class MainWindow
         {
             if (redo) { w.Redo(); return () => w.Undo(); }
             w.Undo(); return () => w.Redo();
-        }, token);
+        }, token, fromBuild: false);
     }
 
     /// <summary>

@@ -110,6 +110,19 @@ internal static class SourceEditingMcpChecks
             blended = Document((await Job("source_world_command", new() { ["document"] = Id(fogged), ["revision"] = fogged.Revision, ["node"] = worldAfter, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "1.0", "0.25", "0.125" } }))["document"]!);
             Assert.Contains("WorldSetFogColor 1.0 0.25 0.125\r\n", Text(workspace.Read("gamegen/m1.gs")));
             Assert.DoesNotContain("0.5 0.25 0.125", Text(workspace.Read("gamegen/m1.gs")));
+            // Copy the ground beside itself, move the copy under the original, then delete it: each edits the database's glTF.
+            await Preview();
+            int groundNow = blended.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            var copied = await Job("source_world_object_edit", new() { ["document"] = Id(blended), ["revision"] = blended.Revision, ["node"] = groundNow, ["action"] = "duplicate", ["name"] = "ground_copy", ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = 40 } });
+            int copyNode = copied["copy"]!.GetValue<int>();
+            var withCopy = Document(copied["document"]!);
+            Assert.Equal(2, JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf")!)!["nodes"]!.AsArray().Count);
+            await Preview();
+            int groundThen = withCopy.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            var reparented = Document((await Job("source_world_object_edit", new() { ["document"] = Id(withCopy), ["revision"] = withCopy.Revision, ["node"] = copyNode, ["action"] = "parent", ["parent"] = groundThen }))["document"]!);
+            Assert.Equal("ground", (await Call("source_world_object", new() { ["document"] = Id(reparented), ["node"] = copyNode }))["object"]!["parent"]!.GetValue<string>());
+            blended = Document((await Job("source_world_object_edit", new() { ["document"] = Id(reparented), ["revision"] = reparented.Revision, ["node"] = copyNode, ["action"] = "delete" }))["document"]!);
+            Assert.Single(JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf")!)!["nodes"]!.AsArray());
             // Resolving an interrupted save waits for the project's unsaved edits to be saved or discarded.
             Assert.Contains("unsaved_changes", (await Call("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, error: true)).GetValue<string>());
 
@@ -124,6 +137,19 @@ internal static class SourceEditingMcpChecks
             // No save was interrupted; resolving an unknown one is refused.
             Assert.Equal(0, (await Call("source_recovery", new()))["saveCount"]!.GetValue<int>());
             Assert.Contains("invalid_argument", (await Call("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, error: true)).GetValue<string>());
+
+            // Two worlds of one project: an undo in m1 takes back m2's edit, so m2's build is out of date until it is reloaded.
+            var second = Document((await Job("source_world_open", new() { ["mission"] = "m2" }))["document"]!);
+            await Preview();
+            int ground2 = second.PreviewDocument.Scene!.Nodes.First(n => n.Name == "ground").Index;
+            var edited2 = Document((await Job("source_world_object_edit", new() { ["document"] = Id(second), ["revision"] = second.Revision, ["node"] = ground2, ["position"] = new Dictionary<string, object?> { ["x"] = 5, ["y"] = 0, ["z"] = 5 } }))["document"]!);
+            Assert.Equal(["data/m2/models/m2.gltf"], workspace.DirtyFiles);
+            blended = Document(await Call("undo_redo", new() { ["document"] = Id(blended), ["revision"] = blended.Revision, ["action"] = "undo" }));
+            Assert.False(workspace.IsDirty);
+            var stale = await Job("source_world_object_edit", new() { ["document"] = Id(edited2), ["revision"] = edited2.Revision, ["node"] = ground2, ["flag"] = "0x10000", ["on"] = true }, "failed");
+            Assert.Equal("stale_document", stale["code"]!.GetValue<string>());
+            var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(edited2), ["revision"] = edited2.Revision }));
+            await Call("close_document", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision });
             await Call("close_document", new() { ["document"] = Id(blended), ["revision"] = blended.Revision });
 
             async Task Preview()
