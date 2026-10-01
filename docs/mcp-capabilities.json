@@ -1091,7 +1091,7 @@
       "tools": [
         "zstudio_scene_options"
       ],
-      "note": "Whole world exclusive solid highlights: changes.highlight accepts none, nonDefaultSoils (yellow), canModify (green), or clipTo (red). preview_state reports highlight, null outside Whole world. Uses the GUI setter without replacing the preview, changing source data, or enabling local MCP. Entire option batches are validated first; requested highlights wait for successful refreshes and never overwrite newer GUI choices."
+      "note": "Whole world exclusive solid highlights: changes.highlight accepts none, nonDefaultSoils (yellow), canModify (green), clipTo (red) or zones (each surface in its node zone's colour, grey for any). preview_state reports highlight, null outside Whole world. Uses the GUI setter without replacing the preview, changing source data, or enabling local MCP. Entire option batches are validated first; requested highlights wait for successful refreshes and never overwrite newer GUI choices."
     },
     {
       "gui": "MainWindow.xaml:ZoomChanged",

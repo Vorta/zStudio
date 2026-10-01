@@ -113,7 +113,7 @@ Terrain is authored as unsplit surfaces in glTF (from Blender) plus a **terrain 
   - the **brush**: **Paint in viewport** or **Erase in viewport**, then drag over the terrain.
 
   Each stroke adds or removes the area a round brush of the given radius covers, as one undoable change, and the world rebuilds. Escape drops a stroke in progress. MCP: `zstudio_source_terrain`, `zstudio_source_terrain_edit`.
-- **Viewing.** The Whole world highlight modes show craters allowed (CanModify), no craters (ClipTo) and non-default soils.
+- **Viewing.** The Whole world highlight modes show craters allowed (CanModify), no craters (ClipTo), non-default soils and **zones** (each surface in its node zone's colour, grey for any).
 - **Convert to editable terrain** (**Tools → Convert to editable terrain…**, MCP `zstudio_source_terrain_convert`) turns a shipped map's hand-cut pieces into terrain:
   - **Which pieces.** The mission database's untransformed mesh roots become surfaces of a recipe beside the database (`mN_terrain.gltf` with `mN_terrain.terrain.json`).
   - **Surfaces.** Pieces with the same node flags and zone share a surface, except where they overlap in plan view: those go to separate surfaces, so stacked sheets stay separate nodes.

@@ -1147,13 +1147,14 @@
           {
             "Name": "highlight",
             "Type": "string",
-            "Description": "Whole world only: solid yellow non-default soils, green CanModify or red ClipTo; none restores normal appearance.",
+            "Description": "Whole world only: solid yellow non-default soils, green CanModify, red ClipTo, or zones (each surface in its node zone\u0027s colour, grey for any); none restores normal appearance.",
             "Required": false,
             "Choices": [
               "none",
               "nonDefaultSoils",
               "canModify",
-              "clipTo"
+              "clipTo",
+              "zones"
             ],
             "Properties": null
           },

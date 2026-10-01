@@ -194,6 +194,7 @@ public partial class MainWindow
                     "nonDefaultSoils" => WorldHighlightMode.NonDefaultSoils,
                     "canModify" => WorldHighlightMode.CanModify,
                     "clipTo" => WorldHighlightMode.ClipTo,
+                    "zones" => WorldHighlightMode.Zones,
                     _ => WorldHighlightMode.None
                 });
             }

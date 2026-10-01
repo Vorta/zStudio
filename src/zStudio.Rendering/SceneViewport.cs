@@ -180,7 +180,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     {
                         JsonMaterial(scene, part.MaterialIndex, out _, out int texture);
                         surfaceAppearances[mesh] = new(material, WorldSurfaceHighlights.Classify(scene, batch[0].NodeIndex, part.MaterialIndex),
-                            alphaMasks.GetValueOrDefault(texture), group.Key.Horizon);
+                            alphaMasks.GetValueOrDefault(texture), group.Key.Horizon, WorldSurfaceHighlights.NodeZone(scene, batch[0].NodeIndex));
                     }
                     if (mesh.IsTransparent)
                     {
