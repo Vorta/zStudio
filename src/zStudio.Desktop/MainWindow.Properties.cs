@@ -60,7 +60,7 @@ public partial class MainWindow
         doc = LiveDocument(doc);
         if (doc.SourceWorld is { } world)
         {
-            if (world.IsRebuilding) ViewModel.Status = $"The {world.Mission} world is still rebuilding; undo and redo are available when it is shown.";
+            if (world.IsRebuilding || sourceWorkspaceBusy) ViewModel.Status = "A world of this source project is still rebuilding; undo and redo are available when it is shown.";
             else if (redo ? world.Workspace.CanRedo : world.Workspace.CanUndo) sourceWorldWork = RunUi(() => UndoSourceWorldAsync(doc, redo, CancellationToken.None));
             return;
         }

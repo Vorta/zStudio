@@ -35,6 +35,9 @@ public partial class MainWindow
         if (sourceWorkspace != null && discardApprovedWorkspace is { } pending && pending.Workspace == sourceWorkspace && pending.Revision == sourceWorkspace.Revision
             && !sourceWorkspace.IsSaving && !sourceWorkspaceBusy && sourceWorldsOpening == 0 && !ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace))
         { sourceWorkspace.Discard(); discardApprovedWorkspace = null; }
+        else if (sourceWorkspace != null && discardApprovedWorkspace is { } waiting && waiting.Workspace == sourceWorkspace && waiting.Revision == sourceWorkspace.Revision
+            && (sourceWorldsOpening > 0 || sourceWorkspaceBusy) && !ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace))
+            throw new StudioCommandException("busy", "The source project's discarded edits are still being dropped (a world was opening or rebuilding); try again in a moment.");
         if (sourceWorkspace?.Root.Equals(full, StringComparison.OrdinalIgnoreCase) == true) return sourceWorkspace;
         // Changing roots closes every document first, so a previous project's workspace has no world left to lose edits of.
         if (sourceWorkspace != null && ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace))
@@ -148,6 +151,11 @@ public partial class MainWindow
     {
         await sourceWorldWork;
         while (sourceRebuild is { } rebuilding) await rebuilding.Task;
+    }
+    /// <summary>Cancels the builds of every open source world (a second request to close the application while it waits).</summary>
+    private void CancelSourceBuilds()
+    {
+        foreach (var world in ViewModel.Documents.Select(d => d.SourceWorld).OfType<SourceWorldSession>().Distinct()) world.Building?.Cancel();
     }
     /// <summary>Properties of a source world takes no input while the project rebuilds.</summary>
     private void UpdateSourceInputBlock()
@@ -268,8 +276,11 @@ public partial class MainWindow
         catch (NotSupportedException ex) { throw new StudioCommandException("unsupported", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         if (revert == null) return doc;
-        SetSourceRebuilding(session, true);
-        try { return await RebuildSourceWorldAsync(session, token, additions); }
+        try
+        {
+            SetSourceRebuilding(session, true);
+            return await RebuildSourceWorldAsync(session, token, additions);
+        }
         // The rebuilt world was never shown (failed, canceled, or its world closed meanwhile): the edit is taken back, so no
         // other world keeps an edit nothing was built with, and worlds built before it are current again.
         catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))
@@ -352,8 +363,11 @@ public partial class MainWindow
             try { workspace.Reload(); }
             catch (SourceFileChangedException ex) { throw new StudioCommandException("unsaved_changes", ex.Message); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-        SetSourceRebuilding(session, true);
-        try { return await RebuildSourceWorldAsync(session, token); }
+        try
+        {
+            SetSourceRebuilding(session, true);
+            return await RebuildSourceWorldAsync(session, token);
+        }
         finally { SetSourceRebuilding(session, false); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
     }
     /// <summary>Other open worlds whose build read a file the workspace changed since show as stale until reloaded.</summary>

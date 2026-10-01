@@ -29,7 +29,16 @@ public partial class MainWindow
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); MessageBox.Show(this, ex.Message, "Animation Save As", MessageBoxButton.OK, MessageBoxImage.Information); return false; }
         finally { IsEnabled = true; if (propertiesWindow != null) propertiesWindow.IsEnabled = true; }
     }
+    /// <summary>Source worlds whose close is being decided (a decision can wait for a rebuild); a second request is refused.</summary>
+    private readonly HashSet<SourceWorldSession> closingSourceWorlds = [];
     private async Task<bool> ConfirmDocumentCloseAsync(DocumentModel document)
+    {
+        if (document.SourceWorld is not { } session) return await DecideDocumentCloseAsync(document);
+        if (!closingSourceWorlds.Add(session)) { ViewModel.Status = $"The {session.Mission} world's close is already being decided."; return false; }
+        try { return await DecideDocumentCloseAsync(document); }
+        finally { closingSourceWorlds.Remove(session); }
+    }
+    private async Task<bool> DecideDocumentCloseAsync(DocumentModel document)
     {
         if (!await ResolvePropertiesDraftsAsync(document) || shownDocument == document && animation?.ResolvePendingDrafts() == false) return false;
         // A committed draft may have rebuilt a source world: the decision is about the document it shows now.

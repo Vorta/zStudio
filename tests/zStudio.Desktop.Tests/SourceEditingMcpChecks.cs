@@ -86,6 +86,12 @@ internal static class SourceEditingMcpChecks
             approval.SetValue(main, (workspace, workspace.Revision));
             main.ViewModel.CloseDecisionsStarting!();
             Assert.Null(approval.GetValue(main));
+            // While one close of a world is being decided (it can wait for a rebuild), a second is refused: no stacked prompts.
+            var closing = (HashSet<SourceWorldSession>)typeof(MainWindow).GetField("closingSourceWorlds", hidden)!.GetValue(main)!;
+            closing.Add(moved.SourceWorld!);
+            Assert.False(await (Task<bool>)typeof(MainWindow).GetMethod("ConfirmDocumentCloseAsync", hidden)!.Invoke(main, [moved])!);
+            Assert.False(moved.IsDisposed);
+            closing.Remove(moved.SourceWorld!);
 
             // Undo is project-wide and restores the exact source bytes; redo brings the move back.
             var undone = Document(await Call("undo_redo", new() { ["document"] = Id(moved), ["revision"] = moved.Revision, ["action"] = "undo" }));

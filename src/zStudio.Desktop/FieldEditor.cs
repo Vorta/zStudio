@@ -102,7 +102,7 @@ public partial class FieldEditor : UserControl
     protected static string[] SplitComponents(string value,string separator) => separator == "|" ? value.Split('|') : value.Split([',',' ','\t'],StringSplitOptions.RemoveEmptyEntries);
     protected bool CanCommitFocus(FrameworkElement group)
     {
-        if (refreshingFields || disposed || committingDraft || !group.IsVisible || group.IsKeyboardFocusWithin || (Window.GetWindow(this) is MainWindow { IsChangingLayout: true } || Window.GetWindow(this)?.Owner is MainWindow { IsChangingLayout: true })) return false;
+        if (refreshingFields || disposed || committingDraft || !group.IsVisible || !group.IsEnabled || group.IsKeyboardFocusWithin || (Window.GetWindow(this) is MainWindow { IsChangingLayout: true } || Window.GetWindow(this)?.Owner is MainWindow { IsChangingLayout: true })) return false;
         // Navigating presentation chrome is not an implicit source edit. Commands that
         // need current stored values explicitly resolve drafts before running.
         for (var target = Keyboard.FocusedElement as DependencyObject; target != null; target = target is Visual ? VisualTreeHelper.GetParent(target) : LogicalTreeHelper.GetParent(target))

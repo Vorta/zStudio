@@ -41,7 +41,7 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
             for (int i = 0; i < 4 && same; i++)
             {
                 float length = MathF.Sqrt(m[i, 0] * m[i, 0] + m[i, 1] * m[i, 1] + m[i, 2] * m[i, 2]);
-                for (int j = 0; j < 3 && same; j++) same = MathF.Abs(composed[i, j] - m[i, j]) <= 1e-4f * MathF.Max(1, length);
+                for (int j = 0; j < 3 && same; j++) same = MathF.Abs(composed[i, j] - m[i, j]) <= 1e-4f * length + 1e-6f;
             }
             if (same) return stored;
         }
@@ -420,11 +420,11 @@ public static class SourceObjectEdits
             var stored = ObjectTransform.Of(node);
             var basis = q with { M41 = 0, M42 = 0, M43 = 0 };
             if (Near(basis, Matrix4x4.Identity))
-                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", Vector3.Transform(stored.Position, q), Vector3.Zero, anchor, stored.Position);
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", ObjectTransform.Snap(Vector3.Transform(stored.Position, q), angles: true), Vector3.Zero, anchor, stored.Position);
             else if (Near(basis * Matrix4x4.Transpose(basis), Matrix4x4.Identity) && basis.GetDeterminant() > 0)
             {
                 var turned = ObjectTransform.FromMatrix(new ObjectTransform(Vector3.Zero, stored.RotationDegrees, Vector3.One).Matrix() * basis).RotationDegrees;
-                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", Vector3.Transform(stored.Position, q), Vector3.Zero, anchor, stored.Position);
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", ObjectTransform.Snap(Vector3.Transform(stored.Position, q), angles: true), Vector3.Zero, anchor, stored.Position);
                 edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", ObjectTransform.Snap(turned, angles: true), Vector3.Zero, anchor, stored.RotationDegrees);
             }
             else
@@ -508,10 +508,10 @@ public static class SourceObjectEdits
     }
     /// <summary>
     /// Whether a requested value differs from the one shown. Values echo exactly (Properties writes them round-trip, MCP as
-    /// doubles), so only a couple of float steps count as the same.
+    /// doubles), so only the neighbouring float counts as the same.
     /// </summary>
     private static bool Differs(Vector3 requested, Vector3 shown) => Enumerable.Range(0, 3).Any(i => Differs(requested[i], shown[i]));
-    private static bool Differs(float requested, float shown) => MathF.Abs(requested - shown) > 2.5e-7f * MathF.Max(1, MathF.Abs(shown));
+    private static bool Differs(float requested, float shown) => requested > MathF.BitIncrement(shown) || requested < MathF.BitDecrement(shown);
     private static bool Near(Matrix4x4 a, Matrix4x4 b)
     {
         for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) if (MathF.Abs(a[i, j] - b[i, j]) > 1e-5f) return false;
