@@ -64,6 +64,98 @@ public sealed record TerrainAttributes
     /// <summary>The node's carried flag bits exactly (<see cref="Worlds.WorldGltf.CarriedFlags"/>), for combinations the presets cannot express.</summary>
     public uint? Flags { get; init; }
     public bool IsEmpty => this == None;
+    internal static readonly string[] SoilNames = ["default", "water", "seafloor", "quicksand", "lava", "fire"];
+    private static readonly string[] Keys = ["zones", "nodeZone", "nodeGate", "collision", "standable", "craters", "soil", "priority", "flags"];
+
+    /// <summary>
+    /// Attributes from JSON (<c>{ "zones": [1], "craters": "blocked", … }</c>); problems start with <paramref name="what"/>.
+    /// With <paramref name="patch"/>, the result starts from <paramref name="patch"/>'s values: keys present replace them and
+    /// a null value removes the override, so the layers before show through again.
+    /// </summary>
+    public static TerrainAttributes FromJson(JsonNode? node, string what, TerrainAttributes? patch = null)
+    {
+        if (node is null) return patch ?? None;
+        var o = node as JsonObject ?? throw Error("must be an object");
+        foreach (var key in o.Select(p => p.Key))
+            if (!Keys.Contains(key)) throw Error($"has an unknown attribute {key} (known: {string.Join(", ", Keys)})");
+        var a = patch ?? None;
+        bool Has(string key, out JsonNode? value) { bool has = o.TryGetPropertyValue(key, out value); return has; }
+        if (Has("zones", out var zones)) a = a with
+        {
+            Zones = zones switch
+            {
+                null => null,
+                JsonValue v when v.TryGetValue(out string? any) && any == "any" => TerrainZones.Any,
+                JsonArray ids when ids.Count is >= 1 and <= 3 => new(ids.Select(i => i is JsonValue z && z.TryGetValue(out int id) && id is >= 0 and <= 254 ? (byte)id : throw Error("zones are numbers 0–254")).ToArray()),
+                _ => throw Error("zones is \"any\" or a list of one to three zone numbers"),
+            }
+        };
+        if (Has("nodeZone", out var nodeZone)) a = a with
+        {
+            NodeZone = nodeZone switch
+            {
+                null => null,
+                JsonValue v when v.TryGetValue(out string? word) && word is "auto" or "any" => word == "auto" ? AutoZone : AnyZone,
+                JsonValue v when v.TryGetValue(out int zone) && zone is >= 0 and <= 254 => zone,
+                _ => throw Error("nodeZone is a zone number 0–254, \"any\" or \"auto\""),
+            }
+        };
+        if (Has("nodeGate", out var gate)) a = a with { NodeGate = Bool(gate, "nodeGate") };
+        if (Has("collision", out var collision)) a = a with { Collision = Bool(collision, "collision") };
+        if (Has("standable", out var standable)) a = a with { Standable = Bool(standable, "standable") };
+        if (Has("craters", out var craters)) a = a with
+        {
+            Craters = craters switch
+            {
+                null => null,
+                JsonValue v when v.TryGetValue(out string? mode) && Enum.TryParse<TerrainCraters>(mode, true, out var parsed) && mode == mode.ToLowerInvariant() => parsed,
+                _ => throw Error("craters is \"allowed\", \"blocked\" or \"ignored\""),
+            }
+        };
+        if (Has("soil", out var soil)) a = a with
+        {
+            Soil = soil switch
+            {
+                null => null,
+                JsonValue v when v.TryGetValue(out string? name) && Array.IndexOf(SoilNames, name) is int index and >= 0 => (uint)index,
+                JsonValue v when v.TryGetValue(out int number) && number is >= 0 and <= 99 => (uint)number,
+                _ => throw Error("soil is default, water, seafloor, quicksand, lava, fire or a number 6–99"),
+            }
+        };
+        if (Has("priority", out var priority)) a = a with
+        {
+            Priority = priority switch { null => null, JsonValue v when v.TryGetValue(out int p) && p is >= 0 and <= 255 => p, _ => throw Error("priority is 0–255") }
+        };
+        if (Has("flags", out var flags)) a = a with
+        {
+            Flags = flags switch
+            {
+                null => null,
+                JsonValue v when v.TryGetValue(out string? hex) && hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && uint.TryParse(hex.AsSpan(2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint word)
+                    && (word & ~Worlds.WorldGltf.CarriedFlags) == 0 => word,
+                _ => throw Error("flags is a hexadecimal word (\"0x…\") of the carried node flags"),
+            }
+        };
+        return a;
+        InvalidDataException Error(string message) => new($"{what} {message}.");
+        bool? Bool(JsonNode? value, string key) => value switch { null => null, JsonValue v when v.TryGetValue(out bool b) => b, _ => throw Error($"{key} is true or false") };
+    }
+
+    /// <summary>The attributes as JSON, with only the values this layer sets.</summary>
+    public JsonObject ToJson()
+    {
+        JsonObject o = new();
+        if (Zones is { } z) o["zones"] = z.IsAny ? "any" : new JsonArray(z.Ids.Select(i => (JsonNode?)JsonValue.Create((int)i)).ToArray());
+        if (NodeZone is { } nz) o["nodeZone"] = nz == AutoZone ? "auto" : nz == AnyZone ? "any" : JsonValue.Create(nz);
+        if (NodeGate is { } g) o["nodeGate"] = g;
+        if (Collision is { } c) o["collision"] = c;
+        if (Standable is { } s) o["standable"] = s;
+        if (Craters is { } cr) o["craters"] = cr.ToString().ToLowerInvariant();
+        if (Soil is { } soil) o["soil"] = soil < SoilNames.Length ? SoilNames[soil] : JsonValue.Create((int)soil);
+        if (Priority is { } p) o["priority"] = p;
+        if (Flags is { } f) o["flags"] = $"0x{f:X8}";
+        return o;
+    }
 }
 
 /// <summary>A glTF node whose mesh is terrain, and the attributes it starts with.</summary>
@@ -92,7 +184,6 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
     public const int Version = 1, CurrentCompiler = 1;
     public const int MaximumSurfaces = 256, MaximumRegions = 4096, MaximumPolygons = 1024, MaximumRingPoints = 4096, MaximumPoints = 1_000_000;
     public const float MaximumCoordinate = 1_000_000;
-    private static readonly string[] SoilNames = ["default", "water", "seafloor", "quicksand", "lava", "fire"];
 
     /// <summary>Reads and validates a recipe; problems name <paramref name="source"/>.</summary>
     public static TerrainRecipe Parse(ReadOnlySpan<byte> json, string source)
@@ -135,6 +226,7 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
                         if (!surfaces.Any(s => s.Id == surface)) throw Error($"region {name} names unknown surface {surface}");
                         if (!on.Contains(surface)) on.Add(surface);
                     }
+                if (regions.Any(x => x.Name == name)) throw Error($"has two regions named {name}");
                 TerrainShape? shape = r["shape"] is { } shapeNode ? Shape(shapeNode, name, ref points) : null;
                 var set = Attributes(r["set"], $"region {name} set");
                 regions.Add(new(name, on, shape, set));
@@ -165,60 +257,15 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
                 throw Error($"{what} must be a relative file path");
             return text;
         }
-        TerrainAttributes Attributes(JsonNode? node, string what)
-        {
-            if (node is null) return TerrainAttributes.None;
-            var o = node as JsonObject ?? throw Error($"{what} must be an object");
-            foreach (var key in o.Select(p => p.Key))
-                if (key is not ("zones" or "nodeZone" or "nodeGate" or "collision" or "standable" or "craters" or "soil" or "priority" or "flags")) throw Error($"{what} has an unknown attribute {key}");
-            return new()
-            {
-                Zones = o["zones"] switch
-                {
-                    null => null,
-                    JsonValue v when v.TryGetValue(out string? any) && any == "any" => TerrainZones.Any,
-                    JsonArray ids when ids.Count is >= 1 and <= 3 => new(ids.Select(i => i is JsonValue z && z.TryGetValue(out int id) && id is >= 0 and <= 254 ? (byte)id : throw Error($"{what} zones are numbers 0–254")).ToArray()),
-                    _ => throw Error($"{what} zones is \"any\" or a list of one to three zone numbers"),
-                },
-                NodeZone = o["nodeZone"] switch
-                {
-                    null => null,
-                    JsonValue v when v.TryGetValue(out string? word) && word is "auto" or "any" => word == "auto" ? TerrainAttributes.AutoZone : TerrainAttributes.AnyZone,
-                    JsonValue v when v.TryGetValue(out int zone) && zone is >= 0 and <= 254 => zone,
-                    _ => throw Error($"{what} nodeZone is a zone number 0–254, \"any\" or \"auto\""),
-                },
-                NodeGate = Bool(o["nodeGate"], $"{what} nodeGate"), Collision = Bool(o["collision"], $"{what} collision"), Standable = Bool(o["standable"], $"{what} standable"),
-                Craters = o["craters"] switch
-                {
-                    null => null,
-                    JsonValue v when v.TryGetValue(out string? mode) && Enum.TryParse<TerrainCraters>(mode, true, out var parsed) && mode == mode.ToLowerInvariant() => parsed,
-                    _ => throw Error($"{what} craters is \"allowed\", \"blocked\" or \"ignored\""),
-                },
-                Soil = o["soil"] switch
-                {
-                    null => null,
-                    JsonValue v when v.TryGetValue(out string? soil) && Array.IndexOf(SoilNames, soil) is int index and >= 0 => (uint)index,
-                    JsonValue v when v.TryGetValue(out int soil) && soil is >= 0 and <= 99 => (uint)soil,
-                    _ => throw Error($"{what} soil is default, water, seafloor, quicksand, lava, fire or a number 6–99"),
-                },
-                Priority = o["priority"] is null ? null : Int(o["priority"], $"{what} priority") is int p && p is >= 0 and <= 255 ? p : throw Error($"{what} priority is 0–255"),
-                Flags = o["flags"] switch
-                {
-                    null => null,
-                    JsonValue v when v.TryGetValue(out string? hex) && hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && uint.TryParse(hex.AsSpan(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint flags)
-                        && (flags & ~Worlds.WorldGltf.CarriedFlags) == 0 => flags,
-                    _ => throw Error($"{what} flags is a hexadecimal word (\"0x…\") of the carried node flags"),
-                },
-            };
-        }
-        bool? Bool(JsonNode? node, string what) => node switch { null => null, JsonValue v when v.TryGetValue(out bool b) => b, _ => throw Error($"{what} is true or false") };
+        TerrainAttributes Attributes(JsonNode? node, string what) => TerrainAttributes.FromJson(node, $"{source} {what}");
         TerrainShape Shape(JsonNode node, string region, ref long total)
         {
             var o = node as JsonObject ?? throw Error($"region {region} shape must be an object");
             if (o["plane"] is { } plane && (plane is not JsonValue pv || !pv.TryGetValue(out string? p) || p != "xz")) throw Error($"region {region} shape plane must be \"xz\" (plan view)");
             float? min = o["minY"] is null ? null : Real(o["minY"], $"region {region} minY"), max = o["maxY"] is null ? null : Real(o["maxY"], $"region {region} maxY");
             if (min > max) throw Error($"region {region} minY is above maxY");
-            if (o["polygons"] is not JsonArray polygons || polygons.Count is 0 or > MaximumPolygons) throw Error($"region {region} shape lists 1–{MaximumPolygons} polygons");
+            // An empty list covers nothing (everything was erased).
+            if (o["polygons"] is not JsonArray polygons || polygons.Count > MaximumPolygons) throw Error($"region {region} shape lists at most {MaximumPolygons} polygons");
             List<TerrainOutline> outlines = [];
             foreach (var entry in polygons)
             {
@@ -277,19 +324,6 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
         return Encoding.UTF8.GetBytes(text.Replace("\r\n", "\n") + "\n");
 
         static JsonArray Ring(IReadOnlyList<Vector2> ring) => new(ring.Select(p => (JsonNode?)new JsonArray(p.X, p.Y)).ToArray());
-        static JsonObject Json(TerrainAttributes a)
-        {
-            JsonObject o = new();
-            if (a.Zones is { } z) o["zones"] = z.IsAny ? "any" : new JsonArray(z.Ids.Select(i => (JsonNode?)JsonValue.Create((int)i)).ToArray());
-            if (a.NodeZone is { } nz) o["nodeZone"] = nz == TerrainAttributes.AutoZone ? "auto" : nz == TerrainAttributes.AnyZone ? "any" : JsonValue.Create(nz);
-            if (a.NodeGate is { } g) o["nodeGate"] = g;
-            if (a.Collision is { } c) o["collision"] = c;
-            if (a.Standable is { } s) o["standable"] = s;
-            if (a.Craters is { } cr) o["craters"] = cr.ToString().ToLowerInvariant();
-            if (a.Soil is { } soil) o["soil"] = soil < SoilNames.Length ? SoilNames[soil] : JsonValue.Create((int)soil);
-            if (a.Priority is { } p) o["priority"] = p;
-            if (a.Flags is { } f) o["flags"] = $"0x{f:X8}";
-            return o;
-        }
+        static JsonObject Json(TerrainAttributes a) => a.ToJson();
     }
 }
