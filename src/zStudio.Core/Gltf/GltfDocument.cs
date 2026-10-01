@@ -10,6 +10,8 @@ namespace Recoil.Zbd.Core.Gltf;
 public sealed class GltfNode
 {
     public string Name { get; set; } = "";
+    /// <summary>The node's index in the file it was read from (-1 for a node built in memory).</summary>
+    public int Index { get; init; } = -1;
     public GltfMesh? Mesh { get; set; }
     public List<GltfNode> Children { get; } = [];
     /// <summary>Local transform in System.Numerics' row-vector convention (the order of glTF's column-major array); null is identity.</summary>
@@ -350,7 +352,7 @@ public sealed class GltfDocument
         }
         JsonArray jsonNodes = root["nodes"] as JsonArray ?? [];
         if (jsonNodes.Count > MaximumNodes) throw new InvalidDataException($"A glTF file holds at most {MaximumNodes:N0} nodes.");
-        var nodes = jsonNodes.Select(n => new GltfNode { Name = n?["name"]?.GetValue<string>() ?? "", Extras = n?["extras"]?.DeepClone() as JsonObject }).ToArray();
+        var nodes = jsonNodes.Select((n, i) => new GltfNode { Name = n?["name"]?.GetValue<string>() ?? "", Index = i, Extras = n?["extras"]?.DeepClone() as JsonObject }).ToArray();
         for (int i = 0; i < jsonNodes.Count; i++)
         {
             var n = jsonNodes[i]!; var node = nodes[i];

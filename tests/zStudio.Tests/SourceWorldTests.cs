@@ -91,19 +91,22 @@ public sealed class SourceWorldTests
         Assert.Equal(["tank_die"], definitions.Single().Animations); Assert.Equal(["m2"], definitions.Single().Missions);
         Assert.Empty(SourceWorlds.DefinitionsFor(root, "m2", "tank", token: Token));
 
-        SourceWorldEdits edits = new(root, "m1");
-        Assert.False(edits.IsDirty);
-        edits.Add(new(new(fixture.Tank, "tank"), [SourceWorldFixture.TankDefinitions]), Token);
-        edits.Add(new(new(fixture.Tank, "tank_wreck", new(100, 0, -50), 90), []), Token);
-        Assert.True(edits.IsDirty); Assert.Equal(2, edits.Additions.Count);
+        SourceWorkspace workspace = new(root);
+        Assert.False(workspace.IsDirty);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank"), [SourceWorldFixture.TankDefinitions]), Token);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_wreck", new(100, 0, -50), 90), []), Token);
+        Assert.True(workspace.IsDirty); Assert.Equal(2, workspace.UndoCount);
+        Assert.Equal(["data/m1/zrdr/anim.zrd", "gamegen/m1.gs"], workspace.DirtyFiles);
 
         // The preview is built privately, outside the project, from the pending sources.
         string preview = Path.Combine(fixture.Root, "preview");
-        await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(root, "preview"), edits.Overlay(Token), token: Token));
-        var build = await SourceWorlds.BuildPreviewAsync(root, "m1", preview, edits.Overlay(Token), token: Token);
+        await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(root, "preview"), workspace.Overlay(), token: Token));
+        var build = await SourceWorlds.BuildPreviewAsync(root, "m1", preview, workspace.Overlay(), token: Token);
         Assert.All(build.Outputs, o => Assert.Equal("built", o.Status));
         Assert.Contains("data/m2/models/bft/tank.gltf", build.Inputs.Keys);
-        Assert.DoesNotContain(edits.ScriptPath, build.Inputs.Keys);
+        Assert.DoesNotContain("gamegen/m1.gs", build.Inputs.Keys);
+        // The build records what it read, from the workspace or the disk.
+        Assert.Contains("gamegen/m1.gs", build.Dependencies); Assert.Contains("data/m2/models/bft/tank.gltf", build.Dependencies);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         var tank = world.Nodes.Single(n => n.Name == "tank"); var wreck = world.Nodes.Single(n => n.Name == "tank_wreck");
         Assert.Empty(tank.Parents);
@@ -118,15 +121,21 @@ public sealed class SourceWorldTests
         // A preview folder must be new.
         await Assert.ThrowsAsync<IOException>(() => SourceWorlds.BuildPreviewAsync(root, "m1", preview, token: Token));
 
-        // Undo and redo move through the additions; saving writes only the changed sources.
-        edits.Undo(); Assert.Single(edits.Additions); edits.Redo();
+        // Undo and redo move through the history; saving writes every changed source together.
+        workspace.Undo(); Assert.Equal(1, workspace.UndoCount); workspace.Redo();
         string script = fixture.Path("gamegen/m1.gs"), list = fixture.Path("data/m1/zrdr/anim.zrd");
-        Assert.Equal(["gamegen/m1.gs", "data/m1/zrdr/anim.zrd"], edits.Save(Token));
-        Assert.False(edits.IsDirty); Assert.Empty(edits.Save(Token));
+        string listBefore = await File.ReadAllTextAsync(list, Token);
+        Assert.Equal(["data/m1/zrdr/anim.zrd", "gamegen/m1.gs"], workspace.Save(Token).Order(StringComparer.Ordinal));
+        Assert.False(workspace.IsDirty); Assert.Empty(workspace.Save(Token));
+        Assert.False(Directory.Exists(Path.Combine(root, "zstudio", "staging")) && Directory.EnumerateFileSystemEntries(Path.Combine(root, "zstudio", "staging")).Any());
         string saved = await File.ReadAllTextAsync(script, Token);
         Assert.Contains("SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.flt tank\r\n", saved);
         Assert.EndsWith("AddChild tank_wreck\r\nGameZWriteZBDFile ..\\m1\\gamez.zbd\r\nQuit\r\n", saved);
-        Assert.Contains("enemies\\\\tank.zrd", await File.ReadAllTextAsync(list, Token));
+        string listSaved = await File.ReadAllTextAsync(list, Token);
+        Assert.Contains("enemies\\\\tank.zrd", listSaved);
+        // The animation list keeps its layout: only the new entry's lines were added.
+        Assert.StartsWith(listBefore[..listBefore.IndexOf("ANIMATION_DEFINITION_FILE", StringComparison.Ordinal)], listSaved);
+        Assert.Contains("gates.zrd", listSaved);
         // The export of m1 now holds the tank, its texture in every pack and its animation.
         string exported = Path.Combine(fixture.Root, "zbd");
         var report = await SourceBuilder.ExportAsync(root, exported, ["m1/gamez.zbd", "m1/anim.zbd", "m1/texture2.zbd", "m1/rtexture4.zbd"], token: Token);
@@ -135,21 +144,24 @@ public sealed class SourceWorldTests
             Assert.Contains(FormatRegistry.Default.OpenBytes(packName, await File.ReadAllBytesAsync(Path.Combine(exported, "m1", packName), Token), token: Token).Assets, a => a.Name == "camo");
 
         // Undoing past the save leaves the sources to restore; a file changed on disk is never overwritten.
-        edits.Undo(); Assert.True(edits.IsDirty);
-        Assert.False(edits.HasExternalChanges());
+        workspace.Undo(); Assert.True(workspace.IsDirty);
+        Assert.Empty(workspace.ExternalChanges());
         await File.AppendAllTextAsync(script, "# edited elsewhere\r\n", Token);
         File.SetLastWriteTimeUtc(script, DateTime.UtcNow.AddMinutes(1));
-        Assert.True(edits.HasExternalChanges());
-        Assert.Throws<IOException>(() => edits.Save(Token));
+        Assert.Equal(["gamegen/m1.gs"], workspace.ExternalChanges());
+        Assert.ThrowsAny<IOException>(() => workspace.Save(Token));
         Assert.EndsWith("# edited elsewhere\r\n", await File.ReadAllTextAsync(script, Token));
+        Assert.True(workspace.IsDirty);
+        // Further edits of a file with unsaved edits that changed on disk are refused too.
+        Assert.Throws<SourceFileChangedException>(() => SourceWorlds.AddModel(workspace, "m1", new(new("data/m1/models/m1.gltf", "extra"), []), Token));
 
-        // A new addition after undoing past the save cannot look clean.
-        SourceWorldEdits again = new(root, "m2");
-        again.Add(new(new("data/m1/models/m1.gltf", "extra"), []), Token);
-        Assert.Equal([again.ScriptPath], again.Save(Token));
-        again.Undo(); again.Add(new(new("data/m1/models/m1.gltf", "other"), []), Token);
+        // A new change after undoing past the save cannot look clean, and a withdrawn change cannot be redone.
+        SourceWorkspace again = new(root);
+        SourceWorlds.AddModel(again, "m2", new(new("data/m1/models/m1.gltf", "extra"), []), Token);
+        Assert.Equal(["gamegen/m2.gs"], again.Save(Token));
+        again.Undo(); var other = SourceWorlds.AddModel(again, "m2", new(new("data/m1/models/m1.gltf", "other"), []), Token);
         Assert.True(again.IsDirty);
-        again.Retract(); Assert.False(again.CanRedo);
+        again.Retract(other); Assert.False(again.CanRedo);
     }
 
     [Fact]
@@ -159,21 +171,22 @@ public sealed class SourceWorldTests
         string root = fixture.Project;
         // The tank model's own root node is "hull". AddChild takes the newest node with a name, and the model's nodes are
         // newer than the root LoadGameGen names, so a placed model named "hull" would leave its root (and placement) out.
-        SourceWorldEdits edits = new(root, "m1");
-        edits.Add(new(new(fixture.Tank, "hull", new(100, 0, -50)), []), Token);
-        var models = edits.Additions.Select(a => a.Model).ToArray();
-        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p1"), edits.Overlay(Token), token: Token, additions: models));
+        SourceWorkspace workspace = new(root);
+        SourceModelAddition hull = new(fixture.Tank, "hull", new(100, 0, -50));
+        SourceWorlds.AddModel(workspace, "m1", new(hull, []), Token);
+        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p1"), workspace.Overlay(), token: Token, additions: [hull]));
         Assert.Contains("node of its own named hull", refused.Message);
         // The same world without the check shows the defect: the inner node is in the world, the placed root is not.
-        var unchecked_ = await SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p2"), edits.Overlay(Token), token: Token);
+        var unchecked_ = await SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p2"), workspace.Overlay(), token: Token);
         Assert.Contains(unchecked_.Outputs.Single(o => o.Family == "world").Warnings, w => w.Contains("node of its own named hull", StringComparison.Ordinal));
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(unchecked_.WorldPath, Token), token: Token), Token);
         Assert.Contains(world.Nodes, n => n.Name == "hull" && n.Parents.Any(p => p.Class == WorldNodeClass.World));
         Assert.DoesNotContain(world.Nodes, n => n.Name == "hull" && n.Parents.Any(p => p.Class == WorldNodeClass.World) && WorldUpdate.LocalMatrix(n)?.Translation == new Vector3(100, 0, -50));
 
         // Unplaced, the name only makes lookups find the model's node, as the engine would; a new name places the model.
-        edits.Undo(); edits.Add(new(new(fixture.Tank, "hull"), []), Token); edits.Add(new(new(fixture.Tank, "tank_at", new(100, 0, -50)), []), Token);
-        var build = await SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p3"), edits.Overlay(Token), token: Token, additions: [.. edits.Additions.Select(a => a.Model)]);
+        SourceModelAddition unplaced = new(fixture.Tank, "hull"), placedAt = new(fixture.Tank, "tank_at", new(100, 0, -50));
+        workspace.Undo(); SourceWorlds.AddModel(workspace, "m1", new(unplaced, []), Token); SourceWorlds.AddModel(workspace, "m1", new(placedAt, []), Token);
+        var build = await SourceWorlds.BuildPreviewAsync(root, "m1", Path.Combine(fixture.Root, "p3"), workspace.Overlay(), token: Token, additions: [unplaced, placedAt]);
         world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         var placed = world.Nodes.Single(n => n.Name == "tank_at");
         Assert.Equal(WorldNodeClass.World, placed.Parents.Single().Class);
@@ -188,31 +201,30 @@ public sealed class SourceWorldTests
         using SourceWorldFixture fixture = new();
         string root = fixture.Project, script = fixture.Path("gamegen/m1.gs"), list = fixture.Path("data/m1/zrdr/anim.zrd");
         byte[] scriptBefore = File.ReadAllBytes(script), listBefore = File.ReadAllBytes(list);
-        SourceWorldEdits edits = new(root, "m1");
+        SourceWorkspace workspace = new(root);
         // One addition changes both files.
-        edits.Add(new(new(fixture.Tank, "tank"), [SourceWorldFixture.TankDefinitions]), Token);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank"), [SourceWorldFixture.TankDefinitions]), Token);
 
-        // The animation list changed elsewhere: neither file is written, although the script comes first.
+        // The animation list changed elsewhere: neither file is written, although the list sorts first.
         File.AppendAllText(list, "# elsewhere\r\n"); File.SetLastWriteTimeUtc(list, DateTime.UtcNow.AddMinutes(1));
-        Assert.Throws<IOException>(() => edits.Save(Token));
+        var conflict = Assert.Throws<SourceConflictException>(() => workspace.Save(Token));
+        Assert.Contains("data/m1/zrdr/anim.zrd", conflict.Files);
         Assert.Equal(scriptBefore, File.ReadAllBytes(script));
-        Assert.True(edits.IsDirty);
+        Assert.True(workspace.IsDirty);
 
-        // A list that cannot be replaced (read-only) fails after the script was replaced: the script is restored.
-        SourceWorldEdits again = new(root, "m1");
-        again.Add(new(new(fixture.Tank, "tank"), [SourceWorldFixture.TankDefinitions]), Token);
+        // A list another program holds open fails while the files are published: whatever was published is put back.
+        SourceWorkspace again = new(root);
+        SourceWorlds.AddModel(again, "m1", new(new(fixture.Tank, "tank"), [SourceWorldFixture.TankDefinitions]), Token);
         byte[] listNow = File.ReadAllBytes(list);
-        File.SetAttributes(list, FileAttributes.ReadOnly);
-        try
+        using (FileStream held = new(list, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            Assert.ThrowsAny<Exception>(() => again.Save(Token));
+            Assert.ThrowsAny<IOException>(() => again.Save(Token));
             Assert.Equal(scriptBefore, File.ReadAllBytes(script)); Assert.Equal(listNow, File.ReadAllBytes(list));
-            Assert.True(again.IsDirty); Assert.False(again.HasExternalChanges());
-            Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(script)!, "*.tmp")); Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(list)!, "*.tmp"));
+            Assert.True(again.IsDirty); Assert.Empty(again.ExternalChanges());
         }
-        finally { File.SetAttributes(list, FileAttributes.Normal); }
-        // Once the list can be written, the same edits save both files.
-        Assert.Equal([again.ScriptPath, again.DefinitionsPath], again.Save(Token));
+        Assert.Empty(new SourcePublisher(root).FindInterrupted(Token));
+        // Once the list is free, the same edits save both files.
+        Assert.Equal(2, again.Save(Token).Count);
         Assert.NotEqual(scriptBefore, File.ReadAllBytes(script)); Assert.NotEqual(listBefore, File.ReadAllBytes(list));
     }
 
@@ -221,8 +233,8 @@ public sealed class SourceWorldTests
     {
         using SourceWorldFixture fixture = new();
         string root = fixture.Project;
-        SourceWorldEdits edits = new(root, "m1");
-        void Refused(SourceModelAddition addition) => Assert.Throws<InvalidDataException>(() => edits.Add(new(addition, []), Token));
+        SourceWorkspace workspace = new(root);
+        void Refused(SourceModelAddition addition) => Assert.Throws<InvalidDataException>(() => SourceWorlds.AddModel(workspace, "m1", new(addition, []), Token));
         Refused(new("data/m2/models/bft/missing.gltf", "tank"));
         Refused(new("gamegen/m1.gs", "tank"));
         Refused(new("data/../gamegen/tank.gltf", "tank"));
@@ -230,9 +242,9 @@ public sealed class SourceWorldTests
         Refused(new(fixture.Tank, new string('a', 32)));
         Refused(new(fixture.Tank, "tank", new(float.NaN, 0, 0)));
         Refused(new(fixture.Tank, "tank", new(0, 0, 0), 400));
-        Assert.Throws<InvalidDataException>(() => edits.Add(new(new(fixture.Tank, "tank"), ["gamegen/m1.gs"]), Token));
-        Assert.False(edits.IsDirty);
+        Assert.Throws<InvalidDataException>(() => SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank"), ["gamegen/m1.gs"]), Token));
+        Assert.False(workspace.IsDirty);
         // A mission without a world script has no world to edit.
-        Assert.Throws<InvalidDataException>(() => new SourceWorldEdits(root, "m3"));
+        Assert.Throws<InvalidDataException>(() => SourceWorlds.AddModel(workspace, "m3", new(new(fixture.Tank, "tank"), []), Token));
     }
 }

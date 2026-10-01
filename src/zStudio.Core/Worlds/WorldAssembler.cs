@@ -36,6 +36,22 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     public HashSet<string> ScriptFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>The root node of each <c>LoadGameGen</c> before the world was written, in script order.</summary>
     public List<WorldNode> LoadedRoots { get; } = [];
+    /// <summary>Where each node came from and which instructions last changed it.</summary>
+    public Dictionary<WorldNode, WorldNodeProvenance> Provenance { get; } = new(ReferenceEqualityComparer.Instance);
+    /// <summary>How many times each instruction (script, line) ran; an instruction that ran more than once changed several things.</summary>
+    public Dictionary<(string Script, int Line), int> Executions { get; } = [];
+    private SourceInstruction? instruction;
+    private WorldNodeProvenance Origin(WorldNode node) => Provenance.TryGetValue(node, out var p) ? p : Provenance[node] = new();
+    /// <summary>Commands that change the node they apply to (the current node), whose last writer provenance records.</summary>
+    private static readonly HashSet<string> NodeCommands = new([
+        "WorldOrigin", "WorldExtents", "WorldPartition", "WorldPartitionInclusionTolerance", "WorldPartitionMaxDECFeatureCount", "WorldSetFogState", "WorldSetFogColor",
+        "WorldSetFogRange", "WorldSetFogAltitude", "WorldSetFogDensity", "WorldAddLight", "WindowOrigin", "WindowResolution", "DisplayOrigin", "DisplayResolution",
+        "DisplaySetClearColor", "CameraSetWorld", "CameraSetWindow", "CameraSetHorizon", "CameraSetLODMultiplier", "CameraSetNearFarClip", "CameraSetFOV",
+        "LightSetColor", "LightSetDiffuse", "LightSetAmbient", "LightSetRanges", "LightSetOrientation", "LightSetTranslate", "LightSetDirectedSource",
+        "LightSetPointSource", "LightSetDirectional", "LightSetSaturated", "LightSetActive", "NodeSetDescription", "Object3DTranslate", "Object3DRotate",
+        "Object3DScale", "SetAltitudeSurface", "SetIntersectSurface", "SetIntersectBBOX", "SetProximity", "SetLandmark", "NodeSetCanModify", "NodeSetOverwrite",
+        "NodeSetLighting"], StringComparer.Ordinal);
+    private static readonly HashSet<string> CreateCommands = new(["NewWorld", "NewWindow", "NewDisplay", "NewCamera", "LightNew", "NewObject3D", "LoadGameGen"], StringComparer.Ordinal);
     public string? WorldFile { get; private set; }
     public string? AnimationFile { get; private set; }
     /// <summary>World children in the order they were added; their cells are assigned after the update pass.</summary>
@@ -61,11 +77,12 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         string relative = $"{SourceProject.GameGenFolder}/{script.Replace('\\', '/')}";
         if (!files.Exists(relative)) { Warn($"Script {script} does not exist."); return; }
         ScriptFiles.Add(relative);
-        var lines = GameGenScriptText.Tokenize(GameGenScriptText.Decode(files.Read(relative, token)));
-        foreach (var raw in lines)
+        var lines = Sources.GameGenScriptSyntax.Parse(files.Read(relative, token)).Lines.Where(l => l.IsInstruction);
+        foreach (var line in lines)
         {
             token.ThrowIfCancellationRequested();
             if (++instructions > MaximumInstructions) throw new InvalidDataException("The scripts run too many instructions.");
+            var raw = line.Tokens;
             string command = raw[0];
             // Conditions follow the retail interpreter (see ScriptConditions): TRUE-valued macros, no nesting while skipping.
             if (!conditions.Runs(raw, variables)) continue;
@@ -76,7 +93,13 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; continue; }
             if (ScriptConditions.IsSource(command)) { if (args.Length > 0) Source(args[0], depth + 1); continue; }
             if (written) { Late(command, args); continue; }
+            instruction = new(relative, line.Number, command, raw, args);
+            Executions[(relative, line.Number)] = Executions.GetValueOrDefault((relative, line.Number)) + 1;
+            var target = current;
             Run(command, args, relative);
+            if (CreateCommands.Contains(command) && current != null && current != target) Origin(current).Created = instruction;
+            else if (NodeCommands.Contains(command) && target != null) Origin(target).Writers[command] = instruction;
+            instruction = null;
         }
     }
 
@@ -173,7 +196,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "FindSubNode": current = current == null ? null : FindSub(current, A(0)); if (current == null) Warn($"{script}: FindSubNode {A(0)} found no node."); break;
             case "NodeSetDescription": if (current != null) current.Name = A(0); break;
             case "AddChild":
-                if (current != null && Find(A(0), null) is { } child) AddChild(current, child);
+                if (current != null && Find(A(0), null) is { } child) { AddChild(current, child); if (instruction != null) Origin(child).Attached = instruction; }
                 else Warn($"{script}: AddChild {A(0)} has no node or parent.");
                 break;
             case "DeleteChild":
@@ -372,9 +395,11 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         (GltfDocument, string) Load(string file) => documents.TryGetValue(file, out var loaded) ? loaded : documents[file] = LoadDocument(file);
         var (doc, documentPath) = Load(path);
         if (WorldGltf.RootFlags(doc) is { } rootFlags) root.Flags = (root.Flags & ~WorldGltf.CarriedFlags) | rootFlags;
+        bool database = pendingWorld != null; var load = instruction;
         WorldGltf.ImportContext context = new()
         {
             World = World,
+            NodeImported = (node, file, source) => { var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.Load = load; },
             Reference = (uri, from) => Load(Relative(from, uri)),
             TextureName = (uri, name, from) => Texture(uri, name, from),
             Token = token,
@@ -390,6 +415,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         HashSet<WorldNode> added = new(ReferenceEqualityComparer.Instance);
         foreach (var node in nodes)
         {
+            if (database) Origin(node).Database = true;
             AddNodes(node);
             root.Children.Add(node); node.Parents.Add(root);
             if (pendingWorld != null) { node.Parents.Add(pendingWorld); worldChildren.Add(node); }

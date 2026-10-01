@@ -21,7 +21,15 @@ public sealed record SourceDefinitionFile(string Path, IReadOnlyList<string> Ani
 /// <summary>One accepted world edit: a model and the definition files listed with it.</summary>
 public sealed record SourceWorldAddition(SourceModelAddition Model, IReadOnlyList<string> DefinitionFiles);
 /// <summary>A private build of one mission for previewing: the world file and the results and inputs of each output.</summary>
-public sealed record SourceWorldBuild(string Mission, string Folder, string WorldPath, IReadOnlyList<SourceExportResult> Outputs, IReadOnlyDictionary<string, FileStamp> Inputs);
+public sealed record SourceWorldBuild(string Mission, string Folder, string WorldPath, IReadOnlyList<SourceExportResult> Outputs, IReadOnlyDictionary<string, FileStamp> Inputs)
+{
+    /// <summary>Every project file the build read or looked for, from the pending content or the disk.</summary>
+    public IReadOnlyCollection<string> Dependencies { get; init; } = [];
+    /// <summary>Where each node of the built world came from, by its slot in the world file (the scene's node index).</summary>
+    public IReadOnlyDictionary<int, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<int, WorldNodeProvenance>();
+    /// <summary>How many times each script instruction (script, line) ran while the world was built.</summary>
+    public IReadOnlyDictionary<(string Script, int Line), int> Executions { get; init; } = new Dictionary<(string, int), int>();
+}
 
 /// <summary>
 /// Editing a mission world from its sources: the world is what the mission's build script assembles, so adding a model
@@ -120,13 +128,13 @@ public static partial class SourceWorlds
 
     /// <summary>
     /// <paramref name="definitions"/> (a mission's anim.zrd) with <paramref name="files"/> appended to its ANIMATION_LIST.
-    /// Files it already lists are skipped. Text stays text in the canonical layout; compiled data stays compiled.
+    /// Files it already lists are skipped. Text stays text, with its comments and layout; compiled data stays compiled.
     /// </summary>
     public static byte[] AddDefinitionFiles(ReadOnlySpan<byte> definitions, IEnumerable<string> files, CancellationToken token = default)
     {
         bool text = ZrdText.LooksLikeText(definitions);
-        ZrdNode tree;
-        try { tree = text ? ZrdText.Parse(definitions, token) : ZrdDecoder.Read(definitions.ToArray(), token); }
+        ZrdTextSyntax? syntax = null; ZrdNode tree;
+        try { if (text) { syntax = ZrdTextSyntax.Parse(definitions, token); tree = syntax.Root; } else tree = ZrdDecoder.Read(definitions.ToArray(), token); }
         catch (InvalidDataException ex) { throw new InvalidDataException($"The animation definitions do not parse: {ex.Message}", ex); }
         var list = files.Select(f => "..\\" + f.Replace('/', '\\')).ToList();
         bool added = false;
@@ -135,7 +143,9 @@ public static partial class SourceWorlds
         Listed(tree, 0);
         var result = Walk(tree, 0);
         if (!added) throw new InvalidDataException("The animation definitions have no ANIMATION_DEFINITIONS list.");
-        return text ? ZrdText.Encode(result, token) : ZrdWriter.Write(result, token);
+        if (ZrdTextSyntax.StructurallyEqual(result, tree)) return definitions.ToArray();
+        // Text keeps its comments and layout; only the list gains lines.
+        return syntax != null ? System.Text.Encoding.Latin1.GetBytes(syntax.Rewrite(result, token).Text) : ZrdWriter.Write(result, token);
 
         // As the compiler reads the file: arrays that only wrap the keyword list are unwrapped, and new files join the
         // last top-level ANIMATION_DEFINITIONS, so they compile after everything the file already lists.
@@ -250,9 +260,9 @@ public static partial class SourceWorlds
     /// Builds <paramref name="mission"/> into <paramref name="destination"/> (a new private folder outside the project) as
     /// the export would, with <paramref name="overlay"/> replacing project files: the world, its animations and resources,
     /// the common resources, scripts and images the Whole world view reads beside it, and one full-quality texture pack.
-    /// Only the world must build; other failures are reported in the outputs. <paramref name="additions"/> are the models
-    /// the overlay's script adds (see <see cref="SourceWorldEdits.Additions"/>): the world must load each of them where
-    /// it is written, and hold each placed one (see <see cref="CheckAdditions"/>).
+    /// Only the world must build; other failures are reported in the outputs. <paramref name="additions"/> are models
+    /// the overlay's script has just added (see <see cref="AddModel"/>): the world must load each of them where it is written,
+    /// and hold each placed one (see <see cref="CheckAdditions"/>).
     /// </summary>
     public static async Task<SourceWorldBuild> BuildPreviewAsync(string root, string mission, string destination, IReadOnlyDictionary<string, byte[]>? overlay = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, IReadOnlyList<SourceModelAddition>? additions = null)
     {
@@ -262,7 +272,8 @@ public static partial class SourceWorlds
         mission = mission.ToLowerInvariant();
         SourceProject.ValidateSeparate(destination, root, "preview folder"); SourceProject.RejectLinks(destination);
         if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any()) throw new IOException($"The preview folder {destination} is not empty.");
-        var plan = await Task.Run(() => SourceBuilder.Plan(root), token).ConfigureAwait(false);
+        IReadOnlyCollection<string> added = overlay?.Keys.Where(k => !File.Exists(SourceProject.Resolve(root, k))).ToArray() ?? [];
+        var plan = await Task.Run(() => SourceBuilder.Plan(root, added), token).ConfigureAwait(false);
         var selected = PreviewOutputs.Select(o => string.Format(CultureInfo.InvariantCulture, o, mission))
             .Select(o => plan.FirstOrDefault(p => p.Path.Equals(o, StringComparison.OrdinalIgnoreCase))).OfType<SourceOutputPlan>().ToArray();
         if (!selected.Any(p => p.Family == "world")) throw new InvalidDataException($"The project has no world script for {mission} ({SourceBuilder.WorldScript(mission)}) or no glTF models.");
@@ -290,7 +301,37 @@ public static partial class SourceWorlds
             }
         }
         progress?.Report(new(selected.Length, selected.Length, "Built"));
-        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps());
+        var assembled = snapshot.World(mission, token);
+        var slots = GameZWriter.SlotIndices(assembled.World);
+        Dictionary<int, WorldNodeProvenance> provenance = [];
+        foreach (var (node, origin) in assembled.Provenance) if (slots.TryGetValue(node, out int slot)) provenance[slot] = origin;
+        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), Provenance = provenance, Executions = assembled.Executions };
+    }
+
+    /// <summary>
+    /// Adds a model to <paramref name="mission"/>'s world as one change of <paramref name="workspace"/>: the lines that load it
+    /// go into the world script (<c>gamegen/mN.gs</c>) before the line that writes the world, and its definition files into the
+    /// mission's animation list (<c>data/mN/zrdr/anim.zrd</c>). The world must then be built to check it (see <see cref="CheckAdditions"/>).
+    /// </summary>
+    public static SourceTransaction AddModel(SourceWorkspace workspace, string mission, SourceWorldAddition addition, CancellationToken token = default)
+    {
+        if (!MissionName().IsMatch(mission)) throw new InvalidDataException($"'{mission}' is not a mission folder name.");
+        mission = mission.ToLowerInvariant();
+        Validate(workspace.Root, addition.Model);
+        string scriptPath = SourceBuilder.WorldScript(mission), definitionsPath = SourceBuilder.AnimationRoot(mission);
+        byte[] script = workspace.Read(scriptPath, token) ?? throw new InvalidDataException($"The project has no world script {scriptPath}.");
+        List<(string, byte[]?)> changes = [(scriptPath, InsertIntoScript(script, [addition.Model], scriptPath))];
+        if (addition.DefinitionFiles.Count > 0)
+        {
+            foreach (string file in addition.DefinitionFiles)
+            {
+                if (!file.StartsWith(SourceProject.DataFolder + "/", StringComparison.OrdinalIgnoreCase) || !file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"'{file}' is not a definition file in the data folder.");
+                if (!workspace.Exists(file)) throw new InvalidDataException($"The definition file {file} does not exist.");
+            }
+            byte[] definitions = workspace.Read(definitionsPath, token) ?? throw new InvalidDataException($"The project has no {definitionsPath} to list animation definitions in.");
+            changes.Add((definitionsPath, AddDefinitionFiles(definitions, addition.DefinitionFiles, token)));
+        }
+        return workspace.Apply($"Add {addition.Model.Name}", changes, token) ?? throw new InvalidDataException("Adding the model changed no source file.");
     }
 
     /// <summary>
@@ -323,172 +364,5 @@ public static partial class SourceWorlds
             }
             return false;
         }
-    }
-}
-
-/// <summary>
-/// Pending world edits of one mission: models added to its build script (<c>gamegen/mN.gs</c>) and definition files added
-/// to its animation list (<c>data/mN/zrdr/anim.zrd</c>), with undo and redo. The project files change only on
-/// <see cref="Save"/>, which refuses files changed on disk since they were read or saved here.
-/// </summary>
-public sealed class SourceWorldEdits
-{
-    public string Root { get; }
-    public string Mission { get; }
-    public string ScriptPath { get; }
-    public string DefinitionsPath { get; }
-    private readonly byte[] script;
-    private readonly byte[]? definitions;
-    /// <summary>What this session read or last wrote, per file: the external-change baseline (guarded by <see cref="diskGate"/>, as it is checked off the UI thread).</summary>
-    private readonly Dictionary<string, (byte[] Bytes, FileStamp Stamp)> disk = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Lock diskGate = new();
-    private readonly List<SourceWorldAddition> history = [];
-    private int position, saved;
-    public event Action? Changed;
-
-    public SourceWorldEdits(string root, string mission)
-    {
-        Root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)); Mission = mission.ToLowerInvariant();
-        ScriptPath = SourceBuilder.WorldScript(Mission); DefinitionsPath = SourceBuilder.AnimationRoot(Mission);
-        script = ReadDisk(ScriptPath) ?? throw new InvalidDataException($"The project has no world script {ScriptPath}.");
-        definitions = ReadDisk(DefinitionsPath);
-    }
-    private byte[]? ReadDisk(string relative)
-    {
-        string path = SourceProject.Resolve(Root, relative);
-        if (!File.Exists(path)) return null;
-        SourceProject.RejectNestedLinks(Root, relative);
-        var stamp = FileStamp.Read(path);
-        if (stamp.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"{relative} exceeds {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB.");
-        byte[] bytes = File.ReadAllBytes(path);
-        if (FileStamp.Read(path) != stamp) throw new InvalidDataException($"{relative} changed while it was read; try again.");
-        lock (diskGate) disk[relative] = (bytes, stamp);
-        return bytes;
-    }
-
-    public IReadOnlyList<SourceWorldAddition> Additions => history.Take(position).ToArray();
-    public bool IsDirty => position != saved;
-    public bool CanUndo => position > 0;
-    public bool CanRedo => position < history.Count;
-    public bool HasDefinitions => definitions != null;
-
-    /// <summary>Accepts one addition; it must build into the script (see <see cref="SourceWorlds.InsertIntoScript"/>).</summary>
-    public void Add(SourceWorldAddition addition, CancellationToken token = default)
-    {
-        SourceWorlds.Validate(Root, addition.Model);
-        if (addition.DefinitionFiles.Count > 0 && definitions == null) throw new InvalidDataException($"The project has no {DefinitionsPath} to list animation definitions in.");
-        foreach (string file in addition.DefinitionFiles)
-        {
-            if (!file.StartsWith(SourceProject.DataFolder + "/", StringComparison.OrdinalIgnoreCase) || !file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"'{file}' is not a definition file in the data folder.");
-            if (!File.Exists(SourceProject.Resolve(Root, file))) throw new InvalidDataException($"The definition file {file} does not exist.");
-        }
-        var next = history.Take(position).Append(addition).ToArray();
-        _ = Content(next, token);
-        // Replacing redo steps that include the saved state makes that state unreachable.
-        if (saved > position) saved = -1;
-        history.RemoveRange(position, history.Count - position); history.Add(addition); position++;
-        Changed?.Invoke();
-    }
-    /// <summary>Withdraws the newest addition, one the world could not be built with; it cannot be redone.</summary>
-    public void Retract()
-    {
-        if (!CanUndo) throw new InvalidOperationException("Nothing to withdraw.");
-        position--; history.RemoveAt(position);
-        if (saved > position) saved = -1;
-        Changed?.Invoke();
-    }
-    public void Undo() { if (!CanUndo) throw new InvalidOperationException("Nothing to undo."); position--; Changed?.Invoke(); }
-    public void Redo() { if (!CanRedo) throw new InvalidOperationException("Nothing to redo."); position++; Changed?.Invoke(); }
-
-    /// <summary>The managed files' current content (whether or not it differs from disk), to build from.</summary>
-    public IReadOnlyDictionary<string, byte[]> Overlay(CancellationToken token = default) => Content(Additions, token);
-    private Dictionary<string, byte[]> Content(IReadOnlyList<SourceWorldAddition> additions, CancellationToken token)
-    {
-        Dictionary<string, byte[]> files = new(StringComparer.OrdinalIgnoreCase) { [ScriptPath] = SourceWorlds.InsertIntoScript(script, additions.Select(a => a.Model), ScriptPath) };
-        if (definitions != null)
-        {
-            var listed = additions.SelectMany(a => a.DefinitionFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            files[DefinitionsPath] = listed.Length == 0 ? definitions : SourceWorlds.AddDefinitionFiles(definitions, listed, token);
-        }
-        return files;
-    }
-
-    /// <summary>Whether a managed file changed on disk since this session read or saved it. Safe to call off the UI thread.</summary>
-    public bool HasExternalChanges()
-    {
-        KeyValuePair<string, (byte[] Bytes, FileStamp Stamp)>[] entries;
-        lock (diskGate) entries = [.. disk];
-        foreach (var (relative, entry) in entries)
-        {
-            string path = SourceProject.Resolve(Root, relative);
-            if (!File.Exists(path) || FileStamp.Read(path) != entry.Stamp) return true;
-        }
-        return File.Exists(SourceProject.Resolve(Root, DefinitionsPath)) != (definitions != null);
-    }
-
-    /// <summary>
-    /// Writes each managed file whose content differs from what is on disk. Every such file is checked against what this
-    /// session read before any is written, and staged through a temporary file in its folder that is read back and
-    /// compared; if replacing one fails, those already replaced are restored, so a refused or failed save leaves the
-    /// project as it was. Returns the files written.
-    /// </summary>
-    public IReadOnlyList<string> Save(CancellationToken token = default)
-    {
-        var content = Overlay(token);
-        List<(string Relative, string Path, byte[] Bytes, (byte[] Bytes, FileStamp Stamp) Expected)> changed = [];
-        foreach (var (relative, bytes) in content)
-        {
-            token.ThrowIfCancellationRequested();
-            (byte[] Bytes, FileStamp Stamp) expected;
-            lock (diskGate) expected = disk[relative];
-            if (bytes.AsSpan().SequenceEqual(expected.Bytes)) continue;
-            string path = SourceProject.Resolve(Root, relative);
-            SourceProject.RejectNestedLinks(Root, relative);
-            if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException($"{relative} is inside the protected zbd_1998/zbd_1999 folders; nothing was saved.");
-            if (!Unchanged(path, expected)) throw new IOException($"{relative} changed on disk since it was read; nothing was saved. Reload the world to continue from the file.");
-            changed.Add((relative, path, bytes, expected));
-        }
-        List<string> temporaries = []; int replaced = 0;
-        try
-        {
-            foreach (var file in changed)
-            {
-                string temporary = file.Path + "." + Guid.NewGuid().ToString("N") + ".tmp"; temporaries.Add(temporary);
-                File.WriteAllBytes(temporary, file.Bytes);
-                if (!File.ReadAllBytes(temporary).AsSpan().SequenceEqual(file.Bytes)) throw new IOException($"{file.Relative} did not write correctly; nothing was saved.");
-            }
-            token.ThrowIfCancellationRequested();
-            foreach (var file in changed)
-            {
-                if (!Unchanged(file.Path, file.Expected)) throw new IOException($"{file.Relative} changed on disk while saving; nothing was saved. Reload the world to continue from the file.");
-                File.Replace(temporaries[replaced], file.Path, null); replaced++;
-                lock (diskGate) disk[file.Relative] = (file.Bytes, FileStamp.Read(file.Path));
-            }
-        }
-        catch (Exception ex) when (replaced > 0 && ex is IOException or UnauthorizedAccessException or OperationCanceledException)
-        {
-            // Put back the files already replaced, as this session read them.
-            List<string> unrestored = [];
-            for (int i = 0; i < replaced; i++)
-            {
-                var file = changed[i]; string temporary = file.Path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                try
-                {
-                    File.WriteAllBytes(temporary, file.Expected.Bytes);
-                    File.Replace(temporary, file.Path, null);
-                    lock (diskGate) disk[file.Relative] = (file.Expected.Bytes, FileStamp.Read(file.Path));
-                }
-                catch (Exception restore) when (restore is IOException or UnauthorizedAccessException) { unrestored.Add(file.Relative); }
-                finally { if (File.Exists(temporary)) File.Delete(temporary); }
-            }
-            if (unrestored.Count > 0) throw new IOException($"Saving failed ({ex.Message}) and {string.Join(", ", unrestored)} could not be restored; it holds the saved edits.", ex);
-            throw;
-        }
-        finally { foreach (string temporary in temporaries) if (File.Exists(temporary)) File.Delete(temporary); }
-        saved = position; Changed?.Invoke();
-        return changed.Select(c => c.Relative).ToArray();
-
-        static bool Unchanged(string path, (byte[] Bytes, FileStamp Stamp) expected) =>
-            File.Exists(path) && FileStamp.Read(path) == expected.Stamp && File.ReadAllBytes(path).AsSpan().SequenceEqual(expected.Bytes);
     }
 }

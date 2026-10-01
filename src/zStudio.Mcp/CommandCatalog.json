@@ -3300,7 +3300,7 @@
   },
   {
     "Name": "zstudio_pickup_move",
-    "Description": "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements.",
+    "Description": "Move a pickup to exact coordinates as one undoable operation, including unambiguous difficulty counterparts. Requires unlocked placements. In a source world the move changes the coordinate tokens of the resource sources (data/mN/zrdr/puppies*.zrd), the world rebuilds and the result is the replacement document.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4963,7 +4963,7 @@
   },
   {
     "Name": "zstudio_source_world_open",
-    "Description": "Open (or activate) a mission world of the open source project as its build script assembles it from the project\u0027s glTF models, textures and animation definitions. The world is built privately, as the export builds it, and shown read-only in Whole world; edit it with zstudio_source_world_add_model, undo_redo and save_document, which change only the project\u0027s sources. Build problems are listed in problems. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Open (or activate) a mission world of the open source project as its build script assembles it from the project\u0027s glTF models, textures, resources and animation definitions, including the project\u0027s unsaved edits. The world is built privately, as the export builds it, and shown in Whole world. Edit it with zstudio_source_world_add_model, the placement commands (pickup_lock, pickup_move, scene_card), undo_redo and save_document, which change only the project\u0027s sources; every open world of the project shares one edit history and one save. Build problems are listed in problems. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5036,7 +5036,7 @@
   },
   {
     "Name": "zstudio_source_world_add_model",
-    "Description": "Add a project model to a source world as one undoable edit: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zrd. The world rebuilds and the result is the replacement document; an edit the world cannot be built with (build_failed), or one canceled before the rebuilt world is shown, is reverted. While the world rebuilds, other edits, undo_redo, save_document and reload_document of it return busy. Nothing is written until save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Add a project model to a source world as one undoable change of the project\u0027s workspace: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zrd, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with (build_failed), or one canceled before the rebuilt world is shown, is taken back. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5130,6 +5130,294 @@
           "Properties": null
         },
         "MaxItems": 64
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_changes",
+    "Description": "Describe the open source project\u0027s unsaved edits: the files save_document would write, the shared edit history (newest last, with undone steps marked) and, for one file, its working text beside the file on disk as a bounded line diff.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "file",
+        "Type": "string",
+        "Description": "Optional project path (for example data/m1/zrdr/puppies.zrd) to diff against the disk.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "maxLines",
+        "Type": "integer",
+        "Description": "Diff lines to return; default 200.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 2000
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_object",
+    "Description": "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from \u2014 the glTF file and node it was imported from, or the script instruction that created it \u2014 with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_world_object_edit",
+    "Description": "Move, rotate or scale a world object of a source world, or set or clear one of its node flags, as one undoable change of the project\u0027s workspace. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. The world rebuilds and the result is the replacement document; a change the world cannot be built with is taken back. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "position",
+        "Type": "object",
+        "Description": "New local position.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "rotationDegrees",
+        "Type": "object",
+        "Description": "New local rotation in degrees (about Y, then X, then Z, as Object3DRotate).",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "scale",
+        "Type": "object",
+        "Description": "New local scale.",
+        "Required": false,
+        "Choices": null,
+        "Properties": [
+          {
+            "Name": "x",
+            "Type": "number",
+            "Description": "X.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "y",
+            "Type": "number",
+            "Description": "Y.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          },
+          {
+            "Name": "z",
+            "Type": "number",
+            "Description": "Z.",
+            "Required": true,
+            "Choices": null,
+            "Properties": null
+          }
+        ]
+      },
+      {
+        "Name": "flag",
+        "Type": "string",
+        "Description": "Node flag to set or clear.",
+        "Required": false,
+        "Choices": [
+          "0x8",
+          "0x10",
+          "0x20",
+          "0x40",
+          "0x80",
+          "0x10000",
+          "0x20000"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "on",
+        "Type": "boolean",
+        "Description": "Whether the flag is set; required with flag.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_blender_checkout",
+    "Description": "Check a project model out for Blender: its glTF, buffers and textures are copied into the project\u0027s zstudio/export/\u003Cid\u003E/input folder as a self-contained glTF to import in Blender. Export the edited model as glTF Separate (.gltf \u002B .bin \u002B textures, Custom Properties on) into the checkout\u0027s outbox, then call source_blender_update. Give the model path, or a source world document and scene node to check out the model that object comes from.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "model",
+        "Type": "string",
+        "Description": "Project path of a .gltf model, for example data/m2/models/bft/ltank.gltf.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node of the document whose model to check out.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_blender_checkouts",
+    "Description": "List the open source project\u0027s Blender checkouts (newest first) with the exports found in each outbox (newest first).",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
+    "Name": "zstudio_source_blender_update",
+    "Description": "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project\u0027s workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model\u0027s glTF and buffer, with each new or changed texture PNG; a texture other models use changes for them too (reported in notes). The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. Nothing is written until save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "checkout",
+        "Type": "string",
+        "Description": "Checkout id from source_blender_checkout or source_blender_checkouts.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "export",
+        "Type": "string",
+        "Description": "Export path relative to the outbox; default the newest.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
       }
     ]
   }

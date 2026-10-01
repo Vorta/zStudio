@@ -8,7 +8,7 @@ namespace Recoil.Zbd.Core.Sources;
 internal static class ArchiveSources
 {
     internal const int RecordSize = 148;
-    internal sealed record Member(int Index, string Name, uint Aux, string? SourceField, ulong FileTime, ReadOnlyMemory<byte> Payload);
+    internal sealed record Member(int Index, string Name, uint Aux, string? SourceField, ulong FileTime, ReadOnlyMemory<byte> Payload, long Offset = -1);
     /// <summary>A member to write. The engine looks members up by name; the source field records where it was built from.</summary>
     internal sealed record Entry(string Name, string SourceField, byte[] Payload);
 
@@ -27,7 +27,7 @@ internal static class ArchiveSources
             uint offset = BinaryPrimitives.ReadUInt32LittleEndian(r), size = BinaryPrimitives.ReadUInt32LittleEndian(r[4..]);
             BinaryCursor.CheckRange(table, offset, size);
             members.Add(new(i, BinaryCursor.FixedString(r[8..72]), BinaryPrimitives.ReadUInt32LittleEndian(r[72..]), PlainField(r[76..140]),
-                BinaryPrimitives.ReadUInt64LittleEndian(r[140..]), bytes.Slice((int)offset, (int)size)));
+                BinaryPrimitives.ReadUInt64LittleEndian(r[140..]), bytes.Slice((int)offset, (int)size), offset));
         }
         return members;
     }

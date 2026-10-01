@@ -199,6 +199,8 @@ public static class GameZWriter
         }
         return slots;
     }
+    /// <summary>Each live node's slot in the world file, which is the node's index in a scene read from the file.</summary>
+    public static IReadOnlyDictionary<WorldNode, int> NodeSlots(GameZWorld world) => SlotIndices(world);
     internal static Dictionary<WorldNode, int> SlotIndices(GameZWorld world)
     {
         Dictionary<WorldNode, int> result = new(ReferenceEqualityComparer.Instance); var slots = SlotSequence(world);

@@ -94,8 +94,8 @@ public sealed class SourceProjectCorpusTests
                 models.First(m => m.Folder.EndsWith("/models/bft", StringComparison.Ordinal) && !m.Folder.StartsWith("data/m1/", StringComparison.Ordinal) && !present.Contains(m.Name));
             Assert.DoesNotContain(vehicle.Name, present);
             var definitions = SourceWorlds.DefinitionsFor(project, "m1", vehicle.Name, token: Token);
-            SourceWorldEdits edits = new(project, "m1");
-            edits.Add(new(new(vehicle.Path, vehicle.Name), definitions.Select(d => d.Path).ToArray()), Token);
+            SourceWorkspace edits = new(project);
+            SourceWorlds.AddModel(edits, "m1", new(new(vehicle.Path, vehicle.Name), definitions.Select(d => d.Path).ToArray()), Token);
             edits.Save(Token);
             string added = Path.Combine(work, "added");
             var withVehicle = await SourceBuilder.ExportAsync(project, added, ["m1/gamez.zbd", "m1/anim.zbd", "m1/rtexture16.zbd", "m1/texture2.zbd"], token: Token);

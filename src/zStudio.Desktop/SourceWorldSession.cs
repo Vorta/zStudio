@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.IO;
-using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Sources;
 
 namespace Recoil.Zbd.Desktop;
@@ -8,23 +7,26 @@ namespace Recoil.Zbd.Desktop;
 /// <summary>
 /// A mission world edited from its source project. The world shown is a private build of the mission (see
 /// <see cref="SourceWorlds.BuildPreviewAsync"/>) in a temporary folder outside the project; each build has its own
-/// subfolder, removed with the document that shows it. Pending edits live in <see cref="Edits"/> and reach the project
-/// only when saved. The session passes from document to document as edits rebuild the world.
+/// subfolder, removed with the document that shows it. Edits belong to the project's <see cref="Workspace"/>, which every
+/// open world of the project shares, and reach the project only when saved. The session passes from document to document
+/// as edits rebuild the world.
 /// </summary>
 internal sealed class SourceWorldSession : IDisposable
 {
     internal static string TemporaryRoot => Path.Combine(Path.GetTempPath(), "zStudio", "source-worlds");
-    public string Root => Edits.Root;
-    public string Mission => Edits.Mission;
-    public SourceWorldEdits Edits { get; }
+    public SourceWorkspace Workspace { get; }
+    public string Root => Workspace.Root;
+    public string Mission { get; }
+    public string ScriptPath => $"{SourceProject.GameGenFolder}/{Mission}.gs";
+    public string DefinitionsPath => $"{SourceProject.DataFolder}/{Mission}/zrdr/anim.zrd";
     public string Label => $"{Mission} world (sources)";
     /// <summary>The document currently showing this world; disposing it ends the session.</summary>
     internal DocumentModel? Owner { get; set; }
     /// <summary>Cancels the newest build request; a newer request or the session's end supersedes it.</summary>
     internal CancellationTokenSource? Building { get; set; }
     /// <summary>
-    /// An edit, undo, redo or reload is rebuilding the world until its replacement is shown. Other edits, saves and
-    /// reloads wait for it, so the world shown always matches the edits and only edits it was built with are saved.
+    /// An edit, undo, redo or reload is rebuilding the world until its replacement is shown. Other edits of the project, saves
+    /// and reloads wait for it, so the world shown always matches the workspace and only edits it was built with are saved.
     /// </summary>
     internal bool IsRebuilding { get; set; }
     private readonly string folder;
@@ -32,9 +34,10 @@ internal sealed class SourceWorldSession : IDisposable
     private int generation;
     public bool IsDisposed { get; private set; }
 
-    public SourceWorldSession(string root, string mission)
+    public SourceWorldSession(SourceWorkspace workspace, string mission)
     {
-        Edits = new(root, mission);
+        Workspace = workspace; Mission = mission.ToLowerInvariant();
+        if (workspace.Read(ScriptPath) == null) throw new InvalidDataException($"The project has no world script {ScriptPath}.");
         RemoveAbandoned();
         folder = Path.Combine(TemporaryRoot, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);

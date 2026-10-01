@@ -155,6 +155,8 @@ public partial class MainWindow
         RegisterContentCommands(registry);
         RegisterSourceCommands(registry);
         RegisterSourceWorldCommands(registry);
+        RegisterSourceObjectCommands(registry);
+        RegisterSourceBlenderCommands(registry);
         return registry;
     }
 }

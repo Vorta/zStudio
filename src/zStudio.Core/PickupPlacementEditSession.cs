@@ -243,6 +243,29 @@ public sealed partial class PickupPlacementEditSession
     {
         if (!float.IsFinite(value.X) || !float.IsFinite(value.Y) || !float.IsFinite(value.Z)) throw new InvalidDataException("Transform components must be finite game floats.");
     }
+    /// <summary>
+    /// The scalar writes <paramref name="values"/> need in the stored archives: for each component that differs from the
+    /// stored value, the archive, the offset of its node and the new value. Used to carry a placement edit back to the
+    /// sources a built archive came from (see <see cref="Sources.SourceResourceEdits"/>).
+    /// </summary>
+    public IReadOnlyList<(string ArchivePath, int Offset, float Value)> ScalarWrites(IReadOnlyDictionary<MissionPickupSource, PlacementTransform> values)
+    {
+        List<(string, int, float)> writes = [];
+        foreach (var (source, transform) in values)
+        {
+            var entry = entries[source];
+            for (int axis = 0; axis < 3; axis++)
+                if (transform.Position[axis] != entry.Record.OriginalPosition[axis]) writes.Add((source.ArchivePath, entry.Offsets[axis], transform.Position[axis]));
+            for (int i = 0; i < entry.RotationOffsets.Length; i++)
+            {
+                int axis = entry.RotationOffsets.Length == 1 ? 1 : i;
+                if (transform.Rotation[axis] != entry.Record.Rotation[axis]) writes.Add((source.ArchivePath, entry.RotationOffsets[i], transform.Rotation[axis]));
+            }
+        }
+        return writes;
+    }
+    /// <summary>The bytes of a loaded archive as this session read them.</summary>
+    public ReadOnlyMemory<byte> ArchiveBytes(string archivePath) => archives[archivePath].Original.Bytes;
     public byte[] EncodeArchive(string archivePath)
     {
         var archive = archives[archivePath]; byte[] output = archive.Original.Bytes.ToArray();

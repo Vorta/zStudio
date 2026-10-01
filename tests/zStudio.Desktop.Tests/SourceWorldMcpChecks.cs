@@ -52,9 +52,11 @@ internal static class SourceWorldMcpChecks
             Assert.Null(doc.ModelEdits);
             await Preview();
             Assert.Equal(Visibility.Visible, ((FrameworkElement)main.FindName("SourceWorldTools")).Visibility);
-            Assert.Equal(Visibility.Collapsed, ((FrameworkElement)main.FindName("PickupTools")).Visibility);
-            var locked = await Call("pickup_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = false }, error: true);
-            Assert.Contains("unsupported", locked.ToJsonString());
+            // Placements of a source world are edited through its sources, so the world can be unlocked like any map.
+            Assert.Equal(Visibility.Visible, ((FrameworkElement)main.FindName("PickupTools")).Visibility);
+            await Call("pickup_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = false });
+            Assert.False(doc.PickupsLocked);
+            await Call("pickup_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = true });
             // Opening it again activates the same document.
             Assert.Equal(Id(doc), (await Job("source_world_open", new() { ["mission"] = "M1" }))["document"]!["id"]!.GetValue<string>());
 
@@ -69,7 +71,9 @@ internal static class SourceWorldMcpChecks
             Assert.False(File.Exists(doc.Path));
             Assert.True(added.IsDirty); Assert.Equal("m1 world (sources) *", added.Title);
             Assert.Contains(added.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
-            Assert.Equal([SourceWorldFixture.TankDefinitions], added.SourceWorld!.Edits.Additions.Single().DefinitionFiles);
+            // One change of the project's workspace: the script and the animation list.
+            Assert.Equal(["data/m1/zrdr/anim.zrd", "gamegen/m1.gs"], added.SourceWorld!.Workspace.History.Single().Files.Select(f => f.Relative).Order(StringComparer.Ordinal));
+            Assert.Contains("enemies\\\\tank.zrd", System.Text.Encoding.Latin1.GetString(added.SourceWorld.Workspace.Read("data/m1/zrdr/anim.zrd")!));
             var stale = await Job("source_world_add_model", new() { ["document"] = Id(doc), ["revision"] = 0, ["model"] = fixture.Tank, ["name"] = "tank2" }, "failed");
             Assert.Equal("stale_document", stale["code"]!.GetValue<string>());
             var bad = await Job("source_world_add_model", new() { ["document"] = Id(added), ["revision"] = added.Revision, ["model"] = "gamegen/m1.gs", ["name"] = "x" }, "failed");
@@ -93,7 +97,7 @@ internal static class SourceWorldMcpChecks
                 ["position"] = new Dictionary<string, object?> { ["x"] = 10, ["y"] = 0, ["z"] = 10 }, ["definitionFiles"] = Array.Empty<string>()
             }, "failed");
             Assert.Equal("build_failed", shadowed["code"]!.GetValue<string>()); Assert.Contains("hull", shadowed["message"]!.GetValue<string>());
-            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Edits.Additions.Count); Assert.False(placed.SourceWorld!.Edits.CanRedo);
+            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Workspace.UndoCount); Assert.False(placed.SourceWorld!.Workspace.CanRedo);
 
             // An edit canceled while its world rebuilds is withdrawn: the shown world never had it.
             using (CancellationTokenSource cancel = new())
@@ -102,7 +106,7 @@ internal static class SourceWorldMcpChecks
                 cancel.Cancel();
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceled);
             }
-            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Edits.Additions.Count); Assert.False(placed.SourceWorld!.Edits.CanRedo);
+            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Workspace.UndoCount); Assert.False(placed.SourceWorld!.Workspace.CanRedo);
 
             // While an edit rebuilds the world, nothing else edits or saves it: an edit it cannot be built with (here a
             // malformed glTF) is withdrawn afterwards and never reaches the project.
@@ -115,7 +119,7 @@ internal static class SourceWorldMcpChecks
             Assert.Equal("busy", (await Assert.ThrowsAsync<StudioCommandException>(() => SourceTask<DocumentModel>("UndoSourceWorldAsync", placed, false, CancellationToken.None))).Code);
             Assert.Equal("build_failed", (await Assert.ThrowsAsync<StudioCommandException>(() => failing)).Code);
             Assert.Equal(scriptBefore, await File.ReadAllBytesAsync(scriptPath, token));
-            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Edits.Additions.Count); Assert.False(placed.SourceWorld!.Edits.CanRedo);
+            Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Workspace.UndoCount); Assert.False(placed.SourceWorld!.Workspace.CanRedo);
             Assert.False(placed.SourceWorld!.IsRebuilding);
             foreach (string command in new[] { "DocumentSave", "DocumentUndo", "AddSourceModel" }) Assert.True(((UIElement)main.FindName(command)).IsEnabled, command);
             File.Delete(fixture.Path("data/m1/models/broken.gltf"));
@@ -130,7 +134,8 @@ internal static class SourceWorldMcpChecks
             var saveAs = await Job("save_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision, ["destination"] = Path.Combine(fixture.Root, "x.zbd") }, "failed");
             Assert.Equal("invalid_argument", saveAs["code"]!.GetValue<string>());
             var saved = await Job("save_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision });
-            Assert.Equal(["gamegen/m1.gs", "data/m1/zrdr/anim.zrd"], saved["written"]!.AsArray().Select(w => w!.GetValue<string>()));
+            Assert.Equal(["data/m1/zrdr/anim.zrd", "gamegen/m1.gs"], saved["written"]!.AsArray().Select(w => w!.GetValue<string>()).Order(StringComparer.Ordinal));
+            Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
             Assert.False(redone.IsDirty);
             string script = fixture.Path("gamegen/m1.gs");
             Assert.Contains("LoadGameGen tank.flt tank\r\n", await File.ReadAllTextAsync(script, token));
@@ -147,11 +152,11 @@ internal static class SourceWorldMcpChecks
             var refused = await Job("reload_document", new() { ["document"] = Id(pending), ["revision"] = pending.Revision }, "failed");
             Assert.Equal("unsaved_changes", refused["code"]!.GetValue<string>());
             var conflict = await Job("save_document", new() { ["document"] = Id(pending), ["revision"] = pending.Revision }, "failed");
-            Assert.Equal("io_failed", conflict["code"]!.GetValue<string>());
+            Assert.Equal("external_change", conflict["code"]!.GetValue<string>());
             Assert.EndsWith("# elsewhere\r\n", await File.ReadAllTextAsync(script, token));
             var undoneExtra = Document(await Call("undo_redo", new() { ["document"] = Id(pending), ["revision"] = pending.Revision, ["action"] = "undo" }));
             var fresh = Document(await Job("reload_document", new() { ["document"] = Id(undoneExtra), ["revision"] = undoneExtra.Revision }));
-            Assert.False(fresh.SourceWorld!.Edits.CanUndo); Assert.Contains(fresh.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
+            Assert.False(fresh.SourceWorld!.Workspace.CanUndo); Assert.Contains(fresh.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
 
             // Closing the world removes its private files.
             await Call("close_document", new() { ["document"] = Id(fresh), ["revision"] = fresh.Revision });

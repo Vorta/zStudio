@@ -108,7 +108,9 @@ public partial class MainWindow
         Register(r, "close_document", "Close a document. Explicit discard=true is required for unsaved edits; pending drafts are never discarded implicitly.", true,
             [DocumentParameter, RevisionParameter, P("discard", "boolean", "Explicitly discard this document's accepted unsaved edits.")], a =>
         {
-            var doc = TargetDocument(a, true); if (doc.IsDirty && !Flag(a, "discard")) throw new StudioCommandException("unsaved_changes", "Save or explicitly discard this document.");
+            var doc = TargetDocument(a, true);
+            // A source world's edits belong to its project; closing one of several open worlds keeps them.
+            if (doc.IsDirty && !Flag(a, "discard") && !OtherSourceWorldOpen(doc)) throw new StudioCommandException("unsaved_changes", doc.SourceWorld != null ? "Save or explicitly discard the source project's edits; this is its last open world." : "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });
         });
         RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project on disk, keeping its pending edits unless gamegen/mN.gs or data/mN/zrdr/anim.zrd changed on disk.", [DocumentParameter, RevisionParameter], false, async (a, token) =>

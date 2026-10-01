@@ -17,6 +17,12 @@ public partial class MainWindow
     private void InitializeWorkspace()
     {
         var layout = Layout;
+        // A source project's workspace lives while any of its worlds is open; its last close decides its edits.
+        ViewModel.Documents.CollectionChanged += (_, e) =>
+        {
+            if (e.Action is not System.Collections.Specialized.NotifyCollectionChangedAction.Add) ReleaseUnusedSourceWorkspace();
+            if (!ViewModel.Documents.Any(d => d.SourceWorld != null)) discardApprovedWorkspace = null;
+        };
         NavigationTabs.SelectedIndex = layout.BrowserTab; InspectorTabs.SelectedIndex = layout.InspectorTab; ToolTabs.SelectedIndex = layout.ToolTab;
         InitializeResponsiveNavigator();
         InitializeChrome(); ApplyDensity();
@@ -74,18 +80,25 @@ public partial class MainWindow
         foreach (var column in AssetGrid.Columns.Skip(1)) column.Visibility = doc?.AnimationEdits != null ? Visibility.Visible : Visibility.Collapsed;
         foreach (var item in AnimationMenu.Items.OfType<MenuItem>()) if (item.Tag is string command) item.IsEnabled = animation?.CanRunCommand(command) == true;
         // A rebuilding source world accepts no other edit or save until the rebuilt world is shown.
-        bool rebuilding = doc?.SourceWorld?.IsRebuilding == true;
+        bool rebuilding = doc?.SourceWorld is { } rebuildingWorld && (rebuildingWorld.IsRebuilding || sourceWorkspaceBusy || rebuildingWorld.Workspace.IsSaving);
         DocumentSave.IsEnabled = !rebuilding && (doc?.SourceWorld != null || doc?.AnimationEdits != null || doc?.PickupEdits != null || doc?.ModelEdits != null || doc?.ResourceEdits != null || doc?.ContentEdits != null);
-        DocumentSave.ToolTip = doc?.SourceWorld is { } sourceWorld ? $"Save the world's edits to {sourceWorld.Edits.ScriptPath} (Ctrl+S)" : doc?.ModelEdits?.IsDirty == true ? "Save model and texture changes (Ctrl+S)" : doc?.PickupEdits != null ? "Save pickup placements to the owning archive (Ctrl+S)" : doc?.AnimationEdits != null ? "Save the animation pack to a new file (Ctrl+S)" : "Save (Ctrl+S)";
-        DocumentUndo.IsEnabled = !rebuilding && (doc?.SourceWorld?.Edits.CanUndo == true || doc?.AnimationEdits?.CanUndo == true || doc?.CanUndoScene == true || doc?.ResourceEdits?.CanUndo == true || doc?.ContentEdits?.CanUndo == true);
-        DocumentRedo.IsEnabled = !rebuilding && (doc?.SourceWorld?.Edits.CanRedo == true || doc?.AnimationEdits?.CanRedo == true || doc?.CanRedoScene == true || doc?.ResourceEdits?.CanRedo == true || doc?.ContentEdits?.CanRedo == true);
+        DocumentSave.ToolTip = doc?.SourceWorld is { } sourceWorld ? SourceSaveTip(sourceWorld.Workspace) : doc?.ModelEdits?.IsDirty == true ? "Save model and texture changes (Ctrl+S)" : doc?.PickupEdits != null ? "Save pickup placements to the owning archive (Ctrl+S)" : doc?.AnimationEdits != null ? "Save the animation pack to a new file (Ctrl+S)" : "Save (Ctrl+S)";
+        DocumentUndo.IsEnabled = !rebuilding && (doc?.SourceWorld?.Workspace.CanUndo == true || doc?.AnimationEdits?.CanUndo == true || doc?.CanUndoScene == true || doc?.ResourceEdits?.CanUndo == true || doc?.ContentEdits?.CanUndo == true);
+        DocumentRedo.IsEnabled = !rebuilding && (doc?.SourceWorld?.Workspace.CanRedo == true || doc?.AnimationEdits?.CanRedo == true || doc?.CanRedoScene == true || doc?.ResourceEdits?.CanRedo == true || doc?.ContentEdits?.CanRedo == true);
         SaveMenu.IsEnabled = SaveAsMenu.IsEnabled = DocumentSave.IsEnabled;
         // A source world saves to its project's sources; there is no other destination.
         if (doc?.SourceWorld != null) SaveAsMenu.IsEnabled = false;
         AddSourceModelMenu.IsEnabled = AddSourceModel.IsEnabled = doc?.SourceWorld != null && !rebuilding;
         UndoMenu.IsEnabled = DocumentUndo.IsEnabled; RedoMenu.IsEnabled = DocumentRedo.IsEnabled;
-        DocumentUndo.ToolTip = doc?.AnimationEdits?.UndoDescription is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
-        DocumentRedo.ToolTip = doc?.AnimationEdits?.RedoDescription is string redo ? "Redo: " + redo + " (Ctrl+Y)" : "Redo (Ctrl+Y)";
+        DocumentUndo.ToolTip = (doc?.SourceWorld?.Workspace.UndoLabel ?? doc?.AnimationEdits?.UndoDescription) is string undo ? "Undo: " + undo + " (Ctrl+Z)" : "Undo (Ctrl+Z)";
+        DocumentRedo.ToolTip = (doc?.SourceWorld?.Workspace.RedoLabel ?? doc?.AnimationEdits?.RedoDescription) is string redo ? "Redo: " + redo + " (Ctrl+Y)" : "Redo (Ctrl+Y)";
+    }
+    /// <summary>What Save writes in a source project: every changed source file, not only this world's.</summary>
+    private static string SourceSaveTip(Recoil.Zbd.Core.Sources.SourceWorkspace workspace)
+    {
+        var dirty = workspace.DirtyFiles;
+        return dirty.Count == 0 ? "The source project has no unsaved edits (Ctrl+S)"
+            : $"Save the source project's {dirty.Count} changed file{(dirty.Count == 1 ? "" : "s")} (Ctrl+S):\n" + string.Join("\n", dirty.Take(12)) + (dirty.Count > 12 ? $"\n… and {dirty.Count - 12} more" : "");
     }
     private void ObserveDocumentCommands(DocumentModel? document)
     {

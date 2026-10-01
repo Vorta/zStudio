@@ -36,6 +36,10 @@ public partial class MainWindow : Window
     private AnimationEditor? animation;
     private bool pendingAnimationPlay;
     private bool allowClose, resolvingClose;
+    /// <summary>The app is closing every document; a source project's edits cannot stay with another of its worlds.</summary>
+    private bool closingAllDocuments;
+    /// <summary>A source project whose unsaved edits the user chose to discard while closing; its other worlds close without asking again.</summary>
+    private Recoil.Zbd.Core.Sources.SourceWorkspace? discardApprovedWorkspace;
     private DecodedImage? decoded;
     private JsonObject? properties;
     private WaveFileReader? wave;
@@ -252,15 +256,15 @@ public partial class MainWindow : Window
                 if (asset.Kind == AssetKind.World) await PopulateWorldMissionsAsync(doc, token);
                 string? exactMission = ExactMissionFor(doc.Path, ViewModel.Resolver.SelectedMission(doc.Path));
                 var mission = asset.Kind == AssetKind.World ? await MissionSceneLoader.LoadAsync(doc.PreviewDocument, ViewModel.Resolver, token: token, difficulty: ViewModel.Difficulty, mission: exactMission, exactMission: exactMission != null) : null;
-                // A source world's placements change through its sources, not by editing the built archives.
-                if (mission != null) { if (doc.SourceWorld == null) await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
+                // A source world's placement edits are carried back to its sources (see MoveSourcePlacementAsync).
+                if (mission != null) { await doc.GetPickupEditsAsync(ViewModel.Resolver, token); await PopulateWorldMissionsAsync(doc, token); }
                 await scene.ShowAsync(doc.PreviewDocument, asset, ViewModel.Resolver, PreferredPack, LodCombo.SelectedIndex, token, BackdropEnabled.IsChecked == true, mission); token.ThrowIfCancellationRequested(); ApplySceneOptions();
                 // A rebuilt source world keeps the camera of the build it replaced.
                 if (pendingSourceView is { } rebuilt && rebuilt.Document == doc) { pendingSourceView = null; scene.RestoreView(rebuilt.View); }
                 var shownOptions = ReadStaticSceneOptions();
                 publishedStaticOptions = shownOptions with { Difficulty = mission is { Layout.DifficultyApplies: true } ? mission.Layout.Difficulty : ViewModel.Difficulty, Mission = mission?.Layout.MissionArchive ?? shownOptions.Mission };
                 if (mission != null) ViewModel.AdoptMissionFallback(doc.Path, mission.Layout);
-                if (asset.Kind == AssetKind.World && doc.SourceWorld == null) AttachPickupEditor(doc);
+                if (asset.Kind == AssetKind.World) AttachPickupEditor(doc);
                 if (mission != null)
                 {
                     if (previousMission != null && previousView != null)
@@ -656,12 +660,13 @@ public partial class MainWindow : Window
                 // original WPF Closing event before showing prompts or calling Close again.
                 await Dispatcher.Yield(DispatcherPriority.Normal);
                 if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync()) return;
+                closingAllDocuments = true;
                 foreach (var document in ViewModel.Documents.ToArray())
                     if (!await ConfirmDocumentCloseAsync(document)) return;
                 allowClose = true;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { Report(ex); return; }
-            finally { resolvingClose = false; }
+            finally { resolvingClose = closingAllDocuments = false; discardApprovedWorkspace = null; }
             Close();
             return;
         }

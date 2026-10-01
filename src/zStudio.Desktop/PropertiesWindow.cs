@@ -33,11 +33,12 @@ public sealed class PropertiesWindow : Window
     public PickupPropertiesEditor? PickupFields { get; private set; }
     public ResourcePropertiesEditor? ResourceFields { get; private set; }
     public ScriptPropertiesEditor? ScriptFields { get; private set; }
-    public bool HasPendingDrafts => AnimationFields?.HasPendingDrafts == true || PickupFields?.HasPendingDrafts == true || ResourceFields?.HasPendingDrafts == true || ScriptFields?.HasPendingDrafts == true;
+    internal SourceObjectPropertiesEditor? SourceFields { get; private set; }
+    public bool HasPendingDrafts => AnimationFields?.HasPendingDrafts == true || PickupFields?.HasPendingDrafts == true || ResourceFields?.HasPendingDrafts == true || ScriptFields?.HasPendingDrafts == true || SourceFields?.HasPendingDrafts == true;
     public Func<DocumentModel, bool, Task<bool>>? SaveRequested { get; set; }
     public Action<DocumentModel, bool>? UndoRequested { get; set; }
     public Action<DocumentModel>? Editing { get; set; }
-    public JsonObject? CurrentJson => ScriptFields?.Json ?? ResourceFields?.Json ?? AnimationFields?.Json ?? PickupFields?.Json ?? snapshot;
+    public JsonObject? CurrentJson => ScriptFields?.Json ?? ResourceFields?.Json ?? AnimationFields?.Json ?? PickupFields?.Json ?? SourceFields?.Json ?? snapshot;
 
     public PropertiesWindow(Window owner, MainViewModel preferences)
     {
@@ -141,6 +142,11 @@ public sealed class PropertiesWindow : Window
         label = title; PickupFields = new(document, source, title, json);
         PickupFields.Changed += Refresh; body.Content = PickupFields; Refresh(); return true;
     }
+    internal bool SetSourceObject(DocumentModel document, SourceObjectPropertiesEditor fields)
+    {
+        if (!BeginTarget(document)) { fields.Dispose(); return false; }
+        label = fields.State.Name; SourceFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
+    }
     public bool SetResource(DocumentModel document, ResourcePropertiesEditor fields)
     {
         if (!BeginTarget(document)) return false;
@@ -172,13 +178,13 @@ public sealed class PropertiesWindow : Window
             doc.ModelEditsChanged -= ModelAssetsChanged;
             doc.ContentEditsChanged -= ModelAssetsChanged;
         }
-        AnimationFields?.Dispose(); PickupFields?.Dispose(); ResourceFields?.Dispose(); ScriptFields?.Dispose(); ScriptFields = null;
+        AnimationFields?.Dispose(); PickupFields?.Dispose(); ResourceFields?.Dispose(); ScriptFields?.Dispose(); SourceFields?.Dispose(); ScriptFields = null; SourceFields = null;
         AnimationFields = null; PickupFields = null; ResourceFields = null; Document = null; snapshot = null; body.Content = null; readOnlyAsset = null; ++assetRefreshGeneration;
     }
     private void DocumentDisposing() => CloseResolved();
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
-    public bool ResolvePendingDrafts() => AnimationFields?.ResolvePendingDrafts() != false && PickupFields?.ResolvePendingDrafts() != false && ResourceFields?.ResolvePendingDrafts() != false && ScriptFields?.ResolvePendingDrafts() != false;
-    public async Task<bool> ResolvePendingDraftsAsync() => ScriptFields != null ? await ScriptFields.ResolvePendingDraftsAsync() : ResourceFields != null ? await ResourceFields.ResolvePendingDraftsAsync() : ResolvePendingDrafts();
+    public bool ResolvePendingDrafts() => AnimationFields?.ResolvePendingDrafts() != false && PickupFields?.ResolvePendingDrafts() != false && ResourceFields?.ResolvePendingDrafts() != false && ScriptFields?.ResolvePendingDrafts() != false && SourceFields?.ResolvePendingDrafts() != false;
+    public async Task<bool> ResolvePendingDraftsAsync() => ScriptFields != null ? await ScriptFields.ResolvePendingDraftsAsync() : ResourceFields != null ? await ResourceFields.ResolvePendingDraftsAsync() : SourceFields != null ? await SourceFields.ResolvePendingDraftsAsync() : ResolvePendingDrafts();
     private void Refresh()
     {
         if (Document is not { } doc) return;

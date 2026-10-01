@@ -1157,6 +1157,21 @@
         "zstudio_source_world_add_model"
       ],
       "note": "Tools > Add model to world and the Whole world Add model button (source worlds only) open the Add model dialog for the active source world; the accepted choice is one undoable edit that rebuilds the world. undo_redo and save_document apply to source worlds as to other documents."
+    },
+    {
+      "gui": "MainWindow.xaml:EditInBlenderClick",
+      "tools": [
+        "zstudio_source_blender_checkout"
+      ],
+      "note": "Tools > Edit in Blender checks out the model the selected object of a source world comes from (source_blender_checkout with document and node) and offers to open the checkout folder."
+    },
+    {
+      "gui": "MainWindow.xaml:UpdateFromBlenderClick",
+      "tools": [
+        "zstudio_source_blender_checkouts",
+        "zstudio_source_blender_update"
+      ],
+      "note": "Tools > Update from Blender export applies the newest export of the newest checkout (source_blender_checkouts lists them) after confirmation, as one undoable workspace change that rebuilds the world (source_blender_update)."
     }
   ]
 }

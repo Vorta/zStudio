@@ -102,6 +102,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AddProblem("Could not save mission difficulty: " + ex.Message); }
     }
     public Func<DocumentModel, Task<bool>>? ConfirmDiscardAsync { get; set; }
+    /// <summary>Every document is being closed (a root change), so a project's edits cannot stay with another of its documents.</summary>
+    internal bool ClosingAllDocuments { get; private set; }
     internal Action<bool>? ValidateNavigationPublication { get; set; }
     private CancellationTokenSource workspace = new();
     /// <summary>Canceled when the workspace root is replaced; long operations owned by a workspace link to it.</summary>
@@ -134,12 +136,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (!exists) throw new DirectoryNotFoundException(root);
         Dictionary<DocumentModel, long> acceptedRevisions = [];
         if (beforePublish == null)
-            foreach (var document in Documents.ToArray())
+            try
             {
-                if (!await CanRemoveAsync(document)) return;
-                cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
-                acceptedRevisions.Add(document, document.Revision);
+                ClosingAllDocuments = true;
+                foreach (var document in Documents.ToArray())
+                {
+                    if (!await CanRemoveAsync(document)) return;
+                    cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
+                    acceptedRevisions.Add(document, document.Revision);
+                }
             }
+            finally { ClosingAllDocuments = false; }
         cancellationToken.ThrowIfCancellationRequested();
         if (acceptedRevisions.Any(pair => pair.Key.IsDisposed || pair.Key.Revision != pair.Value))
             throw new StudioCommandException("revision_conflict", "A document changed after its close decision. Its current edits were retained.");

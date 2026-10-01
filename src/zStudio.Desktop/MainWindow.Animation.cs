@@ -33,11 +33,19 @@ public partial class MainWindow
     {
         if (!await ResolvePropertiesDraftsAsync(document) || shownDocument == document && animation?.ResolvePendingDrafts() == false) return false;
         System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag(); if (!document.IsDirty) return true;
-        bool pickup = document.ContentEdits != null || document.PickupEdits?.IsDirty == true || document.ResourceEdits != null || document.ModelEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
+        if (document.SourceWorld is { } world)
+        {
+            // The project's edits stay with its other open worlds; they are decided when the last one closes.
+            if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && OtherSourceWorldOpen(document)) return true;
+            if (discardApprovedWorkspace == world.Workspace) return true;
+        }
+        bool pickup = document.SourceWorld != null || document.ContentEdits != null || document.PickupEdits?.IsDirty == true || document.ResourceEdits != null || document.ModelEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
         animation?.Pause(); string choice = "Cancel";
         StackPanel panel = new() { Margin = new(20) };
         panel.Children.Add(new TextBlock { Text = $"Save changes to {document.Title.TrimEnd(' ', '*')}?", FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-        panel.Children.Add(new TextBlock { Text = pickup ? "Save verifies changes before updating working files. Protected reference datasets require saving a copy elsewhere." : "Save As writes a new animation pack and preserves the original source.", Margin = new(0,12,0,20), TextWrapping = TextWrapping.Wrap });
+        string detail = document.SourceWorld is { } project ? $"Save writes every changed file of the source project ({project.Workspace.DirtyFiles.Count}): {string.Join(", ", project.Workspace.DirtyFiles.Take(6))}{(project.Workspace.DirtyFiles.Count > 6 ? ", …" : "")}. Discard drops the project's unsaved edits."
+            : pickup ? "Save verifies changes before updating working files. Protected reference datasets require saving a copy elsewhere." : "Save As writes a new animation pack and preserves the original source.";
+        panel.Children.Add(new TextBlock { Text = detail, Margin = new(0,12,0,20), TextWrapping = TextWrapping.Wrap });
         WrapPanel buttons = new() { HorizontalAlignment = HorizontalAlignment.Right }; panel.Children.Add(buttons);
         Window dialog = new() { Owner = this, Title = "Unsaved changes", Width = 470, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = panel };
         foreach (string label in new[] { saveLabel, "Discard", "Cancel" })
@@ -45,6 +53,8 @@ public partial class MainWindow
             Button button = new() { Content = label, MinWidth = 95, Margin = new(4), Padding = new(10,7,10,7), IsCancel = label == "Cancel", IsDefault = label == saveLabel };
             button.Click += (_, _) => { choice = label; dialog.Close(); }; buttons.Children.Add(button);
         }
-        dialog.ShowDialog(); return choice == "Discard" || choice == saveLabel && await SaveCurrentAsync(document);
+        dialog.ShowDialog();
+        if (choice == "Discard" && document.SourceWorld is { } discarded) discardApprovedWorkspace = discarded.Workspace;
+        return choice == "Discard" || choice == saveLabel && await SaveCurrentAsync(document);
     }
 }

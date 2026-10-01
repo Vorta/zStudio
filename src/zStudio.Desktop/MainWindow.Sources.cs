@@ -196,8 +196,10 @@ public partial class MainWindow
     {
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
-        ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
-        AddSourceModelMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false };
+        ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility =
+            EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
+        AddSourceModelMenu.IsEnabled = UpdateFromBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+        EditInBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld != null && selectedNode != null;
         if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceWorldMenuAsync(root); }
     }
     /// <summary>Lists the project's game files off the UI thread; a newer menu opening or root supersedes the listing.</summary>

@@ -70,17 +70,24 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     internal SourceWorldSession? SourceWorld { get; }
     /// <summary>The private build this document shows, with the project files it read.</summary>
     internal Recoil.Zbd.Core.Sources.SourceWorldBuild? SourceBuild { get; }
+    /// <summary>The project workspace's content revision the shown build was made from.</summary>
+    internal long SourceRevision { get; }
     public event Action? SourceWorldChanged;
-    private void SourceEditsChanged()
+    private void SourceEditsChanged(Recoil.Zbd.Core.Sources.SourceWorkspaceChange change)
     {
         if (IsDisposed) return;
         Revision++; OnPropertyChanged(nameof(Title)); OnPropertyChanged(nameof(IsDirty)); SourceWorldChanged?.Invoke();
     }
-    /// <summary>Whether a project file this world was built from changed on disk since. Reads only immutable build state, so it runs off the UI thread.</summary>
+    /// <summary>
+    /// Whether a project file this world was built from changed since: in the workspace (another world's edit, an undo) or on
+    /// disk. Reads only immutable build state and thread-safe workspace queries, so it runs off the UI thread.
+    /// </summary>
     internal bool SourceInputsChanged()
     {
         if (SourceWorld is not { } world || SourceBuild is not { } build) return false;
-        if (world.Edits.HasExternalChanges()) return true;
+        var changed = world.Workspace.ChangedSince(SourceRevision);
+        if (changed.Count > 0 && build.Dependencies.Any(changed.Contains)) return true;
+        if (world.Workspace.ExternalChanges().Count > 0) return true;
         foreach (var (relative, stamp) in build.Inputs)
         {
             string path = Recoil.Zbd.Core.Sources.SourceProject.Resolve(world.Root, relative);
@@ -128,7 +135,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public event Action? Disposing;
     public bool PickupDiagnosticsReported { get; set; }
     internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
-    public bool IsDirty => SourceWorld?.Edits.IsDirty == true || ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
+    public bool IsDirty => SourceWorld?.Workspace.IsDirty == true || ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
     public void ClaimResourcePaths(IEnumerable<string> paths) => workspaceResolver?.EditOwnership.Acquire(SessionId, Title, paths);
     public void InvalidateCleanPickupEdits()
     {
@@ -253,11 +260,11 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     [ObservableProperty] private bool isStale;
     public string[] Kinds { get; private set; }
     public DocumentModel(ZbdDocument doc) : this(doc, null, null) { }
-    internal DocumentModel(ZbdDocument doc, SourceWorldSession? sourceWorld, Recoil.Zbd.Core.Sources.SourceWorldBuild? sourceBuild)
+    internal DocumentModel(ZbdDocument doc, SourceWorldSession? sourceWorld, Recoil.Zbd.Core.Sources.SourceWorldBuild? sourceBuild, long sourceRevision = 0)
     {
         Document = doc;
-        SourceWorld = sourceWorld; SourceBuild = sourceBuild;
-        if (sourceWorld != null) { sourceWorld.Owner = this; sourceWorld.Edits.Changed += SourceEditsChanged; }
+        SourceWorld = sourceWorld; SourceBuild = sourceBuild; SourceRevision = sourceRevision;
+        if (sourceWorld != null) { sourceWorld.Owner = this; sourceWorld.Workspace.Changed += SourceEditsChanged; }
         Assets = new(doc.Assets.OrderBy(a => a.Kind == AssetKind.World ? -1 : (int)a.Kind).ThenBy(a => a.Index).Select(a => new AssetItem(a)));
         Kinds = ["All types", .. Assets.Select(a => a.Kind).Distinct().Order()];
         FilteredAssets = CollectionViewSource.GetDefaultView(Assets); FilteredAssets.Filter = Matches;
@@ -341,7 +348,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         DisposeCore();
         if (SourceWorld is { } world)
         {
-            world.Edits.Changed -= SourceEditsChanged;
+            world.Workspace.Changed -= SourceEditsChanged;
             // The document showing the world owns the session; a replaced document only releases its build.
             if (world.Owner == this) world.Dispose();
             if (SourceBuild != null) SourceWorldSession.DeleteBuild(SourceBuild.Folder);

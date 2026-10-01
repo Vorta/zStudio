@@ -66,7 +66,7 @@ public sealed partial class MainViewModel
     {
         if (SelectedDocument is not { } original) return;
         // A source world keeps its pending edits across a rebuild unless its own files changed on disk.
-        if ((original.SourceWorld == null || original.SourceWorld.Edits.HasExternalChanges()) && !await CanRemoveAsync(original)) return;
+        if ((original.SourceWorld is not { } world || world.Workspace.ExternalChanges().Any(world.Workspace.IsFileDirty)) && !await CanRemoveAsync(original)) return;
         if (original.IsDisposed || SelectedDocument != original) return;
         // CanRemoveAsync may have saved edits or resolved input. That accepted
         // state is the snapshot; further edits during parsing reject publication.

@@ -59,7 +59,7 @@ public partial class MainWindow
         if (doc.SourceWorld is { } world)
         {
             if (world.IsRebuilding) ViewModel.Status = $"The {world.Mission} world is still rebuilding; undo and redo are available when it is shown.";
-            else if (redo ? world.Edits.CanRedo : world.Edits.CanUndo) sourceWorldWork = RunUi(() => UndoSourceWorldAsync(doc, redo, CancellationToken.None));
+            else if (redo ? world.Workspace.CanRedo : world.Workspace.CanUndo) sourceWorldWork = RunUi(() => UndoSourceWorldAsync(doc, redo, CancellationToken.None));
             return;
         }
         if (doc.ContentEdits != null) { contentWork = UndoContentAsync(doc, redo); return; }
@@ -141,6 +141,9 @@ public partial class MainWindow
         if (selectedNode is int node && properties != null)
         {
             string name = (motion?.Viewport.PreviewScene ?? scene?.PreviewScene ?? doc.Document.Scene)?.Nodes.ElementAtOrDefault(node)?.Name ?? "Scene object";
+            // A source world's own objects (not placed copies) edit their sources.
+            if (doc.SourceWorld != null && scene?.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && doc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true)
+            { ShowSourceObjectProperties(doc, sourceNode); return; }
             bool opened = scene?.PickupAt(node)?.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
                 ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties)
                 : window.SetReadOnly(doc, $"{name} · node #{node}", properties);
@@ -156,6 +159,8 @@ public partial class MainWindow
         if (!item.Owner.IsPreview && doc.PreviewDocument.Assets.FirstOrDefault(a => a.Kind == AssetKind.Node && a.Index == node.Index) is { } asset)
             return OpenAssetPropertiesAsync(doc, asset, token, automation);
         ++propertyRequest;
+        if (doc.SourceWorld != null && doc.SourceBuild?.Provenance.ContainsKey(node.Index) == true)
+            return Task.FromResult<PropertiesWindow?>(ShowSourceObjectProperties(doc, node.Index) ? propertiesWindow : null);
         var window = GetPropertiesWindow(); bool opened = window.SetReadOnly(doc, $"{node.Name} · node #{node.Index}", SceneTreeProperties(item));
         PresentProperties(window, opened); return Task.FromResult<PropertiesWindow?>(opened ? window : null);
     }

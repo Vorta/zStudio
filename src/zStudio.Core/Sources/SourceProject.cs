@@ -30,8 +30,19 @@ public static class SourceProject
     }
     public static string Relative(string root, string path) => System.IO.Path.GetRelativePath(root, path).Replace('\\', '/');
 
-    /// <summary>Regular files below <paramref name="folder"/> (root-relative, forward slashes) in a stable order; links are refused.</summary>
-    internal static IReadOnlyList<string> Files(string root, string folder, Func<string, bool> include)
+    /// <summary>
+    /// Regular files below <paramref name="folder"/> (root-relative, forward slashes) in a stable order; links are refused.
+    /// <paramref name="added"/> are files that exist only as pending content (a workspace's new files) and count as present.
+    /// </summary>
+    internal static IReadOnlyList<string> Files(string root, string folder, Func<string, bool> include, IReadOnlyCollection<string>? added = null)
+    {
+        var files = DiskFiles(root, folder, include);
+        if (added == null || added.Count == 0) return files;
+        string prefix = folder.TrimEnd('/') + "/";
+        var extra = added.Where(a => a.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && include(System.IO.Path.GetFileName(a)) && !files.Contains(a, StringComparer.OrdinalIgnoreCase));
+        return files.Concat(extra).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+    private static IReadOnlyList<string> DiskFiles(string root, string folder, Func<string, bool> include)
     {
         string path = Resolve(root, folder), current = System.IO.Path.GetFullPath(root);
         // The folders leading to the listed one must be regular too; enumeration below only sees their contents.

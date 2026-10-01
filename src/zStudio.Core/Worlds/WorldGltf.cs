@@ -280,6 +280,8 @@ public static partial class WorldGltf
         /// <summary>Texture name for a material's image URI (relative to the file at the given path).</summary>
         public required Func<string, string?, string, string> TextureName { get; init; }
         public List<string> Warnings { get; } = [];
+        /// <summary>Called for each node a glTF node becomes, with the file's path and the glTF node (a shared node once).</summary>
+        public Action<WorldNode, string, GltfNode>? NodeImported { get; init; }
         /// <summary>Cancels a load between nodes and between batches of polygons.</summary>
         public CancellationToken Token { get; init; }
         /// <summary>Texture files the load referenced, by texture name.</summary>
@@ -329,6 +331,7 @@ public static partial class WorldGltf
         string name = extras?["name"] is { } authored ? Text(authored, "name", path) : BlenderSuffix().Replace(source.Name, "");
         WorldNode node = new(name, lod ? WorldNodeClass.Lod : WorldNodeClass.Object3D);
         if (instance is { } first) instances[first] = node;
+        context.NodeImported?.Invoke(node, path, source);
         uint carried = extras?["flags"] is { } flags ? Hex(flags, "flags", path) & CarriedFlags : DefaultCarried;
         node.Flags = (lod ? 0x0108001Cu : 0x0308001Cu) & ~CarriedFlags | carried;
         node.BoundsFlags = 4;

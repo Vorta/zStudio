@@ -36,45 +36,45 @@ public static partial class SourceBuilder
     public static readonly string[] TexturePacks = ["rtexture2.zbd", "rtexture4.zbd", "rtexture8.zbd", "rtexture16.zbd", "texture2.zbd", "texture4.zbd", "texture6.zbd", "texture8.zbd", "texturemax.zbd"];
     [GeneratedRegex(@"\Am\d{1,3}\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)] private static partial Regex MissionFolder();
 
-    /// <summary>Every game file this tree can build, in a stable order.</summary>
-    public static IReadOnlyList<SourceOutputPlan> Plan(string root)
+    /// <summary>Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see <see cref="SourceWorkspace"/>).</summary>
+    public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null)
     {
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         List<SourceOutputPlan> plans = [];
         static bool Zrd(string name) => name.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase);
         // Common resources come from every zrdr folder under data/common (including multi_bft/zrdr).
-        var common = SourceProject.Files(root, "data/common", Zrd).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase)).ToArray();
+        var common = SourceProject.Files(root, "data/common", Zrd, added).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase)).ToArray();
         if (common.Length > 0) plans.Add(new("zrdr.zbd", "archive", common));
-        var scripts = SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase));
+        var scripts = SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), added);
         if (scripts.Count > 0) plans.Add(new("interp.zbd", "scripts", scripts));
-        var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase));
+        var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase), added);
         if (sounds.Count > 0) plans.AddRange(Banks.Select(bank => new SourceOutputPlan(bank, "sounds", sounds)));
         var missions = new DirectoryInfo(SourceProject.Resolve(root, SourceProject.DataFolder)).EnumerateDirectories().Where(d => MissionFolder().IsMatch(d.Name)).OrderBy(d => int.Parse(d.Name.AsSpan(1))).ToArray();
         // A world may load any model in the project, and animations any keyframe script; which depends on the sources.
         IReadOnlyList<string>? models = null, scriptsFound = null;
         // Interface images: fonts, the images tree and each mission's objective images.
-        var images = SourceProject.Files(root, TextureSources.Fonts, Png).Concat(SourceProject.Files(root, TextureSources.Images, Png))
-            .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m.Name}/images", Png))).ToArray();
+        var images = SourceProject.Files(root, TextureSources.Fonts, Png, added).Concat(SourceProject.Files(root, TextureSources.Images, Png, added))
+            .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m.Name}/images", Png, added))).ToArray();
         if (images.Length > 0) plans.Add(new("image.zbd", "images", images));
         foreach (var mission in missions)
         {
             string name = mission.Name.ToLowerInvariant();
             string entry = WorldScript(name);
-            if (File.Exists(SourceProject.Resolve(root, entry)))
+            if (File.Exists(SourceProject.Resolve(root, entry)) || added?.Contains(entry, StringComparer.OrdinalIgnoreCase) == true)
             {
-                models ??= SourceProject.Files(root, SourceProject.DataFolder, IsModelSource);
+                models ??= SourceProject.Files(root, SourceProject.DataFolder, IsModelSource, added);
                 // A project without glTF models has no world to build (buffers alone are not models).
                 if (models.Any(m => !m.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))) plans.Add(new($"{name}/gamez.zbd", "world", [entry, .. models]));
             }
-            var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd);
+            var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd, added);
             if (resources.Count > 0) plans.Add(new($"{name}/zrdr.zbd", "archive", resources));
             string definitions = AnimationRoot(name);
-            if (File.Exists(SourceProject.Resolve(root, definitions)))
+            if (File.Exists(SourceProject.Resolve(root, definitions)) || added?.Contains(definitions, StringComparer.OrdinalIgnoreCase) == true)
             {
-                scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase));
+                scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase), added);
                 plans.Add(new($"{name}/anim.zbd", "animations", [definitions, .. scriptsFound]));
             }
-            var textures = MissionTextures(root, name);
+            var textures = MissionTextures(root, name, added);
             if (textures.Count > 0) plans.AddRange(TexturePacks.Select(pack => new SourceOutputPlan($"{name}/{pack}", "textures", textures)));
         }
         return plans;
@@ -93,11 +93,19 @@ public static partial class SourceBuilder
     internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null)
     {
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Every project file the run read or asked about, from the overlay or the disk: what its outputs depend on.</summary>
+        private readonly HashSet<string> dependencies = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Lock dependencyGate = new();
+        internal IReadOnlyCollection<string> Dependencies() { lock (dependencyGate) return dependencies.ToArray(); }
+        /// <summary>Pending files the disk does not hold yet (new files of a workspace), which count as present.</summary>
+        internal IReadOnlyCollection<string> Added { get; } = overlay?.Keys.Where(k => !File.Exists(SourceProject.Resolve(root, k))).ToArray() ?? [];
+        internal void Depend(string relative) { lock (dependencyGate) dependencies.Add(relative); }
         /// <summary>The project files read from disk and their stamps (pending content that replaced files is not included).</summary>
         internal IReadOnlyDictionary<string, FileStamp> Stamps() => files.ToDictionary(f => f.Key, f => f.Value.Stamp, StringComparer.OrdinalIgnoreCase);
         internal byte[] Read(string relative, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
+            Depend(relative);
             if (overlay?.TryGetValue(relative, out var pending) == true) return pending;
             string path = SourceProject.Resolve(root, relative);
             var stamp = FileStamp.Read(path);
@@ -113,13 +121,17 @@ public static partial class SourceBuilder
         {
             if (damageMasks != null) return damageMasks;
             damageMasks = new(StringComparer.OrdinalIgnoreCase);
-            foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase)))
+            foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), Added))
                 foreach (var line in GameGenScriptText.Tokenize(GameGenScriptText.Decode(Read(script, token))))
                     if (line.Count > 1 && line[0].Equals("WriteTextureSetMap", StringComparison.OrdinalIgnoreCase)) damageMasks.Add(Path.GetFileNameWithoutExtension(line[1]));
             return damageMasks;
         }
         /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>
-        internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<WorldNode> LoadedRoots);
+        internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<WorldNode> LoadedRoots)
+        {
+            public IReadOnlyDictionary<WorldNode, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<WorldNode, WorldNodeProvenance>();
+            public IReadOnlyDictionary<(string Script, int Line), int> Executions { get; init; } = new Dictionary<(string, int), int>();
+        }
         private readonly Dictionary<string, (AssembledWorld? World, Exception? Failure)> worlds = new(StringComparer.OrdinalIgnoreCase);
         internal bool HasWorld(string mission) => overlay?.ContainsKey(WorldScript(mission)) == true || File.Exists(SourceProject.Resolve(root, WorldScript(mission)));
         internal AssembledWorld World(string mission, CancellationToken token)
@@ -131,7 +143,7 @@ public static partial class SourceBuilder
                     WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token);
                     var world = assembler.Assemble($"{mission}.gs");
                     cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
-                        new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots]), null);
+                        new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots]) { Provenance = assembler.Provenance, Executions = assembler.Executions }, null);
                 }
                 catch (Exception ex) when (IsBuildFailure(ex)) { cached = (null, ex); }
                 worlds[mission] = cached;
@@ -146,6 +158,7 @@ public static partial class SourceBuilder
         {
             public bool Exists(string relative)
             {
+                snapshot.Depend(relative);
                 if (overlay?.ContainsKey(relative) == true) return true;
                 if (!File.Exists(SourceProject.Resolve(root, relative))) return false;
                 SourceProject.RejectNestedLinks(root, relative);
@@ -348,11 +361,11 @@ public static partial class SourceBuilder
     /// the other campaign missions' vehicle folders. The first folder holding a name wins, as the engine takes the first
     /// match.
     /// </summary>
-    internal static IReadOnlyList<string> MissionTextures(string root, string mission)
+    internal static IReadOnlyList<string> MissionTextures(string root, string mission, IReadOnlyCollection<string>? added = null)
     {
         List<string> inputs = []; HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
         foreach (string folder in TextureSources.MissionFolders(mission, Multiplayer(root, mission)))
-            foreach (string file in SourceProject.Files(root, folder, n => n.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase)))
+            foreach (string file in SourceProject.Files(root, folder, n => n.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase), added))
                 // Subfolders of a search folder are separate folders (bft is listed on its own).
                 if (Path.GetDirectoryName(file)!.Replace('\\', '/').Equals(folder, StringComparison.OrdinalIgnoreCase) && names.Add(Path.GetFileNameWithoutExtension(file))) inputs.Add(file);
         return inputs;
@@ -435,8 +448,8 @@ public static partial class SourceBuilder
     private static HashSet<string>? EffectNames(string root, string mission, Snapshot snapshot, CancellationToken token)
     {
         static bool Effects(string name) => name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase);
-        var sources = SourceProject.Files(root, "data/common", Effects).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase))
-            .Concat(SourceProject.Files(root, $"data/{mission}/zrdr", Effects)).ToArray();
+        var sources = SourceProject.Files(root, "data/common", Effects, snapshot.Added).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase))
+            .Concat(SourceProject.Files(root, $"data/{mission}/zrdr", Effects, snapshot.Added)).ToArray();
         if (sources.Length == 0) return null;
         HashSet<string> names = new(StringComparer.Ordinal);
         foreach (string source in sources) names.UnionWith(Animation.AnimationCompiler.EffectNames(Animation.AnimationDefinitionSet.Read(snapshot.Files(), source, token)));

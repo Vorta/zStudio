@@ -155,6 +155,11 @@ public partial class MainWindow
     }
     private void ApplyInspectionEdit(SceneInspectionCard card)
     {
+        if (ApplyInspectionEditCore(card) is { } rebuilding) sourceWorldWork = RunUi(() => rebuilding);
+    }
+    /// <summary>Accepts the card's draft as one edit; in a source world the edit changes the sources and returns the rebuild that shows it.</summary>
+    private Task<DocumentModel>? ApplyInspectionEditCore(SceneInspectionCard card)
+    {
         if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "Finish or cancel the active transform drag before confirming.");
         var doc = card.DraftDocument;
         if (!card.HasDraft || doc == null || doc.IsDisposed || doc != shownDocument || card != CurrentInspectionCard || card.Selection?.Target != card.DraftTarget)
@@ -163,8 +168,17 @@ public partial class MainWindow
         var edits = doc.PickupEdits!;
         if (doc.PickupsLocked) throw new StudioCommandException("locked", "Coordinate editing is locked.");
         if (edits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed outside zStudio.");
+        if (doc.SourceWorld != null)
+        {
+            if (doc.SourceWorld.IsRebuilding || sourceWorkspaceBusy) throw new StudioCommandException("busy", "The world is rebuilding after another edit; apply when it is shown.");
+            var source = card.DraftSource!; var transform = card.DraftTransform();
+            // The rebuilt world shows the accepted transform; the draft's preview ends with it.
+            card.CancelDraft(); UpdateDocumentCommands();
+            return MoveSourcePlacementAsync(doc, source, transform, CancellationToken.None);
+        }
         edits.TransformTo(card.DraftSource!, card.DraftTransform());
         card.CancelDraft(); UpdateDocumentCommands();
+        return null;
     }
 
     private void RegisterInspectionCommands(StudioCommands commands)
@@ -196,7 +210,7 @@ public partial class MainWindow
                 P("document", "string", "Owning document ID for edits."), new("revision", "integer", "Expected document revision for edits.", Minimum: 0, Maximum: long.MaxValue),
                 P("token", "string", "Current draft lifetime and input token. Reopening a draft creates a new token."), new("position", "array", "Three coordinate input strings for set; maximum 64 characters each; permits temporary incomplete drafts.", Items: new("", "string", "Coordinate input."), MinItems: 3, MaxItems: 3),
                 new("rotationDegrees", "array", "Pickup XYZ Euler input strings in degrees; maximum 64 characters each.", Items: new("", "string", "Angle input."), MinItems: 3, MaxItems: 3),
-                new("headingDegrees", "string", "Vehicle Y heading input in degrees; maximum 64 characters."), P("transformMode", "string", "Draft handle mode; rotate requires supported axes.", false, "move", "rotate")], a =>
+                new("headingDegrees", "string", "Vehicle Y heading input in degrees; maximum 64 characters."), P("transformMode", "string", "Draft handle mode; rotate requires supported axes.", false, "move", "rotate")], async (a, token) =>
         {
             var viewport = TargetViewport(a); var card = viewport.InspectionContent as SceneInspectionCard ?? throw new StudioCommandException("not_ready", "Inspection card unavailable.");
             string action = Text(a, "action");
@@ -228,7 +242,14 @@ public partial class MainWindow
                     card.RequireDraft(Text(a, "token"));
                     if (action == "set") card.SetDraft(Text(a, "token"), (a["position"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(),
                         (a["rotationDegrees"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(), a["headingDegrees"]?.GetValue<string>(), a["transformMode"]?.GetValue<string>());
-                    else if (action == "apply") ApplyInspectionEdit(card);
+                    else if (action == "apply")
+                    {
+                        if (ApplyInspectionEditCore(card) is { } rebuilding)
+                        {
+                            var next = await rebuilding;
+                            return Result(new { selected = (string?)null, draft = (object?)null, revision = (long?)next.Revision, document = DocumentState(next) });
+                        }
+                    }
                     else card.CancelDraft();
                 }
             }
