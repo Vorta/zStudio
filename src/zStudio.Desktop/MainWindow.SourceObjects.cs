@@ -43,7 +43,8 @@ public partial class MainWindow
         try { built = SourceWorldModel(doc).Slots.GetValueOrDefault(node); }
         catch (InvalidDataException ex) { throw new StudioCommandException("build_failed", ex.Message); }
         if (built == null) throw new StudioCommandException("stale_record", $"Scene node {node} is not in the built world.");
-        ObjectTransform? transform = built.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(built) is { } local ? ObjectTransform.FromMatrix(local) : null;
+        // An object whose identity flag is set has the identity transform (LocalMatrix is null for it).
+        ObjectTransform? transform = built.Class == WorldNodeClass.Object3D ? ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(built) ?? System.Numerics.Matrix4x4.Identity) : null;
         List<string> notes = [];
         string source;
         if (origin.ModelFile != null)

@@ -58,6 +58,7 @@ public sealed class WindowClosingTests
                     await MissionOwnershipChecks.Run();
                     await SourceProjectMcpChecks.Run();
                     await SourceWorldMcpChecks.Run();
+                    await SourceEditingMcpChecks.Run();
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();
                     await AiNetworkMcpChecks.Run();
