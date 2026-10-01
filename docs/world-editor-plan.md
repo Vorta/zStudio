@@ -449,7 +449,7 @@ The target is the unmodified `Recoil.exe` on a measured modern configuration: RT
 ### Vehicles
 
 The main command is *Upgrade vehicle*.
-- **What it keeps:** the vehicle's key, data records, placements, movement behaviour and part hierarchy.
+- **What it keeps:** the vehicle's key, data records, placements, movement type and part hierarchy.
 - **What it replaces:** the visual content: model, textures, and some texture animations as moving 3D parts.
 
 The upgrade starts from the `ltank` structure:
@@ -470,9 +470,8 @@ healthy
   - the whole hierarchy, helpers and LODs;
   - texture-cycle bindings and behaviour dependencies;
   - every mission load of the vehicle, including aliases such as `ltank_2`.
-- **Kept as they are:** role names, pivots, helper numbering and rest transforms.
-  - Collision and support points are not regenerated from the new mesh, because that would change gameplay.
-  - "Visual only" is a tested contract. Every intentional exception (a larger hull, a moved firepoint, a different track UV scale) is listed.
+- **Kept as they are:** role names and helper numbering.
+- **Gameplay may change with the new model.** Collision and support points, the firepoint, the aim target and the track UV scale can be fitted to the new mesh: suggested from it, then reviewed. The upgrade lists every change that affects gameplay so that each one gets tested.
 - **Splitting by role:**
 
   | Part | Treatment |
@@ -544,7 +543,7 @@ A playable deployment (ZBD files) and an editable source package (the project) a
 | 2. World objects and profiles | Move, rotate, duplicate, delete, hierarchy, flags, script-owned environment properties; Blender checkout; target profiles in `gamegen\build-profiles\`; texture and geometry budgets | Database and script objects survive edit → save → reopen → export; unrelated sources and bindings unchanged; test packs load as the profile predicts |
 | 3. Terrain source and splitter | Recipe format, shapes, surface selection, brushes, inclusion, deterministic splitting; *Convert to editable terrain* | Converted M1 terrain reproduces its geometry and attributes before any artistic change |
 | 4. Complete terrain behaviour | Caves, stacked surfaces, underwater layers, multi-zone transitions, CanModify and ClipTo, quicksand, crater reload | M1, then the M5/M6 underwater and zone cases, pass source editing, Blender update, export and in-game tests, one change at a time |
-| 5. Vehicle upgrades and actors | *Upgrade vehicle*, role-safe splitting, LODs, textures, cosmetic animations; AIV placement, AI paths, cross-mission import, mission export | An upgraded tank keeps its behaviour through two-copy, death, respawn and save/reload tests; the M2 tank works in M1 |
+| 5. Vehicle upgrades and actors | *Upgrade vehicle*, role-safe splitting, LODs, textures, cosmetic animations; AIV placement, AI paths, cross-mission import, mission export | An upgraded tank passes two-copy, death, respawn and save/reload tests, with its listed gameplay changes checked; the M2 tank works in M1 |
 | 6. Mission logic | Source-backed animation editor, triggers, prerequisites, destruction, objectives, starts, cameras, audio cues; Blender action conversion | One encounter with an upgraded enemy, an animated or destructible object, an objective and an exit works in the game |
 | 7. Integrated rebuild | An existing mission rebuilt from unsplit terrain, with gameplay edits, on the measured modern profile | The full capability matrix passes; only then are new maps supported |
 | 8. Scale | Incremental builds, multiplayer workflows, and new mission slots only with evidence | Incremental and clean builds agree; budgets survive repeated runtime activity; multiplayer checked with several clients |
@@ -571,9 +570,9 @@ Phase 1 is complete when all three hold:
 | E | Source saves are recoverable, not simultaneously visible; a file name may briefly be absent; publication never replaces an unexpected file; incomplete rollback blocks writes until reconciled. | Preserving external work is preferred over an unqualified atomic-save claim. | Approved |
 | F | Blender changes come in only when the user chooses *Update from export*, through sealed candidate generations and the shared plan/apply path. The add-on uses the existing user-enabled MCP connector and never writes project or game files. | One acceptance boundary; the existing MCP policy stays intact. | Approved |
 | G | Evidence names the operation it establishes: runtime routines do not define the missing build tool's behaviour; animation-binding reports keep logical targets and resolution order, not names or slots, as identity. | See [Verified corrections](#verified-corrections). | Adopted |
-| H | Terrain is authored as unsplit Blender surfaces; splitting and zoning happen in zStudio. The gameplay paint is kept in a terrain recipe (`*.terrain.json`) beside the surfaces: a versioned build input with no editor state. Reconstruction from game files yields pieces, not recipes. | Painted regions must survive re-exports from Blender. | Surfaces approved; recipe explained, awaiting confirmation |
+| H | Terrain is authored as unsplit Blender surfaces; splitting and zoning happen in zStudio. The gameplay paint is kept in a terrain recipe (`*.terrain.json`) beside the surfaces: a versioned build input with no editor state. Reconstruction from game files yields pieces, not recipes. | Painted regions must survive re-exports from Blender. | Approved |
 | I | The target is modern hardware (RTX 3080 class) running the unmodified `Recoil.exe`, expressed as measured build profiles; an original-hardware profile remains. | Texture sizes, pack budgets and geometry budgets depend on it. | Approved |
-| J | "New tank" means a higher-fidelity upgrade of an existing vehicle: new model and textures, some texture animations as 3D parts, same key and behaviour. | Keeps gameplay intact; new movement modes would be engine work. | Approved |
+| J | "New tank" means a higher-fidelity upgrade of an existing vehicle: new model and textures, some texture animations as 3D parts, same key and movement type. Gameplay may change with the new model (collision, firepoint, size). | New movement modes would be engine work. | Approved |
 | K | New maps are supported only once every terrain capability works: caves, stacked floors, underwater areas, zone transitions, craters. | A reduced first release would ship maps the later format must replace. | Approved |
 | L | "No clip" means no craters: the ClipTo flag, as the original developers used the term. | Collision and standing are separate flags. | Resolved |
 
