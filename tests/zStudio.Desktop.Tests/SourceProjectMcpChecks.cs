@@ -49,6 +49,16 @@ internal static class SourceProjectMcpChecks
             var single = (MenuItem)main.FindName("ExportSourceFileMenu");
             while (single.Items.Count != 6) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
             Assert.Equal(["zrdr.zbd", "interp.zbd", "soundsh.zbd", "soundsm.zbd", "soundsl.zbd", "m1/zrdr.zbd"], single.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
+            // Build profiles: the GUI's choice and source_status list the same profiles; source_export names the one it built with.
+            var profiles = (MenuItem)main.FindName("SourceProfileMenu");
+            Assert.Equal(["modern (default) · experimental", "original"], profiles.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
+            Assert.True(((MenuItem)profiles.Items[0]).IsChecked);
+            Assert.Equal(["modern", "original"], status["profiles"]!.AsArray().Select(p => p!["name"]!.GetValue<string>()));
+            Assert.Equal("modern", status["profile"]!.GetValue<string>());
+            ((MenuItem)profiles.Items[1]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Assert.Equal("original", ((ValueTuple<string, string>?)typeof(MainWindow).GetField("sourceProfileChoice", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main))!.Value.Item2);
+            var badProfile = await Job("source_export", new() { ["profile"] = "missing" }, "failed");
+            Assert.Equal("invalid_argument", badProfile["code"]!.GetValue<string>());
 
             // A reconstructed .zrd opens in the shared ZRD editor and saves text.
             string source = Path.Combine(fixture.Project, "data", "m1", "zrdr", "ai.zrd");
@@ -63,8 +73,9 @@ internal static class SourceProjectMcpChecks
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
             Assert.Contains("GRAVITY ( -1.5 )", await File.ReadAllTextAsync(source, token));
 
-            var check = await Job("source_export", new());
+            var check = await Job("source_export", new() { ["profile"] = "original" });
             Assert.False(check["written"]!.GetValue<bool>()); Assert.Equal(6, check["built"]!.GetValue<int>()); Assert.Equal(0, check["failed"]!.GetValue<int>());
+            Assert.Equal("original", check["profile"]!.GetValue<string>());
             string exported = Path.Combine(fixture.Root, "zbd");
             var written = await Job("source_export", new() { ["destination"] = exported, ["outputs"] = new[] { "m1/zrdr.zbd" } });
             Assert.True(written["written"]!.GetValue<bool>()); Assert.Equal("m1/zrdr.zbd", written["outputs"]![0]!["path"]!.GetValue<string>());

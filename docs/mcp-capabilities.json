@@ -207,6 +207,14 @@
       "note": "Tools > Export ZBD file lists the project's buildable game files (source_status) off the UI thread; each generated item exports that one output (source_export with outputs) after the same destination and overwrite decisions."
     },
     {
+      "gui": "MainWindow.Sources:SourceProfileMenu",
+      "tools": [
+        "zstudio_source_status",
+        "zstudio_source_export"
+      ],
+      "note": "Tools > Build profile lists the project's build profiles (source_status profiles: built-in original and modern plus gamegen/build-profiles/*.json, the default marked); the checked one is passed as source_export profile by Export all ZBD files, Export ZBD file and Check source project."
+    },
+    {
       "gui": "MainWindow.SourceWorlds:SourceWorldMenu",
       "tools": [
         "zstudio_source_world_open"

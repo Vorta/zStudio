@@ -18,6 +18,8 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 - Move, rotate and scale world objects and set their flags (standable, collision, craters allowed, no craters, landmark, …) in source worlds, through the glTF node or the script instruction that placed them. Edit fog, lights and cameras through the script commands that set them.
 - Edit models in Blender: **Edit in Blender** checks a model out into `zstudio/export`; **Update from Blender export** applies what Blender exported as one undoable change of the model, its buffer and its textures.
 - Text `.zrd` sources keep their comments and layout when edited, in the ZRD editor and in world edits.
+- Copy, delete and re-parent world objects in source worlds: mission database objects in their glTF file, script objects through their instructions (copies are loaded again, deletions become comments). Edits from a world whose sources another world changed are refused until it is reloaded.
+- Build profiles choose the texture packs an export builds: the built-in `original` (as shipped) and `modern` (adds 8 and 16 MB packs; experimental), or the project's own in `gamegen/build-profiles`. Exports warn when a larger pack left in the destination would win.
 - Nine new MCP tools: `source_changes`, `source_world_object`, `source_world_object_edit`, `source_world_command`, `source_blender_checkout`, `source_blender_checkouts`, `source_blender_update`, `source_recovery`, `source_recovery_resolve`.
 
 ## 0.7.1 — 2026-09-29

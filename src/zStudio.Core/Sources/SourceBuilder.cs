@@ -6,11 +6,19 @@ using Recoil.Zbd.Core.Worlds;
 namespace Recoil.Zbd.Core.Sources;
 
 /// <summary>A game file that the source tree can build, and the source files it is built from.</summary>
-public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<string> Inputs);
+public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<string> Inputs)
+{
+    /// <summary>For a texture pack, the budget and largest texture side its profile builds it with.</summary>
+    public Formats.TexturePackVariant? Pack { get; init; }
+}
 /// <summary>Per-output result: built (and, for an export, written) or failed.</summary>
 public sealed record SourceExportResult(string Path, string Family, string Status, long Bytes, int Items, IReadOnlyList<string> Warnings, string? Error = null);
 public sealed record SourceExportReport(string? Destination, IReadOnlyList<SourceExportResult> Outputs)
 {
+    /// <summary>The build profile the outputs were built with.</summary>
+    public string Profile { get; init; } = BuildProfiles.Modern.Name;
+    /// <summary>Findings about the destination as a whole, such as larger texture packs there that the game would prefer.</summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
     public int Built => Outputs.Count(o => o.Status == "built");
     public int Failed => Outputs.Count(o => o.Status == "failed");
 }
@@ -28,17 +36,17 @@ public static partial class SourceBuilder
     public const string SoundsFolder = "data/common/sounds", SoundDefinitions = "data/common/zrdr/sounds.zrd";
     /// <summary>The HIGH, MED and LOW sound banks, in the order of their sounds.zrd declarations.</summary>
     internal static readonly string[] Banks = ["soundsh.zbd", "soundsm.zbd", "soundsl.zbd"];
-    /// <summary>
-    /// Mission texture packs built on export. Hardware loads rtexture&lt;MB of texture memory&gt; counting down, so the
-    /// 8 and 16 MB packs (not shipped with the game) give modern cards every texture at full quality while 2 and 4 serve
-    /// small cards. Software loads its TextureMemory choice counting down, then texturemax (full quality, not shipped).
-    /// </summary>
-    public static readonly string[] TexturePacks = ["rtexture2.zbd", "rtexture4.zbd", "rtexture8.zbd", "rtexture16.zbd", "texture2.zbd", "texture4.zbd", "texture6.zbd", "texture8.zbd", "texturemax.zbd"];
+    /// <summary>The mission texture packs the default (modern) profile builds; see <see cref="BuildProfiles"/>.</summary>
+    public static IReadOnlyList<string> TexturePacks => BuildProfiles.Modern.TexturePacks.Select(p => p.File).ToArray();
     [GeneratedRegex(@"\Am\d{1,3}\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)] private static partial Regex MissionFolder();
 
-    /// <summary>Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see <see cref="SourceWorkspace"/>).</summary>
-    public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null)
+    /// <summary>
+    /// Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see
+    /// <see cref="SourceWorkspace"/>). Texture packs follow <paramref name="profile"/> (the built-in modern one when null).
+    /// </summary>
+    public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, BuildProfile? profile = null)
     {
+        profile ??= BuildProfiles.Modern;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         List<SourceOutputPlan> plans = [];
         static bool Zrd(string name) => name.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase);
@@ -75,7 +83,7 @@ public static partial class SourceBuilder
                 plans.Add(new($"{name}/anim.zbd", "animations", [definitions, .. scriptsFound]));
             }
             var textures = MissionTextures(root, name, added);
-            if (textures.Count > 0) plans.AddRange(TexturePacks.Select(pack => new SourceOutputPlan($"{name}/{pack}", "textures", textures)));
+            if (textures.Count > 0) plans.AddRange(profile.TexturePacks.Select(pack => new SourceOutputPlan($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant }));
         }
         return plans;
         static bool Png(string name) => name.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase);
@@ -186,20 +194,22 @@ public static partial class SourceBuilder
     internal static bool IsBuildFailure(Exception ex) => ex is not (OperationCanceledException or OutOfMemoryException);
 
     /// <summary>Build the selected outputs (all when null) in memory and report problems without writing anything.</summary>
-    public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default)
-        => RunAsync(root, null, outputs, false, progress, token);
+    public static Task<SourceExportReport> CheckAsync(string root, IReadOnlyCollection<string>? outputs = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null)
+        => RunAsync(root, null, outputs, false, progress, token, profile);
 
     /// <summary>
     /// Build the selected outputs (all when null) into <paramref name="destination"/>. Existing game files there are replaced
     /// only with <paramref name="overwrite"/>; publication restores them if any step fails, and nothing is written if any output fails.
     /// </summary>
-    public static Task<SourceExportReport> ExportAsync(string root, string destination, IReadOnlyCollection<string>? outputs = null, bool overwrite = false, IProgress<SourceProgress>? progress = null, CancellationToken token = default)
-        => RunAsync(root, destination, outputs, overwrite, progress, token);
+    public static Task<SourceExportReport> ExportAsync(string root, string destination, IReadOnlyCollection<string>? outputs = null, bool overwrite = false, IProgress<SourceProgress>? progress = null, CancellationToken token = default, string? profile = null)
+        => RunAsync(root, destination, outputs, overwrite, progress, token, profile);
 
-    private static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token)
+    /// <summary><paramref name="profileName"/> selects the build profile (the project's default when null).</summary>
+    private static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, string? profileName)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        var all = await Task.Run(() => Plan(root), token);
+        var profile = await Task.Run(() => BuildProfiles.Find(root, profileName), token);
+        var all = await Task.Run(() => Plan(root, null, profile), token);
         var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException($"This source project cannot build {o}.")).Distinct().ToArray();
         if (selected.Count == 0) throw new InvalidDataException("This source project has nothing to build yet.");
@@ -239,7 +249,13 @@ public static partial class SourceBuilder
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException("Nothing was written because some outputs failed: " + string.Join("; ", results.Where(r => r.Status == "failed").Select(r => $"{r.Path}: {r.Error}")));
                 Publish(staging, destination, results.Select(r => r.Path).ToArray(), overwrite, token);
             }
-            return new(destination, results);
+            // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
+            List<string> notes = [];
+            if (destination != null)
+                foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
+                    foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, profile))
+                        notes.Add($"{pack} is larger than the packs the {profile.Name} profile builds; the game would load it instead. Delete it, or export with a profile that builds it.");
+            return new(destination, results) { Profile = profile.Name, Notes = notes };
         }
         finally { if (staging != null && Directory.Exists(staging)) Directory.Delete(staging, true); }
     }
@@ -385,7 +401,7 @@ public static partial class SourceBuilder
     /// </summary>
     private static Built BuildTexturePack(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
-        var variant = TexturePackVariant.FromFileName(Path.GetFileName(plan.Path)) ?? throw new InvalidDataException($"{plan.Path} is not a texture pack name.");
+        var variant = plan.Pack ?? TexturePackVariant.FromFileName(Path.GetFileName(plan.Path)) ?? throw new InvalidDataException($"{plan.Path} is not a texture pack name.");
         List<PackTexture> textures = [];
         var (inputs, addressing, warnings) = PackInputs(plan, snapshot, token);
         foreach (var (input, name) in inputs)

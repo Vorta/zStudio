@@ -10,7 +10,8 @@ A source project is separate from editing ZBD files directly. Opening a ZBD file
 - **Tools → Check source project** builds every game file in memory and reports failures and warnings without writing. MCP: `zstudio_source_export` without `destination`.
 - **Tools → Export all ZBD files…** builds every game file into a folder outside the project. MCP: `zstudio_source_export` with `destination`.
 - **Tools → Export ZBD file** lists the game files the project can build; choosing one exports only that file. MCP: `zstudio_source_export` with `outputs`, for example `["m1/zrdr.zbd"]`.
-- `zstudio_source_status` lists the game files the project can build and the sources of each.
+- `zstudio_source_status` lists the game files the project can build and the sources of each, and the project's build profiles.
+- **Tools → Build profile** chooses which texture packs exports and checks build (see [Build profiles](#build-profiles)). MCP: `zstudio_source_export` with `profile`.
 - **Tools → Open mission world** shows a mission's world as its build script assembles it from the project; its placements, objects, fog and lights are edited there, models are added from any folder of the project, and models round-trip through Blender (see [Mission worlds](#mission-worlds)). MCP: `zstudio_source_world_open` and the commands named there.
 
 The export commands appear when the open folder is a source project, which is any folder with both `data` and `gamegen` subfolders. What it can build is derived from those folders; zStudio's own working data (Blender checkouts, save journals) lives in a separate `zstudio` folder that builds never read (see [The zstudio folder](#the-zstudio-folder)).
@@ -148,6 +149,37 @@ zStudio keeps its working data in the project's `zstudio\` folder:
 - `staging\` holds files being prepared.
 
 Builds never read it. Leave it out when sharing a project. It is safe to delete when no save was interrupted and no Blender edit is pending.
+
+## Build profiles
+
+A build profile says which mission texture packs an export builds, with what texel budget and largest texture side. The game opens `rtexture<N>.zbd` for the texture memory its card reports (in MB), counting down, so the packs decide what quality each machine gets.
+
+| Profile | Packs | Status |
+| --- | --- | --- |
+| `original` | What the game shipped: `rtexture2`, `rtexture4` (256-texel textures), `texture2`, `texture4`, `texture6` | Measured |
+| `modern` (default) | `original` plus `rtexture8` and `rtexture16` (up to 1024 texels), `texture8` and `texturemax` | Experimental until measured in the game |
+
+A project can add or replace profiles with files in `gamegen\build-profiles\` (builds never read them otherwise); the file name is the profile's name, and one may be the default:
+
+```json
+{
+  "format": "recoil-build-profile",
+  "version": 1,
+  "status": "experimental",
+  "default": true,
+  "description": "Larger textures for modern cards.",
+  "texturePacks": [
+    { "file": "rtexture2.zbd", "budgetMiB": 2, "maximumDimension": 256 },
+    { "file": "rtexture32.zbd", "budgetMiB": 32, "maximumDimension": 2048 },
+    { "file": "texture6.zbd" }
+  ]
+}
+```
+
+- `budgetMiB` is the pack's texel budget (textures shrink to fit it); `null` keeps every texture at full size. Omitted values come from the pack's name, as before.
+- `maximumDimension` is a power of two from 8 to 4096.
+- A profile lists at least one `rtexture` pack, since the Direct3D renderer reads only those.
+- Export results and `zstudio_source_export` name the profile used. When the destination already holds a larger `rtexture` pack the profile does not build, the export warns: the game would load that pack instead.
 
 ## Layout
 

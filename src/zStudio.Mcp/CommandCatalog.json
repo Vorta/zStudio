@@ -4923,12 +4923,20 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "profile",
+        "Type": "string",
+        "Description": "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the project\u0027s default profile.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
       }
     ]
   },
   {
     "Name": "zstudio_source_status",
-    "Description": "Describe the open source project: the game files it can build, with family and source inputs (16 previewed), paged and filtered by path. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed), paged and filtered by path. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4955,6 +4963,14 @@
         "Name": "query",
         "Type": "string",
         "Description": "Case-insensitive name/path or displayed-text filter, applied before pagination.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "profile",
+        "Type": "string",
+        "Description": "Build profile whose texture packs are listed; default: the project\u0027s default.",
         "Required": false,
         "Choices": null,
         "Properties": null
