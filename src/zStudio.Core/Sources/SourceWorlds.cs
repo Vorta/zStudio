@@ -149,7 +149,7 @@ public static partial class SourceWorlds
         // Text keeps its comments and layout; only the list gains lines.
         if (syntax == null) return ZrdWriter.Write(result, token);
         var (rewritten, lossless) = syntax.Rewrite(result, token);
-        if (!lossless) throw new InvalidDataException("The animation list would be too large to keep its comments and layout; add the files in a text editor.");
+        if (!lossless) throw new InvalidDataException("The animation list cannot keep its comments and layout with this change (it would be too large, or would not read back as edited); add the files in a text editor.");
         return System.Text.Encoding.Latin1.GetBytes(rewritten);
 
         // As the compiler reads the file: arrays that only wrap the keyword list are unwrapped, and new files join the

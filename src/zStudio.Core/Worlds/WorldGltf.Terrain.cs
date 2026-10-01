@@ -34,6 +34,7 @@ public static partial class WorldGltf
             var mesh = node.Mesh ?? throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has no mesh.");
             var values = mesh.Extras?[Key] as JsonObject;
             if (values?["points"] is JsonArray { Count: > 0 }) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has point entries (lens flares), which terrain pieces cannot share; keep it an object.");
+            if (values?["mode"] is JsonValue mode && !(mode.TryGetValue(out double m) && m == 0)) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) is a facade or point model (mode {mode}); keep it an object.");
             if (mesh.Primitives.Any(p => p.Targets.Count > 0)) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has morph targets; terrain is static.");
             models.Add((values, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path));
             Matrix4x4.Invert(world, out var inverse);
@@ -69,7 +70,8 @@ public static partial class WorldGltf
                         var a = Vector3.Transform(primitive.Positions[polygon[i]], world); var b = Vector3.Transform(primitive.Positions[polygon[(i + 1) % polygon.Length]], world);
                         newell += new Vector3((a.Y - b.Y) * (a.Z + b.Z), (a.Z - b.Z) * (a.X + b.X), (a.X - b.X) * (a.Y + b.Y));
                     }
-                    if (mirrored) { newell = -newell; polygon = [.. polygon.Reverse()]; }
+                    // The engine takes the plane and the fan from the first corner, so it stays first.
+                    if (mirrored) { newell = -newell; polygon = [polygon[0], .. polygon[1..].Reverse()]; }
                     var face = newell.LengthSquared() > 0 ? Vector3.Normalize(newell) : Vector3.UnitY;
                     faces.Add(new(index, [.. polygon.Select(i => Corner(i, face))]));
                 }

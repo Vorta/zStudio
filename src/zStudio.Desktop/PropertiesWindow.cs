@@ -34,7 +34,10 @@ public sealed class PropertiesWindow : Window
     public ResourcePropertiesEditor? ResourceFields { get; private set; }
     public ScriptPropertiesEditor? ScriptFields { get; private set; }
     internal SourcePropertiesEditor? SourceFields { get; private set; }
-    public bool HasPendingDrafts => AnimationFields?.HasPendingDrafts == true || PickupFields?.HasPendingDrafts == true || ResourceFields?.HasPendingDrafts == true || ScriptFields?.HasPendingDrafts == true || SourceFields?.HasPendingDrafts == true;
+    public bool HasPendingDrafts => Editors.Any(e => e.HasPendingDrafts);
+    /// <summary>Pending input other than drafts being committed (an edit a draft's commit runs may proceed).</summary>
+    public bool HasUncommittedDrafts => Editors.Any(e => e.HasUncommittedDrafts);
+    private IEnumerable<FieldEditor> Editors => new FieldEditor?[] { AnimationFields, PickupFields, ResourceFields, ScriptFields, SourceFields }.OfType<FieldEditor>();
     public Func<DocumentModel, bool, Task<bool>>? SaveRequested { get; set; }
     public Action<DocumentModel, bool>? UndoRequested { get; set; }
     public Action<DocumentModel>? Editing { get; set; }
@@ -184,7 +187,13 @@ public sealed class PropertiesWindow : Window
     private void DocumentDisposing() => CloseResolved();
     private void DocumentChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
     public bool ResolvePendingDrafts() => AnimationFields?.ResolvePendingDrafts() != false && PickupFields?.ResolvePendingDrafts() != false && ResourceFields?.ResolvePendingDrafts() != false && ScriptFields?.ResolvePendingDrafts() != false && SourceFields?.ResolvePendingDrafts() != false;
-    public async Task<bool> ResolvePendingDraftsAsync() => ScriptFields != null ? await ScriptFields.ResolvePendingDraftsAsync() : ResourceFields != null ? await ResourceFields.ResolvePendingDraftsAsync() : SourceFields != null ? await SourceFields.ResolvePendingDraftsAsync() : ResolvePendingDrafts();
+    public async Task<bool> ResolvePendingDraftsAsync()
+    {
+        // Each editor commits its drafts (awaiting asynchronous ones, such as a source world's pickup position) or asks.
+        foreach (var editor in Editors.ToArray())
+            if (!await editor.ResolvePendingDraftsAsync()) return false;
+        return true;
+    }
     private void Refresh()
     {
         if (Document is not { } doc) return;

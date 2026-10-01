@@ -186,6 +186,58 @@ public sealed class SourceObjectStructureTests
     }
 
     [Fact]
+    public async Task AuthoredGltfNodesAreEditedWhereTheBuildTakesEachPart()
+    {
+        using SourceWorldFixture fixture = new();
+        // The ground has its own rotation and translation; a script translates it (the build applies that), rotates it
+        // (ignored for an authored matrix) and turns collision on.
+        var gltf = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/m1.gltf")))!;
+        var quarter = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2);
+        gltf["nodes"]![0]!["rotation"] = new JsonArray(quarter.X, quarter.Y, quarter.Z, quarter.W);
+        gltf["nodes"]![0]!["translation"] = new JsonArray(5, 0, 0);
+        fixture.Write("data/m1/models/m1.gltf", gltf.ToJsonString());
+        string script = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
+        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "FindNode ground\r\nObject3DTranslate 20.0 0.0 0.0\r\nObject3DRotate 0.0 45.0 0.0\r\nSetIntersectSurface on"));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var ground = Target(workspace, "m1", build, world, "ground");
+        var built = WorldUpdate.LocalMatrix(ground.Node)!.Value;
+        Assert.Equal(20f, built.Translation.X, 3);
+        Assert.Equal(0f, built.M11, 3);
+        var shown = ObjectTransform.FromMatrix(built);
+        // A move changes the script's Object3DTranslate, which the build applies; the glTF stays.
+        var moved = SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, shown with { Position = new(30, 0, 0) }, Token, "m1", shown);
+        Assert.Equal("gamegen/m1.gs", Assert.Single(moved.Changes).Relative);
+        Apply(workspace, moved);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal(30f, WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "ground"))!.Value.Translation.X, 3);
+        // A rotation changes the glTF's basis and keeps the file's own translation.
+        ground = Target(workspace, "m1", build, world, "ground");
+        shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(ground.Node)!.Value);
+        var turned = SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, shown with { RotationDegrees = Vector3.Zero }, Token, "m1", shown);
+        var node = (JsonObject)JsonNode.Parse(Assert.Single(turned.Changes).Content)!["nodes"]![0]!;
+        Assert.Equal(new Vector3(5, 0, 0), GltfNodeEdits.Local(node).Translation);
+        Apply(workspace, turned);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var after = WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "ground"))!.Value;
+        Assert.Equal(1f, after.M11, 3); Assert.Equal(30f, after.Translation.X, 3);
+        // A copy in the glTF sits where the original was built and keeps the collision the script gave it.
+        Apply(workspace, SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, "ground"), "ground2", null, Token));
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var copy = world.Nodes.Single(n => n.Name == "ground2");
+        Assert.Equal(30f, WorldUpdate.LocalMatrix(copy)!.Value.Translation.X, 3);
+        Assert.NotEqual(0u, copy.Flags & 0x10);
+        // Re-parenting under the ground would place the copy by the glTF's translation, not the script's: refused.
+        Assert.Contains("A script sets ground's transform", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "ground2"), world.Nodes.Single(n => n.Name == "ground"), Token)).Message);
+        // Without the script's translation, an identity glTF transform would let its Object3DRotate apply again: refused.
+        workspace.Apply("No translate", [("gamegen/m1.gs", Encoding.Latin1.GetBytes(Text(workspace, "gamegen/m1.gs").Replace("Object3DTranslate 30.0 0.0 0.0\r\n", "")))], Token);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        ground = Target(workspace, "m1", build, world, "ground");
+        shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(ground.Node)!.Value);
+        Assert.Contains("Object3DRotate", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, new(Vector3.Zero, Vector3.Zero, Vector3.One), Token, "m1", shown)).Message);
+    }
+
+    [Fact]
     public void GltfNodeEditsRenumberEveryReference()
     {
         var root = JsonNode.Parse("""

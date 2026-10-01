@@ -21,6 +21,8 @@ public partial class FieldEditor : UserControl
     protected readonly List<Action> referenceRefresh = [];
     protected string inputScope = "properties";
     public bool HasPendingDrafts => draftInputs.Any(d => d.Draft.IsPending || d.Draft.IsCommitting);
+    /// <summary>Drafts with input no commit is applying yet (a committing draft is excluded).</summary>
+    public bool HasUncommittedDrafts => draftInputs.Any(d => d.Draft.IsPending && !d.Draft.IsCommitting);
     private protected sealed record DraftInput(FieldDraft Draft, FrameworkElement Control, Action Display, string Scope);
     protected virtual void RefreshProperties() { }
     protected static void Label(StackPanel panel,string text,bool title = false) => panel.Children.Add(new TextBlock { Text = text,TextWrapping = TextWrapping.Wrap,FontWeight = title ? FontWeights.SemiBold : FontWeights.Normal,Opacity = title ? 1 : .75,Margin = new(0,3,0,6) });

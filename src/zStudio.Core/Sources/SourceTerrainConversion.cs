@@ -44,14 +44,16 @@ public static class SourceTerrainConversion
             token.ThrowIfCancellationRequested();
             if (!(file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gw", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase))) continue;
             if (workspace.Read(file, token) is not { } bytes) continue;
-            IEnumerable<string> tokens;
+            // Every word, and also a resource's strings whole (names may hold spaces) and a script's tokens (names may hold
+            // other characters): more names only keep more pieces as objects.
+            IEnumerable<string> tokens = Regex.Matches(Encoding.Latin1.GetString(bytes), @"[A-Za-z0-9_\-\.\*%]+").Select(m => m.Value);
             if (file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase))
             {
-                // A resource's strings whole (names may hold spaces); a file that does not parse is read word by word.
-                try { tokens = Strings(ZrdText.LooksLikeText(bytes) ? ZrdText.Parse(Encoding.Latin1.GetString(bytes), token) : ZrdDecoder.Read(bytes, token)); }
-                catch (InvalidDataException) { tokens = Regex.Matches(Encoding.Latin1.GetString(bytes), @"[A-Za-z0-9_\-\.\*%]+").Select(m => m.Value); }
+                try { tokens = tokens.Concat(Strings(ZrdText.LooksLikeText(bytes) ? ZrdText.Parse(Encoding.Latin1.GetString(bytes), token) : ZrdDecoder.Read(bytes, token))).ToList(); }
+                catch (InvalidDataException) { }
             }
-            else tokens = Regex.Matches(Encoding.Latin1.GetString(bytes), @"[A-Za-z0-9_\-\.\*%]+").Select(m => m.Value);
+            else if (!file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase))
+                tokens = tokens.Concat(GameGenScriptSyntax.Parse(bytes).Lines.Where(l => l.IsInstruction).SelectMany(l => l.Tokens)).ToList();
             foreach (string t in tokens)
             {
                 if (t.Contains('*')) patterns.Add(new Regex("^" + Regex.Escape(t).Replace("\\*", "[0-9]") + "$", RegexOptions.CultureInvariant));
@@ -104,6 +106,7 @@ public static class SourceTerrainConversion
             if (!groups.TryGetValue(key, out var list)) groups[key] = list = [];
             list.Add(node);
         }
+        if (groups.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need at least {groups.Count} surfaces (different flags, zones or model values), more than a recipe's {TerrainRecipe.MaximumSurfaces}.");
         // Within a group, pieces that overlap in plan view go to different surfaces (first fit, in root order).
         List<TerrainConversionSurface> result = [];
         foreach (var ((flags, zone, values), nodes) in groups.OrderBy(g => g.Key.Zone).ThenBy(g => g.Key.Flags).ThenBy(g => g.Key.Values, StringComparer.Ordinal))
@@ -117,6 +120,7 @@ public static class SourceTerrainConversion
                 if (layer.Members == null) layers.Add(([node], area));
                 else { layer.Members.Add(node); int at = layers.IndexOf(layer); layers[at] = (layer.Members, Clipper.Union(layer.Area, area, FillRule.NonZero, 3)); }
             }
+            if (result.Count + layers.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, model values, or stacked sheets).");
             // Pieces with model values of their own (an unlit or scrolling surface) are a surface of their own, named by a short hash of the values.
             string model = values.Length == 0 ? "" : "_m" + SourceProject.Sha256(Encoding.UTF8.GetBytes(values))[..6];
             for (int k = 0; k < layers.Count; k++)
@@ -185,7 +189,8 @@ public static class SourceTerrainConversion
     private static uint Flags(JsonObject? extras) =>
         extras?["flags"] is JsonValue v && v.TryGetValue(out string? hex)
             && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint flags) ? flags & WorldGltf.CarriedFlags : WorldGltf.DefaultCarried;
-    private static int Zone(JsonObject? extras) => extras?["zone"] is JsonValue v && v.TryGetValue(out int zone) ? zone & 0xFF : 0xFF;
+    /// <summary>A node's zone as the importer reads it: a whole number, written as an integer or a float.</summary>
+    private static int Zone(JsonObject? extras) => extras?["zone"] is JsonValue v && v.TryGetValue(out double zone) && zone == Math.Floor(zone) && Math.Abs(zone) < 9e15 ? (int)((long)zone & 0xFF) : 0xFF;
     /// <summary>The plan-view area a node's triangles cover.</summary>
     private static PathsD PlanArea(GltfNode node)
     {

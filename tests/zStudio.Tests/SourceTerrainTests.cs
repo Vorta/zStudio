@@ -110,8 +110,15 @@ public sealed class SourceTerrainTests
         // Blender's copy suffix: the engine name is still land.
         coast["nodes"]![0]!["name"] = "land.001";
         fixture.Write("data/m1/models/coast.gltf", coast.ToJsonString());
+        // Two nodes sharing an engine name pick neither; extras that are not an object do not break the names.
+        var nodes = coast["nodes"]!.AsArray();
+        nodes.Add(new JsonObject { ["name"] = "rock", ["mesh"] = 0 }); nodes.Add(new JsonObject { ["name"] = "rock.002", ["mesh"] = 0 });
+        nodes.Add(new JsonObject { ["name"] = "odd", ["mesh"] = 0, ["extras"] = new JsonObject { ["recoil"] = "x" } });
+        foreach (int added in new[] { nodes.Count - 3, nodes.Count - 2, nodes.Count - 1 }) coast["scenes"]![0]!["nodes"]!.AsArray().Add(added);
+        fixture.Write("data/m1/models/coast.gltf", coast.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);
-        Assert.Contains("land", SourceTerrain.MeshNodes(workspace, "data/m1/models/coast.gltf", Token));
+        var candidates = SourceTerrain.MeshNodes(workspace, "data/m1/models/coast.gltf", Token);
+        Assert.Contains("land", candidates); Assert.Contains("odd", candidates); Assert.DoesNotContain("rock", candidates);
         var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token);
         Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);

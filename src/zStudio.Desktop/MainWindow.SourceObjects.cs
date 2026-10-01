@@ -120,10 +120,16 @@ public partial class MainWindow
             return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is { } t ? () => workspace.Retract(t) : null;
         }, token, additions);
     }
+    /// <summary>Rounds values a matrix decomposition leaves a hair off (89.99999 → 90).</summary>
+    private static Vector3 Rounded(Vector3 v)
+    {
+        static float R(float x) => MathF.Abs(x - MathF.Round(x, 3)) < 1e-4f ? MathF.Round(x, 3) : x;
+        return new(R(v.X), R(v.Y), R(v.Z));
+    }
     private Task<DocumentModel> DeleteSourceObjectAsync(DocumentModel doc, int node, CancellationToken token) =>
         EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanDelete(target, token), token);
-    private Task<DocumentModel> DuplicateSourceObjectAsync(DocumentModel doc, int node, string name, ObjectTransform? transform, CancellationToken token) =>
-        EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanDuplicate(target, name, transform, token), token);
+    private Task<DocumentModel> DuplicateSourceObjectAsync(DocumentModel doc, int node, string name, ObjectTransform? transform, CancellationToken token, bool keepBasis = false) =>
+        EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanDuplicate(target, name, transform, token, keepBasis), token);
     /// <summary>Moves the object under <paramref name="parent"/> (a scene node index; null for the world).</summary>
     private Task<DocumentModel> ReparentSourceObjectAsync(DocumentModel doc, int node, int? parent, CancellationToken token)
     {
@@ -259,9 +265,11 @@ public partial class MainWindow
                         var whole = SourceObjectTargetFor(d, node, SourceWorldOf(d).Workspace).Node;
                         int wholeNode = SourceWorldModel(d).Slots.First(p => ReferenceEquals(p.Value, whole)).Key;
                         var current = DescribeSourceObject(d, wholeNode).Transform ?? throw new StudioCommandException("unsupported", "Only object nodes have a transform.");
-                        placed = new(Vector(a, "position") ?? current.Position, Vector(a, "rotationDegrees") ?? current.RotationDegrees, Vector(a, "scale") ?? current.Scale);
+                        placed = new(Vector(a, "position") ?? current.Position, Vector(a, "rotationDegrees") ?? Rounded(current.RotationDegrees), Vector(a, "scale") ?? Rounded(current.Scale));
                     }
-                    next = await DuplicateSourceObjectAsync(d, node, name, placed, token);
+                    // Only a position: a copy in the database keeps the original's exact basis (and any mirroring).
+                    bool keepBasis = moves && a["rotationDegrees"] is null && a["scale"] is null;
+                    next = await DuplicateSourceObjectAsync(d, node, name, placed, token, keepBasis);
                     return Result(new { document = DocumentState(next), copy = SourceNodeNamed(next, name) });
                 }
                 if (action == "delete") return Result(new { document = DocumentState(await DeleteSourceObjectAsync(d, node, token)) });

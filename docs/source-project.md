@@ -106,7 +106,7 @@ Terrain is authored as unsplit surfaces in glTF (from Blender) plus a **terrain 
   - `flags`: an exact word of the node flags.
 
   An attribute a layer does not set comes from the layers before it.
-- **Regions** have a name, the surfaces they apply to (all when none are listed) and a shape: polygons with holes in plan view (x, z), optionally limited to a height range. A region without a shape covers its whole surfaces; **Cover nothing (paint it)** in Properties empties it so the brush can paint it. Stacked sheets, such as a cave floor under its ceiling, must be separate surfaces: the engine's altitude probe takes the first polygon of a node.
+- **Regions** have a name, the surfaces they apply to (all when none are listed) and a shape: polygons with holes in plan view (x, z), optionally limited to a height range. A region without a shape covers its whole surfaces; **Cover nothing (paint it)** in Properties empties it so the brush can paint it (painting it while it covers everything is refused). Stacked sheets, such as a cave floor under its ceiling, must be separate surfaces: the engine's altitude probe takes the first polygon of a node.
 - **Pieces are build output.** Properties of a terrain piece shows its recipe instead of the piece:
   - recipe and surface defaults;
   - the regions in the order they apply (select, move, delete, add, rename, choose surfaces, set attributes, make one cover its whole surfaces);

@@ -243,7 +243,7 @@ public sealed class ResourceEditSession
     private string LosslessText(ZrdNode tree, CancellationToken token)
     {
         var (text, lossless) = syntax!.Rewrite(tree, token);
-        if (!lossless) throw new InvalidDataException("The edited text would be too large to keep the file's comments and layout; edit it in a text editor.");
+        if (!lossless) throw new InvalidDataException("The edit cannot keep the file's comments and layout (the text would be too large, or would not read back as edited); edit it in a text editor.");
         return text;
     }
 }

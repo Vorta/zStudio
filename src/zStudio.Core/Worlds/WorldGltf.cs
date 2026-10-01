@@ -626,10 +626,10 @@ public static partial class WorldGltf
         public static MaterialKey Of(WorldMaterial m) => new(m.Flags, m.PackedColor, m.Color.X + 0f, m.Color.Y + 0f, m.Color.Z + 0f, m.Texture, m.Field14 + 0f, m.Field18 + 0f, m.Field1C + 0f, m.Soil);
     }
 
-    /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>
     /// <summary>A glTF node's engine name: its recorded name, else its glTF name without an editor's copy suffix (".001").</summary>
     public static string EngineName(GltfNode node) =>
-        node.Extras?[Key]?["name"] is JsonValue n && n.TryGetValue(out string? named) ? named : BlenderSuffix().Replace(node.Name, "");
+        (node.Extras?[Key] as JsonObject)?["name"] is JsonValue n && n.TryGetValue(out string? named) ? named : BlenderSuffix().Replace(node.Name, "");
+    /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>
     public static uint? RootFlags(GltfDocument doc) => (doc.SceneExtras?[Key] as JsonObject)?["rootFlags"] is { } flags ? Hex(flags, "rootFlags", "the scene") & CarriedFlags : null;
 
     // Engine values in extras. Editors may rewrite their types (Blender stores a list mixing whole and fractional numbers

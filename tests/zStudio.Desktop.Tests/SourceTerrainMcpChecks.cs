@@ -73,6 +73,22 @@ internal static class SourceTerrainMcpChecks
             int piece = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
             string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
             await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
+            var typedFields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
+            // Typing an attribute and pressing Enter edits the recipe through the source edit its draft's commit runs.
+            var soil = Descendants(typedFields).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Region road: Soil");
+            var shownBefore = doc;
+            soil.Text = "water";
+            soil.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, System.Windows.PresentationSource.FromVisual(soil), Environment.TickCount, System.Windows.Input.Key.Enter) { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
+            for (int wait = 0; wait < 1000 && !shownBefore.IsDisposed; wait++) await Task.Delay(10, token);
+            Assert.True(shownBefore.IsDisposed, "The Properties commit did not rebuild the world.");
+            Assert.Equal("water", SourceTerrain.Read(workspace, Recipe).Regions[0].Set.ToJson()["soil"]!.GetValue<string>());
+            doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            await Preview();
+            doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
+            await Preview();
+            piece = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
+            preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+            await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
             var fields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
             Assert.Equal(Recipe, fields.RecipePath); Assert.Equal("road", fields.SelectedRegion);
             var automation = JsonSerializer.SerializeToNode(fields.DescribeAutomationFields())!;
@@ -130,5 +146,15 @@ internal static class SourceTerrainMcpChecks
             }
         }
         finally { main.Close(); }
+    }
+
+    private static IEnumerable<System.Windows.DependencyObject> Descendants(System.Windows.DependencyObject root)
+    {
+        for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var below in Descendants(child)) yield return below;
+        }
     }
 }

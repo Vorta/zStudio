@@ -54,6 +54,8 @@ public sealed class TerrainEditTests
         // Clearing one attribute leaves the others (a JSON null removes the override).
         recipe = TerrainEdits.UpdateRegion(recipe, "road", r => r with { Set = TerrainAttributes.FromJson(JsonNode.Parse("""{ "craters": null, "soil": "lava" }"""), "patch", r.Set) });
         Assert.Null(recipe.Regions[0].Set.Craters); Assert.Equal(4u, recipe.Regions[0].Set.Soil);
+        // Painting a region that covers everything adds nothing, so it is refused (for the GUI brush and MCP alike).
+        Assert.Contains("covers its whole surfaces", Assert.Throws<InvalidDataException>(() => TerrainEdits.Paint(recipe, "cave", [Square(0, 0, 10)], add: true)).Message);
         // Erasing from a region that covers everything leaves everywhere but the stroke; erasing all of it leaves nothing.
         recipe = TerrainEdits.Paint(recipe, "cave", [Square(0, 0, 10)], add: false);
         Assert.Single(Assert.Single(recipe.Regions[1].Shape!.Polygons).Holes);

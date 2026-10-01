@@ -5565,7 +5565,7 @@
   },
   {
     "Name": "zstudio_source_recovery_resolve",
-    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. The project\u0027s unsaved edits must be saved or discarded first.",
+    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. Refused while a world rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them).",
     "Mutates": true,
     "Parameters": [
       {

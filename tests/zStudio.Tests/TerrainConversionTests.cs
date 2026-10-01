@@ -70,6 +70,9 @@ public sealed class TerrainConversionTests
         var overExtras = over["extras"] as JsonObject ?? (JsonObject)(over["extras"] = new JsonObject());
         var recoil = overExtras[WorldGltf.Key] as JsonObject ?? (JsonObject)(overExtras[WorldGltf.Key] = new JsonObject());
         recoil["flags"] = $"{WorldGltf.DefaultCarried | 0x20:x8}";
+        // A zone written as a whole float reads as the importer reads it.
+        var a = Named("flat_a");
+        ((JsonObject)a["extras"]![WorldGltf.Key]!)["zone"] = 3.0;
         fixture.Write("data/m1/models/m1.gltf", gltf.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);
         var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "before"), workspace.Overlay(), token: Token);
@@ -79,6 +82,7 @@ public sealed class TerrainConversionTests
         Assert.Equal(2, plan.Groups.Count);
         var unlit = Assert.Single(plan.Groups, g => g.ModelValues != null && g.ModelValues["flags"]?.GetValue<int>() == 7);
         Assert.Contains("_m", unlit.Id);
+        Assert.All(plan.Groups, g => Assert.Equal(3, g.Zone));
         SourceTerrainConversion.Apply(workspace, plan, Token);
         var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "after"), workspace.Overlay(), token: Token);
         Assert.Null(after.Outputs.FirstOrDefault(o => o.Error != null)?.Error);

@@ -59,6 +59,27 @@ internal static class SourceEditingMcpChecks
             var after = await Job("pickups", new() { ["document"] = Id(moved) });
             Assert.All(after["items"]!.AsArray().Where(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO"), p => Assert.Equal(20.25f, p!["OriginalPosition"]!["X"]!.GetValue<float>()));
 
+            // Properties commits a typed position through the same source edit: its own committing draft does not block it.
+            // (The fixture has no pickup models, so the pickup is opened in Properties as the scene's card opens it.)
+            var hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+            var window = (PropertiesWindow)typeof(MainWindow).GetMethod("GetPropertiesWindow", hidden)!.Invoke(main, [])!;
+            var sourceMove = (Func<Recoil.Zbd.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
+            var ammoSource = moved.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
+            Assert.True(window.SetPickup(moved, ammoSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
+            typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [window, true]);
+            await Task.Delay(50, token);
+            var pickupFields = main.OpenPropertiesWindow!.PickupFields!;
+            var x = Descendants(pickupFields).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position X");
+            x.Text = "21.5";
+            x.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, System.Windows.PresentationSource.FromVisual(x), Environment.TickCount, System.Windows.Input.Key.Enter) { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
+            for (int wait = 0; wait < 1000 && !moved.IsDisposed; wait++) await Task.Delay(10, token);
+            Assert.True(moved.IsDisposed, "The Properties commit did not rebuild the world.");
+            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 21.5 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            var typed = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            await Preview();
+            moved = Document(await Call("undo_redo", new() { ["document"] = Id(typed), ["revision"] = typed.Revision, ["action"] = "undo" }));
+            Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+
             // Undo is project-wide and restores the exact source bytes; redo brings the move back.
             var undone = Document(await Call("undo_redo", new() { ["document"] = Id(moved), ["revision"] = moved.Revision, ["action"] = "undo" }));
             Assert.False(undone.SourceWorld!.Workspace.IsDirty); Assert.Equal(Default, Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
@@ -158,6 +179,15 @@ internal static class SourceEditingMcpChecks
                 await work.WaitAsync(token);
             }
             static string Text(byte[]? bytes) => Encoding.Latin1.GetString(bytes!);
+            static IEnumerable<System.Windows.DependencyObject> Descendants(System.Windows.DependencyObject root)
+            {
+                for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+                {
+                    var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+                    yield return child;
+                    foreach (var below in Descendants(child)) yield return below;
+                }
+            }
             DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == (state["document"]?["id"] ?? state["id"])!.GetValue<string>());
             static string Id(DocumentModel d) => d.SessionId.ToString();
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)

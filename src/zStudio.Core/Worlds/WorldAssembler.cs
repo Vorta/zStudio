@@ -418,7 +418,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             World = World,
             NodeImported = (node, file, source) =>
             {
-                var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.ModelNodeName = source.Name; origin.Load = load;
+                var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.ModelNodeName = source.Name; origin.ModelTransformAuthored = source.Matrix is { } m && !m.IsIdentity; origin.Load = load;
                 origin.Database = database && string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase);
             },
             Reference = (uri, from) => Load(Relative(from, uri)),

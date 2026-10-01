@@ -19,6 +19,11 @@ public sealed class WorldNodeProvenance
     public int ModelNode { get; internal set; } = -1;
     /// <summary>The glTF node's name in <see cref="ModelFile"/>, which an edit checks before changing node <see cref="ModelNode"/>.</summary>
     public string? ModelNodeName { get; internal set; }
+    /// <summary>
+    /// Whether the glTF node had a transform of its own when built. Its matrix is then authored: script Object3DRotate and
+    /// Object3DScale are ignored, while Object3DTranslate still sets its translation (the matrix's last row).
+    /// </summary>
+    public bool ModelTransformAuthored { get; internal set; }
     /// <summary>The LoadGameGen that read the node's file.</summary>
     public SourceInstruction? Load { get; internal set; }
     /// <summary>A node of the mission database file itself (the load after GameGenSetWorld, whose scene roots join the world), not of a file it references.</summary>

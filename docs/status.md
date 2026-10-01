@@ -18,11 +18,12 @@ Following [world-editor-plan.md](world-editor-plan.md), source worlds are now ed
   - Terrain recipes: painted regions, Create terrain, the viewport brush and Convert to editable terrain. On the 1999 data, M1, M5 and M6 convert with the same altitude-probe results at every sample point (737,280, 82,992 and 1,235,631 samples), also when each point searches only its grid cell and the world's list.
   - A Zones highlight in Whole world.
   - 102 MCP tools.
-- **Tests:** Core 712 pass and Desktop 101 pass, including:
+- **Tests:** Core 713 pass and Desktop 101 pass, including:
   - 69 recoverable-save tests with fault injection and crash recovery;
   - 16 lossless-syntax tests with 1,000 randomized edit rounds;
   - workspace, placement, object structure, terrain, conversion, profile and Blender cases;
-  - a real named-pipe MCP check of placements, undo, object edits, terrain painting and conversion, profiles, Blender update and the project-wide save.
+  - a real named-pipe MCP check of placements, undo, object edits, terrain painting and conversion, profiles, Blender update and the project-wide save;
+  - Properties commits typed in the window (a pickup position and a terrain attribute) through the source edit they run.
 - **Not yet:**
   - in-game acceptance of edited worlds, converted terrain and the `modern` profile's texture memory;
   - budgets view, tilted region planes and zone validation;

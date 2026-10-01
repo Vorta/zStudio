@@ -184,6 +184,7 @@ public static class SourceBlender
         string sealedFolder = Path.Combine(checkout.Folder, "sealed", generation);
         Directory.CreateDirectory(sealedFolder);
         string outbox = Path.GetFullPath(checkout.Outbox), exportFolder = Path.GetDirectoryName(chosen.Gltf)!;
+        SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, chosen.Gltf).Replace('\\', '/'));
         byte[] json = Stable(chosen.Gltf);
         JsonObject root = Parse(json, chosen.Relative);
         Dictionary<string, byte[]> uses = new(StringComparer.OrdinalIgnoreCase);
@@ -193,7 +194,9 @@ public static class SourceBlender
         {
             string target = Path.GetFullPath(Path.Combine(sealedFolder, Path.GetRelativePath(outbox, full)));
             if (!target.StartsWith(Path.GetFullPath(sealedFolder) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{full} is outside the outbox.");
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.WriteAllBytes(target, bytes);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, target).Replace('\\', '/'));
+            File.WriteAllBytes(target, bytes);
         }
         // A file the export names: its URI already unescaped (as glTF readers resolve them), relative to the export.
         byte[] Use(string relative)
@@ -201,6 +204,7 @@ public static class SourceBlender
             string full = Path.GetFullPath(Path.Combine(exportFolder, relative.Replace('\\', '/')));
             if (!full.StartsWith(outbox + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"The export uses {relative}, which is outside the outbox.");
             if (uses.TryGetValue(full, out var known)) return known;
+            SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, full).Replace('\\', '/'));
             byte[] bytes = Stable(full);
             if ((total += bytes.Length) > MaximumExportBytes) throw new InvalidDataException("The export is larger than 512 MiB.");
             Seal(full, bytes);

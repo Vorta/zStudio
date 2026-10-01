@@ -6,8 +6,10 @@ namespace Recoil.Zbd.Desktop;
 internal sealed class FieldDraft(string value, Action<string> commit, Func<string, Task>? asyncCommit = null)
 {
     private Task<bool>? work;
+    private bool starting;
     public bool IsAsync => asyncCommit != null;
-    public bool IsCommitting => work is { IsCompleted: false };
+    /// <summary>Whether an asynchronous commit runs, including its synchronous start (before its first await).</summary>
+    public bool IsCommitting => starting || work is { IsCompleted: false };
     public string Committed { get; private set; } = value;
     public string Text { get; set; } = value;
     public string? Error { get; private set; }
@@ -24,7 +26,9 @@ internal sealed class FieldDraft(string value, Action<string> commit, Func<strin
     {
         if (!IsAsync) return Task.FromResult(Commit());
         if (IsCommitting) return work!;
-        return work = Run();
+        starting = true;
+        try { return work = Run(); }
+        finally { starting = false; }
         async Task<bool> Run()
         {
             if (!IsPending) { Error = null; return true; }

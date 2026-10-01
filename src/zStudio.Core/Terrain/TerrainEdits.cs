@@ -65,13 +65,14 @@ public static class TerrainEdits
 
     /// <summary>
     /// Paints a stroke into a region's shape or erases it. A region that covers its whole surfaces (no shape) already holds
-    /// every stroke; erasing from it leaves everywhere but the stroke. Erasing everything leaves an empty shape, which
-    /// covers nothing, so the layers before it show through.
+    /// every stroke, so painting it is refused; erasing from it leaves everywhere but the stroke. Erasing everything leaves
+    /// an empty shape, which covers nothing, so the layers before it show through.
     /// </summary>
     public static TerrainRecipe Paint(TerrainRecipe recipe, string name, IReadOnlyList<TerrainOutline> stroke, bool add)
     {
         var region = Region(recipe, name);
-        if (region.Shape == null && add) return recipe;
+        if (region.Shape == null && add)
+            throw new InvalidDataException($"Region {name} covers its whole surfaces, so painting adds nothing; set it to cover nothing first (Properties, or source_terrain_edit update_region with wholeSurfaces false), then paint.");
         var shape = region.Shape ?? new TerrainShape(TerrainShapes.Everywhere);
         return Checked(recipe with { Regions = [.. recipe.Regions.Select(r => r == region ? r with { Shape = shape with { Polygons = TerrainShapes.Paint(shape.Polygons, stroke, add) } } : r)] });
     }
