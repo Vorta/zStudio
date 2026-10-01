@@ -23,20 +23,23 @@ Every capability is also available through MCP, on the same commands, undo and s
 4. **The full rebuild is the correctness reference.** Previews get faster first through gesture overrides and caching; incremental builds come last and must always match a clean build.
 5. **No zStudio metadata among the sources.**
    - `data\` and `gamegen\` hold only sources, and builds read nothing else.
-   - zStudio's working data lives in the project's `zstudio\` folder, which no build reads.
+   - zStudio's working data lives in the project's `zstudio\` folder. No build reads it, and a model, script or recipe that refers into it is rejected.
    - Editor identities live only in memory. Names, content hashes and line numbers are not identities.
 
    ```
    <project>\
-     data\         sources: models, textures, resources, animations, sounds
-     gamegen\      sources: build scripts
-     zstudio\      zStudio's working data, created when first needed
-       export\     Blender exchange, one folder per checkout
-       recovery\   save journal with the previous file contents
-       staging\    files being prepared for a save
+     data\                   sources: models, terrain recipes, textures, resources, animations, sounds
+     gamegen\                sources: build scripts
+       build-profiles\       target profiles (original, modern)
+     zstudio\                zStudio's working data, created when first needed
+       export\               Blender exchange, one folder per checkout
+       recovery\             save journal with the previous file contents
+       staging\              files being prepared for a save
+       cache\                derived data, safe to delete
+       diagnostics\          measurements and reports
    ```
 
-   Deleting `zstudio\` loses nothing while no save is interrupted and no Blender edit is in progress. Leave it out when sharing a project.
+   Only `cache\` is always safe to delete. Recovery data from an interrupted save, and Blender exports not yet applied, may be the only copies. Leave `zstudio\` out when sharing a project.
 6. **Lossless source editing.** Untouched bytes, comments, ordering, scalar kinds and token spelling survive every edit; normalization is an explicit command.
 7. **Preview contexts are labelled.** Authored assembly, mission-start preview and animation sandbox are distinct; the editor never bakes runtime state (startup animations, cleanup, difficulty fallbacks) into sources.
 
@@ -220,10 +223,10 @@ Mission-specific links (objectives, coordinates, triggers) do not travel with th
 ## Content workflows
 
 Maps and vehicles get two complete workflows, not one universal importer:
-- **Maps:** terrain surfaces plus explicit gameplay regions, compiled into pieces.
-- **Vehicles:** rigid parts with engine roles plus explicit behaviour, compiled into actors.
+- **Maps:** unsplit terrain surfaces from Blender, plus gameplay regions painted in zStudio, compiled into pieces.
+- **Vehicles:** higher-fidelity upgrades of existing vehicles that keep each vehicle's parts, data and behaviour.
 
-Reconstructed content is preserved by default. Every conversion that would change how it behaves is shown and reviewed first.
+Reconstructed content is preserved by default. Every conversion that would change how it behaves is shown and reviewed first. New maps come only after every terrain capability below works on existing missions.
 
 ### How the engine sees a map
 
@@ -238,8 +241,7 @@ Measured on the reconstructed 1999 data and read from the retail executable:
   - The ocean is 93 two-triangle quads, one per cell. Land is cut by hand into smaller pieces.
 - **Textures** repeat.
   - Each land piece uses one or two tiling textures (sand, cliff, rock, road), and the ocean texture covers all 93 ocean quads.
-  - Hardware textures are RGB565, a power of two and 8–256 px; 512 px works only where the device reports it. Aspect is at most 8, and names are at most 19 characters.
-  - A 256² texture costs 128 KiB. One unique texture per M1 cell would need 34 MiB, more than any texture pack holds.
+  - What sizes and pack budgets are usable depends on the [target profile](#target-profiles).
 - **Zones** are the engine's area system.
   - Each polygon carries up to three zone numbers (or *any*), and each node carries a zone number with an on/off gate.
   - Every frame the engine takes the zones of the polygon below the camera as current; each player also has their own zones for collision and line of sight.
@@ -253,106 +255,204 @@ Measured on the reconstructed 1999 data and read from the retail executable:
   - CanModify and ClipTo.
 - **Craters and quicksand.**
   - At run time, the engine cuts a patch outline into the CanModify surfaces around the impact.
-  - Before cutting, it cancels the patch if any polygon of a visible ClipTo node overlaps the outline in plan view (retail 0x46B1F0, 0x46B550, 0x46BB90).
-  - So **CanModify means "craters can form here" and ClipTo means "no crater may overlap this"**. Neither one affects collision.
+  - Before cutting, it cancels the whole patch if any polygon of a visible ClipTo node overlaps the outline in plan view (retail 0x46B1F0, 0x46B550, 0x46BB90).
+  - So **CanModify means "craters can form here" and ClipTo, which the original developers called "no clip", means "no crater may overlap this"**. Neither one affects collision.
+  - Because the test is in plan view, a ClipTo surface above can cancel a crater on a floor below it. zStudio reports this; painting cannot change it.
 - **Soil** is set per material: water, seafloor, quicksand, lava, fire, or custom.
 
 ### Maps
 
-Maps have two source representations, built by one assembler:
+Terrain is authored in Blender as unsplit surfaces, and zStudio does the splitting and the gameplay painting.
+- *Unsplit* means not cut for the engine's grid or limits.
+- Ground, walls, ceilings, water and seafloor are still separate surfaces, which painting stacked areas and caves requires.
+- Shipped maps stay as their reconstructed pieces until converted with [Convert to editable terrain](#convert-to-editable-terrain).
 
-| Representation | In the project | Build |
-| --- | --- | --- |
-| Preserved pieces | Today's `mN.gltf` pieces with their node and material attributes | Kept as authored and repartitioned by their bounds; geometry changes only through explicit edits |
-| Generated terrain (new) | Unchunked Blender surfaces (glTF + PNG) plus a terrain recipe, `*.terrain.json`. The recipe holds the surface references, the painted regions with their attributes, defaults and a named compiler profile; it has no selection state, editor IDs or caches. | Cut into ordinary top-level pieces when the mission database is imported, then built by the normal update and write |
+#### The terrain recipe
 
-- **Existing missions** stay as preserved pieces and are not converted automatically. A later *Promote to generated terrain* checks a selection for script, animation and resource bindings, references and sharing first.
-- **The recipe is a new file format defined by zStudio** (decision [H](#decisions-needed)).
-- **Fixed point:**
-  - Reconstructed projects keep the exact reconstruct → export → reconstruct fixed point.
-  - For generated terrain, the guarantee is that export → reconstruct → export produces the same game content. Reconstructing from the game files yields pieces, not the recipe, so authors share the source project to keep their recipes.
+A terrain is a glTF file of surfaces plus a recipe beside it, for example `data\m1\models\terrain\coast.gltf` and `coast.terrain.json`. The recipe holds everything that is not geometry or texture:
+- which surfaces are terrain;
+- the gameplay attributes painted on them;
+- the version of the splitting rules.
 
-**New map:**
-1. **Start from a mission scaffold.** It occupies an existing slot and holds a world, camera, runtime scripts, resources and a player start. Choose the origin, extents and target profile (decision [I](#decisions-needed)).
+It is a source like the scripts: builds read it, and removing it changes the game. It holds no selection state, editor IDs or caches.
+
+```json
+{
+  "format": "recoil-terrain",
+  "version": 1,
+  "compiler": 1,
+  "surfaces": [
+    { "id": "ground",       "model": "coast.gltf", "node": "ground", "defaults": { "craters": "allowed" } },
+    { "id": "tunnel_floor", "model": "coast.gltf", "node": "tunnel_floor" },
+    { "id": "tunnel_walls", "model": "coast.gltf", "node": "tunnel_walls", "defaults": { "standable": false } },
+    { "id": "sea_floor",    "model": "coast.gltf", "node": "sea_floor", "defaults": { "soil": "seafloor" } }
+  ],
+  "defaults": { "zones": [0], "nodeZone": "auto", "soil": "default", "collision": true, "standable": true, "craters": "ignored" },
+  "regions": [
+    { "name": "tunnel", "surfaces": ["tunnel_floor", "tunnel_walls"],
+      "set": { "zones": [4], "craters": "blocked" } },
+    { "name": "tunnel mouth", "surfaces": ["ground", "tunnel_floor"],
+      "shape": { "plane": "xz", "polygons": [ { "outer": [[1200, 2050], [1260, 2050], [1260, 2110], [1200, 2110]], "holes": [] } ] },
+      "set": { "zones": [0, 4] } },
+    { "name": "road", "surfaces": ["ground"], "shape": { "plane": "xz", "polygons": [ … ] },
+      "set": { "craters": "blocked" } },
+    { "name": "quicksand pit", "surfaces": ["ground"], "shape": { "plane": "xz", "polygons": [ … ] },
+      "set": { "soil": "quicksand" } }
+  ]
+}
+```
+
+- **`surfaces`** names the glTF nodes that are terrain. Each must match exactly one node, and surfaces may not overlap. Each surface can have its own defaults (walls not standable, the seafloor's soil). Everything else in the glTF stays an ordinary object.
+- **Order of application:**
+  1. the recipe's `defaults`;
+  2. the surface's own `defaults`;
+  3. the `regions`, in order.
+
+  A region changes only the attributes it sets. Materials and textures come from the glTF unless the recipe sets them.
+- **Attributes:**
+  - `zones`: one to three zone numbers, or `"any"`.
+  - `nodeZone`: a number, `"any"` or `"auto"`.
+  - `nodeGate`: the gate, set separately.
+  - `soil`: a material soil. Painting `quicksand` sets the soil; it does not create a runtime quicksand patch.
+  - `collision`: the intersection flag.
+  - `standable`: the altitude flag.
+  - `craters`: `allowed` (CanModify), `blocked` (ClipTo, "no clip") or `ignored` (neither).
+  - A raw flags form keeps combinations these presets cannot express, so a conversion never drops an existing bit.
+- **Shapes** are polygons with holes on a projection plane: plan view (`xz`) by default, or a tilted plane with a depth for walls and slopes, with an optional height range. A region without a shape covers its whole surfaces. Where shapes still cannot separate stacked sheets, the surfaces must be split into separate surfaces in Blender.
+- **`nodeZone: "auto"`:**
+  - A piece whose polygons all share one zone gets that zone.
+  - A transition piece gets *any* with the gate on, validated before use.
+  - Zone-specific parts that share a cell stay separate pieces.
+- **`compiler`** is the version of the splitting rules: tolerances, cutting, ordering and naming. The same inputs always produce the same pieces. A new version is an explicit, reviewed source change.
+- **Inclusion.**
+  - One of the mission database's roots names the recipe (`extras.recoil.terrain`), at the place in the root order where the terrain belongs.
+  - On import the marker expands into ordinary top-level pieces. It is not a game node, and no new script command is needed.
+  - The grid (origin, cell size, tolerance) comes from the mission scripts' state when the world is written.
+
+**Brushes.**
+- A stroke edits a named region's shape (adding or subtracting area) on the selected surfaces.
+- The preview shows the affected areas and the resulting pieces and budget. Confirming makes one undoable change.
+- *Erase* reveals what lies beneath: earlier regions or the defaults. *Reset to default* removes the override instead of writing a fixed value.
+- Erasing one attribute leaves the others.
+
+**Update from export.**
+- The recipe stays. Its regions are re-evaluated against the new surfaces, and changed coverage is shown.
+- Paint is in world space, so it stays in place when geometry moves.
+- New surfaces must be classified, and missing or split surfaces remapped. Paint is never dropped silently.
+- Generated pieces are not stable identities across remeshing; only the build is deterministic.
+
+#### Convert to editable terrain
+
+For shipped maps:
+1. **Merge.** The pieces are merged into logical surfaces, keeping polygons, per-corner UVs, normals and attributes. Welding and smoothing are optional.
+2. **Check first.** Bindings, shared models, transforms, LODs, references and roles are checked. The horizon, doors, bridges, destructibles and placed objects stay separate.
+3. **Derive regions** from the existing attribute boundaries, using tilted regions or separate surfaces where plan-view regions cannot reproduce them. Ambiguous cases are declined, not approximated.
+4. **Acceptance** compares:
+   - zone probes;
+   - collision;
+   - crater blocking per cell and zone;
+   - animation bindings;
+   - seams;
+   - budgets.
+
+- **What is lost:** the original piece layout, some names and order, and possibly how many crater models a crater creates. The geometry is not lost.
+- **Reconstruction** from the game files still yields pieces, not recipes, so share the project to keep the recipes.
+
+**Editing a shipped map without converting it:**
+- Its pieces are edited in place. A geometry edit checks out the selected pieces, with their neighbours as read-only context.
+- Setting a node flag on part of a piece requires an explicit split, previewed first.
+- Objects on terrain that changed are reported as floating or buried. They move only through an explicit *Conform to terrain*.
+
+**New map** (once every terrain capability works):
+1. **Start from a mission scaffold.** It occupies an existing slot and holds a world, camera, runtime scripts, resources and a player start. Choose the origin, extents and target profile.
 2. **Build the surfaces in Blender.**
-   - Model the ground, tunnel floors and walls, water surface and seafloor as separate components where that helps.
+   - Model the ground, tunnel floors and walls, ceilings, water surface and seafloor as separate surfaces.
    - Keep buildings, bridges, doors and props separate.
    - Paint textures and UVs there.
-3. **Import the sealed export into zStudio.**
-   - Mark which components are terrain, static objects or references.
-   - See the dimensions, the compiled estimates, materials, missing dependencies and the texture budget.
+3. **Import into zStudio** with *Update from export*.
+   - Mark which surfaces are terrain.
+   - See the dimensions, compiled estimates, materials, missing dependencies and the texture budget.
 4. **Paint gameplay in zStudio:**
    - zones;
    - soils;
-   - collision (intersection, altitude);
-   - crater behaviour (CanModify, ClipTo);
+   - collision;
+   - standable;
+   - craters;
    - draw priority.
 
-   The compiled pieces are generated and can be inspected after each accepted change.
+   The compiled pieces can be inspected after each change.
 5. **Add gameplay, validate and deploy.**
    - Add starts, pickups, actors, routes and logic.
    - Validate texture packs, animation bindings, grid assignment, queries and capacity.
    - Deploy the mission.
 
-**Editing a shipped map:**
-- Its pieces are edited in place. A geometry edit checks out the selected pieces, with their neighbours as read-only context.
-- Setting a node flag on part of a piece requires an explicit split, previewed first.
-- Named doors, bridges, destructibles and the horizon stay separate authored objects.
-- Objects on terrain that changed are reported as floating or buried. They move only through an explicit *Conform to terrain*.
-
-**Paint channels.** Each channel is independent and has one owner:
-
-| Channel | Meaning | Stored on |
-| --- | --- | --- |
-| Zones | Up to three zone numbers, or a deliberate *any* | Polygon |
-| Soil | Default, water, seafloor, quicksand, lava, fire, custom | Material |
-| Priority, back faces, colour | Rendering | Polygon and material |
-| Altitude, intersection | Whether vehicles stand on it and collide with it | Node |
-| Bounding-box collision, proximity | Separate query behaviour | Node |
-| CanModify, ClipTo | Craters may form; craters may not overlap | Node |
-| Node zone and gate | Which zones the whole node belongs to | Node |
-
-- **Storage.** Painted regions are categorical regions: vector areas or volumes, local to a surface component. They are not RGB masks or triangle indices, because a top-down bitmap cannot tell a bridge from the floor beneath it.
-- **After a remesh,** the regions are re-evaluated against the new geometry. zStudio reports uncovered surfaces, conflicts and changed boundaries for explicit resolution.
-- **On preserved pieces,** attributes transfer from the checkout's starting copy by surface correspondence. Ambiguous cases stay unresolved; zStudio does not guess the nearest triangle.
-- **"No clip"** is offered as separate controls: *no collision* (intersection off), *not standable* (altitude off) and *no craters* (ClipTo). Each changes only that one behaviour.
-
-**The chunker:**
-- It only processes generated terrain. It never touches placed references, actors, landmarks or objects that scripts or animations refer to.
-- It cuts at the mission's exact cell boundaries, using its origin, cell size and tolerance. The partition the assembler computes is then checked, not assumed.
-- Node attributes (zone, gate, flags) separate pieces into different nodes. Polygon attributes (zones, soils) cut polygons but don't force new nodes. Pieces that differ only in polygon zones share their material slots; the importer already keeps zones on polygons.
-- It counts what GameZ stores (vertices, normals, polygons) against tested limits and splits before a limit is reached.
-- Neighbouring pieces share boundary cuts, so there are no cracks or T-junctions. UVs are interpolated before the 1/256 tile shift.
-- Output is deterministic and versioned. Generated names (component, cell, piece) are build labels, not identities.
-- There are no terrain LODs at first.
-
-**Textures.**
-- Tiled materials are the default, with a limited amount of unique detail.
-- A large painted Blender texture gets three explicit choices:
-  - downsample it to one texture, previewed first;
-  - convert it to tiled materials plus a few unique patches (recommended);
-  - cut it into budgeted texture pages and remap the UVs, refused if it does not fit.
-- **Budget view:** for each pack, the texture count, sizes, cost, reductions, cycle frames and remaining capacity, with a preview at that pack's quality.
-- The engine has no splat maps or shader graphs, so Blender shader effects do not carry over.
+**The splitter:**
+- It only processes recipe terrain. It never touches placed references, actors, landmarks or objects that scripts or animations refer to.
+- It cuts at the mission's exact cell boundaries. The partition the assembler computes is then checked, not assumed.
+- Node attributes (zone, gate, flags) separate pieces into different nodes. Polygon attributes (zones, soils) cut polygons but don't force new nodes. Pieces that differ only in polygon zones share material slots, as the importer already does.
+- It counts what the engine stores after merging (921 vertices, 1,024 normals, 57 corners per polygon), not Blender vertices, and splits before a limit is reached.
+- Neighbouring pieces share boundary cuts, so there are no cracks or T-junctions.
+- It reports how many crater-capable models a typical crater would touch, since every one costs runtime models.
+- Output is deterministic and versioned. Generated names are build labels, not identities, and there are no terrain LODs at first.
 
 **Zones:**
-- **New maps** start with one explicit zone. *Any* is used only deliberately, and unpainted surfaces never become *any*.
-- **Transitions.** A transition polygon's node must admit both sides, so its node zone is *any* or the gate is off. Otherwise the transition disappears from one side.
+- **New maps** start with one explicit zone. *Any* is used only deliberately.
+- **Transitions.** A transition polygon's node must admit both sides.
 - **Suggestions** come from connected surfaces and enclosed spaces, never from texture names.
 - **Validation:**
   - It samples the engine's camera probe along starts, routes, camera offsets and scripted cameras, including bridges, ceilings, water and seafloor.
   - It checks transitions from both sides, places that would need more than three zones, and static objects' full extents.
-  - It reports how much was sampled; sampling is not proof.
+  - It reports how much was sampled.
 - **Views:**
   - polygon zones;
   - node zones and gates;
-  - the probe's current hit and zones;
+  - the probe's current hit;
   - excluded geometry, ghosted.
-- **Where painting happens.** Gameplay painting is primary in zStudio. Blender owns geometry, UVs and texture painting. The add-on can offer the same assignments through the same commands.
+- **Where painting happens.** Gameplay painting happens in zStudio, while Blender owns geometry, UVs and textures. The add-on can offer the same assignments through the same commands.
+
+**Textures.**
+- Under the modern profile, tiled, uniquely baked and mixed texturing all work within the pack budget.
+- A large painted Blender texture is cut into texture pages that fit the profile's limits. It may also be downsampled, or converted to tiles plus patches, at the artist's choice.
+- **Budget view:** source pixels, encoded bytes, estimated runtime memory and, once measured, the real peak.
+- **UV precision.** GameZ stores UVs as floats. The 1/256 rounding of the shipped models is what the original build tool did, and reconstructed content keeps it. Whether the modern profile can keep full precision, which large textures need, must be confirmed in the game.
+
+### Target profiles
+
+The target is the unmodified `Recoil.exe` on a measured modern configuration: RTX 3080 class, on Windows 11 with its DirectDraw layer or a wrapper. The executable and the capabilities the wrapper reports decide what works, not the GPU alone.
+
+- **Profiles are build sources**, for example `gamegen\build-profiles\original.json` and `modern.json`.
+  - The project has a default, and an export can choose another.
+  - Build reports record the profile used.
+  - zStudio never derives settings from the GPU it runs on.
+
+| Area | Modern profile |
+| --- | --- |
+| Texture size | Above 256 px when the game reports and uses it; aspect at most 8 |
+| Texture packs | Larger complete tiers: the game opens `rtexture<N>` for N = its reported texture memory in MiB, counting down |
+| Geometry | More models; each model keeps the engine limits (921 vertices, 1,024 normals, 57 corners) |
+| Pools | Script-set node, model and material capacities can be raised only to tested values, and never automatically |
+| Memory | `Recoil.exe` is not large-address-aware: 2 GB of address space for everything |
+| Rendering | No new shader, skinning or material features |
+
+- **Packs.**
+  - Every tier must hold the whole mission. The game's choice is a size threshold, not a fit test.
+  - An older, higher-numbered pack left in the game folder would win, so deployment checks for it.
+  - The texture directory holds at most 4,096 textures per world.
+- **Original-hardware export** remains a separate, complete deployment. It may need geometry variants without high-detail parts.
+- **Measure first,** on the maintainer's machine. Until then the profile is *experimental modern*. The measurements:
+  - the reported texture memory and maximum texture size;
+  - test packs and textures of increasing size, loaded in the game;
+  - address-space peaks while loading, repeating missions, and saving and reloading;
+  - runtime growth from craters, clones, effects and deaths;
+  - frame time in demanding views.
 
 ### Vehicles
 
-A tank is a rigid hierarchy of named parts plus data records and behaviour programs; the world grid plays no part in it. The first workflow is *New tracked enemy from template*, starting from `ltank`:
+The main command is *Upgrade vehicle*.
+- **What it keeps:** the vehicle's key, data records, placements, movement behaviour and part hierarchy.
+- **What it replaces:** the visual content: model, textures, and some texture animations as moving 3D parts.
+
+The upgrade starts from the `ltank` structure:
 
 ```
 healthy
@@ -366,59 +466,50 @@ healthy
   collide00 … collide11     12 collision probe points
 ```
 
-The game finds these parts by name: a missing collision point fails the vehicle, and the helper points are hidden once read.
+- **The checkout** holds:
+  - the whole hierarchy, helpers and LODs;
+  - texture-cycle bindings and behaviour dependencies;
+  - every mission load of the vehicle, including aliases such as `ltank_2`.
+- **Kept as they are:** role names, pivots, helper numbering and rest transforms.
+  - Collision and support points are not regenerated from the new mesh, because that would change gameplay.
+  - "Visual only" is a tested contract. Every intentional exception (a larger hull, a moved firepoint, a different track UV scale) is listed.
+- **Splitting by role:**
 
-**Roles and checks:**
-
-| Role | Check |
-| --- | --- |
-| `healthy` | The template's lifecycle and attachment structure are kept |
-| `turret`, `gun` | Pivots and rest transforms are explicit; yaw and pitch belong to the game |
-| `firepoint` | Under the gun; firing ray shown, −Z forward |
-| `target` | An explicit aim point, never the mesh centre by default |
-| `collide00`–`collide11` | Each exactly once; missing, duplicate, non-finite or coincident points rejected |
-| `support00`–`support03` | Footprint shown against the chassis |
-| `shadow` | The quad and its activation |
-| `ltracks`, `rtracks` | Separate parts with scrolling UVs |
-
-- **Helper rules.** These counts are the tracked-vehicle contract. Hover, flying and swimming vehicles get their own after study.
-  - Helper positions suggested from the bounding box must be reviewed.
-  - Scaling a vehicle scales its helpers and animations too.
-  - Hidden helpers and LOD bands are exported with it.
-- **Geometry over the limits.** A part used only as a transform (such as `turret`) may be split into mesh children under it. A part whose model the game reads directly (the tracks scroll their UVs) is reduced or rejected, never restructured silently. The total cost is reported.
-- **LODs** are authored in Blender with RECOIL's LOD groups; generated LODs come later as a reviewed operation.
-- **Destruction** is either the template's death behaviour (generic hulk, fire and smoke animations) or a custom wreck sequence authored explicitly.
-- **Animation.** Blender actions are inputs; once accepted, the `.zan` tracks and definitions are the source.
-  - **Flow:** action → node motion → role mapping → conversion and check with zStudio's evaluator → `.zan` → definition events → the mission's `anim.zrd` → `anim.zbd`.
-  - **Game-driven channels** (AI movement, turret yaw, gun pitch) refuse keyframes. Hatches, doors and rotors are keyframed, and full spins survive key reduction.
-  - **Events** (sounds, effects, visibility) are authored in the definition editor, not inferred from action names.
-  - **Morphs** are accepted only as two shapes with the same topology.
-  - **Skinned meshes** are rejected, except parts attached rigidly to one bone.
-- **Files.** New vehicle files go where the source layout puts similar content:
-
-  | Content | Where |
+  | Part | Treatment |
   | --- | --- |
-  | Geometry | `data/mN/models/bft/name.gltf` |
-  | Textures | `data/mN/textures/bft/` |
-  | Vehicle entries | `data/common/zrdr/vehicle.zrd`, plus every variant that exists |
-  | Reusable behaviour | `data/common/zrdr/enemies/name.zrd` |
-  | Mission-only behaviour | The mission's `zrdr/bft/` |
-  | Model load | `support/bftN.gw` |
-  | Animation list | The mission's `anim.zrd` |
-  | Placements | `aipath/aiv*.zrd` |
+  | Cosmetic rigid geometry under a kept pivot | Split into child meshes |
+  | A role whose model the game reads directly | Keeps one compliant model on the role node |
+  | `ltracks`, `rtracks` | One model each, within the limits, because the game scrolls them |
+  | Morph-bearing part | Keeps both shapes in correspondence |
+  | Helpers (`collide`, `support`, `firepoint`, `target`) | Never split |
 
-  - Records are cloned from a template, keeping unknown fields; values are never estimated from the mesh.
-  - New vehicle names need their dispatch verified first. New movement modes are engine work, not an editor feature (decision [J](#decisions-needed)).
-- **Preview.** A vehicle test view offers turret and gun sliders, the firing ray, collision and support points, track scroll, forced LOD bands and death and reset playback, all preview-only.
-- **In-game acceptance** covers:
-  - spawn;
-  - drive and turn;
-  - aim and fire;
+- **LODs.** One functional skeleton with visual bands. The original model becomes the far band and the original-profile asset, without duplicating role names.
+- **Textures.** Full-quality PNG sources are packed per profile, keeping cycle frames, skins and damage masks. Shared materials are flagged.
+- **Animated textures become 3D parts:**
+  - **Propellers** (a texture cycle on `props`) become a looping spin, written the way helicopter rotors are: `OBJECT_MOTION` with an `XYZ_ROTATION` rate and `LOOP_COUNT -1`.
+  - **Starting the spin.** A vehicle entry in `vehicle.zrd` can name `start_anims ( name )`. The game starts that animation at the vehicle's root when it sets the vehicle up, for the player and for AI vehicles alike. The shipped amphibious enemy spins its radar this way (`radar_spin`).
+  - **Stopping it.** The death sequence stops the spin, as helicopter destruction stops its rotors.
+  - **Still to verify:** mode changes, saved-game restore and repeated spawns.
+  - **Tracks stay texture-scrolled.** The game scrolls them with speed, and nothing in the engine spins wheels with speed.
+  - **The VTOL's heat shimmer** stays a texture effect.
+  - Only the affected texture-cycle binding is replaced.
+- **Death behaviour** is unchanged by default. Upgrading shared assets such as `hulk_small` is a separate, scoped upgrade.
+- **Animation from Blender:**
+  - Actions are inputs. Once accepted, the `.zan` tracks and definitions are the source.
+  - Game-driven channels (AI movement, turret yaw, gun pitch) refuse keyframes.
+  - Morphs are accepted only as two shapes with the same topology; skinned meshes are rejected.
+- **Preview.** A vehicle test view offers turret and gun sliders, the firing ray, collision and support points, track scroll, forced LOD bands and death and reset playback.
+- **In-game acceptance:**
+  - startup;
+  - two live copies, where one dying leaves the other unaffected;
+  - later spawns;
+  - movement, reversing and turning;
   - slopes and soils;
+  - aiming and firing;
   - LOD changes;
   - death and repeated spawns;
-  - save and reload.
-- **The player's multi-mode vehicle** is a later, separate contract.
+  - save and reload;
+  - the player vehicle's mode changes.
 
 ### Other workflows
 
@@ -441,19 +532,22 @@ A playable deployment (ZBD files) and an editable source package (the project) a
 - **Many-to-many provenance.** A generated polygon traces back to a source triangle, a region and a cell cut. Editing a generated piece's flag edits its region or source piece, never a hidden override on the output.
 - **Three validation levels:** a well-formed asset, an asset the engine can represent, and content a mission can deploy. A work-in-progress model can exist in the project before it is a complete vehicle.
 - **Artist master files** (`.blend`) live in the artist's own storage; checkouts are only for exchange.
+- **Target profiles are compiler inputs.** The profile used is recorded in build reports and cache keys. Script pool sizes stay authoritative; a profile only validates them.
 - **MCP.** Every paint and preparation operation has semantic commands: explicit regions, categorical assignments, bounded brush geometry, preview and apply. MCP never synthesizes mouse strokes.
 
 ## Roadmap
 
 | Phase | Scope | Acceptance |
 | --- | --- | --- |
-| 0. Semantic baseline | Ordered animation-binding reports, dependency-resolution traces, an evidence ledger, preview-context labels; target profiles, zone and probe tracing, vehicle role-consumer audit, static versus runtime geometry limits | Retail reconstruction tests report binding relationships and known exceptions (for example `smoke1`); traced and untraced builds agree; reports reproduce the measured cases and name unknown behaviour instead of guessing |
-| 1. Source transactions | `SourceWorkspace`, lossless ZRD/script syntax, project-wide undo, recoverable multi-file save; vertical slice: moving pickups (with linked difficulty variants) in text `puppies*.zrd` | GUI and MCP produce identical patches; undo restores exact bytes; failure injection at every publication step leaves no partial transaction; a moved pickup works in the game |
-| 2. World objects | Move, rotate, duplicate, delete, hierarchy, flags, script-owned environment properties, asset-versus-placement scope; guarded file-based Blender checkout; geometry and texture preflight, editing preserved terrain pieces, explicit chunk creation for static geometry, node and polygon attribute assignment, vehicle role inspection | Database and script objects survive edit → save → reopen → export; unrelated sources and bindings unchanged; a small ground area and a separate static object survive Blender exchange, build, reconstruction and an in-game drive |
-| 3. Functional actors | Create and delete pickups and AIV actors, AI networks and paths, dependency-aware cross-mission import, mission export; *New tracked enemy from template* with helper assignment, role-safe geometry preparation, catalogue variants and AIV placement | The M2 tank works in M1 with its behaviour and resources; a custom enemy works in M1; collisions and missing dependencies are actionable |
-| 4. Mission logic | Source-backed animation editor, triggers, prerequisites, destruction, objectives, starts, cameras, audio cues; Blender action conversion, death and cleanup editing, animated doors and hatches | One encounter with a custom enemy, an animated or destructible object, an objective and an exit works in the game |
-| 5. Terrain and advanced Blender | Generated-terrain recipes, region painting, remesh reconciliation, multi-zone and stacked-surface diagnostics, characterized craters; the optional add-on; whole-database exchange | New playable terrain with transitions, collision, soils, craters and reload checked in the game |
-| 6. Scale | Incremental builds, multiplayer workflows, and new mission slots only with evidence | Incremental and clean builds agree; budgets survive repeated runtime activity; multiplayer checked with several clients |
+| 0. Engine and target contracts | Ordered animation-binding reports, dependency-resolution traces, an evidence ledger, preview-context labels; crater and zone-probe characterization, engine limits, measurements of the modern target, vehicle lifecycle hooks (`start_anims`, death, restore) | Executable-qualified evidence and small deterministic characterization tests; traced and untraced builds agree; unknown behaviour is named, not guessed |
+| 1. Source foundation | `SourceWorkspace`, lossless ZRD/script syntax, project-wide undo, recoverable multi-file save in `zstudio\`, *Update from export*; vertical slice: moving pickups (with linked difficulty variants) in text `puppies*.zrd` | GUI and MCP produce identical patches; undo restores exact bytes; failure injection at every publication step leaves no partial transaction; a moved pickup works in the game |
+| 2. World objects and profiles | Move, rotate, duplicate, delete, hierarchy, flags, script-owned environment properties; Blender checkout; target profiles in `gamegen\build-profiles\`; texture and geometry budgets | Database and script objects survive edit → save → reopen → export; unrelated sources and bindings unchanged; test packs load as the profile predicts |
+| 3. Terrain source and splitter | Recipe format, shapes, surface selection, brushes, inclusion, deterministic splitting; *Convert to editable terrain* | Converted M1 terrain reproduces its geometry and attributes before any artistic change |
+| 4. Complete terrain behaviour | Caves, stacked surfaces, underwater layers, multi-zone transitions, CanModify and ClipTo, quicksand, crater reload | M1, then the M5/M6 underwater and zone cases, pass source editing, Blender update, export and in-game tests, one change at a time |
+| 5. Vehicle upgrades and actors | *Upgrade vehicle*, role-safe splitting, LODs, textures, cosmetic animations; AIV placement, AI paths, cross-mission import, mission export | An upgraded tank keeps its behaviour through two-copy, death, respawn and save/reload tests; the M2 tank works in M1 |
+| 6. Mission logic | Source-backed animation editor, triggers, prerequisites, destruction, objectives, starts, cameras, audio cues; Blender action conversion | One encounter with an upgraded enemy, an animated or destructible object, an objective and an exit works in the game |
+| 7. Integrated rebuild | An existing mission rebuilt from unsplit terrain, with gameplay edits, on the measured modern profile | The full capability matrix passes; only then are new maps supported |
+| 8. Scale | Incremental builds, multiplayer workflows, and new mission slots only with evidence | Incremental and clean builds agree; budgets survive repeated runtime activity; multiplayer checked with several clients |
 
 Each phase includes GUI/MCP parity, protocol tests, source-protection tests and documented limitations. The first deliverable is deliberately small: one complete source edit that proves ownership, provenance, undo, validation, saving and MCP together.
 
@@ -477,17 +571,18 @@ Phase 1 is complete when all three hold:
 | E | Source saves are recoverable, not simultaneously visible; a file name may briefly be absent; publication never replaces an unexpected file; incomplete rollback blocks writes until reconciled. | Preserving external work is preferred over an unqualified atomic-save claim. | Approved |
 | F | Blender changes come in only when the user chooses *Update from export*, through sealed candidate generations and the shared plan/apply path. The add-on uses the existing user-enabled MCP connector and never writes project or game files. | One acceptance boundary; the existing MCP policy stays intact. | Approved |
 | G | Evidence names the operation it establishes: runtime routines do not define the missing build tool's behaviour; animation-binding reports keep logical targets and resolution order, not names or slots, as identity. | See [Verified corrections](#verified-corrections). | Adopted |
-| H | Documented terrain recipes (`*.terrain.json`) are allowed as project sources: versioned build inputs with no editor state. Reconstruction from game files yields pieces, not recipes. | Generated terrain needs its painted regions stored somewhere; the alternative is chunking as an explicit one-time edit and painting the chunks. | Open |
-| I | The first target profile is the original executable on period hardware (256 px textures, shipped pack budgets); larger textures and packs are a separate, tested profile. | Budgets and the texture workflow depend on it. | Open |
-| J | "New vehicle" means a reskin or replacement, or a new vehicle entry using an existing movement mode; new movement modes are out of scope. | New movement behaviour is engine work. | Open |
-| K | The first new-map release supports single-level outdoor terrain; caves, stacked floors and underwater traversal follow, but the region format supports them from the start. | Zones and the camera probe make those cases the hardest to validate. | Open |
+| H | Terrain is authored as unsplit Blender surfaces; splitting and zoning happen in zStudio. The gameplay paint is kept in a terrain recipe (`*.terrain.json`) beside the surfaces: a versioned build input with no editor state. Reconstruction from game files yields pieces, not recipes. | Painted regions must survive re-exports from Blender. | Surfaces approved; recipe explained, awaiting confirmation |
+| I | The target is modern hardware (RTX 3080 class) running the unmodified `Recoil.exe`, expressed as measured build profiles; an original-hardware profile remains. | Texture sizes, pack budgets and geometry budgets depend on it. | Approved |
+| J | "New tank" means a higher-fidelity upgrade of an existing vehicle: new model and textures, some texture animations as 3D parts, same key and behaviour. | Keeps gameplay intact; new movement modes would be engine work. | Approved |
+| K | New maps are supported only once every terrain capability works: caves, stacked floors, underwater areas, zone transitions, craters. | A reduced first release would ship maps the later format must replace. | Approved |
+| L | "No clip" means no craters: the ClipTo flag, as the original developers used the term. | Collision and standing are separate flags. | Resolved |
 
 ## Verified corrections
 
 The review found conflicts between earlier research notes and the source-project rules, and the shipped data and retail code settle them.
 
 - **ClipTo blocks craters.** The reconstruction calls its test "fully inside", but the retail code (0x46B1F0 and 0x46B550, with the byte-matched 0x46BB90) cancels a crater or quicksand patch when any polygon of a visible ClipTo node overlaps it in plan view. Because any one overlapping polygon cancels the patch, splitting a ClipTo node into several does not change the result, as long as the pieces stay visible in the same crater cell. Splitting CanModify surfaces does change how many crater models a crater creates.
-
+- **UV rounding belongs to the build tool.** GameZ stores UVs as floats. The 1/256 rounding seen in the shipped models is what the original build did, so reconstructed content keeps it; it is not a stated engine limit.
 - **Colinear corners.** The runtime's `zDi::AddPolygonEx` (retail 0x483650) removes colinear corners, fans non-planar polygons and extrapolates UVs. The shipped models repeat corners, keep non-planar polygons and keep non-affine UVs, so the original build tool did none of that, and the source importer follows the shipped data.
 - **Animation wildcards match one decimal digit.** Four shipped patterns have world nodes that match with one arbitrary character but not with a digit, and none of those became animations. For example, m4's `stgwin*` produced `stgwin1` and `stgwin2` but not `stgwing` or `stgwinb`; the same holds for m5 `tower**`, m1 `pu***` and m10 `barrel**`.
 
@@ -500,7 +595,14 @@ The review found conflicts between earlier research notes and the source-project
 - **Model limits.** Static loading and drawing limits versus the runtime polygon routine's limits (about 921 vertices), normals, and growth while clipping craters. This gates the splitter profiles.
 - **Vehicle roles.** Which roles need their own model (the tracks do), lookup scope and order, scroll and morph sharing, helper numbering and pivots, and other movement modes' helpers. This gates part splitting and custom rigs.
 - **Animation conversion.** Engine interpolation, spin winding, morph control, reset behaviour and conflicts with game-driven channels. This gates Blender action import.
-- **Textures.** Device limits on real hardware, pack selection, and alpha and mipmap costs. This gates texture budgets and quality presets.
+- **Modern target measurements.**
+  - On the maintainer's machine: the reported texture memory and maximum texture size, test packs and textures loaded in steps, and address-space peaks.
+  - Runtime growth from craters, clones and effects, and frame time.
+  - Whether full-precision UVs render correctly on the hardware path.
+
+  This gates the modern profile, texture budgets and quality presets.
+- **Vehicle animation lifecycle.** A `start_anims` loop: what happens on player mode changes, saved-game restore and repeated spawns, and that the death sequence stops it on each clone. This gates propellers and other texture animations becoming 3D parts.
+- **Crater visibility.** Which nodes the crater test sees (the crater cell and the camera's list), and its interaction with zones and stacked surfaces. This gates complete cave and stacked-floor support.
 - **Test fixtures.**
   - A four-cell terrain: offset origin, two soils, a bridge over another floor, a two-zone transition, separate altitude and intersection cases, and a crater crossing cell and ClipTo boundaries, also built with different subdivisions of the same surface.
   - A tracked vehicle: an oversized cosmetic part, an oversized track that must be rejected, asymmetric track UVs, missing and duplicate helpers, a hatch animation, and repeated death and reset.
