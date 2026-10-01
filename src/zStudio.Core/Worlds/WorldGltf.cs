@@ -284,6 +284,12 @@ public static partial class WorldGltf
         public Action<WorldNode, string, GltfNode>? NodeImported { get; init; }
         /// <summary>Cancels a load between nodes and between batches of polygons.</summary>
         public CancellationToken Token { get; init; }
+        /// <summary>Reads a file relative to a referencing file (terrain recipes): its bytes and project path.</summary>
+        public Func<string, string, (byte[] Bytes, string Path)>? ReadFile { get; init; }
+        /// <summary>The world's grid, for the mission database load only; terrain recipes elsewhere are refused.</summary>
+        public Func<Terrain.TerrainGrid>? Grid { get; init; }
+        /// <summary>Called for each node a terrain recipe compiles to, with the recipe's path, the piece and its surface's id.</summary>
+        public Action<WorldNode, string, Terrain.TerrainPiece, string>? TerrainPieceImported { get; init; }
         /// <summary>Texture files the load referenced, by texture name.</summary>
         public Dictionary<string, string> TextureFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Each texture's clamp word (1 clamps U, 2 clamps V) from the first sampler that uses it; the pack stores it.</summary>
@@ -307,7 +313,21 @@ public static partial class WorldGltf
     {
         if (!context.Loading.TryAdd((path, doc), true)) throw new InvalidDataException($"{path} references itself.");
         Dictionary<int, WorldNode> instances = [];
-        try { return doc.Roots.Select(r => ImportNode(r, path, parentZone, context, instances, depth)).ToList(); }
+        try
+        {
+            List<WorldNode> roots = [];
+            foreach (var root in doc.Roots)
+            {
+                // A terrain recipe stands where its pieces go among the database's roots; it is not a game node itself.
+                if (root.Extras?[Key] is JsonObject marker && marker["terrain"] is { } recipe)
+                {
+                    if (depth > 0) throw new InvalidDataException($"{path}: the terrain recipe {recipe} must be a root of the mission database, not of a referenced file.");
+                    roots.AddRange(ImportTerrain(Text(recipe, "terrain", path), path, context));
+                }
+                else roots.Add(ImportNode(root, path, parentZone, context, instances, depth));
+            }
+            return roots;
+        }
         catch (Exception ex) when (ex is InvalidOperationException or FormatException or OverflowException or ArgumentException or NullReferenceException or IndexOutOfRangeException)
         { throw new InvalidDataException($"{path}: an engine value in the extras is malformed: {ex.Message}", ex); }
         finally { context.Loading.Remove((path, doc)); }
@@ -319,6 +339,7 @@ public static partial class WorldGltf
         if (depth >= GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the node hierarchy, with its external references, is deeper than {GltfDocument.MaximumDepth} levels.");
         context.Token.ThrowIfCancellationRequested();
         var extras = source.Extras?[Key] as JsonObject;
+        if (extras?["terrain"] != null) throw new InvalidDataException($"{path}: node {source.Name} names a terrain recipe but is not a root of the mission database.");
         // Later copies of a shared node are the same node under another parent.
         long? mark = extras?["instance"] is { } marker ? Integer(marker, "instance", path) : null;
         if (mark is < 1 or > int.MaxValue) throw new InvalidDataException($"{path}: node {source.Name} has an invalid instance number.");

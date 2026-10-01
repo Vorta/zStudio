@@ -414,6 +414,18 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                 origin.Database = database && string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase);
             },
             Reference = (uri, from) => Load(Relative(from, uri)),
+            ReadFile = (uri, from) =>
+            {
+                string file = Relative(from, uri);
+                if (!files.Exists(file)) throw new InvalidDataException($"{from} names {uri}, which does not exist.");
+                ModelFiles.Add(file);
+                return (files.Read(file, token), file);
+            },
+            Grid = database ? () => Grid(pendingWorld!) : null,
+            TerrainPieceImported = (node, recipe, piece, surface) =>
+            {
+                var origin = Origin(node); origin.Terrain = recipe; origin.TerrainSurface = surface; origin.TerrainCell = (piece.Column, piece.Row); origin.Load = load;
+            },
             TextureName = (uri, name, from) => Texture(uri, name, from),
             Token = token,
         };
@@ -442,6 +454,10 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             foreach (var child in node.Children) AddNodes(child);
         }
     }
+
+    /// <summary>The world's area grid as WorldOrigin, WorldExtents and WorldPartition set it.</summary>
+    private static Terrain.TerrainGrid Grid(WorldNode world) => new(world.PayloadFloat(0x34), world.PayloadFloat(0x38), world.PayloadFloat(0x3C), world.PayloadFloat(0x40),
+        world.PayloadFloat(0x54), world.PayloadFloat(0x58), world.PayloadInt(0x78), world.PayloadInt(0x7C));
 
     /// <summary>The first model directory (most recently added first) holding the file, as .gltf or .glb.</summary>
     public string? ResolveModel(string file)

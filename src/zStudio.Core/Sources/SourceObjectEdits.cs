@@ -78,6 +78,7 @@ public static class SourceObjectEdits
     /// <summary>A plan that moves, rotates or scales an object to <paramref name="requested"/> (its local transform).</summary>
     public static SourceEditPlan PlanTransform(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, ObjectTransform requested, CancellationToken token = default)
     {
+        Generated(origin, nodeName);
         Check(requested.Position); Check(requested.RotationDegrees); Check(requested.Scale);
         string label = $"Move {nodeName}";
         var writers = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).ToArray();
@@ -109,6 +110,7 @@ public static class SourceObjectEdits
     /// <summary>A plan that sets or clears one node flag bit (see <see cref="FlagCommands"/> and <see cref="WorldGltf.CarriedFlags"/>).</summary>
     public static SourceEditPlan PlanFlag(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, uint bit, bool on, CancellationToken token = default)
     {
+        Generated(origin, nodeName);
         if (System.Numerics.BitOperations.PopCount(bit) != 1 || (bit & WorldGltf.CarriedFlags) == 0) throw new InvalidDataException($"0x{bit:X} is not one node flag a source can set.");
         string label = $"{(on ? "Set" : "Clear")} flag 0x{bit:X} of {nodeName}";
         string value = on ? "on" : "off";
@@ -141,6 +143,7 @@ public static class SourceObjectEdits
     /// </summary>
     public static SourceEditPlan PlanCommand(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, string command, IReadOnlyList<string> args, CancellationToken token = default)
     {
+        Generated(origin, nodeName);
         if (args.Count == 0) throw new InvalidDataException($"{command} needs arguments.");
         string label = $"{command} on {nodeName}";
         if (origin.Writers.TryGetValue(command, out var writer))
@@ -182,6 +185,7 @@ public static class SourceObjectEdits
     public static SourceEditPlan PlanDelete(SourceObjectTarget target, CancellationToken token = default)
     {
         var node = target.Node; var origin = target.Origin;
+        Generated(origin, node.Name);
         string label = $"Delete {node.Name}";
         if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can be deleted here.");
         List<string> notes = [$"Animations and resources that find {node.Name} by name no longer find it; Problems lists what the rebuild reports."];
@@ -212,6 +216,7 @@ public static class SourceObjectEdits
     public static SourceEditPlan PlanDuplicate(SourceObjectTarget target, string name, ObjectTransform? transform, CancellationToken token = default)
     {
         var node = target.Node; var origin = target.Origin;
+        Generated(origin, node.Name);
         CheckName(name);
         if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can be copied here.");
         if (target.World.Nodes.Any(n => n.Name == name)) throw new InvalidDataException($"The world already has a node named {name}; choose another name.");
@@ -262,6 +267,7 @@ public static class SourceObjectEdits
     public static SourceEditPlan PlanReparent(SourceObjectTarget target, WorldNode? parent, CancellationToken token = default)
     {
         var node = target.Node; var origin = target.Origin;
+        Generated(origin, node.Name);
         if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can move to another parent here.");
         if (parent != null && (ReferenceEquals(parent, node) || Ancestors(parent).Contains(node))) throw new InvalidDataException($"{node.Name} cannot move under itself or one of its own parts.");
         string label = parent == null ? $"Move {node.Name} to the world" : $"Move {node.Name} under {parent.Name}";
@@ -306,6 +312,11 @@ public static class SourceObjectEdits
         return new(label, edit.Changes(), $"{created.Script} line {created.Line}", []);
     }
 
+    /// <summary>A terrain piece is compiled from its recipe; its source is the recipe's regions and surfaces, never the piece itself.</summary>
+    private static void Generated(WorldNodeProvenance origin, string name)
+    {
+        if (origin.Terrain is { } recipe) throw new InvalidDataException($"{name} is a piece the terrain recipe {recipe} compiles from surface {origin.TerrainSurface}; change the recipe's regions or the surface instead.");
+    }
     private static readonly HashSet<string> Copyable = new(["Object3DTranslate", "Object3DRotate", "Object3DScale", "SetAltitudeSurface", "SetIntersectSurface", "SetIntersectBBOX", "SetProximity", "SetLandmark", "NodeSetCanModify", "NodeSetOverwrite", "NodeSetLighting"], StringComparer.Ordinal);
     private static readonly HashSet<string> Disableable = new([.. Copyable, "AddChild", "DeleteChild", "NodeSetDescription"], StringComparer.Ordinal);
     private static bool Same(SourceInstruction? a, SourceInstruction b) => a != null && a.Line == b.Line && a.Script.Equals(b.Script, StringComparison.OrdinalIgnoreCase);

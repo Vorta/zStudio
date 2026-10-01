@@ -21,6 +21,10 @@ public sealed class WorldNodeProvenance
     public SourceInstruction? Load { get; internal set; }
     /// <summary>A node of the mission database file itself (the load after GameGenSetWorld, whose scene roots join the world), not of a file it references.</summary>
     public bool Database { get; internal set; }
+    /// <summary>For a piece a terrain recipe compiled to: the recipe's project path, the surface and the cell (−1 outside the grid).</summary>
+    public string? Terrain { get; internal set; }
+    public string? TerrainSurface { get; internal set; }
+    public (int Column, int Row) TerrainCell { get; internal set; } = (-1, -1);
     /// <summary>For the root a LoadGameGen created: the project path of the glTF file it loaded.</summary>
     public string? LoadedFile { get; internal set; }
     /// <summary>The instruction that created the node (LoadGameGen for a load's root, NewObject3D, LightNew, NewCamera …).</summary>
