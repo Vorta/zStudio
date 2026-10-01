@@ -17,7 +17,7 @@ namespace Recoil.Zbd.Core.Sources;
 public static class ZrdText
 {
     public const string Extension = ".zrd";
-    private const int MaximumDepth = 128, MaximumNodes = 2_000_000;
+    internal const int MaximumDepth = 128, MaximumNodes = 2_000_000;
     /// <summary>Raw float bits; a colon never appears in an unquoted string.</summary>
     public const string RawFloatPrefix = "f32:";
 
@@ -49,7 +49,7 @@ public static class ZrdText
                     if (--budget < 0) throw new InvalidDataException("ZRD node limit exceeded.");
                 }
                 if (child.Kind != ZrdKind.Array) { Check(child); text.Append(Scalar(child)).Append('\n'); continue; }
-                if (Short(child))
+                if (IsShort(child))
                 {
                     text.Append('(');
                     foreach (var item in child.Children) { Check(item); text.Append(' ').Append(Scalar(item)); }
@@ -62,9 +62,11 @@ public static class ZrdText
             }
             if (text.Length > maximumCharacters) throw new InvalidDataException($"The text form exceeds {maximumCharacters:N0} characters.");
         }
-        static bool Short(ZrdNode array) => array.Children.All(c => c.Kind != ZrdKind.Array) &&
-            (array.Children.Count <= 1 || array.Children.Count <= 8 && array.Children.Sum(c => c.Kind == ZrdKind.String ? c.Text.Length + 3 : 12) <= 100);
     }
+
+    /// <summary>An array the canonical layout writes on one line: a few short scalars.</summary>
+    internal static bool IsShort(ZrdNode array) => array.Children.All(c => c.Kind != ZrdKind.Array) &&
+        (array.Children.Count <= 1 || array.Children.Count <= 8 && array.Children.Sum(c => c.Kind == ZrdKind.String ? c.Text.Length + 3 : 12) <= 100);
 
     public static string Scalar(ZrdNode node) => node.Kind switch
     {
@@ -107,7 +109,10 @@ public static class ZrdText
         return true;
     }
 
-    public static ZrdNode Parse(string text, CancellationToken token = default)
+    public static ZrdNode Parse(string text, CancellationToken token = default) => Parse(text, token, null);
+
+    /// <summary>The one reader of the text form; <paramref name="spans"/> receives every node with its source span (the root spans the whole text).</summary>
+    internal static ZrdNode Parse(string text, CancellationToken token, Action<ZrdNode, TextSpan>? spans)
     {
         int position = 0, line = 1, budget = MaximumNodes;
         List<ZrdNode> children = [];
@@ -117,13 +122,15 @@ public static class ZrdText
             if (position == text.Length) break;
             children.Add(ReadNode(0));
         }
-        return new(Guid.NewGuid(), ZrdKind.Array, 0, "", children.ToArray());
+        ZrdNode root = new(Guid.NewGuid(), ZrdKind.Array, 0, "", children.ToArray());
+        spans?.Invoke(root, new(0, text.Length));
+        return root;
 
         ZrdNode ReadNode(int depth)
         {
             token.ThrowIfCancellationRequested();
             if (depth > MaximumDepth || --budget < 0) throw Error("ZRD nesting or node limit exceeded.");
-            char c = text[position];
+            int start = position; char c = text[position];
             if (c == ')') throw Error("Unexpected ')'.");
             if (c == '(')
             {
@@ -135,9 +142,9 @@ public static class ZrdText
                     if (text[position] == ')') { position++; break; }
                     items.Add(ReadNode(depth + 1));
                 }
-                return new(Guid.NewGuid(), ZrdKind.Array, 0, "", items.ToArray());
+                return Spanned(new(Guid.NewGuid(), ZrdKind.Array, 0, "", items.ToArray()), start);
             }
-            if (c == '"') return new(Guid.NewGuid(), ZrdKind.String, 0, ReadQuoted(), []);
+            if (c == '"') return Spanned(new(Guid.NewGuid(), ZrdKind.String, 0, ReadQuoted(), []), start);
             string word = Word(position);
             if (word.Length == 0) throw Error($"Unexpected character '{c}'.");
             position += word.Length;
@@ -145,20 +152,25 @@ public static class ZrdText
             {
                 string hex = word[RawFloatPrefix.Length..];
                 if (hex.Length != 8 || !uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint raw)) throw Error($"Raw float bits need exactly eight hex digits after {RawFloatPrefix}.");
-                return new(Guid.NewGuid(), ZrdKind.Float, raw, "", []);
+                return Spanned(new(Guid.NewGuid(), ZrdKind.Float, raw, "", []), start);
             }
             if (char.IsAsciiLetter(word[0]) || word[0] == '_')
             {
                 if (!IsBare(word)) throw Error($"'{word}' must be quoted.");
-                return new(Guid.NewGuid(), ZrdKind.String, 0, word, []);
+                return Spanned(new(Guid.NewGuid(), ZrdKind.String, 0, word, []), start);
             }
             if (word.Contains('.') || word.Contains('e') || word.Contains('E'))
             {
                 if (!float.TryParse(word, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) || !float.IsFinite(value)) throw Error($"Invalid float '{word}'.");
-                return new(Guid.NewGuid(), ZrdKind.Float, BitConverter.SingleToUInt32Bits(value), "", []);
+                return Spanned(new(Guid.NewGuid(), ZrdKind.Float, BitConverter.SingleToUInt32Bits(value), "", []), start);
             }
             if (!int.TryParse(word, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int integer)) throw Error($"Invalid integer '{word}'.");
-            return new(Guid.NewGuid(), ZrdKind.Int, unchecked((uint)integer), "", []);
+            return Spanned(new(Guid.NewGuid(), ZrdKind.Int, unchecked((uint)integer), "", []), start);
+        }
+        ZrdNode Spanned(ZrdNode node, int start)
+        {
+            spans?.Invoke(node, new(start, position - start));
+            return node;
         }
         string ReadQuoted()
         {
@@ -196,10 +208,12 @@ public static class ZrdText
         InvalidDataException Error(string message) => new($"Line {line}: {message}");
     }
 
-    public static ZrdNode Parse(ReadOnlySpan<byte> bytes, CancellationToken token = default)
+    public static ZrdNode Parse(ReadOnlySpan<byte> bytes, CancellationToken token = default) => Parse(Decode(bytes), token);
+    /// <summary>The Latin-1 text of a source file, bounded before it is decoded.</summary>
+    internal static string Decode(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"Source text larger than {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB is not supported.");
-        return Parse(Encoding.Latin1.GetString(bytes), token);
+        return Encoding.Latin1.GetString(bytes);
     }
     public static byte[] Encode(ZrdNode root, CancellationToken token = default, int maximumCharacters = int.MaxValue) => Encoding.ASCII.GetBytes(Write(root, token, maximumCharacters));
 
