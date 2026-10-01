@@ -34,6 +34,11 @@ public partial class MainWindow
         if (!await ResolvePropertiesDraftsAsync(document) || shownDocument == document && animation?.ResolvePendingDrafts() == false) return false;
         // A committed draft may have rebuilt a source world: the decision is about the document it shows now.
         document = LiveDocument(document);
+        if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && document.SourceWorld is { IsRebuilding: true })
+        {
+            ViewModel.Status = "This world is rebuilding after an edit; close it when it is shown, or the edit is taken back.";
+            return false;
+        }
         System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag(); if (!document.IsDirty) return true;
         if (document.SourceWorld is { } world)
         {

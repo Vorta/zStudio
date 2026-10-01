@@ -57,7 +57,7 @@ public partial class MainWindow
         catch (InvalidDataException ex) { throw new StudioCommandException("build_failed", ex.Message); }
         if (built == null) throw new StudioCommandException("stale_record", $"Scene node {node} is not in the built world.");
         // An object whose identity flag is set has the identity transform (LocalMatrix is null for it).
-        ObjectTransform? transform = built.Class == WorldNodeClass.Object3D ? ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(built) ?? System.Numerics.Matrix4x4.Identity) : null;
+        ObjectTransform? transform = built.Class == WorldNodeClass.Object3D ? ObjectTransform.Of(built) : null;
         List<string> notes = [];
         string source;
         if (origin.ModelFile != null)
@@ -192,7 +192,12 @@ public partial class MainWindow
                     if (!next.IsDisposed && SourceNodeNamed(next, name) is int copy && FollowsProperties(shownWindow, next))
                         try { ShowSourceObjectProperties(next, copy); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
                 },
-                async () => { await DeleteSourceObjectAsync(doc, node, CancellationToken.None); propertiesWindow?.Close(); }));
+                async () =>
+                {
+                    var shownWindow = propertiesWindow;
+                    await DeleteSourceObjectAsync(doc, node, CancellationToken.None);
+                    if (propertiesWindow is { } open && open == shownWindow && (open.Document == null || open.Document == doc)) open.CloseResolved();
+                }));
         bool opened = window.SetSourceObject(doc, fields);
         PresentProperties(window, opened);
         return opened;

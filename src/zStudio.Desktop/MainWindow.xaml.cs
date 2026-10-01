@@ -66,7 +66,13 @@ public partial class MainWindow : Window
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;
-        ViewModel.ResolveDraftsAsync = async () => animation?.ResolvePendingDrafts() != false && await ResolvePropertiesDraftsAsync();
+        ViewModel.ResolveDraftsAsync = async () =>
+        {
+            if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !ResolveInspectionDrafts()) return false;
+            // An applied scene-card edit rebuilds its world without the caller awaiting it; decisions wait for that world.
+            await sourceWorldWork;
+            return true;
+        };
         ViewModel.CloseDecisionsStarting = ForgetStaleDiscardApproval;
         ViewModel.ValidateNavigationPublication = closesDocuments =>
         {
@@ -662,7 +668,8 @@ public partial class MainWindow : Window
                 // Discard (and a canceled Save As) can finish synchronously. Leave the
                 // original WPF Closing event before showing prompts or calling Close again.
                 await Dispatcher.Yield(DispatcherPriority.Normal);
-                if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync()) return;
+                if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !ResolveInspectionDrafts()) return;
+                await sourceWorldWork;
                 ForgetStaleDiscardApproval();
                 closingAllDocuments = true;
                 foreach (var document in ViewModel.Documents.ToArray())

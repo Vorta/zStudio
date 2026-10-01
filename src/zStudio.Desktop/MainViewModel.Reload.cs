@@ -77,7 +77,8 @@ public sealed partial class MainViewModel
         try { await ReloadDocumentAsync(original, original.Revision, discardAccepted: true); }
         catch (StudioCommandException ex)
         {
-            bool OwnsRequest() => generation == navigationGeneration && !original.IsDisposed && SelectedDocument == original;
+            // A source world's reload does not take a navigation generation; its failure is always the request's to report.
+            bool OwnsRequest() => original.SourceWorld != null || generation == navigationGeneration && !original.IsDisposed && SelectedDocument == original;
             if (OwnsRequest()) AddProblem(ex.Message, file: original.Path);
             if (OwnsRequest()) Status = ex.Message;
         }

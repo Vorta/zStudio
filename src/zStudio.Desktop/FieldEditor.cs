@@ -127,12 +127,19 @@ public partial class FieldEditor : UserControl
         // While the edit runs (a source world rebuilds), no other input starts: it would be lost with the replaced
         // document, or would count as unfinished and take the edit back. Focus returns where it was.
         var focused = Keyboard.FocusedElement as UIElement;
+        bool enabled = IsEnabled;
         IsEnabled = false;
         try { bool result = await input.Draft.CommitAsync(); if (!disposed) input.Display(); return result; }
         finally
         {
             committingDraft = false;
-            if (!disposed) { IsEnabled = true; if (focused is { IsVisible: true } && IsAncestorOf(focused)) focused.Focus(); if (!HasPendingDrafts) RefreshProperties(); }
+            if (!disposed)
+            {
+                IsEnabled = enabled;
+                // Only while its window is active: focusing would otherwise pull keyboard input from where the user went.
+                if (focused is { IsVisible: true } && IsAncestorOf(focused) && Window.GetWindow(this)?.IsActive == true) focused.Focus();
+                if (!HasPendingDrafts) RefreshProperties();
+            }
         }
     }
     public async Task<bool> ResolvePendingDraftsAsync()
@@ -227,10 +234,11 @@ public partial class FieldEditor : UserControl
         {
             // A draft whose commit rebuilt a source world closed this editor; the action belongs to the old document.
             if (!await ResolvePendingDraftsAsync() || disposed) return;
+            bool enabled = IsEnabled;
             button.IsEnabled = false; committingDraft = true; IsEnabled = false;
             try { await action(); }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { MessageBox.Show(Window.GetWindow(this), ex.Message, "Edit properties"); }
-            finally { committingDraft = false; button.IsEnabled = true; if (!disposed) { IsEnabled = true; RefreshProperties(); } }
+            finally { committingDraft = false; button.IsEnabled = true; if (!disposed) { IsEnabled = enabled; RefreshProperties(); } }
         };
         panel.Children.Add(button);
     }

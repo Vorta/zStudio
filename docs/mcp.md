@@ -145,7 +145,7 @@ Every open world of a project edits one workspace. `undo_redo` on any of its wor
 - an edit canceled before the rebuilt world is shown (`zstudio_operation` cancel, request cancellation or disconnection) is taken back too;
 - while any world of the project rebuilds (`sourceWorld.rebuilding`), the project's other edits, `undo_redo`, `save_document` and `reload_document` return `busy`.
 
-`close_document` of one of several open worlds keeps the project's edits; the last one needs `discard`, and returns `busy` while another world of the project is opening or rebuilding. Unsaved edits are dropped only by that explicit discard (or the GUI's Discard); otherwise they stay for the project's next world. Applying a source world's Properties draft with `resolve_drafts` rebuilds the world and returns the document that shows it now. `source_changes` lists the files `save_document` would write and the history, and for one `file` returns a bounded line diff of its working text against the disk. Document state's `sourceWorld.workspace` reports the same: revision, undo/redo labels, dirty files and history.
+`close_document` of one of several open worlds keeps the project's edits; the last one needs `discard`, and returns `busy` while another world of the project is opening or rebuilding; a world that is rebuilding after an edit is never closed (`busy`), since that would take the edit back. Unsaved edits are dropped only by that explicit discard (or the GUI's Discard); otherwise they stay for the project's next world. Applying a source world's Properties draft with `resolve_drafts` rebuilds the world and returns the document that shows it now. `source_changes` lists the files `save_document` would write and the history, and for one `file` returns a bounded line diff of its working text against the disk. Document state's `sourceWorld.workspace` reports the same: revision, undo/redo labels, dirty files and history.
 
 Editing commands:
 - `source_world_models` pages the project's loadable glTF models.
@@ -156,7 +156,7 @@ Editing commands:
   - `source_world_definitions` lists definition files other missions list with an animation for the node name. `definitionFiles` (default: all of them) appends them to the mission's `anim.zrd`, keeping its comments and layout.
 - `pickup_lock`, `pickup_move` and `scene_card` work in source worlds. A confirmed move of a pickup, AI vehicle or AI node changes only the coordinate tokens of the text resources the world's archives were built from, together with uniquely linked difficulty counterparts.
 - `source_world_object` describes a node (`node` from `scene_nodes`):
-  - its local transform (rotation in degrees about Y, then X, then Z; a mirroring transform has a negative X scale) and flags;
+  - its local transform (rotation in degrees about Y, then X, then Z) and flags: as the script's Object3DTranslate, Object3DRotate and Object3DScale store it when the build composed it from them, otherwise decomposed from the matrix (a mirror as a negative X scale);
   - its origin: the glTF file and node it was imported from, or the instruction that created it;
   - the instruction that last set each property, with how often it ran;
   - the property commands that fit it.

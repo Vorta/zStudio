@@ -172,7 +172,7 @@ public sealed class SourceObjectStructureTests
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         var ground = Target(workspace, "m1", build, world, "ground");
-        var shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(ground.Node)!.Value);
+        var shown = ObjectTransform.Of(ground.Node);
         var moved = SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, shown with { Position = new(5, 0, 7) }, Token, "m1", shown);
         var local = GltfNodeEdits.Local((JsonObject)JsonNode.Parse(moved.Changes.Single().Content)!["nodes"]![0]!);
         var expected = new Matrix4x4(-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 7, 1);
@@ -213,7 +213,7 @@ public sealed class SourceObjectStructureTests
         Assert.Equal(30f, WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "ground"))!.Value.Translation.X, 3);
         // A rotation changes the glTF's basis and keeps the file's own translation.
         ground = Target(workspace, "m1", build, world, "ground");
-        shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(ground.Node)!.Value);
+        shown = ObjectTransform.Of(ground.Node);
         var turned = SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, shown with { RotationDegrees = Vector3.Zero }, Token, "m1", shown);
         var node = (JsonObject)JsonNode.Parse(Assert.Single(turned.Changes).Content)!["nodes"]![0]!;
         Assert.Equal(new Vector3(5, 0, 0), GltfNodeEdits.Local(node).Translation);
@@ -235,7 +235,7 @@ public sealed class SourceObjectStructureTests
         workspace.Apply("No translate", [("gamegen/m1.gs", Encoding.Latin1.GetBytes(Text(workspace, "gamegen/m1.gs").Replace("Object3DTranslate 30.0 0.0 0.0\r\n", "")))], Token);
         (build, world) = await BuildAsync(fixture, workspace, "m1");
         ground = Target(workspace, "m1", build, world, "ground");
-        shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(ground.Node)!.Value);
+        shown = ObjectTransform.Of(ground.Node);
         Assert.Contains("Object3DRotate", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, new(Vector3.Zero, Vector3.Zero, Vector3.One), Token, "m1", shown)).Message);
     }
 
@@ -261,7 +261,7 @@ public sealed class SourceObjectStructureTests
         workspace.Apply("Macro", [("gamegen/m1.gs", Encoding.Latin1.GetBytes(script.Replace("Object3DTranslate 100.0 0.0 -50.0", "set tx 100.0\r\nObject3DTranslate %tx% 0.0 -50.0")))], Token);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         var tank = Target(workspace, "m1", build, world, "tank_at");
-        var shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(tank.Node)!.Value);
+        var shown = ObjectTransform.Of(tank.Node);
         Assert.Equal(100f, shown.Position.X, 3);
         var plan = SourceObjectEdits.PlanTransform(workspace, "tank_at", tank.Origin, build.Executions, shown with { Position = shown.Position with { Y = 5 } }, Token, "m1", shown);
         Assert.Contains("Object3DTranslate %tx% 5.0 -50.0", Encoding.Latin1.GetString(Assert.Single(plan.Changes).Content));
@@ -275,22 +275,26 @@ public sealed class SourceObjectStructureTests
         using SourceWorldFixture fixture = new();
         SourceWorkspace workspace = new(fixture.Project);
         SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_at", new(2500, 0, -50)), []), Token);
-        // The script mirrors the tank in Y; it shows as a negative X scale and a half turn about Z.
+        // The script mirrors the tank in Y; it shows as the script stores it.
         string script = Text(workspace, "gamegen/m1.gs");
         workspace.Apply("Mirror", [("gamegen/m1.gs", Encoding.Latin1.GetBytes(script.Replace("Object3DTranslate 2500.0 0.0 -50.0", "Object3DTranslate 2500.0 0.0 -50.0\r\nObject3DScale 1.0 -1.0 1.0")))], Token);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         var tank = Target(workspace, "m1", build, world, "tank_at");
-        var shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(tank.Node)!.Value);
-        // Turning it writes rotation and scale as one decomposition, so the built matrix is the one asked for.
+        var shown = ObjectTransform.Of(tank.Node);
+        Assert.Equal(new Vector3(1, -1, 1), shown.Scale); Assert.Equal(Vector3.Zero, shown.RotationDegrees);
+        // Turning it adds the rotation and keeps the script's scale (the Euler angles and scale animations start from).
         var turned = shown with { RotationDegrees = shown.RotationDegrees with { Y = 45 } };
-        Apply(workspace, SourceObjectEdits.PlanTransform(workspace, "tank_at", tank.Origin, build.Executions, turned, Token, "m1", shown));
+        var turning = SourceObjectEdits.PlanTransform(workspace, "tank_at", tank.Origin, build.Executions, turned, Token, "m1", shown);
+        string turnedScript = Encoding.Latin1.GetString(Assert.Single(turning.Changes).Content);
+        Assert.Contains("Object3DScale 1.0 -1.0 1.0\r\nObject3DRotate 0.0 45.0 0.0\r\n", turnedScript);
+        Apply(workspace, turning);
         (build, world) = await BuildAsync(fixture, workspace, "m1");
         var built = WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "tank_at"))!.Value;
         var expected = turned.Matrix();
         for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) Assert.True(MathF.Abs(built[i, j] - expected[i, j]) < 1e-4f, $"{built} is not {expected}");
         // A small move far from the origin is written, not lost in a relative tolerance.
         tank = Target(workspace, "m1", build, world, "tank_at");
-        shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(tank.Node)!.Value);
+        shown = ObjectTransform.Of(tank.Node);
         var nudged = SourceObjectEdits.PlanTransform(workspace, "tank_at", tank.Origin, build.Executions, shown with { Position = shown.Position with { X = 2500.02f } }, Token, "m1", shown);
         Assert.Contains("Object3DTranslate 2500.02 0.0 -50.0", Encoding.Latin1.GetString(Assert.Single(nudged.Changes).Content));
     }

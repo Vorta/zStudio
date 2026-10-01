@@ -31,6 +31,10 @@ public partial class MainWindow
     private SourceWorkspace SourceWorkspaceFor(string root)
     {
         string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        // A Discard whose release waited (for a rebuild or an opening) is carried out before a new world uses the workspace.
+        if (sourceWorkspace != null && discardApprovedWorkspace is { } pending && pending.Workspace == sourceWorkspace && pending.Revision == sourceWorkspace.Revision
+            && !sourceWorkspace.IsSaving && !ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace))
+        { sourceWorkspace.Discard(); discardApprovedWorkspace = null; }
         if (sourceWorkspace?.Root.Equals(full, StringComparison.OrdinalIgnoreCase) == true) return sourceWorkspace;
         // Changing roots closes every document first, so a previous project's workspace has no world left to lose edits of.
         if (sourceWorkspace != null && ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace))
@@ -241,6 +245,7 @@ public partial class MainWindow
         catch (NotSupportedException ex) { throw new StudioCommandException("unsupported", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         if (revert == null) return doc;
+        using var suspended = propertiesWindow?.Document == doc ? propertiesWindow.SuspendInput() : null;
         session.IsRebuilding = sourceWorkspaceBusy = true; UpdateDocumentCommands();
         try { return await RebuildSourceWorldAsync(session, token, additions); }
         // The rebuilt world was never shown (failed, canceled, or its world closed meanwhile): the edit is taken back, so no

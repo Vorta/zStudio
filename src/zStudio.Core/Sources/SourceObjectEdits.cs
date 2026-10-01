@@ -21,6 +21,40 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
         return m;
     }
     /// <summary>
+    /// A node's transform as its sources hold it. A matrix the build composed from Object3DTranslate, Object3DRotate and
+    /// Object3DScale (no authored matrix) is shown as those stored values, so an edit of one keeps the others exactly (and
+    /// the Euler angles and scale animations start from); an authored or loaded matrix is decomposed.
+    /// </summary>
+    public static ObjectTransform Of(WorldNode node)
+    {
+        if (WorldUpdate.LocalMatrix(node) is not { } m) return Identity;
+        if ((node.PayloadInt(0) & 0x10) == 0)
+        {
+            const float degrees = 180f / MathF.PI;
+            ObjectTransform stored = new(m.Translation,
+                Snap(new Vector3(node.PayloadFloat(0x18), node.PayloadFloat(0x1C), node.PayloadFloat(0x20)) * degrees, angles: true),
+                new(node.PayloadFloat(0x24), node.PayloadFloat(0x28), node.PayloadFloat(0x2C)));
+            // Only when they compose the matrix (the build keeps them together; another program might not).
+            var composed = stored.Matrix();
+            bool same = true;
+            for (int i = 0; i < 4 && same; i++) for (int j = 0; j < 4 && same; j++) same = MathF.Abs(composed[i, j] - m[i, j]) <= 1e-4f * MathF.Max(1, MathF.Abs(m[i, j]));
+            if (same) return stored;
+        }
+        var decomposed = FromMatrix(m);
+        return decomposed with { RotationDegrees = Snap(decomposed.RotationDegrees, angles: true), Scale = Snap(decomposed.Scale, angles: false) };
+    }
+    /// <summary>
+    /// Removes the float noise a conversion leaves (45.000004°, a scale of 0.99999994, an angle of 5e-6°): values within a
+    /// millionth of a 3-decimal value take it. Authored values such as a scale of 1.00005 stay.
+    /// </summary>
+    internal static Vector3 Snap(Vector3 v, bool angles) => new(SnapOne(v.X, angles), SnapOne(v.Y, angles), SnapOne(v.Z, angles));
+    private static float SnapOne(float x, bool angles)
+    {
+        if (angles && MathF.Abs(x) < 1e-4f) return 0;
+        float rounded = MathF.Round(x, 3);
+        return MathF.Abs(x) >= 1e-3f && MathF.Abs(x - rounded) <= 1e-6f * MathF.Max(1, MathF.Abs(x)) ? rounded : x;
+    }
+    /// <summary>
     /// The transform a local matrix (rows: rotated, scaled axes, then translation) describes. A mirroring matrix has a
     /// negative X scale, so <see cref="Matrix"/> gives it back.
     /// </summary>
@@ -83,17 +117,18 @@ public static class SourceObjectEdits
 
     /// <summary>
     /// A plan that moves, rotates or scales an object to <paramref name="requested"/> (its local transform). With
-    /// <paramref name="current"/> (the transform shown), only the parts that differ from it change: a position edit leaves
-    /// the authored rotation and scale (and a mirroring the decomposition cannot express) as they are.
+    /// <paramref name="current"/> (the transform shown, <see cref="ObjectTransform.Of"/>), only the components that differ
+    /// from it change: a position edit leaves the authored rotation and scale (and a mirroring the decomposition cannot
+    /// express) as they are, and a script keeps the tokens of every component not changed.
     /// </summary>
     public static SourceEditPlan PlanTransform(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, ObjectTransform requested, CancellationToken token = default, string? mission = null, ObjectTransform? current = null)
     {
         Generated(origin, nodeName);
         Check(requested.Position); Check(requested.RotationDegrees); Check(requested.Scale);
         string label = $"Move {nodeName}";
-        bool position = current is not { } c || Vector3.Distance(requested.Position, c.Position) > 1e-4f;
-        bool rotation = current is not { } r || Vector3.Distance(requested.RotationDegrees, r.RotationDegrees) > 1e-3f;
-        bool scale = current is not { } s || Vector3.Distance(requested.Scale, s.Scale) > 1e-5f;
+        bool position = current is not { } c || Differs(requested.Position, c.Position);
+        bool rotation = current is not { } r || Differs(requested.RotationDegrees, r.RotationDegrees);
+        bool scale = current is not { } s || Differs(requested.Scale, s.Scale);
         if (!position && !rotation && !scale) return new(label, [], nodeName, []);
         var writers = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).ToArray();
         // A glTF node imported without a transform takes the scripts' TRS whole; one with its own (authored) matrix keeps its
@@ -106,15 +141,11 @@ public static class SourceObjectEdits
             if (writers.Select(w => w.Script).Append(anchor.Script).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
                 throw new InvalidDataException($"{nodeName}'s transform is set in several scripts; edit them in the scripts directly.");
             ScriptEdit edit = new(workspace, anchor.Script, executions, token, mission);
-            // A position is shown as built, so it compares exactly. Rotation and scale come from one decomposition (a mirror
-            // shows as a negative X scale, whichever axis the script mirrors), so both are written together; components that
-            // match the build's values keep their tokens.
-            if (position) edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", requested.Position, Vector3.Zero, anchor, tolerance: 0);
-            if (rotation || scale)
-            {
-                edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", Round(requested.RotationDegrees), Vector3.Zero, anchor);
-                edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", Round(requested.Scale), Vector3.One, anchor);
-            }
+            // Shown as the scripts store them (ObjectTransform.Of), each value changes alone; components the request keeps
+            // keep their tokens.
+            if (position) edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", requested.Position, Vector3.Zero, anchor, current?.Position);
+            if (rotation) edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", requested.RotationDegrees, Vector3.Zero, anchor, current?.RotationDegrees);
+            if (scale) edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", requested.Scale, Vector3.One, anchor, current?.Scale);
             return new(label, edit.Changes(), $"{anchor.Script} line {anchor.Line}", edit.Notes);
         }
         // A node of a glTF file: its transform is the node's, except a translation a script sets.
@@ -123,7 +154,7 @@ public static class SourceObjectEdits
         if (position && translate != null)
         {
             ScriptEdit edit = new(workspace, translate.Script, executions, token, mission);
-            edit.Set(translate, "Object3DTranslate", requested.Position, Vector3.Zero, translate);
+            edit.Set(translate, "Object3DTranslate", requested.Position, Vector3.Zero, translate, current?.Position);
             changes.AddRange(edit.Changes()); notes.AddRange(edit.Notes); places.Add($"{translate.Script} line {translate.Line}");
         }
         bool gltfPosition = position && translate == null;
@@ -136,7 +167,7 @@ public static class SourceObjectEdits
                 var local = GltfNodeEdits.Local(node);
                 var m = local;
                 // Values a decomposition leaves a hair off (89.99999°, a scale of 0.99999994) are written as meant.
-                if (rotation || scale) { m = new ObjectTransform(requested.Position, Round(requested.RotationDegrees), Round(requested.Scale)).Matrix(); m.Translation = local.Translation; }
+                if (rotation || scale) { m = new ObjectTransform(requested.Position, ObjectTransform.Snap(requested.RotationDegrees, angles: true), ObjectTransform.Snap(requested.Scale, angles: false)).Matrix(); m.Translation = local.Translation; }
                 if (gltfPosition) m.Translation = requested.Position;
                 if (m.IsIdentity && scriptBasis)
                     throw new InvalidDataException($"An identity transform would let {nodeName}'s script Object3DRotate or Object3DScale apply again; change those instructions instead.");
@@ -379,8 +410,8 @@ public static class SourceObjectEdits
             var local = ObjectTransform.FromMatrix(WorldMatrix(node) * inverse);
             var anchor = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).OrderBy(w => w.Line).LastOrDefault() ?? created;
             edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", local.Position, Vector3.Zero, anchor);
-            edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", Round(local.RotationDegrees), Vector3.Zero, anchor);
-            edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", Round(local.Scale), Vector3.One, anchor);
+            edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", ObjectTransform.Snap(local.RotationDegrees, angles: true), Vector3.Zero, anchor);
+            edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", ObjectTransform.Snap(local.Scale, angles: false), Vector3.One, anchor);
         }
         edit.InsertBeforeWrite([["FindNode", parent.Name], ["AddChild", node.Name]], target.Write);
         return new(label, edit.Changes(), $"{created.Script} line {created.Line}", []);
@@ -452,9 +483,9 @@ public static class SourceObjectEdits
             if (at.Class == WorldNodeClass.Object3D) m *= WorldUpdate.LocalMatrix(at) ?? Matrix4x4.Identity;
         return m;
     }
-    /// <summary>Rounds values a matrix round trip leaves a hair off (89.99999 → 90, 1.0000001 → 1).</summary>
-    private static Vector3 Round(Vector3 v) => new(R(v.X), R(v.Y), R(v.Z));
-    private static float R(float x) => MathF.Abs(x) >= 1e-3f && MathF.Abs(x - MathF.Round(x, 3)) < 1e-4f ? MathF.Round(x, 3) : x;
+    /// <summary>Whether a requested value differs from the one shown by more than an echo's rounding (a millionth).</summary>
+    private static bool Differs(Vector3 requested, Vector3 shown) => Enumerable.Range(0, 3).Any(i => Differs(requested[i], shown[i]));
+    private static bool Differs(float requested, float shown) => MathF.Abs(requested - shown) > 1e-6f * MathF.Max(1, MathF.Abs(shown));
 
     /// <summary>A script number as the shipped scripts write them: shortest round-trip form with a decimal point.</summary>
     public static string Number(float value)
@@ -556,22 +587,28 @@ public static class SourceObjectEdits
             list.Add(tokens);
         }
         /// <summary>A vector instruction: the existing one changes; a missing one is added when the value differs from the default.</summary>
-        /// <remarks><paramref name="tolerance"/> is relative: values a decomposition computed differ from the script's by noise.</remarks>
-        public void Set(SourceInstruction? writer, string command, Vector3 value, Vector3 unset, SourceInstruction anchor, float tolerance = 1e-5f)
+        /// <remarks>
+        /// A component changes when it differs from <paramref name="shown"/> (the value the user saw), or, without it, from
+        /// the value the build used by more than a decomposition's noise. Other components keep their tokens (a macro too).
+        /// </remarks>
+        public void Set(SourceInstruction? writer, string command, Vector3 value, Vector3 unset, SourceInstruction anchor, Vector3? shown = null)
         {
-            string[] numbers = [Number(value.X), Number(value.Y), Number(value.Z)];
-            if (writer != null)
+            // The values the build used: a missing argument reads as 0, as the interpreter reads it; no instruction, the default.
+            Vector3 built = writer == null ? unset : new(Arg(0), Arg(1), Arg(2));
+            float Arg(int i) => i < writer!.Args.Count ? WorldAssembler.Number(writer.Args[i]) : 0;
+            bool[] changed = [.. Enumerable.Range(0, 3).Select(i => shown is { } s ? Differs(value[i], s[i])
+                : MathF.Abs(value[i] - built[i]) > 1e-5f * MathF.Max(1, MathF.Abs(value[i])))];
+            if (!changed.Any(c => c)) return;
+            string Component(int i) => Number(changed[i] ? value[i] : built[i]);
+            if (writer == null)
             {
-                // A writer missing values is written whole.
-                if (writer.Args.Count < 3) { ReplaceLine(writer, [command, .. numbers]); return; }
-                // Only the components that differ from the values the build used (a macro's value, not its name) change.
-                Dictionary<int, string> changed = [];
-                for (int i = 0; i < 3; i++)
-                    if (MathF.Abs(WorldAssembler.Number(writer.Args[i]) - value[i]) > tolerance * MathF.Max(1, MathF.Abs(value[i]))) changed[i + 1] = numbers[i];
-                if (changed.Count > 0) Replace(writer, changed);
+                var whole = new Vector3(changed[0] ? value.X : built.X, changed[1] ? value.Y : built.Y, changed[2] ? value.Z : built.Z);
+                if (whole != unset) Insert(anchor, [command, Component(0), Component(1), Component(2)]);
                 return;
             }
-            if (value != unset) Insert(anchor, [command, .. numbers]);
+            // A writer missing values is written whole.
+            if (writer.Args.Count < 3) { ReplaceLine(writer, [command, Component(0), Component(1), Component(2)]); return; }
+            Replace(writer, Enumerable.Range(0, 3).Where(i => changed[i]).ToDictionary(i => i + 1, i => Number(value[i])));
         }
         public IReadOnlyList<(string Relative, byte[] Content)> Changes()
         {

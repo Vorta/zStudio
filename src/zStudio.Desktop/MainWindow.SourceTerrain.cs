@@ -178,8 +178,6 @@ public partial class MainWindow
         var window = propertiesWindow;
         var shown = window?.SourceFields as TerrainPropertiesEditor;
         bool follow = shown?.RecipePath == brush.Recipe && window?.Document == doc;
-        // Typing in Properties during the rebuild would count as unfinished input and take the stroke back.
-        if (shown != null) shown.IsEnabled = false;
         try
         {
             var next = await PaintTerrainAsync(doc, brush.Recipe, brush.Region, [.. stroke.Select(p => new Vector2(p.X, p.Z))], brush.Radius, brush.Add, CancellationToken.None);
@@ -187,7 +185,6 @@ public partial class MainWindow
                 ShowTerrainProperties(next, brush.Recipe, shown!.Surface, null, brush.Region);
         }
         catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
-        finally { if (shown != null) shown.IsEnabled = true; }
     }
 
     /// <summary>GUI: Create terrain from meshes of a glTF file in the project, then show its recipe in Properties.</summary>
