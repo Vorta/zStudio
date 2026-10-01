@@ -82,6 +82,45 @@ Names are written into scripts and found by name, so a copy needs a name no node
 
 Fog, lights and cameras are set by script commands. Properties of the world, a light or a camera lists the commands that set it, for example `WorldSetFogColor 0.5 0.5 0.5`; changing one edits that instruction. `zstudio_source_world_command` sets any of them, adding the command after the instruction that created the node when no instruction set it yet.
 
+### Terrain
+
+Terrain is authored as unsplit surfaces in glTF (from Blender) plus a **terrain recipe** beside them (`name.terrain.json`). The recipe holds the gameplay attributes painted on the surfaces. The build cuts the surfaces into the pieces the engine needs.
+
+- **Creating a terrain.** **Tools → Create terrain…** (or `zstudio_source_terrain_create`) takes a glTF file of the project and the meshes in it that are terrain. The surfaces must be in a file of their own, not in the mission database. It:
+  - writes the recipe;
+  - adds a marker node to the mission database's roots, whose `extras.recoil.terrain` names the recipe. The pieces take the marker's place in the root order.
+- **What the build does** (the splitter):
+  1. Cuts each surface exactly at the world's cell lines (`WorldOrigin`, `WorldExtents`, `WorldPartition` must come before the database load).
+  2. Cuts along the outlines of painted regions, and gives each part the attributes of the layers covering it: the recipe's defaults, its surface's defaults, then the regions in order.
+  3. Groups parts into pieces by surface, cell and node attributes (zone, gate, flags).
+  4. Divides any piece that would pass the engine's 921 vertices or normals.
+
+  Every cut point is put into each polygon that shares the edge, so pieces meet without cracks or T-junctions. The same recipe and surfaces always give the same pieces.
+- **Attributes:**
+  - `zones` (one to three zone numbers, or `any`);
+  - `nodeZone` (a number, `any`, or `auto`: the one zone a piece's polygons share, otherwise `any` with the gate on);
+  - `nodeGate`, `collision`, `standable`;
+  - `craters`: `allowed` (CanModify), `blocked` (ClipTo, "no clip") or `ignored`;
+  - `soil`: default, water, seafloor, quicksand, lava, fire, or 6–99;
+  - `priority`;
+  - `flags`: an exact word of the node flags.
+
+  An attribute a layer does not set comes from the layers before it.
+- **Regions** have a name, the surfaces they apply to (all when none are listed) and a shape: polygons with holes in plan view (x, z), optionally limited to a height range. Stacked sheets, such as a cave floor under its ceiling, must be separate surfaces: the engine's altitude probe takes the first polygon of a node.
+- **Pieces are build output.** Properties of a terrain piece shows its recipe instead of the piece:
+  - recipe and surface defaults;
+  - the regions in the order they apply (select, move, delete, add, rename, choose surfaces, set attributes, make one cover its whole surfaces);
+  - the **brush**: **Paint in viewport** or **Erase in viewport**, then drag over the terrain.
+
+  Each stroke adds or removes the area a round brush of the given radius covers, as one undoable change, and the world rebuilds. Escape drops a stroke in progress. MCP: `zstudio_source_terrain`, `zstudio_source_terrain_edit`.
+- **Viewing.** The Whole world highlight modes show craters allowed (CanModify), no craters (ClipTo) and non-default soils.
+
+Not yet:
+- converting a shipped map's pieces to editable terrain;
+- tilted region planes for walls;
+- zone views and zone probe validation;
+- texture page cutting for large painted textures.
+
 ### Models from other missions
 
 **Add model** (in the Whole world toolbar, or **Tools → Add model to world…**) loads any glTF model of the project into the world, for example a vehicle that only another mission used:

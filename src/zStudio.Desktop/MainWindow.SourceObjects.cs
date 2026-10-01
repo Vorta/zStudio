@@ -168,6 +168,9 @@ public partial class MainWindow
     private bool ShowSourceObjectProperties(DocumentModel doc, int node)
     {
         var state = DescribeSourceObject(doc, node);
+        // A terrain piece is compiled from its recipe; Properties edits the recipe.
+        if (state.Origin.Terrain is { } recipe)
+            return ShowTerrainProperties(doc, recipe, state.Origin.TerrainSurface, $"Piece {state.Name}: surface {state.Origin.TerrainSurface}, cell {state.Origin.TerrainCell.Column}, {state.Origin.TerrainCell.Row}", null);
         var window = GetPropertiesWindow();
         SourceObjectPropertiesEditor fields = new(state,
             transform => FollowSourceObjectAsync(state, () => MoveSourceObjectAsync(doc, node, transform, CancellationToken.None)),

@@ -5580,5 +5580,264 @@
         "Properties": null
       }
     ]
+  },
+  {
+    "Name": "zstudio_source_terrain",
+    "Description": "Describe the terrain recipes of the open source world\u0027s project (data/**/*.terrain.json): without recipe, each recipe with its surface and region counts and the pieces it compiled to in this world; with recipe, its surfaces, defaults and regions in the order they apply (name, surfaces, the attributes each sets, and its shape\u0027s parts, area and bounds); with region too, that region\u0027s shape coordinates (up to 4,096 points). Recipe attributes: zones, nodeZone, nodeGate, collision, standable, craters (allowed, blocked, ignored), soil, priority, flags.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "recipe",
+        "Type": "string",
+        "Description": "A recipe\u0027s project path, as listed.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "region",
+        "Type": "string",
+        "Description": "A region of the recipe, for its shape\u0027s coordinates.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_terrain_edit",
+    "Description": "Edit a terrain recipe of the open source world\u0027s project as one undoable change of the workspace; the world rebuilds and the result is the replacement document. Actions: set_defaults (attributes; surface for a surface\u0027s defaults), add_region (region, optional surfaces, attributes, index; it starts empty unless wholeSurfaces), update_region (region; any of name, surfaces, attributes, wholeSurfaces), remove_region, move_region (region, index), paint (region, mode paint or erase, and a stroke: path of [x, z] points with radius, or polygons). Attributes patch the layer: a key with a value sets it, a key with null removes the override so the layers before show through, absent keys stay. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "recipe",
+        "Type": "string",
+        "Description": "The recipe\u0027s project path.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "What to do.",
+        "Required": true,
+        "Choices": [
+          "set_defaults",
+          "add_region",
+          "update_region",
+          "remove_region",
+          "move_region",
+          "paint"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "surface",
+        "Type": "string",
+        "Description": "set_defaults: the surface whose defaults change (the recipe\u0027s when omitted).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "region",
+        "Type": "string",
+        "Description": "The region\u0027s name.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "name",
+        "Type": "string",
+        "Description": "update_region: a new name.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "surfaces",
+        "Type": "array",
+        "Description": "Surfaces the region applies to (empty: all).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Surface id.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MaxItems": 256
+      },
+      {
+        "Name": "attributes",
+        "Type": "object",
+        "Description": "Attribute patch: zones ([numbers] or \u0022any\u0022), nodeZone (number, \u0022any\u0022, \u0022auto\u0022), nodeGate, collision, standable (booleans), craters (allowed, blocked, ignored), soil (name or 6\u201399), priority, flags (\u00220x\u2026\u0022); null removes an override.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "wholeSurfaces",
+        "Type": "boolean",
+        "Description": "add_region/update_region: the region covers its whole surfaces (no shape).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "index",
+        "Type": "integer",
+        "Description": "add_region/move_region: the region\u0027s place in the order.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 4096
+      },
+      {
+        "Name": "mode",
+        "Type": "string",
+        "Description": "paint: paint adds the stroke\u0027s area to the region, erase removes it.",
+        "Required": false,
+        "Choices": [
+          "paint",
+          "erase"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "path",
+        "Type": "array",
+        "Description": "paint: the stroke\u0027s points as [x, z] pairs (a single point is a disc).",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "array",
+          "Description": "[x, z].",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 10000
+      },
+      {
+        "Name": "radius",
+        "Type": "number",
+        "Description": "paint: the brush radius in world units with path.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "polygons",
+        "Type": "array",
+        "Description": "paint: polygons instead of a path, each { outer: [[x, z]\u2026], holes: [[[x, z]\u2026]] }.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "A polygon.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MaxItems": 1024
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_terrain_create",
+    "Description": "Create a terrain recipe for surfaces of a glTF file in the open source world\u0027s project (surfaces: node names, each with a mesh, in a file of their own \u2014 not the mission database) and add a marker for it at the end of the mission database\u0027s roots, as one undoable change; the world rebuilds with the compiled pieces. The recipe goes beside the file (name.terrain.json) unless recipe names another path ending in .terrain.json. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "model",
+        "Type": "string",
+        "Description": "The surfaces\u0027 glTF file (project path).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "surfaces",
+        "Type": "array",
+        "Description": "Node names of the file that are terrain.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "Node name.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 256
+      },
+      {
+        "Name": "recipe",
+        "Type": "string",
+        "Description": "Optional recipe path.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
   }
 ]

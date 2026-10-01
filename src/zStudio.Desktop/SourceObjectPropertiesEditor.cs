@@ -31,6 +31,17 @@ internal sealed record SourceObjectState(int Node, string Name, string Class, Ob
     }
 }
 
+/// <summary>An editor Properties shows for a source world: a world object or a terrain recipe. Its edits rebuild the world.</summary>
+internal abstract class SourcePropertiesEditor : FieldEditor, IDisposable
+{
+    public event Action? Changed;
+    protected void RaiseChanged() => Changed?.Invoke();
+    public abstract JsonObject Json { get; }
+    /// <summary>The heading Properties shows.</summary>
+    public abstract string Title { get; }
+    public void Dispose() { if (disposed) return; disposed = true; Content = null; draftInputs.Clear(); }
+}
+
 /// <summary>Structural edits Properties offers for an object: move under a parent (by name), copy as a new name, delete.</summary>
 internal sealed record SourceObjectStructure(Func<string, Task> Reparent, Func<string, Task> Duplicate, Func<Task> Delete);
 
@@ -38,7 +49,7 @@ internal sealed record SourceObjectStructure(Func<string, Task> Reparent, Func<s
 /// Properties of a world object in a source world. Edits change the sources that placed the object (see
 /// <see cref="SourceObjectEdits"/>) and rebuild the world; the window then shows the same object in the rebuilt world.
 /// </summary>
-internal sealed class SourceObjectPropertiesEditor : FieldEditor, IDisposable
+internal sealed class SourceObjectPropertiesEditor : SourcePropertiesEditor
 {
     /// <summary>The node flags a source can set, with the names the editor shows.</summary>
     internal static readonly (uint Bit, string Label)[] EditableFlags =
@@ -51,8 +62,8 @@ internal sealed class SourceObjectPropertiesEditor : FieldEditor, IDisposable
     private readonly Func<uint, bool, Task> flag;
     private readonly Func<string, IReadOnlyList<string>, Task>? command;
     private readonly SourceObjectStructure? structure;
-    public event Action? Changed;
-    public JsonObject Json => state.Json();
+    public override JsonObject Json => state.Json();
+    public override string Title => state.Name;
     public SourceObjectState State => state;
 
     public SourceObjectPropertiesEditor(SourceObjectState state, Func<ObjectTransform, Task> transform, Func<uint, bool, Task> flag, Func<string, IReadOnlyList<string>, Task>? command = null, SourceObjectStructure? structure = null)
@@ -87,7 +98,7 @@ internal sealed class SourceObjectPropertiesEditor : FieldEditor, IDisposable
                         if (string.Join(" ", args) != written) await command(name, args);
                     });
             }
-        if (state.Class != nameof(Recoil.Zbd.Core.Worlds.WorldNodeClass.Object3D) && state.Class != nameof(Recoil.Zbd.Core.Worlds.WorldNodeClass.Lod)) { Changed?.Invoke(); return; }
+        if (state.Class != nameof(Recoil.Zbd.Core.Worlds.WorldNodeClass.Object3D) && state.Class != nameof(Recoil.Zbd.Core.Worlds.WorldNodeClass.Lod)) { RaiseChanged(); return; }
         if (structure != null)
         {
             // Deleting, copying and re-parenting apply to the whole object (a loaded model's root), named when it is not this node.
@@ -110,7 +121,7 @@ internal sealed class SourceObjectPropertiesEditor : FieldEditor, IDisposable
                     if (value != on) await flag(bit, value);
                 });
         }
-        Changed?.Invoke();
+        RaiseChanged();
     }
     private void Vector(StackPanel form, string label, Vector3 value, Func<Vector3, ObjectTransform> with)
     {
@@ -126,5 +137,4 @@ internal sealed class SourceObjectPropertiesEditor : FieldEditor, IDisposable
                 if (next != value) await transform(with(next));
             });
     }
-    public void Dispose() { if (disposed) return; disposed = true; Content = null; draftInputs.Clear(); }
 }

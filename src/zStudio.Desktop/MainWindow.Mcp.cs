@@ -157,7 +157,7 @@ public partial class MainWindow
         RegisterSourceWorldCommands(registry);
         RegisterSourceObjectCommands(registry);
         RegisterSourceBlenderCommands(registry);
-        RegisterSourceRecoveryCommands(registry);
+        RegisterSourceRecoveryCommands(registry); RegisterSourceTerrainCommands(registry);
         return registry;
     }
 }

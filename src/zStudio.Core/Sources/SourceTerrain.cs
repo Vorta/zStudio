@@ -84,6 +84,15 @@ public static class SourceTerrain
         return workspace.Apply($"Create terrain {stem}", [(recipePath, recipe.Write()), (database, marked)], token) ?? throw new InvalidDataException("Creating the terrain changed nothing.");
     }
 
+    /// <summary>The names of a glTF file's nodes that have meshes (the candidates for terrain surfaces), as the workspace holds the file.</summary>
+    public static IReadOnlyList<string> MeshNodes(SourceWorkspace workspace, string model, CancellationToken token = default)
+    {
+        model = Checked(model);
+        var doc = GltfDocument.Read(workspace.Read(model, token) ?? throw new InvalidDataException($"The project has no {model}."),
+            uri => workspace.Read(WorldAssembler.Relative(model, uri), token) ?? throw new InvalidDataException($"{model} names {uri}, which does not exist."), token);
+        return doc.AllNodes().Where(n => n.Mesh != null).Select(n => n.Name).Distinct().ToArray();
+    }
+
     /// <summary>A file's path relative to the folder of <paramref name="from"/>, with forward slashes.</summary>
     public static string RelativePath(string from, string to) => Path.GetRelativePath(Path.GetDirectoryName(from.Replace('/', Path.DirectorySeparatorChar)) ?? "", to.Replace('/', Path.DirectorySeparatorChar)).Replace('\\', '/');
     private static string Checked(string path)

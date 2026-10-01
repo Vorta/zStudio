@@ -33,7 +33,7 @@ public sealed class PropertiesWindow : Window
     public PickupPropertiesEditor? PickupFields { get; private set; }
     public ResourcePropertiesEditor? ResourceFields { get; private set; }
     public ScriptPropertiesEditor? ScriptFields { get; private set; }
-    internal SourceObjectPropertiesEditor? SourceFields { get; private set; }
+    internal SourcePropertiesEditor? SourceFields { get; private set; }
     public bool HasPendingDrafts => AnimationFields?.HasPendingDrafts == true || PickupFields?.HasPendingDrafts == true || ResourceFields?.HasPendingDrafts == true || ScriptFields?.HasPendingDrafts == true || SourceFields?.HasPendingDrafts == true;
     public Func<DocumentModel, bool, Task<bool>>? SaveRequested { get; set; }
     public Action<DocumentModel, bool>? UndoRequested { get; set; }
@@ -142,10 +142,10 @@ public sealed class PropertiesWindow : Window
         label = title; PickupFields = new(document, source, title, json);
         PickupFields.Changed += Refresh; body.Content = PickupFields; Refresh(); return true;
     }
-    internal bool SetSourceObject(DocumentModel document, SourceObjectPropertiesEditor fields)
+    internal bool SetSourceObject(DocumentModel document, SourcePropertiesEditor fields)
     {
         if (!BeginTarget(document)) { fields.Dispose(); return false; }
-        label = fields.State.Name; SourceFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
+        label = fields.Title; SourceFields = fields; fields.Changed += Refresh; body.Content = fields; Refresh(); return true;
     }
     public bool SetResource(DocumentModel document, ResourcePropertiesEditor fields)
     {
