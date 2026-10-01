@@ -32,7 +32,7 @@ public static partial class WorldGltf
             var mesh = node.Mesh ?? throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has no mesh.");
             Matrix4x4.Invert(world, out var inverse);
             var normalMatrix = Matrix4x4.Transpose(inverse);
-            List<TerrainTriangle> triangles = [];
+            List<TerrainFace> faces = [];
             foreach (var primitive in mesh.Primitives)
             {
                 if (!indices.TryGetValue((path, primitive.Material), out int index))
@@ -49,17 +49,22 @@ public static partial class WorldGltf
                     var normal = normals ? Vector3.TransformNormal(primitive.Normals[i], normalMatrix) : face;
                     return new(position, normal.LengthSquared() > 0 ? Vector3.Normalize(normal) : face, uvs ? primitive.TexCoords[i] : Vector2.Zero);
                 }
-                for (int t = 0; t + 2 < primitive.Indices.Count; t += 3)
+                // The engine polygons the file records (fans and listed polygons), so uncut polygons stay as they were.
+                int added = 0;
+                foreach (var polygon in Polygons(primitive, materials[index].Material.Texture != null))
                 {
-                    if ((t & 4095) == 0) context.Token.ThrowIfCancellationRequested();
-                    int a = primitive.Indices[t], b = primitive.Indices[t + 1], c = primitive.Indices[t + 2];
-                    var pa = Vector3.Transform(primitive.Positions[a], world); var pb = Vector3.Transform(primitive.Positions[b], world); var pc = Vector3.Transform(primitive.Positions[c], world);
-                    var cross = Vector3.Cross(pb - pa, pc - pa);
-                    var face = cross.LengthSquared() > 0 ? Vector3.Normalize(cross) : Vector3.UnitY;
-                    triangles.Add(new(index, Corner(a, face), Corner(b, face), Corner(c, face)));
+                    if ((++added & 4095) == 0) context.Token.ThrowIfCancellationRequested();
+                    Vector3 newell = Vector3.Zero;
+                    for (int i = 0; i < polygon.Length; i++)
+                    {
+                        var a = Vector3.Transform(primitive.Positions[polygon[i]], world); var b = Vector3.Transform(primitive.Positions[polygon[(i + 1) % polygon.Length]], world);
+                        newell += new Vector3((a.Y - b.Y) * (a.Z + b.Z), (a.Z - b.Z) * (a.X + b.X), (a.X - b.X) * (a.Y + b.Y));
+                    }
+                    var face = newell.LengthSquared() > 0 ? Vector3.Normalize(newell) : Vector3.UnitY;
+                    faces.Add(new(index, [.. polygon.Select(i => Corner(i, face))]));
                 }
             }
-            surfaces.Add(new(surface, triangles));
+            surfaces.Add(new(surface, faces));
         }
         string label = Label(recipePath);
         var compiled = TerrainCompiler.Compile(label, recipe, surfaces, infos, grid, context.Token);

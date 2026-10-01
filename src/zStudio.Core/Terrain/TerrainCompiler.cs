@@ -5,10 +5,16 @@ namespace Recoil.Zbd.Core.Terrain;
 
 /// <summary>A corner of terrain geometry in world space.</summary>
 public readonly record struct TerrainCorner(Vector3 Position, Vector3 Normal, Vector2 Uv);
-/// <summary>A triangle of a terrain surface, with the index of its material in the compile's material list.</summary>
-public readonly record struct TerrainTriangle(int Material, TerrainCorner A, TerrainCorner B, TerrainCorner C);
-/// <summary>A surface to compile: the recipe's entry and its triangles in world space.</summary>
-public sealed record TerrainSurfaceGeometry(TerrainSurface Surface, IReadOnlyList<TerrainTriangle> Triangles);
+/// <summary>
+/// A polygon of a terrain surface (an engine polygon as the model stores it, or a triangle), with the index of its
+/// material in the compile's material list. Polygons the splitter does not cut are kept as they are.
+/// </summary>
+public readonly record struct TerrainFace(int Material, IReadOnlyList<TerrainCorner> Corners)
+{
+    public TerrainFace(int material, TerrainCorner a, TerrainCorner b, TerrainCorner c) : this(material, [a, b, c]) { }
+}
+/// <summary>A surface to compile: the recipe's entry and its polygons in world space.</summary>
+public sealed record TerrainSurfaceGeometry(TerrainSurface Surface, IReadOnlyList<TerrainFace> Faces);
 /// <summary>What the compiler needs of a material: the polygon zone word it carries when no region sets zones.</summary>
 public readonly record struct TerrainMaterialInfo(uint ZoneWord);
 
@@ -58,10 +64,10 @@ public static class TerrainCompiler
         for (int s = 0; s < surfaces.Count; s++)
         {
             var state = State.Initial.Apply(recipe.Defaults).Apply(surfaces[s].Surface.Defaults);
-            foreach (var t in surfaces[s].Triangles)
+            foreach (var face in surfaces[s].Faces)
             {
-                if (t.Material < 0 || t.Material >= materials.Count) throw new InvalidDataException($"A triangle of surface {surfaces[s].Surface.Id} has no material.");
-                compiler.AddTriangle(s, t, state);
+                if (face.Material < 0 || face.Material >= materials.Count) throw new InvalidDataException($"A polygon of surface {surfaces[s].Surface.Id} has no material.");
+                compiler.AddFace(s, face, state);
             }
         }
         // Cell lines first, so region cuts work on small parts and every part lies in one cell.
@@ -131,6 +137,8 @@ public static class TerrainCompiler
         public required List<TerrainCorner> Corners;
         public required List<EdgeRef> Edges;
         public required State State;
+        /// <summary>Whether a line cuts the polygon into two; a polygon that is not convex is cut as its fan.</summary>
+        public bool Convex = true;
         public (Vector3 Min, Vector3 Max) Bounds()
         {
             Vector3 min = new(float.MaxValue), max = new(float.MinValue);
@@ -166,14 +174,36 @@ public static class TerrainCompiler
             return forward ? new(segment, 0, 1) : new(segment, 1, 0);
         }
 
-        public void AddTriangle(int surface, TerrainTriangle t, State state)
+        public void AddFace(int surface, TerrainFace face, State state)
         {
             Tick();
-            var a = t.A.Position; var b = t.B.Position; var c = t.C.Position;
-            if (!Finite(a) || !Finite(b) || !Finite(c) || Vector3.Cross(b - a, c - a).LengthSquared() < 1e-12f) return;
-            if (parts.Count >= MaximumFragments) throw new InvalidDataException($"The terrain has more than {MaximumFragments:N0} triangles.");
-            parts.Add(new() { Surface = surface, Material = t.Material, Corners = [t.A, t.B, t.C], Edges = [SourceEdge(a, b), SourceEdge(b, c), SourceEdge(c, a)], State = state });
+            var corners = face.Corners;
+            if (corners.Count < 3 || corners.Count > ModelBuilder.MaximumCorners || corners.Any(c => !Finite(c.Position)) || Area([.. corners]) < 1e-6) return;
+            if (parts.Count >= MaximumFragments) throw new InvalidDataException($"The terrain has more than {MaximumFragments:N0} polygons.");
+            // A polygon that is not convex stays as it is unless a line must cut it (see Both).
+            parts.Add(new()
+            {
+                Surface = surface, Material = face.Material, Corners = [.. corners],
+                Edges = [.. corners.Select((c, i) => SourceEdge(c.Position, corners[(i + 1) % corners.Count].Position))], State = state,
+                Convex = corners.Count == 3 || Convex(corners),
+            });
             static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
+        }
+        /// <summary>Whether a polygon turns the same way at every corner (a straight corner allowed), about its own normal.</summary>
+        private static bool Convex(IReadOnlyList<TerrainCorner> corners)
+        {
+            Vector3 normal = Vector3.Zero;
+            for (int i = 0; i < corners.Count; i++)
+            {
+                var a = corners[i].Position; var b = corners[(i + 1) % corners.Count].Position;
+                normal += new Vector3((a.Y - b.Y) * (a.Z + b.Z), (a.Z - b.Z) * (a.X + b.X), (a.X - b.X) * (a.Y + b.Y));
+            }
+            for (int i = 0; i < corners.Count; i++)
+            {
+                var a = corners[i].Position; var b = corners[(i + 1) % corners.Count].Position; var c = corners[(i + 2) % corners.Count].Position;
+                if (Vector3.Dot(Vector3.Cross(b - a, c - b), normal) < -1e-6f * normal.Length()) return false;
+            }
+            return true;
         }
 
         public void CutAtGrid(TerrainGrid grid)
@@ -276,6 +306,7 @@ public static class TerrainCompiler
                 negative |= side[i] < 0; positive |= side[i] > 0;
             }
             if (!negative || !positive) return [part];
+            if (!part.Convex) return Fan(part).SelectMany(p => Both(p, line)).ToList();
             // The polygon's points in order: its corners, with a cut point on each edge the line crosses.
             List<(TerrainCorner Corner, int Side, int Edge, double T)> points = [];
             for (int i = 0; i < n; i++)
@@ -321,7 +352,30 @@ public static class TerrainCompiler
             }
             return result.Count == 0 ? [part] : result;
         }
-        private static float Area(List<TerrainCorner> corners)
+        /// <summary>
+        /// A polygon that is not convex as the fan of triangles the engine draws it with, from its first corner: the
+        /// fan's inner edges are new segments each pair of neighbouring triangles shares.
+        /// </summary>
+        private IEnumerable<Part> Fan(Part part)
+        {
+            var c = part.Corners; int n = c.Count;
+            Segment Diagonal(int k) => Less(c[0].Position, c[k].Position) ? new(c[0].Position, c[k].Position) : new(c[k].Position, c[0].Position);
+            EdgeRef From(Segment s, Vector3 start) => start == s.A ? new(s, 0, 1) : new(s, 1, 0);
+            Segment? previous = null;
+            for (int i = 1; i + 1 < n; i++)
+            {
+                var next = i + 1 < n - 1 ? Diagonal(i + 1) : null;
+                List<EdgeRef> edges =
+                [
+                    i == 1 ? part.Edges[0] : From(previous!, c[0].Position),
+                    part.Edges[i],
+                    next == null ? part.Edges[n - 1] : From(next, c[i + 1].Position),
+                ];
+                previous = next;
+                yield return new() { Surface = part.Surface, Material = part.Material, Corners = [c[0], c[i], c[i + 1]], Edges = edges, State = part.State };
+            }
+        }
+        private static float Area(IReadOnlyList<TerrainCorner> corners)
         {
             Vector3 sum = Vector3.Zero;
             for (int i = 1; i + 1 < corners.Count; i++) sum += Vector3.Cross(corners[i].Position - corners[0].Position, corners[i + 1].Position - corners[0].Position);

@@ -17,7 +17,7 @@ public sealed class TerrainCompilerTests
     /// <summary>A flat grid of <paramref name="n"/> × <paramref name="n"/> quads over [x0, x1] × [z0, z1] at height 0, two triangles each.</summary>
     private static TerrainSurfaceGeometry Sheet(string id, float x0, float z0, float x1, float z1, int n = 1, float y = 0)
     {
-        List<TerrainTriangle> triangles = [];
+        List<TerrainFace> triangles = [];
         TerrainCorner C(int i, int j) { float u = i / (float)n, v = j / (float)n; return new(new(x0 + (x1 - x0) * u, y, z0 + (z1 - z0) * v), Vector3.UnitY, new(u, v)); }
         for (int i = 0; i < n; i++)
             for (int j = 0; j < n; j++)
