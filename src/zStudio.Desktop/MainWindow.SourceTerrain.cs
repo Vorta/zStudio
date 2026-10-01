@@ -56,7 +56,57 @@ public partial class MainWindow
         return EditTerrainAsync(doc, recipe, $"{(add ? "Paint" : "Erase")} {region}", r => TerrainEdits.Paint(r, region, stroke, add), token);
     }
 
+    /// <summary>What converting this world's mission database to editable terrain would do (references come from the files its build read).</summary>
+    private static TerrainConversionPlan PlanTerrainConversion(DocumentModel doc, CancellationToken token)
+    {
+        var session = SourceWorldOf(doc);
+        var build = doc.SourceBuild ?? throw new StudioCommandException("not_ready", "The world has not been built.");
+        string database = MissionDatabase(doc);
+        try { return SourceTerrainConversion.Plan(session.Workspace, database, SourceTerrainConversion.References(session.Workspace, build.Dependencies, token), token); }
+        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+    }
+    /// <summary>The shown world's nodes whose provenance matches, read from its world file.</summary>
+    private List<Recoil.Zbd.Core.Worlds.WorldNode> SourceWorldNodes(DocumentModel doc, Func<Recoil.Zbd.Core.Worlds.WorldNodeProvenance, bool> select)
+    {
+        var build = doc.SourceBuild ?? throw new StudioCommandException("not_ready", "The world has not been built.");
+        return [.. SourceWorldModel(doc).Slots.Where(p => build.Provenance.TryGetValue(p.Key, out var origin) && select(origin)).OrderBy(p => p.Key).Select(p => p.Value)];
+    }
+    /// <summary>
+    /// Converts the mission database's pieces to editable terrain as one undoable change, then compares the altitude probe
+    /// over the converted area in the world before and after: heights, polygon zones, soils and node attributes.
+    /// </summary>
+    private async Task<(DocumentModel Next, TerrainConversionPlan Plan, TerrainProbeReport Report)> ConvertTerrainAsync(DocumentModel doc, float spacing, CancellationToken token)
+    {
+        var plan = PlanTerrainConversion(doc, token);
+        if (plan.Converted == 0) throw new StudioCommandException("unsupported", "No piece of the mission database can become terrain.");
+        var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
+        var before = SourceWorldNodes(doc, p => p.Database && string.Equals(p.ModelFile, plan.Database, StringComparison.OrdinalIgnoreCase) && converted.Contains(p.ModelNode));
+        var next = await EditSourceWorldAsync(doc, "Converting to editable terrain", w => SourceTerrainConversion.Apply(w, plan, token) is var t ? () => w.Retract(t) : null, token);
+        var after = SourceWorldNodes(next, p => string.Equals(p.Terrain, plan.Recipe, StringComparison.OrdinalIgnoreCase));
+        var report = await Task.Run(() => TerrainProbe.Compare(before, after, spacing, token), token);
+        string label = next.SourceWorld?.Label ?? "terrain";
+        foreach (string example in report.Examples) ViewModel.AddProblem(Bounded($"{label}: the converted terrain probes differently at {example}"), "Warning", SourceProject.Resolve(SourceWorldOf(next).Root, plan.Recipe));
+        return (next, plan, report);
+    }
+
     // ---------------------------------------------------------------- GUI
+
+    /// <summary>GUI: Convert to editable terrain, after showing what it converts and keeps; the probe comparison follows.</summary>
+    private void ConvertTerrainClick(object sender, System.Windows.RoutedEventArgs e) => _ = RunUi(async () =>
+    {
+        if (ViewModel.SelectedDocument is not { SourceWorld: not null } doc) throw new StudioCommandException("unsupported", "Open a mission world of a source project first.");
+        var plan = PlanTerrainConversion(doc, CancellationToken.None);
+        string kept = string.Join("\n", plan.Kept.GroupBy(k => k.Reason).OrderByDescending(g => g.Count()).Select(g => $"  {g.Count()} {g.Key}"));
+        if (plan.Converted == 0) { System.Windows.MessageBox.Show(this, $"No piece of {plan.Database} can become terrain:\n{kept}", "Convert to editable terrain"); return; }
+        if (System.Windows.MessageBox.Show(this, $"{plan.Converted} pieces of {plan.Database} become {plan.Groups.Count} terrain surfaces in {plan.Surfaces}, painted by {plan.Recipe}.\n\nKept as objects:\n{kept}\n\nThe pieces are rebuilt along the grid's cell lines; their polygons, materials, zones, soils and flags stay. Convert?",
+            "Convert to editable terrain", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.Yes) return;
+        var (next, _, report) = await ConvertTerrainAsync(doc, 8, CancellationToken.None);
+        System.Windows.MessageBox.Show(this, report.Mismatches == 0
+            ? $"Converted. The altitude probe finds the same heights, zones, soils and flags at all {report.Samples:N0} sample points ({report.Hits:N0} hits)" + (report.HeightOnly > 0 ? $"; {report.HeightOnly:N0} differ in height by at most {report.MaximumHeightDifference:0.###}." : ".")
+            : $"Converted, but the altitude probe differs at {report.Mismatches:N0} of {report.Samples:N0} sample points; Problems lists examples. Undo takes the conversion back.",
+            "Convert to editable terrain", System.Windows.MessageBoxButton.OK, report.Mismatches == 0 ? System.Windows.MessageBoxImage.Information : System.Windows.MessageBoxImage.Warning);
+        if (!next.IsDisposed) ShowTerrainProperties(next, plan.Recipe, null, null, null);
+    });
 
     /// <summary>Properties of a terrain: the recipe a piece came from, with the brush for its regions.</summary>
     private bool ShowTerrainProperties(DocumentModel doc, string recipe, string? surface, string? piece, string? region)
@@ -291,6 +341,28 @@ public partial class MainWindow
                     default: throw new StudioCommandException("invalid_argument", $"Unknown action {action}.");
                 }
                 return Result(new { document = DocumentState(next) });
+            });
+        RegisterJob(r, "source_terrain_convert", "Convert to editable terrain: the open source world's mission database pieces (untransformed mesh roots no script, resource or animation names, except landmarks) become surfaces of a new terrain recipe beside the database, grouped by node flags and zone with plan-view overlaps kept apart, as one undoable change. Without apply, only report the plan: surfaces, pieces and the objects kept with reasons. With apply, convert, rebuild, and compare the altitude probe over the converted area before and after (heights, polygon zones, soils, node flags and zones) on a grid of the given spacing.",
+            [DocumentParameter, RevisionParameter, P("apply", "boolean", "Convert (default false: only report the plan)."),
+             new("spacing", "number", "Probe sample spacing in world units for the comparison (default 8, 1–256).")], true,
+            async (a, token) =>
+            {
+                var d = TargetDocument(a, true);
+                object Plan(TerrainConversionPlan plan) => new
+                {
+                    database = plan.Database, surfacesFile = plan.Surfaces, recipe = plan.Recipe, converted = plan.Converted,
+                    surfaces = plan.Groups.Take(256).Select(g => new { id = g.Id, flags = $"0x{g.Flags:X8}", zone = g.Zone, pieces = g.Nodes.Count }).ToArray(), surfaceCount = plan.Groups.Count,
+                    kept = plan.Kept.Take(256).Select(k => new { node = Bounded(k.Node, 128), reason = k.Reason }).ToArray(), keptCount = plan.Kept.Count
+                };
+                if (!Flag(a, "apply")) return Result(new { plan = Plan(PlanTerrainConversion(d, token)) });
+                double spacing = a["spacing"] is JsonValue sv && sv.TryGetValue(out double sd) ? sd : 8;
+                if (!(spacing >= 1 && spacing <= 256)) throw new StudioCommandException("invalid_argument", "spacing is 1–256.");
+                var (next, done, report) = await ConvertTerrainAsync(d, (float)spacing, token);
+                return Result(new
+                {
+                    document = DocumentState(next), plan = Plan(done),
+                    probe = new { samples = report.Samples, hits = report.Hits, mismatches = report.Mismatches, heightOnly = report.HeightOnly, maximumHeightDifference = report.MaximumHeightDifference, examples = report.Examples.Select(x => Bounded(x, 1024)).ToArray() }
+                });
             });
         RegisterJob(r, "source_terrain_create", "Create a terrain recipe for surfaces of a glTF file in the open source world's project (surfaces: node names, each with a mesh, in a file of their own — not the mission database) and add a marker for it at the end of the mission database's roots, as one undoable change; the world rebuilds with the compiled pieces. The recipe goes beside the file (name.terrain.json) unless recipe names another path ending in .terrain.json.",
             [DocumentParameter, RevisionParameter, P("model", "string", "The surfaces' glTF file (project path).", true),

@@ -114,9 +114,15 @@ Terrain is authored as unsplit surfaces in glTF (from Blender) plus a **terrain 
 
   Each stroke adds or removes the area a round brush of the given radius covers, as one undoable change, and the world rebuilds. Escape drops a stroke in progress. MCP: `zstudio_source_terrain`, `zstudio_source_terrain_edit`.
 - **Viewing.** The Whole world highlight modes show craters allowed (CanModify), no craters (ClipTo) and non-default soils.
+- **Convert to editable terrain** (**Tools → Convert to editable terrain…**, MCP `zstudio_source_terrain_convert`) turns a shipped map's hand-cut pieces into terrain:
+  - **Which pieces.** The mission database's untransformed mesh roots become surfaces of a recipe beside the database (`mN_terrain.gltf` with `mN_terrain.terrain.json`).
+  - **Surfaces.** Pieces with the same node flags and zone share a surface, except where they overlap in plan view: those go to separate surfaces, so stacked sheets stay separate nodes.
+  - **What stays.** Every polygon keeps its corners, UVs, normals and material (with its zones and soil), and each surface gets its pieces' exact flags and zone.
+  - **Kept as objects:** the horizon and other landmarks, transformed or grouped nodes, references, shared nodes, and any piece a script, resource or animation names or matches by wildcard. The dialog lists them with reasons before anything changes.
+  - **Acceptance.** After converting, zStudio compares the altitude probe over the converted area in the world before and after: heights, polygon zones, soils, node flags and zones. On the 1999 data, M1, M5 and M6 give the same results at every sample point.
+  - **What is lost:** the original piece layout and names, and possibly how many crater models a crater creates. Undo takes the conversion back.
 
 Not yet:
-- converting a shipped map's pieces to editable terrain;
 - tilted region planes for walls;
 - zone views and zone probe validation;
 - texture page cutting for large painted textures.

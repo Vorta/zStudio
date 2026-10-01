@@ -113,5 +113,31 @@ internal sealed class SourceWorldFixture : IDisposable
         var (json, bin) = WorldGltf.Export([root], 0xFF, new() { Texture = t => ($"{textures}/{t.Name}.png", 0) }).Write(stem + ".bin");
         Write($"{folder}/{stem}.bin", bin); Write($"{folder}/{stem}.gltf", json);
     }
+    /// <summary>
+    /// Replaces m1's database with: ground (named by an animation), two adjacent flat pieces in zone 3, a piece over
+    /// one of them with the same attributes, and a landmark sky.
+    /// </summary>
+    public void WriteTerrainDatabase()
+    {
+        WorldTexture rock = new("rock");
+        WorldNode Piece(string name, float x0, float z0, float size, float y, uint flags = WorldGltf.DefaultCarried, uint zone = 3)
+        {
+            ModelBuilder builder = new();
+            builder.Add(new([new(x0, y, z0 + size), new(x0 + size, y, z0 + size), new(x0 + size, y, z0), new(x0, y, z0)], [new(0, 0), new(1, 0), new(1, 1), new(0, 1)], [], [],
+                new() { Texture = rock, Flags = 0x1FF }, Zone: 0xFFFF0001 | zone << 8));
+            WorldNode node = new(name, WorldNodeClass.Object3D) { Model = builder.Finish(), Flags = flags, Zone = zone };
+            node.SetPayloadInt(0, 0x28);
+            return node;
+        }
+        List<WorldNode> roots =
+        [
+            Piece("ground", 0, 0, 64, 0),
+            Piece("flat_a", 200, 300, 50, 0), Piece("flat_b", 250, 300, 50, 0), Piece("flat_over", 210, 310, 20, 10),
+            Piece("sky", 0, 0, 512, 400, WorldGltf.DefaultCarried | 0x80, 0xFF),
+        ];
+        var (json, bin) = WorldGltf.Export(roots, 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+
     public void Dispose() { try { Directory.Delete(Root, true); } catch (IOException) { } }
 }

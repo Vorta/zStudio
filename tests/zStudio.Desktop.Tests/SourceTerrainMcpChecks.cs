@@ -27,6 +27,7 @@ internal static class SourceTerrainMcpChecks
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
+        fixture.WriteTerrainDatabase();
         // A 100 × 100 surface across m1's cell lines, in its own file.
         ModelBuilder builder = new();
         builder.Add(new([new(200, 0, 300), new(300, 0, 300), new(300, 0, 200), new(200, 0, 200)], [new(0, 0), new(1, 0), new(1, 1), new(0, 1)], [], [], new() { Texture = new("rock"), Flags = 0x1FF }));
@@ -90,6 +91,18 @@ internal static class SourceTerrainMcpChecks
             // Undo is project-wide: the four changes go back and the files match the disk.
             doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             for (int i = 0; i < 4; i++) doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
+            Assert.False(workspace.IsDirty);
+
+            // Convert to editable terrain: the plan first, then the conversion with its probe comparison.
+            var plan = await Job("source_terrain_convert", new() { ["document"] = Id(doc), ["revision"] = doc.Revision });
+            Assert.Equal(3, plan["plan"]!["converted"]!.GetValue<int>());
+            Assert.Equal(2, plan["plan"]!["keptCount"]!.GetValue<int>());
+            var converted = await Job("source_terrain_convert", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["apply"] = true, ["spacing"] = 2 });
+            Assert.Equal(0, converted["probe"]!["mismatches"]!.GetValue<int>());
+            Assert.True(converted["probe"]!["hits"]!.GetValue<int>() > 500);
+            doc = Document(converted["document"]!);
+            Assert.Contains("data/m1/models/m1_terrain.terrain.json", workspace.DirtyFiles);
+            doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
             Assert.False(workspace.IsDirty);
             await Call("close_document", new() { ["document"] = Id(doc), ["revision"] = doc.Revision });
 
