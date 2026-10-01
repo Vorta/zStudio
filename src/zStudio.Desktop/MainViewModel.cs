@@ -102,6 +102,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AddProblem("Could not save mission difficulty: " + ex.Message); }
     }
     public Func<DocumentModel, Task<bool>>? ConfirmDiscardAsync { get; set; }
+    /// <summary>Raised once a root (also the same one again) is open, with its path and HasRoot set.</summary>
+    public event Action? RootPublished;
     /// <summary>Resolves pending GUI input before close decisions: committing it can rebuild (replace) a source world.</summary>
     public Func<Task<bool>>? ResolveDraftsAsync { get; set; }
     /// <summary>A new set of close decisions starts: decisions left from an earlier, unfinished one no longer apply.</summary>
@@ -176,6 +178,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
         Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
         RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";
+        RootPublished?.Invoke();
         Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
         try
         {

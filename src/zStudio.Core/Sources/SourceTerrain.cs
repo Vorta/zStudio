@@ -64,7 +64,7 @@ public static class SourceTerrain
             string id = new([.. name.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' ? c : '_').Take(32)]);
             if (id.Length == 0) id = "surface";
             for (int n = 2; surfaces.Any(s => s.Id == id); n++) id = $"{id[..Math.Min(id.Length, 28)]}_{n}";
-            surfaces.Add(new(id, RelativePath(recipePath, model), name, TerrainAttributes.None));
+            surfaces.Add(new(id, RelativePath(recipePath, model), name, NodeDefaults(matches[0])));
         }
         var recipe = TerrainRecipe.Parse(new TerrainRecipe(TerrainRecipe.CurrentCompiler, surfaces, TerrainAttributes.None, []).Write(), recipePath);
         // The marker: a root of the database's scene that names the recipe.
@@ -84,6 +84,16 @@ public static class SourceTerrain
         return workspace.Apply($"Create terrain {stem}", [(recipePath, recipe.Write()), (database, marked)], token) ?? throw new InvalidDataException("Creating the terrain changed nothing.");
     }
 
+    /// <summary>A surface node's own attributes (flags other than the default, zone), as an object of the file had them.</summary>
+    private static TerrainAttributes NodeDefaults(Gltf.GltfNode node)
+    {
+        if ((node.Extras?[WorldGltf.Key] as JsonObject) is not { } recoil) return TerrainAttributes.None;
+        uint? flags = recoil["flags"] is JsonValue f && f.TryGetValue(out string? hex)
+            && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint parsed)
+            && (parsed & WorldGltf.CarriedFlags) != WorldGltf.DefaultCarried ? parsed & WorldGltf.CarriedFlags : null;
+        int? zone = recoil["zone"] is JsonValue z && z.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e18 ? (int)((long)d & 0xFF) : null;
+        return new() { Flags = flags, NodeZone = zone is null ? null : zone == 0xFF ? TerrainAttributes.AnyZone : zone };
+    }
     /// <summary>
     /// The engine names of a glTF file's nodes that have meshes (the candidates for terrain surfaces), as the workspace holds
     /// the file; a name several nodes share (such as rock and rock.001) picks none, so it is left out.

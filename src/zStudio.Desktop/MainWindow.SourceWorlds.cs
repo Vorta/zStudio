@@ -36,6 +36,7 @@ public partial class MainWindow
             && !sourceWorkspace.IsSaving && !sourceWorkspaceBusy && sourceWorldsOpening == 0 && !ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace))
         { sourceWorkspace.Discard(); discardApprovedWorkspace = null; }
         else if (sourceWorkspace != null && discardApprovedWorkspace is { } waiting && waiting.Workspace == sourceWorkspace && waiting.Revision == sourceWorkspace.Revision
+            && sourceWorkspace.Root.Equals(full, StringComparison.OrdinalIgnoreCase)
             && (sourceWorldsOpening > 0 || sourceWorkspaceBusy) && !ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace))
             throw new StudioCommandException("busy", "The source project's discarded edits are still being dropped (a world was opening or rebuilding); try again in a moment.");
         if (sourceWorkspace?.Root.Equals(full, StringComparison.OrdinalIgnoreCase) == true) return sourceWorkspace;
@@ -145,6 +146,7 @@ public partial class MainWindow
         if (rebuilding) sourceRebuild ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
         else { var done = sourceRebuild; sourceRebuild = null; done?.TrySetResult(); }
         UpdateDocumentCommands();
+        ApplyTerrainBrush(scene);
     }
     /// <summary>Completes when no world of the project rebuilds (after a scene-card edit, undo, stroke, Properties or MCP edit).</summary>
     private async Task SourceWorldsIdleAsync()
@@ -160,7 +162,12 @@ public partial class MainWindow
     /// <summary>Properties of a source world takes no input while the project rebuilds.</summary>
     private void UpdateSourceInputBlock()
     {
-        if (propertiesWindow != null) propertiesWindow.InputBlocked = sourceWorkspaceBusy && propertiesWindow.Document?.SourceWorld != null;
+        if (propertiesWindow == null) return;
+        bool blocked = sourceWorkspaceBusy && propertiesWindow.Document?.SourceWorld != null;
+        propertiesWindow.InputBlocked = blocked;
+        // Input typed before the block stayed as it was (a blocked field does not commit); say so once it can be applied.
+        if (!blocked && propertiesWindow.Document?.SourceWorld != null && propertiesWindow.HasUncommittedDrafts)
+            ViewModel.Status = "Properties has unfinished input; press Enter in the field to apply it, or Escape to restore it.";
     }
 
     private sealed record SourceWorldBuilt(ZbdDocument World, SourceWorldBuild Build, long Revision);

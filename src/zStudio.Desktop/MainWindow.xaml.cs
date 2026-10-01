@@ -626,7 +626,7 @@ public partial class MainWindow : Window
         if (flyCamera?.HandleKey(e, true) == true) return;
         if (CameraKeyboard(e)) return;
         if ((e.Key == Key.Enter || e.SystemKey == Key.Enter) && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.Alt) { e.Handled = true; OpenCurrentProperties(); return; }
-        if (e.Key == Key.Escape && scene?.CancelPickupDrag() == true) { e.Handled = true; return; }
+        if (e.Key == Key.Escape && (scene?.CancelPickupDrag() == true || scene?.CancelTerrainStroke() == true)) { e.Handled = true; return; }
         if (e.Key == Key.Space && System.Windows.Input.Keyboard.Modifiers == ModifierKeys.None &&
             (shownAsset?.Kind == AssetKind.Animation && ViewModel.SelectedDocument?.AnimationEdits != null || motion != null) &&
             AnimationSpaceTarget(e.OriginalSource as DependencyObject))

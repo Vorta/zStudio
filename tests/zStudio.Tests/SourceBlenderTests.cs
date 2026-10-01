@@ -78,6 +78,33 @@ public sealed class SourceBlenderTests
     }
 
     [Fact]
+    public void ExportsThatDropEngineAttributesOrReplaceOtherTexturesAskFirst()
+    {
+        using SourceWorldFixture fixture = new();
+        // Another model's texture, which this model's checkout does not hold.
+        var image = PngDecoder.Decode(File.ReadAllBytes(fixture.Path("data/m1/textures/rock.png")), token: Token); image.Rgba[0] ^= 0xFF;
+        fixture.Write("data/m1/textures/grass.png", PngEncoder.Encode(image, Token));
+        SourceWorkspace workspace = new(fixture.Project);
+        var checkout = SourceBlender.Checkout(workspace, Model, Token);
+        Assert.Contains("\"recoil\"", File.ReadAllText(checkout.Input));
+        // Blender's default (Custom Properties off) writes no extras: the update says what would be lost and asks.
+        string bare = Export(checkout, "bare", g =>
+        {
+            foreach (string key in new[] { "nodes", "meshes", "materials", "scenes" })
+                foreach (var item in g[key] as JsonArray ?? []) (item as JsonObject)?.Remove("extras");
+        });
+        var missing = Assert.Throws<BlenderConflictException>(() => SourceBlender.PlanUpdate(workspace, checkout, bare, token: Token));
+        Assert.Contains("Custom Properties", missing.Message);
+        Assert.Contains(SourceBlender.PlanUpdate(workspace, checkout, bare, force: true, token: Token).Notes, n => n.Contains("Custom Properties", StringComparison.Ordinal));
+        // An exported texture named like a project texture outside the checkout would replace it for every model.
+        string named = Export(checkout, "named", g => g["images"]![0]!["uri"] = "textures/grass.png");
+        File.Copy(Path.Combine(checkout.Outbox, "named", "textures", "rock.png"), Path.Combine(checkout.Outbox, "named", "textures", "grass.png"));
+        Assert.Contains("data/m1/textures/grass.png", Assert.Throws<BlenderConflictException>(() => SourceBlender.PlanUpdate(workspace, checkout, named, token: Token)).Files);
+        // Refused updates leave no sealed copy behind; the forced one above left its own.
+        Assert.Single(Directory.GetDirectories(Path.Combine(checkout.Folder, "sealed")));
+    }
+
+    [Fact]
     public void SealingStaysInsideTheCheckoutAndIdsCanBeFoundAgain()
     {
         using SourceWorldFixture fixture = new();

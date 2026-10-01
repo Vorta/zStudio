@@ -21,7 +21,14 @@ public sealed partial class SceneViewport
     public bool TerrainBrushActive
     {
         get => terrainBrushActive;
-        set { terrainBrushActive = value; if (!value) CancelTerrainStroke(); Cursor = value ? Cursors.Pen : null; }
+        set { terrainBrushActive = value; if (!value) CancelTerrainStroke(); Cursor = value ? terrainBrushWaiting ? Cursors.Wait : Cursors.Pen : null; }
+    }
+    private bool terrainBrushWaiting;
+    /// <summary>While the owner applies an earlier stroke (its world rebuilds), clicks start no new stroke and select nothing.</summary>
+    public bool TerrainBrushWaiting
+    {
+        get => terrainBrushWaiting;
+        set { terrainBrushWaiting = value; if (terrainBrushActive) Cursor = value ? Cursors.Wait : Cursors.Pen; }
     }
     /// <summary>The brush radius in world units; it spaces the stroke's points.</summary>
     public float TerrainBrushRadius { get; set; } = 8;
@@ -32,6 +39,7 @@ public sealed partial class SceneViewport
     internal bool HandleTerrainBrushDown(Point point, MouseButtonEventArgs e)
     {
         if (!terrainBrushActive || e.ChangedButton != MouseButton.Left || IsFlyActive || IsPickupDragging) return false;
+        if (terrainBrushWaiting) return true;
         if (TryNavigationSurface(point, out var hit))
         {
             brushStroke = [new((float)hit.X, (float)hit.Y, (float)hit.Z)];

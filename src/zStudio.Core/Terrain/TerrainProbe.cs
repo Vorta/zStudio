@@ -84,6 +84,8 @@ public static class TerrainProbe
     /// With <paramref name="grid"/> (the world's area grid), a probe at a point searches only the nodes of its cell and the
     /// overflow list, as the engine's does; each node's cell is the one its own world recorded for it, and both worlds share the grid.
     /// </remarks>
+    /// <summary>The most sample points a comparison takes; a larger area samples more sparsely.</summary>
+    public const double MaximumSamples = 4_000_000;
     public static TerrainProbeReport Compare(IReadOnlyList<WorldNode> before, IReadOnlyList<WorldNode> after, float spacing, CancellationToken token = default, WorldNode? grid = null)
     {
         if (!(spacing > 0)) throw new ArgumentOutOfRangeException(nameof(spacing));
@@ -91,14 +93,20 @@ public static class TerrainProbe
         if (all.Length == 0) return new(0, 0, 0, 0, 0, []);
         float minX = all.Min(n => n.Model!.Vertices.Min(p => p.X)), maxX = all.Max(n => n.Model!.Vertices.Max(p => p.X));
         float minZ = all.Min(n => n.Model!.Vertices.Min(p => p.Z)), maxZ = all.Max(n => n.Model!.Vertices.Max(p => p.Z));
+        // At most MaximumSamples points: a wider spacing over a large area (and integer steps, which never stall).
+        double columns = Math.Floor((maxX - minX - 0.37) / spacing) + 1, rows = Math.Floor((maxZ - minZ - 0.29) / spacing) + 1;
+        if (columns * rows > MaximumSamples) spacing *= (float)Math.Sqrt(columns * rows / MaximumSamples);
+        long countX = Math.Max(1, (long)Math.Floor((maxX - minX - 0.37) / spacing) + 1), countZ = Math.Max(1, (long)Math.Floor((maxZ - minZ - 0.29) / spacing) + 1);
         var indexA = Index(before, spacing * 8); var indexB = Index(after, spacing * 8);
         var cellsA = Cells(before, grid); var cellsB = Cells(after, grid);
         int samples = 0, hits = 0, mismatches = 0, heightOnly = 0, revealed = 0; float maximum = 0; List<string> examples = [];
-        for (float x = minX + 0.37f; x <= maxX; x += spacing)
+        for (long i = 0; i < countX; i++)
         {
             token.ThrowIfCancellationRequested();
-            for (float z = minZ + 0.29f; z <= maxZ; z += spacing)
+            float x = minX + 0.37f + i * spacing;
+            for (long j = 0; j < countZ; j++)
             {
+                float z = minZ + 0.29f + j * spacing;
                 samples++;
                 var cell = grid == null ? (-1, -1) : PointCell(grid, x, z);
                 var a = At(Visible(indexA(x, z), cellsA, cell), x, z); var b = At(Visible(indexB(x, z), cellsB, cell), x, z);

@@ -49,13 +49,13 @@ public partial class MainWindow
             if (args.PropertyName is nameof(MainViewModel.RootPath) or nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) UpdateDocumentCommands();
             if (args.PropertyName is nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) ArrangeWorkspace();
             if (args.PropertyName == nameof(MainViewModel.RootPath) && ViewModel.SelectedDocument == null) SelectNavigatorSection(0);
-            // An interrupted save of a source project is reported, and resolved only on the user's decision.
-            if (args.PropertyName == nameof(MainViewModel.RootPath) && SourceProjectRoot is { } project) _ = CheckSourceRecoveryAsync(project);
             // The brush paints the shown source world only; another root ends it.
             if (args.PropertyName == nameof(MainViewModel.RootPath)) terrainBrush = null;
             if (args.PropertyName is nameof(MainViewModel.RootPath) or nameof(MainViewModel.SelectedDocument)) ApplyTerrainBrush(scene);
             if (args.PropertyName == nameof(MainViewModel.GlobalQuery)) UpdateSearchHint();
         };
+        // An interrupted save of a source project is reported, and resolved only on the user's decision.
+        ViewModel.RootPublished += () => { if (SourceProjectRoot is { } project) _ = CheckSourceRecoveryAsync(project); };
         ViewModel.SearchResults.CollectionChanged += (_, _) => UpdateSearchHint();
         ViewModel.Problems.CollectionChanged += (_, _) => UpdateDocumentCommands();
         UpdateSearchHint();

@@ -10,7 +10,7 @@ internal sealed record TerrainBrushState(string Recipe, string Region, bool Add,
 
 /// <summary>The edits the terrain editor makes; each changes the recipe as one undoable change and rebuilds the world.</summary>
 internal sealed record TerrainEditorActions(
-    Func<string?, TerrainAttributes, Task> SetDefaults,
+    Func<string?, Func<TerrainAttributes, TerrainAttributes>, Task> SetDefaults,
     Func<string, Func<TerrainRegion, TerrainRegion>, Task> UpdateRegion,
     Func<string, Task> AddRegion,
     Func<string, Task> RemoveRegion,
@@ -69,11 +69,11 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
         if (piece != null) ReadOnlyText(form, piece);
 
         Label(form, "Recipe defaults", true);
-        Attributes(form, "Defaults", recipe.Defaults, a => actions.SetDefaults(null, a));
+        Attributes(form, "Defaults", recipe.Defaults, change => actions.SetDefaults(null, change));
         if (surface != null && recipe.Surfaces.FirstOrDefault(s => s.Id == surface) is { } shown)
         {
             Label(form, $"Surface {shown.Id} ({shown.Node} in {shown.Model})", true);
-            Attributes(form, $"Surface {shown.Id}", shown.Defaults, a => actions.SetDefaults(shown.Id, a));
+            Attributes(form, $"Surface {shown.Id}", shown.Defaults, change => actions.SetDefaults(shown.Id, change));
         }
 
         Label(form, "Regions, in the order they apply", true);
@@ -105,7 +105,7 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
                     string[] ids = text.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries);
                     if (!ids.SequenceEqual(chosen.Surfaces)) await actions.UpdateRegion(chosen.Name, r => r with { Surfaces = ids });
                 });
-            Attributes(form, $"Region {chosen.Name}", chosen.Set, a => actions.UpdateRegion(chosen.Name, r => r with { Set = a }));
+            Attributes(form, $"Region {chosen.Name}", chosen.Set, change => actions.UpdateRegion(chosen.Name, r => r with { Set = change(r.Set) }));
             StackPanel shapeActions = new() { Orientation = Orientation.Horizontal };
             if (chosen.Shape != null) AsyncButton(shapeActions, "Cover whole surfaces", () => actions.UpdateRegion(chosen.Name, r => r with { Shape = null }));
             else AsyncButton(shapeActions, "Cover nothing (paint it)", () => actions.UpdateRegion(chosen.Name, r => r with { Shape = new TerrainShape([]) }));
@@ -113,12 +113,14 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
 
             Label(form, "Brush", true);
             bool painting = brush?.Region == chosen.Name;
-            float radius = brush?.Radius ?? 8;
+            float radius = brush?.Radius ?? lastRadius;
             Input(form, "Brush radius", radius.ToString("R", CultureInfo.InvariantCulture), _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "world units",
                 asyncCommit: text =>
                 {
                     if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) || !float.IsFinite(value) || value < 0.01f || value > 100_000) throw new FormatException("Enter a radius from 0.01 to 100,000.");
-                    actions.SetBrush(new(recipePath, chosen.Name, brush?.Add ?? true, value));
+                    // The radius is remembered; it changes a running brush but turns none on.
+                    lastRadius = value;
+                    if (painting) actions.SetBrush(brush! with { Radius = value });
                     return Task.CompletedTask;
                 });
             StackPanel brushActions = new() { Orientation = Orientation.Horizontal };
@@ -130,8 +132,13 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
         RaiseChanged();
     }
 
-    /// <summary>One input per attribute; committing one changes only it (empty removes the override).</summary>
-    private void Attributes(StackPanel form, string what, TerrainAttributes current, Func<TerrainAttributes, Task> apply)
+    /// <summary>The radius last entered, for the next brush.</summary>
+    private static float lastRadius = 8;
+    /// <summary>
+    /// One input per attribute; committing one changes only it (empty removes the override), patched onto the layer as the
+    /// recipe holds it when the change applies.
+    /// </summary>
+    private void Attributes(StackPanel form, string what, TerrainAttributes current, Func<Func<TerrainAttributes, TerrainAttributes>, Task> apply)
     {
         var json = current.ToJson();
         foreach (var (key, label, hint) in Fields)
@@ -143,7 +150,8 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
                     input = input.Trim();
                     if (input == text) return;
                     var patch = new JsonObject { [key] = Value(key, input) };
-                    await apply(TerrainAttributes.FromJson(patch, what, current));
+                    TerrainAttributes.FromJson(patch, what, current);
+                    await apply(layer => TerrainAttributes.FromJson(patch, what, layer));
                 });
         }
     }

@@ -72,7 +72,7 @@ public partial class MainWindow
     {
         id = checkout.Id, folder = checkout.Folder, model = checkout.Model, input = checkout.Input, outbox = checkout.Outbox, created = checkout.CreatedUtc,
         files = checkout.Files.Take(64).Select(f => new { project = f.Project, checkout = f.Checkout }).ToArray(), fileCount = checkout.Files.Count,
-        exports = SourceBlender.Exports(checkout).Take(16).Select(e => new { path = e.Relative, written = e.WrittenUtc, bytes = e.Bytes }).ToArray()
+        exports = SourceBlender.Exports(checkout).Take(16).Select(e => new { path = e.Relative, written = e.WrittenUtc, bytes = e.Bytes }).ToArray(), exportCount = SourceBlender.Exports(checkout).Count
     };
 
     /// <summary>GUI: Edit in Blender for the object selected in a source world (its model), then show the checkout folder.</summary>
@@ -126,7 +126,8 @@ public partial class MainWindow
         Register(r, "source_blender_checkouts", "List the open source project's Blender checkouts (newest first) with the exports found in each outbox (newest first).", false, [], _ =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
-            return Result(new { checkouts = SourceBlender.Checkouts(root).Take(32).Select(CheckoutResult).ToArray() });
+            var checkouts = SourceBlender.Checkouts(root);
+            return Result(new { checkouts = checkouts.Take(32).Select(CheckoutResult).ToArray(), checkoutCount = checkouts.Count });
         });
         RegisterJob(r, "source_blender_update", "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project's workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model's glTF and buffer, with each texture PNG Blender added or changed; a texture other models use changes for them too (reported in notes). Files changed in the project since the checkout (other edits, or another update) are not replaced unless force is true: the command fails with code conflict and lists them. The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. files lists the files the change wrote. Nothing is written until save_document.",
             [DocumentParameter, RevisionParameter, P("checkout", "string", "Checkout id from source_blender_checkout or source_blender_checkouts.", true), P("export", "string", "Export path relative to the outbox; default the newest."),
@@ -135,7 +136,7 @@ public partial class MainWindow
             {
                 var d = TargetDocument(a, true);
                 var (next, plan, files) = await UpdateFromBlenderAsync(d, Text(a, "checkout"), a["export"] == null ? null : Text(a, "export"), Flag(a, "force"), token);
-                return Result(new { document = DocumentState(next), files = files.Take(256).ToArray(), notes = plan.Notes.Take(32).ToArray(), @sealed = plan.Sealed });
+                return Result(new { document = DocumentState(next), files = files.Take(256).ToArray(), fileCount = files.Count, notes = plan.Notes.Take(32).ToArray(), noteCount = plan.Notes.Count, @sealed = plan.Sealed });
             });
     }
 }

@@ -125,7 +125,8 @@ public partial class MainWindow
         try
         {
             profiles = await Task.Run(() => BuildProfiles.List(root), token);
-            string? name = a["profile"] is null ? null : Text(a, "profile");
+            // Without a profile, the one chosen in Tools → Build profile (as source_export uses), else the project's default.
+            string? name = a["profile"] is null ? SourceProfileFor(root) : Text(a, "profile");
             profile = name == null ? profiles.Single(p => p.IsDefault) : profiles.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"The project has no build profile {name}.");
             plan = await Task.Run(() => SourceBuilder.Plan(root, null, profile), token);
         }
@@ -236,7 +237,7 @@ public partial class MainWindow
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
         ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceProfileMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility =
-            EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
+            EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = SourceRecoveryMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
         AddSourceModelMenu.IsEnabled = UpdateFromBlenderMenu.IsEnabled = CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         EditInBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld != null && selectedNode != null;
         if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceWorldMenuAsync(root); FillSourceProfileMenu(root); }

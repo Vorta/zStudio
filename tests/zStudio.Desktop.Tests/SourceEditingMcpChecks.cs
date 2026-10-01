@@ -34,7 +34,15 @@ internal static class SourceEditingMcpChecks
             await using var host = new LocalMcpHost(main.Commands, "test");
             await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly); await pipe.ConnectAsync(token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
+            // A save that stopped after committing (before cleaning up) is reported when the project first opens in a session.
+            var crashed = new SourcePublisher(fixture.Project) { Fault = (step, _) => { if (step == "cleanup") throw new SourcePublisher.Crash(); } };
+            Assert.Throws<SourcePublisher.Crash>(() => crashed.Publish([new("gamegen/crash_note.gs", null, Encoding.ASCII.GetBytes("# note" + Environment.NewLine))], "Crashed save", token));
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
+            for (int wait = 0; wait < 500 && !main.ViewModel.Problems.Any(p => p.Message.Contains("interrupted save", StringComparison.Ordinal)); wait++) await Task.Delay(10, token);
+            Assert.Contains(main.ViewModel.Problems, p => p.Message.Contains("interrupted save", StringComparison.Ordinal));
+            string crashId = (await Call("source_recovery", new()))["saves"]![0]!["id"]!.GetValue<string>();
+            await Call("source_recovery_resolve", new() { ["save"] = crashId, ["action"] = "complete" });
+            Assert.DoesNotContain(main.ViewModel.Problems, p => p.Message.Contains("interrupted save", StringComparison.Ordinal));
             var doc = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
             await Preview();
 
@@ -86,16 +94,19 @@ internal static class SourceEditingMcpChecks
             approval.SetValue(main, (workspace, workspace.Revision));
             main.ViewModel.CloseDecisionsStarting!();
             Assert.Null(approval.GetValue(main));
-            // While one close of a world is being decided (it can wait for a rebuild), a second is refused: no stacked prompts.
-            var closing = (HashSet<SourceWorldSession>)typeof(MainWindow).GetField("closingSourceWorlds", hidden)!.GetValue(main)!;
-            closing.Add(moved.SourceWorld!);
-            Assert.False(await (Task<bool>)typeof(MainWindow).GetMethod("ConfirmDocumentCloseAsync", hidden)!.Invoke(main, [moved])!);
-            Assert.False(moved.IsDisposed);
-            closing.Remove(moved.SourceWorld!);
 
             // Undo is project-wide and restores the exact source bytes; redo brings the move back.
             var undone = Document(await Call("undo_redo", new() { ["document"] = Id(moved), ["revision"] = moved.Revision, ["action"] = "undo" }));
             Assert.False(undone.SourceWorld!.Workspace.IsDirty); Assert.Equal(Default, Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            // Close decisions run one at a time (one can wait for a rebuild and its prompt pumps messages): a later one waits.
+            var decisions = (SemaphoreSlim)typeof(MainWindow).GetField("closeDecisions", hidden)!.GetValue(main)!;
+            await decisions.WaitAsync(token);
+            var waiting = (Task<bool>)typeof(MainWindow).GetMethod("ConfirmDocumentCloseAsync", hidden)!.Invoke(main, [undone])!;
+            await Task.Delay(50, token);
+            Assert.False(waiting.IsCompleted);
+            decisions.Release();
+            Assert.True(await waiting.WaitAsync(token));
+            Assert.False(undone.IsDisposed);
             var redone = Document(await Call("undo_redo", new() { ["document"] = Id(undone), ["revision"] = undone.Revision, ["action"] = "redo" }));
             await Preview();
 

@@ -16,18 +16,28 @@ public partial class MainWindow
 {
     private long recoveryCheckGeneration;
 
-    /// <summary>After a source project opens: report interrupted saves and offer to resolve them.</summary>
-    private async Task CheckSourceRecoveryAsync(string root)
+    private const string RecoveryProblem = "An interrupted save of the source project needs a decision";
+    /// <summary>GUI: Tools → Resolve interrupted save… checks the open project now and offers the decisions.</summary>
+    private void SourceRecoveryClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
+    {
+        string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
+        if (await CheckSourceRecoveryAsync(root) == 0) ViewModel.Status = "No save of this source project was interrupted.";
+    });
+
+    /// <summary>After a source project opens (or on request): report interrupted saves and offer to resolve them; returns how many there are.</summary>
+    private async Task<int> CheckSourceRecoveryAsync(string root)
     {
         long generation = ++recoveryCheckGeneration;
         IReadOnlyList<SourceRecoveryCase> cases;
         try { cases = await Task.Run(() => new SourcePublisher(root).FindInterrupted()); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-        { ViewModel.AddProblem(Bounded($"Source project recovery could not be checked: {ex.Message}"), "Error", root); return; }
-        if (generation != recoveryCheckGeneration || SourceProjectRoot != root || cases.Count == 0) return;
+        { ViewModel.AddProblem(Bounded($"Source project recovery could not be checked: {ex.Message}"), "Error", root); return 0; }
+        if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return 0;
+        foreach (var old in ViewModel.Problems.Where(p => p.File == root && p.Message.StartsWith(RecoveryProblem, StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
+        if (cases.Count == 0) return 0;
         foreach (var c in cases)
-            ViewModel.AddProblem(Bounded($"An interrupted save of the source project needs a decision ({c.SaveId}, {c.Description}): {string.Join(", ", c.Files.Take(8).Select(f => $"{f.Relative} is {f.State}"))}. Use zstudio_source_recovery or reopen the project."), c.Committed ? "Warning" : "Error", root);
-        if (automationCloseRequested || !IsVisible) return;
+            ViewModel.AddProblem(Bounded($"{RecoveryProblem} ({c.SaveId}, {c.Description}): {string.Join(", ", c.Files.Take(8).Select(f => $"{f.Relative} is {f.State}"))}. Use Tools → Resolve interrupted save, or zstudio_source_recovery."), c.Committed ? "Warning" : "Error", root);
+        if (automationCloseRequested || !IsVisible) return cases.Count;
         foreach (var c in cases.Where(c => !c.Committed))
         {
             string files = string.Join("\n", c.Files.Take(12).Select(f => $"{f.Relative}: {Describe(f.State)}{(f.HeldOriginal ? " (original kept)" : "")}"));
@@ -52,6 +62,7 @@ public partial class MainWindow
             }
             catch (StudioCommandException ex) { Report(ex); }
         }
+        return cases.Count;
         static string Describe(SourceRecoveryFileState state) => state switch
         {
             SourceRecoveryFileState.Before => "as before the save", SourceRecoveryFileState.After => "as the save wrote it",
@@ -71,7 +82,14 @@ public partial class MainWindow
             if (workspace.DirtyFiles.Intersect(journal, StringComparer.OrdinalIgnoreCase).ToArray() is { Length: > 0 } overlap)
                 throw new StudioCommandException("unsaved_changes", $"The project's unsaved edits change {string.Join(", ", overlap.Take(6))}, which the interrupted save also wrote; save or undo those edits first.");
         }
-        try { return new SourcePublisher(root).Resolve(saveId, action); }
+        try
+        {
+            var result = new SourcePublisher(root).Resolve(saveId, action);
+            // A resolved save no longer needs a decision.
+            if (result.Resolved)
+                foreach (var old in ViewModel.Problems.Where(p => p.Message.StartsWith(RecoveryProblem, StringComparison.Ordinal) && p.Message.Contains($"({saveId},", StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
+            return result;
+        }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { throw new StudioCommandException("io_failed", ex.Message); }
         finally { ViewModel.CheckExternalChanges(); }
@@ -101,7 +119,7 @@ public partial class MainWindow
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             var action = Text(a, "action") switch { "roll_back" => SourceRecoveryAction.RollBack, "complete" => SourceRecoveryAction.Complete, _ => SourceRecoveryAction.Abandon };
             var result = ResolveSourceRecovery(root, Text(a, "save"), action);
-            return Result(new { resolved = result.Resolved, changed = result.Changed.Take(64).ToArray(), conflicts = result.Conflicts.Take(64).Select(c => new { file = c.Relative, reason = Bounded(c.Reason, 256) }).ToArray() });
+            return Result(new { resolved = result.Resolved, changed = result.Changed.Take(64).ToArray(), changedCount = result.Changed.Count, conflicts = result.Conflicts.Take(64).Select(c => new { file = c.Relative, reason = Bounded(c.Reason, 256) }).ToArray(), conflictCount = result.Conflicts.Count });
         });
     }
 }

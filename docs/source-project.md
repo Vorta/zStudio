@@ -165,7 +165,8 @@ The round trip uses only files:
    - The export is sealed: copied into `sealed\` while checking that Blender finished writing it.
    - It is read as a build reads models, and becomes one undoable change: the model's glTF and buffer, and every texture PNG that is new or changed.
    - A changed texture changes for every model that uses it, and a node the export no longer has (animations and placements find nodes by name) is reported in Problems.
-   - When the model or one of its textures changed in the project since the checkout, the update names those files and asks before replacing them. A texture the export left as it was checked out keeps the project's version.
+   - When the model or one of its textures changed in the project since the checkout, or the export names a texture that already exists in the project outside the checkout (another model's texture of the same name), the update names those files and asks before replacing them. A texture the export left as it was checked out keeps the project's version.
+   - An export without the model's engine attributes (Blender's **Custom Properties** option off) is refused unless confirmed, since it would drop node flags, zones, references and material attributes.
    - Embedded textures (Blender's default `.glb`) are refused, because the engine needs PNG files.
 
 Nothing Blender writes reaches the project until the update is applied, and nothing reaches the disk until **Save**.
@@ -180,7 +181,7 @@ Nothing Blender writes reaches the project until the update is applied, and noth
 
 If anything fails, the files already replaced are put back. A file changed by another program since the workspace read it is never overwritten: the save stops and says which file.
 
-If zStudio or the computer stops in the middle of a save, opening the project reports the interrupted save (in Problems, and in a dialog). It offers:
+If zStudio or the computer stops in the middle of a save, opening the project reports the interrupted save (in Problems, and in a dialog); **Tools → Resolve interrupted save…** checks again at any time. It offers:
 - **Roll back**, which restores the files as they were before the save;
 - **Complete**, which finishes the save;
 - **Keep files**, which leaves them as they are and moves the journal to `zstudio\recovery\abandoned`.
@@ -225,7 +226,7 @@ A project can add or replace profiles with files in `gamegen\build-profiles\` (b
 - `budgetMiB` is the pack's texel budget (textures shrink to fit it); `null` keeps every texture at full size. Omitted values come from the pack's name, as before.
 - `maximumDimension` is a power of two from 8 to 4096.
 - A profile lists at least one `rtexture` pack, since the Direct3D renderer reads only those.
-- Export results and `zstudio_source_export` name the profile used. When the destination already holds a larger `rtexture` pack the profile does not build, the export warns: the game would load that pack instead.
+- Export results and `zstudio_source_export` name the profile used. When the destination already holds an `rtexture` pack the profile does not build, the export warns: the game picks packs by size and could load that one instead.
 
 ## Layout
 

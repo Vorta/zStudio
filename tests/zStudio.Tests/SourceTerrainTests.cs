@@ -144,6 +144,23 @@ public sealed class SourceTerrainTests
     }
 
     [Fact]
+    public async Task NothingMovesUnderATerrainPiece()
+    {
+        using var fixture = Fixture();
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_at", new(100, 0, -50)), []), Token);
+        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token);
+        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
+        foreach (var (node, slot) in GameZWriter.NodeSlots(world)) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
+        var tank = world.Nodes.Single(n => n.Name == "tank_at");
+        SourceObjectTarget target = new(workspace, "m1", world, tank, provenance, build.Executions) { Write = build.WriteInstruction };
+        // A piece's name is a build label: a script line finding it would break when the recipe changes.
+        var piece = world.Nodes.First(n => n.Name.StartsWith("coast_land_", StringComparison.Ordinal));
+        Assert.Contains("terrain recipe", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(target, piece, Token)).Message);
+    }
+
+    [Fact]
     public async Task TerrainOutsideTheDatabaseOrWithoutAGridIsRefused()
     {
         using var fixture = Fixture();

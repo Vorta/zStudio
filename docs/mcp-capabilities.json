@@ -1194,7 +1194,15 @@
         "zstudio_source_blender_checkouts",
         "zstudio_source_blender_update"
       ],
-      "note": "Tools > Update from Blender export applies the newest export of the newest checkout (source_blender_checkouts lists them) after confirmation, as one undoable workspace change that rebuilds the world (source_blender_update)."
+      "note": "Tools > Update from Blender export applies the newest export across the project's checkouts (source_blender_checkouts lists them) after confirmation, as one undoable workspace change that rebuilds the world (source_blender_update)."
+    },
+    {
+      "gui": "MainWindow.xaml:SourceRecoveryClick",
+      "tools": [
+        "zstudio_source_recovery",
+        "zstudio_source_recovery_resolve"
+      ],
+      "note": "Tools > Resolve interrupted save checks the open project for interrupted saves (source_recovery) and offers roll back, complete or keep files for each (source_recovery_resolve)."
     },
     {
       "gui": "MainWindow.xaml:CreateTerrainClick",

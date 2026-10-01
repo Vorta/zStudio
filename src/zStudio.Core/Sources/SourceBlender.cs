@@ -29,8 +29,8 @@ public sealed record BlenderUpdatePlan(string Label, IReadOnlyList<(string Relat
     public IReadOnlyDictionary<string, string?> Expected { get; init; } = new Dictionary<string, string?>();
 }
 /// <summary>An update refused because project files it would replace changed since the checkout (another edit, or another update).</summary>
-public sealed class BlenderConflictException(IReadOnlyList<string> files) : IOException(
-    $"{string.Join(", ", files.Take(8))}{(files.Count > 8 ? $" and {files.Count - 8} more" : "")} changed in the project since the checkout; the export would replace those changes. Check the model out again, or update anyway to replace them.")
+public sealed class BlenderConflictException(IReadOnlyList<string> files, string? reason = null) : IOException(reason ??
+    $"The export would replace {string.Join(", ", files.Take(8))}{(files.Count > 8 ? $" and {files.Count - 8} more" : "")}, which changed in the project since the checkout or were not part of it (another model's texture of the same name). Check the model out again, rename the texture in Blender, or update anyway to replace them.")
 {
     public IReadOnlyList<string> Files { get; } = files;
 }
@@ -173,6 +173,17 @@ public static class SourceBlender
     /// </summary>
     public static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export = null, bool force = false, CancellationToken token = default)
     {
+        string? sealedFolder = null;
+        try { return PlanUpdate(workspace, checkout, export, force, ref sealedFolder, token); }
+        catch when (sealedFolder != null)
+        {
+            // A refused or failed update leaves no sealed copy behind (each can be hundreds of megabytes).
+            try { Directory.Delete(sealedFolder, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
+    }
+    private static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, ref string? sealedFolderCreated, CancellationToken token)
+    {
         SourceProject.RejectLinks(checkout.Folder);
         var exports = Exports(checkout);
         var chosen = export == null ? exports.FirstOrDefault() ?? throw new InvalidDataException($"Nothing was exported into {checkout.Outbox} yet.")
@@ -184,6 +195,7 @@ public static class SourceBlender
         string sealedFolder = Path.Combine(checkout.Folder, "sealed", generation);
         SourceProject.RejectNestedLinks(checkout.Folder, $"sealed/{generation}");
         Directory.CreateDirectory(sealedFolder);
+        sealedFolderCreated = sealedFolder;
         string outbox = Path.GetFullPath(checkout.Outbox), exportFolder = Path.GetDirectoryName(chosen.Gltf)!;
         SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, chosen.Gltf).Replace('\\', '/'));
         byte[] json = Stable(chosen.Gltf);
@@ -258,8 +270,17 @@ public static class SourceBlender
             changes.Add((project, png));
         }
         // Node names find animations and placements; report the ones the export no longer has.
-        var before = Names(Parse(workspace.Read(model, token) ?? throw new InvalidDataException($"{model} no longer exists."), model));
+        var checkedOut = Parse(workspace.Read(model, token) ?? throw new InvalidDataException($"{model} no longer exists."), model);
+        var before = Names(checkedOut);
         var after = Names(root);
+        // Engine attributes travel in extras.recoil, which Blender writes only with Custom Properties on.
+        int attributesBefore = EngineAttributes(checkedOut), attributesAfter = EngineAttributes(root);
+        if (attributesBefore > 0 && attributesAfter == 0)
+        {
+            const string missing = "The export has none of the model's engine attributes (extras.recoil: node flags, zones, references, materials). Export again with Include → Custom Properties on, or update anyway to drop them.";
+            if (!force) throw new BlenderConflictException([model], missing);
+            notes.Add("The export had no engine attributes (Custom Properties off); the model's flags, zones, references and material attributes were dropped.");
+        }
         var removed = before.Except(after, StringComparer.Ordinal).Take(16).ToArray();
         if (removed.Length > 0) notes.Add("Nodes no longer present (animations and placements find nodes by name): " + string.Join(", ", removed) + ".");
         changes.Insert(0, (model, Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }))));
@@ -271,7 +292,7 @@ public static class SourceBlender
         {
             string? current = workspace.Read(relative, token) is { } bytes ? SourceProject.Sha256(bytes) : null;
             expected[relative] = current;
-            if (current != null && accepted.TryGetValue(relative, out var states) && !states.Contains(current)) conflicts.Add(relative);
+            if (current != null && (!accepted.TryGetValue(relative, out var states) || !states.Contains(current))) conflicts.Add(relative);
         }
         if (conflicts.Count > 0 && !force) throw new BlenderConflictException(conflicts);
         if (conflicts.Count > 0) notes.Add($"Replaced changes made since the checkout in {string.Join(", ", conflicts.Take(8))}.");
@@ -302,6 +323,9 @@ public static class SourceBlender
         return string.Join('/', relative.Split('/').Select(Uri.EscapeDataString));
     }
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
+    /// <summary>How many nodes, meshes, materials and scenes of a glTF carry engine attributes.</summary>
+    private static int EngineAttributes(JsonObject root) => new[] { "nodes", "meshes", "materials", "scenes" }
+        .Sum(key => (root[key] as JsonArray ?? []).Count(item => ((item as JsonObject)?["extras"] as JsonObject)?[Worlds.WorldGltf.Key] != null));
     /// <summary>The engine names of a glTF's nodes; unexpected shapes of extras or names (another tool's output) count as no name.</summary>
     private static HashSet<string> Names(JsonObject root) => (root["nodes"] as JsonArray ?? [])
         .Select(n => Text((((n as JsonObject)?["extras"] as JsonObject)?[Worlds.WorldGltf.Key] as JsonObject)?["name"]) ?? Text((n as JsonObject)?["name"]) ?? "")

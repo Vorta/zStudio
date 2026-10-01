@@ -269,7 +269,7 @@ public static partial class SourceBuilder
     {
         foreach (string relative in outputs) { _ = SourceProject.Resolve(destination, relative); SourceProject.RejectNestedLinks(destination, relative); }
         string backup = Path.Combine(destination, ".zstudio-backup-" + Guid.NewGuid().ToString("N"));
-        List<(string Target, string? Saved)> steps = [];
+        List<(string Target, string? Saved, bool Installed)> steps = [];
         try
         {
             foreach (string relative in outputs)
@@ -277,20 +277,26 @@ public static partial class SourceBuilder
                 token.ThrowIfCancellationRequested();
                 string target = SourceProject.Resolve(destination, relative), saved = SourceProject.Resolve(backup, relative);
                 if (File.Exists(target) && !overwrite) throw new IOException($"{relative} appeared in {destination} during the export; nothing was replaced. Export again and allow replacing it.");
-                if (File.Exists(target)) { Directory.CreateDirectory(Path.GetDirectoryName(saved)!); File.Move(target, saved); steps.Add((target, saved)); }
-                else steps.Add((target, null));
+                if (File.Exists(target)) { Directory.CreateDirectory(Path.GetDirectoryName(saved)!); File.Move(target, saved); steps.Add((target, saved, false)); }
+                else steps.Add((target, null, false));
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 File.Move(SourceProject.Resolve(staging, relative), target);
+                steps[^1] = steps[^1] with { Installed = true };
             }
         }
         catch
         {
-            // After a file's original moved aside, anything at the target is new.
+            // Only files this export installed are removed; a file another program put at a target meanwhile stays, and the
+            // original that moved aside for it stays in the backup.
             List<string> unrestored = [];
             for (int i = steps.Count - 1; i >= 0; i--)
             {
-                var (target, saved) = steps[i];
-                try { if (File.Exists(target)) File.Delete(target); if (saved != null) File.Move(saved, target); }
+                var (target, saved, installed) = steps[i];
+                try
+                {
+                    if (installed && File.Exists(target)) File.Delete(target);
+                    if (saved != null) { if (File.Exists(target)) unrestored.Add(target); else File.Move(saved, target); }
+                }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { unrestored.Add(target); }
             }
             if (unrestored.Count > 0) throw new IOException($"Export failed and {unrestored.Count} previous files could not be restored; they remain in {backup}: {string.Join(", ", unrestored.Take(8))}");

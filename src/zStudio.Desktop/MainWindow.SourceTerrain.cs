@@ -46,6 +46,11 @@ public partial class MainWindow
     private Task<DocumentModel> CreateTerrainAsync(DocumentModel doc, string model, IReadOnlyList<string> nodes, string? recipe, CancellationToken token)
     {
         string database = MissionDatabase(doc);
+        string file = model.Replace('\\', '/');
+        // (The mission database itself is refused by Create, with its own reason.)
+        if (!string.Equals(file, database, StringComparison.OrdinalIgnoreCase)
+            && doc.SourceBuild?.Provenance.Values.Any(p => string.Equals(p.ModelFile, file, StringComparison.OrdinalIgnoreCase) || string.Equals(p.LoadedFile, file, StringComparison.OrdinalIgnoreCase)) == true)
+            throw new StudioCommandException("unsupported", $"{file} is already loaded into this world as an object; terrain from it would add its geometry a second time. Use a file the world does not load.");
         return EditSourceWorldAsync(doc, $"Creating terrain from {Path.GetFileName(model)}", w => SourceTerrain.Create(w, database, model, nodes, recipe, token) is var t ? () => w.Retract(t) : null, token, fromBuild: false);
     }
     private Task<DocumentModel> PaintTerrainAsync(DocumentModel doc, string recipe, string region, IReadOnlyList<Vector2> path, float radius, bool add, CancellationToken token)
@@ -61,6 +66,9 @@ public partial class MainWindow
     {
         var session = SourceWorldOf(doc);
         var build = doc.SourceBuild ?? throw new StudioCommandException("not_ready", "The world has not been built.");
+        // Names that keep pieces as objects come from the files the build read; an output that failed read only some of them.
+        if (build.Outputs.FirstOrDefault(o => o.Error != null) is { } failed)
+            throw new StudioCommandException("unsupported", Bounded($"{failed.Path} did not build ({failed.Error}), so the names its sources use are unknown; fix it before converting."));
         string database = MissionDatabase(doc);
         try { return SourceTerrainConversion.Plan(session.Workspace, database, SourceTerrainConversion.References(session.Workspace, build.Dependencies, token), token); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
@@ -127,7 +135,8 @@ public partial class MainWindow
         Task Follow(string label, Func<TerrainRecipe, TerrainRecipe> change, string? selectAfter = null) => FollowTerrainAsync(recipe, surface, selectAfter ?? fields?.SelectedRegion,
             () => EditTerrainAsync(doc, recipe, label, change, CancellationToken.None));
         fields = new(recipe, parsed, surface, piece, region, terrainBrush, new(
-            SetDefaults: (s, a) => Follow(s == null ? "Change terrain defaults" : $"Change surface {s} defaults", r => s == null ? TerrainEdits.SetDefaults(r, a) : TerrainEdits.SetSurfaceDefaults(r, s, a)),
+            SetDefaults: (s, change) => Follow(s == null ? "Change terrain defaults" : $"Change surface {s} defaults", r => s == null ? TerrainEdits.SetDefaults(r, change(r.Defaults))
+                : TerrainEdits.SetSurfaceDefaults(r, s, change((r.Surfaces.FirstOrDefault(x => x.Id == s) ?? throw new InvalidDataException($"The recipe has no surface {s}.")).Defaults))),
             // A renamed region stays selected under its new name.
             UpdateRegion: (name, change) => Follow($"Change region {name}", r => TerrainEdits.UpdateRegion(r, name, change), change(TerrainEdits.Region(parsed, name)).Name),
             AddRegion: name => Follow($"Add region {name}", r => TerrainEdits.AddRegion(r, new(name, [], new TerrainShape([]), TerrainAttributes.None)), name),
@@ -162,6 +171,7 @@ public partial class MainWindow
         if (viewport == null) return;
         bool on = BrushPaints(ViewModel.SelectedDocument, terrainBrush);
         viewport.TerrainBrushRadius = terrainBrush?.Radius ?? 8;
+        viewport.TerrainBrushWaiting = sourceWorkspaceBusy;
         viewport.TerrainBrushActive = on;
     }
     private void ConfigureTerrainScene(SceneViewport viewport)
