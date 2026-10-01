@@ -98,14 +98,32 @@ internal static class SourceEditingMcpChecks
             var blended = Document(updated["document"]!);
             Assert.Contains("data/m1/textures/rock.png", workspace.DirtyFiles);
 
+            // Fog the scripts never set is added after the instruction that created the world.
+            await Preview();
+            int world = blended.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world").Index;
+            var worldState = await Call("source_world_object", new() { ["document"] = Id(blended), ["node"] = world });
+            Assert.Contains(worldState["propertyCommands"]!.AsArray(), c => c!["command"]!.GetValue<string>() == "WorldSetFogColor");
+            var fogged = Document((await Job("source_world_command", new() { ["document"] = Id(blended), ["revision"] = blended.Revision, ["node"] = world, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "0.5", "0.25", "0.125" } }))["document"]!);
+            Assert.Contains("NewWorld %worldName%\r\nWorldSetFogColor 0.5 0.25 0.125\r\n", Text(workspace.Read("gamegen/m1.gs")));
+            // The next change of the same setting edits that instruction in place.
+            int worldAfter = fogged.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world").Index;
+            blended = Document((await Job("source_world_command", new() { ["document"] = Id(fogged), ["revision"] = fogged.Revision, ["node"] = worldAfter, ["command"] = "WorldSetFogColor", ["arguments"] = new[] { "1.0", "0.25", "0.125" } }))["document"]!);
+            Assert.Contains("WorldSetFogColor 1.0 0.25 0.125\r\n", Text(workspace.Read("gamegen/m1.gs")));
+            Assert.DoesNotContain("0.5 0.25 0.125", Text(workspace.Read("gamegen/m1.gs")));
+            // Resolving an interrupted save waits for the project's unsaved edits to be saved or discarded.
+            Assert.Contains("unsaved_changes", (await Call("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, error: true)).GetValue<string>());
+
             // One save writes every changed file of the project together, and leaves no journal behind.
             var saved = await Job("save_document", new() { ["document"] = Id(blended), ["revision"] = blended.Revision });
             var written = saved["written"]!.AsArray().Select(w => w!.GetValue<string>()).ToArray();
             // The buffer Blender wrote back unchanged is not a change.
-            Assert.Equal(["data/m1/models/m1.gltf", "data/m1/textures/rock.png", "data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd"], written.Order(StringComparer.Ordinal));
+            Assert.Equal(["data/m1/models/m1.gltf", "data/m1/textures/rock.png", "data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd", "gamegen/m1.gs"], written.Order(StringComparer.Ordinal));
             Assert.False(blended.IsDirty);
             Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), await File.ReadAllTextAsync(fixture.Path("data/m1/zrdr/puppies.zrd"), Encoding.Latin1, token));
             Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
+            // No save was interrupted; resolving an unknown one is refused.
+            Assert.Equal(0, (await Call("source_recovery", new()))["saveCount"]!.GetValue<int>());
+            Assert.Contains("invalid_argument", (await Call("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, error: true)).GetValue<string>());
             await Call("close_document", new() { ["document"] = Id(blended), ["revision"] = blended.Revision });
 
             async Task Preview()

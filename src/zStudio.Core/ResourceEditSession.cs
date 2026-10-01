@@ -19,11 +19,16 @@ public sealed class ResourceEditSession
     private readonly ConcurrentDictionary<(Guid, ReadOnlyMemory<byte>), ZrdNode> trees = new();
     private ResourceSnapshot saved;
     private bool saving;
+    /// <summary>The source text as opened: edits are written as the smallest change of it, keeping comments and layout.</summary>
+    private readonly Sources.ZrdTextSyntax? syntax;
     public ResourceSnapshot Current { get; private set; }
     public string TargetPath { get; private set; }
     public FileStamp TargetStamp { get; private set; }
     public bool IsArchive => source.Probe.Family == FormatFamily.Archive;
-    /// <summary>A reconstructed source .zrd: members hold compiled data for editing, and the document is written back as text.</summary>
+    /// <summary>
+    /// A reconstructed source .zrd: members hold compiled data for editing, and the document is written back as text that
+    /// changes only where the edit does (see <see cref="Sources.ZrdTextSyntax.Rewrite"/>); comments and layout stay.
+    /// </summary>
     public bool IsSourceText => source.SourceSyntax == "zrd-text";
     public bool IsDirty => Current.Hash != saved.Hash;
     public bool CanUndo => !saving && undo.Count != 0;
@@ -35,7 +40,9 @@ public sealed class ResourceEditSession
     {
         if (document.Probe.Family is not (FormatFamily.Archive or FormatFamily.Zrd) || document.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact ZAR archive or standalone ZRD is required.");
         source = document; TargetPath = document.Path; TargetStamp = document.Stamp;
-        var standalone = IsArchive ? null : (document.Assets.SingleOrDefault()?.Content as ZrdNode ?? ZrdDecoder.Read(document.Bytes));
+        // A text source keeps the nodes of its syntax, so edits can be written back as changes of the text.
+        if (IsSourceText) syntax = Sources.ZrdTextSyntax.Parse(document.Bytes.Span);
+        var standalone = IsArchive ? null : syntax?.Root ?? (document.Assets.SingleOrDefault()?.Content as ZrdNode ?? ZrdDecoder.Read(document.Bytes));
         var members = document.Assets.Select(a => new ResourceMember(Guid.NewGuid(), a.Index, a.Name, IsSourceText ? ZrdWriter.Write(standalone!) : document.Slice(a.Offset, a.Length), IsArchive ? document.Slice(document.ArchiveDirectoryOffset!.Value + a.Index * 148L, 148) : ReadOnlyMemory<byte>.Empty, standalone ?? a.Content as ZrdNode)).ToArray();
         Current = saved = new(members, document, Hash(document.Bytes));
     }
@@ -185,7 +192,7 @@ public sealed class ResourceEditSession
     private ResourceSnapshot Build(IReadOnlyList<ResourceMember> members, CancellationToken token)
     {
         byte[] bytes = IsArchive ? ArchiveWriter.Write(source, members, token)
-            : IsSourceText ? Sources.ZrdText.Encode(ZrdDecoder.Read(members.Single().Data, token), token) : members.Single().Data.ToArray();
+            : IsSourceText ? Sources.ZrdTextSyntax.Encode(syntax!.Rewrite(members.Single().Tree ?? ZrdDecoder.Read(members.Single().Data, token), token).Text) : members.Single().Data.ToArray();
         var document = FormatRegistry.Default.OpenBytes(source.Path, bytes, source.Stamp, token);
         if (document.Probe.Family != source.Probe.Family || document.Diagnostics.Any(d => d.Severity == "Error") || document.Assets.Count != members.Count) throw new InvalidDataException("Resource edit failed shared-reader verification. Its contents must remain an unambiguous ZAR/ZRD file.");
         return new(members.ToArray(), document, Hash(bytes));

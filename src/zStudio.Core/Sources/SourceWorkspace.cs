@@ -42,6 +42,8 @@ public sealed class SourceWorkspace
     public long ContentRevision { get; private set; }
     public bool IsSaving { get; private set; }
     public event Action<SourceWorkspaceChange>? Changed;
+    /// <summary>Asked for each file an edit would change; a returned reason refuses the edit (another editor holds unsaved changes of the file).</summary>
+    public Func<string, string?>? EditGuard { get; set; }
 
     public SourceWorkspace(string root, Saver? saver = null)
     {
@@ -112,6 +114,7 @@ public sealed class SourceWorkspace
             string relative = Normalize(raw);
             if (!seen.Add(relative)) throw new InvalidDataException($"{relative} is changed twice in one edit.");
             CheckEditable(relative);
+            if (EditGuard?.Invoke(relative) is { } refused) throw new InvalidDataException(refused);
             if (content != null && content.Length > Formats.FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} would exceed 512 MiB.");
             Refresh(relative);
             byte[]? before; lock (gate) before = working.TryGetValue(relative, out var current) ? current : baselines[relative].Bytes;

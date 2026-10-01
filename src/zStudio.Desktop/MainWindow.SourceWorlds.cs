@@ -37,6 +37,14 @@ public partial class MainWindow
             throw new StudioCommandException("busy", "Close the other source project's worlds first.");
         try { sourceWorkspace = new SourceWorkspace(full); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        var workspace = sourceWorkspace;
+        // A file an open resource or content editor holds unsaved changes of cannot also change in the workspace.
+        workspace.EditGuard = relative =>
+        {
+            string path = SourceProject.Resolve(workspace.Root, relative);
+            return ViewModel.Documents.FirstOrDefault(d => d.SourceWorld == null && !d.IsDisposed && d.IsDirty && Path.GetFullPath(d.Path).Equals(path, StringComparison.OrdinalIgnoreCase)) is { } open
+                ? $"{relative} is open with unsaved edits ({open.Title.TrimEnd(' ', '*')}); save or close it first." : null;
+        };
         return sourceWorkspace;
     }
     /// <summary>When no world of the project is open any more, its unsaved edits go with the last one (its close was confirmed).</summary>

@@ -134,6 +134,8 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     public bool IsDisposed { get; private set; }
     public event Action? Disposing;
     public bool PickupDiagnosticsReported { get; set; }
+    /// <summary>Asked before a resource edit is accepted; throws to refuse it (a source project's workspace holds unsaved edits of the file).</summary>
+    internal Action<DocumentModel>? BeforeResourceEdit { get; set; }
     internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
     public bool IsDirty => SourceWorld?.Workspace.IsDirty == true || ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
     public void ClaimResourcePaths(IEnumerable<string> paths) => workspaceResolver?.EditOwnership.Acquire(SessionId, Title, paths);
@@ -272,7 +274,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (doc.Probe.Family is FormatFamily.Archive or FormatFamily.Zrd && !doc.Diagnostics.Any(d => d.Severity == "Error"))
         {
             ResourceEdits = new(doc);
-            ResourceEdits.BeforeEdit += () => ClaimResourcePaths([Path, ResourceEdits.TargetPath]);
+            ResourceEdits.BeforeEdit += () => { BeforeResourceEdit?.Invoke(this); ClaimResourcePaths([Path, ResourceEdits.TargetPath]); };
             RebuildResourceAssets();
             ResourceEdits.Changed += () =>
             {

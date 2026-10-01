@@ -5184,6 +5184,85 @@
     ]
   },
   {
+    "Name": "zstudio_source_world_command",
+    "Description": "Set a property a script command makes on a node of a source world (fog of the world, a light\u0027s color, ranges or orientation, a camera\u0027s clip or field of view) as one undoable change of the project\u0027s workspace: the instruction that last set it changes, or a new one follows the instruction that created the node. zstudio_source_world_object lists the commands that fit the node and the arguments each set one has. The world rebuilds and the result is the replacement document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "node",
+        "Type": "integer",
+        "Description": "Scene node index.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "command",
+        "Type": "string",
+        "Description": "Property command.",
+        "Required": true,
+        "Choices": [
+          "WorldSetFogState",
+          "WorldSetFogColor",
+          "WorldSetFogRange",
+          "WorldSetFogAltitude",
+          "WorldSetFogDensity",
+          "LightSetColor",
+          "LightSetDiffuse",
+          "LightSetAmbient",
+          "LightSetRanges",
+          "LightSetOrientation",
+          "LightSetTranslate",
+          "LightSetActive",
+          "LightSetSaturated",
+          "CameraSetNearFarClip",
+          "CameraSetFOV",
+          "CameraSetLODMultiplier",
+          "DisplaySetClearColor"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "arguments",
+        "Type": "array",
+        "Description": "The command\u0027s arguments as script tokens (numbers as text).",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "string",
+          "Description": "One argument.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null
+        },
+        "MinItems": 1,
+        "MaxItems": 8
+      }
+    ]
+  },
+  {
     "Name": "zstudio_source_world_object_edit",
     "Description": "Move, rotate or scale a world object of a source world, or set or clear one of its node flags, as one undoable change of the project\u0027s workspace. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. The world rebuilds and the result is the replacement document; a change the world cannot be built with is taken back. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
@@ -5417,6 +5496,39 @@
         "Description": "Export path relative to the outbox; default the newest.",
         "Required": false,
         "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_recovery",
+    "Description": "List the open source project\u0027s interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved.",
+    "Mutates": false,
+    "Parameters": []
+  },
+  {
+    "Name": "zstudio_source_recovery_resolve",
+    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. The project\u0027s unsaved edits must be saved or discarded first.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "save",
+        "Type": "string",
+        "Description": "Save id from zstudio_source_recovery.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "What to do.",
+        "Required": true,
+        "Choices": [
+          "roll_back",
+          "complete",
+          "abandon"
+        ],
         "Properties": null
       }
     ]

@@ -20,6 +20,7 @@ public partial class MainWindow
         // A source project's workspace lives while any of its worlds is open; its last close decides its edits.
         ViewModel.Documents.CollectionChanged += (_, e) =>
         {
+            foreach (var added in e.NewItems?.OfType<DocumentModel>() ?? []) added.BeforeResourceEdit = RefuseResourceEditOfWorkspaceFile;
             if (e.Action is not System.Collections.Specialized.NotifyCollectionChangedAction.Add) ReleaseUnusedSourceWorkspace();
             if (!ViewModel.Documents.Any(d => d.SourceWorld != null)) discardApprovedWorkspace = null;
         };
@@ -47,6 +48,8 @@ public partial class MainWindow
             if (args.PropertyName is nameof(MainViewModel.RootPath) or nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) UpdateDocumentCommands();
             if (args.PropertyName is nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) ArrangeWorkspace();
             if (args.PropertyName == nameof(MainViewModel.RootPath) && ViewModel.SelectedDocument == null) SelectNavigatorSection(0);
+            // An interrupted save of a source project is reported, and resolved only on the user's decision.
+            if (args.PropertyName == nameof(MainViewModel.RootPath) && SourceProjectRoot is { } project) _ = CheckSourceRecoveryAsync(project);
             if (args.PropertyName == nameof(MainViewModel.GlobalQuery)) UpdateSearchHint();
         };
         ViewModel.SearchResults.CollectionChanged += (_, _) => UpdateSearchHint();

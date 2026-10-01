@@ -16,7 +16,7 @@ public sealed class McpLazyConnectorTests
         int connections = 0;
         await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => false, async client =>
         {
-            Assert.Equal(95, (await client.ListToolsAsync()).Count);
+            Assert.Equal(98, (await client.ListToolsAsync()).Count);
             Assert.Equal(2, (await client.ListResourcesAsync()).Count);
             Assert.False((await client.CallToolAsync("zstudio_capabilities")).IsError);
             Assert.Single((await client.ReadResourceAsync("zstudio://capabilities")).Contents);

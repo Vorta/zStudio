@@ -40,13 +40,14 @@ internal sealed class SourceObjectPropertiesEditor : FieldEditor, IDisposable
     private readonly SourceObjectState state;
     private readonly Func<ObjectTransform, Task> transform;
     private readonly Func<uint, bool, Task> flag;
+    private readonly Func<string, IReadOnlyList<string>, Task>? command;
     public event Action? Changed;
     public JsonObject Json => state.Json();
     public SourceObjectState State => state;
 
-    public SourceObjectPropertiesEditor(SourceObjectState state, Func<ObjectTransform, Task> transform, Func<uint, bool, Task> flag)
+    public SourceObjectPropertiesEditor(SourceObjectState state, Func<ObjectTransform, Task> transform, Func<uint, bool, Task> flag, Func<string, IReadOnlyList<string>, Task>? command = null)
     {
-        this.state = state; this.transform = transform; this.flag = flag;
+        this.state = state; this.transform = transform; this.flag = flag; this.command = command;
         Build();
     }
 
@@ -63,6 +64,20 @@ internal sealed class SourceObjectPropertiesEditor : FieldEditor, IDisposable
             Vector(form, "Rotation (degrees)", current.RotationDegrees, v => current with { RotationDegrees = v });
             Vector(form, "Scale", current.Scale, v => current with { Scale = v });
         }
+        // Settings a script made with a property command (fog, lights, cameras): each writer's arguments, as written.
+        if (command != null)
+            foreach (var (name, writer) in state.Origin.Writers.Where(w => SourceObjectEdits.PropertyCommands.ContainsKey(w.Key)).OrderBy(w => w.Key, StringComparer.Ordinal))
+            {
+                string written = string.Join(" ", writer.Tokens.Skip(1));
+                Input(form, name, written, _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: SourceObjectEdits.PropertyCommands[name] + $" · {writer.Script} line {writer.Line}",
+                    asyncCommit: async text =>
+                    {
+                        string[] args = text.Split([' ', ',', '\t'], StringSplitOptions.RemoveEmptyEntries);
+                        if (args.Length == 0) throw new FormatException("Enter the command's arguments.");
+                        if (string.Join(" ", args) != written) await command(name, args);
+                    });
+            }
+        if (state.Class != nameof(Recoil.Zbd.Core.Worlds.WorldNodeClass.Object3D) && state.Class != nameof(Recoil.Zbd.Core.Worlds.WorldNodeClass.Lod)) { Changed?.Invoke(); return; }
         foreach (var (bit, label) in EditableFlags)
         {
             bool on = (state.Flags & bit) != 0;

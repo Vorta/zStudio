@@ -27,6 +27,16 @@ public partial class MainWindow
         return model;
     }
 
+    /// <summary>A resource editor may not change a project file the source workspace holds unsaved edits of; the edits would conflict on save.</summary>
+    private void RefuseResourceEditOfWorkspaceFile(DocumentModel doc)
+    {
+        if (sourceWorkspace is not { } workspace) return;
+        string full = Path.GetFullPath(doc.Path), prefix = workspace.Root + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return;
+        string relative = SourceProject.Relative(workspace.Root, full);
+        if (workspace.IsFileDirty(relative))
+            throw new InvalidOperationException($"The source project holds unsaved edits of {relative}; save or undo them before editing the file here.");
+    }
     /// <summary>The world-file node a shown scene node is, or null for a runtime copy (a placed vehicle or pickup instance).</summary>
     private int? SourceObjectNode(int node)
     {
@@ -78,6 +88,12 @@ public partial class MainWindow
         EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanTransform(w, s.Name, s.Origin, e, transform, token), token);
     private Task<DocumentModel> FlagSourceObjectAsync(DocumentModel doc, int node, uint bit, bool on, CancellationToken token) =>
         EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanFlag(w, s.Name, s.Origin, e, bit, on, token), token);
+    private Task<DocumentModel> CommandSourceObjectAsync(DocumentModel doc, int node, string command, IReadOnlyList<string> args, CancellationToken token)
+    {
+        if (!SourceObjectEdits.PropertyCommands.ContainsKey(command)) throw new StudioCommandException("invalid_argument", $"{command} is not a property command (see zstudio_source_world_object).");
+        if (args.Count is 0 or > 8 || args.Any(a => a.Length is 0 or > 64)) throw new StudioCommandException("invalid_argument", "Give 1–8 arguments of up to 64 characters.");
+        return EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanCommand(w, s.Name, s.Origin, e, command, args, token), token);
+    }
 
     /// <summary>Opens Properties for a source world's object; after an edit it follows the object into the rebuilt world.</summary>
     private bool ShowSourceObjectProperties(DocumentModel doc, int node)
@@ -86,7 +102,8 @@ public partial class MainWindow
         var window = GetPropertiesWindow();
         SourceObjectPropertiesEditor fields = new(state,
             transform => FollowSourceObjectAsync(state, () => MoveSourceObjectAsync(doc, node, transform, CancellationToken.None)),
-            (bit, on) => FollowSourceObjectAsync(state, () => FlagSourceObjectAsync(doc, node, bit, on, CancellationToken.None)));
+            (bit, on) => FollowSourceObjectAsync(state, () => FlagSourceObjectAsync(doc, node, bit, on, CancellationToken.None)),
+            (command, args) => FollowSourceObjectAsync(state, () => CommandSourceObjectAsync(doc, node, command, args, CancellationToken.None)));
         bool opened = window.SetSourceObject(doc, fields);
         PresentProperties(window, opened);
         return opened;
@@ -117,10 +134,21 @@ public partial class MainWindow
                     load = Instruction(origin.Load), created = Instruction(origin.Created), attached = Instruction(origin.Attached),
                     writers = origin.Writers.Take(32).ToDictionary(w => w.Key, w => Instruction(w.Value))
                 },
-                editableFlags = SourceObjectPropertiesEditor.EditableFlags.Select(f => new { bit = $"0x{f.Bit:X}", label = f.Label, on = (state.Flags & f.Bit) != 0 }).ToArray()
+                editableFlags = SourceObjectPropertiesEditor.EditableFlags.Select(f => new { bit = $"0x{f.Bit:X}", label = f.Label, on = (state.Flags & f.Bit) != 0 }).ToArray(),
+                propertyCommands = SourceObjectEdits.PropertyCommands.Select(p => new { command = p.Key, arguments = p.Value, set = origin.Writers.TryGetValue(p.Key, out var w) ? w.Tokens.Skip(1).Take(16).ToArray() : null }).Where(p => p.set != null || CommandFits(state.Class, p.command)).ToArray()
             });
             object? Instruction(SourceInstruction? i) => i == null ? null : new { script = i.Script, line = i.Line, command = i.Command, tokens = i.Tokens.Take(16).Select(t => Bounded(t, 128)).ToArray(), runs = d.SourceBuild!.Executions.GetValueOrDefault((i.Script, i.Line)) };
         });
+        RegisterJob(r, "source_world_command", "Set a property a script command makes on a node of a source world (fog of the world, a light's color, ranges or orientation, a camera's clip or field of view) as one undoable change of the project's workspace: the instruction that last set it changes, or a new one follows the instruction that created the node. zstudio_source_world_object lists the commands that fit the node and the arguments each set one has. The world rebuilds and the result is the replacement document.",
+            [DocumentParameter, RevisionParameter, new("node", "integer", "Scene node index.", true, Minimum: 0, Maximum: int.MaxValue),
+             P("command", "string", "Property command.", true, [.. SourceObjectEdits.PropertyCommands.Keys]),
+             new("arguments", "array", "The command's arguments as script tokens (numbers as text).", true, Items: new("", "string", "One argument."), MinItems: 1, MaxItems: 8)], true,
+            async (a, token) =>
+            {
+                var d = TargetDocument(a, true);
+                var args = (a["arguments"] as JsonArray)!.Select(v => v!.GetValue<string>()).ToArray();
+                return Result(new { document = DocumentState(await CommandSourceObjectAsync(d, Int(a, "node"), Text(a, "command"), args, token)) });
+            });
         RegisterJob(r, "source_world_object_edit", "Move, rotate or scale a world object of a source world, or set or clear one of its node flags, as one undoable change of the project's workspace. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. The world rebuilds and the result is the replacement document; a change the world cannot be built with is taken back.",
             [DocumentParameter, RevisionParameter, new("node", "integer", "Scene node index.", true, Minimum: 0, Maximum: int.MaxValue),
              new("position", "object", "New local position.", Properties: [P("x", "number", "X.", true), P("y", "number", "Y.", true), P("z", "number", "Z.", true)]),
@@ -149,5 +177,7 @@ public partial class MainWindow
                 return Result(new { document = DocumentState(next) });
             });
     }
+    /// <summary>Whether a property command applies to a node class (the interpreter applies World… to worlds, Light… to lights, and so on).</summary>
+    private static bool CommandFits(string nodeClass, string command) => command.StartsWith(nodeClass switch { "World" => "World", "Light" => "Light", "Camera" => "Camera", "Display" => "Display", _ => "\0" }, StringComparison.Ordinal);
     private static Vector3? Vector(JsonObject a, string name) => a[name] is JsonObject v ? new Vector3(Coordinate(v, "x"), Coordinate(v, "y"), Coordinate(v, "z")) : null;
 }

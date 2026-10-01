@@ -47,6 +47,16 @@ public sealed record SourceEditPlan(string Label, IReadOnlyList<(string Relative
 public static class SourceObjectEdits
 {
     private static readonly string[] TransformCommands = ["Object3DTranslate", "Object3DRotate", "Object3DScale"];
+    /// <summary>Script commands that set a property of the node they apply to (fog, lights, cameras, windows), with the arguments each takes.</summary>
+    public static readonly IReadOnlyDictionary<string, string> PropertyCommands = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["WorldSetFogState"] = "linear, exponential or off", ["WorldSetFogColor"] = "red green blue (0–1)", ["WorldSetFogRange"] = "start end",
+        ["WorldSetFogAltitude"] = "low high", ["WorldSetFogDensity"] = "density",
+        ["LightSetColor"] = "red green blue", ["LightSetDiffuse"] = "diffuse", ["LightSetAmbient"] = "ambient", ["LightSetRanges"] = "near far",
+        ["LightSetOrientation"] = "x y z degrees", ["LightSetTranslate"] = "x y z", ["LightSetActive"] = "on or off", ["LightSetSaturated"] = "on or off",
+        ["CameraSetNearFarClip"] = "near far", ["CameraSetFOV"] = "horizontal vertical degrees", ["CameraSetLODMultiplier"] = "multiplier",
+        ["DisplaySetClearColor"] = "red green blue",
+    };
     /// <summary>Node flag bits and the script command that sets each.</summary>
     public static readonly IReadOnlyDictionary<uint, string> FlagCommands = new Dictionary<uint, string>
     {
