@@ -64,6 +64,9 @@ public sealed partial class MainViewModel
 
     private async Task ReloadSelectedAsync()
     {
+        // Committing pending input first: it can rebuild the selected source world, which is then the one reloaded.
+        if (ResolveDraftsAsync != null && !await ResolveDraftsAsync()) return;
+        CloseDecisionsStarting?.Invoke();
         if (SelectedDocument is not { } original) return;
         // A source world keeps its pending edits across a rebuild unless its own files changed on disk.
         if ((original.SourceWorld is not { } world || world.Workspace.ExternalChanges().Any(world.Workspace.IsFileDirty)) && !await CanRemoveAsync(original)) return;

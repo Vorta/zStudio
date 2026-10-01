@@ -60,8 +60,19 @@ public partial class MainWindow
         }
         sourceWorkspace = null; discardApprovedWorkspace = null;
     }
-    /// <summary>A world of the project is opening: closing the last open world now could not decide its edits.</summary>
-    private bool SourceWorldOpening(DocumentModel doc) => doc.SourceWorld != null && sourceWorldsOpening > 0;
+    /// <summary>
+    /// A world of the project is opening or rebuilding: closing the last open world now could not carry out its decision
+    /// (the opening would show the edits; a failed rebuild's take-back would change what Discard approved).
+    /// </summary>
+    private bool SourceWorldPending(DocumentModel doc) => doc.SourceWorld != null && (sourceWorldsOpening > 0 || sourceWorkspaceBusy);
+    /// <summary>
+    /// A Discard approval belongs to the close that asked for it: when a world of its workspace is still open, the close
+    /// did not happen (cancelled, superseded), and a later close asks again.
+    /// </summary>
+    private void ForgetStaleDiscardApproval()
+    {
+        if (discardApprovedWorkspace is { } approved && ViewModel.Documents.Any(d => !d.IsDisposed && d.SourceWorld?.Workspace == approved.Workspace)) discardApprovedWorkspace = null;
+    }
     /// <summary>The document a source world shows now: a draft commit or another edit may have rebuilt it.</summary>
     private DocumentModel LiveDocument(DocumentModel doc) =>
         doc.IsDisposed && doc.SourceWorld?.Owner is { IsDisposed: false } owner && ViewModel.Documents.Contains(owner) ? owner : doc;

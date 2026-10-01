@@ -106,9 +106,15 @@ public static class SourceObjectEdits
             if (writers.Select(w => w.Script).Append(anchor.Script).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
                 throw new InvalidDataException($"{nodeName}'s transform is set in several scripts; edit them in the scripts directly.");
             ScriptEdit edit = new(workspace, anchor.Script, executions, token, mission);
-            if (position) edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", requested.Position, Vector3.Zero, anchor);
-            if (rotation) edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", Round(requested.RotationDegrees), Vector3.Zero, anchor);
-            if (scale) edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", Round(requested.Scale), Vector3.One, anchor);
+            // A position is shown as built, so it compares exactly. Rotation and scale come from one decomposition (a mirror
+            // shows as a negative X scale, whichever axis the script mirrors), so both are written together; components that
+            // match the build's values keep their tokens.
+            if (position) edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", requested.Position, Vector3.Zero, anchor, tolerance: 0);
+            if (rotation || scale)
+            {
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", Round(requested.RotationDegrees), Vector3.Zero, anchor);
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", Round(requested.Scale), Vector3.One, anchor);
+            }
             return new(label, edit.Changes(), $"{anchor.Script} line {anchor.Line}", edit.Notes);
         }
         // A node of a glTF file: its transform is the node's, except a translation a script sets.
@@ -341,10 +347,12 @@ public static class SourceObjectEdits
                     throw new InvalidDataException($"{parent.Name} is not a node of {origin.ModelFile}; a mission database node can only move under another node of the database, or to the world.");
                 into = p.ModelNode;
             }
-            if (origin.Named.FirstOrDefault(n => n.Command == "AddChild") is { } attach)
-                throw new InvalidDataException($"{attach.Script} line {attach.Line} also attaches {node.Name} elsewhere; a new place in the glTF would move that instance too. Move it in the scripts directly.");
-            // The glTF keeps the node's place from the file's transforms; a script transform along either chain moves it elsewhere.
-            var chain = Ancestors(node).Prepend(node).Concat(parent == null ? [] : Ancestors(parent).Prepend(parent));
+            // The glTF keeps the node's place from the file's transforms; a script transform along either chain moves it
+            // elsewhere, and a script that also attaches a node of either chain places an instance the glTF does not.
+            var chain = Ancestors(node).Prepend(node).Concat(parent == null ? [] : Ancestors(parent).Prepend(parent)).ToList();
+            foreach (var n in chain)
+                if (target.Provenance.TryGetValue(n, out var linked) && linked.Named.FirstOrDefault(x => x.Command == "AddChild") is { } attach)
+                    throw new InvalidDataException($"{attach.Script} line {attach.Line} also attaches {n.Name} elsewhere; a new place in the glTF would not hold for that instance. Move it in the scripts directly.");
             if (chain.FirstOrDefault(n => target.Provenance.TryGetValue(n, out var p) && TransformCommands.Any(p.Writers.ContainsKey)) is { } scripted)
                 throw new InvalidDataException($"A script sets {scripted.Name}'s transform, so the glTF alone cannot keep {node.Name} in place; move it in the scripts directly.");
             return GltfFile(target.Workspace, origin, label, (root, _) => GltfNodeEdits.Reparent(root, origin.ModelNode, into), token,
@@ -446,7 +454,7 @@ public static class SourceObjectEdits
     }
     /// <summary>Rounds values a matrix round trip leaves a hair off (89.99999 → 90, 1.0000001 → 1).</summary>
     private static Vector3 Round(Vector3 v) => new(R(v.X), R(v.Y), R(v.Z));
-    private static float R(float x) => MathF.Abs(x - MathF.Round(x, 3)) < 1e-4f ? MathF.Round(x, 3) : x;
+    private static float R(float x) => MathF.Abs(x) >= 1e-3f && MathF.Abs(x - MathF.Round(x, 3)) < 1e-4f ? MathF.Round(x, 3) : x;
 
     /// <summary>A script number as the shipped scripts write them: shortest round-trip form with a decimal point.</summary>
     public static string Number(float value)
@@ -548,16 +556,18 @@ public static class SourceObjectEdits
             list.Add(tokens);
         }
         /// <summary>A vector instruction: the existing one changes; a missing one is added when the value differs from the default.</summary>
-        public void Set(SourceInstruction? writer, string command, Vector3 value, Vector3 unset, SourceInstruction anchor)
+        /// <remarks><paramref name="tolerance"/> is relative: values a decomposition computed differ from the script's by noise.</remarks>
+        public void Set(SourceInstruction? writer, string command, Vector3 value, Vector3 unset, SourceInstruction anchor, float tolerance = 1e-5f)
         {
             string[] numbers = [Number(value.X), Number(value.Y), Number(value.Z)];
             if (writer != null)
             {
+                // A writer missing values is written whole.
+                if (writer.Args.Count < 3) { ReplaceLine(writer, [command, .. numbers]); return; }
                 // Only the components that differ from the values the build used (a macro's value, not its name) change.
-                if (writer.Args.Count < 3) { Replace(writer, new() { [1] = numbers[0], [2] = numbers[1], [3] = numbers[2] }); return; }
                 Dictionary<int, string> changed = [];
                 for (int i = 0; i < 3; i++)
-                    if (MathF.Abs(WorldAssembler.Number(writer.Args[i]) - value[i]) > 1e-5f * MathF.Max(1, MathF.Abs(value[i]))) changed[i + 1] = numbers[i];
+                    if (MathF.Abs(WorldAssembler.Number(writer.Args[i]) - value[i]) > tolerance * MathF.Max(1, MathF.Abs(value[i]))) changed[i + 1] = numbers[i];
                 if (changed.Count > 0) Replace(writer, changed);
                 return;
             }

@@ -37,14 +37,15 @@ public partial class MainWindow
         System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag(); if (!document.IsDirty) return true;
         if (document.SourceWorld is { } world)
         {
-            if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && !OtherSourceWorldOpen(document) && SourceWorldOpening(document))
+            if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && !OtherSourceWorldOpen(document) && SourceWorldPending(document))
             {
-                ViewModel.Status = "A world of this source project is opening; close this one when it is shown, so its unsaved edits can be decided.";
+                ViewModel.Status = "A world of this source project is opening or rebuilding; try again when it is shown, so its unsaved edits can be decided.";
                 return false;
             }
             // The project's edits stay with its other open worlds; they are decided when the last one closes.
             if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && OtherSourceWorldOpen(document)) return true;
-            if (discardApprovedWorkspace is { } approved && approved.Workspace == world.Workspace && approved.Revision == world.Workspace.Revision) return true;
+            // Closing every document: one Discard covers the project's other worlds in the same decision.
+            if ((closingAllDocuments || ViewModel.ClosingAllDocuments) && discardApprovedWorkspace is { } approved && approved.Workspace == world.Workspace && approved.Revision == world.Workspace.Revision) return true;
         }
         bool pickup = document.SourceWorld != null || document.ContentEdits != null || document.PickupEdits?.IsDirty == true || document.ResourceEdits != null || document.ModelEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
         animation?.Pause(); string choice = "Cancel";

@@ -80,6 +80,12 @@ internal static class SourceEditingMcpChecks
             await Preview();
             moved = Document(await Call("undo_redo", new() { ["document"] = Id(typed), ["revision"] = typed.Revision, ["action"] = "undo" }));
             Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            // A Discard approval left from a close that did not happen (the world is still open) is forgotten when the next
+            // close decision starts, so it never skips that decision's prompt.
+            var approval = typeof(MainWindow).GetField("discardApprovedWorkspace", hidden)!;
+            approval.SetValue(main, (workspace, workspace.Revision));
+            main.ViewModel.CloseDecisionsStarting!();
+            Assert.Null(approval.GetValue(main));
 
             // Undo is project-wide and restores the exact source bytes; redo brings the move back.
             var undone = Document(await Call("undo_redo", new() { ["document"] = Id(moved), ["revision"] = moved.Revision, ["action"] = "undo" }));

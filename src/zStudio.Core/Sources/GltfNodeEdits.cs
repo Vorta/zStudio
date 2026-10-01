@@ -45,13 +45,13 @@ public static class GltfNodeEdits
         var nodes = Nodes(root);
         List<int> order = []; HashSet<int> seen = []; Collect(index);
         Dictionary<int, int> copies = []; for (int k = 0; k < order.Count; k++) copies[order[k]] = nodes.Count + k;
-        long nextInstance = nodes.Select(n => Instance(n?["extras"]?[WorldGltf.Key]?["instance"]) ?? 0).DefaultIfEmpty(0).Max() + 1;
+        long nextInstance = nodes.Select(n => Instance((((n as JsonObject)?["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject)?["instance"]) ?? 0).DefaultIfEmpty(0).Max() + 1;
         Dictionary<long, long> instances = [];
         foreach (int original in order)
         {
             var copy = (JsonObject)nodes[original]!.DeepClone();
             if (copy["children"] is JsonArray children) copy["children"] = new JsonArray(children.Select(c => (JsonNode?)JsonValue.Create(copies[c!.GetValue<int>()])).ToArray());
-            if (copy["extras"]?[WorldGltf.Key] is JsonObject marked && Instance(marked["instance"]) is long instance)
+            if ((copy["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject marked && Instance(marked["instance"]) is long instance)
             {
                 if (!instances.TryGetValue(instance, out long renumbered)) instances[instance] = renumbered = nextInstance++;
                 marked["instance"] = renumbered;

@@ -270,6 +270,32 @@ public sealed class SourceObjectStructureTests
     }
 
     [Fact]
+    public async Task ScriptMirrorsAndSmallMovesAreWrittenAsShown()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_at", new(2500, 0, -50)), []), Token);
+        // The script mirrors the tank in Y; it shows as a negative X scale and a half turn about Z.
+        string script = Text(workspace, "gamegen/m1.gs");
+        workspace.Apply("Mirror", [("gamegen/m1.gs", Encoding.Latin1.GetBytes(script.Replace("Object3DTranslate 2500.0 0.0 -50.0", "Object3DTranslate 2500.0 0.0 -50.0\r\nObject3DScale 1.0 -1.0 1.0")))], Token);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var tank = Target(workspace, "m1", build, world, "tank_at");
+        var shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(tank.Node)!.Value);
+        // Turning it writes rotation and scale as one decomposition, so the built matrix is the one asked for.
+        var turned = shown with { RotationDegrees = shown.RotationDegrees with { Y = 45 } };
+        Apply(workspace, SourceObjectEdits.PlanTransform(workspace, "tank_at", tank.Origin, build.Executions, turned, Token, "m1", shown));
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var built = WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "tank_at"))!.Value;
+        var expected = turned.Matrix();
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) Assert.True(MathF.Abs(built[i, j] - expected[i, j]) < 1e-4f, $"{built} is not {expected}");
+        // A small move far from the origin is written, not lost in a relative tolerance.
+        tank = Target(workspace, "m1", build, world, "tank_at");
+        shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(tank.Node)!.Value);
+        var nudged = SourceObjectEdits.PlanTransform(workspace, "tank_at", tank.Origin, build.Executions, shown with { Position = shown.Position with { X = 2500.02f } }, Token, "m1", shown);
+        Assert.Contains("Object3DTranslate 2500.02 0.0 -50.0", Encoding.Latin1.GetString(Assert.Single(nudged.Changes).Content));
+    }
+
+    [Fact]
     public void GltfNodeEditsRenumberEveryReference()
     {
         var root = JsonNode.Parse("""

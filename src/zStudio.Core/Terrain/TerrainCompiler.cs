@@ -581,10 +581,11 @@ public static class TerrainCompiler
             string head = $"{label}_{surface}";
             if (head.Length + suffix.Length > 34)
             {
-                // A shortened head ends with the surface's place in the recipe (two base-36 digits; at most 256 surfaces),
-                // so surfaces whose ids begin alike keep apart.
+                // A shortened head ends with ~ (which labels and surface ids never hold, so no full name can equal it) and the
+                // surface's place in the recipe (two base-36 digits; at most 256 surfaces), so surfaces whose ids begin alike
+                // keep apart.
                 const string digits = "0123456789abcdefghijklmnopqrstuvwxyz";
-                head = $"{head[..(34 - suffix.Length - 3)]}_{digits[surfaceIndex / 36 % 36]}{digits[surfaceIndex % 36]}";
+                head = $"{head[..(34 - suffix.Length - 3)]}~{digits[surfaceIndex / 36 % 36]}{digits[surfaceIndex % 36]}";
             }
             return head + suffix;
         }

@@ -102,6 +102,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { AddProblem("Could not save mission difficulty: " + ex.Message); }
     }
     public Func<DocumentModel, Task<bool>>? ConfirmDiscardAsync { get; set; }
+    /// <summary>Resolves pending GUI input before close decisions: committing it can rebuild (replace) a source world.</summary>
+    public Func<Task<bool>>? ResolveDraftsAsync { get; set; }
+    /// <summary>A new set of close decisions starts: decisions left from an earlier, unfinished one no longer apply.</summary>
+    public Action? CloseDecisionsStarting { get; set; }
     /// <summary>Every document is being closed (a root change), so a project's edits cannot stay with another of its documents.</summary>
     internal bool ClosingAllDocuments { get; private set; }
     internal Action<bool>? ValidateNavigationPublication { get; set; }
@@ -119,6 +123,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public async Task OpenRootAsync(string root, CancellationToken cancellationToken = default, Action? beforePublish = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (beforePublish == null && ResolveDraftsAsync != null && !await ResolveDraftsAsync()) return;
         long generation = ++navigationGeneration;
         RequireCurrentNavigation(generation);
         root = Path.GetFullPath(root);
@@ -139,6 +144,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             try
             {
                 ClosingAllDocuments = true;
+                CloseDecisionsStarting?.Invoke();
                 foreach (var document in Documents.ToArray())
                 {
                     if (!await CanRemoveAsync(document)) return;
@@ -259,6 +265,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void Close(DocumentModel document) { if (document.IsDirty) throw new InvalidOperationException("Use CloseAsync to resolve unsaved edits."); RemoveDocument(document); }
     public async Task CloseAsync(DocumentModel document)
     {
+        CloseDecisionsStarting?.Invoke();
         if (!await CanRemoveAsync(document)) return;
         RemoveDocument(Replacement(document));
     }

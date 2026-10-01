@@ -225,7 +225,7 @@ public sealed class PropertiesWindow : Window
         { e.Handled = true; RunUndo(e.Key == Key.Y); }
         // Escape belongs to field drafts, not to window dismissal.
     }
-    /// <summary>The user closed the window (X, Alt+F4), rather than its document's replacement or a command.</summary>
+    /// <summary>The window was dismissed (X, Alt+F4, properties_close), rather than closed by its document's replacement.</summary>
     internal bool ClosedByUser { get; private set; }
     private void OnClosing(object? sender, CancelEventArgs e)
     {
@@ -241,6 +241,8 @@ public sealed class PropertiesWindow : Window
         }));
     }
     internal void CloseResolved() { closingResolved = true; Close(); }
+    /// <summary>Closes by an explicit request (MCP properties_close): an edit in flight does not reopen it.</summary>
+    internal void Dismiss() { ClosedByUser = true; CloseResolved(); }
     private void RememberBounds()
     {
         Rect bounds = WindowState == WindowState.Normal ? new(Left, Top, ActualWidth, ActualHeight) : RestoreBounds;

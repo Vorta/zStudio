@@ -175,15 +175,19 @@ public partial class MainWindow
         if (terrainBrush is not { } brush || ViewModel.SelectedDocument is not { SourceWorld: not null } doc) return;
         if (!BrushPaints(doc, brush)) { ViewModel.Status = $"This world has no pieces of {brush.Recipe}; the brush paints the world built from it."; return; }
         // Properties closes with the replaced document; when it showed this recipe, it shows it again for the rebuilt world.
-        var shown = propertiesWindow?.SourceFields as TerrainPropertiesEditor;
-        bool follow = shown?.RecipePath == brush.Recipe && propertiesWindow?.Document == doc;
+        var window = propertiesWindow;
+        var shown = window?.SourceFields as TerrainPropertiesEditor;
+        bool follow = shown?.RecipePath == brush.Recipe && window?.Document == doc;
+        // Typing in Properties during the rebuild would count as unfinished input and take the stroke back.
+        if (shown != null) shown.IsEnabled = false;
         try
         {
             var next = await PaintTerrainAsync(doc, brush.Recipe, brush.Region, [.. stroke.Select(p => new Vector2(p.X, p.Z))], brush.Radius, brush.Add, CancellationToken.None);
-            if (follow && !next.IsDisposed && (propertiesWindow == null || propertiesWindow.Document == null || propertiesWindow.Document == next))
+            if (follow && !next.IsDisposed && FollowsProperties(window, next))
                 ShowTerrainProperties(next, brush.Recipe, shown!.Surface, null, brush.Region);
         }
         catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+        finally { if (shown != null) shown.IsEnabled = true; }
     }
 
     /// <summary>GUI: Create terrain from meshes of a glTF file in the project, then show its recipe in Properties.</summary>

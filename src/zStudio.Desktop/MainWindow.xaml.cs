@@ -66,6 +66,8 @@ public partial class MainWindow : Window
         WorldDifficulty.ItemsSource = MainViewModel.DifficultyChoices;
         ViewModel.PropertyChanged += DifficultyPreferenceChanged;
         ViewModel.ConfirmDiscardAsync = ConfirmDocumentCloseAsync;
+        ViewModel.ResolveDraftsAsync = async () => animation?.ResolvePendingDrafts() != false && await ResolvePropertiesDraftsAsync();
+        ViewModel.CloseDecisionsStarting = ForgetStaleDiscardApproval;
         ViewModel.ValidateNavigationPublication = closesDocuments =>
         {
             RequireAutomationMutationAvailable();
@@ -661,6 +663,7 @@ public partial class MainWindow : Window
                 // original WPF Closing event before showing prompts or calling Close again.
                 await Dispatcher.Yield(DispatcherPriority.Normal);
                 if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync()) return;
+                ForgetStaleDiscardApproval();
                 closingAllDocuments = true;
                 foreach (var document in ViewModel.Documents.ToArray())
                     if (!await ConfirmDocumentCloseAsync(document)) return;

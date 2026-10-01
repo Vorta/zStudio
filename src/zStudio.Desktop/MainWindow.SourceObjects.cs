@@ -187,8 +187,9 @@ public partial class MainWindow
             new(parent => FollowSourceObjectAsync(state, () => ReparentSourceObjectAsync(doc, node, GameZWriter.NodeSlots(SourceWorldModel(doc).World)[SourceWorldNodeNamed(doc, parent)], CancellationToken.None)),
                 async name =>
                 {
+                    var shownWindow = propertiesWindow;
                     var next = await DuplicateSourceObjectAsync(doc, node, name, null, CancellationToken.None);
-                    if (!next.IsDisposed && SourceNodeNamed(next, name) is int copy && (propertiesWindow?.Document == null || propertiesWindow.Document == next))
+                    if (!next.IsDisposed && SourceNodeNamed(next, name) is int copy && FollowsProperties(shownWindow, next))
                         try { ShowSourceObjectProperties(next, copy); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
                 },
                 async () => { await DeleteSourceObjectAsync(doc, node, CancellationToken.None); propertiesWindow?.Close(); }));

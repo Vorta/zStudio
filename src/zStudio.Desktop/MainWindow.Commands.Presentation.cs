@@ -89,7 +89,7 @@ public partial class MainWindow
         Register(r,"properties_close","Close the Properties window after drafts have been explicitly resolved.",true,[],_=>
         {
             if(propertiesWindow?.HasPendingDrafts==true) throw new StudioCommandException("pending_drafts","Resolve Properties drafts first.");
-            ++propertyRequest; propertiesWindow?.CloseResolved(); return Result(new { closed=true });
+            ++propertyRequest; propertiesWindow?.Dismiss(); return Result(new { closed=true });
         });
         Register(r,"properties_state","Read the pinned Properties window identity, content and current editable fields.",false,[],_ =>
             Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? (FieldEditor?)propertiesWindow?.ResourceFields ?? propertiesWindow?.SourceFields)?.DescribeAutomationFields() }));

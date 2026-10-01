@@ -125,10 +125,15 @@ public partial class FieldEditor : UserControl
         if (disposed) return false;
         committingDraft = true;
         // While the edit runs (a source world rebuilds), no other input starts: it would be lost with the replaced
-        // document, or would count as unfinished and take the edit back.
+        // document, or would count as unfinished and take the edit back. Focus returns where it was.
+        var focused = Keyboard.FocusedElement as UIElement;
         IsEnabled = false;
         try { bool result = await input.Draft.CommitAsync(); if (!disposed) input.Display(); return result; }
-        finally { committingDraft = false; if (!disposed) { IsEnabled = true; if (!HasPendingDrafts) RefreshProperties(); } }
+        finally
+        {
+            committingDraft = false;
+            if (!disposed) { IsEnabled = true; if (focused is { IsVisible: true } && IsAncestorOf(focused)) focused.Focus(); if (!HasPendingDrafts) RefreshProperties(); }
+        }
     }
     public async Task<bool> ResolvePendingDraftsAsync()
     {
@@ -222,10 +227,10 @@ public partial class FieldEditor : UserControl
         {
             // A draft whose commit rebuilt a source world closed this editor; the action belongs to the old document.
             if (!await ResolvePendingDraftsAsync() || disposed) return;
-            button.IsEnabled = false; committingDraft = true;
+            button.IsEnabled = false; committingDraft = true; IsEnabled = false;
             try { await action(); }
             catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { MessageBox.Show(Window.GetWindow(this), ex.Message, "Edit properties"); }
-            finally { committingDraft = false; button.IsEnabled = true; if (!disposed) RefreshProperties(); }
+            finally { committingDraft = false; button.IsEnabled = true; if (!disposed) { IsEnabled = true; RefreshProperties(); } }
         };
         panel.Children.Add(button);
     }

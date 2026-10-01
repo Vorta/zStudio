@@ -91,6 +91,14 @@ public sealed class TerrainCompilerTests
         Assert.Equal(2, result.Pieces.Count);
         Assert.Equal(result.Pieces.Count, result.Pieces.Select(p => p.Name).Distinct().Count());
         Assert.All(result.Pieces, p => Assert.True(p.Name.Length <= 34, p.Name));
+        Assert.Equal(["~00_00x00", "~01_00x00"], result.Pieces.Select(p => p.Name[^9..]).Order());
+        // A shortened name never equals another surface's full name: northern_cliff_rock_01 fits whole, while its longer
+        // sibling, shortened, would otherwise end the same way.
+        string fits = "northern_cliff_rock_01", longer = "northern_cliff_rock_large";
+        var pair = new TerrainRecipe(1, [new(fits, "surfaces.gltf", fits, TerrainAttributes.None), new(longer, "surfaces.gltf", longer, TerrainAttributes.None)], TerrainAttributes.None, []);
+        var named = TerrainCompiler.Compile("coast", pair, [Sheet(fits, 10, 300, 20, 310) with { Surface = pair.Surfaces[0] }, Sheet(longer, 30, 300, 40, 310, y: 5) with { Surface = pair.Surfaces[1] }], Materials, Grid, Token);
+        Assert.Contains("coast_northern_cliff_rock_01_00x00", named.Pieces.Select(p => p.Name));
+        Assert.Equal(2, named.Pieces.Select(p => p.Name).Distinct().Count());
     }
 
     [Fact]
