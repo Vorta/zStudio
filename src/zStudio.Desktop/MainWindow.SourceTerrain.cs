@@ -52,8 +52,12 @@ public partial class MainWindow
             && doc.SourceBuild?.Provenance.Values.Any(p => string.Equals(p.ModelFile, file, StringComparison.OrdinalIgnoreCase) || string.Equals(p.LoadedFile, file, StringComparison.OrdinalIgnoreCase)) == true)
             throw new StudioCommandException("unsupported", $"{file} is already loaded into this world as an object; terrain from it would add its geometry a second time. Use a file the world does not load.");
         foreach (string existing in doc.SourceBuild?.Provenance.Values.Select(p => p.Terrain).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase) ?? [])
-            if (ReadRecipe(doc, existing).Surfaces.Any(s => string.Equals(SourceTerrain.SurfaceFile(existing, s), file, StringComparison.OrdinalIgnoreCase)))
-                throw new StudioCommandException("unsupported", $"{file} is already a surface file of {existing}; another terrain from it would add its geometry a second time.");
+        {
+            bool uses;
+            try { uses = ReadRecipe(doc, existing).Surfaces.Any(s => string.Equals(SourceTerrain.SurfaceFile(existing, s), file, StringComparison.OrdinalIgnoreCase)); }
+            catch (Exception ex) when (ex is StudioCommandException or InvalidDataException) { continue; }
+            if (uses) throw new StudioCommandException("unsupported", $"{file} is already a surface file of {existing}; another terrain from it would add its geometry a second time.");
+        }
         return EditSourceWorldAsync(doc, $"Creating terrain from {Path.GetFileName(model)}", w => SourceTerrain.Create(w, database, model, nodes, recipe, token) is var t ? () => w.Retract(t) : null, token, fromBuild: false);
     }
     private Task<DocumentModel> PaintTerrainAsync(DocumentModel doc, string recipe, string region, IReadOnlyList<Vector2> path, float radius, bool add, CancellationToken token)
@@ -121,7 +125,7 @@ public partial class MainWindow
             "Convert to editable terrain", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.Yes) return;
         var (next, _, compared) = await ConvertTerrainAsync(doc, 8, CancellationToken.None);
         var report = compared!;
-        System.Windows.MessageBox.Show(this, report.Mismatches == 0
+        System.Windows.MessageBox.Show(this, report.Samples == 0 ? "Converted. The converted area is too small for the altitude probe comparison." : report.Mismatches == 0
             ? $"Converted. The altitude probe finds the same heights, zones, soils and flags at all {report.Samples:N0} sample points ({report.Hits:N0} hits)" + (report.HeightOnly > 0 ? $"; {report.HeightOnly:N0} differ in height by at most {report.MaximumHeightDifference:0.###}." : ".")
               + (report.Revealed > 0 ? $" At {report.Revealed:N0} points along cell edges the converted terrain also finds ground the original pieces hid from their neighbouring cells." : "")
             : $"Converted, but the altitude probe differs at {report.Mismatches:N0} of {report.Samples:N0} sample points; Problems lists examples. Undo takes the conversion back.",

@@ -65,7 +65,7 @@ public static class SourceTerrain
             string id = new([.. name.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' ? c : '_').Take(32)]);
             if (id.Length == 0) id = "surface";
             for (int n = 2; surfaces.Any(s => s.Id == id); n++) id = $"{id[..Math.Min(id.Length, 28)]}_{n}";
-            surfaces.Add(new(id, RelativePath(recipePath, model), name, NodeDefaults(matches[0], zones.TryGetValue(matches[0], out uint z) ? z : 0xFFu)));
+            surfaces.Add(new(id, RelativePath(recipePath, model), name, NodeDefaults(matches[0], zones.TryGetValue(matches[0], out var z) ? z : (0xFFu, false))));
         }
         var recipe = TerrainRecipe.Parse(new TerrainRecipe(TerrainRecipe.CurrentCompiler, surfaces, TerrainAttributes.None, []).Write(), recipePath);
         // The marker: a root of the database's scene that names the recipe.
@@ -89,26 +89,31 @@ public static class SourceTerrain
     /// A surface node's attributes as an object of the file has them: its flags when not the default, and its zone (its
     /// own, else its parents', as the importer inherits it) when it has one; a node without a zone keeps auto.
     /// </summary>
-    private static TerrainAttributes NodeDefaults(Gltf.GltfNode node, uint zone)
+    private static TerrainAttributes NodeDefaults(Gltf.GltfNode node, (uint Zone, bool Explicit) zone)
     {
         uint? flags = (node.Extras?[WorldGltf.Key] as JsonObject)?["flags"] is JsonValue f && f.TryGetValue(out string? hex)
             && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint parsed)
             && (parsed & WorldGltf.CarriedFlags) != WorldGltf.DefaultCarried ? parsed & WorldGltf.CarriedFlags : null;
-        return new() { Flags = flags, NodeZone = zone == 0xFF ? null : (int)zone };
+        return new() { Flags = flags, NodeZone = !zone.Explicit ? null : zone.Zone == 0xFF ? TerrainAttributes.AnyZone : (int)zone.Zone };
     }
     /// <summary>The project path of a recipe surface's glTF file.</summary>
     public static string SurfaceFile(string recipe, TerrainSurface surface) => WorldAssembler.Relative(recipe, surface.Model);
-    /// <summary>Each node's zone as the importer gives it: its own, else its parent's; the file's roots start with any (0xFF).</summary>
-    private static Dictionary<Gltf.GltfNode, uint> InheritedZones(Gltf.GltfDocument doc)
+    /// <summary>
+    /// Each node's zone as the importer gives it: its own, else its parent's; the file's roots start with any (0xFF).
+    /// Explicit tells whether a node on the way set it (an explicit any differs from no zone at all).
+    /// </summary>
+    private static Dictionary<Gltf.GltfNode, (uint Zone, bool Explicit)> InheritedZones(Gltf.GltfDocument doc)
     {
-        Dictionary<Gltf.GltfNode, uint> zones = new(ReferenceEqualityComparer.Instance);
-        Stack<(Gltf.GltfNode Node, uint Parent)> pending = new(doc.Roots.Select(r => (r, 0xFFu)));
+        Dictionary<Gltf.GltfNode, (uint, bool)> zones = new(ReferenceEqualityComparer.Instance);
+        Stack<(Gltf.GltfNode Node, uint Parent, bool Explicit)> pending = new(doc.Roots.Select(r => (r, 0xFFu, false)));
         while (pending.TryPop(out var item))
         {
             if (zones.ContainsKey(item.Node) || zones.Count > 1_000_000) continue;
-            uint zone = (item.Node.Extras?[WorldGltf.Key] as JsonObject)?["zone"] is JsonValue z && z.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e18 ? (uint)((long)d & 0xFF) : item.Parent;
-            zones[item.Node] = zone;
-            foreach (var child in item.Node.Children) pending.Push((child, zone));
+            bool own = (item.Node.Extras?[WorldGltf.Key] as JsonObject)?["zone"] is JsonValue z && z.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e18;
+            uint zone = own ? (uint)((long)((JsonValue)((JsonObject)item.Node.Extras![WorldGltf.Key]!)["zone"]!).GetValue<double>() & 0xFF) : item.Parent;
+            bool isExplicit = own || item.Explicit;
+            zones[item.Node] = (zone, isExplicit);
+            foreach (var child in item.Node.Children) pending.Push((child, zone, isExplicit));
         }
         return zones;
     }

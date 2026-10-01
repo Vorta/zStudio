@@ -218,11 +218,19 @@ public partial class MainWindow
     /// </summary>
     private static string? NewRejections(SourceWorldBuild previous, SourceWorldBuild next)
     {
-        var failed = next.Outputs.Where(o => o.Error != null && previous.Outputs.FirstOrDefault(p => p.Path == o.Path) is { Error: null }).Select(o => $"{o.Path} ({o.Error})").ToArray();
-        HashSet<string> before = [.. previous.Outputs.SelectMany(o => o.Warnings).Where(w => w.Contains("the game rejects", StringComparison.Ordinal))];
-        var rejected = next.Outputs.SelectMany(o => o.Warnings).Where(w => w.Contains("the game rejects", StringComparison.Ordinal) && !before.Contains(w)).ToArray();
-        if (failed.Length == 0 && rejected.Length == 0) return null;
-        return Bounded("The addition would break the mission's files: " + string.Join("; ", failed.Concat(rejected).Take(4)) + ((failed.Length + rejected.Length) > 4 ? $" and {failed.Length + rejected.Length - 4} more" : "") + ". List only the definition files the model needs.");
+        // Output by output: one the game already rejected (or that failed) gains nothing from another warning.
+        List<string> broken = [];
+        foreach (var output in next.Outputs)
+        {
+            if (previous.Outputs.FirstOrDefault(p => p.Path == output.Path) is not { Error: null } before) continue;
+            if (output.Error != null) { broken.Add($"{output.Path} no longer builds ({output.Error})"); continue; }
+            if (before.Warnings.Any(Rejects)) continue;
+            if (output.Warnings.FirstOrDefault(Rejects) is { } warning) broken.Add($"{output.Path}: {warning}");
+        }
+        if (broken.Count == 0) return null;
+        return Bounded("The addition would break the mission's files: " + string.Join("; ", broken.Take(4)) + (broken.Count > 4 ? $" and {broken.Count - 4} more" : "")
+            + ". List only the definition files the model needs, or choose a name no animation definition binds.");
+        static bool Rejects(string warning) => warning.Contains("the game rejects", StringComparison.Ordinal);
     }
     /// <summary>Lists the build's problems under the world's script, replacing those of its previous build.</summary>
     private void ReportSourceBuild(SourceWorldSession session, SourceWorldBuild build)
@@ -327,6 +335,8 @@ public partial class MainWindow
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)
     {
         string mission = doc.SourceWorld?.Mission ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
+        // The rebuild is checked against the shown build; a stale one would blame the addition for others' changes.
+        if (doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before adding a model.");
         return EditSourceWorldAsync(doc, $"Adding {addition.Model.Name}", workspace => SourceWorlds.AddModel(workspace, mission, addition, token) is var t ? () => workspace.Retract(t) : null, token, [addition.Model], fromBuild: false);
     }
     private Task<DocumentModel> UndoSourceWorldAsync(DocumentModel doc, bool redo, CancellationToken token)
@@ -507,12 +517,12 @@ public partial class MainWindow
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
             return Result(new { name, files = files.Take(64).Select(f => new { path = f.Path, animations = f.Animations.Take(32).Select(n => Bounded(n, 128)).ToArray(), animationCount = f.Animations.Count, missions = f.Missions }).ToArray(), fileCount = files.Count, truncated = files.Count > 64 });
         });
-        RegisterJob(r, "source_world_add_model", "Add a project model to a source world as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zrd, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with (build_failed), or one canceled before the rebuilt world is shown, is taken back. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document.",
+        RegisterJob(r, "source_world_add_model", "Add a project model to a source world as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zrd, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (anim.zbd binding a node this world gives another meaning), returns build_failed and is taken back, as is one canceled before the rebuilt world is shown. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document.",
             [DocumentParameter, RevisionParameter, P("model", "string", "Project path of the glTF model, as zstudio_source_world_models lists it (for example data/m2/models/bft/ltank.gltf).", true),
              P("name", "string", "Node name: 1–31 letters, digits, '_', '-' or '.'. Resources and animations find the model by it. A placed model's name must not also name a node inside the model, which AddChild would attach instead (build_failed).", true),
              new("position", "object", "Optional world position; omit for an unplaced root.", Properties: [P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)]),
              P("heading", "number", "Rotation about Y in degrees (−360 to 360) for a placed model; default 0."),
-             new("definitionFiles", "array", "Definition files to list, as zstudio_source_world_definitions returns them; omit to list all it returns, or pass [] to list none.", Items: new("", "string", "Project path of a definition file."), MaxItems: 64)], true,
+             new("definitionFiles", "array", "Definition files to list, as zstudio_source_world_definitions returns them; omit to list all it returns (refused above 64), or pass [] to list none.", Items: new("", "string", "Project path of a definition file."), MaxItems: 64)], true,
             async (a, token) =>
             {
                 var d = TargetDocument(a, true); var world = d.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");

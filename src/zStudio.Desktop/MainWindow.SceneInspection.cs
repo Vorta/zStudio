@@ -178,6 +178,8 @@ public partial class MainWindow
             try { edits.PreviewTransform(source, transform); }
             catch (System.IO.InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             if (doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before editing it.");
+            if (propertiesWindow?.Document == doc && propertiesWindow.HasUncommittedDrafts || doc == shownDocument && animation?.HasAutomationDrafts == true)
+                throw new StudioCommandException("pending_drafts", "Properties has unfinished input for this world; apply or restore it first.");
             // The rebuilt world shows the accepted transform; the draft's preview ends with it.
             card.CancelDraft(); UpdateDocumentCommands();
             return MoveSourcePlacementAsync(doc, source, transform, CancellationToken.None);

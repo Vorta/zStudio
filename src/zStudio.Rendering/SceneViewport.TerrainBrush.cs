@@ -37,6 +37,13 @@ public sealed partial class SceneViewport
         get => terrainBrushWaiting;
         set { terrainBrushWaiting = value; if (terrainBrushActive && !IsFlyActive) Cursor = value ? Cursors.Wait : Cursors.Pen; }
     }
+    /// <summary>Sets the cursor from the brush's state (after Fly, which owned it, ends).</summary>
+    public void RefreshTerrainBrushCursor()
+    {
+        if (IsFlyActive) return;
+        if (terrainBrushActive) Cursor = terrainBrushWaiting ? Cursors.Wait : Cursors.Pen;
+        else if (Cursor == Cursors.Pen || Cursor == Cursors.Wait) Cursor = null;
+    }
     /// <summary>The brush radius in world units; it spaces the stroke's points.</summary>
     public float TerrainBrushRadius { get; set; } = 8;
     public bool IsTerrainStroking => brushStroke != null;

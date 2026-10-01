@@ -22,10 +22,10 @@ public partial class MainWindow
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         int found = await CheckSourceRecoveryAsync(root, everySave: true);
-        ViewModel.Status = found == 0 ? "No save of this source project was interrupted." : found < 0 ? "The project's interrupted saves could not be checked; Problems says why." : ViewModel.Status;
+        ViewModel.Status = found == 0 ? "No save of this source project was interrupted." : found == -1 ? "The project's interrupted saves could not be checked; Problems says why." : ViewModel.Status;
     });
 
-    /// <summary>After a source project opens (or on request): report interrupted saves and offer to resolve them; returns how many there are, or -1 when they could not be checked.</summary>
+    /// <summary>After a source project opens (or on request): report interrupted saves and offer to resolve them; returns how many there are, -1 when they could not be checked, or -2 when a newer check took over.</summary>
     /// <remarks>
     /// On opening, only saves that need a decision ask; a save that finished but was not cleaned up is reported in
     /// Problems, and <paramref name="everySave"/> (Tools → Resolve interrupted save) asks about it too.
@@ -37,7 +37,7 @@ public partial class MainWindow
         try { cases = await Task.Run(() => new SourcePublisher(root).FindInterrupted()); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         { ViewModel.AddProblem(Bounded($"Source project recovery could not be checked: {ex.Message}"), "Error", root); return -1; }
-        if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return -1;
+        if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return -2;
         foreach (var old in ViewModel.Problems.Where(p => p.File == root && p.Message.StartsWith(RecoveryProblem, StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
         if (cases.Count == 0) return 0;
         foreach (var c in cases)

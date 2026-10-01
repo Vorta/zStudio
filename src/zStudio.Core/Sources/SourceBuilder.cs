@@ -284,7 +284,7 @@ public static partial class SourceBuilder
                 steps[^1] = steps[^1] with { Installed = true };
             }
         }
-        catch
+        catch (Exception failure)
         {
             // Only files this export installed are removed; a file another program put at a target meanwhile stays, and the
             // original that moved aside for it stays in the backup.
@@ -299,9 +299,13 @@ public static partial class SourceBuilder
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { (saved != null ? unrestored : leftover).Add(target); }
             }
-            if (unrestored.Count > 0) throw new IOException($"Export failed and {unrestored.Count} previous files could not be restored; they remain in {backup}: {string.Join(", ", unrestored.Take(8))}"
-                + (leftover.Count > 0 ? $". New files that could not be removed: {string.Join(", ", leftover.Take(8))}" : ""));
-            if (leftover.Count > 0) throw new IOException($"Export failed and {leftover.Count} new files could not be removed: {string.Join(", ", leftover.Take(8))}");
+            if (unrestored.Count > 0) throw new IOException($"Export failed ({failure.Message}) and {unrestored.Count} previous files could not be restored; they remain in {backup}: {string.Join(", ", unrestored.Take(8))}"
+                + (leftover.Count > 0 ? $". New files that could not be removed: {string.Join(", ", leftover.Take(8))}" : ""), failure);
+            if (leftover.Count > 0)
+            {
+                try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                throw new IOException($"Export failed ({failure.Message}) and {leftover.Count} new files could not be removed: {string.Join(", ", leftover.Take(8))}", failure);
+            }
             if (Directory.Exists(backup)) Directory.Delete(backup, true);
             throw;
         }

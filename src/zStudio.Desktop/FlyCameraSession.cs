@@ -120,7 +120,7 @@ internal sealed class FlyCameraSession : IDisposable
                 if (Mouse.Captured == scene) Mouse.Capture(null);
                 if (hadInput)
                 {
-                    scene.Cursor = previousCursor; scene.ForceCursor = previousForceCursor; scene.Focusable = previousFocusable;
+                    scene.Cursor = previousCursor; scene.ForceCursor = previousForceCursor; scene.Focusable = previousFocusable; scene.RefreshTerrainBrushCursor();
                 }
                 preparingInput = false;
                 try { scene.SetFly(false); }
