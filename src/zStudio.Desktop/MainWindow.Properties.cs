@@ -43,6 +43,7 @@ public partial class MainWindow
             Editing = doc => { if (doc == shownDocument) animation?.Pause(); }
         };
         window.Closed += (_, _) => { if (propertiesWindow == window) { propertiesWindow = null; ++propertyRequest; } };
+        window.Retargeted += UpdateSourceInputBlock;
         propertiesWindow = window; return window;
     }
     private static void PresentProperties(PropertiesWindow window, bool accepted)

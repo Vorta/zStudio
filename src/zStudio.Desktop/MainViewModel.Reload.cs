@@ -78,7 +78,7 @@ public sealed partial class MainViewModel
         catch (StudioCommandException ex)
         {
             // A source world's reload does not take a navigation generation; its failure is always the request's to report.
-            bool OwnsRequest() => original.SourceWorld != null || generation == navigationGeneration && !original.IsDisposed && SelectedDocument == original;
+            bool OwnsRequest() => original.SourceWorld != null ? ex.Code != "context_changed" : generation == navigationGeneration && !original.IsDisposed && SelectedDocument == original;
             if (OwnsRequest()) AddProblem(ex.Message, file: original.Path);
             if (OwnsRequest()) Status = ex.Message;
         }

@@ -69,8 +69,8 @@ public partial class MainWindow : Window
         ViewModel.ResolveDraftsAsync = async () =>
         {
             if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !ResolveInspectionDrafts()) return false;
-            // An applied scene-card edit rebuilds its world without the caller awaiting it; decisions wait for that world.
-            await sourceWorldWork;
+            // An applied scene-card edit (or any other) rebuilds its world without the caller awaiting it; decisions wait for it.
+            await SourceWorldsIdleAsync();
             return true;
         };
         ViewModel.CloseDecisionsStarting = ForgetStaleDiscardApproval;
@@ -669,7 +669,8 @@ public partial class MainWindow : Window
                 // original WPF Closing event before showing prompts or calling Close again.
                 await Dispatcher.Yield(DispatcherPriority.Normal);
                 if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !ResolveInspectionDrafts()) return;
-                await sourceWorldWork;
+                if (sourceWorkspaceBusy) ViewModel.Status = "Waiting for the source world to finish rebuilding before closing…";
+                await SourceWorldsIdleAsync();
                 ForgetStaleDiscardApproval();
                 closingAllDocuments = true;
                 foreach (var document in ViewModel.Documents.ToArray())

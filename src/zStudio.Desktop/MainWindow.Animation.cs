@@ -34,10 +34,12 @@ public partial class MainWindow
         if (!await ResolvePropertiesDraftsAsync(document) || shownDocument == document && animation?.ResolvePendingDrafts() == false) return false;
         // A committed draft may have rebuilt a source world: the decision is about the document it shows now.
         document = LiveDocument(document);
-        if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && document.SourceWorld is { IsRebuilding: true })
+        if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && document.SourceWorld != null && sourceWorkspaceBusy)
         {
-            ViewModel.Status = "This world is rebuilding after an edit; close it when it is shown, or the edit is taken back.";
-            return false;
+            // Closing a rebuilding world would take its edit back unseen: the close waits for the world it rebuilds into.
+            ViewModel.Status = "Waiting for the source world to finish rebuilding…";
+            await SourceWorldsIdleAsync();
+            document = LiveDocument(document);
         }
         System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag(); if (!document.IsDirty) return true;
         if (document.SourceWorld is { } world)

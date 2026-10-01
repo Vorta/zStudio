@@ -300,6 +300,33 @@ public sealed class SourceObjectStructureTests
     }
 
     [Fact]
+    public async Task ReparentingKeepsTheStoredRotationAndScale()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_at", new(100, 0, -50)), []), Token);
+        // A rotation outside the decomposition's range and a Y mirror, as an animation would start from them.
+        string script = Text(workspace, "gamegen/m1.gs");
+        workspace.Apply("Pose", [("gamegen/m1.gs", Encoding.Latin1.GetBytes(script.Replace("Object3DTranslate 100.0 0.0 -50.0", "Object3DTranslate 100.0 0.0 -50.0\r\nObject3DRotate 120.0 0.0 0.0\r\nObject3DScale 1.0 -1.0 1.0")))], Token);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var before = WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "tank_at"))!.Value;
+        // Under the ground (which only sits in the world), the place is kept and the rotation and scale lines stay as written.
+        var plan = SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "tank_at"), world.Nodes.Single(n => n.Name == "ground"), Token);
+        string moved = Encoding.Latin1.GetString(Assert.Single(plan.Changes).Content);
+        Assert.Contains("Object3DRotate 120.0 0.0 0.0\r\nObject3DScale 1.0 -1.0 1.0\r\n", moved);
+        Apply(workspace, plan);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var tank = world.Nodes.Single(n => n.Name == "tank_at");
+        Assert.Equal("ground", Assert.Single(tank.Parents).Name);
+        var after = WorldUpdate.LocalMatrix(tank)!.Value;
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) Assert.True(MathF.Abs(after[i, j] - before[i, j]) < 1e-3f, $"{after} is not {before}");
+        // A nudge of two thousandths at x = 100 is a change too.
+        var shown = ObjectTransform.Of(Target(workspace, "m1", build, world, "tank_at").Node);
+        var nudged = SourceObjectEdits.PlanTransform(workspace, "tank_at", Target(workspace, "m1", build, world, "tank_at").Origin, build.Executions, shown with { Position = shown.Position with { X = 100.002f } }, Token, "m1", shown);
+        Assert.Contains("Object3DTranslate 100.002 0.0 -50.0", Encoding.Latin1.GetString(Assert.Single(nudged.Changes).Content));
+    }
+
+    [Fact]
     public void GltfNodeEditsRenumberEveryReference()
     {
         var root = JsonNode.Parse("""

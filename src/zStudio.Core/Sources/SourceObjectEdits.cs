@@ -34,10 +34,15 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
             ObjectTransform stored = new(m.Translation,
                 Snap(new Vector3(node.PayloadFloat(0x18), node.PayloadFloat(0x1C), node.PayloadFloat(0x20)) * degrees, angles: true),
                 new(node.PayloadFloat(0x24), node.PayloadFloat(0x28), node.PayloadFloat(0x2C)));
-            // Only when they compose the matrix (the build keeps them together; another program might not).
+            // Only when they compose the matrix (the build keeps them together; another program might not). Each row compares
+            // relative to its own length, so a large scale's rounding does not count as a difference.
             var composed = stored.Matrix();
             bool same = true;
-            for (int i = 0; i < 4 && same; i++) for (int j = 0; j < 4 && same; j++) same = MathF.Abs(composed[i, j] - m[i, j]) <= 1e-4f * MathF.Max(1, MathF.Abs(m[i, j]));
+            for (int i = 0; i < 4 && same; i++)
+            {
+                float length = MathF.Sqrt(m[i, 0] * m[i, 0] + m[i, 1] * m[i, 1] + m[i, 2] * m[i, 2]);
+                for (int j = 0; j < 3 && same; j++) same = MathF.Abs(composed[i, j] - m[i, j]) <= 1e-4f * MathF.Max(1, length);
+            }
             if (same) return stored;
         }
         var decomposed = FromMatrix(m);
@@ -404,14 +409,32 @@ public static class SourceObjectEdits
         if (!created.Script.Equals(SourceBuilder.WorldScript(target.Mission), StringComparison.OrdinalIgnoreCase) || attached.Any(a => !a.Script.Equals(created.Script, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidDataException($"{node.Name} is set up outside the mission's world script; move it in the scripts directly.");
         foreach (var instruction in attached) edit.Comment(instruction);
-        // Keep the world placement: the local transform becomes the old world transform relative to the new parent.
+        // Keep the world placement: the local transform becomes the old world transform relative to the new parent. With
+        // Q = old parent's world × the new parent's inverse, the new local is S·R·T·Q. When Q only moves (the usual case:
+        // load roots and the world translate), the rotation and scale stay as stored (the Euler angles and scale
+        // animations start from); when Q also turns, the scale stays and only the rotation takes Q's turn.
         if (node.Class == WorldNodeClass.Object3D && Matrix4x4.Invert(WorldMatrix(parent), out var inverse))
         {
-            var local = ObjectTransform.FromMatrix(WorldMatrix(node) * inverse);
             var anchor = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).OrderBy(w => w.Line).LastOrDefault() ?? created;
-            edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", local.Position, Vector3.Zero, anchor);
-            edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", ObjectTransform.Snap(local.RotationDegrees, angles: true), Vector3.Zero, anchor);
-            edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", ObjectTransform.Snap(local.Scale, angles: false), Vector3.One, anchor);
+            var q = WorldMatrix(current) * inverse;
+            var stored = ObjectTransform.Of(node);
+            var basis = q with { M41 = 0, M42 = 0, M43 = 0 };
+            if (Near(basis, Matrix4x4.Identity))
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", Vector3.Transform(stored.Position, q), Vector3.Zero, anchor, stored.Position);
+            else if (Near(basis * Matrix4x4.Transpose(basis), Matrix4x4.Identity) && basis.GetDeterminant() > 0)
+            {
+                var turned = ObjectTransform.FromMatrix(new ObjectTransform(Vector3.Zero, stored.RotationDegrees, Vector3.One).Matrix() * basis).RotationDegrees;
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", Vector3.Transform(stored.Position, q), Vector3.Zero, anchor, stored.Position);
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", ObjectTransform.Snap(turned, angles: true), Vector3.Zero, anchor, stored.RotationDegrees);
+            }
+            else
+            {
+                // A scaled or mirrored parent change: the transform is decomposed whole.
+                var local = ObjectTransform.FromMatrix(WorldMatrix(node) * inverse);
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", local.Position, Vector3.Zero, anchor);
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", ObjectTransform.Snap(local.RotationDegrees, angles: true), Vector3.Zero, anchor);
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", ObjectTransform.Snap(local.Scale, angles: false), Vector3.One, anchor);
+            }
         }
         edit.InsertBeforeWrite([["FindNode", parent.Name], ["AddChild", node.Name]], target.Write);
         return new(label, edit.Changes(), $"{created.Script} line {created.Line}", []);
@@ -483,9 +506,17 @@ public static class SourceObjectEdits
             if (at.Class == WorldNodeClass.Object3D) m *= WorldUpdate.LocalMatrix(at) ?? Matrix4x4.Identity;
         return m;
     }
-    /// <summary>Whether a requested value differs from the one shown by more than an echo's rounding (a millionth).</summary>
+    /// <summary>
+    /// Whether a requested value differs from the one shown. Values echo exactly (Properties writes them round-trip, MCP as
+    /// doubles), so only a couple of float steps count as the same.
+    /// </summary>
     private static bool Differs(Vector3 requested, Vector3 shown) => Enumerable.Range(0, 3).Any(i => Differs(requested[i], shown[i]));
-    private static bool Differs(float requested, float shown) => MathF.Abs(requested - shown) > 1e-6f * MathF.Max(1, MathF.Abs(shown));
+    private static bool Differs(float requested, float shown) => MathF.Abs(requested - shown) > 2.5e-7f * MathF.Max(1, MathF.Abs(shown));
+    private static bool Near(Matrix4x4 a, Matrix4x4 b)
+    {
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) if (MathF.Abs(a[i, j] - b[i, j]) > 1e-5f) return false;
+        return true;
+    }
 
     /// <summary>A script number as the shipped scripts write them: shortest round-trip form with a decimal point.</summary>
     public static string Number(float value)

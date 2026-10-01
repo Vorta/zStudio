@@ -164,6 +164,7 @@ public sealed class PropertiesWindow : Window
     {
         if (!ResolvePendingDrafts() || document.IsDisposed) return false;
         Detach(); Document = document;
+        Retargeted?.Invoke();
         document.Disposing += DocumentDisposing; document.PropertyChanged += DocumentChanged;
         if (document.AnimationEdits is { } edits) edits.Changed += Refresh;
         document.PickupEditsChanged += Refresh;
@@ -241,21 +242,10 @@ public sealed class PropertiesWindow : Window
         }));
     }
     internal void CloseResolved() { closingResolved = true; Close(); }
-    private int inputSuspended;
-    /// <summary>
-    /// Stops input while an edit of the shown document rebuilds it: typing then would count as unfinished input and take
-    /// the edit back. Nested suspensions resume when the last ends.
-    /// </summary>
-    internal IDisposable SuspendInput()
-    {
-        if (inputSuspended++ == 0) body.IsEnabled = false;
-        return new InputResume(this);
-    }
-    private sealed class InputResume(PropertiesWindow window) : IDisposable
-    {
-        private bool done;
-        public void Dispose() { if (done) return; done = true; if (--window.inputSuspended == 0) window.body.IsEnabled = true; }
-    }
+    /// <summary>Whether the content takes no input (a source world rebuilding); set by the owner when that state or the target changes.</summary>
+    internal bool InputBlocked { set => body.IsEnabled = !value; }
+    /// <summary>Raised when the window shows another document.</summary>
+    internal event Action? Retargeted;
     /// <summary>Closes by an explicit request (MCP properties_close): an edit in flight does not reopen it.</summary>
     internal void Dismiss() { ClosedByUser = true; CloseResolved(); }
     private void RememberBounds()

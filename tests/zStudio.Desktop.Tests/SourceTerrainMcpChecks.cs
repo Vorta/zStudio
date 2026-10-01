@@ -92,6 +92,14 @@ internal static class SourceTerrainMcpChecks
             await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
             var fields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
             Assert.Equal(Recipe, fields.RecipePath); Assert.Equal("road", fields.SelectedRegion);
+            // While the project rebuilds a world, Properties of its worlds takes no input (typing then would take the edit back).
+            var busy = typeof(MainWindow).GetField("sourceWorkspaceBusy", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var block = typeof(MainWindow).GetMethod("UpdateSourceInputBlock", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var body = (System.Windows.Controls.ContentControl)typeof(PropertiesWindow).GetField("body", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main.OpenPropertiesWindow)!;
+            busy.SetValue(main, true); block.Invoke(main, []);
+            Assert.False(body.IsEnabled);
+            busy.SetValue(main, false); block.Invoke(main, []);
+            Assert.True(body.IsEnabled);
             var automation = JsonSerializer.SerializeToNode(fields.DescribeAutomationFields())!;
             string erase = automation["actions"]!.AsArray().Single(x => x!["Label"]!.GetValue<string>() == "Erase in viewport")!["Id"]!.GetValue<string>();
             await fields.InvokeAutomationActionAsync(erase);

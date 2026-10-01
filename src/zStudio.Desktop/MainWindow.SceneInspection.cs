@@ -139,6 +139,8 @@ public partial class MainWindow
     }
     private void BeginInspectionEdit(SceneInspectionCard card)
     {
+        // A draft started now would count as unfinished input when the rebuild finishes, taking its edit back.
+        if (shownDocument?.SourceWorld != null && sourceWorkspaceBusy) throw new StudioCommandException("busy", "The world is rebuilding after an edit; edit placements when it is shown.");
         if (scene != null && shownDocument?.PickupsLocked == true) throw new StudioCommandException("locked", "Unlock editing first.");
         if (card != CurrentInspectionCard || scene == null || shownDocument is not { IsDisposed: false } doc || card.Selection is not { } selection)
             throw new StudioCommandException("not_ready", "Select a mission placement first.");

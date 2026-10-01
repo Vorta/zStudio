@@ -33,7 +33,7 @@ public partial class MainWindow
         string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // A Discard whose release waited (for a rebuild or an opening) is carried out before a new world uses the workspace.
         if (sourceWorkspace != null && discardApprovedWorkspace is { } pending && pending.Workspace == sourceWorkspace && pending.Revision == sourceWorkspace.Revision
-            && !sourceWorkspace.IsSaving && !ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace))
+            && !sourceWorkspace.IsSaving && !sourceWorkspaceBusy && sourceWorldsOpening == 0 && !ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace))
         { sourceWorkspace.Discard(); discardApprovedWorkspace = null; }
         if (sourceWorkspace?.Root.Equals(full, StringComparison.OrdinalIgnoreCase) == true) return sourceWorkspace;
         // Changing roots closes every document first, so a previous project's workspace has no world left to lose edits of.
@@ -131,6 +131,29 @@ public partial class MainWindow
         finally { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); }
     }
     private int sourceWorldsOpening;
+    private TaskCompletionSource? sourceRebuild;
+    /// <summary>
+    /// Marks the project rebuilding a world after an edit or reload (or done): commands, Properties input for source worlds
+    /// (typing then would count as unfinished input and take the edit back) and waiters follow it.
+    /// </summary>
+    private void SetSourceRebuilding(SourceWorldSession session, bool rebuilding)
+    {
+        session.IsRebuilding = sourceWorkspaceBusy = rebuilding;
+        if (rebuilding) sourceRebuild ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
+        else { var done = sourceRebuild; sourceRebuild = null; done?.TrySetResult(); }
+        UpdateDocumentCommands();
+    }
+    /// <summary>Completes when no world of the project rebuilds (after a scene-card edit, undo, stroke, Properties or MCP edit).</summary>
+    private async Task SourceWorldsIdleAsync()
+    {
+        await sourceWorldWork;
+        while (sourceRebuild is { } rebuilding) await rebuilding.Task;
+    }
+    /// <summary>Properties of a source world takes no input while the project rebuilds.</summary>
+    private void UpdateSourceInputBlock()
+    {
+        if (propertiesWindow != null) propertiesWindow.InputBlocked = sourceWorkspaceBusy && propertiesWindow.Document?.SourceWorld != null;
+    }
 
     private sealed record SourceWorldBuilt(ZbdDocument World, SourceWorldBuild Build, long Revision);
     /// <summary>
@@ -245,24 +268,26 @@ public partial class MainWindow
         catch (NotSupportedException ex) { throw new StudioCommandException("unsupported", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         if (revert == null) return doc;
-        using var suspended = propertiesWindow?.Document == doc ? propertiesWindow.SuspendInput() : null;
-        session.IsRebuilding = sourceWorkspaceBusy = true; UpdateDocumentCommands();
+        SetSourceRebuilding(session, true);
         try { return await RebuildSourceWorldAsync(session, token, additions); }
         // The rebuilt world was never shown (failed, canceled, or its world closed meanwhile): the edit is taken back, so no
         // other world keeps an edit nothing was built with, and worlds built before it are current again.
         catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))
         {
+            bool discardApproved = discardApprovedWorkspace is { } approved && approved.Workspace == session.Workspace && approved.Revision == session.Workspace.Revision;
             try { revert(); }
             catch (Exception undo) when (undo is InvalidDataException or SourceFileChangedException or IOException or InvalidOperationException or NotSupportedException)
             {
                 throw new StudioCommandException("build_failed", $"{action} did not finish ({(ex as StudioCommandException)?.Message ?? ex.Message}) and could not be taken back: {undo.Message} Reload the world before continuing.");
             }
+            // The take-back changes the revision; a Discard chosen meanwhile still covers the workspace.
+            finally { if (discardApproved) discardApprovedWorkspace = (session.Workspace, session.Workspace.Revision); }
             session.Workspace.ForgetChangesAfter(contentBefore);
             if (ex is StudioCommandException { Code: not "context_changed" } failure)
                 throw new StudioCommandException(failure.Code, failure.Code == "build_failed" ? $"{action} was reverted because the world does not build with it: {failure.Message}" : $"{action} was reverted: {failure.Message}");
             throw;
         }
-        finally { session.IsRebuilding = sourceWorkspaceBusy = false; UpdateDocumentCommands(); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
+        finally { SetSourceRebuilding(session, false); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
     }
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)
     {
@@ -327,9 +352,9 @@ public partial class MainWindow
             try { workspace.Reload(); }
             catch (SourceFileChangedException ex) { throw new StudioCommandException("unsaved_changes", ex.Message); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-        session.IsRebuilding = sourceWorkspaceBusy = true; UpdateDocumentCommands();
+        SetSourceRebuilding(session, true);
         try { return await RebuildSourceWorldAsync(session, token); }
-        finally { session.IsRebuilding = sourceWorkspaceBusy = false; UpdateDocumentCommands(); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
+        finally { SetSourceRebuilding(session, false); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
     }
     /// <summary>Other open worlds whose build read a file the workspace changed since show as stale until reloaded.</summary>
     private void MarkStaleSourceWorlds() { if (ViewModel.Documents.Any(d => d.SourceWorld != null)) ViewModel.CheckExternalChanges(); }

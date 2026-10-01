@@ -63,6 +63,7 @@ public partial class MainWindow
     }
     private void UpdateDocumentCommands()
     {
+        UpdateSourceInputBlock();
         RefreshSceneTree();
         var doc = ViewModel.SelectedDocument;
         ObserveDocumentCommands(doc);
