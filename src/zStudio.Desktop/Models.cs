@@ -137,7 +137,8 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     /// <summary>Asked before a resource edit is accepted; throws to refuse it (a source project's workspace holds unsaved edits of the file).</summary>
     internal Action<DocumentModel>? BeforeResourceEdit { get; set; }
     internal Dictionary<AssetId,Dictionary<string,bool>> DataTreeExpansion { get; } = [];
-    public bool IsDirty => SourceWorld?.Workspace.IsDirty == true || ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
+    /// <summary>A source world's placements change through its sources (the workspace), never through its private build's archives.</summary>
+    public bool IsDirty => SourceWorld?.Workspace.IsDirty == true || ContentEdits?.IsDirty == true || ResourceEdits?.IsDirty == true || AnimationEdits?.IsDirty == true || SourceWorld == null && PickupEdits?.IsDirty == true || ModelEdits?.IsDirty == true;
     public void ClaimResourcePaths(IEnumerable<string> paths) => workspaceResolver?.EditOwnership.Acquire(SessionId, Title, paths);
     public void InvalidateCleanPickupEdits()
     {
@@ -186,6 +187,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             if (PreviewDocument.Scene is { } templateScene) edits.BindCoordinateTemplates(templateScene);
             edits.BeforeEdit += archives =>
             {
+                if (SourceWorld != null) throw new InvalidOperationException("A source world's placements change through its sources: use Edit on the scene card, Properties, or zstudio_pickup_move.");
                 if (pickupSnapshotRevision != resolver.SnapshotRevision && !edits.CanUndo && !edits.CanRedo)
                     throw new InvalidOperationException("Resource previews changed. Refresh this map before editing pickup placements.");
                 // Claim only the archives this edit changes. An unedited reader must still match

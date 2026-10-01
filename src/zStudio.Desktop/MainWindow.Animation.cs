@@ -37,7 +37,7 @@ public partial class MainWindow
         {
             // The project's edits stay with its other open worlds; they are decided when the last one closes.
             if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && OtherSourceWorldOpen(document)) return true;
-            if (discardApprovedWorkspace == world.Workspace) return true;
+            if (discardApprovedWorkspace is { } approved && approved.Workspace == world.Workspace && approved.Revision == world.Workspace.Revision) return true;
         }
         bool pickup = document.SourceWorld != null || document.ContentEdits != null || document.PickupEdits?.IsDirty == true || document.ResourceEdits != null || document.ModelEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
         animation?.Pause(); string choice = "Cancel";
@@ -54,7 +54,7 @@ public partial class MainWindow
             button.Click += (_, _) => { choice = label; dialog.Close(); }; buttons.Children.Add(button);
         }
         dialog.ShowDialog();
-        if (choice == "Discard" && document.SourceWorld is { } discarded) discardApprovedWorkspace = discarded.Workspace;
+        if (choice == "Discard" && document.SourceWorld is { } discarded) discardApprovedWorkspace = (discarded.Workspace, discarded.Workspace.Revision);
         return choice == "Discard" || choice == saveLabel && await SaveCurrentAsync(document);
     }
 }

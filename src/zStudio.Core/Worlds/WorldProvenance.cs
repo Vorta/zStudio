@@ -17,6 +17,8 @@ public sealed class WorldNodeProvenance
     public string? ModelFile { get; internal set; }
     /// <summary>The node's index in <see cref="ModelFile"/>.</summary>
     public int ModelNode { get; internal set; } = -1;
+    /// <summary>The glTF node's name in <see cref="ModelFile"/>, which an edit checks before changing node <see cref="ModelNode"/>.</summary>
+    public string? ModelNodeName { get; internal set; }
     /// <summary>The LoadGameGen that read the node's file.</summary>
     public SourceInstruction? Load { get; internal set; }
     /// <summary>A node of the mission database file itself (the load after GameGenSetWorld, whose scene roots join the world), not of a file it references.</summary>

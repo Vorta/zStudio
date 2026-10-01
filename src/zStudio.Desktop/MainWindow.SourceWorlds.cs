@@ -50,7 +50,7 @@ public partial class MainWindow
     /// <summary>When no world of the project is open any more, its unsaved edits go with the last one (its close was confirmed).</summary>
     private void ReleaseUnusedSourceWorkspace()
     {
-        if (sourceWorkspace == null || sourceWorkspaceBusy || ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace)) return;
+        if (sourceWorkspace == null || sourceWorkspaceBusy || sourceWorldsOpening > 0 || ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace)) return;
         if (sourceWorkspace.IsDirty && !sourceWorkspace.IsSaving) sourceWorkspace.Discard();
         sourceWorkspace = null;
     }
@@ -76,10 +76,13 @@ public partial class MainWindow
         RequireNoDrafts();
         long workspace = ViewModel.WorkspaceGeneration;
         var project = SourceWorkspaceFor(root);
+        // Until the world's document exists, the opening holds the workspace: closing another document must not release it.
+        sourceWorldsOpening++;
         SourceWorldSession session;
         try { session = await Task.Run(() => new SourceWorldSession(project, mission), token); }
-        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        catch (InvalidDataException ex) { sourceWorldsOpening--; throw new StudioCommandException("invalid_argument", ex.Message); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { sourceWorldsOpening--; throw new StudioCommandException("io_failed", ex.Message); }
+        catch { sourceWorldsOpening--; throw; }
         DocumentModel? doc = null;
         try
         {
@@ -99,7 +102,9 @@ public partial class MainWindow
             else if (!ViewModel.Documents.Contains(doc)) doc.Dispose();
             throw;
         }
+        finally { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); }
     }
+    private int sourceWorldsOpening;
 
     private sealed record SourceWorldBuilt(ZbdDocument World, SourceWorldBuild Build, long Revision);
     /// <summary>
@@ -197,8 +202,11 @@ public partial class MainWindow
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
         RequireSourceWorldIdle(session);
         RequireNoDrafts(doc);
-        if (fromBuild && doc.SourceBuild is { } built && session.Workspace.ChangedSince(doc.SourceRevision) is { Count: > 0 } changed && built.Dependencies.Any(changed.Contains))
-            throw new StudioCommandException("stale_document", $"{string.Join(", ", built.Dependencies.Where(changed.Contains).Take(3))} changed since this world was built (an edit in another world, or an undo); reload the world before editing it.");
+        // Plans from the build (node and line numbers, archive layouts) hold only while every source it read is unchanged,
+        // in the workspace and on disk.
+        if (fromBuild && doc.SourceInputsChanged())
+            throw new StudioCommandException("stale_document", "Sources this world was built from changed since (an edit in another world, an undo, or another program); reload the world before editing it.");
+        long contentBefore = session.Workspace.ContentRevision;
         Action? revert;
         try { revert = apply(session.Workspace); }
         catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
@@ -208,15 +216,17 @@ public partial class MainWindow
         if (revert == null) return doc;
         session.IsRebuilding = sourceWorkspaceBusy = true; UpdateDocumentCommands();
         try { return await RebuildSourceWorldAsync(session, token, additions); }
-        // Until the replacement is published the session's owner is still this document, which shows the world without the edit.
-        catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException) && !session.IsDisposed && session.Owner == doc && !doc.IsDisposed)
+        // The rebuilt world was never shown (failed, canceled, or its world closed meanwhile): the edit is taken back, so no
+        // other world keeps an edit nothing was built with, and worlds built before it are current again.
+        catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))
         {
             revert();
+            session.Workspace.ForgetChangesAfter(contentBefore);
             if (ex is StudioCommandException { Code: not "context_changed" } failure)
                 throw new StudioCommandException(failure.Code, failure.Code == "build_failed" ? $"{action} was reverted because the world does not build with it: {failure.Message}" : $"{action} was reverted: {failure.Message}");
             throw;
         }
-        finally { session.IsRebuilding = sourceWorkspaceBusy = false; UpdateDocumentCommands(); MarkStaleSourceWorlds(); }
+        finally { session.IsRebuilding = sourceWorkspaceBusy = false; UpdateDocumentCommands(); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
     }
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)
     {
@@ -254,6 +264,13 @@ public partial class MainWindow
             return workspace.Apply(label, changes, token) is { } t ? () => workspace.Retract(t) : null;
         }, token);
     }
+
+    /// <summary>For a source world, how Properties moves a placement: through its sources, like the scene card; null otherwise.</summary>
+    private Func<MissionPickupSource, System.Numerics.Vector3, Task>? SourcePickupMove(DocumentModel doc) => doc.SourceWorld == null ? null : async (source, position) =>
+    {
+        var edits = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "Load the world's placements first.");
+        await MoveSourcePlacementAsync(doc, source, edits.Transform(source) with { Position = position }, CancellationToken.None);
+    };
 
     /// <summary>Rebuilds from the project. Workspace edits are kept unless a file they change was changed on disk.</summary>
     private async Task<DocumentModel> ReloadSourceWorldAsync(DocumentModel doc, bool discardAccepted, CancellationToken token)

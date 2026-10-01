@@ -102,6 +102,46 @@ public sealed class SourceWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public void ACleanFileIsReadFromDiskAgainAfterAnotherProgramChangesIt()
+    {
+        SourceWorkspace workspace = new(root);
+        // Edit pickups, undo it, then edit another file: no history step describes pickups any more, but the workspace still holds its old bytes.
+        workspace.Apply("Move A", [("data/m1/zrdr/puppies.zrd", Bytes("( )\n"))], Token);
+        workspace.Undo();
+        workspace.Apply("Edit script", [("gamegen/m1.gs", Bytes("Quit\r\n"))], Token);
+        Write("data/m1/zrdr/puppies.zrd", "# changed elsewhere\n( )\n");
+        // An edit computed from what the workspace serves starts from the other program's version, and saving keeps it.
+        Assert.StartsWith("# changed elsewhere", Text(workspace.Read("data/m1/zrdr/puppies.zrd", Token)));
+        workspace.Apply("Move B", [("data/m1/zrdr/puppies.zrd", Bytes(Text(workspace.Read("data/m1/zrdr/puppies.zrd", Token)) + "# moved\n"))], Token);
+        workspace.Save(Token);
+        Assert.Equal("# changed elsewhere\n( )\n# moved\n", File.ReadAllText(At("data/m1/zrdr/puppies.zrd"), Encoding.Latin1));
+    }
+
+    [Fact]
+    public void RevertedChangesAndGuardedFilesKeepBuildsCurrent()
+    {
+        SourceWorkspace workspace = new(root);
+        long before = workspace.ContentRevision;
+        var t = workspace.Apply("Edit", [("gamegen/m1.gs", Bytes("Quit\r\n"))], Token)!;
+        workspace.Retract(t);
+        Assert.NotEmpty(workspace.ChangedSince(before));
+        // The change was taken back: builds made before it are current again.
+        workspace.ForgetChangesAfter(before);
+        Assert.Empty(workspace.ChangedSince(before));
+        // Undo and redo are refused while another editor holds unsaved changes of a file they would change.
+        workspace.Apply("Edit again", [("gamegen/m1.gs", Bytes("Quit\r\n"))], Token);
+        workspace.Undo();
+        workspace.EditGuard = relative => relative == "gamegen/m1.gs" ? "open elsewhere" : null;
+        Assert.Equal("open elsewhere", Assert.Throws<InvalidDataException>(() => workspace.Redo()).Message);
+        workspace.EditGuard = null;
+        workspace.Redo();
+        // The history keeps at most its limit of steps.
+        for (int i = 0; i < SourceWorkspace.MaximumHistory + 10; i++) workspace.Apply($"Step {i}", [("gamegen/m1.gs", Bytes($"Quit {i}\r\n"))], Token);
+        Assert.Equal(SourceWorkspace.MaximumHistory, workspace.History.Count);
+        Assert.Equal($"Step {SourceWorkspace.MaximumHistory + 9}", workspace.UndoLabel);
+    }
+
+    [Fact]
     public void AFailedSaveKeepsTheEditsAndTheFiles()
     {
         int calls = 0;

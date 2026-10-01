@@ -39,7 +39,8 @@ public partial class MainWindow : Window
     /// <summary>The app is closing every document; a source project's edits cannot stay with another of its worlds.</summary>
     private bool closingAllDocuments;
     /// <summary>A source project whose unsaved edits the user chose to discard while closing; its other worlds close without asking again.</summary>
-    private Recoil.Zbd.Core.Sources.SourceWorkspace? discardApprovedWorkspace;
+    /// <summary>A Discard the user chose for a project's edits, valid only while the workspace is as it was then (its revision).</summary>
+    private (Recoil.Zbd.Core.Sources.SourceWorkspace Workspace, long Revision)? discardApprovedWorkspace;
     private DecodedImage? decoded;
     private JsonObject? properties;
     private WaveFileReader? wave;

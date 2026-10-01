@@ -54,6 +54,33 @@ public sealed class BuildProfileTests
     }
 
     [Fact]
+    public void ExplicitNullBudgetsKeepFullSizeAndPackNamesAreTheGamesOwn()
+    {
+        var profile = BuildProfiles.Parse("big", Encoding.UTF8.GetBytes(Retro.Replace("\"budgetMiB\": 4", "\"budgetMiB\": null")), "big.json");
+        Assert.Null(profile.TexturePacks[0].BudgetBytes);
+        Assert.Null(profile.TexturePacks[0].Variant.BudgetBytes);
+        // An omitted budget keeps the one the name implies.
+        Assert.Equal(4L << 20, profile.TexturePacks[1].BudgetBytes);
+        // rtexture08 is not a name the game opens.
+        Assert.Throws<InvalidDataException>(() => BuildProfiles.Parse("x", Encoding.UTF8.GetBytes(Retro.Replace("rtexture4.zbd", "rtexture04.zbd")), "x.json"));
+    }
+
+    [Fact]
+    public void ANamedProfileIsFoundEvenWhenAnotherFileIsBroken()
+    {
+        var files = new Dictionary<string, byte[]>
+        {
+            ["gamegen/build-profiles/retro.json"] = Encoding.UTF8.GetBytes(Retro),
+            ["gamegen/build-profiles/broken.json"] = Encoding.UTF8.GetBytes("{ not json"),
+            ["gamegen/build-profiles/old/retro.json"] = Encoding.UTF8.GetBytes("ignored: not directly in the folder"),
+        };
+        Assert.Equal("retro", BuildProfiles.Find("unused", "retro", f => files[f], files.Keys).Name);
+        Assert.Same(BuildProfiles.Original, BuildProfiles.Find("unused", "original", f => files[f], files.Keys));
+        // The default needs every file, so the broken one is reported.
+        Assert.Contains("broken.json", Assert.Throws<InvalidDataException>(() => BuildProfiles.Find("unused", null, f => files[f], files.Keys)).Message);
+    }
+
+    [Fact]
     public async Task ExportsBuildTheChosenProfilesPacksAndWarnAboutLargerPacksLeftBehind()
     {
         using SourceWorldFixture fixture = new();
@@ -69,6 +96,10 @@ public sealed class BuildProfileTests
         Assert.Equal("retro", report.Profile);
         Assert.Equal(0, report.Failed);
         Assert.Contains(report.Notes, n => n.StartsWith("m1/rtexture16.zbd", StringComparison.Ordinal));
+        // A smaller stale pack can be chosen too (a 2 MB card would open rtexture2).
+        await File.WriteAllBytesAsync(Path.Combine(destination, "m1", "rtexture2.zbd"), [1], Token);
+        var again = await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/rtexture4.zbd"], overwrite: true, token: Token);
+        Assert.Contains(again.Notes, n => n.StartsWith("m1/rtexture2.zbd", StringComparison.Ordinal));
         // Another profile can be chosen by name; an unknown one is refused.
         var original = await SourceBuilder.CheckAsync(fixture.Project, ["m1/rtexture2.zbd"], token: Token, profile: "original");
         Assert.Equal("original", original.Profile);

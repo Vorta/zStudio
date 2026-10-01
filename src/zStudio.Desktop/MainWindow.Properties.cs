@@ -145,7 +145,7 @@ public partial class MainWindow
             if (doc.SourceWorld != null && scene?.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && doc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true)
             { ShowSourceObjectProperties(doc, sourceNode); return; }
             bool opened = scene?.PickupAt(node)?.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
-                ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties)
+                ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties, SourcePickupMove(doc))
                 : window.SetReadOnly(doc, $"{name} · node #{node}", properties);
             PresentProperties(window, opened);
         }

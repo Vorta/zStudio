@@ -66,12 +66,22 @@ public sealed class SourceWorkspace
         if (PickupPlacementEditSession.IsProtectedPath(path)) throw new InvalidDataException($"{relative} is inside the protected zbd_1998/zbd_1999 folders.");
     }
 
-    /// <summary>The accepted content of a file: the workspace's when it holds edits for it, otherwise the file on disk (null when absent).</summary>
+    /// <summary>
+    /// The accepted content of a file: the workspace's when it holds unsaved edits for it, otherwise the file on disk now
+    /// (null when absent). A clean file another program changed is read again, so an edit is never computed from old bytes.
+    /// </summary>
     public byte[]? Read(string relative, CancellationToken token = default)
     {
         relative = Normalize(relative);
-        lock (gate) if (working.TryGetValue(relative, out var bytes)) return bytes;
+        Baseline? baseline = null;
+        lock (gate)
+            if (working.TryGetValue(relative, out var bytes))
+            {
+                baseline = baselines[relative];
+                if (!Same(bytes, baseline.Bytes)) return bytes;
+            }
         token.ThrowIfCancellationRequested();
+        if (baseline != null && Matches(relative, baseline)) return baseline.Bytes;
         return ReadDisk(relative).Bytes;
     }
     public bool Exists(string relative) => Read(relative) != null;
@@ -130,6 +140,7 @@ public sealed class SourceWorkspace
             history.RemoveRange(position, history.Count - position);
             history.Add(transaction); position++;
             foreach (var file in files) working[file.Relative] = file.After;
+            Trim();
         }
         Publish("apply", label, files.Select(f => f.Relative));
         return transaction;
@@ -139,6 +150,10 @@ public sealed class SourceWorkspace
     {
         if (!CanUndo) throw new InvalidOperationException("Nothing to undo.");
         var transaction = history[position - 1];
+        Guard(transaction);
+        // Builds read the overlay in place of the disk and cannot see a file go away: a created file that was saved stays.
+        if (transaction.Files.FirstOrDefault(f => f.Before == null && BaselineOf(f.Relative).Bytes != null) is { } created)
+            throw new NotSupportedException($"{created.Relative} was created by {transaction.Label} and saved since; undoing it would delete the file, which the workspace does not do. Delete it by hand.");
         lock (gate) { foreach (var file in transaction.Files) working[file.Relative] = file.Before; position--; }
         return Publish("undo", transaction.Label, transaction.Files.Select(f => f.Relative));
     }
@@ -146,8 +161,35 @@ public sealed class SourceWorkspace
     {
         if (!CanRedo) throw new InvalidOperationException("Nothing to redo.");
         var transaction = history[position];
+        Guard(transaction);
         lock (gate) { foreach (var file in transaction.Files) working[file.Relative] = file.After; position++; }
         return Publish("redo", transaction.Label, transaction.Files.Select(f => f.Relative));
+    }
+    /// <summary>Undo and redo change files too: one another editor holds unsaved changes of is refused, as for an edit.</summary>
+    private void Guard(SourceTransaction transaction)
+    {
+        foreach (var file in transaction.Files)
+            if (EditGuard?.Invoke(file.Relative) is { } refused) throw new InvalidDataException(refused);
+    }
+    /// <summary>
+    /// Forgets the content changes after <paramref name="contentRevision"/>, after a change was taken back so that every file
+    /// again holds what it held then: builds made at that revision are current again (see <see cref="ChangedSince"/>).
+    /// </summary>
+    public void ForgetChangesAfter(long contentRevision)
+    {
+        lock (gate) changeLog.RemoveAll(c => c.Revision > contentRevision);
+    }
+    /// <summary>The most steps and bytes (before and after copies) the history keeps; the oldest steps go first.</summary>
+    public const int MaximumHistory = 256;
+    public const long MaximumHistoryBytes = 1024L * 1024 * 1024;
+    private void Trim()
+    {
+        long bytes = history.Sum(t => t.Files.Sum(f => (long)(f.Before?.Length ?? 0) + (f.After?.Length ?? 0)));
+        while (history.Count > 1 && position > 1 && (history.Count > MaximumHistory || bytes > MaximumHistoryBytes))
+        {
+            bytes -= history[0].Files.Sum(f => (long)(f.Before?.Length ?? 0) + (f.After?.Length ?? 0));
+            history.RemoveAt(0); position--;
+        }
     }
     /// <summary>Withdraws the newest transaction, one that turned out not to build; unlike Undo it cannot be redone.</summary>
     public SourceWorkspaceChange Retract(SourceTransaction transaction)

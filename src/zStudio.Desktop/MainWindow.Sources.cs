@@ -125,7 +125,7 @@ public partial class MainWindow
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         return new
         {
-            project = root, profile = profile.Name,
+            project = root, profile = profile.Name, selected = SourceProfileFor(root) ?? profiles.Single(p => p.IsDefault).Name,
             profiles = profiles.Select(p => new
             {
                 name = p.Name, status = p.Status, @default = p.IsDefault, source = p.Source, description = Bounded(p.Description, 512),
@@ -161,10 +161,11 @@ public partial class MainWindow
             [P("destination", "string", "Optional output folder; omit to check without writing."),
              new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
              P("overwrite", "boolean", "Replace game files that already exist in destination; default false."),
-             P("profile", "string", "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the project's default profile.")], true,
+             P("profile", "string", "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the profile checked in Tools → Build profile (source_status selected), which is the project's default unless the user chose another.")], true,
             async (a, token) =>
             {
-                string? profile = a["profile"] == null ? null : Text(a, "profile");
+                // Without profile, the one Tools → Build profile shows checked (the project's default unless the user chose another).
+                string? profile = a["profile"] == null ? SourceProjectRoot is { } chosenRoot ? SourceProfileFor(chosenRoot) : null : Text(a, "profile");
                 if (profile != null && SourceProjectRoot is { } root) ResolveProfile(root, profile);
                 var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, profile);
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
@@ -239,6 +240,8 @@ public partial class MainWindow
         IReadOnlyList<BuildProfile> profiles;
         try { profiles = BuildProfiles.List(root); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = ex.Message, TextWrapping = TextWrapping.Wrap, MaxWidth = 420 }, IsEnabled = false }); return; }
+        // A chosen profile whose file was removed falls back to the default.
+        if (SourceProfileFor(root) is { } stale && !profiles.Any(p => p.Name.Equals(stale, StringComparison.OrdinalIgnoreCase))) sourceProfileChoice = null;
         string chosen = SourceProfileFor(root) ?? profiles.Single(p => p.IsDefault).Name;
         foreach (var profile in profiles)
         {

@@ -132,6 +132,60 @@ public sealed class SourceObjectStructureTests
     }
 
     [Fact]
+    public async Task EditsCheckThatTheSourcesStillHoldWhatTheBuildRan()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_at", new(100, 0, -50)), []), Token);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var tank = Target(workspace, "m1", build, world, "tank_at");
+        // A line added above the instructions after the build: their line numbers now name other lines.
+        workspace.Apply("Note", [("gamegen/m1.gs", Encoding.Latin1.GetBytes("# note\r\n" + Text(workspace, "gamegen/m1.gs")))], Token);
+        Assert.Contains("changed since the world was built", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanFlag(workspace, "tank_at", tank.Origin, build.Executions, 0x10, true, Token, "m1")).Message);
+        workspace.Undo();
+        // A script another mission runs too is not changed for one of them.
+        fixture.Write("gamegen/m3.gs", "source m1.gs\r\n");
+        Assert.Contains("also runs in m3", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanFlag(workspace, "tank_at", tank.Origin, build.Executions, 0x10, true, Token, "m1")).Message);
+        File.Delete(Path.Combine(fixture.Project, "gamegen", "m3.gs"));
+        Assert.NotEmpty(SourceObjectEdits.PlanFlag(workspace, "tank_at", tank.Origin, build.Executions, 0x10, true, Token, "m1").Changes);
+        // A node of the database renamed (or replaced) since the build is not the node to edit.
+        var ground = Target(workspace, "m1", build, world, "ground");
+        var gltf = JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf", Token)!)!;
+        gltf["nodes"]![0]!["name"] = "renamed";
+        workspace.Apply("Rename", [("data/m1/models/m1.gltf", Encoding.UTF8.GetBytes(gltf.ToJsonString()))], Token);
+        Assert.Contains("no longer ground", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, new(new(1, 0, 0), Vector3.Zero, Vector3.One), Token)).Message);
+        workspace.Undo();
+        // Copies cannot take a name model imports would shorten to the original's.
+        Assert.Contains("suffix", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(ground, "ground.001", null, Token)).Message);
+        // Only the added tank remains changed.
+        Assert.Equal(["gamegen/m1.gs"], workspace.DirtyFiles);
+    }
+
+    [Fact]
+    public async Task AMoveKeepsTheAuthoredBasisAndDeletingRespectsScriptUsers()
+    {
+        using SourceWorldFixture fixture = new();
+        // The ground's matrix mirrors it, which a rotation and scale cannot express.
+        var gltf = JsonNode.Parse(File.ReadAllBytes(Path.Combine(fixture.Project, "data", "m1", "models", "m1.gltf")))!;
+        gltf["nodes"]![0]!["matrix"] = new JsonArray(-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1);
+        fixture.Write("data/m1/models/m1.gltf", gltf.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var ground = Target(workspace, "m1", build, world, "ground");
+        var shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(ground.Node)!.Value);
+        var moved = SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, shown with { Position = new(5, 0, 7) }, Token, "m1", shown);
+        var local = GltfNodeEdits.Local((JsonObject)JsonNode.Parse(moved.Changes.Single().Content)!["nodes"]![0]!);
+        var expected = new Matrix4x4(-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 7, 1);
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) Assert.True(MathF.Abs(local[i, j] - expected[i, j]) < 1e-5f, $"{local} is not {expected}");
+        // An unchanged transform changes nothing.
+        Assert.Empty(SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, shown, Token, "m1", shown).Changes);
+        // A script instruction acting on the ground keeps it from being deleted.
+        fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(workspace.Read("gamegen/m1.gs", Token)!).Replace("# no vehicles", "FindNode ground\r\nSetIntersectSurface on"));
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Contains("SetIntersectSurface", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDelete(Target(workspace, "m1", build, world, "ground"), Token)).Message);
+    }
+
+    [Fact]
     public void GltfNodeEditsRenumberEveryReference()
     {
         var root = JsonNode.Parse("""

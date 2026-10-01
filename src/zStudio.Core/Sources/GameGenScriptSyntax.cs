@@ -84,7 +84,13 @@ public sealed class GameGenScriptSyntax
         int at = number <= Lines.Count ? Lines[number - 1].Start : Text.Length;
         // Appending after a last line without a newline starts a new line first.
         string prefix = number > Lines.Count && Text.Length > 0 && !Text.EndsWith('\n') ? Newline : "";
-        return Text[..at] + prefix + inserted + Text[at..];
+        string result = Text[..at] + prefix + inserted + Text[at..];
+        // Each inserted line must read back as the tokens asked for (a token ending in a carriage return would not).
+        var check = new GameGenScriptSyntax(result);
+        int first = 1 + result.AsSpan(0, at + prefix.Length).Count('\n');
+        for (int i = 0; i < instructions.Count; i++)
+            if (first + i > check.Lines.Count || !check.Line(first + i).Tokens.SequenceEqual(instructions[i])) throw new InvalidDataException("An inserted instruction would not read back as intended.");
+        return result;
     }
 
     /// <summary>The text with an instruction line turned into a comment, which keeps it readable and lets it be restored by hand.</summary>

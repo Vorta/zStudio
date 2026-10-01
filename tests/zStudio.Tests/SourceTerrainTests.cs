@@ -56,7 +56,7 @@ public sealed class SourceTerrainTests
         {
             // Each piece is a world child in the cell its name gives (columns then rows), never the overflow list.
             Assert.Contains(worldNode, piece.Parents);
-            int column = int.Parse(piece.Name.AsSpan(11, 2)), row = int.Parse(piece.Name.AsSpan(13, 2));
+            int column = int.Parse(piece.Name.AsSpan(11, 2)), row = int.Parse(piece.Name.AsSpan(14, 2));
             Assert.Contains(piece, worldNode.Areas[row * 2 + column].Nodes);
             bool road = (piece.Flags & 0x20000) != 0;
             Assert.Equal(road ? 0xFFu : 1u, piece.Zone & 0xFF);
@@ -98,6 +98,27 @@ public sealed class SourceTerrainTests
         var origin = build.Provenance[slots[road[0]]];
         var refused = Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanFlag(workspace, road[0].Name, origin, build.Executions, 0x10, false, Token));
         Assert.Contains("terrain recipe", refused.Message);
+    }
+
+    [Fact]
+    public async Task AMirroredSurfaceKeepsFacingAsAuthoredAndCreateUsesEngineNames()
+    {
+        using var fixture = Fixture();
+        // The land is placed through a mirroring matrix (x → 500 − x), which keeps it over the same area.
+        var coast = JsonNode.Parse(File.ReadAllText(fixture.Path("data/m1/models/coast.gltf")))!;
+        coast["nodes"]![0]!["matrix"] = new JsonArray(-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 500, 0, 0, 1);
+        // Blender's copy suffix: the engine name is still land.
+        coast["nodes"]![0]!["name"] = "land.001";
+        fixture.Write("data/m1/models/coast.gltf", coast.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        Assert.Contains("land", SourceTerrain.MeshNodes(workspace, "data/m1/models/coast.gltf", Token));
+        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token);
+        Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
+        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
+        var pieces = world.Nodes.Where(n => n.Name.StartsWith("coast_land_", StringComparison.Ordinal)).ToArray();
+        // The probe finds the land facing up wherever it lies.
+        foreach (var (x, z) in new[] { (210f, 210f), (290f, 290f), (250f, 230f) })
+            Assert.Equal([0f], Recoil.Zbd.Core.Terrain.TerrainProbe.At(pieces, x, z).Select(h => h.Height));
     }
 
     [Fact]

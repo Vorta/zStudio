@@ -61,8 +61,16 @@ public partial class MainWindow
 
     private SourceRecoveryResult ResolveSourceRecovery(string root, string saveId, SourceRecoveryAction action)
     {
-        if (sourceWorkspace is { } workspace && workspace.Root.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase) && (workspace.IsDirty || sourceWorkspaceBusy))
-            throw new StudioCommandException("unsaved_changes", "Save or discard the project's edits, and let its worlds finish rebuilding, before resolving an interrupted save.");
+        if (sourceWorkspace is { } workspace && workspace.Root.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase))
+        {
+            if (sourceWorkspaceBusy) throw new StudioCommandException("busy", "Let the project's worlds finish rebuilding before resolving an interrupted save.");
+            // Only edits of the save's own files would be overtaken by resolving it.
+            IReadOnlyList<string> journal;
+            try { journal = new SourcePublisher(root).FindInterrupted().FirstOrDefault(c => c.SaveId == saveId)?.Files.Select(f => f.Relative).ToArray() ?? []; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { throw new StudioCommandException("io_failed", ex.Message); }
+            if (workspace.DirtyFiles.Intersect(journal, StringComparer.OrdinalIgnoreCase).ToArray() is { Length: > 0 } overlap)
+                throw new StudioCommandException("unsaved_changes", $"The project's unsaved edits change {string.Join(", ", overlap.Take(6))}, which the interrupted save also wrote; save or undo those edits first.");
+        }
         try { return new SourcePublisher(root).Resolve(saveId, action); }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { throw new StudioCommandException("io_failed", ex.Message); }

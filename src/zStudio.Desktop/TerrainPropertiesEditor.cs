@@ -106,12 +106,10 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
                     if (!ids.SequenceEqual(chosen.Surfaces)) await actions.UpdateRegion(chosen.Name, r => r with { Surfaces = ids });
                 });
             Attributes(form, $"Region {chosen.Name}", chosen.Set, a => actions.UpdateRegion(chosen.Name, r => r with { Set = a }));
-            if (chosen.Shape != null)
-            {
-                StackPanel shapeActions = new() { Orientation = Orientation.Horizontal };
-                AsyncButton(shapeActions, "Cover whole surfaces", () => actions.UpdateRegion(chosen.Name, r => r with { Shape = null }));
-                form.Children.Add(shapeActions);
-            }
+            StackPanel shapeActions = new() { Orientation = Orientation.Horizontal };
+            if (chosen.Shape != null) AsyncButton(shapeActions, "Cover whole surfaces", () => actions.UpdateRegion(chosen.Name, r => r with { Shape = null }));
+            else AsyncButton(shapeActions, "Cover nothing (paint it)", () => actions.UpdateRegion(chosen.Name, r => r with { Shape = new TerrainShape([]) }));
+            form.Children.Add(shapeActions);
 
             Label(form, "Brush", true);
             bool painting = brush?.Region == chosen.Name;

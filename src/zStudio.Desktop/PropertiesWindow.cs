@@ -136,10 +136,10 @@ public sealed class PropertiesWindow : Window
         }
         catch (OperationCanceledException) when (doc.IsDisposed) { }
     }
-    public bool SetPickup(DocumentModel document, MissionPickupSource source, string title, JsonObject json)
+    public bool SetPickup(DocumentModel document, MissionPickupSource source, string title, JsonObject json, Func<MissionPickupSource, System.Numerics.Vector3, Task>? sourceMove = null)
     {
         if (!BeginTarget(document)) return false;
-        label = title; PickupFields = new(document, source, title, json);
+        label = title; PickupFields = new(document, source, title, json, sourceMove);
         PickupFields.Changed += Refresh; body.Content = PickupFields; Refresh(); return true;
     }
     internal bool SetSourceObject(DocumentModel document, SourcePropertiesEditor fields)

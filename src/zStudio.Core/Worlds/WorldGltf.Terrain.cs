@@ -22,16 +22,24 @@ public static partial class WorldGltf
         List<TerrainMaterialInfo> infos = [];
         List<(WorldMaterial Material, int Priority, bool BackFace, bool Normals)> materials = [];
         Dictionary<(string, GltfMaterial?), int> indices = [];
+        // Model values (lighting, scrolling, display mode) are a surface mesh's, and every piece of the surface takes them.
+        List<(JsonObject? Values, float Morph, string Path)> models = [];
         foreach (var surface in recipe.Surfaces)
         {
             context.Token.ThrowIfCancellationRequested();
             var (doc, path) = context.Reference(surface.Model, recipePath);
-            var matches = Placed(doc).Where(p => (p.Node.Extras?[Key]?["name"] is JsonValue n && n.TryGetValue(out string? named) ? named : BlenderSuffix().Replace(p.Node.Name, "")) == surface.Node).Take(2).ToList();
+            var matches = Placed(doc).Where(p => EngineName(p.Node) == surface.Node).Take(2).ToList();
             if (matches.Count != 1) throw new InvalidDataException($"{recipePath}: surface {surface.Id} names node {surface.Node}, which {path} has {(matches.Count == 0 ? "no" : "more than one")} of.");
             var (node, world) = matches[0];
             var mesh = node.Mesh ?? throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has no mesh.");
+            var values = mesh.Extras?[Key] as JsonObject;
+            if (values?["points"] is JsonArray { Count: > 0 }) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has point entries (lens flares), which terrain pieces cannot share; keep it an object.");
+            if (mesh.Primitives.Any(p => p.Targets.Count > 0)) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has morph targets; terrain is static.");
+            models.Add((values, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path));
             Matrix4x4.Invert(world, out var inverse);
             var normalMatrix = Matrix4x4.Transpose(inverse);
+            // A mirroring transform turns polygons over; reversed corners keep them facing as authored.
+            bool mirrored = world.GetDeterminant() < 0;
             List<TerrainFace> faces = [];
             foreach (var primitive in mesh.Primitives)
             {
@@ -51,8 +59,9 @@ public static partial class WorldGltf
                 }
                 // The engine polygons the file records (fans and listed polygons), so uncut polygons stay as they were.
                 int added = 0;
-                foreach (var polygon in Polygons(primitive, materials[index].Material.Texture != null))
+                foreach (var listed in Polygons(primitive, materials[index].Material.Texture != null))
                 {
+                    var polygon = listed;
                     if ((++added & 4095) == 0) context.Token.ThrowIfCancellationRequested();
                     Vector3 newell = Vector3.Zero;
                     for (int i = 0; i < polygon.Length; i++)
@@ -60,6 +69,7 @@ public static partial class WorldGltf
                         var a = Vector3.Transform(primitive.Positions[polygon[i]], world); var b = Vector3.Transform(primitive.Positions[polygon[(i + 1) % polygon.Length]], world);
                         newell += new Vector3((a.Y - b.Y) * (a.Z + b.Z), (a.Z - b.Z) * (a.X + b.X), (a.X - b.X) * (a.Y + b.Y));
                     }
+                    if (mirrored) { newell = -newell; polygon = [.. polygon.Reverse()]; }
                     var face = newell.LengthSquared() > 0 ? Vector3.Normalize(newell) : Vector3.UnitY;
                     faces.Add(new(index, [.. polygon.Select(i => Corner(i, face))]));
                 }
@@ -91,6 +101,8 @@ public static partial class WorldGltf
             }
             foreach (var warning in builder.Warnings.Distinct()) context.Warnings.Add($"{recipePath}: piece {piece.Name}: {warning}");
             node.Model = builder.Finish();
+            var (modelValues, morph, modelPath) = models[piece.Surface];
+            ApplyValues(node.Model, modelValues, morph, modelPath);
             context.World.Models.Add(node.Model);
             context.TerrainPieceImported?.Invoke(node, recipePath, piece, recipe.Surfaces[piece.Surface].Id);
             nodes.Add(node);

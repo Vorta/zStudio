@@ -231,7 +231,10 @@ public sealed partial class PickupPlacementEditSession
             throw new InvalidDataException("Mission coordinates must stay within the supported ±1e12 preview range.");
         Vector3 delta = position - positions[source]; RequireFinite(delta);
         Vector3 rotationDelta = transform.Rotation - rotations[source]; RequireFinite(rotationDelta);
-        var after = Scope(source).Sources.ToDictionary(s => s, s => s == source ? transform : new PlacementTransform(positions[s] + delta, rotations[s] + rotationDelta));
+        // A counterpart where the source is takes the requested values exactly: arithmetic on the delta would round them
+        // apart, and the records would no longer match as counterparts.
+        var after = Scope(source).Sources.ToDictionary(s => s, s => s == source || positions[s] == positions[source] && rotations[s] == rotations[source] ? transform
+            : new PlacementTransform(positions[s] + delta, rotations[s] + rotationDelta));
         foreach (var value in after.Values) { RequireFinite(value.Position); RequireFinite(value.Rotation); }
         return after;
     }

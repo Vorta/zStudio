@@ -192,7 +192,7 @@ public sealed class ResourceEditSession
     private ResourceSnapshot Build(IReadOnlyList<ResourceMember> members, CancellationToken token)
     {
         byte[] bytes = IsArchive ? ArchiveWriter.Write(source, members, token)
-            : IsSourceText ? Sources.ZrdTextSyntax.Encode(syntax!.Rewrite(members.Single().Tree ?? ZrdDecoder.Read(members.Single().Data, token), token).Text) : members.Single().Data.ToArray();
+            : IsSourceText ? Sources.ZrdTextSyntax.Encode(LosslessText(members.Single().Tree ?? ZrdDecoder.Read(members.Single().Data, token), token)) : members.Single().Data.ToArray();
         var document = FormatRegistry.Default.OpenBytes(source.Path, bytes, source.Stamp, token);
         if (document.Probe.Family != source.Probe.Family || document.Diagnostics.Any(d => d.Severity == "Error") || document.Assets.Count != members.Count) throw new InvalidDataException("Resource edit failed shared-reader verification. Its contents must remain an unambiguous ZAR/ZRD file.");
         return new(members.ToArray(), document, Hash(bytes));
@@ -239,6 +239,13 @@ public sealed class ResourceEditSession
     private static string Hash(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(SHA256.HashData(bytes.Span));
     private static void ValidateName(string name)
     { if (name.Length is < 1 or > 63 || name.Any(c => c == 0 || c > 255)) throw new InvalidDataException("Member names require 1–63 Latin-1 characters without NUL."); }
+    /// <summary>A text source with the edit, keeping its comments and layout; an edit that cannot keep them is refused rather than rewriting the file.</summary>
+    private string LosslessText(ZrdNode tree, CancellationToken token)
+    {
+        var (text, lossless) = syntax!.Rewrite(tree, token);
+        if (!lossless) throw new InvalidDataException("The edited text would be too large to keep the file's comments and layout; edit it in a text editor.");
+        return text;
+    }
 }
 
 public static class ArchiveWriter

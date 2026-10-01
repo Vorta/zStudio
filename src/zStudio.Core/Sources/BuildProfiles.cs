@@ -38,12 +38,9 @@ public static class BuildProfiles
     public static IReadOnlyList<BuildProfile> List(string root, Func<string, byte[]?>? read = null, IEnumerable<string>? files = null)
     {
         Dictionary<string, BuildProfile> profiles = new(StringComparer.OrdinalIgnoreCase) { [Original.Name] = Original, [Modern.Name] = Modern };
-        var paths = files?.ToArray() ?? SourceProject.Files(root, Folder, n => n.EndsWith(".json", StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (paths.Length > MaximumProfiles) throw new InvalidDataException($"{Folder} holds more than {MaximumProfiles} profiles.");
-        foreach (string path in paths.Order(StringComparer.OrdinalIgnoreCase))
+        foreach (string path in ProfileFiles(root, files))
         {
-            byte[] bytes = read?.Invoke(path) ?? File.ReadAllBytes(SourceProject.Resolve(root, path));
-            var profile = Parse(Path.GetFileNameWithoutExtension(path), bytes, path);
+            var profile = Parse(Path.GetFileNameWithoutExtension(path), ReadProfile(root, path, read), path);
             profiles[profile.Name] = profile;
         }
         var defaults = profiles.Values.Where(p => p.IsDefault).ToArray();
@@ -52,12 +49,34 @@ public static class BuildProfiles
         return profiles.Values.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    /// <summary>The named profile (the project's default when null).</summary>
+    /// <summary>
+    /// The named profile, reading only its own file, so another malformed profile does not block it; the project's
+    /// default (which needs every file) when null.
+    /// </summary>
     public static BuildProfile Find(string root, string? name, Func<string, byte[]?>? read = null, IEnumerable<string>? files = null)
     {
-        var profiles = List(root, read, files);
-        return name == null ? profiles.Single(p => p.IsDefault)
-            : profiles.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"The project has no build profile {name} ({string.Join(", ", profiles.Select(p => p.Name))}).");
+        if (name == null) return List(root, read, files).Single(p => p.IsDefault);
+        var paths = ProfileFiles(root, files);
+        if (paths.FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals(name, StringComparison.OrdinalIgnoreCase)) is { } own)
+            return Parse(Path.GetFileNameWithoutExtension(own), ReadProfile(root, own, read), own);
+        if (name.Equals(Original.Name, StringComparison.OrdinalIgnoreCase)) return Original;
+        if (name.Equals(Modern.Name, StringComparison.OrdinalIgnoreCase)) return Modern;
+        throw new InvalidDataException($"The project has no build profile {name} ({string.Join(", ", paths.Select(Path.GetFileNameWithoutExtension).Append(Original.Name).Append(Modern.Name).Distinct(StringComparer.OrdinalIgnoreCase))}).");
+    }
+    /// <summary>The profile files: .json files directly in the profiles folder (sub-folders are not profiles).</summary>
+    private static IReadOnlyList<string> ProfileFiles(string root, IEnumerable<string>? files)
+    {
+        var paths = (files ?? SourceProject.Files(root, Folder, n => n.EndsWith(".json", StringComparison.OrdinalIgnoreCase)))
+            .Where(p => p.StartsWith(Folder + "/", StringComparison.OrdinalIgnoreCase) && !p[(Folder.Length + 1)..].Contains('/')).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (paths.Length > MaximumProfiles) throw new InvalidDataException($"{Folder} holds more than {MaximumProfiles} profiles.");
+        return paths;
+    }
+    private static byte[] ReadProfile(string root, string path, Func<string, byte[]?>? read)
+    {
+        if (read != null) return read(path) ?? throw new InvalidDataException($"{path} does not exist.");
+        var info = new FileInfo(SourceProject.Resolve(root, path));
+        if (info.Length > 64 * 1024) throw new InvalidDataException($"{path} is larger than 64 KB.");
+        return File.ReadAllBytes(info.FullName);
     }
 
     /// <summary>A profile file: <c>{ "format": "recoil-build-profile", "version": 1, "description", "status", "default", "texturePacks": [ { "file", "budgetMiB", "maximumDimension" } ] }</c>.</summary>
@@ -82,13 +101,15 @@ public static class BuildProfiles
             if (entry is not JsonObject pack) throw new InvalidDataException($"{source}: each texture pack is an object.");
             string file = Text(pack, "file").ToLowerInvariant();
             var variant = TexturePackVariant.FromFileName(file);
-            if (variant == null || variant.Kind == TexturePackKind.Interface || file != Path.GetFileName(file)) throw new InvalidDataException($"{source}: {file} is not a mission texture pack (rtexture<N>.zbd, texture<N>.zbd or texturemax.zbd).");
+            // The game opens the names it formats (rtexture8.zbd, never rtexture08.zbd).
+            if (variant == null || variant.Kind == TexturePackKind.Interface || !System.Text.RegularExpressions.Regex.IsMatch(file, @"\A(r?texture[1-9][0-9]*|texturemax)\.zbd\z"))
+                throw new InvalidDataException($"{source}: {file} is not a mission texture pack (rtexture<N>.zbd, texture<N>.zbd or texturemax.zbd).");
             if (list.Any(p => p.File == file)) throw new InvalidDataException($"{source}: {file} is listed twice.");
-            long? budget = pack["budgetMiB"] switch
+            // An explicit null (which JsonObject returns as a present key with a null value) keeps every texture at full size.
+            long? budget = !pack.TryGetPropertyValue("budgetMiB", out var budgetNode) ? variant.BudgetBytes : budgetNode switch
             {
-                null => variant.BudgetBytes,
+                null => null,
                 JsonValue b when b.TryGetValue(out double mib) && mib is >= 0.25 and <= 1024 => (long)(mib * MiB),
-                JsonValue b when b.GetValueKind() == JsonValueKind.Null => null,
                 _ => throw new InvalidDataException($"{source}: {file} budgetMiB is null (full size) or 0.25–1024."),
             };
             int dimension = pack["maximumDimension"] is null ? variant.MaximumDimension
@@ -103,17 +124,16 @@ public static class BuildProfiles
     private static string Text(JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue(out string? s) ? s : throw new InvalidDataException($"{key} must be a string.");
 
     /// <summary>
-    /// Hardware packs a destination mission folder holds that the profile does not build but the game would prefer: it
-    /// opens the highest rtexture&lt;N&gt; at or below its texture memory, so a stale larger pack wins over the exported ones.
+    /// Hardware packs a destination mission folder holds that the profile does not build: the game opens the largest
+    /// rtexture&lt;N&gt; at or below its texture memory, so a stale pack of any size the profile leaves out can be chosen
+    /// instead of the exported ones.
     /// </summary>
     public static IReadOnlyList<string> ShadowingPacks(string destination, string mission, BuildProfile profile)
     {
         string folder = Path.Combine(destination, mission);
         if (!Directory.Exists(folder)) return [];
-        int largest = profile.TexturePacks.Select(p => TexturePackVariant.FromFileName(p.File)!).Where(v => v.Kind == TexturePackKind.Hardware).Select(v => Megabytes(v.FileName)).DefaultIfEmpty(0).Max();
         return Directory.EnumerateFiles(folder, "rtexture*.zbd").Select(Path.GetFileName).OfType<string>()
-            .Where(f => TexturePackVariant.FromFileName(f) is { Kind: TexturePackKind.Hardware } && Megabytes(f) > largest && !profile.TexturePacks.Any(p => p.File.Equals(f, StringComparison.OrdinalIgnoreCase)))
+            .Where(f => TexturePackVariant.FromFileName(f) is { Kind: TexturePackKind.Hardware } && !profile.TexturePacks.Any(p => p.File.Equals(f, StringComparison.OrdinalIgnoreCase)))
             .Select(f => $"{mission}/{f.ToLowerInvariant()}").Order(StringComparer.Ordinal).ToArray();
-        static int Megabytes(string file) => int.Parse(Path.GetFileNameWithoutExtension(file).AsSpan("rtexture".Length), System.Globalization.CultureInfo.InvariantCulture);
     }
 }

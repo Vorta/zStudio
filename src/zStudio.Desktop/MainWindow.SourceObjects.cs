@@ -94,7 +94,7 @@ public partial class MainWindow
         var model = SourceWorldModel(doc);
         var built = model.Slots.GetValueOrDefault(node) ?? throw new StudioCommandException("stale_record", $"Scene node {node} is not in the built world.");
         var provenance = SourceWorldProvenance(doc);
-        return new(workspace, session.Mission, model.World, SourceObjectEdits.ObjectOf(built, provenance), provenance, build.Executions);
+        return new(workspace, session.Mission, model.World, SourceObjectEdits.ObjectOf(built, provenance), provenance, build.Executions) { Write = build.WriteInstruction };
     }
     /// <summary>A node of the shown world by name, refused when no node or several nodes have it.</summary>
     private WorldNode SourceWorldNodeNamed(DocumentModel doc, string name)
@@ -154,14 +154,16 @@ public partial class MainWindow
         }, token);
     }
     private Task<DocumentModel> MoveSourceObjectAsync(DocumentModel doc, int node, ObjectTransform transform, CancellationToken token) =>
-        EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanTransform(w, s.Name, s.Origin, e, transform, token), token);
+        EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanTransform(w, s.Name, s.Origin, e, transform, token, doc.SourceWorld?.Mission, s.Transform), token);
     private Task<DocumentModel> FlagSourceObjectAsync(DocumentModel doc, int node, uint bit, bool on, CancellationToken token) =>
-        EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanFlag(w, s.Name, s.Origin, e, bit, on, token), token);
+        EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanFlag(w, s.Name, s.Origin, e, bit, on, token, doc.SourceWorld?.Mission), token);
     private Task<DocumentModel> CommandSourceObjectAsync(DocumentModel doc, int node, string command, IReadOnlyList<string> args, CancellationToken token)
     {
         if (!SourceObjectEdits.PropertyCommands.ContainsKey(command)) throw new StudioCommandException("invalid_argument", $"{command} is not a property command (see zstudio_source_world_object).");
         if (args.Count is 0 or > 8 || args.Any(a => a.Length is 0 or > 64)) throw new StudioCommandException("invalid_argument", "Give 1–8 arguments of up to 64 characters.");
-        return EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanCommand(w, s.Name, s.Origin, e, command, args, token), token);
+        // The interpreter applies World… commands to worlds, Light… to lights and so on; others would do nothing.
+        if (!CommandFits(DescribeSourceObject(doc, node).Class, command)) throw new StudioCommandException("invalid_argument", $"{command} does not apply to a {DescribeSourceObject(doc, node).Class} node.");
+        return EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanCommand(w, s.Name, s.Origin, e, command, args, token, doc.SourceWorld?.Mission), token);
     }
 
     /// <summary>Opens Properties for a source world's object; after an edit it follows the object into the rebuilt world.</summary>
@@ -253,7 +255,10 @@ public partial class MainWindow
                     ObjectTransform? placed = null;
                     if (moves)
                     {
-                        var current = DescribeSourceObject(d, node).Transform ?? throw new StudioCommandException("unsupported", "Only object nodes have a transform.");
+                        // Omitted values come from the object copied (a part stands for the object that loaded it).
+                        var whole = SourceObjectTargetFor(d, node, SourceWorldOf(d).Workspace).Node;
+                        int wholeNode = SourceWorldModel(d).Slots.First(p => ReferenceEquals(p.Value, whole)).Key;
+                        var current = DescribeSourceObject(d, wholeNode).Transform ?? throw new StudioCommandException("unsupported", "Only object nodes have a transform.");
                         placed = new(Vector(a, "position") ?? current.Position, Vector(a, "rotationDegrees") ?? current.RotationDegrees, Vector(a, "scale") ?? current.Scale);
                     }
                     next = await DuplicateSourceObjectAsync(d, node, name, placed, token);

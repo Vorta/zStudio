@@ -106,7 +106,7 @@ Terrain is authored as unsplit surfaces in glTF (from Blender) plus a **terrain 
   - `flags`: an exact word of the node flags.
 
   An attribute a layer does not set comes from the layers before it.
-- **Regions** have a name, the surfaces they apply to (all when none are listed) and a shape: polygons with holes in plan view (x, z), optionally limited to a height range. Stacked sheets, such as a cave floor under its ceiling, must be separate surfaces: the engine's altitude probe takes the first polygon of a node.
+- **Regions** have a name, the surfaces they apply to (all when none are listed) and a shape: polygons with holes in plan view (x, z), optionally limited to a height range. A region without a shape covers its whole surfaces; **Cover nothing (paint it)** in Properties empties it so the brush can paint it. Stacked sheets, such as a cave floor under its ceiling, must be separate surfaces: the engine's altitude probe takes the first polygon of a node.
 - **Pieces are build output.** Properties of a terrain piece shows its recipe instead of the piece:
   - recipe and surface defaults;
   - the regions in the order they apply (select, move, delete, add, rename, choose surfaces, set attributes, make one cover its whole surfaces);
@@ -116,10 +116,10 @@ Terrain is authored as unsplit surfaces in glTF (from Blender) plus a **terrain 
 - **Viewing.** The Whole world highlight modes show craters allowed (CanModify), no craters (ClipTo), non-default soils and **zones** (each surface in its node zone's colour, grey for any).
 - **Convert to editable terrain** (**Tools → Convert to editable terrain…**, MCP `zstudio_source_terrain_convert`) turns a shipped map's hand-cut pieces into terrain:
   - **Which pieces.** The mission database's untransformed mesh roots become surfaces of a recipe beside the database (`mN_terrain.gltf` with `mN_terrain.terrain.json`).
-  - **Surfaces.** Pieces with the same node flags and zone share a surface, except where they overlap in plan view: those go to separate surfaces, so stacked sheets stay separate nodes.
+  - **Surfaces.** Pieces with the same node flags, zone and model values (lighting, scrolling) share a surface, except where they overlap in plan view: those go to separate surfaces, so stacked sheets stay separate nodes. Every piece compiled from a surface takes its mesh's model values.
   - **What stays.** Every polygon keeps its corners, UVs, normals and material (with its zones and soil), and each surface gets its pieces' exact flags and zone.
-  - **Kept as objects:** the horizon and other landmarks, transformed or grouped nodes, references, shared nodes, and any piece a script, resource or animation names or matches by wildcard. The dialog lists them with reasons before anything changes.
-  - **Acceptance.** After converting, zStudio compares the altitude probe over the converted area in the world before and after: heights, polygon zones, soils, node flags and zones. On the 1999 data, M1, M5 and M6 give the same results at every sample point.
+  - **Kept as objects:** the horizon and other landmarks, transformed or grouped nodes, references, shared nodes, pieces that collide by their bounding box or are proximity nodes (both depend on a node's own bounds), facades, pieces with lens flares, and any piece a script, resource or animation names or matches by wildcard. The dialog lists them with reasons before anything changes.
+  - **Acceptance.** After converting, zStudio compares the altitude probe over the converted area in the world before and after: heights, polygon zones, soils, node flags and zones, searching each point's grid cell and the world's own list as the engine does. On the 1999 data, M1, M5 and M6 give the same results at every sample point. Searched per cell, the converted terrain also finds ground at a few points along cell edges (M1 67, M5 3, M6 7 of up to 1.2 million) where an original piece overhung into a neighbouring cell that does not search it.
   - **What is lost:** the original piece layout and names, and possibly how many crater models a crater creates. Undo takes the conversion back.
 
 Not yet:
@@ -165,6 +165,7 @@ The round trip uses only files:
    - The export is sealed: copied into `sealed\` while checking that Blender finished writing it.
    - It is read as a build reads models, and becomes one undoable change: the model's glTF and buffer, and every texture PNG that is new or changed.
    - A changed texture changes for every model that uses it, and a node the export no longer has (animations and placements find nodes by name) is reported in Problems.
+   - When the model or one of its textures changed in the project since the checkout, the update names those files and asks before replacing them. A texture the export left as it was checked out keeps the project's version.
    - Embedded textures (Blender's default `.glb`) are refused, because the engine needs PNG files.
 
 Nothing Blender writes reaches the project until the update is applied, and nothing reaches the disk until **Save**.

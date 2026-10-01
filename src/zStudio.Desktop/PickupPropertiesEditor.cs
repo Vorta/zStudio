@@ -34,9 +34,11 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
             return json;
         }
     }
-    public PickupPropertiesEditor(DocumentModel document, MissionPickupSource source, string label, JsonObject metadata)
+    /// <summary>For a source world: moves a placement through its sources (the edit rebuilds the world).</summary>
+    private readonly Func<MissionPickupSource, Vector3, Task>? sourceMove;
+    public PickupPropertiesEditor(DocumentModel document, MissionPickupSource source, string label, JsonObject metadata, Func<MissionPickupSource, Vector3, Task>? sourceMove = null)
     {
-        this.document = document; this.source = source; this.label = label;
+        this.document = document; this.source = source; this.label = label; this.sourceMove = sourceMove;
         original = JsonData.PreviewObject(metadata);
         document.PickupEditsChanged += RefreshProperties; document.PropertyChanged += DocumentChanged;
         RefreshProperties();
@@ -56,15 +58,19 @@ public sealed class PickupPropertiesEditor : FieldEditor, IDisposable
             Label(form, record.Type + " · placement #" + source.RecordIndex, true);
             Label(form, locked == true ? "Enable Unlock editing in Whole world to edit this placement." : "Position in game units · Enter to apply · Escape to restore");
             string Read() { var pos = edits.Position(source); return string.Join(", ", new[] { pos.X, pos.Y, pos.Z }.Select(v => v.ToEditorText())); }
-            Input(form, "Position", Read(), text =>
+            Vector3 Parse(string text)
             {
                 if (document.PickupsLocked) throw new InvalidOperationException("This document's coordinate editing is locked.");
                 string[] parts = text.Split([',', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != 3) throw new FormatException("Enter finite X, Y and Z coordinates.");
                 float[] values = parts.Select(v => float.Parse(v, CultureInfo.InvariantCulture)).ToArray();
                 if (values.Any(v => !float.IsFinite(v))) throw new FormatException("Coordinates must be finite numbers.");
-                edits.MoveTo(source, new Vector3(values[0], values[1], values[2]));
-            }, locked == true, getter: Read, components: ["X", "Y", "Z"]);
+                return new(values[0], values[1], values[2]);
+            }
+            if (sourceMove is { } move)
+                Input(form, "Position", Read(), _ => throw new InvalidOperationException("Use the asynchronous edit."), locked == true, getter: Read, components: ["X", "Y", "Z"],
+                    asyncCommit: async text => { var position = Parse(text); if (position != edits.Position(source)) await move(source, position); });
+            else Input(form, "Position", Read(), text => edits.MoveTo(source, Parse(text)), locked == true, getter: Read, components: ["X", "Y", "Z"]);
             panel.Children.Add(details);
         }
         else foreach (var refresh in valueRefresh.ToArray()) refresh();

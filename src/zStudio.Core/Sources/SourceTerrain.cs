@@ -58,7 +58,7 @@ public static class SourceTerrain
         List<TerrainSurface> surfaces = [];
         foreach (string name in nodes)
         {
-            var matches = doc.AllNodes().Where(n => n.Name == name).Take(2).ToList();
+            var matches = doc.AllNodes().Where(n => WorldGltf.EngineName(n) == name).Take(2).ToList();
             if (matches.Count != 1) throw new InvalidDataException($"{model} has {(matches.Count == 0 ? "no" : "more than one")} node named {name}.");
             if (matches[0].Mesh == null) throw new InvalidDataException($"Node {name} of {model} has no mesh.");
             string id = new([.. name.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' ? c : '_').Take(32)]);
@@ -90,7 +90,7 @@ public static class SourceTerrain
         model = Checked(model);
         var doc = GltfDocument.Read(workspace.Read(model, token) ?? throw new InvalidDataException($"The project has no {model}."),
             uri => workspace.Read(WorldAssembler.Relative(model, uri), token) ?? throw new InvalidDataException($"{model} names {uri}, which does not exist."), token);
-        return doc.AllNodes().Where(n => n.Mesh != null).Select(n => n.Name).Distinct().ToArray();
+        return doc.AllNodes().Where(n => n.Mesh != null).Select(WorldGltf.EngineName).Distinct().ToArray();
     }
 
     /// <summary>A file's path relative to the folder of <paramref name="from"/>, with forward slashes.</summary>

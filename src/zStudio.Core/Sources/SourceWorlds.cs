@@ -29,6 +29,8 @@ public sealed record SourceWorldBuild(string Mission, string Folder, string Worl
     public IReadOnlyDictionary<int, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<int, WorldNodeProvenance>();
     /// <summary>How many times each script instruction (script, line) ran while the world was built.</summary>
     public IReadOnlyDictionary<(string Script, int Line), int> Executions { get; init; } = new Dictionary<(string, int), int>();
+    /// <summary>The GameZWriteZBDFile instruction that wrote the world.</summary>
+    public SourceInstruction? WriteInstruction { get; init; }
 }
 
 /// <summary>
@@ -145,7 +147,10 @@ public static partial class SourceWorlds
         if (!added) throw new InvalidDataException("The animation definitions have no ANIMATION_DEFINITIONS list.");
         if (ZrdTextSyntax.StructurallyEqual(result, tree)) return definitions.ToArray();
         // Text keeps its comments and layout; only the list gains lines.
-        return syntax != null ? System.Text.Encoding.Latin1.GetBytes(syntax.Rewrite(result, token).Text) : ZrdWriter.Write(result, token);
+        if (syntax == null) return ZrdWriter.Write(result, token);
+        var (rewritten, lossless) = syntax.Rewrite(result, token);
+        if (!lossless) throw new InvalidDataException("The animation list would be too large to keep its comments and layout; add the files in a text editor.");
+        return System.Text.Encoding.Latin1.GetBytes(rewritten);
 
         // As the compiler reads the file: arrays that only wrap the keyword list are unwrapped, and new files join the
         // last top-level ANIMATION_DEFINITIONS, so they compile after everything the file already lists.
@@ -305,7 +310,7 @@ public static partial class SourceWorlds
         var slots = GameZWriter.SlotIndices(assembled.World);
         Dictionary<int, WorldNodeProvenance> provenance = [];
         foreach (var (node, origin) in assembled.Provenance) if (slots.TryGetValue(node, out int slot)) provenance[slot] = origin;
-        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), Provenance = provenance, Executions = assembled.Executions };
+        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), Provenance = provenance, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
     }
 
     /// <summary>

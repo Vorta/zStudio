@@ -182,7 +182,7 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
 {
     public const string Format = "recoil-terrain", Extension = ".terrain.json";
     public const int Version = 1, CurrentCompiler = 1;
-    public const int MaximumSurfaces = 256, MaximumRegions = 4096, MaximumPolygons = 1024, MaximumRingPoints = 4096, MaximumPoints = 1_000_000;
+    public const int MaximumSurfaces = 256, MaximumRegions = 4096, MaximumPolygons = 1024, MaximumRingPoints = 200_000, MaximumPoints = 1_000_000;
     public const float MaximumCoordinate = 1_000_000;
 
     /// <summary>Reads and validates a recipe; problems name <paramref name="source"/>.</summary>

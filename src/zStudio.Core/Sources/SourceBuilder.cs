@@ -139,6 +139,7 @@ public static partial class SourceBuilder
         {
             public IReadOnlyDictionary<WorldNode, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<WorldNode, WorldNodeProvenance>();
             public IReadOnlyDictionary<(string Script, int Line), int> Executions { get; init; } = new Dictionary<(string, int), int>();
+            public SourceInstruction? WriteInstruction { get; init; }
         }
         private readonly Dictionary<string, (AssembledWorld? World, Exception? Failure)> worlds = new(StringComparer.OrdinalIgnoreCase);
         internal bool HasWorld(string mission) => overlay?.ContainsKey(WorldScript(mission)) == true || File.Exists(SourceProject.Resolve(root, WorldScript(mission)));
@@ -151,7 +152,7 @@ public static partial class SourceBuilder
                     WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token);
                     var world = assembler.Assemble($"{mission}.gs");
                     cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
-                        new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots]) { Provenance = assembler.Provenance, Executions = assembler.Executions }, null);
+                        new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots]) { Provenance = assembler.Provenance, Executions = assembler.Executions, WriteInstruction = assembler.WriteInstruction }, null);
                 }
                 catch (Exception ex) when (IsBuildFailure(ex)) { cached = (null, ex); }
                 worlds[mission] = cached;
@@ -254,7 +255,7 @@ public static partial class SourceBuilder
             if (destination != null)
                 foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
                     foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, profile))
-                        notes.Add($"{pack} is larger than the packs the {profile.Name} profile builds; the game would load it instead. Delete it, or export with a profile that builds it.");
+                        notes.Add($"{pack} is not a pack the {profile.Name} profile builds, but the game may load it instead of the exported ones. Delete it, or export with a profile that builds it.");
             return new(destination, results) { Profile = profile.Name, Notes = notes };
         }
         finally { if (staging != null && Directory.Exists(staging)) Directory.Delete(staging, true); }

@@ -45,22 +45,25 @@ public static class GltfNodeEdits
         var nodes = Nodes(root);
         List<int> order = []; HashSet<int> seen = []; Collect(index);
         Dictionary<int, int> copies = []; for (int k = 0; k < order.Count; k++) copies[order[k]] = nodes.Count + k;
-        long nextInstance = nodes.Select(n => n?["extras"]?[WorldGltf.Key]?["instance"] is JsonValue v && v.TryGetValue(out long i) ? i : 0).DefaultIfEmpty(0).Max() + 1;
+        long nextInstance = nodes.Select(n => Instance(n?["extras"]?[WorldGltf.Key]?["instance"]) ?? 0).DefaultIfEmpty(0).Max() + 1;
         Dictionary<long, long> instances = [];
         foreach (int original in order)
         {
             var copy = (JsonObject)nodes[original]!.DeepClone();
             if (copy["children"] is JsonArray children) copy["children"] = new JsonArray(children.Select(c => (JsonNode?)JsonValue.Create(copies[c!.GetValue<int>()])).ToArray());
-            if (copy["extras"]?[WorldGltf.Key] is JsonObject recoil && recoil["instance"] is JsonValue marker && marker.TryGetValue(out long instance))
+            if (copy["extras"]?[WorldGltf.Key] is JsonObject marked && Instance(marked["instance"]) is long instance)
             {
                 if (!instances.TryGetValue(instance, out long renumbered)) instances[instance] = renumbered = nextInstance++;
-                recoil["instance"] = renumbered;
+                marked["instance"] = renumbered;
             }
             nodes.Add(copy);
         }
         var top = (JsonObject)nodes[copies[index]]!;
         top["name"] = name;
-        if (top["extras"]?[WorldGltf.Key] is JsonObject named && named.ContainsKey("name")) named["name"] = name;
+        // The engine name too, so an editor's suffix rules (".001") never rename the copy on import.
+        var extras = top["extras"] as JsonObject ?? (JsonObject)(top["extras"] = new JsonObject());
+        var recoil = extras[WorldGltf.Key] as JsonObject ?? (JsonObject)(extras[WorldGltf.Key] = new JsonObject());
+        recoil["name"] = name;
         // Beside the original: in its parent's children, or among the scene roots that hold it.
         int copied = copies[index];
         if (Parent(nodes, index) is int parent) InsertAfter((JsonArray)nodes[parent]!["children"]!, index, copied);
@@ -148,6 +151,8 @@ public static class GltfNodeEdits
         }
         return m;
     }
+    /// <summary>An instance marker as the importer reads it: a whole number, written as an integer or a float.</summary>
+    private static long? Instance(JsonNode? node) => node is JsonValue v ? v.TryGetValue(out long i) ? i : v.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 1e15 ? (long)d : null : null;
     /// <summary>The parent of a node, or null for a root.</summary>
     public static int? Parent(JsonObject root, int index) => Parent(Nodes(root), index);
 

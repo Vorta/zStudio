@@ -51,6 +51,11 @@ public sealed class TerrainConversionCorpusTests
             Assert.All(nodesB, n => Assert.True(n.Model!.Vertices.Count <= 921 && n.Model.Normals.Count <= 921, $"{n.Name}: {n.Model.Vertices.Count} vertices"));
             var report = TerrainProbe.Compare(nodesA, nodesB, 4, Token);
             output?.WriteLine($"{mission}: {report.Samples} samples, {report.Hits} hits, {report.Mismatches} differ, {report.HeightOnly} differ only in height (at most {report.MaximumHeightDifference})");
+            // As the engine searches: only the point's cell and the world's own list.
+            var cells = TerrainProbe.Compare(nodesA, nodesB, 4, Token, worldA.Nodes.First(n => n.Class == WorldNodeClass.World));
+            output?.WriteLine($"{mission} by cell: {cells.Mismatches} differ, {cells.Revealed} newly found along cell edges");
+            foreach (string example in cells.Examples) output?.WriteLine("  cell: " + example);
+            Assert.Equal(0, cells.Mismatches);
             foreach (string example in report.Examples) output?.WriteLine(example);
             // Diagnostic: the polygons the converted terrain's probe hits where the shipped pieces had none.
             foreach (string example in report.Examples.Where(e => e.Contains("before nothing")).Take(2))

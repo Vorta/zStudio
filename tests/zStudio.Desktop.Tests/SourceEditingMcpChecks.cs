@@ -123,8 +123,8 @@ internal static class SourceEditingMcpChecks
             Assert.Equal("ground", (await Call("source_world_object", new() { ["document"] = Id(reparented), ["node"] = copyNode }))["object"]!["parent"]!.GetValue<string>());
             blended = Document((await Job("source_world_object_edit", new() { ["document"] = Id(reparented), ["revision"] = reparented.Revision, ["node"] = copyNode, ["action"] = "delete" }))["document"]!);
             Assert.Single(JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf")!)!["nodes"]!.AsArray());
-            // Resolving an interrupted save waits for the project's unsaved edits to be saved or discarded.
-            Assert.Contains("unsaved_changes", (await Call("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, error: true)).GetValue<string>());
+            // Unsaved edits of other files do not block resolving an interrupted save; an unknown save is refused as such.
+            Assert.Contains("invalid_argument", (await Call("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, error: true)).GetValue<string>());
 
             // One save writes every changed file of the project together, and leaves no journal behind.
             var saved = await Job("save_document", new() { ["document"] = Id(blended), ["revision"] = blended.Revision });

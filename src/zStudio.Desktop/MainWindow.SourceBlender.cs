@@ -32,21 +32,40 @@ public partial class MainWindow
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
     }
 
-    /// <summary>Plans an export's changes and applies them to the workspace, rebuilding <paramref name="doc"/>'s world.</summary>
-    private async Task<(DocumentModel Document, BlenderUpdatePlan Plan)> UpdateFromBlenderAsync(DocumentModel doc, string checkoutId, string? export, CancellationToken token)
+    /// <summary>
+    /// Plans an export's changes off the UI thread (sealing reads every file twice), then applies them to the workspace,
+    /// rebuilding <paramref name="doc"/>'s world. Files changed in the project since the checkout are replaced only with
+    /// <paramref name="force"/> (code conflict otherwise). Returns the files the change actually wrote.
+    /// </summary>
+    private async Task<(DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files)> UpdateFromBlenderAsync(DocumentModel doc, string checkoutId, string? export, bool force, CancellationToken token)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "Open a mission world of the source project to update it from Blender.");
-        BlenderCheckout checkout;
-        try { checkout = SourceBlender.Find(session.Root, checkoutId); }
+        RequireSourceWorldIdle(session);
+        BlenderCheckout checkout; BlenderUpdatePlan plan;
+        try
+        {
+            checkout = SourceBlender.Find(session.Root, checkoutId);
+            var workspace = session.Workspace;
+            plan = await Task.Run(() => SourceBlender.PlanUpdate(workspace, checkout, export, force, token), token);
+        }
+        catch (BlenderConflictException ex) { throw new StudioCommandException("conflict", ex.Message); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-        BlenderUpdatePlan? plan = null;
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        IReadOnlyList<string> written = [];
         var next = await EditSourceWorldAsync(doc, $"Updating {Path.GetFileName(checkout.Model)} from Blender", workspace =>
         {
-            plan = SourceBlender.PlanUpdate(workspace, checkout, export, token);
-            return workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is { } t ? () => workspace.Retract(t) : null;
+            // The plan was made off the UI thread; nothing may have changed those files since.
+            foreach (var (relative, sha) in plan.Expected)
+                if ((workspace.Read(relative, token) is { } bytes ? SourceProject.Sha256(bytes) : null) != sha)
+                    throw new InvalidDataException($"{relative} changed while the update was prepared; update again.");
+            if (workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is not { } t) return null;
+            written = [.. t.Files.Select(f => f.Relative)];
+            return () => workspace.Retract(t);
         }, token, fromBuild: false);
-        foreach (string note in plan?.Notes ?? []) ViewModel.AddProblem(Bounded($"{session.Label}: {note}"), "Warning", Path.Combine(session.Root, checkout.Model.Replace('/', Path.DirectorySeparatorChar)));
-        return (next, plan!);
+        try { if (written.Count > 0) SourceBlender.RecordApplied(checkout, plan); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) { ViewModel.Status = $"The update was applied, but the checkout could not record it: {ex.Message}"; }
+        foreach (string note in plan.Notes) ViewModel.AddProblem(Bounded($"{session.Label}: {note}"), "Warning", Path.Combine(session.Root, checkout.Model.Replace('/', Path.DirectorySeparatorChar)));
+        return (next, plan, written);
     }
 
     private static object CheckoutResult(BlenderCheckout checkout) => new
@@ -78,8 +97,16 @@ public partial class MainWindow
         var (checkout, export) = candidates.OrderByDescending(c => c.Export!.WrittenUtc).First();
         if (MessageBox.Show(this, $"Update {checkout.Model} from the Blender export {export!.Relative} ({export.WrittenUtc.ToLocalTime():g})?\n\nThe model, its buffer and changed textures are replaced in the project's unsaved edits; Save writes them.",
             "Update from Blender export", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
-        var (_, plan) = await UpdateFromBlenderAsync(doc, checkout.Id, export.Relative, CancellationToken.None);
-        ViewModel.Status = $"Updated {checkout.Model} from Blender: {plan.Changes.Count} file{(plan.Changes.Count == 1 ? "" : "s")} changed" + (plan.Notes.Count > 0 ? $"; {plan.Notes.Count} notes in Problems" : "");
+        (DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files) result;
+        try { result = await UpdateFromBlenderAsync(doc, checkout.Id, export.Relative, false, CancellationToken.None); }
+        catch (StudioCommandException ex) when (ex.Code == "conflict")
+        {
+            if (MessageBox.Show(this, ex.Message + "\n\nReplace those changes with the export?", "Update from Blender export", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            if (ViewModel.SelectedDocument is not { SourceWorld: not null } current) return;
+            result = await UpdateFromBlenderAsync(current, checkout.Id, export.Relative, true, CancellationToken.None);
+        }
+        int count = result.Files.Count;
+        ViewModel.Status = count == 0 ? $"{checkout.Model} already matches the Blender export." : $"Updated {checkout.Model} from Blender: {count} file{(count == 1 ? "" : "s")} changed" + (result.Plan.Notes.Count > 0 ? $"; {result.Plan.Notes.Count} notes in Problems" : "");
     });
 
     private void RegisterSourceBlenderCommands(StudioCommands r)
@@ -101,13 +128,14 @@ public partial class MainWindow
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             return Result(new { checkouts = SourceBlender.Checkouts(root).Take(32).Select(CheckoutResult).ToArray() });
         });
-        RegisterJob(r, "source_blender_update", "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project's workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model's glTF and buffer, with each new or changed texture PNG; a texture other models use changes for them too (reported in notes). The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. Nothing is written until save_document.",
-            [DocumentParameter, RevisionParameter, P("checkout", "string", "Checkout id from source_blender_checkout or source_blender_checkouts.", true), P("export", "string", "Export path relative to the outbox; default the newest.")], true,
+        RegisterJob(r, "source_blender_update", "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project's workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model's glTF and buffer, with each texture PNG Blender added or changed; a texture other models use changes for them too (reported in notes). Files changed in the project since the checkout (other edits, or another update) are not replaced unless force is true: the command fails with code conflict and lists them. The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. files lists the files the change wrote. Nothing is written until save_document.",
+            [DocumentParameter, RevisionParameter, P("checkout", "string", "Checkout id from source_blender_checkout or source_blender_checkouts.", true), P("export", "string", "Export path relative to the outbox; default the newest."),
+             P("force", "boolean", "Replace project files changed since the checkout; default false.")], true,
             async (a, token) =>
             {
                 var d = TargetDocument(a, true);
-                var (next, plan) = await UpdateFromBlenderAsync(d, Text(a, "checkout"), a["export"] == null ? null : Text(a, "export"), token);
-                return Result(new { document = DocumentState(next), files = plan.Changes.Select(c => c.Relative).ToArray(), notes = plan.Notes.Take(32).ToArray(), @sealed = plan.Sealed });
+                var (next, plan, files) = await UpdateFromBlenderAsync(d, Text(a, "checkout"), a["export"] == null ? null : Text(a, "export"), Flag(a, "force"), token);
+                return Result(new { document = DocumentState(next), files = files.Take(256).ToArray(), notes = plan.Notes.Take(32).ToArray(), @sealed = plan.Sealed });
             });
     }
 }

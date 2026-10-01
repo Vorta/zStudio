@@ -1,34 +1,33 @@
 # Desktop implementation status
 
-## World editor, phases 1–2 in progress (2026-10-01, branch feat/world-editor)
+## World editor, phases 1–3 (2026-10-01, branch feat/world-editor)
 
 Following [world-editor-plan.md](world-editor-plan.md), source worlds are now edited through one project-wide workspace instead of per-mission script edits.
 
 - **Workspace and saving:**
-  - One undo history over every source file of a project, shared by all of its open worlds.
+  - One undo history over every source file of a project, shared by all of its open worlds (at most 256 steps or 1 GiB of content).
   - Save writes every dirty file as a recoverable publication: staged and journaled in the project's `zstudio` folder; originals moved aside and replacements installed only where no other program changed the file; rollback on failure.
-  - An interrupted save is reported when the project opens and is resolved on request (roll back, complete, keep files).
-  - Lossless text `.zrd` syntax: edits change only their tokens, and new records use the canonical layout.
+  - An interrupted save is reported when the project opens and is resolved on request (roll back, complete, keep files), also while unrelated files have unsaved edits.
+  - A clean file another program changed is read from disk again; undo and redo respect the resource editor's unsaved files.
+  - Lossless text `.zrd` syntax: edits change only their tokens, and new records use the canonical layout. An edit that cannot keep the layout is refused.
 - **Editing in source worlds:**
-  - Pickups, AI vehicles and AI nodes: a move changes only the coordinate tokens of their text sources.
-  - World objects: move, rotate, scale and flags, through their glTF node or script instruction, known from build provenance recorded per node.
-  - Fog, lights and cameras, through their script commands.
-  - Blender round trip through `zstudio/export` checkouts with explicit Update from export.
-  - Nine new MCP tools (98 in all).
-- **Tests:** Core 678 pass, including:
+  - Pickups, AI vehicles and AI nodes: a move changes only the coordinate tokens of their text sources (also from Properties).
+  - World objects: move, rotate, scale, flags, property commands, copy, delete and re-parent, through their glTF node or script instruction, known from build provenance recorded per node. Edits check that the script lines and glTF nodes still read as the build ran them, refuse scripts other missions also run, and refuse deletions and copies that would change what a script instruction acts on.
+  - Blender round trip through `zstudio/export` checkouts with explicit Update from export; changes made in the project since the checkout are reported before an export replaces them.
+  - Build profiles (`original`, `modern`, project files) choose the texture packs exports build.
+  - Terrain recipes: painted regions, Create terrain, the viewport brush and Convert to editable terrain. On the 1999 data, M1, M5 and M6 convert with the same altitude-probe results at every sample point (737,280, 82,992 and 1,235,631 samples), also when each point searches only its grid cell and the world's list.
+  - A Zones highlight in Whole world.
+  - 102 MCP tools.
+- **Tests:** Core 712 pass and Desktop 101 pass, including:
   - 69 recoverable-save tests with fault injection and crash recovery;
   - 16 lossless-syntax tests with 1,000 randomized edit rounds;
-  - workspace, placement, object, script-syntax and text-editing cases.
-
-  Desktop 101 pass, with a real named-pipe MCP check of placements, undo, object moves and flags, fog, Blender update and the project-wide save.
+  - workspace, placement, object structure, terrain, conversion, profile and Blender cases;
+  - a real named-pipe MCP check of placements, undo, object edits, terrain painting and conversion, profiles, Blender update and the project-wide save.
 - **Not yet:**
-  - generated terrain (recipes, painting, splitting);
-  - vehicle upgrades;
-  - deleting and duplicating objects;
-  - build profiles;
-  - mission logic;
-  - incremental builds;
-  - in-game acceptance of edited worlds.
+  - in-game acceptance of edited worlds, converted terrain and the `modern` profile's texture memory;
+  - budgets view, tilted region planes and zone validation;
+  - vehicle upgrades and mission logic (phases 5–6);
+  - incremental builds.
 
   The resource editor and the workspace guard each other's unsaved files rather than sharing one buffer.
 

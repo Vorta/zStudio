@@ -243,16 +243,16 @@ public static class TerrainCompiler
                 if (shape == null) { part.State = part.State.Apply(region.Set); result.Add(part); continue; }
                 var (min, max) = part.Bounds();
                 if (max.X < shapeMin.X || min.X > shapeMax.X || max.Z < shapeMin.Y || min.Z > shapeMax.Y) { result.Add(part); continue; }
-                // Cut along the lines of the outline edges that cross this part; each resulting part is then wholly inside or outside.
-                List<Line> lines = [];
-                foreach (var e in edges)
-                    if (e.Max.X >= min.X && e.Min.X <= max.X && e.Max.Y >= min.Z && e.Min.Y <= max.Z && Crosses(part, e.A, e.B))
-                    {
-                        var line = Line.Through(e.A, e.B);
-                        if (!lines.Contains(line)) lines.Add(line);
-                    }
+                // Cut along the outline edges that cross this part; each resulting part is then wholly inside or outside. A
+                // sub-part is cut only by an edge that crosses it, so a detailed outline does not shatter the whole part.
+                var crossing = edges.Where(e => e.Max.X >= min.X && e.Min.X <= max.X && e.Max.Y >= min.Z && e.Min.Y <= max.Z && Crosses(part, e.A, e.B)).ToArray();
                 List<Part> pending = [part];
-                foreach (var line in lines) pending = [.. pending.SelectMany(p => Both(p, line))];
+                foreach (var e in crossing)
+                {
+                    var line = Line.Through(e.A, e.B);
+                    pending = [.. pending.SelectMany(p => Crosses(p, e.A, e.B) ? Both(p, line) : [p])];
+                    if (pending.Count > MaximumFragments) throw new InvalidDataException($"Region {region.Name} cuts the terrain into more than {MaximumFragments:N0} parts.");
+                }
                 foreach (var p in pending)
                 {
                     var centre = p.Centroid();
@@ -324,7 +324,7 @@ public static class TerrainCompiler
             }
             // The chord: the line between the two points on it, one segment both parts share.
             var onLine = points.Where(p => p.Side == 0).ToList();
-            if (onLine.Count != 2) return [part];
+            if (onLine.Count != 2) return part.Corners.Count > 3 ? Fan(part).SelectMany(p => Both(p, line)).ToList() : [part];
             bool forward = Less(onLine[0].Corner.Position, onLine[1].Corner.Position);
             Segment chord = forward ? new(onLine[0].Corner.Position, onLine[1].Corner.Position) : new(onLine[1].Corner.Position, onLine[0].Corner.Position);
             double ChordT(Vector3 p) => p == chord.A ? 0 : 1;
@@ -448,7 +448,7 @@ public static class TerrainCompiler
                 {
                     int index = perCell.TryGetValue((key.Surface, key.Row, key.Column), out int seen) ? seen + 1 : 0;
                     perCell[(key.Surface, key.Row, key.Column)] = index;
-                    string cell = key.Column < 0 ? "out" : $"{key.Column:D2}{key.Row:D2}";
+                    string cell = key.Column < 0 ? "out" : $"{key.Column:D2}x{key.Row:D2}";
                     string name = Name(label, surfaces[key.Surface].Surface.Id, cell, index);
                     var polygons = group.Select(p => new TerrainPolygonOutput(p.Material, Ordered(p.Corners), p.State.Zones?.Word ?? materials[p.Material].ZoneWord, p.State.Soil, p.State.Priority)).ToArray();
                     pieces.Add(new(name, key.Surface, key.Column, key.Row, carried, zone, polygons));

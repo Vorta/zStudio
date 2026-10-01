@@ -53,6 +53,8 @@ public partial class MainWindow
         IReadOnlyList<TerrainOutline> stroke;
         try { stroke = TerrainShapes.Stroke(path, radius); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        if (add && ReadRecipe(doc, recipe).Regions.FirstOrDefault(r => r.Name == region) is { Shape: null })
+            throw new StudioCommandException("unsupported", $"Region {region} covers its whole surfaces, so painting adds nothing; set it to cover nothing first (Properties, or source_terrain_edit update_region with wholeSurfaces false), then paint.");
         return EditTerrainAsync(doc, recipe, $"{(add ? "Paint" : "Erase")} {region}", r => TerrainEdits.Paint(r, region, stroke, add), token);
     }
 
@@ -81,9 +83,11 @@ public partial class MainWindow
         if (plan.Converted == 0) throw new StudioCommandException("unsupported", "No piece of the mission database can become terrain.");
         var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
         var before = SourceWorldNodes(doc, p => p.Database && string.Equals(p.ModelFile, plan.Database, StringComparison.OrdinalIgnoreCase) && converted.Contains(p.ModelNode));
+        var grid = SourceWorldModel(doc).World.Nodes.FirstOrDefault(n => n.Class == Recoil.Zbd.Core.Worlds.WorldNodeClass.World);
         var next = await EditSourceWorldAsync(doc, "Converting to editable terrain", w => SourceTerrainConversion.Apply(w, plan, token) is var t ? () => w.Retract(t) : null, token);
         var after = SourceWorldNodes(next, p => string.Equals(p.Terrain, plan.Recipe, StringComparison.OrdinalIgnoreCase));
-        var report = await Task.Run(() => TerrainProbe.Compare(before, after, spacing, token), token);
+        // The conversion is applied and shown; comparing it is a report that ends only with the application.
+        var report = await Task.Run(() => TerrainProbe.Compare(before, after, spacing, shutdownToken, grid), shutdownToken);
         string label = next.SourceWorld?.Label ?? "terrain";
         foreach (string example in report.Examples) ViewModel.AddProblem(Bounded($"{label}: the converted terrain probes differently at {example}"), "Warning", SourceProject.Resolve(SourceWorldOf(next).Root, plan.Recipe));
         return (next, plan, report);
@@ -103,6 +107,7 @@ public partial class MainWindow
         var (next, _, report) = await ConvertTerrainAsync(doc, 8, CancellationToken.None);
         System.Windows.MessageBox.Show(this, report.Mismatches == 0
             ? $"Converted. The altitude probe finds the same heights, zones, soils and flags at all {report.Samples:N0} sample points ({report.Hits:N0} hits)" + (report.HeightOnly > 0 ? $"; {report.HeightOnly:N0} differ in height by at most {report.MaximumHeightDifference:0.###}." : ".")
+              + (report.Revealed > 0 ? $" At {report.Revealed:N0} points along cell edges the converted terrain also finds ground the original pieces hid from their neighbouring cells." : "")
             : $"Converted, but the altitude probe differs at {report.Mismatches:N0} of {report.Samples:N0} sample points; Problems lists examples. Undo takes the conversion back.",
             "Convert to editable terrain", System.Windows.MessageBoxButton.OK, report.Mismatches == 0 ? System.Windows.MessageBoxImage.Information : System.Windows.MessageBoxImage.Warning);
         if (!next.IsDisposed) ShowTerrainProperties(next, plan.Recipe, null, null, null);
@@ -143,10 +148,13 @@ public partial class MainWindow
         ApplyTerrainBrush(scene);
         ViewModel.Status = brush == null ? "Terrain brush off." : $"{(brush.Add ? "Painting" : "Erasing")} {brush.Region}: drag over the terrain.";
     }
+    /// <summary>Whether a world shows pieces of the brush's recipe (another mission of the project does not).</summary>
+    private static bool BrushPaints(DocumentModel? doc, TerrainBrushState? brush) => brush != null && doc?.SourceWorld != null &&
+        doc.SourceBuild?.Provenance.Values.Any(p => string.Equals(p.Terrain, brush.Recipe, StringComparison.OrdinalIgnoreCase)) == true;
     private void ApplyTerrainBrush(SceneViewport? viewport)
     {
         if (viewport == null) return;
-        bool on = terrainBrush != null && ViewModel.SelectedDocument?.SourceWorld != null;
+        bool on = BrushPaints(ViewModel.SelectedDocument, terrainBrush);
         viewport.TerrainBrushRadius = terrainBrush?.Radius ?? 8;
         viewport.TerrainBrushActive = on;
     }
@@ -159,6 +167,7 @@ public partial class MainWindow
     private async Task PaintStrokeAsync(IReadOnlyList<Vector3> stroke)
     {
         if (terrainBrush is not { } brush || ViewModel.SelectedDocument is not { SourceWorld: not null } doc) return;
+        if (!BrushPaints(doc, brush)) { ViewModel.Status = $"This world has no pieces of {brush.Recipe}; the brush paints the world built from it."; return; }
         // Properties closes with the replaced document; when it showed this recipe, it shows it again for the rebuilt world.
         var shown = propertiesWindow?.SourceFields as TerrainPropertiesEditor;
         bool follow = shown?.RecipePath == brush.Recipe && propertiesWindow?.Document == doc;
@@ -329,7 +338,8 @@ public partial class MainWindow
                                 else
                                 {
                                     var path = (a["path"] as JsonArray ?? throw new StudioCommandException("invalid_argument", "Give a path with a radius, or polygons.")).Select(p => p is JsonArray { Count: 2 } xz
-                                        ? new Vector2(xz[0]!.GetValue<float>(), xz[1]!.GetValue<float>()) : throw new StudioCommandException("invalid_argument", "Path points are [x, z].")).ToArray();
+                                        && xz[0] is JsonValue x && x.TryGetValue(out double px) && xz[1] is JsonValue z && z.TryGetValue(out double pz)
+                                        ? new Vector2((float)px, (float)pz) : throw new StudioCommandException("invalid_argument", "Path points are [x, z] numbers.")).ToArray();
                                     float radius = a["radius"] is JsonValue rv && rv.TryGetValue(out double rd) ? (float)rd : throw new StudioCommandException("invalid_argument", "Give the brush radius.");
                                     stroke = TerrainShapes.Stroke(path, radius);
                                 }
@@ -361,7 +371,7 @@ public partial class MainWindow
                 return Result(new
                 {
                     document = DocumentState(next), plan = Plan(done),
-                    probe = new { samples = report.Samples, hits = report.Hits, mismatches = report.Mismatches, heightOnly = report.HeightOnly, maximumHeightDifference = report.MaximumHeightDifference, examples = report.Examples.Select(x => Bounded(x, 1024)).ToArray() }
+                    probe = new { samples = report.Samples, hits = report.Hits, mismatches = report.Mismatches, heightOnly = report.HeightOnly, maximumHeightDifference = report.MaximumHeightDifference, revealed = report.Revealed, examples = report.Examples.Select(x => Bounded(x, 1024)).ToArray() }
                 });
             });
         RegisterJob(r, "source_terrain_create", "Create a terrain recipe for surfaces of a glTF file in the open source world's project (surfaces: node names, each with a mesh, in a file of their own — not the mission database) and add a marker for it at the end of the mission database's roots, as one undoable change; the world rebuilds with the compiled pieces. The recipe goes beside the file (name.terrain.json) unless recipe names another path ending in .terrain.json.",

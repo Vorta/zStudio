@@ -53,6 +53,42 @@ public sealed class TerrainConversionTests
         Assert.False(workspace.IsDirty);
     }
 
+    [Fact]
+    public async Task ModelValuesTravelWithTheirPiecesAndBoundsDependentPiecesStay()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteTerrainDatabase();
+        // flat_b is unlit (its own model flags); flat_over collides by its bounding box.
+        string path = Path.Combine(fixture.Project, "data", "m1", "models", "m1.gltf");
+        var gltf = JsonNode.Parse(File.ReadAllBytes(path))!;
+        JsonObject Named(string name) => (JsonObject)gltf["nodes"]!.AsArray().Single(n => n!["name"]!.GetValue<string>() == name)!;
+        var mesh = (JsonObject)gltf["meshes"]![Named("flat_b")["mesh"]!.GetValue<int>()]!;
+        var meshExtras = mesh["extras"] as JsonObject ?? (JsonObject)(mesh["extras"] = new JsonObject());
+        var values = meshExtras[WorldGltf.Key] as JsonObject ?? (JsonObject)(meshExtras[WorldGltf.Key] = new JsonObject());
+        values["flags"] = 7;
+        var over = Named("flat_over");
+        var overExtras = over["extras"] as JsonObject ?? (JsonObject)(over["extras"] = new JsonObject());
+        var recoil = overExtras[WorldGltf.Key] as JsonObject ?? (JsonObject)(overExtras[WorldGltf.Key] = new JsonObject());
+        recoil["flags"] = $"{WorldGltf.DefaultCarried | 0x20:x8}";
+        fixture.Write("data/m1/models/m1.gltf", gltf.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "before"), workspace.Overlay(), token: Token);
+        var plan = SourceTerrainConversion.Plan(workspace, "data/m1/models/m1.gltf", SourceTerrainConversion.References(workspace, before.Dependencies, Token), Token);
+        Assert.Contains(plan.Kept, k => k.Node == "flat_over" && k.Reason.Contains("bounding box"));
+        // flat_a and flat_b no longer share a surface: their model values differ.
+        Assert.Equal(2, plan.Groups.Count);
+        var unlit = Assert.Single(plan.Groups, g => g.ModelValues != null && g.ModelValues["flags"]?.GetValue<int>() == 7);
+        Assert.Contains("_m", unlit.Id);
+        SourceTerrainConversion.Apply(workspace, plan, Token);
+        var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "after"), workspace.Overlay(), token: Token);
+        Assert.Null(after.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
+        var pieces = await Nodes(after, p => p.Terrain == plan.Recipe && p.TerrainSurface == unlit.Id);
+        Assert.NotEmpty(pieces);
+        Assert.All(pieces, n => Assert.Equal(7u, n.Model!.Flags));
+        var report = TerrainProbe.Compare(await Nodes(before, p => p.Database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode))), await Nodes(after, p => p.Terrain == plan.Recipe), 2, Token);
+        Assert.Equal(0, report.Mismatches);
+    }
+
     private static async Task<List<WorldNode>> Nodes(SourceWorldBuild build, Func<WorldNodeProvenance, bool> select)
     {
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);

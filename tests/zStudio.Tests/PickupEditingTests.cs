@@ -46,6 +46,11 @@ public sealed partial class AnimationTests
             Assert.All(Enumerable.Range(0, original.Length).Where(i => original[i] != encoded[i]), i => Assert.Contains(i, permitted));
             edits.Undo(); Assert.False(edits.IsDirty); Assert.False(edits.CanUndo); Assert.Equal(original, edits.EncodeArchive(path));
             edits.Redo(); Assert.True(edits.IsDirty); Assert.Equal(encoded, edits.EncodeArchive(path));
+            // Values float arithmetic on a delta would round apart stay identical, so the records remain counterparts.
+            Vector3 inexact = new(0.1f, 1234.567f, -0.3f);
+            edits.MoveTo(selected.Source, inexact);
+            foreach (var source in scope.Sources) Assert.Equal(inexact, edits.Position(source));
+            Assert.Equal(3, edits.Scope(selected.Source).Sources.Count);
         });
     }
     [Fact]

@@ -38,8 +38,16 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     public List<WorldNode> LoadedRoots { get; } = [];
     /// <summary>Where each node came from and which instructions last changed it.</summary>
     public Dictionary<WorldNode, WorldNodeProvenance> Provenance { get; } = new(ReferenceEqualityComparer.Instance);
-    /// <summary>How many times each instruction (script, line) ran; an instruction that ran more than once changed several things.</summary>
-    public Dictionary<(string Script, int Line), int> Executions { get; } = [];
+    /// <summary>How many times each instruction (script, line) ran; an instruction that ran more than once changed several things. Scripts compare without case, as the file system finds them.</summary>
+    public Dictionary<(string Script, int Line), int> Executions { get; } = new(ScriptLineComparer.Instance);
+    /// <summary>The GameZWriteZBDFile that wrote the world: lines added before the world is written go right before it.</summary>
+    public SourceInstruction? WriteInstruction { get; private set; }
+    private sealed class ScriptLineComparer : IEqualityComparer<(string Script, int Line)>
+    {
+        public static readonly ScriptLineComparer Instance = new();
+        public bool Equals((string Script, int Line) a, (string Script, int Line) b) => a.Line == b.Line && string.Equals(a.Script, b.Script, StringComparison.OrdinalIgnoreCase);
+        public int GetHashCode((string Script, int Line) key) => HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(key.Script), key.Line);
+    }
     private SourceInstruction? instruction;
     private WorldNodeProvenance Origin(WorldNode node) => Provenance.TryGetValue(node, out var p) ? p : Provenance[node] = new();
     /// <summary>Commands that change the node they apply to (the current node), whose last writer provenance records.</summary>
@@ -224,7 +232,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "NodeSetLighting": if (current != null) foreach (var model in Subtree(current).Select(n => n.Model).OfType<WorldModel>()) model.Flags = On(0) ? model.Flags | 1 : model.Flags & ~1u; break;
 
             case "LoadGameGen": LoadGameGen(A(0), A(1), script); break;
-            case "GameZWriteZBDFile": WorldFile = A(0); Finish(); break;
+            case "GameZWriteZBDFile": WorldFile = A(0); WriteInstruction = instruction; Finish(); break;
             // Rendering and runtime settings are not part of the world file; gamegen-only commands had no retail effect.
             // Commands that change nodes or models in the retail interpreter but are not built here are reported.
             default: if (Unsupported.Contains(command)) Warn($"{script}: {command} changes the world in the game's interpreter, but the source build does not apply it."); break;
@@ -410,7 +418,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             World = World,
             NodeImported = (node, file, source) =>
             {
-                var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.Load = load;
+                var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.ModelNodeName = source.Name; origin.Load = load;
                 origin.Database = database && string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase);
             },
             Reference = (uri, from) => Load(Relative(from, uri)),

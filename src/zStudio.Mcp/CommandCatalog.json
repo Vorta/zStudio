@@ -4928,7 +4928,7 @@
       {
         "Name": "profile",
         "Type": "string",
-        "Description": "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the project\u0027s default profile.",
+        "Description": "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the profile checked in Tools \u2192 Build profile (source_status selected), which is the project\u0027s default unless the user chose another.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -5510,7 +5510,7 @@
   },
   {
     "Name": "zstudio_source_blender_update",
-    "Description": "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project\u0027s workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model\u0027s glTF and buffer, with each new or changed texture PNG; a texture other models use changes for them too (reported in notes). The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. Nothing is written until save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project\u0027s workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model\u0027s glTF and buffer, with each texture PNG Blender added or changed; a texture other models use changes for them too (reported in notes). Files changed in the project since the checkout (other edits, or another update) are not replaced unless force is true: the command fails with code conflict and lists them. The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. files lists the files the change wrote. Nothing is written until save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5543,6 +5543,14 @@
         "Name": "export",
         "Type": "string",
         "Description": "Export path relative to the outbox; default the newest.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "force",
+        "Type": "boolean",
+        "Description": "Replace project files changed since the checkout; default false.",
         "Required": false,
         "Choices": null,
         "Properties": null

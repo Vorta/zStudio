@@ -58,7 +58,7 @@ public sealed class TerrainCompilerTests
     public void SurfacesAreCutExactlyAtCellLines()
     {
         var result = TerrainCompiler.Compile("t", Recipe(TerrainAttributes.None), [Sheet("land", 200, 200, 300, 300)], Materials, Grid, Token);
-        Assert.Equal(["t_land_0000", "t_land_0100", "t_land_0001", "t_land_0101"], result.Pieces.Select(p => p.Name));
+        Assert.Equal(["t_land_00x00", "t_land_01x00", "t_land_00x01", "t_land_01x01"], result.Pieces.Select(p => p.Name));
         foreach (var piece in result.Pieces)
         {
             // Every corner lies inside the piece's cell, the cell lines included.

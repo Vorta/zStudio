@@ -14,7 +14,11 @@ namespace Recoil.Zbd.Core.Sources;
 /// <summary>A database root kept out of a conversion, and why.</summary>
 public sealed record TerrainConversionKept(string Node, string Reason);
 /// <summary>A planned surface: its id, node attributes and the database roots (glTF node indices, in root order) it merges.</summary>
-public sealed record TerrainConversionSurface(string Id, uint Flags, int Zone, IReadOnlyList<int> Nodes);
+public sealed record TerrainConversionSurface(string Id, uint Flags, int Zone, IReadOnlyList<int> Nodes)
+{
+    /// <summary>The pieces' model values (lighting, scrolling), which the surface's mesh carries.</summary>
+    public JsonObject? ModelValues { get; init; }
+}
 /// <summary>What converting a mission database's pieces to editable terrain would do.</summary>
 public sealed record TerrainConversionPlan(string Database, string Surfaces, string Recipe, IReadOnlyList<TerrainConversionSurface> Groups, IReadOnlyList<TerrainConversionKept> Kept)
 {
@@ -41,9 +45,11 @@ public static class SourceTerrainConversion
             if (!(file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gw", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase))) continue;
             if (workspace.Read(file, token) is not { } bytes) continue;
             IEnumerable<string> tokens;
-            if (file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) && !ZrdText.LooksLikeText(bytes))
+            if (file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase))
             {
-                try { tokens = Strings(ZrdDecoder.Read(bytes, token)); } catch (InvalidDataException) { continue; }
+                // A resource's strings whole (names may hold spaces); a file that does not parse is read word by word.
+                try { tokens = Strings(ZrdText.LooksLikeText(bytes) ? ZrdText.Parse(Encoding.Latin1.GetString(bytes), token) : ZrdDecoder.Read(bytes, token)); }
+                catch (InvalidDataException) { tokens = Regex.Matches(Encoding.Latin1.GetString(bytes), @"[A-Za-z0-9_\-\.\*%]+").Select(m => m.Value); }
             }
             else tokens = Regex.Matches(Encoding.Latin1.GetString(bytes), @"[A-Za-z0-9_\-\.\*%]+").Select(m => m.Value);
             foreach (string t in tokens)
@@ -66,16 +72,17 @@ public static class SourceTerrainConversion
         var (root, doc) = Read(workspace, database, token);
         string stem = database[(database.LastIndexOf('/') + 1)..database.LastIndexOf('.')];
         string folder = database[..database.LastIndexOf('/')];
-        string surfaces = $"{folder}/{stem}_terrain.gltf", recipe = $"{folder}/{stem}_terrain{TerrainRecipe.Extension}";
-        if (workspace.Exists(surfaces) || workspace.Exists(recipe)) throw new InvalidDataException($"{surfaces} or {recipe} already exists; the database was converted before.");
+        string surfaces = $"{folder}/{stem}_terrain.gltf", recipe = $"{folder}/{stem}_terrain{TerrainRecipe.Extension}", buffer = $"{folder}/{stem}_terrain.bin";
+        if (workspace.Exists(surfaces) || workspace.Exists(recipe) || workspace.Exists(buffer)) throw new InvalidDataException($"{surfaces}, {buffer} or {recipe} already exists; the database was converted before.");
         var json = (JsonArray)root["nodes"]!;
         List<TerrainConversionKept> kept = [];
-        Dictionary<(uint Flags, int Zone), List<GltfNode>> groups = [];
+        Dictionary<(uint Flags, int Zone, string Values), List<GltfNode>> groups = [];
         foreach (var node in doc.Roots)
         {
             token.ThrowIfCancellationRequested();
             var extras = node.Extras?[WorldGltf.Key] as JsonObject;
-            string name = extras?["name"] is JsonValue n && n.TryGetValue(out string? named) ? named : node.Name;
+            string name = WorldGltf.EngineName(node);
+            var values = node.Mesh?.Extras?[WorldGltf.Key] as JsonObject;
             string? reason = extras?["terrain"] != null ? "terrain marker"
                 : node.Mesh == null ? "no mesh of its own"
                 : node.Children.Count > 0 ? "has children"
@@ -85,18 +92,21 @@ public static class SourceTerrainConversion
                 : node.Matrix is { } m && !m.IsIdentity ? "placed with a transform"
                 : node.Mesh.Weights.Count > 0 || node.Mesh.Primitives.Any(p => p.Targets.Count > 0) ? "has morph targets"
                 : (Flags(extras) & 0x80) != 0 ? "landmark (the horizon and other always-drawn nodes)"
+                : (Flags(extras) & 0x60) != 0 ? "collides by its bounding box or is a proximity node (both depend on the node's own bounds)"
+                : values?["points"] is JsonArray { Count: > 0 } ? "holds point entries (lens flares)"
+                : values?["mode"] is JsonValue mode && mode.ToString() != "0" ? "a facade or point model"
                 : references.Names.Contains(name) ? "named by a script, resource or animation"
                 : references.Patterns.FirstOrDefault(p => p.IsMatch(name)) is { } pattern ? $"matched by the wildcard {pattern}"
                 : extras?["zoneWord"] is JsonValue word && word.ToString() is var w && Zone(extras) is var z && !w.Equals($"0x{(uint)z:X}", StringComparison.OrdinalIgnoreCase) && !w.Equals($"0x{(uint)z:X8}", StringComparison.OrdinalIgnoreCase) ? "has a zone word beyond its zone"
                 : null;
             if (reason != null) { kept.Add(new(name, reason)); continue; }
-            var key = (Flags(extras), Zone(extras));
+            var key = (Flags(extras), Zone(extras), values?.ToJsonString() ?? "");
             if (!groups.TryGetValue(key, out var list)) groups[key] = list = [];
             list.Add(node);
         }
         // Within a group, pieces that overlap in plan view go to different surfaces (first fit, in root order).
         List<TerrainConversionSurface> result = [];
-        foreach (var ((flags, zone), nodes) in groups.OrderBy(g => g.Key.Zone).ThenBy(g => g.Key.Flags))
+        foreach (var ((flags, zone, values), nodes) in groups.OrderBy(g => g.Key.Zone).ThenBy(g => g.Key.Flags).ThenBy(g => g.Key.Values, StringComparer.Ordinal))
         {
             List<(List<GltfNode> Members, PathsD Area)> layers = [];
             foreach (var node in nodes)
@@ -107,8 +117,11 @@ public static class SourceTerrainConversion
                 if (layer.Members == null) layers.Add(([node], area));
                 else { layer.Members.Add(node); int at = layers.IndexOf(layer); layers[at] = (layer.Members, Clipper.Union(layer.Area, area, FillRule.NonZero, 3)); }
             }
+            // Pieces with model values of their own (an unlit or scrolling surface) are a surface of their own, named by a short hash of the values.
+            string model = values.Length == 0 ? "" : "_m" + SourceProject.Sha256(Encoding.UTF8.GetBytes(values))[..6];
             for (int k = 0; k < layers.Count; k++)
-                result.Add(new($"z{(zone == 0xFF ? "any" : zone.ToString(System.Globalization.CultureInfo.InvariantCulture))}_{flags:x8}" + (layers.Count > 1 ? $"_{k + 1}" : ""), flags, zone, [.. layers[k].Members.Select(n => n.Index)]));
+                result.Add(new($"z{(zone == 0xFF ? "any" : zone.ToString(System.Globalization.CultureInfo.InvariantCulture))}_{flags:x8}{model}" + (layers.Count > 1 ? $"_{k + 1}" : ""), flags, zone, [.. layers[k].Members.Select(n => n.Index)])
+                { ModelValues = values.Length == 0 ? null : JsonNode.Parse(values) as JsonObject });
         }
         return new(database, surfaces, recipe, result, kept);
     }
@@ -123,7 +136,7 @@ public static class SourceTerrainConversion
         GltfDocument surfaces = new();
         foreach (var group in plan.Groups)
         {
-            GltfMesh mesh = new() { Name = group.Id };
+            GltfMesh mesh = new() { Name = group.Id, Extras = group.ModelValues == null ? null : new JsonObject { [WorldGltf.Key] = group.ModelValues.DeepClone() } };
             foreach (int index in group.Nodes)
             {
                 if (!byIndex.TryGetValue(index, out var node) || node.Mesh == null) throw new InvalidDataException($"{plan.Database} changed since the conversion was planned.");
@@ -170,8 +183,8 @@ public static class SourceTerrainConversion
         return (root, doc);
     }
     private static uint Flags(JsonObject? extras) =>
-        extras?["flags"] is JsonValue v && v.TryGetValue(out string? hex) && hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            && uint.TryParse(hex.AsSpan(2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint flags) ? flags & WorldGltf.CarriedFlags : WorldGltf.DefaultCarried;
+        extras?["flags"] is JsonValue v && v.TryGetValue(out string? hex)
+            && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint flags) ? flags & WorldGltf.CarriedFlags : WorldGltf.DefaultCarried;
     private static int Zone(JsonObject? extras) => extras?["zone"] is JsonValue v && v.TryGetValue(out int zone) ? zone & 0xFF : 0xFF;
     /// <summary>The plan-view area a node's triangles cover.</summary>
     private static PathsD PlanArea(GltfNode node)
