@@ -32,9 +32,16 @@ public partial class MainWindow
     private async Task<bool> ConfirmDocumentCloseAsync(DocumentModel document)
     {
         if (!await ResolvePropertiesDraftsAsync(document) || shownDocument == document && animation?.ResolvePendingDrafts() == false) return false;
+        // A committed draft may have rebuilt a source world: the decision is about the document it shows now.
+        document = LiveDocument(document);
         System.Windows.Input.Keyboard.ClearFocus(); scene?.CancelPickupDrag(); if (!document.IsDirty) return true;
         if (document.SourceWorld is { } world)
         {
+            if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && !OtherSourceWorldOpen(document) && SourceWorldOpening(document))
+            {
+                ViewModel.Status = "A world of this source project is opening; close this one when it is shown, so its unsaved edits can be decided.";
+                return false;
+            }
             // The project's edits stay with its other open worlds; they are decided when the last one closes.
             if (!closingAllDocuments && !ViewModel.ClosingAllDocuments && OtherSourceWorldOpen(document)) return true;
             if (discardApprovedWorkspace is { } approved && approved.Workspace == world.Workspace && approved.Revision == world.Workspace.Revision) return true;

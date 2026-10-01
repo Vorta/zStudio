@@ -20,12 +20,16 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
         m.Translation = Position;
         return m;
     }
-    /// <summary>The transform a local matrix (rows: rotated, scaled axes, then translation) describes.</summary>
+    /// <summary>
+    /// The transform a local matrix (rows: rotated, scaled axes, then translation) describes. A mirroring matrix has a
+    /// negative X scale, so <see cref="Matrix"/> gives it back.
+    /// </summary>
     public static ObjectTransform FromMatrix(Matrix4x4 m)
     {
         Vector3 x = new(m.M11, m.M12, m.M13), y = new(m.M21, m.M22, m.M23), z = new(m.M31, m.M32, m.M33);
         Vector3 scale = new(x.Length(), y.Length(), z.Length());
         if (scale.X == 0 || scale.Y == 0 || scale.Z == 0) return new(m.Translation, Vector3.Zero, scale);
+        if (Vector3.Dot(Vector3.Cross(x, y), z) < 0) scale.X = -scale.X;
         x /= scale.X; y /= scale.Y; z /= scale.Z;
         // Rows of Rz·Rx·Ry: M32 = −sin x, M31/M33 give y, M12/M22 give z (gimbal lock: z is 0).
         float rx = MathF.Asin(Math.Clamp(-z.Y, -1f, 1f)), ry, rz;
@@ -103,8 +107,8 @@ public static class SourceObjectEdits
                 throw new InvalidDataException($"{nodeName}'s transform is set in several scripts; edit them in the scripts directly.");
             ScriptEdit edit = new(workspace, anchor.Script, executions, token, mission);
             if (position) edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", requested.Position, Vector3.Zero, anchor);
-            if (rotation) edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", requested.RotationDegrees, Vector3.Zero, anchor);
-            if (scale) edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", requested.Scale, Vector3.One, anchor);
+            if (rotation) edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", Round(requested.RotationDegrees), Vector3.Zero, anchor);
+            if (scale) edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", Round(requested.Scale), Vector3.One, anchor);
             return new(label, edit.Changes(), $"{anchor.Script} line {anchor.Line}", edit.Notes);
         }
         // A node of a glTF file: its transform is the node's, except a translation a script sets.
@@ -277,7 +281,7 @@ public static class SourceObjectEdits
                 : TransformCommands.Any(origin.Writers.ContainsKey) ? built : null;
             bool flags = origin.Applied.Any(i => FlagCommands.Values.Contains(i.Command));
             List<string> copyNotes = ["The copy shares the original's meshes and textures.", parts];
-            foreach (var i in origin.Applied.Where(i => !TransformCommands.Contains(i.Command) && !FlagCommands.Values.Contains(i.Command)))
+            foreach (var i in origin.Applied.Where(i => !TransformCommands.Contains(i.Command) && !FlagCommands.Values.Contains(i.Command) && i.Command is not ("NodeSetLighting" or "FindSubNode")))
                 copyNotes.Add($"{i.Script} line {i.Line} ({i.Command}) acts on {node.Name} by name; the copy does not get it.");
             return GltfFile(target.Workspace, origin, label, (root, _) =>
             {
@@ -337,6 +341,8 @@ public static class SourceObjectEdits
                     throw new InvalidDataException($"{parent.Name} is not a node of {origin.ModelFile}; a mission database node can only move under another node of the database, or to the world.");
                 into = p.ModelNode;
             }
+            if (origin.Named.FirstOrDefault(n => n.Command == "AddChild") is { } attach)
+                throw new InvalidDataException($"{attach.Script} line {attach.Line} also attaches {node.Name} elsewhere; a new place in the glTF would move that instance too. Move it in the scripts directly.");
             // The glTF keeps the node's place from the file's transforms; a script transform along either chain moves it elsewhere.
             var chain = Ancestors(node).Prepend(node).Concat(parent == null ? [] : Ancestors(parent).Prepend(parent));
             if (chain.FirstOrDefault(n => target.Provenance.TryGetValue(n, out var p) && TransformCommands.Any(p.Writers.ContainsKey)) is { } scripted)
@@ -547,9 +553,12 @@ public static class SourceObjectEdits
             string[] numbers = [Number(value.X), Number(value.Y), Number(value.Z)];
             if (writer != null)
             {
-                // The values the build used (a macro's value, not its name).
-                if (writer.Args.Count >= 3 && Enumerable.Range(0, 3).All(i => WorldAssembler.Number(writer.Args[i]) == value[i])) return;
-                Replace(writer, new() { [1] = numbers[0], [2] = numbers[1], [3] = numbers[2] });
+                // Only the components that differ from the values the build used (a macro's value, not its name) change.
+                if (writer.Args.Count < 3) { Replace(writer, new() { [1] = numbers[0], [2] = numbers[1], [3] = numbers[2] }); return; }
+                Dictionary<int, string> changed = [];
+                for (int i = 0; i < 3; i++)
+                    if (MathF.Abs(WorldAssembler.Number(writer.Args[i]) - value[i]) > 1e-5f * MathF.Max(1, MathF.Abs(value[i]))) changed[i + 1] = numbers[i];
+                if (changed.Count > 0) Replace(writer, changed);
                 return;
             }
             if (value != unset) Insert(anchor, [command, .. numbers]);

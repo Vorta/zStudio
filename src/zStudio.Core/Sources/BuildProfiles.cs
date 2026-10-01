@@ -63,6 +63,11 @@ public static class BuildProfiles
         if (name.Equals(Modern.Name, StringComparison.OrdinalIgnoreCase)) return Modern;
         throw new InvalidDataException($"The project has no build profile {name} ({string.Join(", ", paths.Select(Path.GetFileNameWithoutExtension).Append(Original.Name).Append(Modern.Name).Distinct(StringComparer.OrdinalIgnoreCase))}).");
     }
+    /// <summary>Whether the project has a profile of that name (built in, or a file of it), however its file reads.</summary>
+    public static bool Exists(string root, string name, IEnumerable<string>? files = null) =>
+        name.Equals(Original.Name, StringComparison.OrdinalIgnoreCase) || name.Equals(Modern.Name, StringComparison.OrdinalIgnoreCase)
+        || (files ?? SourceProject.Files(root, Folder, n => n.EndsWith(".json", StringComparison.OrdinalIgnoreCase)))
+            .Any(p => p.StartsWith(Folder + "/", StringComparison.OrdinalIgnoreCase) && !p[(Folder.Length + 1)..].Contains('/') && Path.GetFileNameWithoutExtension(p).Equals(name, StringComparison.OrdinalIgnoreCase));
     /// <summary>The profile files: .json files directly in the profiles folder (sub-folders are not profiles).</summary>
     private static IReadOnlyList<string> ProfileFiles(string root, IEnumerable<string>? files)
     {

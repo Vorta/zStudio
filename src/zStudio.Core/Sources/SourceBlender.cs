@@ -182,6 +182,7 @@ public static class SourceBlender
         // Seal: copy the export and every file it uses, reading each twice so a file Blender is still writing is refused.
         string generation = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture);
         string sealedFolder = Path.Combine(checkout.Folder, "sealed", generation);
+        SourceProject.RejectNestedLinks(checkout.Folder, $"sealed/{generation}");
         Directory.CreateDirectory(sealedFolder);
         string outbox = Path.GetFullPath(checkout.Outbox), exportFolder = Path.GetDirectoryName(chosen.Gltf)!;
         SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, chosen.Gltf).Replace('\\', '/'));
@@ -194,6 +195,7 @@ public static class SourceBlender
         {
             string target = Path.GetFullPath(Path.Combine(sealedFolder, Path.GetRelativePath(outbox, full)));
             if (!target.StartsWith(Path.GetFullPath(sealedFolder) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{full} is outside the outbox.");
+            SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, target).Replace('\\', '/'));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, target).Replace('\\', '/'));
             File.WriteAllBytes(target, bytes);
@@ -300,7 +302,10 @@ public static class SourceBlender
         return string.Join('/', relative.Split('/').Select(Uri.EscapeDataString));
     }
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
-    private static HashSet<string> Names(JsonObject root) => (root["nodes"] as JsonArray ?? []).Select(n => n?["extras"]?[Worlds.WorldGltf.Key]?["name"]?.GetValue<string>() ?? n?["name"]?.GetValue<string>() ?? "").Where(n => n.Length > 0).ToHashSet(StringComparer.Ordinal);
+    /// <summary>The engine names of a glTF's nodes; unexpected shapes of extras or names (another tool's output) count as no name.</summary>
+    private static HashSet<string> Names(JsonObject root) => (root["nodes"] as JsonArray ?? [])
+        .Select(n => Text((((n as JsonObject)?["extras"] as JsonObject)?[Worlds.WorldGltf.Key] as JsonObject)?["name"]) ?? Text((n as JsonObject)?["name"]) ?? "")
+        .Where(n => n.Length > 0).ToHashSet(StringComparer.Ordinal);
     private static JsonObject Parse(byte[] json, string name)
     {
         try { return JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 }) as JsonObject ?? throw new InvalidDataException($"{name} is not a glTF JSON object."); }

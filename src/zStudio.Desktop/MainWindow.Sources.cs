@@ -49,9 +49,11 @@ public partial class MainWindow
     private string? SourceProfileFor(string root)
     {
         if (sourceProfileChoice is not { } choice || !choice.Root.Equals(root, StringComparison.OrdinalIgnoreCase)) return null;
-        // A chosen profile file removed or broken since falls back to the project's default.
-        try { BuildProfiles.Find(root, choice.Name); return choice.Name; }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { sourceProfileChoice = null; return null; }
+        // A chosen profile whose file was removed falls back to the project's default; a broken one stays chosen, so the
+        // export reports it rather than building another profile's packs.
+        try { if (BuildProfiles.Exists(root, choice.Name)) return choice.Name; }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { return choice.Name; }
+        sourceProfileChoice = null; return null;
     }
     /// <summary>A project's build profile, refused as an invalid argument when its files are malformed or the name is unknown.</summary>
     private static BuildProfile ResolveProfile(string root, string? name)

@@ -225,15 +225,18 @@ public sealed class PropertiesWindow : Window
         { e.Handled = true; RunUndo(e.Key == Key.Y); }
         // Escape belongs to field drafts, not to window dismissal.
     }
+    /// <summary>The user closed the window (X, Alt+F4), rather than its document's replacement or a command.</summary>
+    internal bool ClosedByUser { get; private set; }
     private void OnClosing(object? sender, CancelEventArgs e)
     {
+        if (!closingResolved) ClosedByUser = true;
         if (closingResolved || !HasPendingDrafts) return;
         e.Cancel = true;
         if (resolvingClose) return;
         resolvingClose = true;
         Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(async () =>
         {
-            try { if (await ResolvePendingDraftsAsync()) CloseResolved(); }
+            try { if (await ResolvePendingDraftsAsync()) CloseResolved(); else ClosedByUser = false; }
             finally { resolvingClose = false; }
         }));
     }

@@ -142,8 +142,9 @@ public partial class MainWindow
     /// <summary>Runs a recipe edit, then shows the same recipe of the rebuilt world in Properties.</summary>
     private async Task FollowTerrainAsync(string recipe, string? surface, string? region, Func<Task<DocumentModel>> edit)
     {
+        var window = propertiesWindow;
         var next = await edit();
-        if (!next.IsDisposed && (propertiesWindow == null || propertiesWindow.Document == null || propertiesWindow.Document == next))
+        if (!next.IsDisposed && FollowsProperties(window, next))
             try { ShowTerrainProperties(next, recipe, surface, null, region); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
     }
     /// <summary>Turns the viewport brush on (painting or erasing one region) or off.</summary>
@@ -377,6 +378,8 @@ public partial class MainWindow
                 double spacing = a["spacing"] is JsonValue sv && sv.TryGetValue(out double sd) ? sd : 8;
                 if (!(spacing >= 1 && spacing <= 256)) throw new StudioCommandException("invalid_argument", "spacing is 1–256.");
                 var (next, done, report) = await ConvertTerrainAsync(d, (float)spacing, token);
+                // Applied: the job completes with the converted document, even when cancelled during the comparison.
+                CommitRunningJob();
                 return Result(new
                 {
                     document = DocumentState(next), plan = Plan(done),

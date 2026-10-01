@@ -73,6 +73,7 @@ internal static class SourceTerrainMcpChecks
             int piece = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
             string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
             await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
+            await main.Dispatcher.InvokeAsync(() => main.OpenPropertiesWindow!.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
             var typedFields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
             // Typing an attribute and pressing Enter edits the recipe through the source edit its draft's commit runs.
             var soil = Descendants(typedFields).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Region road: Soil");

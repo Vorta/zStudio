@@ -55,6 +55,45 @@ public sealed class TerrainCompilerTests
     }
 
     [Fact]
+    public void TheOutlineIndexAgreesWithRayCastingOverEveryRing()
+    {
+        // Two polygons (one with two holes), points on bucket lines, edges and the outline's maximum.
+        TerrainShape shape = new([
+            new([new(0, 0), new(100, 0), new(100, 80), new(60, 80), new(60, 40), new(0, 40)], [[new(10, 10), new(20, 10), new(20, 20), new(10, 20)], [new(70, 50), new(90, 50), new(80, 70)]]),
+            new([new(120, 0), new(150, 30), new(120, 60)], [])], MinY: -5, MaxY: 50);
+        var outline = new TerrainCompiler.Outline(shape);
+        bool Brute(Vector3 p)
+        {
+            if (p.Y < -5 || p.Y > 50) return false;
+            bool In(IReadOnlyList<Vector2> ring)
+            {
+                bool inside = false;
+                for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++)
+                    if (ring[i].Y > p.Z != ring[j].Y > p.Z && p.X < (ring[j].X - ring[i].X) * (p.Z - (double)ring[i].Y) / (ring[j].Y - (double)ring[i].Y) + ring[i].X) inside = !inside;
+                return inside;
+            }
+            return shape.Polygons.Any(poly => In(poly.Outer) && !poly.Holes.Any(In));
+        }
+        var random = new Random(7);
+        List<Vector3> points = [new(150, 0, 30), new(100, 0, 80), new(0, 0, 0), new(60, 0, 40), new(15, 0, 15), new(80, 0, 60), new(130, 0, 30), new(75, 60, 20)];
+        for (int i = 0; i < 5000; i++) points.Add(new(random.NextSingle() * 170 - 10, random.NextSingle() * 60 - 8, random.NextSingle() * 100 - 10));
+        for (int x = -10; x <= 160; x += 5) for (int z = -10; z <= 90; z += 5) points.Add(new(x, 0, z));
+        foreach (var p in points) Assert.True(Brute(p) == outline.Inside(p), $"{p}: index {outline.Inside(p)}, rings {Brute(p)}");
+    }
+
+    [Fact]
+    public void ShortenedPieceNamesKeepSurfacesApart()
+    {
+        // Two surfaces whose ids begin alike, in one cell, under a long label: their pieces' names still differ.
+        string a = "landscape_terrain_tile_section_001", b = "landscape_terrain_tile_section_002";
+        var recipe = new TerrainRecipe(1, [new(a, "surfaces.gltf", a, TerrainAttributes.None), new(b, "surfaces.gltf", b, TerrainAttributes.None)], TerrainAttributes.None, []);
+        var result = TerrainCompiler.Compile("m1_world_terrain", recipe, [Sheet(a, 10, 300, 20, 310) with { Surface = recipe.Surfaces[0] }, Sheet(b, 30, 300, 40, 310, y: 5) with { Surface = recipe.Surfaces[1] }], Materials, Grid, Token);
+        Assert.Equal(2, result.Pieces.Count);
+        Assert.Equal(result.Pieces.Count, result.Pieces.Select(p => p.Name).Distinct().Count());
+        Assert.All(result.Pieces, p => Assert.True(p.Name.Length <= 34, p.Name));
+    }
+
+    [Fact]
     public void SurfacesAreCutExactlyAtCellLines()
     {
         var result = TerrainCompiler.Compile("t", Recipe(TerrainAttributes.None), [Sheet("land", 200, 200, 300, 300)], Materials, Grid, Token);

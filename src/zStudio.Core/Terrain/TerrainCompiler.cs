@@ -158,6 +158,102 @@ public static class TerrainCompiler
         }
     }
 
+    /// <summary>
+    /// A region outline's edges in a uniform grid over its plan-view bounds. An edge is listed in every bucket its box
+    /// overlaps, so a part finds the edges near it, and a point's ray towards +x the edges along its row.
+    /// </summary>
+    internal sealed class Outline
+    {
+        /// <summary>Bucket entries at most; an outline of long edges crossing many buckets uses one bucket instead.</summary>
+        private const long MaximumEntries = 16_000_000;
+        private readonly TerrainShape shape;
+        private readonly (Vector2 A, Vector2 B, Vector2 Min, Vector2 Max, int Ring)[] edges;
+        private readonly (int Outer, int[] Holes)[] polygons;
+        private readonly int[][] buckets;
+        private readonly int columns, rows;
+        private readonly Vector2 min, max, size;
+        private readonly int[] seen;
+        private readonly bool[] parity;
+        private int pass;
+
+        public Outline(TerrainShape shape)
+        {
+            this.shape = shape;
+            List<(Vector2 A, Vector2 B, Vector2 Min, Vector2 Max, int Ring)> list = [];
+            List<(int, int[])> rings = [];
+            int ring = 0;
+            foreach (var polygon in shape.Polygons)
+            {
+                int outer = ring;
+                foreach (var points in polygon.Holes.Prepend(polygon.Outer))
+                {
+                    for (int i = 0; i < points.Count; i++)
+                    {
+                        var a = points[i]; var b = points[(i + 1) % points.Count];
+                        if (a != b) list.Add((a, b, Vector2.Min(a, b), Vector2.Max(a, b), ring));
+                    }
+                    ring++;
+                }
+                rings.Add((outer, [.. Enumerable.Range(outer + 1, polygon.Holes.Count)]));
+            }
+            edges = [.. list]; polygons = [.. rings]; parity = new bool[ring]; seen = new int[edges.Length];
+            min = edges.Length == 0 ? default : edges.Aggregate(new Vector2(float.MaxValue), (m, e) => Vector2.Min(m, e.Min));
+            max = edges.Length == 0 ? default : edges.Aggregate(new Vector2(float.MinValue), (m, e) => Vector2.Max(m, e.Max));
+            int side = Math.Clamp((int)Math.Sqrt(edges.Length / 2.0), 1, 1024);
+            (columns, rows, size) = Layout(side);
+            long entries = edges.Sum(e => (long)(Column(e.Max.X) - Column(e.Min.X) + 1) * (Row(e.Max.Y) - Row(e.Min.Y) + 1));
+            if (entries > MaximumEntries) (columns, rows, size) = Layout(1);
+            var lists = new List<int>[columns * rows];
+            for (int i = 0; i < edges.Length; i++)
+                for (int r = Row(edges[i].Min.Y); r <= Row(edges[i].Max.Y); r++)
+                    for (int c = Column(edges[i].Min.X); c <= Column(edges[i].Max.X); c++)
+                        (lists[r * columns + c] ??= []).Add(i);
+            buckets = [.. lists.Select(l => l?.ToArray() ?? [])];
+        }
+        private (int, int, Vector2) Layout(int side) => (side, side, new(Math.Max((max.X - min.X) / side, 1e-3f), Math.Max((max.Y - min.Y) / side, 1e-3f)));
+        private int Column(float x) => Math.Clamp((int)((x - min.X) / size.X), 0, columns - 1);
+        private int Row(float z) => Math.Clamp((int)((z - min.Y) / size.Y), 0, rows - 1);
+
+        /// <summary>Whether a part's plan-view box meets the outline's.</summary>
+        public bool Overlaps(Vector3 lo, Vector3 hi) => edges.Length > 0 && !(hi.X < min.X || lo.X > max.X || hi.Z < min.Y || lo.Z > max.Y);
+
+        /// <summary>The edges whose boxes meet a plan-view box, in outline order.</summary>
+        public IEnumerable<(Vector2 A, Vector2 B)> Near(Vector3 lo, Vector3 hi)
+        {
+            pass++;
+            List<int> found = [];
+            for (int r = Row(lo.Z); r <= Row(hi.Z); r++)
+                for (int c = Column(lo.X); c <= Column(hi.X); c++)
+                    foreach (int i in buckets[r * columns + c])
+                        if (seen[i] != pass && edges[i].Max.X >= lo.X && edges[i].Min.X <= hi.X && edges[i].Max.Y >= lo.Z && edges[i].Min.Y <= hi.Z) { seen[i] = pass; found.Add(i); }
+            found.Sort();
+            return found.Select(i => (edges[i].A, edges[i].B));
+        }
+
+        /// <summary>Whether a point lies in the shape (inside an outer ring and none of its holes, within the height range).</summary>
+        public bool Inside(Vector3 point)
+        {
+            if (shape.MinY is { } minY && point.Y < minY || shape.MaxY is { } maxY && point.Y > maxY) return false;
+            Vector2 p = new(point.X, point.Z);
+            if (edges.Length == 0 || p.X < min.X || p.X > max.X || p.Y < min.Y || p.Y > max.Y) return false;
+            pass++;
+            Array.Clear(parity);
+            // A ray towards +x crosses each ring an odd number of times when the point is inside it.
+            int row = Row(p.Y);
+            for (int c = Column(p.X); c < columns; c++)
+                foreach (int i in buckets[row * columns + c])
+                {
+                    if (seen[i] == pass) continue;
+                    seen[i] = pass;
+                    var (a, b, _, _, ring) = edges[i];
+                    if (a.Y > p.Y != b.Y > p.Y && p.X < (b.X - a.X) * (p.Y - (double)a.Y) / (b.Y - (double)a.Y) + a.X) parity[ring] = !parity[ring];
+                }
+            foreach (var (outer, holes) in polygons)
+                if (parity[outer] && !holes.Any(h => parity[h])) return true;
+            return false;
+        }
+    }
+
     private sealed class Compiler(CancellationToken token)
     {
         private readonly List<Part> parts = [];
@@ -273,102 +369,6 @@ public static class TerrainCompiler
             foreach (var c in part.Corners) { double s = ((c.Position.X - a.X) * dx + (c.Position.Z - a.Y) * dz) / length; lo = Math.Min(lo, s); hi = Math.Max(hi, s); }
             return hi >= 0 && lo <= 1;
         }
-        /// <summary>
-        /// A region outline's edges in a uniform grid over its plan-view bounds. An edge is listed in every bucket its box
-        /// overlaps, so a part finds the edges near it, and a point's ray towards +x the edges along its row.
-        /// </summary>
-        private sealed class Outline
-        {
-            /// <summary>Bucket entries at most; an outline of long edges crossing many buckets uses one bucket instead.</summary>
-            private const long MaximumEntries = 16_000_000;
-            private readonly TerrainShape shape;
-            private readonly (Vector2 A, Vector2 B, Vector2 Min, Vector2 Max, int Ring)[] edges;
-            private readonly (int Outer, int[] Holes)[] polygons;
-            private readonly int[][] buckets;
-            private readonly int columns, rows;
-            private readonly Vector2 min, max, size;
-            private readonly int[] seen;
-            private readonly bool[] parity;
-            private int pass;
-
-            public Outline(TerrainShape shape)
-            {
-                this.shape = shape;
-                List<(Vector2 A, Vector2 B, Vector2 Min, Vector2 Max, int Ring)> list = [];
-                List<(int, int[])> rings = [];
-                int ring = 0;
-                foreach (var polygon in shape.Polygons)
-                {
-                    int outer = ring;
-                    foreach (var points in polygon.Holes.Prepend(polygon.Outer))
-                    {
-                        for (int i = 0; i < points.Count; i++)
-                        {
-                            var a = points[i]; var b = points[(i + 1) % points.Count];
-                            if (a != b) list.Add((a, b, Vector2.Min(a, b), Vector2.Max(a, b), ring));
-                        }
-                        ring++;
-                    }
-                    rings.Add((outer, [.. Enumerable.Range(outer + 1, polygon.Holes.Count)]));
-                }
-                edges = [.. list]; polygons = [.. rings]; parity = new bool[ring]; seen = new int[edges.Length];
-                min = edges.Length == 0 ? default : edges.Aggregate(new Vector2(float.MaxValue), (m, e) => Vector2.Min(m, e.Min));
-                max = edges.Length == 0 ? default : edges.Aggregate(new Vector2(float.MinValue), (m, e) => Vector2.Max(m, e.Max));
-                int side = Math.Clamp((int)Math.Sqrt(edges.Length / 2.0), 1, 1024);
-                (columns, rows, size) = Layout(side);
-                long entries = edges.Sum(e => (long)(Column(e.Max.X) - Column(e.Min.X) + 1) * (Row(e.Max.Y) - Row(e.Min.Y) + 1));
-                if (entries > MaximumEntries) (columns, rows, size) = Layout(1);
-                var lists = new List<int>[columns * rows];
-                for (int i = 0; i < edges.Length; i++)
-                    for (int r = Row(edges[i].Min.Y); r <= Row(edges[i].Max.Y); r++)
-                        for (int c = Column(edges[i].Min.X); c <= Column(edges[i].Max.X); c++)
-                            (lists[r * columns + c] ??= []).Add(i);
-                buckets = [.. lists.Select(l => l?.ToArray() ?? [])];
-            }
-            private (int, int, Vector2) Layout(int side) => (side, side, new(Math.Max((max.X - min.X) / side, 1e-3f), Math.Max((max.Y - min.Y) / side, 1e-3f)));
-            private int Column(float x) => Math.Clamp((int)((x - min.X) / size.X), 0, columns - 1);
-            private int Row(float z) => Math.Clamp((int)((z - min.Y) / size.Y), 0, rows - 1);
-
-            /// <summary>Whether a part's plan-view box meets the outline's.</summary>
-            public bool Overlaps(Vector3 lo, Vector3 hi) => edges.Length > 0 && !(hi.X < min.X || lo.X > max.X || hi.Z < min.Y || lo.Z > max.Y);
-
-            /// <summary>The edges whose boxes meet a plan-view box, in outline order.</summary>
-            public IEnumerable<(Vector2 A, Vector2 B)> Near(Vector3 lo, Vector3 hi)
-            {
-                pass++;
-                List<int> found = [];
-                for (int r = Row(lo.Z); r <= Row(hi.Z); r++)
-                    for (int c = Column(lo.X); c <= Column(hi.X); c++)
-                        foreach (int i in buckets[r * columns + c])
-                            if (seen[i] != pass && edges[i].Max.X >= lo.X && edges[i].Min.X <= hi.X && edges[i].Max.Y >= lo.Z && edges[i].Min.Y <= hi.Z) { seen[i] = pass; found.Add(i); }
-                found.Sort();
-                return found.Select(i => (edges[i].A, edges[i].B));
-            }
-
-            /// <summary>Whether a point lies in the shape (inside an outer ring and none of its holes, within the height range).</summary>
-            public bool Inside(Vector3 point)
-            {
-                if (shape.MinY is { } minY && point.Y < minY || shape.MaxY is { } maxY && point.Y > maxY) return false;
-                Vector2 p = new(point.X, point.Z);
-                if (edges.Length == 0 || p.X < min.X || p.X > max.X || p.Y < min.Y || p.Y > max.Y) return false;
-                pass++;
-                Array.Clear(parity);
-                // A ray towards +x crosses each ring an odd number of times when the point is inside it.
-                int row = Row(p.Y);
-                for (int c = Column(p.X); c < columns; c++)
-                    foreach (int i in buckets[row * columns + c])
-                    {
-                        if (seen[i] == pass) continue;
-                        seen[i] = pass;
-                        var (a, b, _, _, ring) = edges[i];
-                        if (a.Y > p.Y != b.Y > p.Y && p.X < (b.X - a.X) * (p.Y - (double)a.Y) / (b.Y - (double)a.Y) + a.X) parity[ring] = !parity[ring];
-                    }
-                foreach (var (outer, holes) in polygons)
-                    if (parity[outer] && !holes.Any(h => parity[h])) return true;
-                return false;
-            }
-        }
-
         /// <summary>The parts of a convex polygon on either side of a line (one when the line misses it).</summary>
         private IEnumerable<Part> Both(Part part, Line line)
         {
@@ -525,7 +525,7 @@ public static class TerrainCompiler
                     int index = perCell.TryGetValue((key.Surface, key.Row, key.Column), out int seen) ? seen + 1 : 0;
                     perCell[(key.Surface, key.Row, key.Column)] = index;
                     string cell = key.Column < 0 ? "out" : $"{key.Column:D2}x{key.Row:D2}";
-                    string name = Name(label, surfaces[key.Surface].Surface.Id, cell, index);
+                    string name = Name(label, surfaces[key.Surface].Surface.Id, key.Surface, cell, index);
                     var polygons = group.Select(p => new TerrainPolygonOutput(p.Material, Ordered(p.Corners), p.State.Zones?.Word ?? materials[p.Material].ZoneWord, p.State.Soil, p.State.Priority)).ToArray();
                     pieces.Add(new(name, key.Surface, key.Column, key.Row, carried, zone, polygons));
                 }
@@ -575,16 +575,16 @@ public static class TerrainCompiler
             }
             return [.. corners];
         }
-        private static string Name(string label, string surface, string cell, int index)
+        private static string Name(string label, string surface, int surfaceIndex, string cell, int index)
         {
             string suffix = $"_{cell}" + (index > 0 ? $"_{index}" : "");
             string head = $"{label}_{surface}";
             if (head.Length + suffix.Length > 34)
             {
-                // A shortened head ends with a hash of the whole one, so surfaces whose ids begin alike keep apart.
-                uint hash = 2166136261;
-                foreach (char c in head) hash = (hash ^ c) * 16777619;
-                head = $"{head[..(34 - suffix.Length - 5)]}_{hash & 0xFFFF:x4}";
+                // A shortened head ends with the surface's place in the recipe (two base-36 digits; at most 256 surfaces),
+                // so surfaces whose ids begin alike keep apart.
+                const string digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+                head = $"{head[..(34 - suffix.Length - 3)]}_{digits[surfaceIndex / 36 % 36]}{digits[surfaceIndex % 36]}";
             }
             return head + suffix;
         }

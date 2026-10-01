@@ -117,6 +117,8 @@ public static class SourceTerrainConversion
                 token.ThrowIfCancellationRequested();
                 var area = PlanArea(node);
                 var layer = layers.FirstOrDefault(l => Math.Abs(Clipper.Area(Clipper.Intersect(l.Area, area, FillRule.NonZero, 3))) <= 0.01);
+                if (layer.Members == null && result.Count + layers.Count >= TerrainRecipe.MaximumSurfaces)
+                    throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, model values, or stacked sheets).");
                 if (layer.Members == null) layers.Add(([node], area));
                 else { layer.Members.Add(node); int at = layers.IndexOf(layer); layers[at] = (layer.Members, Clipper.Union(layer.Area, area, FillRule.NonZero, 3)); }
             }
@@ -190,7 +192,9 @@ public static class SourceTerrainConversion
         extras?["flags"] is JsonValue v && v.TryGetValue(out string? hex)
             && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint flags) ? flags & WorldGltf.CarriedFlags : WorldGltf.DefaultCarried;
     /// <summary>A node's zone as the importer reads it: a whole number, written as an integer or a float.</summary>
-    private static int Zone(JsonObject? extras) => extras?["zone"] is JsonValue v && v.TryGetValue(out double zone) && zone == Math.Floor(zone) && Math.Abs(zone) < 9e15 ? (int)((long)zone & 0xFF) : 0xFF;
+    private static int Zone(JsonObject? extras) => extras?["zone"] is JsonValue v
+        ? v.TryGetValue(out long whole) ? (int)(whole & 0xFF) : v.TryGetValue(out double zone) && zone == Math.Floor(zone) && Math.Abs(zone) < 9e18 ? (int)((long)zone & 0xFF) : 0xFF
+        : 0xFF;
     /// <summary>The plan-view area a node's triangles cover.</summary>
     private static PathsD PlanArea(GltfNode node)
     {

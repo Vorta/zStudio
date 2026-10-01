@@ -19,6 +19,8 @@ public partial class MainWindow
         public JsonNode? Data { get; set; }
         public CancellationTokenSource Cancellation { get; } = new();
         public Task Work { get; set; } = Task.CompletedTask;
+        /// <summary>The job applied its change; cancellation after this no longer turns its result into "canceled".</summary>
+        public bool Committed { get; set; }
         public object Snapshot() => new { id = Id, Name, State, Cancellable, result = Data };
     }
     private readonly Dictionary<Guid, AutomationOperation> automationOperations = [];
@@ -48,8 +50,11 @@ public partial class MainWindow
             using var scope = PreviewOperation.Begin(job.Cancellation.Token);
             job.Cancellation.Token.ThrowIfCancellationRequested();
             RequireAutomationMutationAvailable();
-            job.Data = (await execute(arguments, job.Cancellation.Token)).Data;
-            job.Cancellation.Token.ThrowIfCancellationRequested(); job.State = "completed";
+            runningJob = job;
+            try { job.Data = (await execute(arguments, job.Cancellation.Token)).Data; }
+            finally { runningJob = null; }
+            if (!job.Committed) job.Cancellation.Token.ThrowIfCancellationRequested();
+            job.State = "completed";
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
@@ -58,6 +63,10 @@ public partial class MainWindow
         }
         finally { if (acquired) automationGate.Release(); }
     }
+    /// <summary>The job whose work runs (jobs run one at a time behind the automation gate).</summary>
+    private AutomationOperation? runningJob;
+    /// <summary>The running job has applied its change: it completes with its result even if cancellation arrives now.</summary>
+    private void CommitRunningJob() { if (runningJob != null) runningJob.Committed = true; }
     private void RegisterOperationCommands(StudioCommands r)
     {
         r.Add(new("zstudio_operation", "Read operation status/result. Poll at sensible intervals; cancel is available only for export, validation and source reconstruction/export.", true,

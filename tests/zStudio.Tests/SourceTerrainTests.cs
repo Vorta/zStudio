@@ -129,6 +129,21 @@ public sealed class SourceTerrainTests
     }
 
     [Fact]
+    public async Task AFacadeMeshIsNotATerrainSurface()
+    {
+        using var fixture = Fixture();
+        var coast = JsonNode.Parse(File.ReadAllText(fixture.Path("data/m1/models/coast.gltf")))!;
+        var mesh = (JsonObject)coast["meshes"]![0]!;
+        if (mesh["extras"] is not JsonObject extras) mesh["extras"] = extras = new JsonObject();
+        if (extras["recoil"] is not JsonObject recoil) extras["recoil"] = recoil = new JsonObject();
+        recoil["mode"] = 1;
+        fixture.Write("data/m1/models/coast.gltf", coast.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token));
+        Assert.Contains("facade or point model", refused.Message);
+    }
+
+    [Fact]
     public async Task TerrainOutsideTheDatabaseOrWithoutAGridIsRefused()
     {
         using var fixture = Fixture();

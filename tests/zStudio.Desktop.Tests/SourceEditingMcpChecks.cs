@@ -67,7 +67,8 @@ internal static class SourceEditingMcpChecks
             var ammoSource = moved.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
             Assert.True(window.SetPickup(moved, ammoSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
             typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [window, true]);
-            await Task.Delay(50, token);
+            // Wait for the window's layout to finish, so its fields exist.
+            await main.Dispatcher.InvokeAsync(() => window.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
             var pickupFields = main.OpenPropertiesWindow!.PickupFields!;
             var x = Descendants(pickupFields).OfType<System.Windows.Controls.TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position X");
             x.Text = "21.5";

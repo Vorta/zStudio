@@ -61,8 +61,8 @@ public static class GltfNodeEdits
         var top = (JsonObject)nodes[copies[index]]!;
         top["name"] = name;
         // The engine name too, so an editor's suffix rules (".001") never rename the copy on import.
-        var extras = top["extras"] as JsonObject ?? (JsonObject)(top["extras"] = new JsonObject());
-        var recoil = extras[WorldGltf.Key] as JsonObject ?? (JsonObject)(extras[WorldGltf.Key] = new JsonObject());
+        if (top["extras"] is not JsonObject extras) top["extras"] = extras = new JsonObject();
+        if (extras[WorldGltf.Key] is not JsonObject recoil) extras[WorldGltf.Key] = recoil = new JsonObject();
         recoil["name"] = name;
         // Beside the original: in its parent's children, or among the scene roots that hold it.
         int copied = copies[index];

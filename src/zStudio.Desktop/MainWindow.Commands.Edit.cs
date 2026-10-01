@@ -143,11 +143,13 @@ public partial class MainWindow
             var owner = DraftOwner(target) ?? throw new StudioCommandException("not_ready", "No field editor is open."); await owner.ResolveAutomationDraftsAsync(Text(a, "token"), Text(a, "action") == "apply");
             if (owner is AnimationEditor editor) await editor.AwaitOptionWorkAsync();
             token.ThrowIfCancellationRequested();
-            if (d.IsDisposed || !ViewModel.Documents.Contains(d))
+            // Applying a source world's draft rebuilds the world: the result is the document that shows it now.
+            var live = LiveDocument(d);
+            if (live.IsDisposed || !ViewModel.Documents.Contains(live))
                 throw new StudioCommandException("stale_document", "The draft document was closed during resolution.");
-            if (DraftOwner(target) != owner || (target == "properties" ? propertiesWindow?.Document : shownDocument) != d)
+            if (live == d && (DraftOwner(target) != owner || (target == "properties" ? propertiesWindow?.Document : shownDocument) != d))
                 throw new StudioCommandException("context_changed", "The draft editor was replaced during resolution.");
-            return Result(DocumentState(d));
+            return Result(DocumentState(live));
         });
     }
     private FieldEditor? DraftOwner(string target) => target == "preview" ? animation : (FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.ResourceFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? propertiesWindow?.SourceFields;

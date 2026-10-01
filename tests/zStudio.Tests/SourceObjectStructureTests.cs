@@ -197,7 +197,7 @@ public sealed class SourceObjectStructureTests
         gltf["nodes"]![0]!["translation"] = new JsonArray(5, 0, 0);
         fixture.Write("data/m1/models/m1.gltf", gltf.ToJsonString());
         string script = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
-        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "FindNode ground\r\nObject3DTranslate 20.0 0.0 0.0\r\nObject3DRotate 0.0 45.0 0.0\r\nSetIntersectSurface on"));
+        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "FindNode ground\r\nObject3DTranslate 20.0 0.0 0.0\r\nObject3DRotate 0.0 45.0 0.0\r\nSetIntersectSurface off"));
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         var ground = Target(workspace, "m1", build, world, "ground");
@@ -221,12 +221,14 @@ public sealed class SourceObjectStructureTests
         (build, world) = await BuildAsync(fixture, workspace, "m1");
         var after = WorldUpdate.LocalMatrix(world.Nodes.Single(n => n.Name == "ground"))!.Value;
         Assert.Equal(1f, after.M11, 3); Assert.Equal(30f, after.Translation.X, 3);
-        // A copy in the glTF sits where the original was built and keeps the collision the script gave it.
+        // A copy in the glTF sits where the original was built and keeps the flags the script gave it (collision off, which
+        // the glTF's default would turn on).
         Apply(workspace, SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, "ground"), "ground2", null, Token));
         (build, world) = await BuildAsync(fixture, workspace, "m1");
         var copy = world.Nodes.Single(n => n.Name == "ground2");
         Assert.Equal(30f, WorldUpdate.LocalMatrix(copy)!.Value.Translation.X, 3);
-        Assert.NotEqual(0u, copy.Flags & 0x10);
+        Assert.Equal(0u, copy.Flags & 0x10);
+        Assert.Equal(world.Nodes.Single(n => n.Name == "ground").Flags & WorldGltf.CarriedFlags, copy.Flags & WorldGltf.CarriedFlags);
         // Re-parenting under the ground would place the copy by the glTF's translation, not the script's: refused.
         Assert.Contains("A script sets ground's transform", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "ground2"), world.Nodes.Single(n => n.Name == "ground"), Token)).Message);
         // Without the script's translation, an identity glTF transform would let its Object3DRotate apply again: refused.
@@ -235,6 +237,36 @@ public sealed class SourceObjectStructureTests
         ground = Target(workspace, "m1", build, world, "ground");
         shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(ground.Node)!.Value);
         Assert.Contains("Object3DRotate", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "ground", ground.Origin, build.Executions, new(Vector3.Zero, Vector3.Zero, Vector3.One), Token, "m1", shown)).Message);
+    }
+
+    [Fact]
+    public void MirroredTransformsDecomposeToANegativeScaleAndBack()
+    {
+        foreach (var scale in new Vector3[] { new(-2, 1, 3), new(1, -1, 1), new(-1, -1, -1), new(2, 3, 4) })
+        {
+            var m = new ObjectTransform(new(1, 2, 3), new(10, 30, 50), scale).Matrix();
+            var back = ObjectTransform.FromMatrix(m).Matrix();
+            for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) Assert.True(MathF.Abs(back[i, j] - m[i, j]) < 1e-4f, $"{scale}: {back} is not {m}");
+        }
+    }
+
+    [Fact]
+    public async Task OnlyTheChangedComponentsOfAScriptValueChange()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_at", new(100, 0, -50)), []), Token);
+        // The tank's X comes from a macro: moving it in Y leaves the macro alone.
+        string script = Text(workspace, "gamegen/m1.gs");
+        workspace.Apply("Macro", [("gamegen/m1.gs", Encoding.Latin1.GetBytes(script.Replace("Object3DTranslate 100.0 0.0 -50.0", "set tx 100.0\r\nObject3DTranslate %tx% 0.0 -50.0")))], Token);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var tank = Target(workspace, "m1", build, world, "tank_at");
+        var shown = ObjectTransform.FromMatrix(WorldUpdate.LocalMatrix(tank.Node)!.Value);
+        Assert.Equal(100f, shown.Position.X, 3);
+        var plan = SourceObjectEdits.PlanTransform(workspace, "tank_at", tank.Origin, build.Executions, shown with { Position = shown.Position with { Y = 5 } }, Token, "m1", shown);
+        Assert.Contains("Object3DTranslate %tx% 5.0 -50.0", Encoding.Latin1.GetString(Assert.Single(plan.Changes).Content));
+        // Changing the macro's own component is still refused.
+        Assert.Contains("macro", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "tank_at", tank.Origin, build.Executions, shown with { Position = shown.Position with { X = 7 } }, Token, "m1", shown)).Message);
     }
 
     [Fact]

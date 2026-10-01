@@ -109,6 +109,8 @@ public partial class MainWindow
             [DocumentParameter, RevisionParameter, P("discard", "boolean", "Explicitly discard this document's accepted unsaved edits.")], a =>
         {
             var doc = TargetDocument(a, true);
+            if (doc.IsDirty && !OtherSourceWorldOpen(doc) && SourceWorldOpening(doc)) throw new StudioCommandException("busy", "A world of this source project is opening; close this one when it is shown.");
+            if (doc.IsDirty && Flag(a, "discard") && doc.SourceWorld is { } discarded && !OtherSourceWorldOpen(doc)) discardApprovedWorkspace = (discarded.Workspace, discarded.Workspace.Revision);
             // A source world's edits belong to its project; closing one of several open worlds keeps them.
             if (doc.IsDirty && !Flag(a, "discard") && !OtherSourceWorldOpen(doc)) throw new StudioCommandException("unsaved_changes", doc.SourceWorld != null ? "Save or explicitly discard the source project's edits; this is its last open world." : "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });

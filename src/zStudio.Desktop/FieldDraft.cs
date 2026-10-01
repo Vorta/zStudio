@@ -25,7 +25,7 @@ internal sealed class FieldDraft(string value, Action<string> commit, Func<strin
     public Task<bool> CommitAsync()
     {
         if (!IsAsync) return Task.FromResult(Commit());
-        if (IsCommitting) return work!;
+        if (IsCommitting) return work ?? Task.FromResult(false);
         starting = true;
         try { return work = Run(); }
         finally { starting = false; }

@@ -143,7 +143,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 {
                     if (!await CanRemoveAsync(document)) return;
                     cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
-                    acceptedRevisions.Add(document, document.Revision);
+                    var decided = Replacement(document);
+                    acceptedRevisions[decided] = decided.Revision;
                 }
             }
             finally { ClosingAllDocuments = false; }
@@ -256,7 +257,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         { RequireCurrentNavigation(generation); throw; }
     }
     public void Close(DocumentModel document) { if (document.IsDirty) throw new InvalidOperationException("Use CloseAsync to resolve unsaved edits."); RemoveDocument(document); }
-    public async Task CloseAsync(DocumentModel document) { if (await CanRemoveAsync(document)) RemoveDocument(document); }
+    public async Task CloseAsync(DocumentModel document)
+    {
+        if (!await CanRemoveAsync(document)) return;
+        RemoveDocument(Replacement(document));
+    }
+    /// <summary>A source world's document after resolving its drafts rebuilt it (the original is then disposed).</summary>
+    private DocumentModel Replacement(DocumentModel document) =>
+        document.IsDisposed && document.SourceWorld?.Owner is { IsDisposed: false } owner && Documents.Contains(owner) ? owner : document;
     private Task<bool> CanRemoveAsync(DocumentModel document) => ConfirmDiscardAsync?.Invoke(document) ?? Task.FromResult(!document.IsDirty);
     private void RemoveDocument(DocumentModel document) { int i = Documents.IndexOf(document); Documents.Remove(document); document.Dispose(); if (SelectedDocument == document) SelectedDocument = Documents.Count > 0 ? Documents[Math.Clamp(i, 0, Documents.Count - 1)] : null; }
     public Task ReloadAsync() => ReloadSelectedAsync();

@@ -199,13 +199,20 @@ public partial class MainWindow
     /// <summary>Runs an edit, then shows the same object of the rebuilt world in Properties (found by its source).</summary>
     private async Task FollowSourceObjectAsync(SourceObjectState state, Func<Task<DocumentModel>> edit)
     {
+        var window = propertiesWindow;
         var next = await edit();
         if (next.SourceBuild is not { } build) return;
         int? node = build.Provenance.Where(p => new SourceObjectState(p.Key, "", "", null, 0, p.Value, "", []).Identity == state.Identity).Select(p => (int?)p.Key).FirstOrDefault();
-        if (node is int found && !next.IsDisposed && (propertiesWindow == null || propertiesWindow.Document == null || propertiesWindow.Document == next))
+        if (node is int found && !next.IsDisposed && FollowsProperties(window, next))
             try { ShowSourceObjectProperties(next, found); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
     }
 
+    /// <summary>
+    /// Whether Properties, which showed <paramref name="window"/>'s content before an edit rebuilt the world, reopens on
+    /// <paramref name="next"/>: not when the user closed it meanwhile or another Properties opened.
+    /// </summary>
+    private bool FollowsProperties(PropertiesWindow? window, DocumentModel next) =>
+        window is { ClosedByUser: false } && (propertiesWindow == null || propertiesWindow == window && (window.Document == null || window.Document == next));
     private void RegisterSourceObjectCommands(StudioCommands r)
     {
         Register(r, "source_world_object", "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from — the glTF file and node it was imported from, or the script instruction that created it — with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world.", false,

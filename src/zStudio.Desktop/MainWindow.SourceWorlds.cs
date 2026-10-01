@@ -51,12 +51,23 @@ public partial class MainWindow
     private void ReleaseUnusedSourceWorkspace()
     {
         if (sourceWorkspace == null || sourceWorkspaceBusy || sourceWorldsOpening > 0 || ViewModel.Documents.Any(d => d.SourceWorld?.Workspace == sourceWorkspace)) return;
-        if (sourceWorkspace.IsDirty && !sourceWorkspace.IsSaving) sourceWorkspace.Discard();
-        sourceWorkspace = null;
+        if (sourceWorkspace.IsDirty)
+        {
+            // Unsaved edits go only with an explicit Discard of this workspace at its current state; otherwise they stay
+            // for the project's next world.
+            if (sourceWorkspace.IsSaving || discardApprovedWorkspace is not { } approved || approved.Workspace != sourceWorkspace || approved.Revision != sourceWorkspace.Revision) return;
+            sourceWorkspace.Discard();
+        }
+        sourceWorkspace = null; discardApprovedWorkspace = null;
     }
+    /// <summary>A world of the project is opening: closing the last open world now could not decide its edits.</summary>
+    private bool SourceWorldOpening(DocumentModel doc) => doc.SourceWorld != null && sourceWorldsOpening > 0;
+    /// <summary>The document a source world shows now: a draft commit or another edit may have rebuilt it.</summary>
+    private DocumentModel LiveDocument(DocumentModel doc) =>
+        doc.IsDisposed && doc.SourceWorld?.Owner is { IsDisposed: false } owner && ViewModel.Documents.Contains(owner) ? owner : doc;
     /// <summary>Whether another open world of the same project keeps its edits when <paramref name="doc"/> closes.</summary>
-    private bool OtherSourceWorldOpen(DocumentModel doc) => doc.SourceWorld is { } world && (sourceWorldsOpening > 0 ||
-        ViewModel.Documents.Any(d => d != doc && !d.IsDisposed && d.SourceWorld is { IsDisposed: false } other && other != world && other.Workspace == world.Workspace));
+    private bool OtherSourceWorldOpen(DocumentModel doc) => doc.SourceWorld is { } world &&
+        ViewModel.Documents.Any(d => d != doc && !d.IsDisposed && d.SourceWorld is { IsDisposed: false } other && other != world && other.Workspace == world.Workspace);
 
     private DocumentModel? OpenSourceWorld(string root, string mission) => ViewModel.Documents.FirstOrDefault(d => !d.IsDisposed && d.SourceWorld is { IsDisposed: false } world &&
         world.Mission.Equals(mission, StringComparison.OrdinalIgnoreCase) && world.Root.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase));
@@ -226,7 +237,7 @@ public partial class MainWindow
         catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))
         {
             try { revert(); }
-            catch (Exception undo) when (undo is InvalidDataException or SourceFileChangedException or IOException)
+            catch (Exception undo) when (undo is InvalidDataException or SourceFileChangedException or IOException or InvalidOperationException or NotSupportedException)
             {
                 throw new StudioCommandException("build_failed", $"{action} did not finish ({(ex as StudioCommandException)?.Message ?? ex.Message}) and could not be taken back: {undo.Message} Reload the world before continuing.");
             }

@@ -72,8 +72,9 @@ public sealed class TerrainConversionTests
         recoil["flags"] = $"{WorldGltf.DefaultCarried | 0x20:x8}";
         // A zone written as a whole float reads as the importer reads it.
         var a = Named("flat_a");
-        ((JsonObject)a["extras"]![WorldGltf.Key]!)["zone"] = 3.0;
-        fixture.Write("data/m1/models/m1.gltf", gltf.ToJsonString());
+        ((JsonObject)a["extras"]![WorldGltf.Key]!)["zone"] = "THREE";
+        // As Blender writes it: the literal text 3.0.
+        fixture.Write("data/m1/models/m1.gltf", gltf.ToJsonString().Replace("\"zone\":\"THREE\"", "\"zone\":3.0"));
         SourceWorkspace workspace = new(fixture.Project);
         var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "before"), workspace.Overlay(), token: Token);
         var plan = SourceTerrainConversion.Plan(workspace, "data/m1/models/m1.gltf", SourceTerrainConversion.References(workspace, before.Dependencies, Token), Token);
