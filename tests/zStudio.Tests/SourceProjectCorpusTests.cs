@@ -19,10 +19,12 @@ public sealed class SourceProjectCorpusTests
         try
         {
             var report = await SourceExtractor.ExtractAsync(corpus, project, token: Token);
-            // Animation definitions changed after the shipped animations were compiled are rebuilt from them; nothing else is noted.
-            const string Rebuilt = " was changed after the shipped animations were compiled; it was rebuilt from anim.zbd.";
+            // Animation definitions shipped in another version than the animations were compiled from are rebuilt from
+            // them; nothing else is noted. Definitions that name a sequence twice compile as shipped (the last name).
+            const string Rebuilt = " is not the version the shipped animations were compiled from; it was rebuilt from anim.zbd.";
             Assert.All(report.Notes, n => Assert.EndsWith(Rebuilt, n));
             var rebuilt = report.Notes.Select(n => Path.GetFileName(n[..n.IndexOf(':')])).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("sbarm.zrd", rebuilt); Assert.DoesNotContain("deathmulti.zrd", rebuilt);
             Assert.Equal(1, report.Families["scripts"]); Assert.Equal(3, report.Families["sounds"]);
             Assert.Equal(Directory.GetFiles(corpus, "gamez.zbd", SearchOption.AllDirectories).Length, report.Families["worlds"]);
             Assert.Equal(Directory.GetFiles(corpus, "anim.zbd", SearchOption.AllDirectories).Length, report.Families["animations"]);

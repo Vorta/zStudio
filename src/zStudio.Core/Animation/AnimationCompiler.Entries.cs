@@ -62,8 +62,11 @@ public sealed partial class AnimationCompiler
 
             AnimationEntry entry = new(header, index, -1);
             entry.Primary = Sequence("RESET_SEQUENCE", item.Item("RESET_STATE")?.Items ?? []);
+            // A sequence named more than once takes its last NAME, as the original compiler did: the shipped deathmulti
+            // and sbarm definitions name sequences twice and compiled to the second name. (Inside an event the first of
+            // a repeated attribute counts, as the shipped machine and pipetrig definitions show.)
             foreach (var sequence in item.All("SEQUENCE_DEFINITION"))
-                entry.Sequences.Add(Sequence(sequence.TextOf("NAME") ?? "", sequence.Items, sequence));
+                entry.Sequences.Add(Sequence(sequence.All("NAME").LastOrDefault() is { Scalars.Count: > 0 } named ? named.Text() : "", sequence.Items, sequence));
             if (entry.Sequences.Count > 255) throw item.Error("more than 255 sequences.");
             // The loader creates the entry's lights and sound nodes by name before it resolves node references, so
             // those names need not be in the world; any other missing node makes the game reject the file.

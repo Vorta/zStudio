@@ -406,6 +406,17 @@ public sealed class AnimationCompilerTests
     }
 
     [Fact]
+    public void ASequenceNamedTwiceTakesItsLastName()
+    {
+        // As the shipped sbarm (two names in a row) and deathmulti (a name in each branch) definitions compiled.
+        var files = new MemoryFiles(Definitions("ANIMATION_DEFINITION ( NAME ( gate ) " +
+            "SEQUENCE_DEFINITION ( NAME ( drill_snd ) NAME ( add_one_sound ) CALLBACK ( VALUE ( 1 ) ) ) " +
+            "SEQUENCE_DEFINITION ( IF ( PLAYER_RANGE ( 70 ) ) NAME ( fbfx01 ) CALLBACK ( VALUE ( 2 ) ) ELSEIF ( PLAYER_RANGE ( 140 ) ) NAME ( fbfx01a ) CALLBACK ( VALUE ( 3 ) ) ENDIF ( ) ) )"));
+        var gate = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", ["gate"], Token).Package.Entries[1];
+        Assert.Equal(["add_one_sound", "fbfx01a"], gate.Sequences.Select(s => s.Name));
+    }
+
+    [Fact]
     public void ScriptConventionsFollowTheSurvivingFragments()
     {
         Assert.Equal(["vtol1", "lengine", "rengine", "cargodoor"], AnimationSources.SourceOrder(["vtol1", "cargodoor", "rengine", "lengine"]));
@@ -430,15 +441,19 @@ public sealed class AnimationCompilerTests
         string[] world = ["gate", Latin];
         var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
         List<string> notes = [];
-        var swing = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token).Single(o => o.Path == "data/m1/zrdr/swing.zan");
+        System.Collections.Concurrent.ConcurrentQueue<(SourceStage, string)> statuses = [];
+        var swing = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token, (stage, item) => statuses.Enqueue((stage, item)))
+            .Single(o => o.Path == "data/m1/zrdr/swing.zan");
         Assert.Empty(notes);
         Assert.True(SiAnimationScript.Recognize(swing.Bytes));
         Assert.True(SiAnimationScript.Parse(swing.Bytes, swing.Path).Has(Latin));
+        // Writing each script is reconstruction; compiling the mission's animations again afterwards is validation.
+        Assert.Equal([(SourceStage.Reconstructing, "keyframe script data/m1/zrdr/swing.zan"), (SourceStage.Validating, "the m1 animations")], statuses);
         // Cancelling while scripts are being written stops the reconstruction; nothing falls back to another format.
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token);
         List<string> cancelledNotes = [];
         Assert.ThrowsAny<OperationCanceledException>(() => AnimationSources.Reconstruct([new(1, package, [], world)], files, cancelledNotes, cancel.Token,
-            status => { if (status.StartsWith("keyframe script ", StringComparison.Ordinal)) cancel.Cancel(); }));
+            (stage, item) => { if (stage == SourceStage.Reconstructing && item.StartsWith("keyframe script ", StringComparison.Ordinal)) cancel.Cancel(); }));
         Assert.Empty(cancelledNotes);
     }
 

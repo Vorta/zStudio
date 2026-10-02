@@ -87,11 +87,11 @@ public static class SourceExtractor
             if (family != null) families[family] = families.GetValueOrDefault(family) + 1; else skipped.Add(relative);
         }
         // The work after reading the files reports what it is doing rather than leaving the last file's name shown.
-        void Phase(string item) => progress?.Report(new(files.Count, files.Count, item));
-        if (soundBanks.Count > 0) { Phase("sound banks"); await context.ExtractSoundsAsync(soundBanks); }
-        if (texturePacks.Count > 0) { Phase("textures"); await context.ExtractTexturesAsync(texturePacks); }
-        if (worlds.Count > 0) { Phase("worlds"); await context.ExtractWorldsAsync(worlds); }
-        if (animations.Count > 0) { Phase("animations"); await context.ExtractAnimationsAsync(animations, Phase); }
+        void Phase(SourceStage stage, string item) => progress?.Report(new(files.Count, files.Count, item, stage));
+        if (soundBanks.Count > 0) { Phase(SourceStage.Reconstructing, "sound banks"); await context.ExtractSoundsAsync(soundBanks); }
+        if (texturePacks.Count > 0) { Phase(SourceStage.Reconstructing, "textures"); await context.ExtractTexturesAsync(texturePacks); }
+        if (worlds.Count > 0) { Phase(SourceStage.Reconstructing, "worlds"); await context.ExtractWorldsAsync(worlds); }
+        if (animations.Count > 0) { Phase(SourceStage.Reconstructing, "animations"); await context.ExtractAnimationsAsync(animations, Phase); }
         progress?.Report(new(files.Count, files.Count, "Done"));
         return new(projectRoot, context.Written, families, skipped, context.Notes);
     }
@@ -302,7 +302,7 @@ public static class SourceExtractor
         /// <summary>Node names of each shipped world, which animation definitions bind to.</summary>
         internal Dictionary<int, IReadOnlyCollection<string>> WorldNodes { get; } = [];
         /// <summary>Keyframe scripts of the shipped animations (see <see cref="AnimationSources"/>); definitions come with the resources.</summary>
-        internal async Task ExtractAnimationsAsync(IReadOnlyList<(string Relative, byte[] Bytes)> animations, Action<string>? status = null)
+        internal async Task ExtractAnimationsAsync(IReadOnlyList<(string Relative, byte[] Bytes)> animations, Action<SourceStage, string>? status = null)
         {
             List<AnimationSources.MissionAnimation> missions = [];
             foreach (var (relative, bytes) in animations.OrderBy(a => TextureSources.MissionNumber(a.Relative)))

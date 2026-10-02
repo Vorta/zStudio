@@ -101,4 +101,11 @@ public static class SourceProject
     }
 }
 
-public sealed record SourceProgress(int Completed, int Total, string Item);
+/// <summary>
+/// Progress of a source operation: <see cref="Completed"/> of <see cref="Total"/> counted items and the current
+/// <see cref="Item"/>. Work after the counted items reports its <see cref="Stage"/> instead, the item naming what it is on.
+/// </summary>
+public sealed record SourceProgress(int Completed, int Total, string Item, SourceStage Stage = SourceStage.Items);
+
+/// <summary>What a <see cref="SourceProgress"/> reports: a counted item, or later work that writes sources or checks them.</summary>
+public enum SourceStage { Items, Reconstructing, Validating }

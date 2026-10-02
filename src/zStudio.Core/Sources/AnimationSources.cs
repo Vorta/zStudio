@@ -31,7 +31,7 @@ internal static class AnimationSources
 
     /// <param name="status">Told what is being done: each keyframe script as it starts being written (from worker threads),
     /// then each mission's check of its rebuilt animations.</param>
-    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token, Action<string>? status = null)
+    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token, Action<SourceStage, string>? status = null)
     {
         Overlay files = new(project);
         HashSet<(string, int)> attempted = [];
@@ -90,7 +90,7 @@ internal static class AnimationSources
             {
                 Parallel.For(0, order.Count, new ParallelOptions { CancellationToken = token }, i =>
                 {
-                    status?.Invoke($"keyframe script {order[i]}");
+                    status?.Invoke(SourceStage.Reconstructing, $"keyframe script {order[i]}");
                     written[i] = WriteScript(order[i], scripts[order[i]], times.TryGetValue(order[i], out uint t) ? t : null, token);
                 });
             }
@@ -105,7 +105,7 @@ internal static class AnimationSources
                 if (scriptNotes.TryAdd(order[i], written[i].Note)) noted.Add(order[i]); else scriptNotes[order[i]] = written[i].Note;
             }
 
-            status?.Invoke($"checking the m{mission.Mission} animations");
+            status?.Invoke(SourceStage.Validating, $"the m{mission.Mission} animations");
             RepairDefinitions(mission, bindings, files, attempted, notes, token);
         }
         notes.AddRange(noted.Select(path => scriptNotes[path]).OfType<string>());
@@ -230,7 +230,7 @@ internal static class AnimationSources
             }
             catch (InvalidDataException ex) { remaining = ex.Message; }
             bool exact = remaining == null;
-            if (exact) notes.Add($"{definition.File}: {Name(definition)} was changed after the shipped animations were compiled; it was rebuilt from anim.zbd.");
+            if (exact) notes.Add($"{definition.File}: {Name(definition)} is not the version the shipped animations were compiled from; it was rebuilt from anim.zbd.");
             else
             {
                 files.Written[definition.File] = original;

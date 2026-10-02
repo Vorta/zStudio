@@ -26,7 +26,16 @@ public partial class MainWindow
         SourceReconstructionReport report;
         try
         {
-            var progress = new Progress<SourceProgress>(p => { if (operation == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"Reconstructing {p.Completed}/{p.Total}: {p.Item}"; });
+            // After the game files the counter stays at its total, so later work shows what it is doing instead.
+            var progress = new Progress<SourceProgress>(p =>
+            {
+                if (operation == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = p.Stage switch
+                {
+                    SourceStage.Reconstructing => $"Reconstructing {p.Item}",
+                    SourceStage.Validating => $"Validating {p.Item}",
+                    _ => $"Reconstructing {p.Completed}/{p.Total}: {p.Item}",
+                };
+            });
             report = await Task.Run(() => SourceExtractor.ExtractAsync(source, destination, progress, cancellation.Token), cancellation.Token);
             foreach (string note in report.Notes.Take(256)) ViewModel.AddProblem(Bounded(note), "Warning", destination);
             ViewModel.Status = $"Reconstructed {report.SourceFiles:N0} source files into {destination}";
