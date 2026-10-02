@@ -38,9 +38,11 @@ public static class SiAnimationScript
     /// <summary>A frame block: its label and the poses it lists, in text order.</summary>
     public sealed record Frame(int Label, IReadOnlyList<(string Object, Pose Pose)> Poses);
     /// <summary>A parsed script: its frame blocks in text order and the objects they name, in first-appearance order.</summary>
-    public sealed record Script(IReadOnlyList<Frame> Frames, IReadOnlyList<string> Objects)
+    public sealed class Script(IReadOnlyList<Frame> frames, IReadOnlyList<string> objects)
     {
         private Dictionary<string, List<(int Label, Pose Pose)>>? tracks;
+        public IReadOnlyList<Frame> Frames { get; } = frames;
+        public IReadOnlyList<string> Objects { get; } = objects;
         public bool Has(string name) => Track(name) != null;
         /// <summary>The object's poses in text order, indexed once for all the events that use the script.</summary>
         internal List<(int Label, Pose Pose)>? Track(string name)
@@ -60,19 +62,24 @@ public static class SiAnimationScript
         }
     }
 
-    /// <summary>Whether <paramref name="bytes"/> is an SI Animation Script: its first line that is not blank is the header.</summary>
+    /// <summary>
+    /// Whether <paramref name="bytes"/> is an SI Animation Script: its first line that is neither blank nor a <c>#</c>
+    /// comment is the header (a UTF-8 byte order mark before it is ignored). zStudio's keyframe format starts with
+    /// comments and OBJECT or FRAME lines instead.
+    /// </summary>
     public static bool Recognize(ReadOnlySpan<byte> bytes)
     {
-        int at = 0;
+        int at = bytes.StartsWith(Bom) ? Bom.Length : 0;
         while (at < bytes.Length)
         {
             int end = bytes[at..].IndexOf((byte)'\n'); end = end < 0 ? bytes.Length : at + end;
             var line = Encoding.Latin1.GetString(bytes[at..end]).Trim();
-            if (line.Length > 0) return line == Header;
+            if (line.Length > 0 && line[0] != '#') return line == Header;
             at = end + 1;
         }
         return false;
     }
+    private static ReadOnlySpan<byte> Bom => [0xEF, 0xBB, 0xBF];
 
     public static Script Parse(ReadOnlySpan<byte> bytes, string source)
     {
@@ -80,6 +87,7 @@ public static class SiAnimationScript
         List<(string, Pose)>? poses = null; HashSet<string>? inFrame = null;
         string? current = null; double[]? s = null, r = null, t = null;
         int lineNumber = 0, total = 0;
+        if (bytes.StartsWith(Bom)) bytes = bytes[Bom.Length..];
         foreach (string raw in Encoding.Latin1.GetString(bytes).Split('\n'))
         {
             lineNumber++;

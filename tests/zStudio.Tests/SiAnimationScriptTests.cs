@@ -305,10 +305,58 @@ public sealed class SiAnimationScriptTests
         // The rotation search stops when its budget is spent; the keyframes then keep zStudio's format.
         var error = Assert.Throws<InvalidDataException>(() => SiScriptWriter.Write(Tracks(Flight, 15), new("3.7"), Token, evaluations: 1_000));
         Assert.Contains("took too long", error.Message);
-        // A still stretch is written on the script's step, but never beyond the frames a script may hold.
+        // A still stretch is written on the script's step, but never beyond the frames a script may hold: a gap of twenty
+        // million frames (still on the frame grid) is refused before anything is filled.
         var far = AnimationScript.Compile(AnimationScript.Track(AnimationScript.Parse(
-            "FRAME 0 POSITION 0 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 1 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 2\nFRAME 200000 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 200001"u8, "far.zan"), "a")!, 10, "far.zan");
+            "FRAME 0 POSITION 0 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 1 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 2\nFRAME 20000000 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 20000002"u8, "far.zan"), "a")!, 10, "far.zan");
+        long before = GC.GetAllocatedBytesForCurrentThread();
         Assert.Contains($"more than {SiAnimationScript.MaximumFrames} frames", Assert.Throws<InvalidDataException>(() => SiScriptWriter.Write([new("a", far, 10)], new("3.7"), Token)).Message);
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 16 << 20);
+        // A script larger than a project reads is refused rather than written.
+        Assert.Contains("larger than", Assert.Throws<InvalidDataException>(() => SiScriptWriter.Write(Tracks(Flight, 15), new("3.7"), Token, maximumBytes: 1_000)).Message);
+        // Objects that move in turn are written only from their first key to their last, so the bound checked before any
+        // rotation search counts those frames alone: a script exactly at the limit is written, one byte over is refused.
+        var inTurn = Tracks(Script(
+            (1, [("door", [0, 0, 0], [0, 0, 0])]),
+            (11, [("door", [0, 0.5, 0], [0, 0, 0])]),
+            (21, [("lift", [0, 0, 0], [0, 0, 0])]),
+            (31, [("lift", [0, 0, 0], [0, 4, 0])])), 10);
+        int size = SiScriptWriter.Write(inTurn, new(null), Token).Length;
+        Assert.Equal(size, SiScriptWriter.Write(inTurn, new(null), Token, maximumBytes: size).Length);
+        Assert.Contains("larger than", Assert.Throws<InvalidDataException>(() => SiScriptWriter.Write(inTurn, new(null), Token, maximumBytes: size - 1)).Message);
+    }
+
+    [Fact]
+    public void EndValuesNearZeroAndNegativeZeroAreWritten()
+    {
+        // The body travels from 1000 to 0 and stops while it keeps turning: its translation's end value (0.000000) lies
+        // a billion float steps from the estimate the stored rate gives, but many six-decimal values reproduce the rate.
+        // A translation of -0.000000 is stored as negative zero and must be written so.
+        string text = Script(
+            (1, [("body", [0, 0, 0], [1000, 0, -0.0])]),
+            (11, [("body", [0, 0.2, 0], [0, 0, -0.0])]),
+            (21, [("body", [0, 0.4, 0], [0, 0, -0.0])]),
+            (31, [("body", [0, 0.6, 0], [0, 0, -0.0])]));
+        var tracks = Tracks(text, 10);
+        Assert.Equal(0x80000000u, SiMath.Bits(tracks[0].Frames[0].F32(tracks[0].Frames[0].ChannelOffset(0) + 8)));
+        string written = SiScriptWriter.Write(tracks, new(null), Token);
+        Assert.Equal(3, written.Split("\r\n").Count(l => l == "Translation: 0.000000 0.000000 -0.000000"));
+        var again = SiAnimationScript.Parse(Encoding.Latin1.GetBytes(written), "again.zan");
+        var compiled = SiAnimationScript.Compile(again, "body", 10, "again.zan");
+        Assert.All(compiled.Zip(tracks[0].Frames), p => Assert.True(SiScriptWriter.Same(p.First, p.Second)));
+    }
+
+    [Fact]
+    public void ScriptsAreRecognisedAfterCommentsAndAByteOrderMark()
+    {
+        byte[] commented = Encoding.ASCII.GetBytes("# exported for the gate\n\n" + Flight);
+        Assert.True(SiAnimationScript.Recognize(commented));
+        Assert.Equal(["body", "rotor"], SiAnimationScript.Parse(commented, "a.zan").Objects);
+        byte[] marked = [0xEF, 0xBB, 0xBF, .. Encoding.ASCII.GetBytes(Flight)];
+        Assert.True(SiAnimationScript.Recognize(marked));
+        Assert.Equal(["body", "rotor"], SiAnimationScript.Parse(marked, "b.zan").Objects);
+        // zStudio's keyframe format starts with comments too, then OBJECT or FRAME lines.
+        Assert.False(SiAnimationScript.Recognize("# RECOIL keyframe script\nOBJECT door\nFRAME 0 POSITION 0 0 0\nFRAME 1"u8));
     }
 
     [Fact]

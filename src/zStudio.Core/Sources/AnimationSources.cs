@@ -29,13 +29,17 @@ internal static class AnimationSources
         public byte[] Read(string relative, CancellationToken token) => Written.TryGetValue(relative, out var bytes) ? bytes : project.Read(relative, token);
     }
 
-    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token)
+    /// <param name="status">Told what is being done: each keyframe script as it starts being written (from worker threads),
+    /// then each mission's check of its rebuilt animations.</param>
+    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token, Action<string>? status = null)
     {
         Overlay files = new(project);
         HashSet<(string, int)> attempted = [];
         // Script path → its object tracks in the order first seen, and the time its stamp records.
         Dictionary<string, List<ScriptTrack>> scripts = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, uint> times = new(StringComparer.OrdinalIgnoreCase);
+        // A script that several missions use is written again when one adds to it: only its last note counts.
+        Dictionary<string, string?> scriptNotes = new(StringComparer.OrdinalIgnoreCase); List<string> noted = [];
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
@@ -55,7 +59,8 @@ internal static class AnimationSources
                 if (normalized.EndsWith(AnimationScript.Extension, StringComparison.OrdinalIgnoreCase) && WorldAssembler.ProjectPath(normalized) is { } path)
                     stamped.TryAdd(Path.GetFileName(path), (path, time));
             }
-            HashSet<string> touched = new(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> touched = new(StringComparer.OrdinalIgnoreCase); List<string> order = [];
+            void Touch(string path) { if (touched.Add(path)) order.Add(path); }
             foreach (var (definition, digits, entry) in bindings)
                 foreach (var (item, ev) in ScriptEvents(definition.Item, entry))
                 {
@@ -69,17 +74,41 @@ internal static class AnimationSources
                     catch (InvalidDataException) { frames = []; track = null; }
                     if (track == null) { notes.Add($"m{mission.Mission}: {entry.Name} moves {target} with keyframes that are not on the {rate}/s frame grid of {file}; the track was not reconstructed."); continue; }
                     string path = stamped.TryGetValue(file, out var stamp) ? stamp.Path : $"{Path.GetDirectoryName(definition.File)!.Replace('\\', '/')}/{file}";
-                    if (stamped.ContainsKey(file)) times.TryAdd(path, stamp.Time);
+                    // A stamp seen only by a later mission still dates a script written before.
+                    if (stamped.ContainsKey(file) && times.TryAdd(path, stamp.Time) && scripts.ContainsKey(path)) Touch(path);
                     var tracks = scripts.TryGetValue(path, out var list) ? list : scripts[path] = [];
                     int existing = tracks.FindIndex(t => t.Object == target);
-                    if (existing < 0) { tracks.Add(new(target, frames, rate, track)); touched.Add(path); }
-                    else if (tracks[existing].Text != track || tracks[existing].Rate != rate) notes.Add($"{path}: {entry.Name} moves {target} differently from an earlier animation using the same script; the first track was kept.");
+                    if (existing < 0) { tracks.Add(new(target, frames, rate, track)); Touch(path); }
+                    else if (tracks[existing].Rate != rate) notes.Add($"{path}: {entry.Name} plays {target} at {rate} frames per second, an earlier animation at {tracks[existing].Rate}; the script was written from the earlier one.");
+                    else if (tracks[existing].Text != track) notes.Add($"{path}: {entry.Name} moves {target} differently from an earlier animation using the same script; the first track was kept.");
                 }
-            // Scripts are read as Latin-1, like the names they hold.
-            foreach (string path in touched) files.Written[path] = Encoding.Latin1.GetBytes(WriteScript(path, scripts[path], times.TryGetValue(path, out uint t) ? t : null, notes, token));
+            // Scripts are independent and their rotation searches are the longest work of a reconstruction, so they are
+            // written in parallel; outputs and notes keep the order the scripts were first seen. Scripts are read as
+            // Latin-1, like the names they hold.
+            var written = new (string Text, string? Note)[order.Count];
+            try
+            {
+                Parallel.For(0, order.Count, new ParallelOptions { CancellationToken = token }, i =>
+                {
+                    status?.Invoke($"keyframe script {order[i]}");
+                    written[i] = WriteScript(order[i], scripts[order[i]], times.TryGetValue(order[i], out uint t) ? t : null, token);
+                });
+            }
+            catch (AggregateException ex) when (ex.InnerExceptions.Count > 0)
+            {
+                token.ThrowIfCancellationRequested();
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerExceptions[0]).Throw();
+            }
+            for (int i = 0; i < order.Count; i++)
+            {
+                files.Written[order[i]] = Encoding.Latin1.GetBytes(written[i].Text);
+                if (scriptNotes.TryAdd(order[i], written[i].Note)) noted.Add(order[i]); else scriptNotes[order[i]] = written[i].Note;
+            }
 
+            status?.Invoke($"checking the m{mission.Mission} animations");
             RepairDefinitions(mission, bindings, files, attempted, notes, token);
         }
+        notes.AddRange(noted.Select(path => scriptNotes[path]).OfType<string>());
         return files.Written.OrderBy(w => w.Key, StringComparer.Ordinal).Select(w => new WorldSources.Output(w.Key, w.Value)).ToList();
     }
 
@@ -89,16 +118,16 @@ internal static class AnimationSources
     /// original's exporter wrote it, with the Softimage DKit messages of its date; scripts of other files (zStudio's
     /// exports carry no stamps) hold only their frames.
     /// </summary>
-    private static string WriteScript(string path, List<ScriptTrack> tracks, uint? time, List<string> notes, CancellationToken token)
+    private static (string Text, string? Note) WriteScript(string path, List<ScriptTrack> tracks, uint? time, CancellationToken token)
     {
         var objects = tracks.Select(t => t.Object).ToList();
         var ordered = SourceOrder(objects).Select(name => tracks.First(t => t.Object == name)).ToList();
         SiScriptWriter.Layout layout = new(Version(time), !MessagesFollowFrames(path, time));
-        try { return SiScriptWriter.Write([.. ordered.Select(t => new SiScriptWriter.Track(t.Object, t.Frames, t.Rate))], layout, token); }
+        try { return (SiScriptWriter.Write([.. ordered.Select(t => new SiScriptWriter.Track(t.Object, t.Frames, t.Rate))], layout, token), null); }
         catch (InvalidDataException ex)
         {
-            notes.Add($"{path}: the keyframes have no SI Animation Script ({ex.Message}); it was written in zStudio's keyframe format.");
-            return AnimationScript.Write(tracks.Select(t => (t.Object, t.Text)));
+            return (AnimationScript.Write(tracks.Select(t => (t.Object, t.Text))),
+                $"{path}: the keyframes have no SI Animation Script ({ex.Message}); it was written in zStudio's keyframe format.");
         }
     }
 

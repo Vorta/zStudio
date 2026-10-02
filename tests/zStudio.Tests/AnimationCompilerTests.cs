@@ -419,4 +419,59 @@ public sealed class AnimationCompilerTests
         Assert.False(AnimationSources.MessagesFollowFrames("data/m5/zrdr/vtol/m5doexit.zan", 895_642_827));
         Assert.False(AnimationSources.MessagesFollowFrames("data/m5/zrdr/vtol/m5exit.zan", 895_642_826));
     }
+
+    [Fact]
+    public void ReconstructedScriptsKeepLatin1NamesAndStopWhenCancelled()
+    {
+        const string Latin = "tür";
+        const string Definition = "ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) " +
+            $"OBJECT_MOTION_SI_SCRIPT ( NAME ( \"{Latin}\" ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( swing.zan ) ) ) )";
+        var files = new MemoryFiles(Definitions(Definition, ("data/m1/zrdr/swing.zan", Swing.Replace("Object: door", $"Object: {Latin}"))));
+        string[] world = ["gate", Latin];
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        List<string> notes = [];
+        var swing = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token).Single(o => o.Path == "data/m1/zrdr/swing.zan");
+        Assert.Empty(notes);
+        Assert.True(SiAnimationScript.Recognize(swing.Bytes));
+        Assert.True(SiAnimationScript.Parse(swing.Bytes, swing.Path).Has(Latin));
+        // Cancelling while scripts are being written stops the reconstruction; nothing falls back to another format.
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        List<string> cancelledNotes = [];
+        Assert.ThrowsAny<OperationCanceledException>(() => AnimationSources.Reconstruct([new(1, package, [], world)], files, cancelledNotes, cancel.Token,
+            status => { if (status.StartsWith("keyframe script ", StringComparison.Ordinal)) cancel.Cancel(); }));
+        Assert.Empty(cancelledNotes);
+    }
+
+    [Fact]
+    public void AScriptPlayedAtTwoRatesIsNotedAsSuch()
+    {
+        const string Definition = "ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) " +
+            "OBJECT_MOTION_SI_SCRIPT ( NAME ( door ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( swing.zan ) ) " +
+            "OBJECT_MOTION_SI_SCRIPT ( NAME ( door ) SCRIPT_FRAME_RATE ( 20.0 ) SCRIPT_FILENAME ( swing.zan ) ) ) )";
+        var files = new MemoryFiles(Definitions(Definition, ("data/m1/zrdr/swing.zan", Swing)));
+        string[] world = ["gate", "door"];
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        List<string> notes = [];
+        AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
+        Assert.Equal(["data/m1/zrdr/swing.zan: gate plays door at 20 frames per second, an earlier animation at 10; the script was written from the earlier one."], notes);
+    }
+
+    [Fact]
+    public void AScriptSeveralMissionsShareIsWrittenOnceWithAllItsObjects()
+    {
+        // m2 lists m1's definitions; their pattern binds lamp1 in m1 and lamp2 in m2, both in one script. Its keyframes
+        // stay in zStudio's format (each first segment moves only a position), and the note is given once.
+        var files = new MemoryFiles(Definitions(
+            "ANIMATION_DEFINITION ( NAME ( \"lamp*\" ) SEQUENCE_DEFINITION ( NAME ( s ) OBJECT_MOTION_SI_SCRIPT ( NAME ( \"lamp*\" ) SCRIPT_FILENAME ( lamps.zan ) ) ) )",
+            ("data/m1/zrdr/lamps.zan", "OBJECT lamp1\nFRAME 0 POSITION 0 0 0\nFRAME 5\nOBJECT lamp2\nFRAME 0 POSITION 1 0 0\nFRAME 5\n"),
+            ("data/m2/zrdr/anim.zrd", "( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( \"..\\\\data\\\\m1\\\\zrdr\\\\defs.zrd\" ) ) ) )")));
+        string[] first = ["lamp1"], second = ["lamp2"];
+        var m1 = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", first, Token).Package;
+        var m2 = AnimationCompiler.Compile(files, "data/m2/zrdr/anim.zrd", second, Token).Package;
+        List<string> notes = [];
+        var lamps = AnimationSources.Reconstruct([new(1, m1, [], first), new(2, m2, [], second)], files, notes, Token).Single(o => o.Path == "data/m1/zrdr/lamps.zan");
+        Assert.Single(notes, n => n.StartsWith("data/m1/zrdr/lamps.zan: ", StringComparison.Ordinal));
+        var tracks = AnimationScript.Parse(lamps.Bytes, lamps.Path);
+        Assert.Equal(["lamp1", "lamp2"], tracks.Select(t => t.Object));
+    }
 }

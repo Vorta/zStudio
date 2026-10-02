@@ -86,10 +86,12 @@ public static class SourceExtractor
             catch (InvalidDataException ex) { context.Notes.Add($"{relative}: not reconstructed because {ex.Message}"); family = null; }
             if (family != null) families[family] = families.GetValueOrDefault(family) + 1; else skipped.Add(relative);
         }
-        if (soundBanks.Count > 0) await context.ExtractSoundsAsync(soundBanks);
-        if (texturePacks.Count > 0) await context.ExtractTexturesAsync(texturePacks);
-        if (worlds.Count > 0) await context.ExtractWorldsAsync(worlds);
-        if (animations.Count > 0) await context.ExtractAnimationsAsync(animations);
+        // The work after reading the files reports what it is doing rather than leaving the last file's name shown.
+        void Phase(string item) => progress?.Report(new(files.Count, files.Count, item));
+        if (soundBanks.Count > 0) { Phase("sound banks"); await context.ExtractSoundsAsync(soundBanks); }
+        if (texturePacks.Count > 0) { Phase("textures"); await context.ExtractTexturesAsync(texturePacks); }
+        if (worlds.Count > 0) { Phase("worlds"); await context.ExtractWorldsAsync(worlds); }
+        if (animations.Count > 0) { Phase("animations"); await context.ExtractAnimationsAsync(animations, Phase); }
         progress?.Report(new(files.Count, files.Count, "Done"));
         return new(projectRoot, context.Written, families, skipped, context.Notes);
     }
@@ -300,7 +302,7 @@ public static class SourceExtractor
         /// <summary>Node names of each shipped world, which animation definitions bind to.</summary>
         internal Dictionary<int, IReadOnlyCollection<string>> WorldNodes { get; } = [];
         /// <summary>Keyframe scripts of the shipped animations (see <see cref="AnimationSources"/>); definitions come with the resources.</summary>
-        internal async Task ExtractAnimationsAsync(IReadOnlyList<(string Relative, byte[] Bytes)> animations)
+        internal async Task ExtractAnimationsAsync(IReadOnlyList<(string Relative, byte[] Bytes)> animations, Action<string>? status = null)
         {
             List<AnimationSources.MissionAnimation> missions = [];
             foreach (var (relative, bytes) in animations.OrderBy(a => TextureSources.MissionNumber(a.Relative)))
@@ -309,7 +311,7 @@ public static class SourceExtractor
                 if (!WorldNodes.TryGetValue(mission, out var nodes)) { Notes.Add($"{relative}: the mission has no world, so its animations' keyframe scripts were not reconstructed."); continue; }
                 missions.Add(new(mission, Animation.AnimationPackage.Read(bytes, token), Stamps(bytes), nodes));
             }
-            var outputs = await Task.Run(() => AnimationSources.Reconstruct(missions, new DiskFiles(root), Notes, token), token);
+            var outputs = await Task.Run(() => AnimationSources.Reconstruct(missions, new DiskFiles(root), Notes, token, status), token);
             // Scripts are new; definitions are the shipped ones rebuilt where they no longer matched anim.zbd.
             foreach (var output in outputs)
                 if (output.Path.EndsWith(ZrdText.Extension, StringComparison.OrdinalIgnoreCase)) await ReplaceAsync(output.Path, output.Bytes);

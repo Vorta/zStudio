@@ -82,6 +82,8 @@ public sealed class SourceProjectCorpusTests
             var scriptsWritten = Directory.GetFiles(Path.Combine(project, "data"), "*.zan", SearchOption.AllDirectories);
             Assert.NotEmpty(scriptsWritten);
             Assert.All(scriptsWritten, s => Assert.True(Recoil.Zbd.Core.Animation.SiAnimationScript.Recognize(File.ReadAllBytes(s)), s));
+            // The shipped files are stamped, so their scripts carry the DKit messages of their exporter.
+            Assert.All(scriptsWritten, s => Assert.Contains("\r\nWarning, file version ", File.ReadAllText(s, System.Text.Encoding.Latin1)));
 
             // Exported files carry their sources' folders, so reconstructing them restores the same tree. Exports carry
             // no source stamps, so their scripts come back without the DKit messages the shipped scripts' exporter wrote.

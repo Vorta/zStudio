@@ -28,6 +28,11 @@ internal static class SiScriptWriter
     public sealed record Layout(string? Version, bool WarningsBeforeFrames = true);
 
     private enum Channel { Scale, Rotation, Position }
+    private enum Pin : byte { None, Key, End }
+    /// <summary>"-0.000000", which reads back as negative zero; every other value is its number of millionths.</summary>
+    private const long NegativeZero = long.MinValue;
+    private static double Value(long micros) => micros == NegativeZero ? -0.0 : micros / 1e6;
+    private static double Millionths(long micros) => micros == NegativeZero ? 0 : micros;
 
     private sealed class Key
     {
@@ -40,13 +45,30 @@ internal static class SiScriptWriter
 
     /// <summary>
     /// The script text, or an <see cref="InvalidDataException"/> saying why the keyframes have none (or why finding it
-    /// would take more than <paramref name="evaluations"/> rotation candidates).
+    /// would take more than <paramref name="evaluations"/> rotation candidates, or the text would be larger than
+    /// <paramref name="maximumBytes"/>, the most a project reads).
     /// </summary>
-    public static string Write(IReadOnlyList<Track> tracks, Layout layout, CancellationToken token, long evaluations = 2_000_000_000)
+    public static string Write(IReadOnlyList<Track> tracks, Layout layout, CancellationToken token, long evaluations = 2_000_000_000,
+        int maximumBytes = Sources.SourceProject.MaximumSourceTextBytes)
     {
         if (tracks.Count == 0) throw new InvalidDataException("no tracks.");
         var keys = tracks.Select(t => Keys(t)).ToList();
         var frames = Sequence(keys);
+        // Before any rotation is searched for: each object is written in the frames from its first key to its last, in at
+        // least 133 bytes besides its name, and its keyed positions and scales need six-decimal texts.
+        long poses = 0, smallest = 0;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            long span = Span(tracks[i], keys[i], frames);
+            poses += span; smallest += span * (133 + tracks[i].Object.Length);
+            foreach (var key in keys[i])
+            {
+                if (key.Position != null) Micros(key.Position, tracks[i], key.Frame);
+                if (key.Scale != null) Micros(key.Scale, tracks[i], key.Frame);
+            }
+        }
+        if (poses > SiAnimationScript.MaximumPoses) throw new InvalidDataException($"the script would hold more than {SiAnimationScript.MaximumPoses} object poses.");
+        if (smallest > maximumBytes) throw TooLarge(maximumBytes);
         List<(string Object, long[]?[] Values)> objects = [];
         SiRotationSolver.Budget budget = new(evaluations);
         for (int i = 0; i < tracks.Count; i++)
@@ -55,8 +77,22 @@ internal static class SiScriptWriter
             objects.Add((tracks[i].Object, Values(tracks[i], keys[i], frames, budget, token)));
         }
         string text = Text(objects, frames, layout);
+        if (text.Length > maximumBytes) throw TooLarge(maximumBytes);
         Verify(text, tracks);
         return text;
+
+        static InvalidDataException TooLarge(int maximumBytes) => new($"the script would be larger than {maximumBytes:N0} bytes, the most a project reads.");
+    }
+
+    /// <summary>How many script frames hold <paramref name="track"/>: those from its first key to its last, matched as
+    /// <see cref="Values"/> matches them.</summary>
+    private static int Span(Track track, List<Key> keys, List<int> frames)
+    {
+        int ki = -1, first = -1, last = -1;
+        for (int pos = 0; pos < frames.Count && ki + 1 < keys.Count; pos++)
+            if (keys[ki + 1].Frame == frames[pos]) { ki++; if (first < 0) first = pos; last = pos; }
+        if (ki != keys.Count - 1) throw new InvalidDataException($"{track.Object}'s keys do not follow the script's frames.");
+        return last - first + 1;
     }
 
     /// <summary>The keys of a compiled stream: a key at each segment start (with its channels and rates), a bare key
@@ -102,8 +138,8 @@ internal static class SiScriptWriter
     {
         foreach (var keys in tracks)
             for (int i = 1; i < keys.Count; i++)
-                if (keys[i].Frame < keys[i - 1].Frame) return [.. keys.Select(k => k.Frame)];
-        var keyed = tracks.SelectMany(k => k.Select(x => x.Frame)).Distinct().Order().ToList();
+                if (keys[i].Frame < keys[i - 1].Frame) return Bounded([.. keys.Select(k => k.Frame)]);
+        var keyed = Bounded(tracks.SelectMany(k => k.Select(x => x.Frame)).Distinct().Order().ToList());
         // The most common spacing, the first seen among equals.
         Dictionary<int, int> counts = []; List<int> order = [];
         for (int i = 1; i < keyed.Count; i++)
@@ -127,10 +163,15 @@ internal static class SiScriptWriter
                 while (last[t] + 1 < tracks[t].Count && tracks[t][last[t] + 1].Frame <= a) last[t]++;
                 if (last[t] >= 0 && !tracks[t][last[t]].Bare) still = false;
             }
-            if (still) for (long f = (long)a + step; f < b; f += step) all.Add((int)f);
-            if (all.Count > SiAnimationScript.MaximumFrames) throw new InvalidDataException($"the script would have more than {SiAnimationScript.MaximumFrames} frames.");
+            if (!still) continue;
+            long between = ((long)b - a - 1) / step;
+            if (all.Count + between > SiAnimationScript.MaximumFrames) Bounded(null);
+            for (long f = (long)a + step; f < b; f += step) all.Add((int)f);
         }
         return all;
+
+        static List<int> Bounded(List<int>? frames) => frames != null && frames.Count <= SiAnimationScript.MaximumFrames ? frames
+            : throw new InvalidDataException($"the script would have more than {SiAnimationScript.MaximumFrames} frames.");
     }
 
     /// <summary>The object's scaling, rotation and translation (millionths) at each script frame, or null outside its frames.</summary>
@@ -148,13 +189,13 @@ internal static class SiScriptWriter
             }
         int n = frames.Count;
         long[]?[] values = new long[]?[n * 3];
-        var pinned = new Dictionary<Channel, string>[n];
+        // Per frame and channel: whether a key fixes the value there (Key), a solved end value does (End), or neither.
+        var pinned = new Pin[n * 3];
         Dictionary<Channel, long[]> current = [];
         Dictionary<(int Key, Channel Channel), long[]> ends = [];
         int ki = -1, first = -1, last = -1;
         for (int pos = 0; pos < n; pos++)
         {
-            pinned[pos] = [];
             if (ki + 1 < keys.Count && keys[ki + 1].Frame == frames[pos])
             {
                 ki++;
@@ -163,8 +204,8 @@ internal static class SiScriptWriter
                 var k = keys[ki];
                 foreach (Channel c in Enum.GetValues<Channel>())
                 {
-                    if (k.Has(c)) { current[c] = c == Channel.Rotation ? Triple(rotations[ki]) : Micros(c == Channel.Position ? k.Position! : k.Scale!, track, k.Frame); pinned[pos][c] = "key"; }
-                    else if (ends.Remove((ki - 1, c), out var end)) { current[c] = end; pinned[pos][c] = "end"; }
+                    if (k.Has(c)) { current[c] = c == Channel.Rotation ? Triple(rotations[ki]) : Micros(c == Channel.Position ? k.Position! : k.Scale!, track, k.Frame); pinned[pos * 3 + (int)c] = Pin.Key; }
+                    else if (ends.Remove((ki - 1, c), out var end)) { current[c] = end; pinned[pos * 3 + (int)c] = Pin.End; }
                 }
                 // A channel whose segment ends at a key that does not list it stops at the value its rate reaches.
                 if (!k.Bare && ki + 1 < keys.Count)
@@ -193,22 +234,22 @@ internal static class SiScriptWriter
 
     /// <summary>Held stretches: between a pinned value and the next key that lists the channel, the held frames take the
     /// key's value right away (one step below the compiler's threshold), or an even spread where one step would be keyed.</summary>
-    private static void Hold(long[]?[] values, Dictionary<Channel, string>[] pinned, int n)
+    private static void Hold(long[]?[] values, Pin[] pinned, int n)
     {
         foreach (Channel c in Enum.GetValues<Channel>())
         {
-            var pins = Enumerable.Range(0, n).Where(p => pinned[p].ContainsKey(c)).ToList();
+            var pins = Enumerable.Range(0, n).Where(p => pinned[p * 3 + (int)c] != Pin.None).ToList();
             for (int i = 1; i < pins.Count; i++)
             {
                 int i0 = pins[i - 1], i1 = pins[i];
-                if (i1 - i0 < 2 || pinned[i1][c] != "key") continue;
+                if (i1 - i0 < 2 || pinned[i1 * 3 + (int)c] != Pin.Key) continue;
                 var v0 = values[i0 * 3 + (int)c]; var v1 = values[i1 * 3 + (int)c];
                 if (v0 == null || v1 == null || v0.SequenceEqual(v1)) continue;
                 if (Absorbed(c, v0, v1)) { for (int p = i0 + 1; p < i1; p++) values[p * 3 + (int)c] = v1; continue; }
                 for (int step = 1; step < i1 - i0; step++)
                 {
                     double w = step / (double)(i1 - i0);
-                    values[(i0 + step) * 3 + (int)c] = c == Channel.Rotation ? Slerp(v0, v1, w) : [.. v0.Zip(v1, (a, b) => (long)Math.Round(a + (b - a) * w, MidpointRounding.ToEven))];
+                    values[(i0 + step) * 3 + (int)c] = c == Channel.Rotation ? Slerp(v0, v1, w) : [.. v0.Zip(v1, (a, b) => (long)Math.Round(Millionths(a) + (Millionths(b) - Millionths(a)) * w, MidpointRounding.ToEven))];
                 }
             }
         }
@@ -217,7 +258,7 @@ internal static class SiScriptWriter
     private static bool Absorbed(Channel c, long[] a, long[] b)
     {
         if (c == Channel.Rotation) return SiMath.RotationAngle(Rotation(a), Rotation(b)) / 2 <= SiMath.Threshold;
-        for (int i = 0; i < 3; i++) if (Math.Abs((double)(float)(a[i] / 1e6) - (float)(b[i] / 1e6)) > SiMath.Threshold) return false;
+        for (int i = 0; i < 3; i++) if (Math.Abs((double)(float)Value(a[i]) - (float)Value(b[i])) > SiMath.Threshold) return false;
         return true;
     }
 
@@ -247,16 +288,35 @@ internal static class SiScriptWriter
         for (int i = 0; i < 3; i++)
         {
             float p0 = start[i]; uint target = SiMath.Bits(rate[i]);
-            if (SiMath.Bits(SiMath.ComponentRate(p0, p0, rho)) == target) { result[i] = Micros([p0], track, from)[0]; continue; }
+            bool Fits(float p1) => float.IsFinite(p1) && SiMath.Bits(SiMath.ComponentRate(p0, p1, rho)) == target;
+            if (Fits(p0)) { result[i] = Micros([p0], track, from)[0]; continue; }
             float estimate = (float)(p0 + rate[i] / rho);
-            int bits = BitConverter.SingleToInt32Bits(estimate);
             long? found = null;
+            // Floats around the estimate first (the value the stored rate came from is usually among them)...
+            int bits = BitConverter.SingleToInt32Bits(estimate);
             for (int k = 0; k <= 400 && found == null; k++)
                 foreach (int d in k == 0 ? [0] : new[] { -k, k })
                 {
                     float p1 = BitConverter.Int32BitsToSingle(bits + d);
-                    if (float.IsFinite(p1) && SiMath.Bits(SiMath.ComponentRate(p0, p1, rho)) == target && Text(p1) is { } m) { found = m; break; }
+                    if (Fits(p1) && Text(p1) is { } m) { found = m == NegativeZero && Fits(0f) ? 0 : m; break; }
                 }
+            // ...then six-decimal values around it, where a float step is far finer than a millionth (an end near zero
+            // after a move from far away): the rate's own float step spans many of them, so the roundest one is taken
+            // (whole units first, then tenths, and so on), each nearest the estimate.
+            if (found == null && float.IsFinite(estimate) && Math.Abs(estimate) < 9e12)
+            {
+                double step = Math.Max(MathF.BitIncrement(Math.Abs(p0)) - Math.Abs(p0), MathF.BitIncrement(Math.Abs(estimate)) - Math.Abs(estimate));
+                long window = Math.Min(1_000_000, 64 + (long)Math.Ceiling(step * 1e6)), centre = SiRotationSolver.Round(estimate);
+                for (long grain = Micro; grain >= 1 && found == null; grain /= 10)
+                {
+                    long first = (long)Math.Round(centre / (double)grain) * grain;
+                    for (long k = 0; k <= 2 * (window / grain + 1) && found == null; k++)
+                    {
+                        long m = first + grain * (k == 0 ? 0 : (k + 1) / 2 * (k % 2 == 1 ? -1 : 1));
+                        if (Math.Abs(m - centre) <= window && Fits((float)(m / 1e6))) found = m;
+                    }
+                }
+            }
             result[i] = found ?? throw new InvalidDataException($"{track.Object} stops at frame {to} with a rate no six-decimal value reaches.");
         }
         return result;
@@ -267,12 +327,16 @@ internal static class SiScriptWriter
 
     private static long[] Triple(SiRotationSolver.Triple t) => [t.A, t.B, t.G];
 
-    /// <summary>The six-decimal value (in millionths) printf("%f") gives for <paramref name="value"/>, when it reads back as the same float.</summary>
+    /// <summary>
+    /// The six-decimal value (in millionths) printf("%f") gives for <paramref name="value"/>, when it reads back as the
+    /// same float. Negative zero is written "-0.000000" (<see cref="NegativeZero"/>), which reads back as itself.
+    /// </summary>
     private static long? Text(float value)
     {
         if (!float.IsFinite(value) || Math.Abs(value) >= 9e12) return null;
+        if (value == 0) return float.IsNegative(value) ? NegativeZero : 0;
         long m = ExactMicros(value);
-        return (float)double.Parse(Format(m), CultureInfo.InvariantCulture) is float back && SiMath.Bits(back) == SiMath.Bits(value) || value == 0 ? m : null;
+        return SiMath.Bits((float)double.Parse(Format(m), CultureInfo.InvariantCulture)) == SiMath.Bits(value) ? m : null;
     }
 
     /// <summary>The exact binary value times a million, rounded half to even (as a correctly rounded printf does).</summary>
@@ -297,6 +361,7 @@ internal static class SiScriptWriter
 
     public static string Format(long micros)
     {
+        if (micros == NegativeZero) return "-0.000000";
         long magnitude = Math.Abs(micros);
         return (micros < 0 ? "-" : "") + (magnitude / Micro).ToString(CultureInfo.InvariantCulture) + "." + (magnitude % Micro).ToString("D6", CultureInfo.InvariantCulture);
     }

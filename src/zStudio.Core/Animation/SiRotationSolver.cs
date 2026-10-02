@@ -25,22 +25,24 @@ internal static class SiRotationSolver
     }
 
     /// <summary>
-    /// Candidate evaluations left for one script. The heaviest shipped script needs about 131 million (all 77 of 1999
-    /// about 550 million); a script whose keyframes need far more (keyframes no script came from, or thousands of keys
-    /// at exactly ±90°) is not worth searching further.
+    /// Candidate evaluations allowed for one script. Searches are charged for what they examined up to their first find
+    /// in search order, never for the speculative work of parallel blocks, so whether a script runs out does not depend
+    /// on scheduling; no stage starts once it has run out. The heaviest shipped script needs about 131 million (all 77
+    /// of 1999 about 550 million); a script whose keyframes need far more (keyframes no script came from, or thousands of
+    /// keys at exactly ±90°) is not worth searching further.
     /// </summary>
     public sealed class Budget(long evaluations = 2_000_000_000)
     {
         private long remaining = evaluations;
         public bool Exhausted => Interlocked.Read(ref remaining) < 0;
-        public bool Spend() => Interlocked.Decrement(ref remaining) >= 0;
+        public void Charge(long count) => Interlocked.Add(ref remaining, -count);
     }
 
     /// <summary>The triple compiling to <paramref name="target"/> exactly, nearest <paramref name="prefer"/> (the previous key) among equal finds.</summary>
     public static Triple? Key(SiMath.Quat target, Triple? prefer, Budget budget, CancellationToken token)
     {
-        bool Ok(Triple t) => budget.Spend() && t.Compile().BitEquals(target);
-        return Search((target.W, target.X, target.Y, target.Z), prefer, Ok, token, end: false);
+        bool Ok(Triple t) => t.Compile().BitEquals(target);
+        return Search((target.W, target.X, target.Y, target.Z), prefer, Ok, budget, token, end: false);
     }
 
     /// <summary>
@@ -53,10 +55,10 @@ internal static class SiRotationSolver
         uint sx = SiMath.Bits(spin.X), sy = SiMath.Bits(spin.Y), sz = SiMath.Bits(spin.Z);
         bool Ok(Triple t)
         {
-            if (!budget.Spend()) return false;
             var s = SiMath.Spin(q0, t.Compile(), from, to, frameRate);
             return SiMath.Bits(s.X) == sx && SiMath.Bits(s.Y) == sy && SiMath.Bits(s.Z) == sz;
         }
+        budget.Charge(1);
         if (Ok(start)) return start;
         // The rate uses the engine's fast square root: invert the actual rate function, correcting the half-angle
         // vector until the computed spin matches the stored one.
@@ -74,10 +76,10 @@ internal static class SiRotationSolver
             estimate = SiMath.Multiply(SiMath.FromRotationVector(hx, hy, hz), q0d);
         }
         if (!double.IsFinite(estimate.W + estimate.X + estimate.Y + estimate.Z)) return null;
-        return Search(estimate, start, Ok, token, end: true);
+        return Search(estimate, start, Ok, budget, token, end: true);
     }
 
-    private static Triple? Search((double W, double X, double Y, double Z) estimate, Triple? prefer, Func<Triple, bool> ok, CancellationToken token, bool end)
+    private static Triple? Search((double W, double X, double Y, double Z) estimate, Triple? prefer, Func<Triple, bool> ok, Budget budget, CancellationToken token, bool end)
     {
         var e = SiMath.Euler(estimate.W, estimate.X, estimate.Y, estimate.Z);
         double conditioning = Math.Abs(Math.Cos(e.B));
@@ -89,6 +91,8 @@ internal static class SiRotationSolver
         var centres = forms.Select(f => (Form: f, Centre: new Triple(Round(f.A), Round(f.B), Round(f.G)))).ToList();
         var nearest = prefer is { } preferred ? [.. centres.OrderBy(c => c.Centre.Distance(preferred))] : centres;
         var box = Box(3);
+        long examined = 0;
+        bool Try(Triple t) { examined++; return ok(t); }
 
         if (!end)
         {
@@ -99,11 +103,12 @@ internal static class SiRotationSolver
                 foreach (var (da, db, dg) in Product)
                 {
                     Triple t = new(centre.A + da, centre.B + db, centre.G + dg);
-                    if (!ok(t)) continue;
-                    if (prefer is not { } p) return t;
+                    if (!Try(t)) continue;
+                    if (prefer is not { } p) { budget.Charge(examined); return t; }
                     if (best is not { } b || t.Distance(p) < b.Distance(p)) best = t;
                     break;
                 }
+            budget.Charge(examined); examined = 0;
             if (best != null) return best;
             // 2. Near ±90° heading: from the eight forms nearest the previous key, step the first angle outward with the
             //    third following it along the trade-off line, the heading and the cross direction within ±3.
@@ -111,8 +116,9 @@ internal static class SiRotationSolver
                 foreach (var (_, centre) in nearest.Take(8))
                 {
                     token.ThrowIfCancellationRequested();
+                    if (budget.Exhausted) return null;
                     int s = Math.Sin(centre.B / 1e6) > 0 ? 1 : -1;
-                    if (First(2 * 4_000 + 1, k =>
+                    if (First(2 * 4_000 + 1, 49, k =>
                     {
                         long t = Step(k);
                         for (int db = -3; db <= 3; db++)
@@ -122,19 +128,21 @@ internal static class SiRotationSolver
                                 if (ok(c)) return c;
                             }
                         return null;
-                    }, token) is { } found) return found;
+                    }, budget, token) is { } found) return found;
                 }
         }
         // 3. Every form's ±3 neighbourhood, nearest first (for an end value the forms nearest the segment's start).
+        if (budget.Exhausted) return null;
         foreach (var (_, centre) in nearest)
         {
             token.ThrowIfCancellationRequested();
             foreach (var (da, db, dg) in box)
             {
                 Triple t = new(centre.A + da, centre.B + db, centre.G + dg);
-                if (ok(t)) return t;
+                if (Try(t)) { budget.Charge(examined); return t; }
             }
         }
+        budget.Charge(examined);
         if (conditioning >= NearGimbal) return null;
 
         // 4. Near ±90° heading: walk the trade-off line through angles fitted to the estimate, from the three nearest
@@ -145,7 +153,8 @@ internal static class SiRotationSolver
                 foreach (var (form, _) in nearest.Take(3))
                 {
                     token.ThrowIfCancellationRequested();
-                    if (Line(estimate, form, width, 2, 2, ok, token) is { } found) return found;
+                    if (budget.Exhausted) return null;
+                    if (Line(estimate, form, width, 2, 2, ok, budget, token) is { } found) return found;
                 }
         if (conditioning >= 1e-6)
         {
@@ -155,7 +164,8 @@ internal static class SiRotationSolver
                 foreach (var start in starts)
                 {
                     token.ThrowIfCancellationRequested();
-                    if (Line(estimate, start, width, 3, 3, ok, token) is { } found) return found;
+                    if (budget.Exhausted) return null;
+                    if (Line(estimate, start, width, 3, 3, ok, budget, token) is { } found) return found;
                 }
         }
         if (conditioning >= AtGimbal) return null;
@@ -168,6 +178,7 @@ internal static class SiRotationSolver
             foreach (int kb in new[] { 0, -1, 1 })
             {
                 var fit = Fit(estimate, (branch.A, branch.B + kb * TwoPi, branch.G));
+                if (!Finite(fit)) continue;
                 int s = Math.Sin(fit.B) > 0 ? 1 : -1;
                 double combination = fit.A - s * fit.G;
                 if (!seen.Add((Round(fit.B), Round(combination) / 10))) continue;
@@ -178,20 +189,22 @@ internal static class SiRotationSolver
                         foreach (int kg in new[] { 0, -1, 1 })
                         {
                             token.ThrowIfCancellationRequested();
-                            if (Turn(fit.B, combination, s, Round(centre + ka * TwoPi), kg * TwoPi, 250_000, ok, token) is { } found) return found;
+                            if (budget.Exhausted) return null;
+                            if (Turn(fit.B, combination, s, Round(centre + ka * TwoPi), kg * TwoPi, 250_000, ok, budget, token) is { } found) return found;
                         }
             }
         return null;
     }
 
     /// <summary>Candidates along the trade-off line through the fitted angles: first-angle steps outward from the fit.</summary>
-    private static Triple? Line((double W, double X, double Y, double Z) estimate, (double A, double B, double G) start, int width, int betaSpread, int crossSpread, Func<Triple, bool> ok, CancellationToken token)
+    private static Triple? Line((double W, double X, double Y, double Z) estimate, (double A, double B, double G) start, int width, int betaSpread, int crossSpread, Func<Triple, bool> ok, Budget budget, CancellationToken token)
     {
         var fit = Fit(estimate, start);
+        if (!Finite(fit)) return null;
         int s = Math.Sin(fit.B) > 0 ? 1 : -1;
         double combination = fit.A - s * fit.G;
         long a0 = Round(fit.A), b0 = Round(fit.B);
-        return First(2L * width + 1, k =>
+        return First(2L * width + 1, (2 * betaSpread + 1) * (2 * crossSpread + 1), k =>
         {
             long a = a0 + Step(k);
             double gIdeal = (a / 1e6 - combination) * s;
@@ -202,14 +215,14 @@ internal static class SiRotationSolver
                     if (ok(t)) return t;
                 }
             return null;
-        }, token);
+        }, budget, token);
     }
 
     /// <summary>One turn of the line: first angles within <paramref name="half"/> millionths of <paramref name="centre"/>, nearest first.</summary>
-    private static Triple? Turn(double beta, double combination, int s, long centre, double thirdTurn, long half, Func<Triple, bool> ok, CancellationToken token)
+    private static Triple? Turn(double beta, double combination, int s, long centre, double thirdTurn, long half, Func<Triple, bool> ok, Budget budget, CancellationToken token)
     {
         long b0 = Round(beta);
-        return First(2 * half + 1, k =>
+        return First(2 * half + 1, 9, k =>
         {
             long a = centre + Step(k);
             long g0 = Round((a / 1e6 - combination) * s + thirdTurn);
@@ -220,36 +233,48 @@ internal static class SiRotationSolver
                     if (ok(t)) return t;
                 }
             return null;
-        }, token);
+        }, budget, token);
     }
 
-    /// <summary>The find with the lowest ordinal in [0, <paramref name="count"/>), searched in parallel blocks.</summary>
-    private static Triple? First(long count, Func<long, Triple?> probe, CancellationToken token)
+    /// <summary>
+    /// The find with the lowest ordinal in [0, <paramref name="count"/>), searched in parallel blocks. The budget is
+    /// charged for the ordinals up to the find (or all of them), each worth <paramref name="cost"/> candidates, which
+    /// does not depend on how the blocks were scheduled.
+    /// </summary>
+    private static Triple? First(long count, int cost, Func<long, Triple?> probe, Budget budget, CancellationToken token)
     {
         const long Block = 4096;
-        // Small searches run inline.
+        long bestOrdinal = long.MaxValue;
+        Triple? best = null;
         if (count <= Block)
         {
-            for (long k = 0; k < count; k++) if (probe(k) is { } t) return t;
-            return null;
+            // Small searches run inline.
+            for (long k = 0; k < count; k++) if (probe(k) is { } t) { bestOrdinal = k; best = t; break; }
         }
-        long blocks = (count + Block - 1) / Block, bestOrdinal = long.MaxValue;
-        Triple? best = null; object gate = new();
-        Parallel.For(0L, blocks, new ParallelOptions { CancellationToken = token }, block =>
+        else
         {
-            long from = block * Block, to = Math.Min(count, from + Block);
-            for (long k = from; k < to; k++)
+            long blocks = (count + Block - 1) / Block;
+            object gate = new();
+            Parallel.For(0L, blocks, new ParallelOptions { CancellationToken = token }, block =>
             {
-                if (k >= Interlocked.Read(ref bestOrdinal)) return;
-                if (probe(k) is { } t)
+                long from = block * Block, to = Math.Min(count, from + Block);
+                for (long k = from; k < to; k++)
                 {
-                    lock (gate) if (k < Interlocked.Read(ref bestOrdinal)) { Interlocked.Exchange(ref bestOrdinal, k); best = t; }
-                    return;
+                    if (k >= Interlocked.Read(ref bestOrdinal)) return;
+                    if (probe(k) is { } t)
+                    {
+                        lock (gate) if (k < Interlocked.Read(ref bestOrdinal)) { Interlocked.Exchange(ref bestOrdinal, k); best = t; }
+                        return;
+                    }
                 }
-            }
-        });
+            });
+        }
+        budget.Charge((best == null ? count : bestOrdinal + 1) * cost);
         return best;
     }
+
+    private static bool Finite((double A, double B, double G) v) =>
+        double.IsFinite(v.A) && double.IsFinite(v.B) && double.IsFinite(v.G) && Math.Abs(v.A) < 1e6 && Math.Abs(v.B) < 1e6 && Math.Abs(v.G) < 1e6;
 
     /// <summary>Least-squares Euler angles for a quaternion (sign-free), by Gauss-Newton from <paramref name="start"/>.</summary>
     private static (double A, double B, double G) Fit((double W, double X, double Y, double Z) q, (double A, double B, double G) start)
