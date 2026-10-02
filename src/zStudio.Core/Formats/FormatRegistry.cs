@@ -39,6 +39,9 @@ public sealed class FormatRegistry
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { return new(FormatFamily.Unknown, null, Recognition.Malformed, ex.Message); }
     }
+    /// <summary>zReader data: resources (<c>.zrd</c>) and source projects' animation definitions (<c>.zad</c>), the same syntax.</summary>
+    private static bool IsZrdExtension(string extension) =>
+        extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) || extension.Equals(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase);
     public static FormatProbe Probe(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> trailer, long size, string extension = "")
     {
         uint magic = prefix.Length >= 4 ? BinaryPrimitives.ReadUInt32LittleEndian(prefix) : 0;
@@ -60,7 +63,7 @@ public sealed class FormatRegistry
             bool valid = 24L + palettes * 512L + records * 40L <= size;
             return new(FormatFamily.TexturePack, 1, valid ? Recognition.Supported : Recognition.Malformed, valid ? $"Texture pack · {records:N0} textures" : "Texture tables exceed file length");
         }
-        if (extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) && magic is >= 1 and <= 4)
+        if (IsZrdExtension(extension) && magic is >= 1 and <= 4)
             return new(FormatFamily.Zrd, null, Recognition.Supported, "zReader typed data");
         if (trailer.Length == 8 && BinaryPrimitives.ReadUInt32LittleEndian(trailer) == 1)
         {
@@ -73,7 +76,7 @@ public sealed class FormatRegistry
         if (prefix.Length >= 12 && prefix[..4].SequenceEqual("RIFF"u8) && prefix.Slice(8, 4).SequenceEqual("WAVE"u8))
             return new(FormatFamily.Wave, null, Recognition.Supported, "RIFF / WAVE audio");
         // Reconstructed source text is recognized by name only after every structural format has been ruled out.
-        if (extension.Equals(".zrd", StringComparison.OrdinalIgnoreCase) && Sources.ZrdText.LooksLikeText(prefix))
+        if (IsZrdExtension(extension) && Sources.ZrdText.LooksLikeText(prefix))
             return new(FormatFamily.Zrd, null, Recognition.Supported, SourceZrdDescription);
         if (extension.Equals(".gw", StringComparison.OrdinalIgnoreCase) || extension.Equals(".gs", StringComparison.OrdinalIgnoreCase))
             return new(FormatFamily.Scripts, null, Recognition.Supported, SourceScriptDescription);

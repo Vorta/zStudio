@@ -26,6 +26,7 @@ public static class SourceExtractor
         // Require positive RECOIL evidence: prepared scripts, a version-15 world or a version-28 animation program.
         if (!probes.Any(f => f.Probe is { Family: FormatFamily.Scripts, Version: 7 } or { Family: FormatFamily.GameZ, Version: 15 } or { Family: FormatFamily.Animation, Version: 28 }))
             throw new InvalidDataException("No RECOIL game data was found. Choose the folder that contains interp.zbd, zrdr.zbd and the mission folders.");
+        if (!CarriesDefinitions(files)) throw new InvalidDataException(NotOriginal);
         bool created = !Directory.Exists(projectRoot);
         Directory.CreateDirectory(projectRoot);
         try { return await ExtractFilesAsync(projectRoot, files, progress, token); }
@@ -37,6 +38,31 @@ public static class SourceExtractor
                 { if (entry is DirectoryInfo directory) directory.Delete(true); else entry.Delete(); }
             throw;
         }
+    }
+
+    /// <summary>Why a folder of game files that are not the original ones is refused.</summary>
+    public const string NotOriginal = "zStudio can unpack only the original ZBD files.";
+
+    /// <summary>
+    /// Whether the files are the original ones, which a source tree is reconstructed from once: their resource archives
+    /// carry the animation definitions (<c>anim.zrd</c>) every <c>anim.zbd</c> was compiled from. zStudio's exports leave
+    /// the definitions in the project (<c>.zad</c>), so the tree only ever goes on to be exported, not unpacked again.
+    /// </summary>
+    private static bool CarriesDefinitions(List<(string Path, string Relative)> files)
+    {
+        HashSet<string> carrying = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, relative) in files.Where(f => Path.GetFileName(f.Relative).Equals("zrdr.zbd", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                if (ArchiveSources.Read(File.ReadAllBytes(path)).Any(m => m.Name.Equals("anim.zrd", StringComparison.OrdinalIgnoreCase)))
+                    carrying.Add(Path.GetDirectoryName(relative) ?? "");
+            }
+            catch (InvalidDataException) { }
+        }
+        // Every mission's animations need the definitions beside them.
+        return carrying.Count > 0 && files.Where(f => Path.GetFileName(f.Relative).Equals("anim.zbd", StringComparison.OrdinalIgnoreCase))
+            .All(f => carrying.Contains(Path.GetDirectoryName(f.Relative) ?? ""));
     }
 
     private static async Task<SourceReconstructionReport> ExtractFilesAsync(string projectRoot, List<(string Path, string Relative)> files, IProgress<SourceProgress>? progress, CancellationToken token)
@@ -187,8 +213,18 @@ public static class SourceExtractor
                     // The text form is bounded while it is built: a resource whose text would exceed the text-source limit stays compiled.
                     byte[]? text = null;
                     try { text = ZrdText.Encode(tree, token, SourceProject.MaximumSourceTextBytes); } catch (InvalidDataException) { }
-                    if (text != null && ZrdWriter.Write(ZrdText.Parse(text, token), token).AsSpan().SequenceEqual(payload)) source = text;
-                    else Notes.Add($"{output}: {m.Name} kept as compiled data because its text form " + (text == null ? $"would exceed {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB." : "does not round-trip."));
+                    bool asText = text != null && ZrdWriter.Write(ZrdText.Parse(text, token), token).AsSpan().SequenceEqual(payload);
+                    if (!asText) Notes.Add($"{output}: {m.Name} kept as compiled data because its text form " + (text == null ? $"would exceed {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB." : "does not round-trip."));
+                    if (Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
+                    {
+                        // Animation definitions are not resources: they go to a .zad file beside it, and a resource that
+                        // also holds other data (pickup.zrd: PICKUP_DATA) keeps only that.
+                        var (definitions, rest) = Animation.AnimationDefinitionSet.Split(tree);
+                        await WriteAsync($"{directory}/{Path.GetFileNameWithoutExtension(m.Name)}{Animation.AnimationDefinitionSet.Extension}", Encode(definitions, asText));
+                        if (rest == null) continue;
+                        source = Encode(rest, asText);
+                    }
+                    else if (asText) source = text!;
                 }
                 // Exported archives contain the .zrd resources of their zrdr folders, as the original build read them.
                 else Notes.Add(m.Name.EndsWith(ZrdText.Extension, StringComparison.OrdinalIgnoreCase)
@@ -196,6 +232,8 @@ public static class SourceExtractor
                     : $"{output}: {m.Name} is not zReader data; it was written as stored and exported archives leave it out.");
                 await WriteAsync($"{directory}/{m.Name}", source);
             }
+
+            byte[] Encode(ZrdNode node, bool text) => text ? ZrdText.Encode(node, token, SourceProject.MaximumSourceTextBytes) : ZrdWriter.Write(node, token);
         }
 
         internal async Task ExtractScriptsAsync(string output, byte[] bytes)
@@ -314,7 +352,7 @@ public static class SourceExtractor
             var outputs = await Task.Run(() => AnimationSources.Reconstruct(missions, new DiskFiles(root), Notes, token, status), token);
             // Scripts are new; definitions are the shipped ones rebuilt where they no longer matched anim.zbd.
             foreach (var output in outputs)
-                if (output.Path.EndsWith(ZrdText.Extension, StringComparison.OrdinalIgnoreCase)) await ReplaceAsync(output.Path, output.Bytes);
+                if (output.Path.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase)) await ReplaceAsync(output.Path, output.Bytes);
                 else await WriteAsync(output.Path, output.Bytes);
         }
         /// <summary>The source paths an animation file records (80-character paths, each with its modification time).</summary>

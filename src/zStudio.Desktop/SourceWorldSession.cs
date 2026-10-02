@@ -18,7 +18,7 @@ internal sealed class SourceWorldSession : IDisposable
     public string Root => Workspace.Root;
     public string Mission { get; }
     public string ScriptPath => $"{SourceProject.GameGenFolder}/{Mission}.gs";
-    public string DefinitionsPath => $"{SourceProject.DataFolder}/{Mission}/zrdr/anim.zrd";
+    public string DefinitionsPath => $"{SourceProject.DataFolder}/{Mission}/zrdr/anim{Recoil.Zbd.Core.Animation.AnimationDefinitionSet.Extension}";
     public string Label => $"{Mission} world (sources)";
     /// <summary>The document currently showing this world; disposing it ends the session.</summary>
     internal DocumentModel? Owner { get; set; }

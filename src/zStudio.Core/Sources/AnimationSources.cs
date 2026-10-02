@@ -43,7 +43,7 @@ internal static class AnimationSources
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
-            string root = $"data/m{mission.Mission}/zrdr/anim.zrd";
+            string root = SourceBuilder.AnimationRoot($"m{mission.Mission}");
             if (!files.Exists(root)) { notes.Add($"m{mission.Mission}: anim.zbd has no definitions ({root}); its animation sources were not reconstructed."); continue; }
             AnimationDefinitionSet set;
             try { set = AnimationDefinitionSet.Load(files, root, token); }
@@ -190,7 +190,7 @@ internal static class AnimationSources
     private static void RepairDefinitions(MissionAnimation mission, List<(AnimationDefinition Definition, string Digits, AnimationEntry Entry)> bindings,
         Overlay files, HashSet<(string, int)> attempted, List<string> notes, CancellationToken token)
     {
-        string root = $"data/m{mission.Mission}/zrdr/anim.zrd";
+        string root = SourceBuilder.AnimationRoot($"m{mission.Mission}");
         AnimationPackage Compile() => AnimationCompiler.Compile(files, root, mission.WorldNodes, token).Package;
         AnimationPackage built;
         try { built = Compile(); }

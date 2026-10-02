@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## Animation definitions as `.zad`; unpacking only the original files (2026-10-02, branch feat/world-editor)
+
+- **Why:** the game never reads animation definitions (only `anim.zbd`), yet the original build packed them into `zrdr.zbd` as `.zrd` files beside the zReader resources. Source projects keep them apart.
+- **Reconstruction:** every archive member that holds `ANIMATION_DEFINITIONS` becomes a `.zad` file in its recorded folder (each mission's `anim.zad` list, the files it names, and definitions no list names), and the names in the lists are renamed with it. `pickup.zrd`, the only shipped file with both, keeps its `PICKUP_DATA` and its `pu***` animation goes to `pickup.zad`.
+- **Export:** `zrdr.zbd` holds only `.zrd` resources; a `.zrd` that still holds definitions (a project reconstructed before this change) fails with a message to reconstruct it again. `anim.zbd` is compiled from `anim.zad`. The world editor's **Add model** lists `.zad` definition files.
+- **Unpacking:** a project is reconstructed once, from the original files, then only exported. Reconstruction requires archives that carry the definitions (`anim.zrd` in `zrdr.zbd`, beside every `anim.zbd`) and otherwise refuses the folder, before writing anything, with "zStudio can unpack only the original ZBD files." (MCP: `invalid_argument`).
+- **Tests:** 1,010 pass in Release with the 1999 and MechWarrior 3 data, including three new cases (exports leave definitions out and cannot be unpacked; a mission whose archive lacks its definitions is refused; definitions kept as `.zrd` fail the export). The source corpus test passes for 1999 and 1998: no reconstructed `.zrd` holds definitions, every exported archive equals the shipped one without its definitions, every shipped animation entry rebuilds, and unpacking the export is refused.
+
 ## Original keyframe scripts (2026-10-02, branch feat/world-editor)
 
 Keyframe scripts (`.zan`) are the original Softimage "SI Animation Script" format again ([source-project.md](source-project.md#keyframe-scripts-zan)).

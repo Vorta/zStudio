@@ -48,34 +48,34 @@ public sealed class SourceWorldTests
               ANIMATION_DEFINITIONS (
                 GRAVITY ( -9.8 )
                 ANIMATION_LIST (
-                  ANIMATION_DEFINITION_FILE ( "..\\data\\\\common\\zrdr\\enemies\\drone.zrd" )
+                  ANIMATION_DEFINITION_FILE ( "..\\data\\\\common\\zrdr\\enemies\\drone.zad" )
                 )
               )
             )
             """u8.ToArray();
-        byte[] added = SourceWorlds.AddDefinitionFiles(root, ["data/common/zrdr/enemies/ltank.zrd", "data/common/zrdr/enemies/drone.zrd"], Token);
+        byte[] added = SourceWorlds.AddDefinitionFiles(root, ["data/common/zrdr/enemies/ltank.zad", "data/common/zrdr/enemies/drone.zad"], Token);
         string text = Encoding.ASCII.GetString(added);
         // A file already listed (even with a doubled separator) is not listed again; the new one follows the list.
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(text, @"drone\.zrd"));
-        Assert.True(text.IndexOf("ltank.zrd", StringComparison.Ordinal) > text.IndexOf("drone.zrd", StringComparison.Ordinal));
-        Assert.Contains("ANIMATION_DEFINITION_FILE", text[text.IndexOf("drone.zrd", StringComparison.Ordinal)..]);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(text, @"drone\.zad"));
+        Assert.True(text.IndexOf("ltank.zad", StringComparison.Ordinal) > text.IndexOf("drone.zad", StringComparison.Ordinal));
+        Assert.Contains("ANIMATION_DEFINITION_FILE", text[text.IndexOf("drone.zad", StringComparison.Ordinal)..]);
         // New files join the last list the compiler reads; a file any list names is not listed again.
         byte[] twoLists = """
             (
-              ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( "..\\data\\m1\\zrdr\\a.zrd" ) ) )
-              ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( "..\\data\\m1\\zrdr\\b.zrd" ) ) )
+              ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( "..\\data\\m1\\zrdr\\a.zad" ) ) )
+              ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( "..\\data\\m1\\zrdr\\b.zad" ) ) )
             )
             """u8.ToArray();
-        string joined = Encoding.ASCII.GetString(SourceWorlds.AddDefinitionFiles(twoLists, ["data/m1/zrdr/a.zrd", "data/m1/zrdr/c.zrd"], Token));
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(joined, @"a\.zrd"));
-        Assert.True(joined.IndexOf("c.zrd", StringComparison.Ordinal) > joined.IndexOf("b.zrd", StringComparison.Ordinal));
+        string joined = Encoding.ASCII.GetString(SourceWorlds.AddDefinitionFiles(twoLists, ["data/m1/zrdr/a.zad", "data/m1/zrdr/c.zad"], Token));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(joined, @"a\.zad"));
+        Assert.True(joined.IndexOf("c.zad", StringComparison.Ordinal) > joined.IndexOf("b.zad", StringComparison.Ordinal));
         // Compiled definitions stay compiled; a file without an animation list gets one.
         byte[] compiled = ZrdWriter.Write(ZrdText.Parse("( ANIMATION_DEFINITIONS ( GRAVITY ( -9.8 ) ) )"u8, Token), Token);
-        byte[] listed = SourceWorlds.AddDefinitionFiles(compiled, ["data/m1/zrdr/gate.zrd"], Token);
+        byte[] listed = SourceWorlds.AddDefinitionFiles(compiled, ["data/m1/zrdr/gate.zad"], Token);
         Assert.False(ZrdText.LooksLikeText(listed));
         string written = ZrdText.Write(ZrdDecoder.Read(listed, Token), Token);
-        Assert.Contains("ANIMATION_LIST", written); Assert.Contains("gate.zrd", written);
-        Assert.Throws<InvalidDataException>(() => SourceWorlds.AddDefinitionFiles("( GRAVITY ( 1.0 ) )"u8, ["data/a.zrd"], Token));
+        Assert.Contains("ANIMATION_LIST", written); Assert.Contains("gate.zad", written);
+        Assert.Throws<InvalidDataException>(() => SourceWorlds.AddDefinitionFiles("( GRAVITY ( 1.0 ) )"u8, ["data/a.zad"], Token));
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public sealed class SourceWorldTests
         SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank"), [SourceWorldFixture.TankDefinitions]), Token);
         SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_wreck", new(100, 0, -50), 90), []), Token);
         Assert.True(workspace.IsDirty); Assert.Equal(2, workspace.UndoCount);
-        Assert.Equal(["data/m1/zrdr/anim.zrd", "gamegen/m1.gs"], workspace.DirtyFiles);
+        Assert.Equal(["data/m1/zrdr/anim.zad", "gamegen/m1.gs"], workspace.DirtyFiles);
 
         // The preview is built privately, outside the project, from the pending sources.
         string preview = Path.Combine(fixture.Root, "preview");
@@ -123,19 +123,19 @@ public sealed class SourceWorldTests
 
         // Undo and redo move through the history; saving writes every changed source together.
         workspace.Undo(); Assert.Equal(1, workspace.UndoCount); workspace.Redo();
-        string script = fixture.Path("gamegen/m1.gs"), list = fixture.Path("data/m1/zrdr/anim.zrd");
+        string script = fixture.Path("gamegen/m1.gs"), list = fixture.Path("data/m1/zrdr/anim.zad");
         string listBefore = await File.ReadAllTextAsync(list, Token);
-        Assert.Equal(["data/m1/zrdr/anim.zrd", "gamegen/m1.gs"], workspace.Save(Token).Order(StringComparer.Ordinal));
+        Assert.Equal(["data/m1/zrdr/anim.zad", "gamegen/m1.gs"], workspace.Save(Token).Order(StringComparer.Ordinal));
         Assert.False(workspace.IsDirty); Assert.Empty(workspace.Save(Token));
         Assert.False(Directory.Exists(Path.Combine(root, "zstudio", "staging")) && Directory.EnumerateFileSystemEntries(Path.Combine(root, "zstudio", "staging")).Any());
         string saved = await File.ReadAllTextAsync(script, Token);
         Assert.Contains("SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.flt tank\r\n", saved);
         Assert.EndsWith("AddChild tank_wreck\r\nGameZWriteZBDFile ..\\m1\\gamez.zbd\r\nQuit\r\n", saved);
         string listSaved = await File.ReadAllTextAsync(list, Token);
-        Assert.Contains("enemies\\\\tank.zrd", listSaved);
+        Assert.Contains("enemies\\\\tank.zad", listSaved);
         // The animation list keeps its layout: only the new entry's lines were added.
         Assert.StartsWith(listBefore[..listBefore.IndexOf("ANIMATION_DEFINITION_FILE", StringComparison.Ordinal)], listSaved);
-        Assert.Contains("gates.zrd", listSaved);
+        Assert.Contains("gates.zad", listSaved);
         // The export of m1 now holds the tank, its texture in every pack and its animation.
         string exported = Path.Combine(fixture.Root, "zbd");
         var report = await SourceBuilder.ExportAsync(root, exported, ["m1/gamez.zbd", "m1/anim.zbd", "m1/texture2.zbd", "m1/rtexture4.zbd"], token: Token);
@@ -199,7 +199,7 @@ public sealed class SourceWorldTests
     public void ARefusedOrFailedSaveLeavesTheProjectAsItWas()
     {
         using SourceWorldFixture fixture = new();
-        string root = fixture.Project, script = fixture.Path("gamegen/m1.gs"), list = fixture.Path("data/m1/zrdr/anim.zrd");
+        string root = fixture.Project, script = fixture.Path("gamegen/m1.gs"), list = fixture.Path("data/m1/zrdr/anim.zad");
         byte[] scriptBefore = File.ReadAllBytes(script), listBefore = File.ReadAllBytes(list);
         SourceWorkspace workspace = new(root);
         // One addition changes both files.
@@ -208,7 +208,7 @@ public sealed class SourceWorldTests
         // The animation list changed elsewhere: neither file is written, although the list sorts first.
         File.AppendAllText(list, "# elsewhere\r\n"); File.SetLastWriteTimeUtc(list, DateTime.UtcNow.AddMinutes(1));
         var conflict = Assert.Throws<SourceConflictException>(() => workspace.Save(Token));
-        Assert.Contains("data/m1/zrdr/anim.zrd", conflict.Files);
+        Assert.Contains("data/m1/zrdr/anim.zad", conflict.Files);
         Assert.Equal(scriptBefore, File.ReadAllBytes(script));
         Assert.True(workspace.IsDirty);
 

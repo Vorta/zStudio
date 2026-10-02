@@ -20,7 +20,7 @@ When the destination already has some of the selected game files, the GUI asks b
 
 Exports read every source file once and check that none changed before anything is written; an edit made while an export runs fails the export rather than mixing two states. Opening another folder cancels a running export.
 
-Reconstruction supports RECOIL data and requires RECOIL evidence (prepared scripts, a version-15 world or a version-28 animation program); MechWarrior 3 folders are refused. A canceled or failed reconstruction removes everything it wrote, so the same folder can be used again. Projects and export folders can never be the protected `zbd_1998`/`zbd_1999` corpora, overlap their input (also when spelled through a short name, a SUBST drive or a link above the input), or pass through links. Text sources larger than 16 MiB are refused before they are decoded.
+Reconstruction supports RECOIL data and requires RECOIL evidence (prepared scripts, a version-15 world or a version-28 animation program); MechWarrior 3 folders are refused. A project is reconstructed once, from the original game files, and from then on only exported: zStudio unpacks only files whose resource archives carry the animation definitions every `anim.zbd` was compiled from, which the shipped ones do and zStudio's exports do not, and refuses any other folder with "zStudio can unpack only the original ZBD files." A canceled or failed reconstruction removes everything it wrote, so the same folder can be used again. Projects and export folders can never be the protected `zbd_1998`/`zbd_1999` corpora, overlap their input (also when spelled through a short name, a SUBST drive or a link above the input), or pass through links. Text sources larger than 16 MiB are refused before they are decoded.
 
 ## Mission worlds
 
@@ -135,7 +135,7 @@ Not yet:
   - Resources and animations find the model by this name; the dialog says when the world already has a node with it.
   - `AddChild` attaches the newest node with the name, so a placed model cannot use a name one of its own nodes has (the root node of `vtol.gltf` is `vtol`). Such an addition is taken back with a request to choose another name.
 - **Not placed** loads the model as a root outside the world, as the shipped scripts load vehicle templates: resources such as `aiv.zrd` place copies of it by name (`ltank_01` places a copy of `ltank`). **Placed in the world** puts it at a position and heading (the orbit point by default).
-- **Animations** lists the definition files other missions list with an animation for that name, such as `data\common\zrdr\enemies\ltank.zrd` for `ltank`. Checked files are added to the mission's `data\mN\zrdr\anim.zrd`, keeping its comments and layout.
+- **Animations** lists the definition files other missions list with an animation for that name, such as `data\common\zrdr\enemies\ltank.zad` for `ltank`. Checked files are added to the mission's `data\mN\zrdr\anim.zad`, keeping its comments and layout.
 
 The edit adds the lines the shipped scripts use to load a model, before the line that writes the world:
 
@@ -240,13 +240,15 @@ A project can add or replace profiles with files in `gamegen\build-profiles\` (b
     common\sounds\*.wav         common\{fonts,images}\*.png
     mN\models\*.gltf/.bin       mN\models\bft\     (the mission database mN.gltf and its loads)
     mN\textures\*.png           mN\textures\bft\
-    mN\zrdr\{aipath,envmodels,vtol,bft,choppers,…}\*.zrd, *.zan
+    mN\zrdr\{aipath,envmodels,vtol,bft,choppers,…}\*.zrd, *.zad, *.zan
     mN\images\*.png             (objective images)
 ```
 
 Directory placement is recovered from evidence in the shipped files; [recoil-original-worktree.md](recoil-original-worktree.md) reconstructs the complete original tree from it. Every ZAR member records the temporary file its compiler created in the source directory (for example `D:\battlesportdev\data\m1\zrdr\envmodels\fueE3B0.TMP`), so each resource returns to its original folder, including subfolders that member names do not carry. Sound banks carry no source paths; their WAVs go to `data\common\sounds`, the `SOUND_PATH` set by `sounds.zrd`. The prepared-script index names each script (`support\common.gw`, `m1.gs`) and its modification time, which the reconstructed file keeps.
 
-Exported archives record each member's project path (`data\m1\zrdr\envmodels\fuel.zrd`) where the original compiler recorded its temporary file, so reconstructing exported files restores the same tree.
+Animation definitions are `.zad` files: each mission's list (`data\mN\zrdr\anim.zad`) and every file it names, in the folders the shipped archives recorded. The original build kept them as `.zrd` beside the resources and packed them into `zrdr.zbd`, although the game never reads them there; reconstruction renames them, and the names in the lists with them. `pickup.zrd`, the one shipped file holding both, keeps its `PICKUP_DATA`, which the game reads, and its pickup animation becomes `pickup.zad`.
+
+Exported archives record each member's project path (`data\m1\zrdr\envmodels\fuel.zrd`) where the original compiler recorded its temporary file.
 
 ## What is built
 
@@ -259,13 +261,13 @@ Exported archives record each member's project path (`data\m1\zrdr\envmodels\fue
 | `image.zbd` | `data\common\fonts`, `data\common\images`, `data\mN\images` PNGs | interface images at their authored size in direct colour |
 | `mN\rtexture{2,4,8,16}.zbd`, `mN\texture{2,4,6,8,max}.zbd` | the mission's texture folders, and every texture its world uses from elsewhere | each PNG scaled and converted to the pack's budget and colour mode |
 | `mN\gamez.zbd` | `gamegen\mN.gs` and the scripts it sources, glTF models, texture names | the build script run with the engine's interpreter rules |
-| `mN\anim.zbd` | `data\mN\zrdr\anim.zrd`, the definition files it lists and their `.zan` scripts | compiled against the world this export builds |
+| `mN\anim.zbd` | `data\mN\zrdr\anim.zad`, the `.zad` definition files it lists and their `.zan` scripts | compiled against the world this export builds |
 
 Archive members are found by name, so two sources with the same file name in one archive are refused. A `.zrd` source may be text or compiled data.
 
 Each sound's source is its best-quality version across the three shipped banks. `sounds.zrd` declares a rate, sample size and channel count for each bank; the declaration is a ceiling. As in every retail bank, each of the three values is the lower of the source's and the declaration's, so a sound is never raised in quality. Conversion mixes channels, reduces sample size and resamples with a windowed-sinc low-pass filter; cue markers, which the engine turns into playback times, move with the samples. A WAV that `sounds.zrd` does not declare goes into every bank unchanged, with a warning. Only 8- and 16-bit PCM can be converted.
 
-On the 1998 and 1999 retail data, reconstructing, exporting and reconstructing again gives the same tree. The exported archives contain the same members with identical compiled data (apart from the rebuilt animation definitions), `interp.zbd` the same scripts and tokens, `soundsh.zbd` the shipped sounds unchanged, the medium/low banks the shipped formats with the same frame counts (within two frames) and cues, every world the shipped nodes, placements, models and textures, and every `anim.zbd` the shipped entries.
+On the 1998 and 1999 retail data, the exported archives contain the shipped resources with identical compiled data, without the animation definitions (and `pickup.zrd` without its pickup animation); a `.zrd` source that holds animation definitions fails the export. The exports also have `interp.zbd` with the same scripts and tokens, `soundsh.zbd` with the shipped sounds unchanged, the medium/low banks with the shipped formats with the same frame counts (within two frames) and cues, every world the shipped nodes, placements, models and textures, and every `anim.zbd` the shipped entries.
 
 Reconstruction lists shipped files whose family it does not reconstruct. They are not copied into the project.
 
@@ -293,7 +295,7 @@ A world assembled from the reconstructed sources has the shipped nodes, placemen
 
 ### Animations
 
-`anim.zbd` is compiled from the mission's `data\mN\zrdr\anim.zrd`, the definition files it lists (a path relative to the gamegen folder, or a bare name found beside the listing file or in `ANIMATION_PATH`; a missing file is skipped with a warning) and the keyframe scripts named by `OBJECT_MOTION_SI_SCRIPT`. Definitions bind to the world this export builds: a `NAME` listing several roots binds to the first the world has, a name with `*` (one digit each) expands to every matching node in name order, and a definition whose root the world lacks is left out, as the shipped files show. A node name the world cannot resolve, or an effect that no `effects.zrd` of the project defines (names match exactly), would make the game reject the whole file, so the export reports it. Values that do not fit their stored field (such as an `EXECUTION_PRIORITY` above 255 or a `LOOP_COUNT` above 65535) and more than 32,767 entries, the most the game reads, are errors. The compiled file carries no source stamps, because the game rejects `anim.zbd` when a stamped source exists with a different time.
+`anim.zbd` is compiled from the mission's `data\mN\zrdr\anim.zad`, the definition files it lists (a path relative to the gamegen folder, or a bare name found beside the listing file or in `ANIMATION_PATH`; a missing file is skipped with a warning) and the keyframe scripts named by `OBJECT_MOTION_SI_SCRIPT`. Definitions bind to the world this export builds: a `NAME` listing several roots binds to the first the world has, a name with `*` (one digit each) expands to every matching node in name order, and a definition whose root the world lacks is left out, as the shipped files show. A node name the world cannot resolve, or an effect that no `effects.zrd` of the project defines (names match exactly), would make the game reject the whole file, so the export reports it. Values that do not fit their stored field (such as an `EXECUTION_PRIORITY` above 255 or a `LOOP_COUNT` above 65535) and more than 32,767 entries, the most the game reads, are errors. The compiled file carries no source stamps, because the game rejects `anim.zbd` when a stamped source exists with a different time.
 
 Every entry of every shipped `anim.zbd` recompiles from its sources to the same fields. A sequence named more than once takes its last `NAME`, as the shipped `deathmulti.zrd` and `sbarm.zrd` compiled; inside an event the first of a repeated attribute counts, as `machine.zrd` and `pipetrig.zrd` show. Five shipped definitions of 1999 (one of 1998) are not the versions the animations were compiled from. `anim.zbd` records the date of each definition file it read, and `zrdr.zbd` when it was packed: the m1 `frcgate`, `vwrebel` and `semideath` definitions anim.zbd read are dated 16 November 1998, and its `m13\zrdr\envmodels\bft_trans.zrd` 11 December, all after their archives were packed on 10 November (`bft_to_5cav` in that file moves the vehicle 55 units down, where the shipped animation moves it 47). Reconstruction rebuilds those from the compiled entries and says so in its notes, so the project reproduces the animations the game shipped. Their archive members differ from the shipped ones, which the engine does not read at run time.
 
@@ -309,9 +311,9 @@ Text `.zrd` files open in the shared ZRD viewer and editor (tree, Properties, `z
 
 ## Text formats
 
-### zReader resources (`.zrd`)
+### zReader resources (`.zrd`) and animation definitions (`.zad`)
 
-The original compiler's text syntax did not survive, and the retail engine only reads compiled data, so zStudio defines a lossless syntax. A file lists the children of its root array.
+The original compiler's text syntax did not survive, and the retail engine only reads compiled data, so zStudio defines a lossless syntax, the same for resources and animation definitions. A file lists the children of its root array.
 
 - `( … )` is an array. A key followed by its value array is written on one line: `GRAVITY ( -9.8 )`.
 - Integers are decimal 32-bit values: `42`, `-7`.
@@ -344,7 +346,7 @@ Each frame block gives every object's scaling, rotation (radians about X, Y and 
 
 The compiler turns consecutive frames into keyframe segments: a channel is kept in a segment when it changes (a position or scale component by more than 0.00001, a rotation by a half-angle above 0.00001 radians); the first and last segments keep every channel; a segment with no change is left out. Times are frame × the float of 1/rate; rotations go through the engine's own matrix, Euler and quaternion routines in single precision; rates are the change over the segment, with the spin taken from the engine's quaternion log and its fast square root.
 
-Reconstruction writes the frames the compiler kept, with grid frames on the script's step where every object stood still. Keyed values are the six-decimal values the stored floats came from, and rotations the Euler angles that compile to the stored quaternions. A channel that stops before its next key ends at the value its stored rate reaches; between such points the compiler recorded nothing, and the held frames take the next key's value (as surviving fragments of the original texts show). Scripts of the shipped files also get the DKit messages their exporter wrote: before every frame (after every frame in the `m5doexit.zan` of 20 May 1998), with the Softimage version of the script's stamp date (3.5001 before July 1997, 3.7 until 4 May 1998, then 3.71). Scripts of files without stamps, such as zStudio's own exports, hold only their frames. The exit scripts list their objects as `vtol1`, `lengine`, `rengine`, `cargodoor`, as the fragments show. Keyframes that no SI script reproduces exactly (two poses at one frame, a first segment that does not move every channel, a value no six-decimal number reads back as, a rotation whose angles take too long to find, or a script larger than a project reads) are written in zStudio's keyframe format instead, with a note. A track whose keyframes are not on the frame grid of its `SCRIPT_FRAME_RATE` is not reconstructed at all, with a note. Translations and scalings of negative zero are written `-0.000000`, which reads back as negative zero. Rotation angles are never written as negative zero: keyframes only such an angle reproduces are written in zStudio's format, with a note (none of the shipped ones need it).
+Reconstruction writes the frames the compiler kept, with grid frames on the script's step where every object stood still. Keyed values are the six-decimal values the stored floats came from, and rotations the Euler angles that compile to the stored quaternions. A channel that stops before its next key ends at the value its stored rate reaches; between such points the compiler recorded nothing, and the held frames take the next key's value (as surviving fragments of the original texts show). Scripts of the shipped files also get the DKit messages their exporter wrote: before every frame (after every frame in the `m5doexit.zan` of 20 May 1998), with the Softimage version of the script's stamp date (3.5001 before July 1997, 3.7 until 4 May 1998, then 3.71). A script with no stamp date holds only its frames. The exit scripts list their objects as `vtol1`, `lengine`, `rengine`, `cargodoor`, as the fragments show. Keyframes that no SI script reproduces exactly (two poses at one frame, a first segment that does not move every channel, a value no six-decimal number reads back as, a rotation whose angles take too long to find, or a script larger than a project reads) are written in zStudio's keyframe format instead, with a note. A track whose keyframes are not on the frame grid of its `SCRIPT_FRAME_RATE` is not reconstructed at all, with a note. Translations and scalings of negative zero are written `-0.000000`, which reads back as negative zero. Rotation angles are never written as negative zero: keyframes only such an angle reproduces are written in zStudio's format, with a note (none of the shipped ones need it).
 
 zStudio's keyframe format lists a track per object; exports compile both formats:
 

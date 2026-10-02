@@ -42,12 +42,12 @@ public static class SourceTerrainConversion
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
-            if (!(file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gw", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase))) continue;
+            if (!(file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gw", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase))) continue;
             if (workspace.Read(file, token) is not { } bytes) continue;
             // Every word, and also a resource's strings whole (names may hold spaces) and a script's tokens (names may hold
             // other characters): more names only keep more pieces as objects.
             IEnumerable<string> tokens = Regex.Matches(Encoding.Latin1.GetString(bytes), @"[A-Za-z0-9_\-\.\*%]+").Select(m => m.Value);
-            if (file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase))
+            if (file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase))
             {
                 try { tokens = tokens.Concat(Strings(ZrdText.LooksLikeText(bytes) ? ZrdText.Parse(Encoding.Latin1.GetString(bytes), token) : ZrdDecoder.Read(bytes, token))).ToList(); }
                 catch (InvalidDataException) { }

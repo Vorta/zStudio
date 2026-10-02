@@ -25,8 +25,8 @@ public sealed class AnimationCompilerTests
             GRAVITY ( -9.8 )
             ANIMATION_PATH ( "..\\data\\m1\\zrdr\\envmodels" )
             ANIMATION_LIST (
-              ANIMATION_DEFINITION_FILE ( gate.zrd )
-              ANIMATION_DEFINITION_FILE ( "..\\data\\m1\\zrdr\\missing.zrd" )
+              ANIMATION_DEFINITION_FILE ( gate.zad )
+              ANIMATION_DEFINITION_FILE ( "..\\data\\m1\\zrdr\\missing.zad" )
             )
           )
         )
@@ -96,17 +96,17 @@ public sealed class AnimationCompilerTests
 
     private static MemoryFiles Project() => new(new(StringComparer.Ordinal)
     {
-        ["data/m1/zrdr/anim.zrd"] = Encoding.ASCII.GetBytes(Root),
-        ["data/m1/zrdr/envmodels/gate.zrd"] = Encoding.ASCII.GetBytes(Gate),
+        ["data/m1/zrdr/anim.zad"] = Encoding.ASCII.GetBytes(Root),
+        ["data/m1/zrdr/envmodels/gate.zad"] = Encoding.ASCII.GetBytes(Gate),
         ["data/m1/zrdr/envmodels/gate.zan"] = Encoding.ASCII.GetBytes(Script),
     });
 
     [Fact]
     public void DefinitionsCompileAsTheOriginalToolDid()
     {
-        var result = AnimationCompiler.Compile(Project(), "data/m1/zrdr/anim.zrd", World, Token);
+        var result = AnimationCompiler.Compile(Project(), "data/m1/zrdr/anim.zad", World, Token);
         // A missing definition file is skipped with a warning; a definition whose root the world lacks has no entry.
-        Assert.Contains(result.Warnings, w => w.Contains("missing.zrd"));
+        Assert.Contains(result.Warnings, w => w.Contains("missing.zad"));
         var entries = result.Package.Entries;
         Assert.Equal(["", "open_gate", "blink1", "blink2", "destroy_turret"], entries.Select(e => e.Name));
         // Several roots bind to the first one the world has; a pattern expands to every match, digits carried over.
@@ -152,13 +152,13 @@ public sealed class AnimationCompilerTests
     public void CompiledEntriesDecompileToDefinitionsThatCompileTheSame()
     {
         var files = Project();
-        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", World, Token).Package;
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", World, Token).Package;
         // Rewrite every definition from its compiled entry and compile again.
         var gate = package.Entries[1];
         var items = AnimationDecompiler.Definition(gate, _ => ("gate.zan", 10f));
-        var tree = AnimationDefinitionSet.ReplaceDefinition(AnimationDefinitionSet.Read(files, "data/m1/zrdr/envmodels/gate.zrd", Token), 0, items);
-        files.Files["data/m1/zrdr/envmodels/gate.zrd"] = Encoding.ASCII.GetBytes(ZrdText.Write(tree, Token));
-        var again = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", World, Token).Package;
+        var tree = AnimationDefinitionSet.ReplaceDefinition(AnimationDefinitionSet.Read(files, "data/m1/zrdr/envmodels/gate.zad", Token), 0, items);
+        files.Files["data/m1/zrdr/envmodels/gate.zad"] = Encoding.ASCII.GetBytes(ZrdText.Write(tree, Token));
+        var again = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", World, Token).Package;
         Assert.Equal(package.Entries.Count, again.Entries.Count);
         for (int i = 1; i < package.Entries.Count; i++) Assert.Null(AnimationComparer.Difference(package.Entries[i], again.Entries[i]));
     }
@@ -190,8 +190,8 @@ public sealed class AnimationCompilerTests
     {
         Dictionary<string, byte[]> files = new(StringComparer.Ordinal)
         {
-            ["data/m1/zrdr/anim.zrd"] = "( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( defs.zrd ) ) ) )"u8.ToArray(),
-            ["data/m1/zrdr/defs.zrd"] = Encoding.Latin1.GetBytes($"( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( {definitions} ) ) )"),
+            ["data/m1/zrdr/anim.zad"] = "( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( defs.zad ) ) ) )"u8.ToArray(),
+            ["data/m1/zrdr/defs.zad"] = Encoding.Latin1.GetBytes($"( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( {definitions} ) ) )"),
         };
         foreach (var (path, text) in more) files[path] = Encoding.Latin1.GetBytes(text);
         return files;
@@ -205,11 +205,11 @@ public sealed class AnimationCompilerTests
         var files = new MemoryFiles(Definitions("ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) EFFECT ( NAME ( smoke1 ) ) EFFECT ( NAME ( Smoke2 ) ) ) )"));
         var effects = AnimationCompiler.EffectNames(ZrdText.Parse("( EFFECTS ( ( smoke1.flt NAME ( smoke1 ) SPEED ( 3.0 ) MAPS ( a.tif ) ) ( smoke2.flt NAME ( smoke2 ) ) ) )"u8.ToArray(), Token)).ToArray();
         Assert.Equal(["smoke1", "smoke2"], effects);
-        var result = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", ["gate"], effects, Token);
+        var result = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], effects, Token);
         Assert.Single(result.Warnings, w => w.Contains("Smoke2") && w.Contains("rejects"));
         Assert.DoesNotContain(result.Warnings, w => w.Contains("smoke1"));
         // Without effects.zrd nothing can be checked.
-        Assert.DoesNotContain(AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", ["gate"], Token).Warnings, w => w.Contains("Smoke2"));
+        Assert.DoesNotContain(AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], Token).Warnings, w => w.Contains("Smoke2"));
     }
 
     [Theory]
@@ -220,8 +220,8 @@ public sealed class AnimationCompilerTests
     public void ValuesOutsideTheirStoredRangeAreReportedWhereTheyAre(string setting, string keyword)
     {
         var files = new MemoryFiles(Definitions($"ANIMATION_DEFINITION ( NAME ( gate ) {setting} )"));
-        var error = Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", ["gate"], Token));
-        Assert.Contains("defs.zrd", error.Message); Assert.Contains(keyword, error.Message);
+        var error = Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], Token));
+        Assert.Contains("defs.zad", error.Message); Assert.Contains(keyword, error.Message);
     }
 
     [Fact]
@@ -229,7 +229,7 @@ public sealed class AnimationCompilerTests
     {
         string sounds = string.Concat(Enumerable.Range(0, 300).Select(i => $"SOUND ( NAME ( s{i} ) ) "));
         var files = new MemoryFiles(Definitions($"ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) {sounds}) )"));
-        var error = Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", ["gate"], Token));
+        var error = Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], Token));
         Assert.Contains("254", error.Message);
     }
 
@@ -240,7 +240,7 @@ public sealed class AnimationCompilerTests
         Assert.Equal(short.MaxValue, AnimationCompiler.MaximumEntries);
         string[] world = Enumerable.Range(0, 32_768).Select(i => $"n{i:D5}").ToArray();
         var files = new MemoryFiles(Definitions("ANIMATION_DEFINITION ( NAME ( \"n*****\" ) )"));
-        var error = Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token));
+        var error = Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token));
         Assert.Contains("32767", error.Message.Replace(",", ""));
     }
 
@@ -269,11 +269,11 @@ public sealed class AnimationCompilerTests
         // Each file lists the next twice: 2^14 reads of files that define nothing.
         Dictionary<string, byte[]> files = new(StringComparer.Ordinal);
         string List(string next) => $"( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( {next} ) ANIMATION_DEFINITION_FILE ( {next} ) ) ) )";
-        files["data/m1/zrdr/anim.zrd"] = Encoding.ASCII.GetBytes(List("f1.zrd"));
-        for (int i = 1; i < 14; i++) files[$"data/m1/zrdr/f{i}.zrd"] = Encoding.ASCII.GetBytes(List($"f{i + 1}.zrd"));
-        files["data/m1/zrdr/f14.zrd"] = "( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ) ) )"u8.ToArray();
+        files["data/m1/zrdr/anim.zad"] = Encoding.ASCII.GetBytes(List("f1.zad"));
+        for (int i = 1; i < 14; i++) files[$"data/m1/zrdr/f{i}.zad"] = Encoding.ASCII.GetBytes(List($"f{i + 1}.zad"));
+        files["data/m1/zrdr/f14.zad"] = "( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ) ) )"u8.ToArray();
         CountingFiles counting = new(files);
-        var error = Assert.Throws<InvalidDataException>(() => AnimationDefinitionSet.Load(counting, "data/m1/zrdr/anim.zrd", Token));
+        var error = Assert.Throws<InvalidDataException>(() => AnimationDefinitionSet.Load(counting, "data/m1/zrdr/anim.zad", Token));
         Assert.Contains("definition files", error.Message);
         Assert.True(counting.Reads.Values.Sum() <= AnimationDefinitionSet.MaximumFileReads);
     }
@@ -284,11 +284,11 @@ public sealed class AnimationCompilerTests
         string events = string.Concat(Enumerable.Range(0, 40).Select(_ => "OBJECT_MOTION_SI_SCRIPT ( NAME ( door ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( gate.zan ) ) "));
         string keys = string.Concat(Enumerable.Range(0, 200).Select(i => $"FRAME {i} POSITION {i} 0 0\n")) + "FRAME 200\n";
         CountingFiles files = new(Definitions($"ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) {events}) )", ("data/m1/zrdr/gate.zan", "OBJECT door\n" + keys)));
-        var result = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", ["gate", "door"], null, 1 << 20, Token);
+        var result = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate", "door"], null, 1 << 20, Token);
         Assert.Equal(40, result.Package.Entries[1].Sequences[0].Events.Count);
         Assert.Equal(1, files.Reads["data/m1/zrdr/gate.zan"]);
         // Forty 200-key streams are about 320 KiB: a smaller budget refuses the output instead of growing without bound.
-        var error = Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", ["gate", "door"], null, 64 * 1024, Token));
+        var error = Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate", "door"], null, 64 * 1024, Token));
         Assert.Contains("larger than", error.Message);
     }
 
@@ -301,7 +301,7 @@ public sealed class AnimationCompilerTests
             $"ANIMATION_DEFINITION ( NAME ( \"{Latin}\" ) SEQUENCE_DEFINITION ( NAME ( s ) OBJECT_MOTION_SI_SCRIPT ( NAME ( \"{Latin}\" ) SCRIPT_FILENAME ( named.zan ) ) ) )",
             ("data/m1/zrdr/loose.zan", "FRAME 0 POSITION 0 0 0\nFRAME 5\n"), ("data/m1/zrdr/named.zan", $"OBJECT {Latin}\nFRAME 0 POSITION 1 0 0\nFRAME 5\n")));
         string[] world = ["my door", Latin];
-        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token).Package;
         List<string> notes = [];
         var outputs = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
         Assert.Contains(notes, n => n.Contains("my door"));
@@ -350,7 +350,7 @@ public sealed class AnimationCompilerTests
             "OBJECT_MOTION_SI_SCRIPT ( NAME ( lamp ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( swing.zan ) ) ) )";
         var files = new MemoryFiles(Definitions(Definition, ("data/m1/zrdr/swing.zan", Swing)));
         string[] world = ["gate", "door", "lamp"];
-        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token).Package;
         // The lamp holds while the door swings: its middle segment would be empty, but a two-segment track's segments
         // are its first and last, which carry every channel.
         Assert.Equal([7, 7], package.Entries[1].Sequences[0].Events[1].Keyframes(Token).Select(f => f.Flags));
@@ -365,7 +365,7 @@ public sealed class AnimationCompilerTests
         Assert.Contains("Rotation:    0.000000 1.570796 0.000000", text);
         // The written script rebuilds the same animation.
         files.Files["data/m1/zrdr/swing.zan"] = swing.Bytes;
-        var rebuilt = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        var rebuilt = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token).Package;
         Assert.Null(AnimationComparer.Difference(package.Entries[1], rebuilt.Entries[1]));
     }
 
@@ -377,7 +377,7 @@ public sealed class AnimationCompilerTests
             "ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) OBJECT_MOTION_SI_SCRIPT ( NAME ( door ) SCRIPT_FILENAME ( slide.zan ) ) ) )",
             ("data/m1/zrdr/slide.zan", "OBJECT door\nFRAME 0 POSITION 0 0 0\nFRAME 5\n")));
         string[] world = ["gate", "door"];
-        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token).Package;
         List<string> notes = [];
         var outputs = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
         Assert.Contains(notes, n => n.StartsWith("data/m1/zrdr/slide.zan: the keyframes have no SI Animation Script") && n.EndsWith("written in zStudio's keyframe format."));
@@ -395,7 +395,7 @@ public sealed class AnimationCompilerTests
             "OBJECT_MOTION_SI_SCRIPT ( NAME ( lamp ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( swing.zan ) ) ) )";
         var files = new MemoryFiles(Definitions(Definition, ("data/m1/zrdr/swing.zan", Swing)));
         string[] world = ["gate", "door", "lamp"];
-        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token).Package;
         List<string> notes = [];
         var outputs = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
         Assert.Empty(notes);
@@ -412,7 +412,7 @@ public sealed class AnimationCompilerTests
         var files = new MemoryFiles(Definitions("ANIMATION_DEFINITION ( NAME ( gate ) " +
             "SEQUENCE_DEFINITION ( NAME ( drill_snd ) NAME ( add_one_sound ) CALLBACK ( VALUE ( 1 ) ) ) " +
             "SEQUENCE_DEFINITION ( IF ( PLAYER_RANGE ( 70 ) ) NAME ( fbfx01 ) CALLBACK ( VALUE ( 2 ) ) ELSEIF ( PLAYER_RANGE ( 140 ) ) NAME ( fbfx01a ) CALLBACK ( VALUE ( 3 ) ) ENDIF ( ) ) )"));
-        var gate = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", ["gate"], Token).Package.Entries[1];
+        var gate = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], Token).Package.Entries[1];
         Assert.Equal(["add_one_sound", "fbfx01a"], gate.Sequences.Select(s => s.Name));
     }
 
@@ -439,7 +439,7 @@ public sealed class AnimationCompilerTests
             $"OBJECT_MOTION_SI_SCRIPT ( NAME ( \"{Latin}\" ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( swing.zan ) ) ) )";
         var files = new MemoryFiles(Definitions(Definition, ("data/m1/zrdr/swing.zan", Swing.Replace("Object: door", $"Object: {Latin}"))));
         string[] world = ["gate", Latin];
-        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token).Package;
         List<string> notes = [];
         System.Collections.Concurrent.ConcurrentQueue<(SourceStage, string)> statuses = [];
         var swing = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token, (stage, item) => statuses.Enqueue((stage, item)))
@@ -465,7 +465,7 @@ public sealed class AnimationCompilerTests
             "OBJECT_MOTION_SI_SCRIPT ( NAME ( door ) SCRIPT_FRAME_RATE ( 20.0 ) SCRIPT_FILENAME ( swing.zan ) ) ) )";
         var files = new MemoryFiles(Definitions(Definition, ("data/m1/zrdr/swing.zan", Swing)));
         string[] world = ["gate", "door"];
-        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token).Package;
         List<string> notes = [];
         AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
         Assert.Equal(["data/m1/zrdr/swing.zan: gate plays door at 20 frames per second, an earlier animation at 10; the script was written from the earlier one."], notes);
@@ -479,10 +479,10 @@ public sealed class AnimationCompilerTests
         var files = new MemoryFiles(Definitions(
             "ANIMATION_DEFINITION ( NAME ( \"lamp*\" ) SEQUENCE_DEFINITION ( NAME ( s ) OBJECT_MOTION_SI_SCRIPT ( NAME ( \"lamp*\" ) SCRIPT_FILENAME ( lamps.zan ) ) ) )",
             ("data/m1/zrdr/lamps.zan", "OBJECT lamp1\nFRAME 0 POSITION 0 0 0\nFRAME 5\nOBJECT lamp2\nFRAME 0 POSITION 1 0 0\nFRAME 5\n"),
-            ("data/m2/zrdr/anim.zrd", "( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( \"..\\\\data\\\\m1\\\\zrdr\\\\defs.zrd\" ) ) ) )")));
+            ("data/m2/zrdr/anim.zad", "( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( \"..\\\\data\\\\m1\\\\zrdr\\\\defs.zad\" ) ) ) )")));
         string[] first = ["lamp1"], second = ["lamp2"];
-        var m1 = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", first, Token).Package;
-        var m2 = AnimationCompiler.Compile(files, "data/m2/zrdr/anim.zrd", second, Token).Package;
+        var m1 = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", first, Token).Package;
+        var m2 = AnimationCompiler.Compile(files, "data/m2/zrdr/anim.zad", second, Token).Package;
         List<string> notes = [];
         var lamps = AnimationSources.Reconstruct([new(1, m1, [], first), new(2, m2, [], second)], files, notes, Token).Single(o => o.Path == "data/m1/zrdr/lamps.zan");
         Assert.Single(notes, n => n.StartsWith("data/m1/zrdr/lamps.zan: ", StringComparison.Ordinal));

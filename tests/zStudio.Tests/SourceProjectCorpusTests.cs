@@ -11,7 +11,7 @@ public sealed class SourceProjectCorpusTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task ReconstructedSourcesExportGameEquivalentFilesAndRoundTrip()
+    public async Task ReconstructedSourcesExportGameEquivalentFiles()
     {
         string? corpus = Environment.GetEnvironmentVariable("ZSTUDIO_CORPUS"); if (string.IsNullOrEmpty(corpus)) return;
         string work = Path.Combine(Path.GetTempPath(), "zstudio-source-corpus-" + Guid.NewGuid().ToString("N"));
@@ -24,7 +24,7 @@ public sealed class SourceProjectCorpusTests
             const string Rebuilt = " is not the version the shipped animations were compiled from; it was rebuilt from anim.zbd.";
             Assert.All(report.Notes, n => Assert.EndsWith(Rebuilt, n));
             var rebuilt = report.Notes.Select(n => Path.GetFileName(n[..n.IndexOf(':')])).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            Assert.DoesNotContain("sbarm.zrd", rebuilt); Assert.DoesNotContain("deathmulti.zrd", rebuilt);
+            Assert.DoesNotContain("sbarm.zad", rebuilt); Assert.DoesNotContain("deathmulti.zad", rebuilt);
             Assert.Equal(1, report.Families["scripts"]); Assert.Equal(3, report.Families["sounds"]);
             Assert.Equal(Directory.GetFiles(corpus, "gamez.zbd", SearchOption.AllDirectories).Length, report.Families["worlds"]);
             Assert.Equal(Directory.GetFiles(corpus, "anim.zbd", SearchOption.AllDirectories).Length, report.Families["animations"]);
@@ -32,8 +32,13 @@ public sealed class SourceProjectCorpusTests
             Assert.All(report.NotReconstructed, f => Assert.DoesNotContain("zrdr.zbd", f));
             // The original layout, and nothing zStudio-specific.
             Assert.Equal(["data", "gamegen"], Directory.GetFileSystemEntries(project).Select(Path.GetFileName).Order().ToArray());
-            Assert.True(File.Exists(Path.Combine(project, "data", "m1", "zrdr", "envmodels", "frcgate.zrd")));
+            Assert.True(File.Exists(Path.Combine(project, "data", "m1", "zrdr", "envmodels", "frcgate.zad")));
             Assert.True(File.Exists(Path.Combine(project, "gamegen", "support", "common.gw")));
+            // Animation definitions are .zad files, never zReader resources; pickup.zrd keeps only its pickup data.
+            Assert.True(File.Exists(Path.Combine(project, "data", "m1", "zrdr", "anim.zad")));
+            Assert.True(File.Exists(Path.Combine(project, "data", "common", "zrdr", "pickup.zad")));
+            Assert.All(Directory.GetFiles(Path.Combine(project, "data"), "*.zrd", SearchOption.AllDirectories), f =>
+                Assert.False(Recoil.Zbd.Core.Animation.AnimationDefinitionSet.HoldsDefinitions(ZrdText.LooksLikeText(File.ReadAllBytes(f)) ? ZrdText.Parse(File.ReadAllBytes(f), Token) : ZrdDecoder.Read(File.ReadAllBytes(f), Token)), f));
 
             var export = await SourceBuilder.ExportAsync(project, exported, token: Token);
             Assert.Equal(0, export.Failed);
@@ -42,9 +47,15 @@ public sealed class SourceProjectCorpusTests
             foreach (string archive in Directory.GetFiles(corpus, "zrdr.zbd", SearchOption.AllDirectories))
             {
                 string relative = Path.GetRelativePath(corpus, archive);
-                var shipped = Members(archive); var built = Members(Path.Combine(exported, relative));
-                Assert.Equal(shipped.Keys.Order(StringComparer.OrdinalIgnoreCase), built.Keys.Order(StringComparer.OrdinalIgnoreCase));
-                Assert.All(shipped.Where(m => !rebuilt.Contains(m.Key)), m => Assert.Equal(m.Value, built[m.Key]));
+                var built = Members(Path.Combine(exported, relative));
+                // The shipped resources without the animation definitions, which stay in the project.
+                Dictionary<string, byte[]> expected = new(StringComparer.OrdinalIgnoreCase);
+                foreach (var (name, bytes) in Members(archive))
+                    if (ZrdDecoder.TryRead(bytes, Token) is { } tree && Recoil.Zbd.Core.Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
+                    { if (Recoil.Zbd.Core.Animation.AnimationDefinitionSet.Split(tree).Others is { } others) expected[name] = ZrdWriter.Write(others, Token); }
+                    else expected[name] = bytes;
+                Assert.Equal(expected.Keys.Order(StringComparer.OrdinalIgnoreCase), built.Keys.Order(StringComparer.OrdinalIgnoreCase));
+                Assert.All(expected, m => Assert.Equal(m.Value, built[m.Key]));
             }
             // Animations rebuilt from the definitions and keyframe scripts match every shipped entry.
             foreach (string animations in Directory.GetFiles(corpus, "anim.zbd", SearchOption.AllDirectories))
@@ -87,13 +98,10 @@ public sealed class SourceProjectCorpusTests
             // The shipped files are stamped, so their scripts carry the DKit messages of their exporter.
             Assert.All(scriptsWritten, s => Assert.Contains("\r\nWarning, file version ", File.ReadAllText(s, System.Text.Encoding.Latin1)));
 
-            // Exported files carry their sources' folders, so reconstructing them restores the same tree. Exports carry
-            // no source stamps, so their scripts come back without the DKit messages the shipped scripts' exporter wrote.
-            var second = await SourceExtractor.ExtractAsync(exported, again, token: Token);
-            Assert.Empty(second.Notes);
-            var first = Tree(project); var reconstructed = Tree(again);
-            Assert.Equal(first.Keys.Order(StringComparer.OrdinalIgnoreCase), reconstructed.Keys.Order(StringComparer.OrdinalIgnoreCase));
-            Assert.All(first, f => Assert.Equal(f.Key.EndsWith(".zan", StringComparison.OrdinalIgnoreCase) ? WithoutMessages(f.Value) : f.Value, reconstructed[f.Key]));
+            // A project is unpacked once, from the original files; its exports carry no definitions and are refused.
+            var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(exported, again, token: Token));
+            Assert.Equal(SourceExtractor.NotOriginal, refused.Message);
+            Assert.False(Directory.Exists(again));
 
             // A vehicle only another mission loads (the 1999 light tank of m2–m6) added to m1: the export of m1 holds its
             // nodes, every texture its materials use in each pack, and the animations other missions list for it.
@@ -146,9 +154,4 @@ public sealed class SourceProjectCorpusTests
         var doc = FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token);
         return doc.Scripts!.Entries.ToDictionary(e => e.Name, e => string.Join("\n", e.Instructions.Select(i => string.Join("\u0001", i.Tokens))), StringComparer.OrdinalIgnoreCase);
     }
-    /// <summary>A script's text without the Softimage DKit message lines.</summary>
-    private static byte[] WithoutMessages(byte[] script) => System.Text.Encoding.Latin1.GetBytes(string.Concat(
-        System.Text.Encoding.Latin1.GetString(script).Split("\r\n").Select(l => l + "\r\n").Where(l => !l.StartsWith("Warning, file version ", StringComparison.Ordinal) && !l.StartsWith("Attempt to read: ", StringComparison.Ordinal)))[..^2]);
-    private static Dictionary<string, byte[]> Tree(string root) => Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-        .ToDictionary(f => Path.GetRelativePath(root, f), File.ReadAllBytes, StringComparer.OrdinalIgnoreCase);
 }

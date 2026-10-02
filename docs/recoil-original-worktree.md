@@ -2,7 +2,7 @@
 
 This is the source tree RECOIL's developers built the shipped ZBD files from, reconstructed as far as the shipped files allow. The backbone is `interp.zbd`: it holds the prepared gamegen scripts (122 in both the 1998 and 1999 releases, under the same names), and their commands name every folder of the tree and many of its files. Where the scripts name a file but not its folder, or do not name it at all, other recorded evidence fills the gap; each placement below says which. It describes the 1999 release; the 1998 release ships the same scripts and data for m1–m6 only.
 
-zStudio's source projects (see [source-project.md](source-project.md)) follow this layout with glTF models and PNG textures in place of OpenFlight (`.flt`) and TIFF (`.tif`) files. This page keeps the original file types, as the scripts name them.
+zStudio's source projects (see [source-project.md](source-project.md)) follow this layout with glTF models and PNG textures in place of OpenFlight (`.flt`) and TIFF (`.tif`) files, and `.zad` animation definitions in place of the `.zrd` ones (with `pickup.zrd`'s pickup animation in its own `pickup.zad`). This page keeps the original file types, as the scripts and archives name them.
 
 ## Evidence
 

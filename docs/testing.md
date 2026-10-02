@@ -8,7 +8,7 @@ Tests that need game data return early unless their variable is set, so `dotnet 
 
 | Variable | Value | Enables |
 | --- | --- | --- |
-| `ZSTUDIO_CORPUS` | a RECOIL data folder (holding `interp.zbd`, `zrdr.zbd` and `m1\`), such as `zbd_1999` or `zbd_1998` | archive, world, animation, keyframe, AI, resource-editing and source-project corpus tests. `SourceProjectCorpusTests` reconstructs the whole release, checks every script is an SI script with its DKit messages, exports, rebuilds every shipped animation entry and reconstructs the export again. |
+| `ZSTUDIO_CORPUS` | a RECOIL data folder (holding `interp.zbd`, `zrdr.zbd` and `m1\`), such as `zbd_1999` or `zbd_1998` | archive, world, animation, keyframe, AI, resource-editing and source-project corpus tests. `SourceProjectCorpusTests` reconstructs the whole release, checks every script is an SI script with its DKit messages and that no `.zrd` holds animation definitions, exports, compares the archives with the shipped ones without their definitions, rebuilds every shipped animation entry and checks that the export is refused for unpacking. |
 | `ZSTUDIO_MW3_CORPUS` | a MechWarrior 3 `zbd` folder | MechWarrior 3 and AI valve tests |
 | `ZSTUDIO_SOURCE_PROJECT` | a reconstructed project (only read) | the terrain conversion corpus test without reconstructing first |
 | `ZSTUDIO_CONTENT_CAPTURE`, `ZSTUDIO_INSPECTION_CAPTURE` | an output folder | screenshots from the Desktop content and inspection checks |

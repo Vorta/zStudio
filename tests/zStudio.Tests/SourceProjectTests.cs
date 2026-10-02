@@ -1,4 +1,5 @@
 using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Sources;
 using Xunit;
@@ -28,6 +29,13 @@ public sealed class SourceProjectTests
         Assert.Equal("GRAVITY ( -9.8 )", File.ReadAllText(P("data/m1/zrdr/ai.zrd")).Trim());
         Assert.True(File.Exists(P("data/m1/zrdr/envmodels/frcgate.zrd")));
         Assert.True(File.Exists(P("data/common/zrdr/sounds.zrd")));
+        // Animation definitions are not resources: they become .zad files, which their lists name, and pickup.zrd keeps
+        // only the pickup data the game reads.
+        Assert.False(File.Exists(P("data/common/zrdr/anim.zrd")));
+        string list = File.ReadAllText(P("data/common/zrdr/anim.zad")), pickup = File.ReadAllText(P("data/common/zrdr/pickup.zrd")), pickupDefinitions = File.ReadAllText(P("data/common/zrdr/pickup.zad"));
+        Assert.Contains("pickup.zad", list); Assert.DoesNotContain(".zrd", list);
+        Assert.Contains("PICKUP_DATA", pickup); Assert.DoesNotContain("ANIMATION", pickup);
+        Assert.Contains("\"pu***\"", pickupDefinitions); Assert.DoesNotContain("PICKUP_DATA", pickupDefinitions);
         Assert.Equal(fixture.Blob, File.ReadAllBytes(P("data/m1/zrdr/blob.bin")));
         // Sounds keep only their best-quality version.
         Assert.Equal(fixture.WaveA, File.ReadAllBytes(P("data/common/sounds/a.wav")));
@@ -268,18 +276,44 @@ public sealed class SourceProjectTests
     }
 
     [Fact]
-    public async Task ExportedFilesReconstructTheSameTree()
+    public async Task ExportsLeaveDefinitionsOutAndCannotBeUnpacked()
     {
         using var fixture = new SourceFixture();
         await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
         File.Delete(Path.Combine(fixture.Project, "data", "m1", "zrdr", "blob.bin"));
         string exported = Path.Combine(fixture.Root, "zbd"), again = Path.Combine(fixture.Root, "again");
         await SourceBuilder.ExportAsync(fixture.Project, exported, token: Token);
-        var report = await SourceExtractor.ExtractAsync(exported, again, token: Token);
-        Assert.Empty(report.Notes); Assert.Empty(report.NotReconstructed);
-        var first = Directory.GetFiles(fixture.Project, "*", SearchOption.AllDirectories).ToDictionary(f => SourceProject.Relative(fixture.Project, f), File.ReadAllBytes);
-        var second = Directory.GetFiles(again, "*", SearchOption.AllDirectories).ToDictionary(f => SourceProject.Relative(again, f), File.ReadAllBytes);
-        Assert.Equal(first.Keys.Order(), second.Keys.Order());
-        Assert.All(first, f => Assert.Equal(f.Value, second[f.Key]));
+        // The archive holds the resources the game reads: no definitions, and pickup.zrd only its pickup data.
+        var members = ArchiveSources.Read(File.ReadAllBytes(Path.Combine(exported, "zrdr.zbd")));
+        Assert.Equal(["pickup.zrd", "sounds.zrd"], members.Select(m => m.Name).Order(StringComparer.Ordinal));
+        Assert.False(AnimationDefinitionSet.HoldsDefinitions(ZrdDecoder.Read(members.Single(m => m.Name == "pickup.zrd").Payload.ToArray(), Token)));
+        // A project is unpacked once, from the original files; an export carries no definitions and is refused before
+        // anything is written.
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(exported, again, token: Token));
+        Assert.Equal(SourceExtractor.NotOriginal, error.Message);
+        Assert.False(Directory.Exists(again));
+    }
+
+    [Fact]
+    public async Task OnlyFilesCarryingTheirDefinitionsAreUnpacked()
+    {
+        using var fixture = new SourceFixture();
+        // A mission's anim.zbd whose resource archive has no definitions did not ship with them.
+        File.WriteAllBytes(Path.Combine(fixture.Corpus, "m1", "anim.zbd"), [0]);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token));
+        Assert.Equal(SourceExtractor.NotOriginal, error.Message);
+        Assert.False(Directory.Exists(fixture.Project) && Directory.EnumerateFileSystemEntries(fixture.Project).Any());
+    }
+
+    [Fact]
+    public async Task DefinitionsKeptAsResourcesAreRefused()
+    {
+        using var fixture = new SourceFixture();
+        await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        // A project reconstructed before definitions moved to .zad files has them as .zrd resources.
+        File.Move(Path.Combine(fixture.Project, "data", "common", "zrdr", "pickup.zad"), Path.Combine(fixture.Project, "data", "common", "zrdr", "old.zrd"));
+        var failed = Assert.Single((await SourceBuilder.CheckAsync(fixture.Project, ["zrdr.zbd"], token: Token)).Outputs);
+        Assert.Equal("failed", failed.Status);
+        Assert.Contains("data/common/zrdr/old.zrd", failed.Error); Assert.Contains("holds animation definitions", failed.Error);
     }
 }

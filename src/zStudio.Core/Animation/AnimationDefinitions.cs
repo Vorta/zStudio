@@ -67,7 +67,7 @@ public sealed class AnimationItem(string key, ZrdNode? values, string source)
 public sealed record AnimationDefinition(AnimationItem Item, string File, int Ordinal);
 
 /// <summary>
-/// A mission's animation definitions as the original compiler read them: the root file (<c>data/mN/zrdr/anim.zrd</c>)
+/// A mission's animation definitions as the original compiler read them: the root file (<c>data/mN/zrdr/anim.zad</c>)
 /// sets the gravity and the search path for bare file names, and its <c>ANIMATION_LIST</c> names definition files
 /// (depth first) and inline definitions, in the order their entries are compiled.
 /// </summary>
@@ -151,6 +151,64 @@ public sealed class AnimationDefinitionSet
     {
         while (root.Children.Count == 1 && root.Children[0].Kind == ZrdKind.Array) root = root.Children[0];
         return root;
+    }
+
+    /// <summary>
+    /// The extension of animation definition files: each mission's list (<c>data/mN/zrdr/anim.zad</c>) and the files it
+    /// names. The original build kept them as <c>.zrd</c> beside the zReader resources and packed them into <c>zrdr.zbd</c>,
+    /// although the game never reads them; a separate extension keeps them out of the archives.
+    /// </summary>
+    public const string Extension = ".zad";
+
+    /// <summary>Whether a zReader tree holds animation definitions (a top-level <c>ANIMATION_DEFINITIONS</c>).</summary>
+    public static bool HoldsDefinitions(ZrdNode root)
+    {
+        var body = Unwrap(root).Children;
+        for (int i = 0; i + 1 < body.Count; i++)
+            if (body[i] is { Kind: ZrdKind.String, Text: "ANIMATION_DEFINITIONS" } && body[i + 1].Kind == ZrdKind.Array) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// <paramref name="root"/> split into its animation definitions, with the definition files they list renamed to
+    /// <see cref="Extension"/>, and everything else (null when nothing else remains, as in every shipped definition file
+    /// but <c>pickup.zrd</c>), both wrapped as the file was.
+    /// </summary>
+    public static (ZrdNode Definitions, ZrdNode? Others) Split(ZrdNode root)
+    {
+        var body = Unwrap(root).Children;
+        List<ZrdNode> definitions = [], rest = [];
+        for (int i = 0; i < body.Count; i++)
+            if (body[i] is { Kind: ZrdKind.String, Text: "ANIMATION_DEFINITIONS" } && i + 1 < body.Count && body[i + 1].Kind == ZrdKind.Array)
+            {
+                definitions.Add(body[i]); definitions.Add(Renamed(body[i + 1], 0)); i++;
+            }
+            else rest.Add(body[i]);
+        if (definitions.Count == 0) throw new InvalidDataException("The file holds no animation definitions.");
+        return (Rewrap(root, definitions), rest.Count == 0 ? null : Rewrap(root, rest));
+
+        static ZrdNode Rewrap(ZrdNode node, List<ZrdNode> children) =>
+            node.Children.Count == 1 && node.Children[0].Kind == ZrdKind.Array ? node with { Children = [Rewrap(node.Children[0], children)] } : node with { Children = children };
+        // ANIMATION_DEFINITION_FILE ( name ): a listed .zrd becomes .zad, whatever its folder.
+        static ZrdNode Renamed(ZrdNode node, int depth)
+        {
+            if (node.Kind != ZrdKind.Array || depth > 64) return node;
+            var children = node.Children.ToList(); bool changed = false;
+            for (int i = 0; i < children.Count; i++)
+            {
+                if (children[i] is { Kind: ZrdKind.String, Text: "ANIMATION_DEFINITION_FILE" } && i + 1 < children.Count
+                    && children[i + 1].Children is [{ Kind: ZrdKind.String } name, ..] value
+                    && name.Text.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase))
+                {
+                    children[i + 1] = children[i + 1] with { Children = [name with { Text = name.Text[..^4] + Extension }, .. value.Skip(1)] };
+                    changed = true; i++;
+                    continue;
+                }
+                var next = Renamed(children[i], depth + 1);
+                if (!ReferenceEquals(next, children[i])) { children[i] = next; changed = true; }
+            }
+            return changed ? node with { Children = children } : node;
+        }
     }
 
     /// <summary>

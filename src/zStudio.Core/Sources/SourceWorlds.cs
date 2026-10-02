@@ -129,7 +129,7 @@ public static partial class SourceWorlds
     }
 
     /// <summary>
-    /// <paramref name="definitions"/> (a mission's anim.zrd) with <paramref name="files"/> appended to its ANIMATION_LIST.
+    /// <paramref name="definitions"/> (a mission's anim.zad) with <paramref name="files"/> appended to its ANIMATION_LIST.
     /// Files it already lists are skipped. Text stays text, with its comments and layout; compiled data stays compiled.
     /// </summary>
     public static byte[] AddDefinitionFiles(ReadOnlySpan<byte> definitions, IEnumerable<string> files, CancellationToken token = default)
@@ -316,7 +316,7 @@ public static partial class SourceWorlds
     /// <summary>
     /// Adds a model to <paramref name="mission"/>'s world as one change of <paramref name="workspace"/>: the lines that load it
     /// go into the world script (<c>gamegen/mN.gs</c>) before the line that writes the world, and its definition files into the
-    /// mission's animation list (<c>data/mN/zrdr/anim.zrd</c>). The world must then be built to check it (see <see cref="CheckAdditions"/>).
+    /// mission's animation list (<c>data/mN/zrdr/anim.zad</c>). The world must then be built to check it (see <see cref="CheckAdditions"/>).
     /// </summary>
     public static SourceTransaction AddModel(SourceWorkspace workspace, string mission, SourceWorldAddition addition, CancellationToken token = default)
     {
@@ -330,7 +330,7 @@ public static partial class SourceWorlds
         {
             foreach (string file in addition.DefinitionFiles)
             {
-                if (!file.StartsWith(SourceProject.DataFolder + "/", StringComparison.OrdinalIgnoreCase) || !file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"'{file}' is not a definition file in the data folder.");
+                if (!file.StartsWith(SourceProject.DataFolder + "/", StringComparison.OrdinalIgnoreCase) || !file.EndsWith(AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"'{file}' is not a definition file ({AnimationDefinitionSet.Extension}) in the data folder.");
                 if (!workspace.Exists(file)) throw new InvalidDataException($"The definition file {file} does not exist.");
             }
             byte[] definitions = workspace.Read(definitionsPath, token) ?? throw new InvalidDataException($"The project has no {definitionsPath} to list animation definitions in.");

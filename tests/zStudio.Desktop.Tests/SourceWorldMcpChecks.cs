@@ -72,8 +72,8 @@ internal static class SourceWorldMcpChecks
             Assert.True(added.IsDirty); Assert.Equal("m1 world (sources) *", added.Title);
             Assert.Contains(added.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
             // One change of the project's workspace: the script and the animation list.
-            Assert.Equal(["data/m1/zrdr/anim.zrd", "gamegen/m1.gs"], added.SourceWorld!.Workspace.History.Single().Files.Select(f => f.Relative).Order(StringComparer.Ordinal));
-            Assert.Contains("enemies\\\\tank.zrd", System.Text.Encoding.Latin1.GetString(added.SourceWorld.Workspace.Read("data/m1/zrdr/anim.zrd")!));
+            Assert.Equal(["data/m1/zrdr/anim.zad", "gamegen/m1.gs"], added.SourceWorld!.Workspace.History.Single().Files.Select(f => f.Relative).Order(StringComparer.Ordinal));
+            Assert.Contains("enemies\\\\tank.zad", System.Text.Encoding.Latin1.GetString(added.SourceWorld.Workspace.Read("data/m1/zrdr/anim.zad")!));
             var stale = await Job("source_world_add_model", new() { ["document"] = Id(doc), ["revision"] = 0, ["model"] = fixture.Tank, ["name"] = "tank2" }, "failed");
             Assert.Equal("stale_document", stale["code"]!.GetValue<string>());
             var bad = await Job("source_world_add_model", new() { ["document"] = Id(added), ["revision"] = added.Revision, ["model"] = "gamegen/m1.gs", ["name"] = "x" }, "failed");
@@ -134,7 +134,7 @@ internal static class SourceWorldMcpChecks
             var saveAs = await Job("save_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision, ["destination"] = Path.Combine(fixture.Root, "x.zbd") }, "failed");
             Assert.Equal("invalid_argument", saveAs["code"]!.GetValue<string>());
             var saved = await Job("save_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision });
-            Assert.Equal(["data/m1/zrdr/anim.zrd", "gamegen/m1.gs"], saved["written"]!.AsArray().Select(w => w!.GetValue<string>()).Order(StringComparer.Ordinal));
+            Assert.Equal(["data/m1/zrdr/anim.zad", "gamegen/m1.gs"], saved["written"]!.AsArray().Select(w => w!.GetValue<string>()).Order(StringComparer.Ordinal));
             Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
             Assert.False(redone.IsDirty);
             string script = fixture.Path("gamegen/m1.gs");

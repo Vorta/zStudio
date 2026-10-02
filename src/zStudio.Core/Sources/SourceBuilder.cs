@@ -28,7 +28,7 @@ public sealed record SourceExportReport(string? Destination, IReadOnlyList<Sourc
 /// prepared scripts from <c>gamegen</c>, the three sound banks from the best-quality WAVs converted to the formats
 /// that <c>sounds.zrd</c> declares, interface images and mission texture packs from PNGs, and each mission world by
 /// running its build script (<c>gamegen/mN.gs</c>) over the glTF model sources, and each mission's animations from
-/// their definitions (<c>data/mN/zrdr/anim.zrd</c>) and keyframe scripts against that world. Output must work in the
+/// their definitions (<c>data/mN/zrdr/anim.zad</c>) and keyframe scripts against that world. Output must work in the
 /// game; it does not reproduce the shipped bytes.
 /// </summary>
 public static partial class SourceBuilder
@@ -91,7 +91,7 @@ public static partial class SourceBuilder
     /// <summary>The script that builds a mission's world (gamegen/mN.gs).</summary>
     internal static string WorldScript(string mission) => $"{SourceProject.GameGenFolder}/{mission}.gs";
     /// <summary>The root of a mission's animation definitions.</summary>
-    internal static string AnimationRoot(string mission) => $"data/{mission}/zrdr/anim.zrd";
+    internal static string AnimationRoot(string mission) => $"data/{mission}/zrdr/anim{Animation.AnimationDefinitionSet.Extension}";
     private static bool IsModelSource(string name) => name.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".glb", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -339,7 +339,14 @@ public static partial class SourceBuilder
             names[name] = input;
             byte[] bytes = snapshot.Read(input, token);
             byte[] payload;
-            try { payload = ZrdText.LooksLikeText(bytes) ? ZrdWriter.Write(ZrdText.Parse(bytes, token), token) : ZrdWriter.Write(ZrdDecoder.Read(bytes, token), token); }
+            try
+            {
+                var tree = ZrdText.LooksLikeText(bytes) ? ZrdText.Parse(bytes, token) : ZrdDecoder.Read(bytes, token);
+                // Animation definitions are compiled into anim.zbd; the game never reads them from an archive.
+                if (Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
+                    throw new InvalidDataException($"it holds animation definitions (ANIMATION_DEFINITIONS), which belong in a {Animation.AnimationDefinitionSet.Extension} file beside it; a project reconstructed before zStudio kept definitions in {Animation.AnimationDefinitionSet.Extension} files must be reconstructed again.");
+                payload = ZrdWriter.Write(tree, token);
+            }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
             entries.Add(new(name, SourceField(input), payload));
         }

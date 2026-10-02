@@ -31,7 +31,15 @@ internal sealed class SourceFixture : IDisposable
         var sounds = ZrdWriter.Write(A(
             A(I(1), S("a.wav"), I(0), S("HIGH"), Format(22050, 16, 1), S("MED"), Format(22050, 8, 1), S("LOW"), Format(11025, 8, 1)),
             A(I(2), S("b.wav"), I(0), S("HIGH"), Format(22050, 16, 1), S("MED"), Format(22050, 8, 1), S("LOW"), Format(11025, 8, 1))));
-        File.WriteAllBytes(Path.Combine(Corpus, "zrdr.zbd"), Archive(("sounds.zrd", sounds, Field("D:\\battlesportdev\\data\\common\\zrdr\\souE001.TMP"))));
+        // As in the shipped archives: the animation definitions are packed beside the resources, and pickup.zrd holds both
+        // the pickup data the game reads and the pickups' animation definition.
+        var animations = ZrdWriter.Write(A(S("ANIMATION_DEFINITIONS"), A(S("ANIMATION_LIST"), A(S("ANIMATION_DEFINITION_FILE"), A(S("..\\data\\common\\zrdr\\pickup.zrd"))))));
+        var pickup = ZrdWriter.Write(A(S("PICKUP_DATA"), A(I(1), S("ammo")),
+            S("ANIMATION_DEFINITIONS"), A(S("ANIMATION_LIST"), A(S("ANIMATION_DEFINITION"), A(S("NAME"), A(S("pu***")), S("ACTIVATION"), A(S("ON_CALL")))))));
+        File.WriteAllBytes(Path.Combine(Corpus, "zrdr.zbd"), Archive(
+            ("anim.zrd", animations, Field("D:\\battlesportdev\\data\\common\\zrdr\\aniE002.TMP")),
+            ("pickup.zrd", pickup, Field("D:\\battlesportdev\\data\\common\\zrdr\\picE003.TMP")),
+            ("sounds.zrd", sounds, Field("D:\\battlesportdev\\data\\common\\zrdr\\souE001.TMP"))));
         var ai = ZrdWriter.Write(A(S("GRAVITY"), A(F(-9.8f))));
         var gate = ZrdWriter.Write(A(S("MODEL"), A(S("frcgate"))));
         File.WriteAllBytes(Path.Combine(Corpus, "m1", "zrdr.zbd"), Archive(

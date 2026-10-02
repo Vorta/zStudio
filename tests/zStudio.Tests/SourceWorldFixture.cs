@@ -15,7 +15,7 @@ internal sealed class SourceWorldFixture : IDisposable
     public string Root { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zstudio-world-" + Guid.NewGuid().ToString("N"));
     public string Project => System.IO.Path.Combine(Root, "project");
     public string Tank => "data/m2/models/bft/tank.gltf";
-    public const string TankDefinitions = "data/common/zrdr/enemies/tank.zrd";
+    public const string TankDefinitions = "data/common/zrdr/enemies/tank.zad";
 
     private static string WorldScript(string mission, string loads) => string.Join("\r\n",
         "set worldName world",
@@ -37,17 +37,17 @@ internal sealed class SourceWorldFixture : IDisposable
         var hull = Node("hull", Quad(new() { Texture = camo, Flags = 0x1FF }, 4, 1));
         Model("data/m2/models/bft", "tank", "../../textures/bft", hull);
         Png("data/m1/textures/rock.png", 255, 0, 0); Png("data/m2/textures/rock.png", 255, 0, 0); Png("data/m2/textures/bft/camo.png", 0, 128, 0);
-        Write("data/m1/zrdr/anim.zrd", """
+        Write("data/m1/zrdr/anim.zad", """
             (
               ANIMATION_DEFINITIONS (
                 GRAVITY ( -9.8 )
                 ANIMATION_LIST (
-                  ANIMATION_DEFINITION_FILE ( "..\\data\\m1\\zrdr\\gates.zrd" )
+                  ANIMATION_DEFINITION_FILE ( "..\\data\\m1\\zrdr\\gates.zad" )
                 )
               )
             )
             """);
-        Write("data/m1/zrdr/gates.zrd", """
+        Write("data/m1/zrdr/gates.zad", """
             (
               ANIMATION_DEFINITIONS (
                 ANIMATION_LIST (
@@ -61,12 +61,12 @@ internal sealed class SourceWorldFixture : IDisposable
               )
             )
             """);
-        Write("data/m2/zrdr/anim.zrd", """
+        Write("data/m2/zrdr/anim.zad", """
             (
               ANIMATION_DEFINITIONS (
                 GRAVITY ( -9.8 )
                 ANIMATION_LIST (
-                  ANIMATION_DEFINITION_FILE ( "..\\data\\common\\zrdr\\enemies\\tank.zrd" )
+                  ANIMATION_DEFINITION_FILE ( "..\\data\\common\\zrdr\\enemies\\tank.zad" )
                 )
               )
             )

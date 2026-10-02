@@ -8,7 +8,7 @@ using Recoil.Zbd.Core.Worlds;
 namespace Recoil.Zbd.Core.Animation;
 
 /// <summary>
-/// Compiles a mission's animation definitions (<c>data/mN/zrdr/anim.zrd</c> and the files it lists) and their keyframe
+/// Compiles a mission's animation definitions (<c>data/mN/zrdr/anim.zad</c> and the files it lists) and their keyframe
 /// scripts into <c>anim.zbd</c> version 28, as the original tool did. Definitions bind to the world by name: a root or
 /// referenced node that the world lacks would make the game reject the whole file, so the compiler reports it. Names
 /// with <c>*</c> (one digit each) expand to every matching world node, in name order. The file carries no source stamps,
