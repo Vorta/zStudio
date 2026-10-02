@@ -315,15 +315,15 @@ public static class SourceExtractor
                 if (output.Path.EndsWith(ZrdText.Extension, StringComparison.OrdinalIgnoreCase)) await ReplaceAsync(output.Path, output.Bytes);
                 else await WriteAsync(output.Path, output.Bytes);
         }
-        /// <summary>The source paths an animation file records (80-character paths with a time each).</summary>
-        private static List<string> Stamps(byte[] bytes)
+        /// <summary>The source paths an animation file records (80-character paths, each with its modification time).</summary>
+        private static List<(string Path, uint Time)> Stamps(byte[] bytes)
         {
             int count = (int)Math.Min(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(8)), (uint)((bytes.Length - 12) / 84));
-            List<string> stamps = [];
+            List<(string, uint)> stamps = [];
             for (int i = 0; i < count; i++)
             {
                 var field = bytes.AsSpan(12 + i * 84, 80); int end = field.IndexOf((byte)0);
-                stamps.Add(System.Text.Encoding.Latin1.GetString(end < 0 ? field : field[..end]));
+                stamps.Add((System.Text.Encoding.Latin1.GetString(end < 0 ? field : field[..end]), System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(12 + i * 84 + 80))));
             }
             return stamps;
         }

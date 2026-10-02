@@ -91,19 +91,35 @@ public sealed partial class AnimationCompiler
                     if (new AnimationItem("EFFECT", effect, "effects.zrd").TextOf("NAME") is { } name) yield return name;
     }
 
-    /// <summary>A keyframe script read once: its tracks by object and its track without OBJECT lines.</summary>
-    private sealed class Script(string path, IReadOnlyList<(string? Object, List<AnimationScript.Key> Keys)> tracks)
+    /// <summary>
+    /// A keyframe script read once: an original SI Animation Script, or zStudio's keyframe format (its tracks by object
+    /// and its track without OBJECT lines).
+    /// </summary>
+    private sealed class Script
     {
-        public string Path { get; } = path;
-        private readonly Dictionary<string, List<AnimationScript.Key>> objects = tracks.Where(t => t.Object != null).ToDictionary(t => t.Object!, t => t.Keys, StringComparer.Ordinal);
-        private readonly List<AnimationScript.Key>? loose = tracks.Count == 1 && tracks[0].Object == null ? tracks[0].Keys : null;
-        /// <summary>The track for a node, as <see cref="AnimationScript.Track"/> picks it.</summary>
-        public List<AnimationScript.Key>? Track(string name) => objects.GetValueOrDefault(name) ?? loose;
+        public string Path { get; }
+        private readonly SiAnimationScript.Script? si;
+        private readonly Dictionary<string, List<AnimationScript.Key>> objects = new(StringComparer.Ordinal);
+        private readonly List<AnimationScript.Key>? loose;
+        public Script(string path, byte[] bytes)
+        {
+            Path = path;
+            if (SiAnimationScript.Recognize(bytes)) { si = SiAnimationScript.Parse(bytes, path); return; }
+            var tracks = AnimationScript.Parse(bytes, path);
+            foreach (var (name, keys) in tracks) if (name != null) objects[name] = keys;
+            loose = tracks.Count == 1 && tracks[0].Object == null ? tracks[0].Keys : null;
+        }
+        /// <summary>Whether the script moves a node of this name (an SI script lists it; a keyframe-format script has its OBJECT section or no sections).</summary>
+        public bool Moves(string name) => si?.Has(name) ?? (objects.ContainsKey(name) || loose != null);
+        /// <summary>The node's keyframes at <paramref name="frameRate"/> frames per second.</summary>
+        public List<AnimationKeyframe> Compile(string name, float frameRate, string source) => si != null
+            ? SiAnimationScript.Compile(si, name, frameRate, source)
+            : AnimationScript.Compile(objects.GetValueOrDefault(name) ?? loose!, frameRate, source);
     }
     private Script? ReadScript(string name, string from)
     {
         if (scripts.TryGetValue((name, from), out var cached)) return cached;
-        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, AnimationScript.Parse(file.Bytes, file.Path)) : null;
+        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, file.Bytes) : null;
         scripts[(name, from)] = script;
         return script;
     }

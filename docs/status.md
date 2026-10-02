@@ -1,5 +1,15 @@
 # Desktop implementation status
 
+## Original keyframe scripts (2026-10-02, branch feat/world-editor)
+
+Keyframe scripts (`.zan`) are the original Softimage "SI Animation Script" format again ([source-project.md](source-project.md#keyframe-scripts-zan)).
+
+- **Compiler:** exports compile SI scripts as RECOIL's lost tool did, reproducing every keyframe of the shipped files bit for bit (pad floats aside): times, the engine's single-precision rotation path, the half-angle keying threshold, and rates with the engine's quaternion log and fast square root. The arithmetic was recovered from the shipped streams outside this repository; reference vectors pin it in the tests.
+- **Reconstruction** writes, for each script the shipped animations use, the SI script its keyframes came from: the frames the exporter wrote, keyed values as the six-decimal numbers the floats came from, rotations as Euler angles that compile to the stored quaternions (searched near ±90° heading, and turn by turn at exactly ±90°), and end values solved from the stored rates. Each script is compiled again and kept only when every keyframe comes back exactly. Scripts of the shipped files also carry the Softimage DKit messages with the version of their stamp date; scripts of files without stamps (zStudio's exports) hold only their frames. Keyframes no SI script reproduces are written in zStudio's keyframe format with a note; that format still compiles.
+- **Results:** every script of the 1998 (73) and 1999 (77) releases reconstructs as an SI script with no fallback; the 1999 reconstruction takes about 40 s. Exported projects rebuild every shipped animation entry; reconstructing an export gives the same tree apart from the DKit messages. An independent compiler (the Python reference model) also reproduces all 176 shipped keyframe events of 1999 from zStudio's scripts.
+- **Tests:** 1,002 pass in Release (zero skipped), including 108 new tests (104 SI script cases: arithmetic vectors, parsing and refusal, writing back, layouts, bounds; 4 reconstruction cases) and the source corpus test for 1999 and for 1998.
+- **Known limits:** values between keys that the compiler absorbed, the split of the outer angles at exactly ±90° and the dates between the version breakpoints are not recorded anywhere; zStudio writes binary-equivalent choices (the next key's value, a split inside the exact band, the chosen breakpoints).
+
 ## World editor, phases 1–3 (2026-10-01, branch feat/world-editor)
 
 Following [world-editor-plan.md](world-editor-plan.md), source worlds are now edited through one project-wide workspace instead of per-mission script edits.

@@ -9,13 +9,17 @@ namespace Recoil.Zbd.Core.Sources;
 /// Reconstructs the animation sources of a mission's shipped <c>anim.zbd</c>. The definitions (<c>.zrd</c>) ship in the
 /// resource archives, but the keyframe scripts (<c>.zan</c>) they name were compiled away: each script event's
 /// keyframes become the track of its object in the named script, written where the file's source stamps say the
-/// original was (or beside its definition). Some shipped definitions changed after the animations were last compiled;
-/// a definition that does not compile to the shipped entries is replaced by the definition decompiled from them, so
-/// the sources rebuild the animations the game shipped.
+/// original was (or beside its definition), as the SI Animation Script the original was (<see cref="SiScriptWriter"/>).
+/// Some shipped definitions changed after the animations were last compiled; a definition that does not compile to the
+/// shipped entries is replaced by the definition decompiled from them, so the sources rebuild the animations the game
+/// shipped.
 /// </summary>
 internal static class AnimationSources
 {
-    internal sealed record MissionAnimation(int Mission, AnimationPackage Package, IReadOnlyList<string> Stamps, IReadOnlyCollection<string> WorldNodes);
+    internal sealed record MissionAnimation(int Mission, AnimationPackage Package, IReadOnlyList<(string Path, uint Time)> Stamps, IReadOnlyCollection<string> WorldNodes);
+
+    /// <summary>An object's track in a script: the compiled keyframes, their frame rate, and the keyframe-format text.</summary>
+    private sealed record ScriptTrack(string Object, List<AnimationKeyframe> Frames, float Rate, string Text);
 
     /// <summary>The files written so far over the project on disk.</summary>
     private sealed class Overlay(IProjectFiles project) : IProjectFiles
@@ -29,8 +33,9 @@ internal static class AnimationSources
     {
         Overlay files = new(project);
         HashSet<(string, int)> attempted = [];
-        // Script path → object → track text, in the order first seen.
-        Dictionary<string, List<(string Object, string Track)>> scripts = new(StringComparer.OrdinalIgnoreCase);
+        // Script path → its object tracks in the order first seen, and the time its stamp records.
+        Dictionary<string, List<ScriptTrack>> scripts = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, uint> times = new(StringComparer.OrdinalIgnoreCase);
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
@@ -43,12 +48,12 @@ internal static class AnimationSources
             if (bindings == null) { notes.Add($"m{mission.Mission}: the definitions do not list anim.zbd's animations in order; animation sources were not reconstructed."); continue; }
 
             // Keyframe scripts: the track each script event plays.
-            Dictionary<string, string> stamped = new(StringComparer.OrdinalIgnoreCase);
-            foreach (string stamp in mission.Stamps)
+            Dictionary<string, (string Path, uint Time)> stamped = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var (stamp, time) in mission.Stamps)
             {
                 string normalized = stamp.Replace('\\', '/'); while (normalized.Contains("//")) normalized = normalized.Replace("//", "/");
                 if (normalized.EndsWith(AnimationScript.Extension, StringComparison.OrdinalIgnoreCase) && WorldAssembler.ProjectPath(normalized) is { } path)
-                    stamped.TryAdd(Path.GetFileName(path), path);
+                    stamped.TryAdd(Path.GetFileName(path), (path, time));
             }
             HashSet<string> touched = new(StringComparer.OrdinalIgnoreCase);
             foreach (var (definition, digits, entry) in bindings)
@@ -59,23 +64,66 @@ internal static class AnimationSources
                     if (file.Length == 0 || file.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || target.Length == 0) continue;
                     // OBJECT lines separate names with whitespace and comments start with #.
                     if (!AnimationScript.IsObjectName(target)) { notes.Add($"m{mission.Mission}: {entry.Name} moves {target}, which a keyframe script cannot name; the track was not reconstructed."); continue; }
-                    string? track;
-                    try { track = AnimationScript.Decompile(ev.Keyframes(token), rate); }
-                    catch (InvalidDataException) { track = null; }
+                    string? track; List<AnimationKeyframe> frames;
+                    try { frames = [.. ev.Keyframes(token)]; track = AnimationScript.Decompile(frames, rate); }
+                    catch (InvalidDataException) { frames = []; track = null; }
                     if (track == null) { notes.Add($"m{mission.Mission}: {entry.Name} moves {target} with keyframes that are not on the {rate}/s frame grid of {file}; the track was not reconstructed."); continue; }
-                    string path = stamped.GetValueOrDefault(file) ?? $"{Path.GetDirectoryName(definition.File)!.Replace('\\', '/')}/{file}";
+                    string path = stamped.TryGetValue(file, out var stamp) ? stamp.Path : $"{Path.GetDirectoryName(definition.File)!.Replace('\\', '/')}/{file}";
+                    if (stamped.ContainsKey(file)) times.TryAdd(path, stamp.Time);
                     var tracks = scripts.TryGetValue(path, out var list) ? list : scripts[path] = [];
                     int existing = tracks.FindIndex(t => t.Object == target);
-                    if (existing < 0) { tracks.Add((target, track)); touched.Add(path); }
-                    else if (tracks[existing].Track != track) notes.Add($"{path}: {entry.Name} moves {target} differently from an earlier animation using the same script; the first track was kept.");
+                    if (existing < 0) { tracks.Add(new(target, frames, rate, track)); touched.Add(path); }
+                    else if (tracks[existing].Text != track || tracks[existing].Rate != rate) notes.Add($"{path}: {entry.Name} moves {target} differently from an earlier animation using the same script; the first track was kept.");
                 }
             // Scripts are read as Latin-1, like the names they hold.
-            foreach (string path in touched) files.Written[path] = Encoding.Latin1.GetBytes(AnimationScript.Write(scripts[path]));
+            foreach (string path in touched) files.Written[path] = Encoding.Latin1.GetBytes(WriteScript(path, scripts[path], times.TryGetValue(path, out uint t) ? t : null, notes, token));
 
             RepairDefinitions(mission, bindings, files, attempted, notes, token);
         }
         return files.Written.OrderBy(w => w.Key, StringComparer.Ordinal).Select(w => new WorldSources.Output(w.Key, w.Value)).ToList();
     }
+
+    /// <summary>
+    /// A script's text: the SI Animation Script its tracks compile from exactly, or zStudio's keyframe format (noted)
+    /// when the keyframes have no such script. A script the shipped file's stamps record (its time) is written as the
+    /// original's exporter wrote it, with the Softimage DKit messages of its date; scripts of other files (zStudio's
+    /// exports carry no stamps) hold only their frames.
+    /// </summary>
+    private static string WriteScript(string path, List<ScriptTrack> tracks, uint? time, List<string> notes, CancellationToken token)
+    {
+        var objects = tracks.Select(t => t.Object).ToList();
+        var ordered = SourceOrder(objects).Select(name => tracks.First(t => t.Object == name)).ToList();
+        SiScriptWriter.Layout layout = new(Version(time), !MessagesFollowFrames(path, time));
+        try { return SiScriptWriter.Write([.. ordered.Select(t => new SiScriptWriter.Track(t.Object, t.Frames, t.Rate))], layout, token); }
+        catch (InvalidDataException ex)
+        {
+            notes.Add($"{path}: the keyframes have no SI Animation Script ({ex.Message}); it was written in zStudio's keyframe format.");
+            return AnimationScript.Write(tracks.Select(t => (t.Object, t.Text)));
+        }
+    }
+
+    /// <summary>
+    /// The order the scene listed its objects in. The exit scripts' objects were compiled vtol1, cargodoor, rengine,
+    /// lengine, but the surviving fragments of their texts list them vtol1, lengine, rengine, cargodoor (seven of the ten
+    /// show it; the pickup and dropoff scripts are compiled in that order), so they are written that way.
+    /// </summary>
+    internal static IReadOnlyList<string> SourceOrder(IReadOnlyList<string> compiled) =>
+        compiled.SequenceEqual(["vtol1", "cargodoor", "rengine", "lengine"], StringComparer.Ordinal) ? ["vtol1", "lengine", "rengine", "cargodoor"] : compiled;
+
+    /// <summary>
+    /// The Softimage version in the DKit warning: the version that saved the scene, which the fragments show changing
+    /// with the scripts' dates (3.5001 in June 1997, 3.7 from July 1997, 3.71 from May 1998). The breaks between the
+    /// last and first evidence are chosen dates: 1 July 1997, and 4 May 1998 (when Softimage released its game kit for
+    /// 3.7 SP1). A script without a recorded time has no DKit messages (null).
+    /// </summary>
+    internal static string? Version(uint? time) => time switch { null => null, < 867_715_200 => "3.5001", < 894_240_000 => "3.7", _ => "3.71" };
+
+    /// <summary>
+    /// Whether the DKit messages follow each frame block instead of preceding it. The fragments show them preceding
+    /// every frame, except in the m5doexit.zan of 20 May 1998, whose memory residue ends with them.
+    /// </summary>
+    internal static bool MessagesFollowFrames(string path, uint? time) =>
+        time == 895_642_826 && Path.GetFileName(path).Equals("m5doexit.zan", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Each shipped entry with the definition (and pattern digits) it was compiled from, or null when they do not line up.</summary>
     private static List<(AnimationDefinition Definition, string Digits, AnimationEntry Entry)>? Bindings(AnimationDefinitionSet set, MissionAnimation mission)

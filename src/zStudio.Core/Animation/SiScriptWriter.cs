@@ -1,0 +1,352 @@
+using System.Globalization;
+using System.Numerics;
+using System.Text;
+
+namespace Recoil.Zbd.Core.Animation;
+
+/// <summary>
+/// Writes compiled keyframes as the SI Animation Script they were compiled from, in the original layout: every
+/// frame the compiler kept (and grid frames where every object stood still), every object in every frame block, and
+/// the Softimage DKit messages the exporter interleaved (only for scripts of the shipped files). Keyed values are the ones the stored floats came from;
+/// rotations are the Euler angles that reproduce the stored quaternion (<see cref="SiRotationSolver"/>); where a
+/// channel stops before the next key lists it, its end value is solved from the stored rate. Values between keys
+/// that the compiler absorbed are not recorded anywhere: a held channel takes the next key's value right after it
+/// stops, which the shipped fragments of the original texts show. The text is compiled again before it is returned
+/// and refused unless it reproduces every keyframe bit for bit.
+/// </summary>
+internal static class SiScriptWriter
+{
+    private const long Micro = 1_000_000;
+
+    /// <summary>One object's compiled keyframes and the frame rate they were compiled at.</summary>
+    public sealed record Track(string Object, IReadOnlyList<AnimationKeyframe> Frames, float FrameRate);
+
+    /// <summary>
+    /// The Softimage version in the DKit warning (null: no DKit messages, as in scripts that did not come from the
+    /// shipped files), and whether the messages precede each frame (or follow it).
+    /// </summary>
+    public sealed record Layout(string? Version, bool WarningsBeforeFrames = true);
+
+    private enum Channel { Scale, Rotation, Position }
+
+    private sealed class Key
+    {
+        public int Frame;
+        public float[]? Position, Velocity, Scale, Growth;
+        public SiMath.Quat? Rotation; public (float X, float Y, float Z) Spin;
+        public bool Has(Channel c) => c switch { Channel.Position => Position != null, Channel.Rotation => Rotation != null, _ => Scale != null };
+        public bool Bare => Position == null && Rotation == null && Scale == null;
+    }
+
+    /// <summary>
+    /// The script text, or an <see cref="InvalidDataException"/> saying why the keyframes have none (or why finding it
+    /// would take more than <paramref name="evaluations"/> rotation candidates).
+    /// </summary>
+    public static string Write(IReadOnlyList<Track> tracks, Layout layout, CancellationToken token, long evaluations = 2_000_000_000)
+    {
+        if (tracks.Count == 0) throw new InvalidDataException("no tracks.");
+        var keys = tracks.Select(t => Keys(t)).ToList();
+        var frames = Sequence(keys);
+        List<(string Object, long[]?[] Values)> objects = [];
+        SiRotationSolver.Budget budget = new(evaluations);
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            objects.Add((tracks[i].Object, Values(tracks[i], keys[i], frames, budget, token)));
+        }
+        string text = Text(objects, frames, layout);
+        Verify(text, tracks);
+        return text;
+    }
+
+    /// <summary>The keys of a compiled stream: a key at each segment start (with its channels and rates), a bare key
+    /// where a segment does not start at the previous end (a gap), and a bare key at the last end.</summary>
+    private static List<Key> Keys(Track track)
+    {
+        if (track.Frames.Count == 0) throw new InvalidDataException($"{track.Object} has no keyframes.");
+        List<Key> keys = []; int? previous = null;
+        foreach (var f in track.Frames)
+        {
+            int start = FrameOf(f.Start, track), end = FrameOf(f.End, track);
+            if (previous is int p && p != start) keys.Add(new() { Frame = p });
+            Key key = new() { Frame = start };
+            if ((f.Flags & ~7) != 0 || (f.Flags & 7) == 0) throw new InvalidDataException($"{track.Object} has a keyframe without channels.");
+            if (f.ChannelOffset(0) is int o0 and >= 0) { key.Position = Floats(f, o0, 3); key.Velocity = Floats(f, o0 + 16, 3); }
+            if (f.ChannelOffset(1) is int o1 and >= 0) { key.Rotation = new(f.F32(o1), f.F32(o1 + 4), f.F32(o1 + 8), f.F32(o1 + 12)); key.Spin = (f.F32(o1 + 16), f.F32(o1 + 20), f.F32(o1 + 24)); }
+            if (f.ChannelOffset(2) is int o2 and >= 0) { key.Scale = Floats(f, o2, 3); key.Growth = Floats(f, o2 + 16, 3); }
+            keys.Add(key);
+            previous = end;
+        }
+        keys.Add(new() { Frame = previous!.Value });
+        // A script holds one pose per frame: two keys at one frame (a cut) cannot be written.
+        for (int i = 1; i < keys.Count; i++)
+            if (keys[i].Frame == keys[i - 1].Frame) throw new InvalidDataException($"{track.Object} has two keys at frame {keys[i].Frame}, which a script frame cannot hold.");
+        return keys;
+
+        static float[] Floats(AnimationKeyframe f, int offset, int count) => [.. Enumerable.Range(0, count).Select(i => f.F32(offset + 4 * i))];
+    }
+
+    private static int FrameOf(float time, Track track)
+    {
+        double frame = Math.Round(time / SiMath.SecondsPerFrame(track.FrameRate));
+        if (!(frame >= 0 && frame < int.MaxValue) || SiMath.Bits(SiMath.KeyTime((int)frame, track.FrameRate)) != SiMath.Bits(time))
+            throw new InvalidDataException($"{track.Object} has a keyframe at {time.ToString("R", CultureInfo.InvariantCulture)} s, which is not on the {track.FrameRate.ToString("R", CultureInfo.InvariantCulture)}/s frame grid.");
+        return (int)frame;
+    }
+
+    /// <summary>
+    /// The script's frames: a track that steps back defines them; otherwise every object's key frames, plus frames on
+    /// the script's most common key spacing where every object is inside a gap (the exporter wrote every step there).
+    /// </summary>
+    private static List<int> Sequence(List<List<Key>> tracks)
+    {
+        foreach (var keys in tracks)
+            for (int i = 1; i < keys.Count; i++)
+                if (keys[i].Frame < keys[i - 1].Frame) return [.. keys.Select(k => k.Frame)];
+        var keyed = tracks.SelectMany(k => k.Select(x => x.Frame)).Distinct().Order().ToList();
+        // The most common spacing, the first seen among equals.
+        Dictionary<int, int> counts = []; List<int> order = [];
+        for (int i = 1; i < keyed.Count; i++)
+        {
+            int d = keyed[i] - keyed[i - 1];
+            if (counts.TryAdd(d, 1)) order.Add(d); else counts[d]++;
+        }
+        int step = order.Count == 0 ? 1 : order.OrderByDescending(d => counts[d]).First();
+        if (keyed.Take(keyed.Count - 1).Any(f => f % step != 0)) return keyed;
+        // Each track's last key at or before the current frame (keys ascend here), walked forward once.
+        int[] last = new int[tracks.Count]; Array.Fill(last, -1);
+        List<int> all = [];
+        for (int i = 0; i < keyed.Count; i++)
+        {
+            all.Add(keyed[i]);
+            if (i + 1 == keyed.Count) break;
+            int a = keyed[i], b = keyed[i + 1];
+            bool still = true;
+            for (int t = 0; t < tracks.Count; t++)
+            {
+                while (last[t] + 1 < tracks[t].Count && tracks[t][last[t] + 1].Frame <= a) last[t]++;
+                if (last[t] >= 0 && !tracks[t][last[t]].Bare) still = false;
+            }
+            if (still) for (long f = (long)a + step; f < b; f += step) all.Add((int)f);
+            if (all.Count > SiAnimationScript.MaximumFrames) throw new InvalidDataException($"the script would have more than {SiAnimationScript.MaximumFrames} frames.");
+        }
+        return all;
+    }
+
+    /// <summary>The object's scaling, rotation and translation (millionths) at each script frame, or null outside its frames.</summary>
+    private static long[]?[] Values(Track track, List<Key> keys, List<int> frames, SiRotationSolver.Budget budget, CancellationToken token)
+    {
+        // Rotation keys in key order, each solved near the previous one.
+        Dictionary<int, SiRotationSolver.Triple> rotations = [];
+        SiRotationSolver.Triple? previous = null;
+        for (int i = 0; i < keys.Count; i++)
+            if (keys[i].Rotation is { } q)
+            {
+                var t = SiRotationSolver.Key(q, previous, budget, token)
+                    ?? throw new InvalidDataException(budget.Exhausted ? $"finding {track.Object}'s rotation angles took too long" : $"{track.Object}'s rotation at frame {keys[i].Frame} has no six-decimal Euler angles that compile to it.");
+                rotations[i] = t; previous = t;
+            }
+        int n = frames.Count;
+        long[]?[] values = new long[]?[n * 3];
+        var pinned = new Dictionary<Channel, string>[n];
+        Dictionary<Channel, long[]> current = [];
+        Dictionary<(int Key, Channel Channel), long[]> ends = [];
+        int ki = -1, first = -1, last = -1;
+        for (int pos = 0; pos < n; pos++)
+        {
+            pinned[pos] = [];
+            if (ki + 1 < keys.Count && keys[ki + 1].Frame == frames[pos])
+            {
+                ki++;
+                if (first < 0) first = pos;
+                last = pos;
+                var k = keys[ki];
+                foreach (Channel c in Enum.GetValues<Channel>())
+                {
+                    if (k.Has(c)) { current[c] = c == Channel.Rotation ? Triple(rotations[ki]) : Micros(c == Channel.Position ? k.Position! : k.Scale!, track, k.Frame); pinned[pos][c] = "key"; }
+                    else if (ends.Remove((ki - 1, c), out var end)) { current[c] = end; pinned[pos][c] = "end"; }
+                }
+                // A channel whose segment ends at a key that does not list it stops at the value its rate reaches.
+                if (!k.Bare && ki + 1 < keys.Count)
+                {
+                    var next = keys[ki + 1];
+                    foreach (Channel c in Enum.GetValues<Channel>())
+                        if (k.Has(c) && !next.Has(c))
+                        {
+                            token.ThrowIfCancellationRequested();
+                            ends[(ki, c)] = c == Channel.Rotation
+                                ? Triple(SiRotationSolver.End(rotations[ki], k.Spin, k.Frame, next.Frame, track.FrameRate, budget, token)
+                                    ?? throw new InvalidDataException(budget.Exhausted ? $"finding {track.Object}'s rotation angles took too long" : $"{track.Object}'s rotation from frame {k.Frame} has no six-decimal end angles that reproduce its spin."))
+                                : VectorEnd(c == Channel.Position ? k.Position! : k.Scale!, c == Channel.Position ? k.Velocity! : k.Growth!, k.Frame, next.Frame, track);
+                        }
+                }
+            }
+            for (int c = 0; c < 3; c++) values[pos * 3 + c] = current.GetValueOrDefault((Channel)c);
+        }
+        if (ki != keys.Count - 1) throw new InvalidDataException($"{track.Object}'s keys do not follow the script's frames.");
+        Hold(values, pinned, n);
+        // Frames outside the object's own are not its frames: the compiler would read them as keys.
+        for (int pos = 0; pos < n; pos++)
+            if (pos < first || pos > last) for (int c = 0; c < 3; c++) values[pos * 3 + c] = null;
+        return values;
+    }
+
+    /// <summary>Held stretches: between a pinned value and the next key that lists the channel, the held frames take the
+    /// key's value right away (one step below the compiler's threshold), or an even spread where one step would be keyed.</summary>
+    private static void Hold(long[]?[] values, Dictionary<Channel, string>[] pinned, int n)
+    {
+        foreach (Channel c in Enum.GetValues<Channel>())
+        {
+            var pins = Enumerable.Range(0, n).Where(p => pinned[p].ContainsKey(c)).ToList();
+            for (int i = 1; i < pins.Count; i++)
+            {
+                int i0 = pins[i - 1], i1 = pins[i];
+                if (i1 - i0 < 2 || pinned[i1][c] != "key") continue;
+                var v0 = values[i0 * 3 + (int)c]; var v1 = values[i1 * 3 + (int)c];
+                if (v0 == null || v1 == null || v0.SequenceEqual(v1)) continue;
+                if (Absorbed(c, v0, v1)) { for (int p = i0 + 1; p < i1; p++) values[p * 3 + (int)c] = v1; continue; }
+                for (int step = 1; step < i1 - i0; step++)
+                {
+                    double w = step / (double)(i1 - i0);
+                    values[(i0 + step) * 3 + (int)c] = c == Channel.Rotation ? Slerp(v0, v1, w) : [.. v0.Zip(v1, (a, b) => (long)Math.Round(a + (b - a) * w, MidpointRounding.ToEven))];
+                }
+            }
+        }
+    }
+
+    private static bool Absorbed(Channel c, long[] a, long[] b)
+    {
+        if (c == Channel.Rotation) return SiMath.RotationAngle(Rotation(a), Rotation(b)) / 2 <= SiMath.Threshold;
+        for (int i = 0; i < 3; i++) if (Math.Abs((double)(float)(a[i] / 1e6) - (float)(b[i] / 1e6)) > SiMath.Threshold) return false;
+        return true;
+    }
+
+    private static SiMath.Quat Rotation(long[] t) => SiMath.CompileRotation(t[0] / 1e6, t[1] / 1e6, t[2] / 1e6);
+
+    /// <summary>Angles a fraction <paramref name="w"/> of the way between two triples (normalised quaternion interpolation), near the first's form.</summary>
+    private static long[] Slerp(long[] t0, long[] t1, double w)
+    {
+        var a = SiMath.ExactQuaternion(t0[0] / 1e6, t0[1] / 1e6, t0[2] / 1e6); var b = SiMath.ExactQuaternion(t1[0] / 1e6, t1[1] / 1e6, t1[2] / 1e6);
+        if (a.W * b.W + a.X * b.X + a.Y * b.Y + a.Z * b.Z < 0) b = (-b.W, -b.X, -b.Y, -b.Z);
+        (double W, double X, double Y, double Z) m = (a.W + (b.W - a.W) * w, a.X + (b.X - a.X) * w, a.Y + (b.Y - a.Y) * w, a.Z + (b.Z - a.Z) * w);
+        double norm = Math.Sqrt(m.W * m.W + m.X * m.X + m.Y * m.Y + m.Z * m.Z);
+        var e = SiMath.Euler(m.W / norm, m.X / norm, m.Y / norm, m.Z / norm);
+        (double A, double B, double G)[] branches = [e, (e.A > 0 ? e.A - Math.PI : e.A + Math.PI, (e.B > 0 ? Math.PI : -Math.PI) - e.B, e.G > 0 ? e.G - Math.PI : e.G + Math.PI)];
+        var best = (from br in branches from ka in new[] { 0, -1, 1 } from kb in new[] { 0, -1, 1 } from kg in new[] { 0, -1, 1 }
+                    let f = (A: br.A + ka * 2 * Math.PI, B: br.B + kb * 2 * Math.PI, G: br.G + kg * 2 * Math.PI)
+                    orderby Math.Abs(f.A - t0[0] / 1e6) + Math.Abs(f.B - t0[1] / 1e6) + Math.Abs(f.G - t0[2] / 1e6)
+                    select f).First();
+        return [SiRotationSolver.Round(best.A), SiRotationSolver.Round(best.B), SiRotationSolver.Round(best.G)];
+    }
+
+    /// <summary>Six-decimal values whose floats give the stored rate from the segment's start.</summary>
+    private static long[] VectorEnd(float[] start, float[] rate, int from, int to, Track track)
+    {
+        double rho = SiMath.InverseDuration(from, to, track.FrameRate);
+        long[] result = new long[3];
+        for (int i = 0; i < 3; i++)
+        {
+            float p0 = start[i]; uint target = SiMath.Bits(rate[i]);
+            if (SiMath.Bits(SiMath.ComponentRate(p0, p0, rho)) == target) { result[i] = Micros([p0], track, from)[0]; continue; }
+            float estimate = (float)(p0 + rate[i] / rho);
+            int bits = BitConverter.SingleToInt32Bits(estimate);
+            long? found = null;
+            for (int k = 0; k <= 400 && found == null; k++)
+                foreach (int d in k == 0 ? [0] : new[] { -k, k })
+                {
+                    float p1 = BitConverter.Int32BitsToSingle(bits + d);
+                    if (float.IsFinite(p1) && SiMath.Bits(SiMath.ComponentRate(p0, p1, rho)) == target && Text(p1) is { } m) { found = m; break; }
+                }
+            result[i] = found ?? throw new InvalidDataException($"{track.Object} stops at frame {to} with a rate no six-decimal value reaches.");
+        }
+        return result;
+    }
+
+    private static long[] Micros(float[] v, Track track, int frame) =>
+        [.. v.Select(x => Text(x) ?? throw new InvalidDataException($"{track.Object}'s value {x.ToString("R", CultureInfo.InvariantCulture)} at frame {frame} has no six-decimal text that reads back as it."))];
+
+    private static long[] Triple(SiRotationSolver.Triple t) => [t.A, t.B, t.G];
+
+    /// <summary>The six-decimal value (in millionths) printf("%f") gives for <paramref name="value"/>, when it reads back as the same float.</summary>
+    private static long? Text(float value)
+    {
+        if (!float.IsFinite(value) || Math.Abs(value) >= 9e12) return null;
+        long m = ExactMicros(value);
+        return (float)double.Parse(Format(m), CultureInfo.InvariantCulture) is float back && SiMath.Bits(back) == SiMath.Bits(value) || value == 0 ? m : null;
+    }
+
+    /// <summary>The exact binary value times a million, rounded half to even (as a correctly rounded printf does).</summary>
+    private static long ExactMicros(double v)
+    {
+        if (v == 0) return 0;
+        long bits = BitConverter.DoubleToInt64Bits(v);
+        bool negative = bits < 0; int exponent = (int)((bits >> 52) & 0x7FF); long mantissa = bits & 0xFFFFFFFFFFFFFL;
+        if (exponent == 0) exponent = 1; else mantissa |= 1L << 52;
+        exponent -= 1075;
+        BigInteger n = new BigInteger(mantissa) * Micro, q;
+        if (exponent >= 0) q = n << exponent;
+        else
+        {
+            BigInteger d = BigInteger.One << -exponent;
+            q = BigInteger.DivRem(n, d, out var r);
+            var twice = r * 2;
+            if (twice > d || twice == d && !q.IsEven) q += 1;
+        }
+        return (long)(negative ? -q : q);
+    }
+
+    public static string Format(long micros)
+    {
+        long magnitude = Math.Abs(micros);
+        return (micros < 0 ? "-" : "") + (magnitude / Micro).ToString(CultureInfo.InvariantCulture) + "." + (magnitude % Micro).ToString("D6", CultureInfo.InvariantCulture);
+    }
+
+    private static string Text(List<(string Object, long[]?[] Values)> objects, List<int> frames, Layout layout)
+    {
+        StringBuilder text = new();
+        string warning = layout.Version == null ? "" : $"Warning, file version {layout.Version} is later than DKit release version 3\r\nAttempt to read: An error may occur...\r\n";
+        text.Append(SiAnimationScript.Header).Append("\r\nFRAMES: ").Append(frames.Count.ToString(CultureInfo.InvariantCulture))
+            .Append("\r\nOBJECTS: ").Append(objects.Count.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+        for (int pos = 0; pos < frames.Count; pos++)
+        {
+            if (layout.WarningsBeforeFrames) text.Append(warning);
+            text.Append("Frame: ").Append((frames[pos] + 1L).ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+            foreach (var (name, values) in objects)
+            {
+                if (values[pos * 3] is not { } s || values[pos * 3 + 1] is not { } r || values[pos * 3 + 2] is not { } t) continue;
+                text.Append("Object: ").Append(name).Append("\r\n");
+                text.Append("Scaling:     ").Append(Triple3(s)).Append("\r\nRotation:    ").Append(Triple3(r)).Append("\r\nTranslation: ").Append(Triple3(t)).Append("\r\n");
+            }
+            if (!layout.WarningsBeforeFrames) text.Append(warning);
+        }
+        return text.ToString();
+
+        static string Triple3(long[] v) => $"{Format(v[0])} {Format(v[1])} {Format(v[2])}";
+    }
+
+    /// <summary>Compiles the text again and refuses it unless every keyframe comes back bit for bit (pad floats aside).</summary>
+    private static void Verify(string text, IReadOnlyList<Track> tracks)
+    {
+        var script = SiAnimationScript.Parse(Encoding.Latin1.GetBytes(text), "script");
+        foreach (var track in tracks)
+        {
+            var compiled = SiAnimationScript.Compile(script, track.Object, track.FrameRate, "script");
+            if (compiled.Count != track.Frames.Count || !compiled.Zip(track.Frames).All(p => Same(p.First, p.Second)))
+                throw new InvalidDataException($"{track.Object}'s script text does not compile back to its keyframes exactly.");
+        }
+    }
+
+    internal static bool Same(AnimationKeyframe a, AnimationKeyframe b)
+    {
+        if (a.Flags != b.Flags || a.Bytes.Length != b.Bytes.Length) return false;
+        for (int o = 0; o < a.Bytes.Length; o += 4)
+        {
+            if (Pad(a, o)) continue;
+            if (BitConverter.ToUInt32(a.Bytes, o) != BitConverter.ToUInt32(b.Bytes, o)) return false;
+        }
+        return true;
+
+        // The unused fourth base float of position and scale holds leftover memory in shipped files.
+        static bool Pad(AnimationKeyframe f, int o) => f.ChannelOffset(0) is int p and >= 0 && o == p + 12 || f.ChannelOffset(2) is int s and >= 0 && o == s + 12;
+    }
+}

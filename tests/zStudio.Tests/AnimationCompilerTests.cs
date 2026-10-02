@@ -308,4 +308,115 @@ public sealed class AnimationCompilerTests
         var named = outputs.Single(o => o.Path == "data/m1/zrdr/named.zan");
         Assert.NotNull(AnimationScript.Track(AnimationScript.Parse(named.Bytes, named.Path), Latin));
     }
+
+    private const string Swing = """
+        SI Animation Script
+        FRAMES: 3
+        OBJECTS: 2
+        Frame: 1
+        Object: door
+        Scaling:     1.000000 1.000000 1.000000
+        Rotation:    0.000000 0.000000 0.000000
+        Translation: 0.000000 0.000000 0.000000
+        Object: lamp
+        Scaling:     1.000000 1.000000 1.000000
+        Rotation:    0.000000 0.000000 0.000000
+        Translation: 2.000000 0.000000 0.000000
+        Frame: 11
+        Object: door
+        Scaling:     1.000000 1.000000 1.000000
+        Rotation:    0.000000 0.785398 0.000000
+        Translation: 0.000000 0.250000 0.000000
+        Object: lamp
+        Scaling:     1.000000 1.000000 1.000000
+        Rotation:    0.000000 0.000000 0.000000
+        Translation: 2.000000 0.000000 0.000000
+        Frame: 21
+        Object: door
+        Scaling:     1.000000 1.000000 1.000000
+        Rotation:    0.000000 1.570796 0.000000
+        Translation: 0.000000 0.500000 0.000000
+        Object: lamp
+        Scaling:     1.000000 1.000000 1.000000
+        Rotation:    0.000000 0.000000 0.500000
+        Translation: 2.000000 1.000000 0.000000
+        """;
+
+    [Fact]
+    public void ReconstructionWritesTheOriginalScriptsAndTheyRebuildTheSameAnimation()
+    {
+        const string Definition = "ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) " +
+            "OBJECT_MOTION_SI_SCRIPT ( NAME ( door ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( swing.zan ) ) " +
+            "OBJECT_MOTION_SI_SCRIPT ( NAME ( lamp ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( swing.zan ) ) ) )";
+        var files = new MemoryFiles(Definitions(Definition, ("data/m1/zrdr/swing.zan", Swing)));
+        string[] world = ["gate", "door", "lamp"];
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        // The lamp holds while the door swings: its middle segment would be empty, but a two-segment track's segments
+        // are its first and last, which carry every channel.
+        Assert.Equal([7, 7], package.Entries[1].Sequences[0].Events[1].Keyframes(Token).Select(f => f.Flags));
+        // Reconstructing writes the script back in the original layout, with the DKit version of its recorded date.
+        files.Files.Remove("data/m1/zrdr/swing.zan");
+        List<string> notes = [];
+        var outputs = AnimationSources.Reconstruct([new(1, package, [("..\\data\\m1\\zrdr\\swing.zan", 900_000_000u)], world)], files, notes, Token);
+        Assert.Empty(notes);
+        var swing = outputs.Single(o => o.Path == "data/m1/zrdr/swing.zan");
+        string text = Encoding.Latin1.GetString(swing.Bytes);
+        Assert.StartsWith("SI Animation Script\r\nFRAMES: 3\r\nOBJECTS: 2\r\nWarning, file version 3.71 is later than DKit release version 3\r\n", text);
+        Assert.Contains("Rotation:    0.000000 1.570796 0.000000", text);
+        // The written script rebuilds the same animation.
+        files.Files["data/m1/zrdr/swing.zan"] = swing.Bytes;
+        var rebuilt = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        Assert.Null(AnimationComparer.Difference(package.Entries[1], rebuilt.Entries[1]));
+    }
+
+    [Fact]
+    public void KeyframesNoScriptReproducesStayInTheKeyframeFormat()
+    {
+        // A first segment that moves only the position cannot come from an SI script (its first segment moves everything).
+        var files = new MemoryFiles(Definitions(
+            "ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) OBJECT_MOTION_SI_SCRIPT ( NAME ( door ) SCRIPT_FILENAME ( slide.zan ) ) ) )",
+            ("data/m1/zrdr/slide.zan", "OBJECT door\nFRAME 0 POSITION 0 0 0\nFRAME 5\n")));
+        string[] world = ["gate", "door"];
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        List<string> notes = [];
+        var outputs = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
+        Assert.Contains(notes, n => n.StartsWith("data/m1/zrdr/slide.zan: the keyframes have no SI Animation Script") && n.EndsWith("written in zStudio's keyframe format."));
+        var slide = outputs.Single(o => o.Path == "data/m1/zrdr/slide.zan");
+        Assert.False(SiAnimationScript.Recognize(slide.Bytes));
+        Assert.NotNull(AnimationScript.Track(AnimationScript.Parse(slide.Bytes, slide.Path), "door"));
+    }
+
+    [Fact]
+    public void ScriptsOfFilesWithoutStampsHoldOnlyTheirFrames()
+    {
+        // zStudio's exports carry no stamps: their scripts are reconstructed without the exporter's DKit messages.
+        const string Definition = "ANIMATION_DEFINITION ( NAME ( gate ) SEQUENCE_DEFINITION ( NAME ( s ) " +
+            "OBJECT_MOTION_SI_SCRIPT ( NAME ( door ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( swing.zan ) ) " +
+            "OBJECT_MOTION_SI_SCRIPT ( NAME ( lamp ) SCRIPT_FRAME_RATE ( 10.0 ) SCRIPT_FILENAME ( swing.zan ) ) ) )";
+        var files = new MemoryFiles(Definitions(Definition, ("data/m1/zrdr/swing.zan", Swing)));
+        string[] world = ["gate", "door", "lamp"];
+        var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zrd", world, Token).Package;
+        List<string> notes = [];
+        var outputs = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
+        Assert.Empty(notes);
+        string text = Encoding.Latin1.GetString(outputs.Single(o => o.Path == "data/m1/zrdr/swing.zan").Bytes);
+        Assert.StartsWith("SI Animation Script\r\nFRAMES: 3\r\nOBJECTS: 2\r\nFrame: 1\r\nObject: door\r\n", text);
+        Assert.DoesNotContain("Warning", text);
+        Assert.DoesNotContain("Attempt to read", text);
+    }
+
+    [Fact]
+    public void ScriptConventionsFollowTheSurvivingFragments()
+    {
+        Assert.Equal(["vtol1", "lengine", "rengine", "cargodoor"], AnimationSources.SourceOrder(["vtol1", "cargodoor", "rengine", "lengine"]));
+        Assert.Equal(["vtol1", "lengine", "rengine"], AnimationSources.SourceOrder(["vtol1", "lengine", "rengine"]));
+        Assert.Equal("3.5001", AnimationSources.Version(867_715_199));
+        Assert.Equal("3.7", AnimationSources.Version(867_715_200));
+        Assert.Equal("3.7", AnimationSources.Version(894_239_999));
+        Assert.Equal("3.71", AnimationSources.Version(894_240_000));
+        Assert.Null(AnimationSources.Version(null));
+        Assert.True(AnimationSources.MessagesFollowFrames("data/m5/zrdr/vtol/m5doexit.zan", 895_642_826));
+        Assert.False(AnimationSources.MessagesFollowFrames("data/m5/zrdr/vtol/m5doexit.zan", 895_642_827));
+        Assert.False(AnimationSources.MessagesFollowFrames("data/m5/zrdr/vtol/m5exit.zan", 895_642_826));
+    }
 }

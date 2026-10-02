@@ -78,12 +78,18 @@ public sealed class SourceProjectCorpusTests
                 }
             }
 
-            // Exported files carry their sources' folders, so reconstructing them restores the same tree.
+            // Every keyframe script is the SI Animation Script the shipped keyframes came from.
+            var scriptsWritten = Directory.GetFiles(Path.Combine(project, "data"), "*.zan", SearchOption.AllDirectories);
+            Assert.NotEmpty(scriptsWritten);
+            Assert.All(scriptsWritten, s => Assert.True(Recoil.Zbd.Core.Animation.SiAnimationScript.Recognize(File.ReadAllBytes(s)), s));
+
+            // Exported files carry their sources' folders, so reconstructing them restores the same tree. Exports carry
+            // no source stamps, so their scripts come back without the DKit messages the shipped scripts' exporter wrote.
             var second = await SourceExtractor.ExtractAsync(exported, again, token: Token);
             Assert.Empty(second.Notes);
             var first = Tree(project); var reconstructed = Tree(again);
             Assert.Equal(first.Keys.Order(StringComparer.OrdinalIgnoreCase), reconstructed.Keys.Order(StringComparer.OrdinalIgnoreCase));
-            Assert.All(first, f => Assert.Equal(f.Value, reconstructed[f.Key]));
+            Assert.All(first, f => Assert.Equal(f.Key.EndsWith(".zan", StringComparison.OrdinalIgnoreCase) ? WithoutMessages(f.Value) : f.Value, reconstructed[f.Key]));
 
             // A vehicle only another mission loads (the 1999 light tank of m2–m6) added to m1: the export of m1 holds its
             // nodes, every texture its materials use in each pack, and the animations other missions list for it.
@@ -136,6 +142,9 @@ public sealed class SourceProjectCorpusTests
         var doc = FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token);
         return doc.Scripts!.Entries.ToDictionary(e => e.Name, e => string.Join("\n", e.Instructions.Select(i => string.Join("\u0001", i.Tokens))), StringComparer.OrdinalIgnoreCase);
     }
+    /// <summary>A script's text without the Softimage DKit message lines.</summary>
+    private static byte[] WithoutMessages(byte[] script) => System.Text.Encoding.Latin1.GetBytes(string.Concat(
+        System.Text.Encoding.Latin1.GetString(script).Split("\r\n").Select(l => l + "\r\n").Where(l => !l.StartsWith("Warning, file version ", StringComparison.Ordinal) && !l.StartsWith("Attempt to read: ", StringComparison.Ordinal)))[..^2]);
     private static Dictionary<string, byte[]> Tree(string root) => Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
         .ToDictionary(f => Path.GetRelativePath(root, f), File.ReadAllBytes, StringComparer.OrdinalIgnoreCase);
 }

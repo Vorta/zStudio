@@ -435,8 +435,8 @@ public sealed partial class AnimationCompiler
             string target = Req(key, "NAME"); Track(target); e.Int(12, Node(target));
             string file = Bound(Req(key, "SCRIPT_FILENAME")); float rate = key.Item("SCRIPT_FRAME_RATE")?.Number() ?? 30;
             var script = compiler.ReadScript(file, key.Source) ?? throw key.Error($"keyframe script {file} was not found in the animation path.");
-            var track = script.Track(Bound(target)) ?? throw key.Error($"keyframe script {file} has no track for {Bound(target)}.");
-            var frames = AnimationScript.Compile(track, rate, $"{script.Path}, object {Bound(target)}");
+            if (!script.Moves(Bound(target))) throw key.Error($"keyframe script {file} has no track for {Bound(target)}.");
+            var frames = script.Compile(Bound(target), rate, $"{script.Path}, object {Bound(target)}");
             var ev = new AnimationEvent(e.Bytes) { Version = 28 }.WithKeyframes(frames);
             ev.SetInt(16, frames.Count);
             return ev;
