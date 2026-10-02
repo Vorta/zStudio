@@ -403,6 +403,39 @@ Scripts name only the resource folders (`RdrSetPath`). The 997 resource files an
 - Interface images (`image.zbd`): `data\common\fonts`, `data\common\images\dialog\<screen>`, `data\common\images\hud` and `data\mN\images` (objective images, m1–m6), from the order of its records and the resources' `IMAGE_PATH` values; the folder names below `data\common\images\dialog` follow the resources.
 - `mk.act`: the palette `setup.gw` names for the gamegen tool; no evidence gives its folder.
 
+## How the shipped files were built
+
+The file dates of the 1999 release survived with a constant 9-hour shift: each of the 14 `zrdr.zbd` files is dated 9 hours (±2 s) before the last member packed inside it, and the shifted dates fall seconds after times recorded inside other files (`anim.zbd` stamps, script times). Times below are UTC after that shift, all in 1998 unless noted.
+
+**Source and archive mode.** The retail executable still has the developers' switch. With archives on (the retail default; the menu item that toggles it is always removed), a level load runs `mN_zbd.gs`, which reads `gamez.zbd`, and mounts `zbd\mN\zrdr.zbd`. With archives off it ran `mN.gs`, which builds the world from the scripts and models and writes `gamez.zbd` (`GameZWriteZBDFile`), and resources came from the `..\data\...\zrdr` folders. The same load then reached the animations: the retail loader still rejects an `anim.zbd` whose stamped sources changed and is still passed `anim.zrd`, the remains of a development path that compiled `anim.zbd` at that point. Each mission's `anim.zbd` was written 16–30 s after its `gamez.zbd`, the time between those two steps of one load. Packing `zrdr.zbd` and the sound banks was a separate step.
+
+| When | What | Shipped files it left |
+| --- | --- | --- |
+| 3 Sep 21:18–21:51 | texture packs, in mission order | packs of m2, m3, m5, m8, m9, m12, m13 (the others were rebuilt one by one, 10 Sep – 18 Nov) |
+| 31 Oct 20:58 | last script change: the newest of the 122 scripts in `interp.zbd` is `bft2.gw` | — |
+| 10 Nov 23:36–23:43 | every mission loaded in source mode, in order (each `mNvtols.zrd` of m2–m5 rewritten seconds apart first) | worlds and animations of m3, m4, m8, m9, m11, m12 |
+| 10 Nov 23:46:58–23:48:46 | resource archives packed, 1–13 s each | archives of m1–m5, m7, m8, m10–m13 |
+| 12 Nov | m6 archive (17:34); sound banks (17:56, 17:59, 18:02); m2 loaded (21:08) | those files |
+| 13 Nov – 11 Dec | single missions loaded again: m6 (13 Nov), m1 (16 Nov, 34 s after `semideath.zrd` was saved), m7 (30 Nov), m5 and m10 (4 Dec), m13 (11 Dec) | those missions' worlds and animations; `interp.zbd` (4 s before m13's world) |
+| 4 Dec, 9 Dec | m9 archive and the common archive, packed in `E:\RecoilFull` (the others in `D:\battlesportdev`) | those archives |
+| 7 Jan 1999 | `image.zbd` | — |
+
+The release is therefore a mix of runs: reloading a mission rewrote its world and animations but not its resource archive. No script a shipped world ran is newer than the world, so worlds and scripts agree. Five archived animation definitions do not: their archives were packed before the definitions the animations were compiled from were saved.
+
+| Definition | Archived text packed | `anim.zbd` compiled from a version saved | What the newer version changed |
+| --- | --- | --- | --- |
+| `common\zrdr\vtol\gen_vtol.zrd` (`vtol_destruction*`) | 31 Oct (1998 release), the same text again 9 Dec (1999) | 4 Nov | reset time 0.5 s → 0; healthy model hidden at reset |
+| `m1\zrdr\envmodels\frcgate.zrd` (`destroy_the_gen`) | 10 Nov | 16 Nov | the generator's explosion also calls `blowup_semi_tractr` |
+| `m1\zrdr\semi\semideath.zrd` (`blowup_semi_tractr`) | 10 Nov | 16 Nov | plays once (invalidates itself) |
+| `m1\zrdr\envmodels\vwrebel.zrd` (`rebel_vw`) | 10 Nov | 16 Nov | invalidates itself when the bus moves |
+| `m13\zrdr\envmodels\bft_trans.zrd` (`bft_to_5cav`) | 10 Nov | 11 Dec | moves the vehicle to y −47 instead of −55 |
+
+The game never reads these definitions, so the mismatch had no effect in play; reconstruction rebuilds them from the compiled entries ([source-project.md](source-project.md#animations)).
+
+**What the packer took.** Every `.zrd` under the `zrdr` folders and nothing else: all 371 definition files the animation compilers read are in their archives, none of the 77 keyframe scripts beside them is, and files nothing uses were packed as well (`location.zrd` in every mission, `aiv_easy.zrd`/`aiv_hard.zrd`, `cockpit.zrd`, `fonts.zrd`, `rcochet1.zrd`, and definitions no `anim.zrd` lists). Of the 997 members, 403 (1.9 of 3.3 MB) are never requested by the game.
+
+**A cut feature.** `m5\zrdr\subhut\sbbelt.zrd` defines the sub hut's conveyor belt (`sub_convey_belt`, looping two belt segments with a factory sound, and `stop_the_belt`). m5's `anim.zrd` does not list it and no world has its objects (`sbbelt`, `sbblt1`, `sbblt2`), but the compiled `sbelev.zrd` still calls `stop_the_belt` when the elevator shuts the hut down; the game finds no such animation and carries on.
+
 ## What remains open
 
 - Which folder each **search** model was in: the scripts only give the order of the folders searched.

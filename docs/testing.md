@@ -2,6 +2,28 @@
 
 Code reviews and review-fix cycles must follow [the adversarial review procedure](code-review.md). It requires a full PR coverage inventory, producer-to-consumer checks for data growth, mixed record-kind identity cases, a finding/evidence ledger and a final challenge pass after fixes. The test commands below validate specific behavior; a green suite does not establish review coverage of other changed paths.
 
+## Corpus-gated tests
+
+Tests that need game data return early unless their variable is set, so `dotnet test --solution zStudio.slnx -c Release` runs without any. The retail datasets are never written: tests work in temporary folders, and the protected `zbd_1998`/`zbd_1999` folders (git-ignored, beside the solution) are refused as project or export destinations.
+
+| Variable | Value | Enables |
+| --- | --- | --- |
+| `ZSTUDIO_CORPUS` | a RECOIL data folder (holding `interp.zbd`, `zrdr.zbd` and `m1\`), such as `zbd_1999` or `zbd_1998` | archive, world, animation, keyframe, AI, resource-editing and source-project corpus tests. `SourceProjectCorpusTests` reconstructs the whole release, checks every script is an SI script with its DKit messages, exports, rebuilds every shipped animation entry and reconstructs the export again. |
+| `ZSTUDIO_MW3_CORPUS` | a MechWarrior 3 `zbd` folder | MechWarrior 3 and AI valve tests |
+| `ZSTUDIO_SOURCE_PROJECT` | a reconstructed project (only read) | the terrain conversion corpus test without reconstructing first |
+| `ZSTUDIO_CONTENT_CAPTURE`, `ZSTUDIO_INSPECTION_CAPTURE` | an output folder | screenshots from the Desktop content and inspection checks |
+
+A full local gate runs the solution with the 1999 and MechWarrior 3 data, then the source-project test with the 1998 data:
+
+```powershell
+$env:ZSTUDIO_CORPUS = 'zbd_1999'; $env:ZSTUDIO_MW3_CORPUS = '<MechWarrior 3>\zbd'
+dotnet test --solution zStudio.slnx -c Release
+$env:ZSTUDIO_CORPUS = 'zbd_1998'
+dotnet test tests/zStudio.Tests -c Release --no-build --filter "FullyQualifiedName~SourceProjectCorpusTests"
+```
+
+One allocation-measuring test (`SoundAliasLookupRetainsNamesAndLoopFlagsWithoutCopyingIgnoredPayload`) can fail when the test assemblies run in parallel; rerun it alone before treating it as a regression.
+
 Blender-style navigation has synthetic gesture/keyboard, projection, framing, numeric-bound and named-pipe protocol coverage in the normal suite. Modifier sequences cover both press orders, left/right Shift/Ctrl, release and unsupported combinations, clearing prior-mode inertia, focus/capture cancellation and transitions from axis views. Pointer zoom checks cover screen anchoring in both projections, width clamps, empty-space direction/speed, surface crossing and drag/inertia. Run `dotnet run --project tools/zStudio.PreviewCheck -c Release -- --blender-navigation zbd_1999` (also `zbd_1998`) for rendered model/Whole world/animation pointer zoom and MCP parity, rendered-surface pan order, axis views, perspective/orthographic scale parity, presented-buffer idle stability, view-cube agreement, orthographic pickup handles, refresh/resize retention, playback and Follow camera transitions. Reports and PNGs stay under `%TEMP%/zstudio-blender-*`; the harness restores settings and verifies source hashes. It never moves or captures the physical mouse. Run UI checks serially. Physical gesture feel remains a manual check.
 
 Responsive Files has settings-migration coverage and real named-pipe/GUI checks in the normal suite: stable section indices, effective layout readback, breakpoint hysteresis, tree identity/selection/expansion/scroll, both native splitter handlers, independent preferred widths, opening Files into Assets, retained filters/search, unavailable-section rejection without partial mutation, presets/reset and pending pinned Properties drafts. Run `dotnet run --project tools/zStudio.PreviewCheck -c Release -- --responsive-files zbd_1999` for the 36 header cases plus world/Document scene transitions and 18 animation theme/density/width transitions. It checks left-to-right pane placement, a 600-DIP central column in split mode, retained Inspector/editor/frame/camera and playback. Images are owned-window PrintWindow captures under `%TEMP%/zstudio-gui-review-*`; this mode does not require unobscured desktop corner screenshots. Settings are restored. Run UI checks serially.
