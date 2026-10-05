@@ -18,8 +18,9 @@ internal sealed class GameZLayouts(uint version)
     internal uint Version => version;
     /// <summary>
     /// Version 13 stores a node's cached box as its eight corners in the parent's space (the box transformed by the node's
-    /// matrix) where version 15 stores the box itself, and an Object3D's translation beside its matrix (corpus bytes of the
-    /// 1998 demos: every corner set is the node's model-and-child box under its own matrix).
+    /// matrix) where version 15 stores the box itself, and an Object3D's translation component beside its rotation and scale
+    /// (corpus bytes of the 1998 demos: every corner set is the node's model-and-child box under its own matrix; the translation is
+    /// a script's Object3DTranslate, which the matrix also carries, and zero for a node whose matrix its model file gave).
     /// </summary>
     internal bool Demo => version == 13;
     internal bool HasVertexColors => mw3;
@@ -56,7 +57,7 @@ internal sealed class GameZLayouts(uint version)
                     Add(fields, "activation_ptr", 260, 4, "ptr");
                     break;
                 case "GAMEZ_OBJECT3D_LAYOUT":
-                    // Rotation, scale, then the translation the matrix also carries.
+                    // Rotation, scale, then the translation: a script's Object3DTranslate, which the matrix also carries.
                     Shift(fields, 48, 12);
                     Add(fields, "translate", 48, 12, "vec3");
                     break;

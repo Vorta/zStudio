@@ -14,7 +14,7 @@ public static class GameZWorldReader
 {
     /// <summary>Version 13 node slots: the version-15 fields up to the sphere, the cached box as eight corners, then the rest.</summary>
     private const int DemoSlotSize = 268, DemoCorners = 116, DemoModelBox = 212, DemoChildBox = 236, DemoActivation = 260;
-    /// <summary>A version-13 Object3D record: the version-15 fields with a translation (12 bytes) after the scale.</summary>
+    /// <summary>A version-13 Object3D record: the version-15 fields with a translation (12 bytes, a script's Object3DTranslate) after the scale.</summary>
     private const int DemoObject3DSize = 156, DemoTranslation = 48;
 
     public static GameZWorld FromDocument(ZbdDocument doc, CancellationToken token = default)
@@ -110,7 +110,8 @@ public static class GameZWorldReader
             var data = bytes[(int)layout.NodeDataOffsets[i]..];
             if (demo && kind == WorldNodeClass.Object3D)
             {
-                // The matrix carries the translation, so the version-15 record is the version-13 one without it.
+                // The matrix carries the translation a script set (and a model file's, which leaves the field zero), so the
+                // version-15 record is the version-13 one without it.
                 byte[] payload = new byte[node.Payload.Length];
                 data[..DemoTranslation].CopyTo(payload); data[(DemoTranslation + 12)..DemoObject3DSize].CopyTo(payload.AsSpan(DemoTranslation));
                 node.Payload = payload;

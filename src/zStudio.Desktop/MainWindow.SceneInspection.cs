@@ -133,7 +133,7 @@ public partial class MainWindow
         bool locked = known && shownDocument!.PickupsLocked;
         info["Editable"] = known && !locked;
         info["Rotation axes"] = known ? edits!.RotationKind(source!) switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "None" } : "None";
-        info["Editing"] = locked ? "Unlock editing to select and edit objects" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";
+        info["Editing"] = edits?.ReadOnlyReason is { } readOnly ? readOnly : locked ? "Unlock editing to select and edit objects" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";
         info["Document revision"] = shownDocument?.Revision;
         return info;
     }

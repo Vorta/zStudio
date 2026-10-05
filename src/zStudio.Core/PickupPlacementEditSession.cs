@@ -59,12 +59,22 @@ public sealed partial class PickupPlacementEditSession
     public bool IsArchiveEdited(string path) => touched.Contains(Path.GetFullPath(path));
     public string TargetPath(string source) => archives[source].Target;
 
+    /// <summary>Why a world's placements cannot be edited (they remain inspectable), or null.</summary>
+    public string? ReadOnlyReason { get; private set; }
+    /// <summary>
+    /// Why the placements of a world with this format are read-only: the 1998 demos' worlds (GameZ version 13) open
+    /// read-only, and so do the placements of their missions; their archives are never written.
+    /// </summary>
+    public static string? ReadOnlyWorld(FormatProbe probe) => probe is { Family: FormatFamily.GameZ, Version: 13 }
+        ? "This is a 1998 demo world (GameZ version 13), which opens read-only: its placements can be inspected, not edited." : null;
+
     public static async Task<PickupPlacementEditSession> LoadAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
     {
         Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> found = new(StringComparer.OrdinalIgnoreCase);
         List<(ZbdDocument Archive, AssetRecord Asset)> coordinateResources = [];
         PreviewNotes notes = new();
-        bool mw3 = FormatRegistry.Probe(worldPath) is { Family: FormatFamily.GameZ, Version: 27 };
+        var probe = FormatRegistry.Probe(worldPath);
+        bool mw3 = probe is { Family: FormatFamily.GameZ, Version: 27 };
         // Load the coordinate store once for every reader in this map. Preview selection
         // filters by archive identity; changing mission must never discard accepted history.
         var files = MissionSceneLoader.ResourceFiles(worldPath, resolver); HashSet<ZbdDocument> snapshots = new(ReferenceEqualityComparer.Instance);
@@ -93,6 +103,7 @@ public sealed partial class PickupPlacementEditSession
         return await Task.Run(() =>
         {
             var result = Create(resources, notes, token);
+            result.ReadOnlyReason = ReadOnlyWorld(probe);
             result.AddCoordinates(coordinateResources, token, mw3);
             foreach (var archive in result.archives.Values) archive.FromSnapshot = snapshots.Contains(archive.Original);
             return result;
@@ -206,6 +217,7 @@ public sealed partial class PickupPlacementEditSession
     public bool MoveTo(MissionPickupSource source, Vector3 position) => TransformTo(source, Transform(source) with { Position = position });
     public bool TransformTo(MissionPickupSource source, PlacementTransform transform)
     {
+        if (ReadOnlyReason is { } reason) throw new InvalidOperationException(reason);
         if (saving) throw new InvalidOperationException("Wait for the current save to finish.");
         var after = PreviewTransform(source, transform);
         var before = after.Keys.ToDictionary(s => s, Transform);

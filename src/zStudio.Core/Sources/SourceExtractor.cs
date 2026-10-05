@@ -18,13 +18,19 @@ public static class SourceExtractor
         SourceProject.ValidateSeparate(projectRoot, corpusRoot, "project folder");
         SourceProject.RejectLinks(projectRoot);
         if (Directory.Exists(projectRoot) && Directory.EnumerateFileSystemEntries(projectRoot).Any()) throw new IOException("Choose a new or empty folder for the source project.");
-        var files = Corpus(corpusRoot);
-        // The recovered build layout is RECOIL's; MechWarrior 3 data uses other formats and folders.
+        var all = Corpus(corpusRoot);
+        // The game reads its data from the folder itself and its mission folders (mN): only those files are reconstructed
+        // and decide whether the folder can be. Files anywhere else, such as a demo copied into a subfolder, are not read.
+        var files = all.Where(f => GameFile(f.Relative)).ToList();
         var probes = files.Select(f => (f.Relative, Probe: FormatRegistry.Probe(f.Path))).ToArray();
-        if (probes.FirstOrDefault(f => f.Probe is { Family: FormatFamily.GameZ, Version: 27 } or { Family: FormatFamily.Animation, Version: 39 }) is { Relative: not null } mw3)
-            throw new InvalidDataException($"{mw3.Relative} is MechWarrior 3 data; source reconstruction supports RECOIL.");
+        // The recovered build layout is RECOIL's; MechWarrior 3 data uses other formats and folders (c1, t1), so a folder
+        // without RECOIL mission folders is MechWarrior 3's when any of its files is.
+        static bool Mw3(FormatProbe probe) => probe is { Family: FormatFamily.GameZ, Version: 27 } or { Family: FormatFamily.Animation, Version: 39 };
+        string? mw3 = probes.FirstOrDefault(f => Mw3(f.Probe)).Relative ?? (files.Any(f => TextureSources.MissionNumber(f.Relative) > 0) ? null
+            : all.Where(f => !GameFile(f.Relative)).Select(f => (f.Relative, Probe: FormatRegistry.Probe(f.Path))).FirstOrDefault(f => Mw3(f.Probe)).Relative);
+        if (mw3 != null) throw new InvalidDataException($"{mw3} is MechWarrior 3 data; source reconstruction supports RECOIL.");
         // The 1998 demos' worlds (version 13) open read-only; projects are reconstructed from the releases.
-        if (probes.FirstOrDefault(f => f.Probe is { Family: FormatFamily.GameZ, Version: 13 }) is { Relative: not null } demo)
+        if (probes.FirstOrDefault(f => f.Probe is { Family: FormatFamily.GameZ, Version: 13 } && MissionWorld(f.Relative)) is { Relative: not null } demo)
             throw new InvalidDataException($"{demo.Relative} is a 1998 demo world (GameZ version 13), which zStudio opens read-only; source projects are reconstructed from the RECOIL releases.");
         // Require positive RECOIL evidence: prepared scripts, a version-15 world or a version-28 animation program.
         if (!probes.Any(f => f.Probe is { Family: FormatFamily.Scripts, Version: 7 } or { Family: FormatFamily.GameZ, Version: 15 } or { Family: FormatFamily.Animation, Version: 28 }))
@@ -32,7 +38,7 @@ public static class SourceExtractor
         if (!CarriesDefinitions(files)) throw new InvalidDataException(NotOriginal);
         Writes writes = new();
         writes.CreateDirectory(projectRoot);
-        try { return await ExtractFilesAsync(projectRoot, files, writes, progress, token); }
+        try { return await ExtractFilesAsync(projectRoot, files, [.. all.Where(f => !GameFile(f.Relative)).Select(f => f.Relative)], writes, progress, token); }
         catch (Exception stopped)
         {
             // The folder was new or empty: remove everything this reconstruction wrote so it can be retried. Only that: a file
@@ -95,7 +101,13 @@ public static class SourceExtractor
         }
     }
 
-    private static async Task<SourceReconstructionReport> ExtractFilesAsync(string projectRoot, List<(string Path, string Relative)> files, Writes writes, IProgress<SourceProgress>? progress, CancellationToken token)
+    /// <summary>A file of the game's data: in the folder itself or in a mission folder (<c>mN</c>), where the game reads it.</summary>
+    private static bool GameFile(string relative) => !relative.Contains('/') || relative.Count(c => c == '/') == 1 && TextureSources.MissionNumber(relative) > 0;
+    /// <summary>A mission's world (<c>mN/gamez.zbd</c>), the worlds reconstruction reads.</summary>
+    private static bool MissionWorld(string relative) => TextureSources.MissionNumber(relative) > 0 && Path.GetFileName(relative).Equals("gamez.zbd", StringComparison.OrdinalIgnoreCase);
+
+    /// <param name="elsewhere">Files outside the game's folders, listed as not reconstructed.</param>
+    private static async Task<SourceReconstructionReport> ExtractFilesAsync(string projectRoot, List<(string Path, string Relative)> files, List<string> elsewhere, Writes writes, IProgress<SourceProgress>? progress, CancellationToken token)
     {
         Context context = new(projectRoot, writes, token);
         writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.DataFolder)); writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.GameGenFolder));
@@ -121,7 +133,7 @@ public static class SourceExtractor
                     else { await context.ExtractResourcesAsync(relative, members); family = "resources"; }
                 }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Scripts, Version: 7 }) { await context.ExtractScriptsAsync(relative, bytes); family = "scripts"; }
-                else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.GameZ, Version: 15 } && TextureSources.MissionNumber(relative) > 0 && Path.GetFileName(relative).Equals("gamez.zbd", StringComparison.OrdinalIgnoreCase))
+                else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.GameZ, Version: 15 } && MissionWorld(relative))
                 {
                     var doc = FormatRegistry.Default.OpenBytes(relative, bytes, token: token);
                     if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
@@ -149,7 +161,7 @@ public static class SourceExtractor
         if (worlds.Count > 0) { Phase(SourceStage.Reconstructing, "worlds"); await context.ExtractWorldsAsync(worlds); }
         if (animations.Count > 0) { Phase(SourceStage.Reconstructing, "animations"); await context.ExtractAnimationsAsync(animations, Phase); }
         progress?.Report(new(files.Count, files.Count, "Done"));
-        return new(projectRoot, context.Written, families, skipped, context.Notes);
+        return new(projectRoot, context.Written, families, [.. skipped, .. elsewhere], context.Notes);
     }
     /// <summary>Mission packs (<c>mN/texture*.zbd</c>, <c>mN/rtexture*.zbd</c>) and the interface pack (<c>image.zbd</c>, <c>rimage.zbd</c>).</summary>
     private static bool IsTexturePack(string relative)

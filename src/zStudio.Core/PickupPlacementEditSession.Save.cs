@@ -28,6 +28,7 @@ public sealed partial class PickupPlacementEditSession
     public async Task<PickupPlacementSaveResult> SaveAsync(IReadOnlyDictionary<string, string>? destinations = null, bool createBackup = false, CancellationToken token = default)
     {
         if (saving) throw new InvalidOperationException("A pickup save is already running.");
+        if (ReadOnlyReason is { } reason) throw new InvalidOperationException(reason);
         if (destinations != null)
         {
             destinations = destinations.ToDictionary(p => Path.GetFullPath(p.Key), p => p.Value, StringComparer.OrdinalIgnoreCase);

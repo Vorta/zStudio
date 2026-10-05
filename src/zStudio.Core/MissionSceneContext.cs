@@ -291,6 +291,8 @@ public static partial class MissionSceneLoader
         data["transform"] = new JsonArray(new[] { m.M11,m.M12,m.M13,m.M21,m.M22,m.M23,m.M31,m.M32,m.M33,m.M41,m.M42,m.M43 }.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());
         Matrix4x4.Decompose(m, out var scale, out var rotation, out _); var euler = AnimationMath.ToEuler(rotation);
         data["scale"] = Vector(scale); data["rotate"] = Vector(euler);
+        // Version 13 (the 1998 demos) also stores the translation of these components (Object3DTranslate's), beside the matrix.
+        if (data.ContainsKey("translate")) data["translate"] = Vector(m.Translation);
         static JsonObject Vector(Vector3 v) => new() { ["x"] = v.X, ["y"] = v.Y, ["z"] = v.Z };
     }
     private static float Number(JsonNode? n)
