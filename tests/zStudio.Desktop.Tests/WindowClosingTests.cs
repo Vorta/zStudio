@@ -65,6 +65,7 @@ public sealed class WindowClosingTests
                     await WorldCompareMcpChecks.Run();
                     await WorldCompareBoundsChecks.Run();
                     await LookupMcpChecks.Run();
+                    await SourceObjectPlanMcpChecks.Run();
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();
                     await AiNetworkMcpChecks.Run();

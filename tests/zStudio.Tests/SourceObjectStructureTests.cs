@@ -45,16 +45,11 @@ public sealed class SourceObjectStructureTests
         var gate = world.Nodes.Single(n => n.Name == "gate");
         var shared = Assert.Single(gate.Parents);
         Assert.Equal(2, shared.Parents.Count);
-        // The file holds the shared node once per gate and the build reads the first: changing that copy alone would let
-        // the other come back once the first is removed. Moving, copying, deleting and changing gate are refused.
+        // The file holds the shared node once per gate and the build reads the first: moving gate out of one copy would keep
+        // one place (other edits change every copy alike, see SourceObjectPlanTests).
         var target = Target(workspace, "m1", build, world, gate);
         Assert.Contains("several parents share", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(target, null, Token)).Message);
-        Assert.Contains("instance", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(target, "gate2", null, Token)).Message);
-        Assert.Contains("instance", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDelete(target, Token)).Message);
-        Assert.Contains("instance", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "gate", target.Origin, build.Executions, new(new(0, 5, 0), Vector3.Zero, Vector3.One), Token)).Message);
-        // So is the shared node itself, and moving another object into it, which would place that object under each gate.
-        var sharedOrigin = build.Provenance[GameZWriter.NodeSlots(world)[shared]];
-        Assert.Contains("instance", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "", sharedOrigin, build.Executions, new(new(0, 5, 0), Vector3.Zero, Vector3.One), Token)).Message);
+        // Moving another object into it would place that object under each gate.
         Assert.Contains("placed under each", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "ground"), gate, Token)).Message);
         // The gates themselves move freely; deleting the first leaves the shared node, unchanged, under the second.
         var first = Target(workspace, "m1", build, world, "sgate1");

@@ -13,14 +13,17 @@ namespace Recoil.Zbd.Core.Sources;
 public static class GltfNodeEdits
 {
     /// <summary>Removes node <paramref name="index"/> and its descendants. Meshes, materials and buffers stay (unused ones are valid glTF).</summary>
-    public static void Remove(JsonObject root, int index)
+    public static void Remove(JsonObject root, int index) => Remove(root, [index]);
+    /// <summary>Removes each of <paramref name="indices"/> (the copies of an instance's node) with its descendants.</summary>
+    public static void Remove(JsonObject root, IReadOnlyCollection<int> indices)
     {
         var nodes = Nodes(root);
-        var removed = Subtree(nodes, index);
+        HashSet<int> removed = [];
+        foreach (int index in indices) removed.UnionWith(Subtree(nodes, index));
         // A removed node another node still lists (a second parent) would leave a dangling child.
         for (int i = 0; i < nodes.Count; i++)
-            if (!removed.Contains(i) && Children(nodes, i).Any(c => removed.Contains(c) && c != index))
-                throw new InvalidDataException($"Node {i} also holds a part of node {index}; the file shares nodes in a way glTF does not allow.");
+            if (!removed.Contains(i) && Children(nodes, i).Any(c => removed.Contains(c) && !indices.Contains(c)))
+                throw new InvalidDataException($"Node {i} also holds a part of node {indices.First()}; the file shares nodes in a way glTF does not allow.");
         foreach (var animation in root["animations"] as JsonArray ?? [])
             foreach (var channel in animation?["channels"] as JsonArray ?? [])
                 if (channel?["target"]?["node"] is JsonValue target && target.TryGetValue(out int t) && removed.Contains(t))
@@ -28,7 +31,7 @@ public static class GltfNodeEdits
         foreach (var skin in root["skins"] as JsonArray ?? [])
             if ((skin?["joints"] as JsonArray ?? []).Any(j => j is JsonValue v && v.TryGetValue(out int k) && removed.Contains(k)) || skin?["skeleton"] is JsonValue s && s.TryGetValue(out int sk) && removed.Contains(sk))
                 throw new InvalidDataException($"A skin of the file uses a node the deletion removes; remove it in Blender first.");
-        Detach(root, nodes, index);
+        foreach (int index in indices) Detach(root, nodes, index);
         int[] map = new int[nodes.Count]; int next = 0;
         for (int i = 0; i < nodes.Count; i++) map[i] = removed.Contains(i) ? -1 : next++;
         for (int i = nodes.Count - 1; i >= 0; i--) if (removed.Contains(i)) nodes.RemoveAt(i);
@@ -37,16 +40,17 @@ public static class GltfNodeEdits
 
     /// <summary>
     /// Copies node <paramref name="index"/> and its descendants (sharing their meshes) and places the copy right after it,
-    /// named <paramref name="name"/>. Shared parts inside the copy get new instance numbers, so the copy owns them.
-    /// Returns the copy's index.
+    /// named <paramref name="name"/>. Shared parts inside the copy get new instance numbers, so the copy owns them; copies of
+    /// an instance's copies pass one <paramref name="instances"/> map, so theirs are copies of one new instance again.
+    /// Returns the copy's index. The file's other nodes keep their indices.
     /// </summary>
-    public static int Duplicate(JsonObject root, int index, string name)
+    public static int Duplicate(JsonObject root, int index, string name, Dictionary<long, long>? instances = null)
     {
         var nodes = Nodes(root);
         List<int> order = []; HashSet<int> seen = []; Collect(index);
         Dictionary<int, int> copies = []; for (int k = 0; k < order.Count; k++) copies[order[k]] = nodes.Count + k;
         long nextInstance = nodes.Select(n => Instance((((n as JsonObject)?["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject)?["instance"]) ?? 0).DefaultIfEmpty(0).Max() + 1;
-        Dictionary<long, long> instances = [];
+        instances ??= [];
         foreach (int original in order)
         {
             var copy = (JsonObject)nodes[original]!.DeepClone();
@@ -200,6 +204,44 @@ public static class GltfNodeEdits
     }
     /// <summary>An instance marker as the importer reads it: a whole number, written as an integer or a float.</summary>
     private static long? Instance(JsonNode? node) => node is JsonValue v ? v.TryGetValue(out long i) ? i : v.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 1e15 ? (long)d : null : null;
+    /// <summary>
+    /// Node <paramref name="index"/> and, when an instance holds it (a node the file places under several parents, written as
+    /// copies with one mark, or a node inside one), the nodes standing for it in the instance's other copies: the importer
+    /// reads the first copy and joins the others to it, so all of them must change alike. The node comes first.
+    /// </summary>
+    public static IReadOnlyList<int> InstanceCopies(JsonObject root, int index)
+    {
+        var nodes = Nodes(root);
+        if (index < 0 || index >= nodes.Count) throw new InvalidDataException($"The file has no node {index}.");
+        int[] parents = new int[nodes.Count], places = new int[nodes.Count];
+        Array.Fill(parents, -1);
+        for (int i = 0; i < nodes.Count; i++) { int k = 0; foreach (int c in Children(nodes, i)) { if (parents[c] < 0) { parents[c] = i; places[c] = k; } k++; } }
+        // What the importer makes of a node: a marked node is its instance, a node below one the child at its place in the
+        // instance's node; a node no instance holds is itself (no key).
+        string?[] keys = new string?[nodes.Count]; bool[] known = new bool[nodes.Count];
+        long? Mark(int i) => Instance(((nodes[i]!["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject)?["instance"]);
+        string? Key(int i)
+        {
+            List<int> chain = [];
+            for (int at = i; !known[at]; at = parents[at])
+            {
+                chain.Add(at);
+                if (Mark(at) != null || parents[at] < 0) break;
+                if (chain.Count > GltfDocument.MaximumDepth) throw new InvalidDataException("The node hierarchy is cyclic or too deep.");
+            }
+            for (int k = chain.Count - 1; k >= 0; k--)
+            {
+                int n = chain[k];
+                keys[n] = Mark(n) is long mark ? $"i{mark}" : parents[n] >= 0 && keys[parents[n]] is { } above ? $"{above}/{places[n]}" : null;
+                known[n] = true;
+            }
+            return keys[i];
+        }
+        if (Key(index) is not { } key) return [index];
+        List<int> copies = [index];
+        for (int i = 0; i < nodes.Count; i++) if (i != index && Key(i) == key) copies.Add(i);
+        return copies;
+    }
     /// <summary>The parent of a node, or null for a root.</summary>
     public static int? Parent(JsonObject root, int index) => Parent(Nodes(root), index);
 

@@ -97,18 +97,27 @@ public partial class MainWindow
         var provenance = SourceWorldProvenance(doc);
         return new(workspace, session.Mission, model.World, SourceObjectEdits.ObjectOf(built, provenance), provenance, build.Executions) { Write = build.WriteInstruction };
     }
+    /// <summary>A node of the shown world by name (see <see cref="SourceWorldNodeNamedNear"/>).</summary>
+    private WorldNode SourceWorldNodeNamed(DocumentModel doc, string name) => SourceWorldNodeNamedNear(doc, name, null);
     /// <summary>
     /// A node of the shown world by name, refused when no node or several nodes have it, unless they are the copies of one
-    /// node of a part of the mission database: an edit of the part's file is the same through any of them.
+    /// node of a part of the mission database: an edit of the part's file is the same through any of them. Of those, the one
+    /// in the same copy of the part as scene node <paramref name="near"/> (the node an edit moves) is taken, as a parent's
+    /// node index would choose it, so the checks against its place agree.
     /// </summary>
-    private WorldNode SourceWorldNodeNamed(DocumentModel doc, string name)
+    private WorldNode SourceWorldNodeNamedNear(DocumentModel doc, string name, int? near)
     {
         var matches = SourceWorldModel(doc).World.Nodes.Where(n => n.Name == name).ToList();
         if (matches.Count > 1)
         {
             var provenance = SourceWorldProvenance(doc);
             var sources = matches.Select(n => provenance.TryGetValue(n, out var p) && p.Part && p.ModelFile != null ? $"{p.ModelFile.ToLowerInvariant()}#{p.ModelNode}" : null).Distinct().Take(2).ToList();
-            if (sources is [{ }]) return matches[0];
+            if (sources is [{ }])
+            {
+                string? copy = near is int index && SourceWorldModel(doc).Slots.GetValueOrDefault(index) is { } moved && provenance.TryGetValue(SourceObjectEdits.ObjectOf(moved, provenance), out var origin)
+                    ? SourceObjectEdits.CopyKey(origin) : null;
+                return matches.FirstOrDefault(n => copy != null && SourceObjectEdits.CopyKey(provenance[n]) == copy) ?? matches[0];
+            }
         }
         return matches.Count switch
         {
@@ -158,10 +167,29 @@ public partial class MainWindow
         }
         return EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanReparent(target, into, token), token, keepsNodes: true);
     }
-    /// <summary>The scene node index of the newest node with a name in a rebuilt world, for following a copy.</summary>
-    private static int? SourceNodeNamed(DocumentModel doc, string name) =>
-        doc.SourceBuild is { } build && GameZWorldReader.FromDocument(doc.Document, doc.Lifetime.Token) is var world
-            ? GameZWriter.NodeSlots(world).Where(p => p.Key.Name == name).Select(p => (int?)p.Value).DefaultIfEmpty(null).Max() : null;
+    /// <summary>
+    /// The scene node indices of the nodes named <paramref name="name"/> in a rebuilt world, for following a copy: one per copy
+    /// of a part the mission database references several times, the one in the copy <paramref name="copyKey"/> names (the
+    /// original's, <see cref="SourceObjectEdits.CopyKey"/>) first, then the newest.
+    /// </summary>
+    private static List<int> SourceCopiesNamed(DocumentModel doc, string name, string? copyKey)
+    {
+        if (doc.SourceBuild is not { } build) return [];
+        List<int> copies = [.. GameZWriter.NodeSlots(GameZWorldReader.FromDocument(doc.Document, doc.Lifetime.Token)).Where(p => p.Key.Name == name).Select(p => p.Value).OrderDescending()];
+        int same = copies.FindIndex(c => copyKey != null && build.Provenance.TryGetValue(c, out var p) && SourceObjectEdits.CopyKey(p) == copyKey);
+        if (same > 0) { int first = copies[same]; copies.RemoveAt(same); copies.Insert(0, first); }
+        return copies;
+    }
+    /// <summary>Which copy of its file the object scene node <paramref name="node"/> belongs to is in (<see cref="SourceObjectEdits.CopyKey"/>), or null when unknown.</summary>
+    private string? SourceCopyKey(DocumentModel doc, int node)
+    {
+        try
+        {
+            var provenance = SourceWorldProvenance(doc);
+            return SourceWorldModel(doc).Slots.GetValueOrDefault(node) is { } built && provenance.TryGetValue(SourceObjectEdits.ObjectOf(built, provenance), out var origin) ? SourceObjectEdits.CopyKey(origin) : null;
+        }
+        catch (InvalidDataException) { return null; }
+    }
 
     /// <summary>Plans one edit of a source world's object against the workspace and rebuilds the world with it.</summary>
     private Task<DocumentModel> EditSourceObjectAsync(DocumentModel doc, int node, Func<SourceWorkspace, SourceObjectState, IReadOnlyDictionary<(string Script, int Line), int>, SourceEditPlan> plan, CancellationToken token)
@@ -181,14 +209,16 @@ public partial class MainWindow
         EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanTransform(w, s.Name, s.Origin, e, transform, token, doc.SourceWorld?.Mission, s.Transform,
             SourceObjectEdits.CopiesOf(s.Origin, SourceWorldProvenance(doc).Values)), token);
     private Task<DocumentModel> FlagSourceObjectAsync(DocumentModel doc, int node, uint bit, bool on, CancellationToken token) =>
-        EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanFlag(w, s.Name, s.Origin, e, bit, on, token, doc.SourceWorld?.Mission), token);
+        EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanFlag(w, s.Name, s.Origin, e, bit, on, token, doc.SourceWorld?.Mission,
+            SourceObjectEdits.CopiesOf(s.Origin, SourceWorldProvenance(doc).Values), SourceWorldModel(doc).World, doc.SourceBuild?.WriteInstruction), token);
     private Task<DocumentModel> CommandSourceObjectAsync(DocumentModel doc, int node, string command, IReadOnlyList<string> args, CancellationToken token)
     {
         if (!SourceObjectEdits.PropertyCommands.ContainsKey(command)) throw new StudioCommandException("invalid_argument", $"{command} is not a property command (see zstudio_source_world_object).");
         if (args.Count is 0 or > 8 || args.Any(a => a.Length is 0 or > 64)) throw new StudioCommandException("invalid_argument", "Give 1–8 arguments of up to 64 characters.");
         // The interpreter applies World… commands to worlds, Light… to lights and so on; others would do nothing.
         if (!CommandFits(DescribeSourceObject(doc, node).Class, command)) throw new StudioCommandException("invalid_argument", $"{command} does not apply to a {DescribeSourceObject(doc, node).Class} node.");
-        return EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanCommand(w, s.Name, s.Origin, e, command, args, token, doc.SourceWorld?.Mission), token);
+        return EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanCommand(w, s.Name, s.Origin, e, command, args, token, doc.SourceWorld?.Mission,
+            SourceWorldModel(doc).World, doc.SourceBuild?.WriteInstruction), token);
     }
 
     /// <summary>Opens Properties for a source world's object; after an edit it follows the object into the rebuilt world.</summary>
@@ -203,12 +233,14 @@ public partial class MainWindow
             transform => FollowSourceObjectAsync(doc, node, state, () => MoveSourceObjectAsync(doc, node, transform, CancellationToken.None)),
             (bit, on) => FollowSourceObjectAsync(doc, node, state, () => FlagSourceObjectAsync(doc, node, bit, on, CancellationToken.None)),
             (command, args) => FollowSourceObjectAsync(doc, node, state, () => CommandSourceObjectAsync(doc, node, command, args, CancellationToken.None)),
-            new(parent => FollowSourceObjectAsync(doc, node, state, () => ReparentSourceObjectAsync(doc, node, GameZWriter.NodeSlots(SourceWorldModel(doc).World)[SourceWorldNodeNamed(doc, parent)], CancellationToken.None)),
+            new(parent => FollowSourceObjectAsync(doc, node, state, () => ReparentSourceObjectAsync(doc, node, GameZWriter.NodeSlots(SourceWorldModel(doc).World)[SourceWorldNodeNamedNear(doc, parent, node)], CancellationToken.None)),
                 async name =>
                 {
                     var shownWindow = propertiesWindow;
+                    string? copyKey = SourceCopyKey(doc, node);
                     var next = await DuplicateSourceObjectAsync(doc, node, name, null, CancellationToken.None);
-                    if (!next.IsDisposed && SourceNodeNamed(next, name) is int copy && FollowsProperties(shownWindow, next))
+                    // A part's copy is made in every copy of the part: follow the one beside the object edited.
+                    if (!next.IsDisposed && SourceCopiesNamed(next, name, copyKey) is [int copy, ..] && FollowsProperties(shownWindow, next))
                         try { ShowSourceObjectProperties(next, copy); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
                 },
                 async () =>
@@ -259,7 +291,8 @@ public partial class MainWindow
                     load = Instruction(origin.Load), created = Instruction(origin.Created), attached = Instruction(origin.Attached),
                     writers = origin.Writers.Take(32).ToDictionary(w => w.Key, w => Instruction(w.Value))
                 },
-                editableFlags = SourceObjectPropertiesEditor.EditableFlags.Select(f => new { bit = $"0x{f.Bit:X}", label = f.Label, on = (state.Flags & f.Bit) != 0 }).ToArray(),
+                // Those its source can set: a script has no command for every flag (ClipTo).
+                editableFlags = SourceObjectPropertiesEditor.EditableFlags.Where(f => SourceObjectEdits.FlagSettable(origin, f.Bit)).Select(f => new { bit = $"0x{f.Bit:X}", label = f.Label, on = (state.Flags & f.Bit) != 0 }).ToArray(),
                 applied = origin.Applied.Take(32).Select(Instruction).ToArray(), appliedCount = origin.Applied.Count,
                 propertyCommands = SourceObjectEdits.PropertyCommands.Select(p => new { command = p.Key, arguments = p.Value, set = origin.Writers.TryGetValue(p.Key, out var w) ? w.Tokens.Skip(1).Take(16).ToArray() : null }).Where(p => p.set != null || CommandFits(state.Class, p.command)).ToArray()
             });
@@ -306,8 +339,11 @@ public partial class MainWindow
                     }
                     // Only a position: a copy in the database keeps the original's exact basis (and any mirroring).
                     bool keepBasis = moves && a["rotationDegrees"] is null && a["scale"] is null;
+                    string? copyKey = SourceCopyKey(d, node);
                     next = await DuplicateSourceObjectAsync(d, node, name, placed, token, keepBasis);
-                    return Result(new { document = DocumentState(next), copy = SourceNodeNamed(next, name) });
+                    // A part's copy is made in every copy of the part: copy is the one beside the object edited, copies all.
+                    var copies = SourceCopiesNamed(next, name, copyKey);
+                    return Result(new { document = DocumentState(next), copy = copies.Count > 0 ? copies[0] : (int?)null, copies = copies.Take(256).ToArray() });
                 }
                 if (action == "delete") return Result(new { document = DocumentState(await DeleteSourceObjectAsync(d, node, token)) });
                 if (action == "parent")

@@ -114,6 +114,8 @@ internal sealed class SourceObjectPropertiesEditor : SourcePropertiesEditor
         foreach (var (bit, label) in EditableFlags)
         {
             bool on = (state.Flags & bit) != 0;
+            // A script object's flag no script command sets (ClipTo) is shown, not offered.
+            if (!SourceObjectEdits.FlagSettable(state.Origin, bit)) { ReadOnlyText(form, $"{label}: {(on ? "on" : "off")} (no script command sets it)"); continue; }
             Input(form, label, on ? "on" : "off", _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "on or off",
                 asyncCommit: async text =>
                 {
