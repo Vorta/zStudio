@@ -57,7 +57,7 @@ public partial class MainWindow
 
     private void RegisterWorldCompareCommands(StudioCommands r)
     {
-        RegisterJob(r, "world_compare", "Compare two RECOIL GameZ worlds (gamez.zbd) of version 15, or 13 for the 1998 demos, such as a retail world and one rebuilt from a source project or a demo world, in the visible Compare worlds window (Tools → Compare worlds…). Their node trees are merged by parent-child structure: children match by name, then repeated names by structure, their children's names and position, independent of node order and slots. Each pair is the same or changed (class, flags, zone, grid cell, transform, class data, model, number of children); other nodes are only in one world. The result gives both versions, counts them, and the names several nodes share whose whole-world lookup (the engine finds a name's highest slot first) finds another node in the rebuilt world; animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every one changes behaviour. Indistinguishable copies (same parents, same contents all the way down) count as the same node. Read rows with zstudio_world_compare_tree.",
+        RegisterJob(r, "world_compare", "Compare two RECOIL GameZ worlds (gamez.zbd) of version 15, or 13 for the 1998 demos, such as a retail world and one rebuilt from a source project or a demo world, in the visible Compare worlds window (Tools → Compare worlds…). Their node trees are merged by parent-child structure: children match by name, then repeated names by their whole contents, then structure, their children's names and nearest position, independent of node order and slots. Each pair is the same or changed (class, flags, zone, grid cell, transform, class data, model, number of children); other nodes are only in one world. The result gives both versions, counts them and their differences, says whether the tree is truncated (it holds at most 500,000 rows, a node under several parents appearing under each, and 256 levels), and the names several nodes share whose whole-world lookup (the engine finds a name's highest slot first) finds another node in the rebuilt world; animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every one changes behaviour. Indistinguishable copies (same parents, same contents all the way down) count as the same node. Read rows with zstudio_world_compare_tree.",
             [P("retail", "string", "Full path of the retail (expected) world file.", true), P("rebuilt", "string", "Full path of the rebuilt (actual) world file.", true)], true, async (a, token) =>
         {
             // Arguments that cannot name a world leave no window behind.
@@ -66,9 +66,9 @@ public partial class MainWindow
             var view = await ShowCompareWindow().CompareAsync(Text(a, "retail"), Text(a, "rebuilt"), token);
             return Result(DescribeComparison(view));
         });
-        Register(r, "world_compare_tree", "Read the merged node tree of the Compare worlds window: its roots (the world node with its members, then the nodes no parent holds) or a row's children, optionally filtered before paging. A row is a pair of nodes or a node only one world has, with both slots, its status, how many rows below differ, whether a whole-world lookup of its name finds another node in the rebuilt world, and its differences (at most 16, values shortened). select shows a row's properties in the window; expand and collapse change only the window's tree.", true,
+        Register(r, "world_compare_tree", "Read the merged node tree of the Compare worlds window: its roots (the world node with its members, then the nodes no parent holds) or a row's children, optionally filtered before paging. A row is a pair of nodes or a node only one world has, with both slots, its status, how many rows below differ, whether a whole-world lookup of its name finds another node in the rebuilt world, whether the tree leaves out some of its children (truncated), and its differences (at most 16, values shortened to 256 characters and 1,024 in all, of differenceCount). It only reads the comparison, so it stays available while operations run: select shows a row's properties in the window, expand and collapse change only the window's tree, and these actions return busy while a dialog is open.", false,
             [P("context", "string", "Comparison context from zstudio_world_compare or a read; required for actions and row queries."),
-                P("action", "string", "Tree action; default read.", false, "read", "expand", "collapse", "select"),
+                P("action", "string", "Tree action; default read. expand, collapse and select change only the Compare worlds window's presentation.", false, "read", "expand", "collapse", "select"),
                 P("row", "string", "Opaque row ID: whose children to read, or the row to act on."),
                 P("differencesOnly", "boolean", "List only rows that differ, or hold differences below them. Independent of the window's checkbox; default false."),
                 .. PageParameters.Select(p => p.Name == "query" ? P("query", "string", "Case-insensitive text: rows whose node name, or a name below them, contains it. Independent of the window's filter.") : p)], a =>
@@ -81,6 +81,8 @@ public partial class MainWindow
             if (action != "read")
             {
                 if (row == null) throw new StudioCommandException("invalid_argument", "Supply the row to act on.");
+                // Like the window itself, which a modal dialog disables.
+                if (shutdownToken.IsCancellationRequested || System.Windows.Interop.ComponentDispatcher.IsThreadModal) throw new StudioCommandException("busy", "A dialog is open. Retry after it closes.");
                 if (action == "select") { for (var parent = row.Parent; parent != null; parent = parent.Parent) parent.IsExpanded = true; view.Select(row); }
                 else row.IsExpanded = action == "expand";
             }
@@ -97,23 +99,35 @@ public partial class MainWindow
     {
         var c = view.Comparison;
         return new(view.Context, view.RetailPath, view.RebuiltPath, view.RetailVersion, view.RebuiltVersion, view.RetailNodes, view.RebuiltNodes, c.Counts[WorldComparisonStatus.Same], c.Counts[WorldComparisonStatus.Changed],
-            c.Counts[WorldComparisonStatus.OnlyExpected], c.Counts[WorldComparisonStatus.OnlyActual], c.Differences.Count, c.Bindings.Count, c.Bindings.Count(b => !b.Same), c.Truncated);
+            c.Counts[WorldComparisonStatus.OnlyExpected], c.Counts[WorldComparisonStatus.OnlyActual], c.DifferenceCount, c.Bindings.Count, c.Bindings.Count(b => !b.Same), c.Truncated, c.PairingTruncated);
     }
     private sealed record Summary(string context, string retail, string rebuilt, uint retailVersion, uint rebuiltVersion, int retailNodes, int rebuiltNodes, int same, int changed, int onlyRetail, int onlyRebuilt,
-        int differences, int sharedNames, int wholeWorldLookupsDiffering, bool truncated);
+        int differences, int sharedNames, int wholeWorldLookupsDiffering, bool truncated, bool pairingTruncated);
+
+    /// <summary>
+    /// The most characters of difference values a tree row returns: a full page of rows, every character escaped, stays
+    /// well within the response limit.
+    /// </summary>
+    private const int MaximumRowDifferenceText = 1024;
 
     /// <param name="properties">Whether to add the window's property lines (both worlds side by side), as for the selected row.</param>
     private static object DescribeCompareRow(WorldCompareView view, WorldCompareRow row, bool properties = false)
     {
         var node = row.Source;
         var details = properties ? view.Details(row) : null;
+        List<object> differences = []; int text = 0;
+        foreach (var d in node.Differences.Take(16))
+        {
+            string retail = WorldCompareView.Short(d.Expected, 256), rebuilt = WorldCompareView.Short(d.Actual, 256);
+            if ((text += retail.Length + rebuilt.Length) > MaximumRowDifferenceText && differences.Count > 0) break;
+            differences.Add(new { field = WorldCompareView.Short(d.Field, 64), retail, rebuilt });
+        }
         return new
         {
             row = row.Id, name = WorldCompareView.Short(node.Name, 256), path = WorldCompareView.Short(node.Path, 512), status = WorldCompareView.Status(node),
             retailSlot = view.RetailSlot(node), rebuiltSlot = view.RebuiltSlot(node), retailClass = node.Expected?.Class.ToString(), rebuiltClass = node.Actual?.Class.ToString(),
-            childCount = node.Children.Count, differingBelow = view.NotableBelow(node), wholeWorldLookupDiffers = node.BindsElsewhere,
-            differenceCount = node.Differences.Count,
-            differences = node.Differences.Take(16).Select(d => new { field = d.Field, retail = WorldCompareView.Short(d.Expected, 256), rebuilt = WorldCompareView.Short(d.Actual, 256) }).ToArray(),
+            childCount = node.Children.Count, truncated = node.Truncated, differingBelow = view.NotableBelow(node), wholeWorldLookupDiffers = node.BindsElsewhere,
+            differenceCount = node.DifferenceCount, differences,
             expanded = row.IsExpanded, selected = row.IsSelected,
             properties = details?.Take(32).Select(d => new { field = WorldCompareView.Short(d.Field, 64), retail = WorldCompareView.Short(d.Retail, 256), rebuilt = WorldCompareView.Short(d.Rebuilt, 256), differs = d.Differs }).ToArray(),
             propertyCount = details?.Count,

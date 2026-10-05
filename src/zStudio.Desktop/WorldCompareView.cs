@@ -140,6 +140,9 @@ internal sealed class WorldCompareView
         foreach (var difference in node.Differences)
             if (difference.Field is not ("class" or "children" or "flags.carried" or "flags.derived" or "zone" or "cell"))
                 details.Add(new(difference.Field, Short(difference.Expected, 512), Short(difference.Actual, 512), true));
+        // A pair lists at most WorldComparer.MaximumNodeDifferences differences; the rest are counted.
+        if (node.DifferenceCount > node.Differences.Count)
+            details.Add(new("More differences", string.Create(CultureInfo.InvariantCulture, $"{node.DifferenceCount - node.Differences.Count} not listed"), "", true));
         return details;
 
         static string Names(IEnumerable<WorldNode> nodes) { var list = nodes.Take(13).Select(n => n.Name.Length == 0 ? "(unnamed)" : n.Name).ToList(); return list.Count == 0 ? "none" : string.Join(", ", list.Take(12)) + (list.Count > 12 ? ", …" : ""); }
@@ -179,14 +182,15 @@ public sealed class WorldCompareRow : INotifyPropertyChanged
             var node = Source; string cls = (node.Expected ?? node.Actual)!.Class.ToString();
             int? a = Owner.RetailSlot(node), b = Owner.RebuiltSlot(node);
             string slots = a == null ? $"rebuilt #{b}" : b == null ? $"retail #{a}" : a == b ? $"#{a}" : $"#{a} → #{b}";
-            int below = Owner.NotableBelow(node);
-            return $"{cls} · {slots}" + (node.Differences.Count > 0 ? $" · {node.Differences.Count} {(node.Differences.Count == 1 ? "difference" : "differences")}" : "")
-                + (below > 0 ? $" · {below} below" : "") + (node.BindsElsewhere ? " · whole-world lookup finds another node" : "");
+            int below = Owner.NotableBelow(node), count = node.DifferenceCount;
+            return $"{cls} · {slots}" + (count > 0 ? $" · {count} {(count == 1 ? "difference" : "differences")}" : "")
+                + (below > 0 ? $" · {below} below" : "") + (node.BindsElsewhere ? " · whole-world lookup finds another node" : "") + (node.Truncated ? " · more children not shown" : "");
         }
     }
     public string ToolTip => $"{WorldCompareView.Short(Source.Path, 1024)}\n{WorldCompareView.Status(Source)}" +
         (Source.BindsElsewhere ? "\nA whole-world lookup of this name (highest slot first) finds this node in the retail world, but another node in the rebuilt one. Animations bind roots and fall back to such lookups; names inside an animation are searched in its own subtrees first." : "") +
-        string.Concat(Source.Differences.Take(6).Select(d => $"\n{d.Field}: {WorldCompareView.Short(d.Expected, 120)} → {WorldCompareView.Short(d.Actual, 120)}")) + (Source.Differences.Count > 6 ? "\n…" : "");
+        (Source.Truncated ? $"\nSome of its children are not shown: the merged tree stops at {WorldComparer.MaximumTreeNodes:N0} rows or 256 levels." : "") +
+        string.Concat(Source.Differences.Take(6).Select(d => $"\n{d.Field}: {WorldCompareView.Short(d.Expected, 120)} → {WorldCompareView.Short(d.Actual, 120)}")) + (Source.DifferenceCount > 6 ? "\n…" : "");
 
     private IReadOnlyList<WorldCompareRow>? children, visible;
     public IReadOnlyList<WorldCompareRow> Children => children ??= [.. Source.Children.Select(c => Owner.New(c, this))];
