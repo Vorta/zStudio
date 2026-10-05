@@ -166,7 +166,7 @@ internal sealed class GameZReader : IZbdFormatReader
             "none" => (0, null),
             "camera" => (488, "GAMEZ_CAMERA_LAYOUT"),
             "display" => (28, "GAMEZ_DISPLAY_LAYOUT"),
-            "object3d" => (144, "GAMEZ_OBJECT3D_LAYOUT"),
+            "object3d" => (version.Object3DSize, "GAMEZ_OBJECT3D_LAYOUT"),
             "lod" => (80, "GAMEZ_LOD_LAYOUT"),
             "light" => (version.LightSize, "GAMEZ_LIGHT_LAYOUT"),
             "world" => (version.WorldSize, "GAMEZ_WORLD_LAYOUT"),

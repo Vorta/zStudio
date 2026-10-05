@@ -26,7 +26,7 @@ public sealed record TexturePackVariant(string FileName, TexturePackKind Kind, l
     {
         string name = Path.GetFileName(fileName).ToLowerInvariant();
         if (name == "image.zbd") return new(name, TexturePackKind.Interface, null, 1024);
-        if (name == "texturemax.zbd") return new(name, TexturePackKind.Software, null, 1024);
+        if (name == "texturemax.zbd") return new(name, TexturePackKind.Software, null, TexturePackBuilder.SoftwareMaximumDimension);
         foreach (var (prefix, kind) in new[] { ("rtexture", TexturePackKind.Hardware), ("texture", TexturePackKind.Software) })
             if (name.StartsWith(prefix, StringComparison.Ordinal) && name.EndsWith(".zbd", StringComparison.Ordinal)
                 && int.TryParse(name.AsSpan(prefix.Length, name.Length - prefix.Length - 4), NumberStyles.None, CultureInfo.InvariantCulture, out int megabytes) && megabytes is >= 1 and <= 1024)
@@ -47,11 +47,18 @@ public sealed record PackTexture(string Name, string SortKey, DecodedImage Maste
 /// <summary>Result of building a pack: its bytes and, per texture, the stored size.</summary>
 public sealed record TexturePackBuild(byte[] Bytes, IReadOnlyList<(string Name, int Width, int Height)> Sizes, int Pages, IReadOnlyList<string> Warnings);
 
+/// <summary>How a texture is transparent: not at all, by a colour key (alpha only 0 or 255) or by an alpha plane.</summary>
+public enum TextureTransparency { Opaque, Keyed, Alpha }
+
 /// <summary>Builds complete texture packs from master images: sizing, transparency, palettes and the pack layout.</summary>
 public static class TexturePackBuilder
 {
     public const int MinimumDimension = 8, MaximumRecords = 4096;
-    private enum Transparency { Opaque, Keyed, Alpha }
+    /// <summary>
+    /// The widest texture the software renderer draws: its spans switch on 20 − log2(width) with cases 10–17 only (retail
+    /// 0x49bbf0, CalcPow2ScratchFields 0x4902b0), so a wider texture is skipped without drawing.
+    /// </summary>
+    public const int SoftwareMaximumDimension = 1024;
 
     public static TexturePackBuild Build(IReadOnlyList<PackTexture> textures, TexturePackVariant variant, CancellationToken token = default)
     {
@@ -68,7 +75,7 @@ public static class TexturePackBuilder
         bool threeD = variant.Kind != TexturePackKind.Interface;
         var modes = ordered.Select(t => Classify(t.Master)).ToArray();
         bool Paletted(int i) => variant.Kind == TexturePackKind.Software && !ordered[i].Direct;
-        long Cost(int i, int w, int h) => (long)w * h * (Paletted(i) ? 1 : 2) + (modes[i] == Transparency.Alpha ? (long)w * h : 0);
+        long Cost(int i, int w, int h) => (long)w * h * (Paletted(i) ? 1 : 2) + (modes[i] == TextureTransparency.Alpha ? (long)w * h : 0);
         var sizes = ordered.Select(t => threeD ? Normalize(t.Master.Width, t.Master.Height, variant) : (t.Master.Width, t.Master.Height)).ToArray();
         if (variant.BudgetBytes is { } budget) Fit(sizes, Cost, budget, variant, token, warnings);
 
@@ -99,7 +106,7 @@ public static class TexturePackBuilder
     }
 
     /// <summary>Opaque when every alpha is 255; colour-keyed when alpha is only 0 or 255 (1555 on hardware keeps more colour); else an alpha plane.</summary>
-    private static Transparency Classify(DecodedImage image)
+    public static TextureTransparency Classify(DecodedImage image)
     {
         bool translucent = false, transparent = false;
         for (int i = 3; i < image.Rgba.Length; i += 4)
@@ -107,13 +114,14 @@ public static class TexturePackBuilder
             byte a = image.Rgba[i];
             if (a == 0) transparent = true; else if (a != 255) { translucent = true; break; }
         }
-        return translucent ? Transparency.Alpha : transparent ? Transparency.Keyed : Transparency.Opaque;
+        return translucent ? TextureTransparency.Alpha : transparent ? TextureTransparency.Keyed : TextureTransparency.Opaque;
     }
 
     /// <summary>3D textures are powers of two from 8 up to the variant's limit; hardware also needs aspect ≤ 8 (always enforced by CreateTextureRecord).</summary>
-    private static (int Width, int Height) Normalize(int width, int height, TexturePackVariant variant)
+    internal static (int Width, int Height) Normalize(int width, int height, TexturePackVariant variant)
     {
-        static int Pow2(int v) { int p = 1; while (p < v) p <<= 1; return p > v && p - v > v - p / 2 ? p / 2 : p; }
+        // Nearest power of two, at most 2^30 (shifting further would overflow and never end).
+        static int Pow2(int v) { int p = 1; while (p < v && p < 1 << 30) p <<= 1; return p > v && p - v > v - p / 2 ? p / 2 : p; }
         int w = Math.Clamp(Pow2(width), MinimumDimension, variant.MaximumDimension), h = Math.Clamp(Pow2(height), MinimumDimension, variant.MaximumDimension);
         while (w > h * 8) w /= 2;
         while (h > w * 8) h /= 2;
@@ -212,7 +220,7 @@ public static class TexturePackBuilder
     /// packs do (12–18 pages); every page and palette is expanded per fog/shade recipe at load, so pages are shared.
     /// Entry 0 is black and reserved: keyed and fully transparent texels use it, opaque texels never do.
     /// </summary>
-    private static void BuildPages(int[] members, DecodedImage[] images, Transparency[] modes, int[] pageOf, List<ushort[]> pages, CancellationToken token)
+    private static void BuildPages(int[] members, DecodedImage[] images, TextureTransparency[] modes, int[] pageOf, List<ushort[]> pages, CancellationToken token)
     {
         int k = Math.Clamp((members.Length + 23) / 24, 1, 16);
         var means = members.ToDictionary(i => i, i => Mean(images[i]));
@@ -243,7 +251,7 @@ public static class TexturePackBuilder
             int[] histogram = new int[65536];
             foreach (int i in group)
                 for (int p = 0; p < images[i].Width * images[i].Height; p++)
-                    if (images[i].Rgba[p * 4 + 3] >= (modes[i] == Transparency.Keyed ? 128 : 1)) histogram[Rgb565(images[i].Rgba, p)]++;
+                    if (images[i].Rgba[p * 4 + 3] >= (modes[i] == TextureTransparency.Keyed ? 128 : 1)) histogram[Rgb565(images[i].Rgba, p)]++;
             histogram[0] = 0;
             var colors = TexturePackWriter.Quantize(histogram, 255, token);
             ushort[] palette = [0, .. colors.Where(color => color != 0)];
@@ -268,23 +276,23 @@ public static class TexturePackBuilder
     internal static ushort Rgb565(byte[] rgba, int pixel) =>
         (ushort)(((rgba[pixel * 4] * 31 + 127) / 255 << 11) | ((rgba[pixel * 4 + 1] * 63 + 127) / 255 << 5) | ((rgba[pixel * 4 + 2] * 31 + 127) / 255));
 
-    private static void WriteImage(BinaryWriter w, DecodedImage image, Transparency mode, int addressing, ushort[]? palette, CancellationToken token)
+    private static void WriteImage(BinaryWriter w, DecodedImage image, TextureTransparency mode, int addressing, ushort[]? palette, CancellationToken token)
     {
         int count = image.Width * image.Height;
         // Format bits: 0x01 16-bit colour words, 0x02 transparent, 0x04 opaque marker, 0x08 alpha plane, 0x10 page palette.
-        byte flags = (byte)((palette == null ? 0x01 : 0x11) | mode switch { Transparency.Opaque => 0x04, Transparency.Keyed => 0x02, _ => 0x0A });
+        byte flags = (byte)((palette == null ? 0x01 : 0x11) | mode switch { TextureTransparency.Opaque => 0x04, TextureTransparency.Keyed => 0x02, _ => 0x0A });
         w.Write(flags); w.Write((byte)0); w.Write((ushort)0);
         w.Write((ushort)image.Width); w.Write((ushort)image.Height); w.Write(0u);
         w.Write((ushort)(palette == null ? 0 : 256)); w.Write((ushort)(addressing & 3));
-        bool Opaque(int p) => mode switch { Transparency.Opaque => true, Transparency.Keyed => image.Rgba[p * 4 + 3] >= 128, _ => image.Rgba[p * 4 + 3] > 0 };
+        bool Opaque(int p) => mode switch { TextureTransparency.Opaque => true, TextureTransparency.Keyed => image.Rgba[p * 4 + 3] >= 128, _ => image.Rgba[p * 4 + 3] > 0 };
         if (palette == null)
             for (int p = 0; p < count; p++)
             {
                 if ((p & 4095) == 0) token.ThrowIfCancellationRequested();
                 // Keyed textures store the key; alpha-plane textures keep the colour under any alpha.
-                ushort color = mode == Transparency.Alpha || Opaque(p) ? Rgb565(image.Rgba, p) : (ushort)0;
+                ushort color = mode == TextureTransparency.Alpha || Opaque(p) ? Rgb565(image.Rgba, p) : (ushort)0;
                 // Opaque black would read as a hole in a keyed texture.
-                if (mode == Transparency.Keyed && color == 0 && Opaque(p)) color = 0x0020;
+                if (mode == TextureTransparency.Keyed && color == 0 && Opaque(p)) color = 0x0020;
                 w.Write(color);
             }
         else
@@ -299,7 +307,7 @@ public static class TexturePackBuilder
                 w.Write(index);
             }
         }
-        if (mode == Transparency.Alpha) w.Write(image.Rgba.Where((_, i) => i % 4 == 3).ToArray());
+        if (mode == TextureTransparency.Alpha) w.Write(image.Rgba.Where((_, i) => i % 4 == 3).ToArray());
     }
     private static byte Nearest(ushort[] palette, ushort color)
     {

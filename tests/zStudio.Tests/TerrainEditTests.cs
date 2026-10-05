@@ -90,7 +90,7 @@ public sealed class TerrainEditTests
         // Painting a region rebuilds the pieces: four cells, plus the painted road's own pieces.
         SourceTerrain.Edit(workspace, "data/m1/models/terrain/hills.terrain.json", "Add road", r => TerrainEdits.AddRegion(r, new("road", [], new([]), new() { Craters = TerrainCraters.Blocked })), Token);
         SourceTerrain.Edit(workspace, "data/m1/models/terrain/hills.terrain.json", "Paint road", r => TerrainEdits.Paint(r, "road", TerrainShapes.Stroke([new(220, 250), new(280, 250)], 4), add: true), Token);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token);
+        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         var pieces = world.Nodes.Where(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).ToArray();
         Assert.Equal(4, pieces.Count(p => (p.Flags & 0x20000) == 0));

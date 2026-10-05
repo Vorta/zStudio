@@ -59,6 +59,9 @@ public sealed partial class AnimationCompiler
             BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(160), (float)((double)range * range));
             BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(164), reset);
             BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(172), health);
+            // The countdown starts at the health too: the loader keeps the stored value, and only a stop copies 172 into it
+            // (FinalizeStop 0x45d3d0), so an entry without load cleanup would otherwise trigger on its first hit.
+            BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(176), health);
 
             AnimationEntry entry = new(header, index, -1);
             entry.Primary = Sequence("RESET_SEQUENCE", item.Item("RESET_STATE")?.Items ?? []);

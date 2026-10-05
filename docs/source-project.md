@@ -6,25 +6,28 @@ A source project is separate from editing ZBD files directly. Opening a ZBD file
 
 ## Reconstruct, check and export
 
-- **Tools → Reconstruct source project…** asks for the shipped data folder (the folder containing `interp.zbd`, `zrdr.zbd` and `m1\`) and a new or empty destination outside it, then optionally opens the project as the workspace root. MCP: `zstudio_source_reconstruct`.
+The welcome screen offers both ways to work. **Edit compiled ZBD assets → Choose a ZBD folder…** opens game files for direct editing. Under **Work with source project**, **Initialize** opens a dialog with the retail ZBD folder and a new or empty project folder (type them or use **Browse…**); **Initialize and open** becomes available once both are given, shows the reconstruction's progress, keeps the dialog open with the reason if a folder is refused (for example files that are not the original ones), and opens the project when it is done. **Cancel** stops a running reconstruction and removes what it wrote. **Open** opens an initialized project and refuses a folder without `data` and `gamegen`. MCP: `zstudio_source_reconstruct` and `zstudio_open_root` with `project`.
+
 - **Tools → Check source project** builds every game file in memory and reports failures and warnings without writing. MCP: `zstudio_source_export` without `destination`.
 - **Tools → Export all ZBD files…** builds every game file into a folder outside the project. MCP: `zstudio_source_export` with `destination`.
 - **Tools → Export ZBD file** lists the game files the project can build; choosing one exports only that file. MCP: `zstudio_source_export` with `outputs`, for example `["m1/zrdr.zbd"]`.
 - `zstudio_source_status` lists the game files the project can build and the sources of each, and the project's build profiles.
+- **Check and export report lookups by name.** The game finds some nodes by name as a mission loads: the texture-effect scripts' `FindNode` (`gamegen/mN_zbd.gs` and the scripts it sources), each animation's root, its attach node when the root lacks it, the names inside an animation that neither the attach node's nor the root's subtree has, and the first node of each activation prerequisite path. Where several nodes share the name, the game takes the highest slot, the node made last. Check and export list each such lookup in Problems (Info) with the node the game finds. An export that replaces a mission's files also warns about every lookup that now finds another node than those files did. In a source world, an edit that does so is reported in Problems, until it is saved or taken back; copying an object, for example, copies its parts with their names, and the copies are newer.
+- **Tools → Compare worlds…** shows two worlds, such as a shipped `gamez.zbd` and an exported one, as one node tree merged by parent-child structure, whatever the order of their nodes (see [Known differences](#known-differences)). MCP: `zstudio_world_compare` and `zstudio_world_compare_tree`.
 - **Tools → Build profile** chooses which texture packs exports and checks build (see [Build profiles](#build-profiles)). MCP: `zstudio_source_export` with `profile`.
 - **Tools → Open mission world** shows a mission's world as its build script assembles it from the project; its placements, objects, fog and lights are edited there, models are added from any folder of the project, and models round-trip through Blender (see [Mission worlds](#mission-worlds)). MCP: `zstudio_source_world_open` and the commands named there.
 
-The export commands appear when the open folder is a source project, which is any folder with both `data` and `gamegen` subfolders. What it can build is derived from those folders; zStudio's own working data (Blender checkouts, save journals) lives in a separate `zstudio` folder that builds never read (see [The zstudio folder](#the-zstudio-folder)).
+The export commands appear when the open folder is a source project, which is any folder with both `data` and `gamegen` subfolders. What it can build is derived from those folders; zStudio's own working data (Blender checkouts, save journals, the mission worlds it shows) lives in a separate `zstudio` folder that builds never read (see [The zstudio folder](#the-zstudio-folder)).
 
 When the destination already has some of the selected game files, the GUI asks before replacing them; MCP needs `overwrite`. Without it, a game file that appears in the destination while the export runs is not replaced either. Other files in the destination are left alone, so a game installation can be the destination. All outputs are built, reopened through the shared readers and staged first; if any output fails, nothing is written, and a check reports every output with its failure or warnings. Publication moves replaced files aside and restores them if a later step fails. Unsaved edits to project files, including additions to an open mission world, must be saved or discarded before exporting, because exports read the files on disk.
 
 Exports read every source file once and check that none changed before anything is written; an edit made while an export runs fails the export rather than mixing two states. Opening another folder cancels a running export.
 
-Reconstruction supports RECOIL data and requires RECOIL evidence (prepared scripts, a version-15 world or a version-28 animation program); MechWarrior 3 folders are refused. A project is reconstructed once, from the original game files, and from then on only exported: zStudio unpacks only files whose resource archives carry the animation definitions every `anim.zbd` was compiled from, which the shipped ones do and zStudio's exports do not, and refuses any other folder with "zStudio can unpack only the original ZBD files." A canceled or failed reconstruction removes everything it wrote, so the same folder can be used again. Projects and export folders can never be the protected `zbd_1998`/`zbd_1999` corpora, overlap their input (also when spelled through a short name, a SUBST drive or a link above the input), or pass through links. Text sources larger than 16 MiB are refused before they are decoded.
+Reconstruction supports RECOIL data and requires RECOIL evidence (prepared scripts, a version-15 world or a version-28 animation program); MechWarrior 3 folders are refused, and so are the 1998 demos' folders (GameZ version 13), whose worlds open read-only. A project is reconstructed once, from the original game files, and from then on only exported: zStudio unpacks only files whose resource archives carry the animation definitions every `anim.zbd` was compiled from, which the shipped ones do and zStudio's exports do not, and refuses any other folder with "zStudio can unpack only the original ZBD files." A canceled or failed reconstruction removes everything it wrote, so the same folder can be used again. Projects and export folders can never be the protected `zbd_1998`/`zbd_1999` corpora, overlap their input (also when spelled through a short name, a SUBST drive or a link above the input), or pass through links. Text sources larger than 16 MiB are refused before they are decoded.
 
 ## Mission worlds
 
-In a source project, a mission's world is what its build script (`gamegen\mN.gs`) assembles from the project's sources, so the world editor edits those sources. **Tools → Open mission world** lists the missions with a world script; choosing one builds that mission privately, as the export would (the world, its animations and resources, and a full-quality texture pack), into a temporary folder outside the project, and shows it in Whole world with its mission context. Build problems are listed in Problems under the script's path.
+In a source project, a mission's world is what its build script (`gamegen\mN.gs`) assembles from the project's sources, so the world editor edits those sources. **Tools → Open mission world** lists the missions with a world script; choosing one builds that mission privately, as the export would (the world, its animations and resources, and a full-quality texture pack), into the project's `zstudio\cache\worlds` folder, and shows it in Whole world with its mission context. Build problems are listed in Problems under the script's path.
 
 ### One workspace per project
 
@@ -49,7 +52,7 @@ MCP: `zstudio_pickup_lock`, `zstudio_pickup_move`, `zstudio_scene_card`.
 
 ### World objects
 
-Every object of the built world knows the source that made it: a node of the mission database (`data\mN\models\mN.gltf`), a node of a model file, or the script instruction that loaded or created it, with the instruction that last set each property.
+Every object of the built world knows the source that made it: a node of the mission database (`data\mN\models\mN.gltf` or one of its parts, `mN_NN.gltf`), a node of a model file, or the script instruction that loaded or created it, with the instruction that last set each property.
 
 Properties of an object (or `zstudio_source_world_object`) shows its source, its position, rotation (degrees about Y, then X, then Z) and scale, and its flags:
 - standable (altitude surface);
@@ -61,7 +64,7 @@ Properties of an object (or `zstudio_source_world_object`) shows its source, its
 - no craters (ClipTo).
 
 Editing them (or `zstudio_source_world_object_edit`) changes that source:
-- **Database or model nodes:** a database node changes its glTF node's transform or engine flags. A model file's node changes for every load of that file, and Properties says so.
+- **Database or model nodes:** a database node changes its glTF node's transform or engine flags, in the database file or in the part that holds it. A part is copied wherever the database references it, so an edit of a part applies to each copy, and Properties says so (`origin.part` in `zstudio_source_world_object`). A model file's node changes for every load of that file, and Properties says so.
 - **Script-placed objects:** the instruction that set the value changes, for example `Object3DTranslate 110.0 5.0 -50.0`. A value no instruction set yet is added after the instruction that created the object.
 - **Refused:**
   - an instruction that runs more than once while the world is built, which would change several objects;
@@ -73,10 +76,10 @@ Editing them (or `zstudio_source_world_object_edit`) changes that source:
 
 | Object | Copy | Delete | Move to another parent |
 | --- | --- | --- | --- |
-| A node of the mission database | A copy of the glTF node and its descendants, beside it, sharing its meshes | The glTF node and its descendants leave the file | Moves in the glTF file, under another database node or to the world, keeping its place |
+| A node of the mission database or one of its parts | A copy of the glTF node and its descendants, beside it, sharing its meshes | The glTF node and its descendants leave the file | Moves in its glTF file, under another node of that file or to the world (a part's node: to the top of its part), keeping its place and its zone |
 | An object a script loaded | The load is repeated before the world is written: `SetModelDirectory`, `LoadGameGen`, its flag and transform commands, `FindNode` and `AddChild` | Every instruction that loaded, changed or attached it becomes a comment (`# LoadGameGen …`), so the rest of the script runs as before | Its `AddChild` becomes a comment and a new one attaches it before the world is written; its transform changes so it stays in place |
 
-Names are written into scripts and found by name, so a copy needs a name no node has, and a parent found by name must be the only node with it. A template (a loaded model no node holds, which resources place copies of) cannot be copied or moved, and objects other instructions use (a camera's horizon, a world's light) cannot be deleted. Animations and resources that find a deleted object by name no longer find it; Problems lists what the rebuild reports.
+Names are written into scripts and found by name, so a copy needs a name no node has, and a parent found by name must be the only node with it, or the copies of one node of a part of the mission database (the part's file changes the same through any of them). A node the file places under several parents (an instance, such as the node holding 1999 m9's gate under sgate1–sgate8), and anything inside it, is edited in Blender instead: the build reads its first copy, so changing that copy alone would let the others come back. Nothing moves into such a node either, which would place it under every parent. Copying is refused while a script takes a part out of the object or acts on a part its file holds elsewhere (morfUtil.gw's morph LODs), a level-of-detail node moves only under a parent standing where its parent does, and a node a script left with no parent moves only in the scripts. An object a script attaches elsewhere is copied in the scripts, as is a script-loaded object whose parts scripts change; nothing moves under a node a script took out of the world. Since the build finds nodes by name, a copy or move in a glTF file is taken back when its rebuild makes any script instruction act on another node. Script transforms hold no shear, so a script object does not move under or out of a turned parent whose scale is not uniform, and a node whose transform holds a shear or a zero scale keeps its rotation and scale; a scale of 0 (or below 0.00001) is refused, since it leaves no rotation to read back, and a move that would flatten a node or place it beyond ±1,000,000 of its new parent is refused. A move that would change a node's zone writes the zone it had; a part's node whose copies take different zones from their references cannot move where a zone of its file would replace them. A template (a loaded model no node holds, which resources place copies of) cannot be copied or moved, and objects other instructions use (a camera's horizon, a world's light) cannot be deleted. Animations and resources that find a deleted object by name no longer find it; Problems lists what the rebuild reports.
 
 **Out-of-date worlds.** When another world's edit or an undo changed a source this world was built from, its node, line and archive references are out of date: edits made from it are refused until it is reloaded. Undo, Add model and Update from Blender export do not depend on them.
 
@@ -115,11 +118,11 @@ Terrain is authored as unsplit surfaces in glTF (from Blender) plus a **terrain 
   Each stroke adds or removes the area a round brush of the given radius covers, as one undoable change, and the world rebuilds. Escape drops a stroke in progress. MCP: `zstudio_source_terrain`, `zstudio_source_terrain_edit`.
 - **Viewing.** The Whole world highlight modes show craters allowed (CanModify), no craters (ClipTo), non-default soils and **zones** (each surface in its node zone's colour, grey for any).
 - **Convert to editable terrain** (**Tools → Convert to editable terrain…**, MCP `zstudio_source_terrain_convert`) turns a shipped map's hand-cut pieces into terrain:
-  - **Which pieces.** The mission database's untransformed mesh roots become surfaces of a recipe beside the database (`mN_terrain.gltf` with `mN_terrain.terrain.json`).
+  - **Which pieces.** The mission database's untransformed mesh objects (its roots, and the objects its groups hold) become surfaces of a recipe beside the database (`mN_terrain.gltf` with `mN_terrain.terrain.json`). The recipe's marker stands among the roots where the first piece, or the group holding it, stood; emptied groups stay. Pieces in the database's parts stay objects, because every copy of a part shares its file.
   - **Surfaces.** Pieces with the same node flags, zone and model values (lighting, scrolling) share a surface, except where they overlap in plan view: those go to separate surfaces, so stacked sheets stay separate nodes. Every piece compiled from a surface takes its mesh's model values.
   - **What stays.** Every polygon keeps its corners, UVs, normals and material (with its zones and soil), and each surface gets its pieces' exact flags and zone.
-  - **Kept as objects:** the horizon and other landmarks, transformed or grouped nodes, references, shared nodes, pieces that collide by their bounding box or are proximity nodes (both depend on a node's own bounds), facades, pieces with lens flares, and any piece a script, resource or animation names or matches by wildcard. The dialog lists them with reasons before anything changes.
-  - **Acceptance.** After converting, zStudio compares the altitude probe over the converted area in the world before and after: heights, polygon zones, soils, node flags and zones, searching each point's grid cell and the world's own list as the engine does. On the 1999 data, M1, M5 and M6 give the same results at every sample point. Searched per cell, the converted terrain also finds ground at a few points along cell edges (M1 67, M5 3, M6 7 of up to 1.2 million) where an original piece overhung into a neighbouring cell that does not search it.
+  - **Kept as objects:** the horizon and other landmarks, transformed nodes and nodes with children, references and the database's parts, shared nodes, pieces that collide by their bounding box or are proximity nodes (both depend on a node's own bounds), facades, pieces with lens flares, and any piece a script, resource or animation names or matches by wildcard. The dialog lists them with reasons before anything changes.
+  - **Acceptance.** After converting, zStudio compares the altitude probe over the converted area in the world before and after: heights, polygon zones, soils, node flags and zones, searching each point's grid cell and the world's own list as the engine does. On the 1999 data, M1, M5 and M6 give the same results at every sample point (M1 converts 210 pieces, M5 132 and M6 315; the pieces in M1's and M5's parts stay). Searched per cell, the converted terrain also finds ground at a few points along cell edges (M1 39, M5 3, M6 7 of up to 1.2 million) where an original piece overhung into a neighbouring cell that does not search it.
   - **What is lost:** the original piece layout and names, and possibly how many crater models a crater creates. Undo takes the conversion back.
 
 Not yet:
@@ -140,7 +143,7 @@ Not yet:
 The edit adds the lines the shipped scripts use to load a model, before the line that writes the world:
 
 ```
-SetModelDirectory ..\data\m2\models\bft
+SetModelDirectory ..\data\common\models
 LoadGameGen ltank.flt ltank
 ```
 
@@ -159,7 +162,7 @@ Exports of the mission then include the model's geometry and materials, every te
 
 The round trip uses only files:
 
-1. **Check out.** **Tools → Edit in Blender…** (or `zstudio_source_blender_checkout`) copies the model of the selected object into the project's `zstudio\export\<checkout>\input` folder: its glTF, buffer and textures, as the workspace holds them.
+1. **Check out.** **Tools → Edit in Blender…** (or `zstudio_source_blender_checkout`) copies the model of the selected object into the project's `zstudio\export\<checkout>\input` folder: its glTF, buffer and textures, as the workspace holds them. The copy shows transparent textures and hides pickup collision volumes as the game does ([Worlds and models](#worlds-and-models)), also for projects reconstructed before models carried that.
 2. **Edit and export.** Import that glTF in Blender, edit it, and export it with **glTF 2.0**, format **glTF Separate (.gltf + .bin + textures)**, with **Custom Properties** on, into the checkout's `outbox` folder.
 3. **Update.** **Tools → Update from Blender export…** (or `zstudio_source_blender_update`) applies the newest export after confirmation.
    - The export is sealed: copied into `sealed\` while checking that Blender finished writing it.
@@ -193,9 +196,10 @@ A file another program changed since is left alone. Until the decision, the proj
 zStudio keeps its working data in the project's `zstudio\` folder:
 - `export\` holds Blender checkouts;
 - `recovery\` holds save journals;
-- `staging\` holds files being prepared.
+- `staging\` holds files being prepared;
+- `cache\worlds\` holds the builds of the mission worlds zStudio shows, one folder per open world, removed when the world closes. A folder left by a zStudio that ended without closing its world is removed the next time a world of the project opens.
 
-Builds never read it. Leave it out when sharing a project. It is safe to delete when no save was interrupted and no Blender edit is pending.
+Builds never read it, and Files does not list `cache\`. Leave the folder out when sharing a project. `cache\` is safe to delete while no world of the project is open; the whole folder is safe to delete when no save was interrupted and no Blender edit is pending.
 
 ## Build profiles
 
@@ -203,8 +207,12 @@ A build profile says which mission texture packs an export builds, with what tex
 
 | Profile | Packs | Status |
 | --- | --- | --- |
-| `original` | What the game shipped: `rtexture2`, `rtexture4` (256-texel textures), `texture2`, `texture4`, `texture6` | Measured |
-| `modern` (default) | `original` plus `rtexture8` and `rtexture16` (up to 1024 texels), `texture8` and `texturemax` | Experimental until measured in the game |
+| `original` | What each mission shipped with: `rtexture2`, `rtexture4` (256-texel textures), `texture2` and `texture4` everywhere, `texture6` in m1–m6 and m13, and `texture8` in m6 alone | Measured |
+| `modern` (default) | `rtexture2`, `rtexture4`, `texture2`, `texture4` and `texture6` in every mission, plus `rtexture8` and `rtexture16` (up to 1024 texels), the automatic `rtexture<N>` when a mission's textures outgrow `rtexture16` (at most 256 MB), `texture8` and `texturemax` | Experimental until measured in the game |
+
+`texture8` and `texturemax` serve only the software renderer; Direct3D, which every modern setup uses, loads `rtexture` packs. So larger textures reach Direct3D through the automatic pack: when a mission's textures at full size need more texture memory than its largest fixed `rtexture` pack, the export adds `rtexture<N>.zbd`, N that memory in MB (two bytes a texel) rounded up to a power of two. It holds every texture at full size, up to its largest side. Above its budget (256 MB in `modern`, because the game is a 32-bit process) it is `rtexture<budget>.zbd`, the textures are reduced to fit, and the export says so. The size is read from the PNG headers when the export is planned; textures a world brings from other missions' folders are not counted. The game skips a pack whose N is above the texture memory the card reports.
+
+Either way, the textures come from the project's PNGs, which reconstruction takes from each texture's largest copy in any pack: in m6 that is often `texture8`, the only pack that holds 100 of its textures at full size.
 
 A project can add or replace profiles with files in `gamegen\build-profiles\` (builds never read them otherwise); the file name is the profile's name, and one may be the default:
 
@@ -218,14 +226,17 @@ A project can add or replace profiles with files in `gamegen\build-profiles\` (b
   "texturePacks": [
     { "file": "rtexture2.zbd", "budgetMiB": 2, "maximumDimension": 256 },
     { "file": "rtexture32.zbd", "budgetMiB": 32, "maximumDimension": 2048 },
-    { "file": "texture6.zbd" }
+    { "file": "texture6.zbd" },
+    { "file": "texture8.zbd", "missions": ["m6"] }
   ]
 }
 ```
 
 - `budgetMiB` is the pack's texel budget (textures shrink to fit it); `null` keeps every texture at full size. Omitted values come from the pack's name, as before.
-- `maximumDimension` is a power of two from 8 to 4096.
-- A profile lists at least one `rtexture` pack, since the Direct3D renderer reads only those.
+- `"file": "rtexture*.zbd"` is the automatic pack described above. Its `budgetMiB` is the largest pack it makes, a whole number from 1 to 1024 (default 256).
+- `maximumDimension` is a power of two from 8 to 4096, and at most 1024 for the software packs (`texture<N>`, `texturemax`): the software renderer does not draw wider textures.
+- `missions` limits a pack to some mission folders (`["m6"]`); without it, every mission gets the pack.
+- A profile lists at least one `rtexture` pack without `missions` (the automatic one counts), so that every mission gets one: the Direct3D renderer reads only those, and without one it falls back to the software packs and refuses them.
 - Export results and `zstudio_source_export` name the profile used. When the destination already holds an `rtexture` pack the profile does not build, the export warns: the game picks packs by size and could load that one instead.
 
 ## Layout
@@ -236,7 +247,7 @@ A project can add or replace profiles with files in `gamegen\build-profiles\` (b
   data\                        the original source tree
     common\zrdr\{enemies,explosns,lighting,vtol,weapons}\*.zrd
     common\multi_bft\{zrdr,model,textures}\
-    common\{models,textures}\  common\effects\{models,textures}\  effects\{models,textures}\
+    common\{models,textures}\  common\effects\{models,textures}\
     common\sounds\*.wav         common\{fonts,images}\*.png
     mN\models\*.gltf/.bin       mN\models\bft\     (the mission database mN.gltf and its loads)
     mN\textures\*.png           mN\textures\bft\
@@ -273,7 +284,7 @@ Reconstruction lists shipped files whose family it does not reconstruct. They ar
 
 ### Textures
 
-Each texture becomes one PNG from its best-quality stored variant (the largest, preferring direct colour at equal size) in the folder the mission packs' record order places it: `data\effects\textures`, `data\common\textures`, the mission's `textures` and `textures\bft`, or `data\common\multi_bft\textures` for multiplayer missions. Packs are built from the PNGs on export: hardware packs (`rtexture`) as RGB565 with an alpha plane, software packs (`texture`) with shared palettes, and damage masks and player-vehicle skins in direct colour. Besides the shipped 2 and 4 MB packs, exports add `rtexture8`/`rtexture16` and `texture8`/`texturemax`, which the engine loads when the card or the TextureMemory setting allows, so modern cards get every texture at full quality. A texture's edge mode (clamp or wrap) comes from the glTF samplers that use it.
+Each texture becomes one PNG from its best-quality stored variant (the largest, preferring direct colour at equal size) in the folder the mission packs' record order places it: `data\common\effects\textures`, `data\common\textures`, the mission's `textures` and `textures\bft`, or `data\common\multi_bft\textures` for multiplayer missions. Packs are built from the PNGs on export: hardware packs (`rtexture`) as RGB565 with an alpha plane, software packs (`texture`) with shared palettes, and damage masks and player-vehicle skins in direct colour. Besides the shipped 2 and 4 MB packs, exports add `rtexture8`/`rtexture16` and `texture8`/`texturemax`, which the engine loads when the card or the TextureMemory setting allows, so modern cards get every texture at full quality. A texture's edge mode (clamp or wrap) comes from the glTF samplers that use it.
 
 ### Worlds and models
 
@@ -287,7 +298,22 @@ Models are glTF 2.0 with PNG textures, editable in Blender. Textures are separat
 - primitives: `polygons`, where joining triangles back into the stored polygons would not restore them (a count of fan triangles per polygon, or a corner list);
 - the scene: `rootFlags`, the flags of the node a script load creates.
 
-Reconstruction replays each mission's scripts against its shipped world and undoes their edits (attaching, renaming, rearranging) in reverse, so each load's root holds exactly its file's scene. Files go where the original tree had them as far as the scripts show ([recoil-original-worktree.md](recoil-original-worktree.md)): a file whose script chose its folder (`SetModelDirectory`, as `bftN.gw`, `bftmulti.gw` and `weapons.gw` do) goes there; a file a script run by every mission loads identically (the pickups of `pickup.gw`) goes to `data\common\models`; a mission database and the files a mission's own scripts load go to that mission's `models` folder, one copy per mission; a load that finds an identical file in a folder searched earlier uses it. External references (models named inside other models) are written beside every file that references them, so two missions sharing one keep a copy each, as they keep their shared textures. Every folder the scripts search is created, including `data\common\effects\models`, `data\effects\textures` and the vehicle folders of the multiplayer missions, which no shipped file comes from. Polygons keep their authored corners and UVs as the original build stored them (repeated corners, non-planar polygons and UVs are kept; only the tile shift and 1/256 quantization apply).
+Two settings make Blender and other glTF viewers show a model as the game draws it; builds read neither:
+
+- **Transparent textures.** The game takes transparency from the texture, not the material. A material whose PNG has alpha is marked **Alpha Blend** (`BLEND`), or **Alpha Clip** (`MASK` at 0.5) when its alpha is only 0 or 255, the texels the packs key out.
+- **Pickup collision volumes.** A pickup's `bvol` node is its collision volume: the game registers an object as a pickup only when it has one, and switches it off at once, so it is never drawn (retail `Pickup::AssignBvolGroupAndId`, 0x41DB60). Its mesh gets a fully transparent material of its own (`~hidden`, Alpha Clip with base alpha 0) that keeps the engine colour and records its opacity (`opacity: 255`), so the look never becomes the engine value. Keep the node: without it the model is no pickup. Tools that frame a model by its bounds still count the invisible volume.
+
+Reconstruction replays each mission's scripts against its shipped world and undoes their edits (attaching, renaming, rearranging) in reverse, so each load's root holds exactly its file's scene. Files go where the original tree had them as far as the scripts show ([recoil-original-worktree.md](recoil-original-worktree.md)): a file whose script chose its folder (`SetModelDirectory`, as `bftN.gw`, `bftmulti.gw` and `weapons.gw` do) goes there, except that a vehicle several missions' vehicle scripts (`bft1.gw`–`bft6.gw`) load identically from their own folders is one file in `data\common\models`, which those loads also search (a differing version stays in its mission's `models\bft`, which its loads search first), and the effect models `weapons.gw` loads after setting `data\effects\models` are kept with their textures in `data\common\effects\models`, which the same loads search (the packs show the effect textures came from `data\common\effects\textures`, although `weapons.gw` sets `data\effects\textures` too); a file a script run by every mission loads identically (the pickups of `pickup.gw`) goes to `data\common\models`; a mission database and the files a mission's own scripts load go to that mission's `models` folder, one copy per mission; a load that finds an identical file in a folder searched earlier uses it. External references (models named inside other models) are written beside every file that references them, so two missions sharing one keep a copy each, as they keep their shared textures. Only folders that hold files are created: folders the scripts search but no shipped file comes from, such as `data\effects` and the multiplayer missions' `models\bft` and `textures\bft`, are left out (the build finds nothing in a missing folder either). Polygons keep their authored corners and UVs as the original build stored them (repeated corners, non-planar polygons and UVs are kept; only the tile shift and 1/256 quantization apply).
+
+**Mission databases and their parts.** The original mission databases were several files: the database referenced files holding parts of the world (groups and objects) the way objects reference models, and the build copied each part in from a cache of it ([Engine evidence](engine-evidence.md#name-lookups-and-node-slot-order)). The order in which the build made and freed the nodes still shows in the shipped worlds' node slots, and reconstruction recovers from it:
+- the database's records in their file order, with the groups the build deleted (placeholders named `groupN`, or the name a freed slot still holds), a group's last objects after it where its part's cache shows the group closed before them, and nodes in the order they were made (the world lists some levels of detail in another order);
+- each part as a file of its own beside the database, `mN_NN.gltf` (the files' names are lost), referenced by a group node `mN_NN.flt` whose `extras.recoil.ref` names it, also inside another part; a reference with records of its own keeps them as its children in the database, and the build copies the part before them;
+- references that named one file by different paths, which the build cached separately: the later paths are written `./name.gltf`, `././name.gltf` … (counted per file written, so the first reference to another version of a file, written as `name_2.gltf`, is that file's first path), and the build keys its caches by the reference as written (ignoring case, as Windows paths do), and the models it reads by the same key. The same holds inside model files: a model that named one file by two paths (`comanche.gltf` names `hturret.gltf` once as `./hturret.gltf`) is written so in every mission that loads it;
+- an unnamed node several records share (an OpenFlight instance definition) stays one node, written with the glTF profile's instance marks; the build makes it before the file's root. A cached file's identical unnamed subtrees, which its copies show expanded, are one such definition in its cache.
+
+Since the slots alone cannot tell two loads of the same file under the same name apart, nor which of a model's references to one file took another path, reconstruction tries each reading. It then builds each mission database as the build will and keeps the reconstruction when every node takes its shipped slot (every mission of both releases), or the closest parts model it finds, which is noted. Where the slots fit several of a file's references as the one that named it by its second path, the reference whose copy has models of its own is the one (copies of one cache share its models; m3, m5), and every later reference whose copy shares those models names the file by that path too. The build makes models as the original loader did: once per cache (a file named by another path, or read again by another file, has its own), each object its own, in the order the loader read them, so a rebuilt world shares each model among the same nodes as the shipped one. Where the records start on slots several earlier caches left free (m2), it searches for where the caches end in the free list: the boundary whose caches, simulated, end there and give back their high-water mark. Where the records start inside the copy of the first cache, which goes on into the fresh slots (m6), a world that kept that cache's slots free shows it whole at the bottom of its free list: reconstruction reads it from there and simulates the caches from it. Where no model fits, the database keeps its objects in the order of their shipped slots with a group at every slot the build freed, also noted: an object made later took a later slot, so of objects that share a name the shipped one is still made last and found first, and the later loads reuse the freed slots below the database as in the game.
+
+Scripts name the project's files as written: `LoadGameGen` and the `dbName` macro name `.gltf` models and the texture commands (`CycleTextureSetMap`, `WriteTextureSetMap`, `LensFlareTexture`, `TextureAdd`) name `.png` images. Node names keep their spelling, also where they end in `.flt`.
 
 A world assembled from the reconstructed sources has the shipped nodes, placements, flags, grid cells, models and textures for every 1998 and 1999 mission. A mission's loads of the same file share its models, so it can have fewer model and material records than the shipped file.
 
@@ -301,7 +327,17 @@ Every entry of every shipped `anim.zbd` recompiles from its sources to the same 
 
 ### Known differences
 
-- The original build reused node slots it freed while loading, which exported worlds do not reproduce. The game binds consecutive animations with the same root name to same-named nodes in slot order, so an animation can bind to a different one of two same-named nodes (for example `smoke1` in most missions). Nothing else depends on slot order.
+- Exported worlds give every node its shipped slot in every mission of both releases. Every lookup by name in the game finds the highest slot of the name first, so where names repeat and slots differ (in an edited world), an exported world can resolve a name to a different node. This affects:
+  - animation roots: consecutive entries with the same root name take the following same-named nodes, then start again at the highest;
+  - an animation's attachment (the node whose hits start it) outside its root, the node and tracked-node names inside animations that neither the attachment's nor the root's subtree has, and the first node of each activation prerequisite's path: all fall back to the whole world;
+  - the `tex_fx` scripts' `FindNode`.
+
+  Every name that repeats in a world (2,021 in 1999, 1,427 in 1998) binds to the shipped node in the exports ([Engine evidence](engine-evidence.md#name-lookups-and-node-slot-order)), and so does every lookup the game makes by name: every animation root and name, texture-effect `FindNode`, effect template and turret target.
+- **Tools → Compare worlds…** checks an exported world against the shipped one, needing no open folder; either may also be a version-13 world of the July and August 1998 demos, and the summary names such a world's version. Choose both `gamez.zbd` files and **Compare**:
+  - The tree merges the two worlds by parent-child structure: children match by name, repeated names by their structure, their children's names and their position, never by node order. Each row is marked `·` the same, `≠` changed (class, flags, zone, grid cell, transform, class data, model or number of children), `−` only in the shipped world or `+` only in the exported one, with the number of differing rows below it.
+  - `⚑` marks a node whose name several nodes share, where a whole-world lookup (highest slot first) finds it in the shipped world but another node in the exported one. Animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every `⚑` changes behaviour. An indistinguishable copy (the same parents and contents all the way down) counts as the same node.
+  - **Differences only** hides rows with nothing differing below them; **Filter** keeps rows whose name, or a name below them, matches, and opens the rows that hold them. Selecting a row shows its slots, class, parents, children, flags, zone, grid cell, position and model in both worlds, with differing values highlighted. Slots and the order of parents and children are shown, never highlighted.
+  - Every world exported from a fresh reconstruction of either release has the shipped parent-child structure: no node is changed, missing or extra.
 - Shipped name fields keep residue after the terminator; exported files have their own residue.
 - `m9\gamez.zbd` names a texture, `surf00`, that no shipped pack holds; the game shows its default texture for it, and so does the exported world.
 

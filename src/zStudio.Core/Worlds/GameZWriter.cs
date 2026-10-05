@@ -14,7 +14,7 @@ namespace Recoil.Zbd.Core.Worlds;
 public static class GameZWriter
 {
     public const uint Magic = 0x02971222, Version = 15;
-    private const int NodeSlotSize = 196, ModelSlotSize = 88, MaterialSlotSize = 44, TextureEntrySize = 36;
+    internal const int NodeSlotSize = 196; private const int ModelSlotSize = 88, MaterialSlotSize = 44, TextureEntrySize = 36;
 
     public static byte[] Write(GameZWorld world, CancellationToken token = default)
     {

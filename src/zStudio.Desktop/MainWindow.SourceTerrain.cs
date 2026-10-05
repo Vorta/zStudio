@@ -31,7 +31,7 @@ public partial class MainWindow
     /// <summary>The mission database the world was built from: the glTF file its database nodes came from.</summary>
     private static string MissionDatabase(DocumentModel doc)
     {
-        var files = doc.SourceBuild?.Provenance.Values.Where(p => p.Database).Select(p => p.ModelFile).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).Take(2).ToList() ?? [];
+        var files = doc.SourceBuild?.Provenance.Values.Where(p => p.Database && !p.Part).Select(p => p.ModelFile).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).Take(2).ToList() ?? [];
         return files.Count == 1 ? files[0] : throw new StudioCommandException("unsupported", files.Count == 0 ? "This world has no mission database (no load after GameGenSetWorld) to add terrain to." : "The mission database's nodes come from several files.");
     }
     private static TerrainRecipe ReadRecipe(DocumentModel doc, string recipe)

@@ -7,7 +7,8 @@ namespace Recoil.Zbd.Core.Animation;
 /// </summary>
 public static class AnimationComparer
 {
-    private static readonly (int From, int To)[] HeaderRanges = [(148, 176), (260, 272)];
+    // 176 is the countdown the game starts from (it equals the health at 172 in every shipped entry), not runtime state.
+    private static readonly (int From, int To)[] HeaderRanges = [(148, 180), (260, 272)];
     // Bytes compared per table after the name: light/sound attachment, prerequisite kind, child cleanup.
     private static readonly int[][] TableRanges = [[], [], [40, 44], [40, 44], [], [], [0, 8], [64, 68]];
     private static readonly int[] NameSizes = [36, 36, 36, 36, 32, 32, 0, 32];

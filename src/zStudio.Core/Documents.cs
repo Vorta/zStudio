@@ -52,7 +52,7 @@ public sealed class ZbdDocument
         Path = path; Stamp = stamp; Probe = probe; Bytes = bytes;
         Game = (probe.Family, probe.Version) switch
         { (FormatFamily.GameZ, 27) or (FormatFamily.Animation, 39) => GameVariant.MechWarrior3,
-          (FormatFamily.GameZ, 15) or (FormatFamily.Animation, 28) => GameVariant.Recoil, _ => GameVariant.Shared };
+          (FormatFamily.GameZ, 15 or 13) or (FormatFamily.Animation, 28) => GameVariant.Recoil, _ => GameVariant.Shared };
     }
     public ReadOnlyMemory<byte> Slice(long offset, long length)
     { BinaryCursor.CheckRange(Bytes.Length, offset, length); return Bytes.Slice((int)offset, (int)length); }

@@ -13,6 +13,37 @@ public static class TextureSources
     public const string EffectsTextures = "data/common/effects/textures", CommonTextures = "data/common/textures", MultiBftTextures = "data/common/multi_bft/textures";
     public const string Fonts = "data/common/fonts", Images = "data/common/images", HudImages = "data/common/images/hud";
     public const string Extension = ".png";
+    private const int MaximumCachedSizes = 65536;
+    /// <summary>The largest texture side a build decodes (<c>SourceBuilder.DecodeTexture</c>).</summary>
+    internal const int MaximumSide = 4096;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long Length, DateTime Written, DateTime Created, int Width, int Height)> Sizes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A PNG's size from its header, cached by the file's length and time, so planning an export reads each image's
+    /// header once; null when the file is missing, unreadable, does not start with a PNG header or is larger than a
+    /// build decodes (<see cref="MaximumSide"/>; the build reports it).
+    /// </summary>
+    internal static (int Width, int Height)? PngSize(string path)
+    {
+        Span<byte> header = stackalloc byte[24];
+        FileInfo info;
+        try
+        {
+            info = new FileInfo(path);
+            if (!info.Exists) return null;
+            // A copy keeps the write time but gets a new creation time, so both identify the file's content.
+            if (Sizes.TryGetValue(path, out var cached) && cached.Length == info.Length && cached.Written == info.LastWriteTimeUtc && cached.Created == info.CreationTimeUtc) return (cached.Width, cached.Height);
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1);
+            if (stream.ReadAtLeast(header, header.Length, false) < header.Length) return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        if (!header[..8].SequenceEqual((ReadOnlySpan<byte>)[137, 80, 78, 71, 13, 10, 26, 10]) || !header[12..16].SequenceEqual("IHDR"u8)) return null;
+        int width = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(header[16..]), height = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(header[20..]);
+        if (width is < 1 or > MaximumSide || height is < 1 or > MaximumSide) return null;
+        if (Sizes.Count >= MaximumCachedSizes) Sizes.Clear();
+        Sizes[path] = (info.Length, info.LastWriteTimeUtc, info.CreationTimeUtc, width, height);
+        return (width, height);
+    }
 
     /// <summary>Folders searched for a mission's textures, as <c>support\common.gw</c> sets them.</summary>
     public static IReadOnlyList<string> MissionFolders(string mission, bool multiplayer) => multiplayer

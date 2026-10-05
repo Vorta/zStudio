@@ -51,8 +51,23 @@ public static class SourceBlender
 
     private static string Folder(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), "zstudio", "export");
 
-    /// <summary>Copies <paramref name="model"/> (a project .gltf, as the workspace holds it) and the files it uses into a new checkout.</summary>
+    /// <summary>
+    /// Copies <paramref name="model"/> (a project .gltf, as the workspace holds it) and the files it uses into a new checkout.
+    /// The copy shows transparent textures and hides collision volumes as the game does (<see cref="Worlds.WorldGltf.ApplyPresentation"/>),
+    /// also for models reconstructed before reconstruction wrote that; the project's file is not changed.
+    /// </summary>
     public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default)
+    {
+        string? created = null;
+        try { return Checkout(workspace, model, token, ref created); }
+        catch when (created != null)
+        {
+            // A canceled or failed checkout leaves no partial folder behind (listings skip folders without a manifest).
+            try { Directory.Delete(created, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
+    }
+    private static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, ref string? created)
     {
         model = SourceWorkspace.Normalize(model);
         workspace.CheckEditable(model);
@@ -64,6 +79,7 @@ public static class SourceBlender
         string id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + stem + "-" + Guid.NewGuid().ToString("N")[..6];
         string folder = Path.Combine(Folder(workspace.Root), id), input = Path.Combine(folder, "input");
         SourceProject.RejectLinks(Folder(workspace.Root));
+        created = folder;
         Directory.CreateDirectory(Path.Combine(input, "textures")); Directory.CreateDirectory(Path.Combine(folder, "outbox"));
         List<BlenderCheckoutFile> files = [new(model, "input/" + Path.GetFileName(model), SourceProject.Sha256(json))];
         // Buffers sit next to the model in the checkout; textures in its textures folder, under their engine names.
@@ -77,6 +93,7 @@ public static class SourceBlender
             files.Add(new(project, "input/" + name, SourceProject.Sha256(bytes)));
         }
         HashSet<string> copied = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, Formats.TextureTransparency> transparency = new(StringComparer.OrdinalIgnoreCase);
         foreach (var image in root["images"] as JsonArray ?? [])
         {
             if (Text(image?["uri"]) is not { } uri || uri.StartsWith("data:", StringComparison.Ordinal)) continue;
@@ -87,7 +104,9 @@ public static class SourceBlender
             if (workspace.Read(project, token) is not { } bytes) continue;
             File.WriteAllBytes(Path.Combine(input, "textures", name), bytes);
             files.Add(new(project, "input/textures/" + name, SourceProject.Sha256(bytes)));
+            if (Transparency(bytes, token) is { } kind) transparency[name] = kind;
         }
+        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null);
         File.WriteAllText(Path.Combine(input, Path.GetFileName(model)), root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
         BlenderCheckout checkout = new(id, folder, model, DateTime.UtcNow, files);
         JsonObject manifest = new()
@@ -312,6 +331,13 @@ public static class SourceBlender
             if (FileStamp.Read(path) != stamp || !File.ReadAllBytes(path).AsSpan().SequenceEqual(first)) throw new IOException($"{path} is still changing; wait for Blender to finish exporting.");
             return first;
         }
+    }
+
+    /// <summary>How a texture is transparent, or null when it is not a PNG the packs could read (the build reports those).</summary>
+    private static Formats.TextureTransparency? Transparency(byte[] png, CancellationToken token)
+    {
+        try { return Formats.TexturePackBuilder.Classify(Export.PngDecoder.Decode(png, token: token)); }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or OverflowException or IndexOutOfRangeException) { return null; }
     }
 
     private static string DefaultTextureFolder(string model)

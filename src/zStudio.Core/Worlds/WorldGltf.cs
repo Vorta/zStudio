@@ -33,8 +33,15 @@ public static partial class WorldGltf
     {
         /// <summary>The image URI (relative to the glTF file) and the clamp word for a texture.</summary>
         public required Func<WorldTexture, (string Uri, int Addressing)> Texture { get; init; }
-        /// <summary>For a node that is an external reference, the referenced file's URI; its children are then not written.</summary>
+        /// <summary>For a node that is an external reference, the referenced file's URI; its children from that file are then not written.</summary>
         public Func<WorldNode, string?> Reference { get; init; } = _ => null;
+        /// <summary>
+        /// For a reference, the children that come from the referenced file (null: all of them). The others are records of
+        /// the file being written: a reference with records of its own (a mission database's part), written as its children.
+        /// </summary>
+        public Func<WorldNode, IReadOnlyCollection<WorldNode>?> Content { get; init; } = _ => null;
+        /// <summary>Nodes that are groups of a mission database (written with <c>extras.recoil.group</c>; see <see cref="IsGroup"/>).</summary>
+        public Func<WorldNode, bool> Group { get; init; } = _ => false;
         /// <summary>Clear the runtime state of point entries (elapsed time, packed state, heap words, flare runtime values) to compare content.</summary>
         public bool Canonical { get; init; }
         internal Dictionary<WorldModel, GltfMesh> Meshes { get; } = new(ReferenceEqualityComparer.Instance);
@@ -61,7 +68,7 @@ public static partial class WorldGltf
             if (!path.Add(node)) throw new InvalidDataException($"Node {node.Name} is its own ancestor.");
             if (path.Count > WorldUpdate.MaximumDepth) throw new InvalidDataException($"The model hierarchy is deeper than {WorldUpdate.MaximumDepth} levels.");
             reached[node] = reached.GetValueOrDefault(node) + 1;
-            if (reached[node] == 1 && context.Reference(node) == null) foreach (var child in node.Children) Count(child);
+            if (reached[node] == 1) foreach (var child in OwnChildren(node, context)) Count(child);
             path.Remove(node);
         }
         foreach (var root in roots) Count(root);
@@ -117,10 +124,19 @@ public static partial class WorldGltf
             if (mesh.Primitives.Count > 0) result.Mesh = mesh;
             else extras["model"] = mesh.Extras?[Key]?.DeepClone() ?? new JsonObject();
         }
+        if (context.Group(node)) extras["group"] = true;
         if (context.Reference(node) is { } uri) extras["ref"] = uri;
-        else foreach (var child in node.Children) result.Children.Add(ExportNode(child, zone, context, state));
+        foreach (var child in OwnChildren(node, context)) result.Children.Add(ExportNode(child, zone, context, state));
         if (extras.Count > 0) result.Extras = new() { [Key] = extras };
         return result;
+    }
+
+    /// <summary>The children written in the file itself: all for a node, those not from the referenced file for a reference.</summary>
+    private static IEnumerable<WorldNode> OwnChildren(WorldNode node, ExportContext context)
+    {
+        if (context.Reference(node) == null) return node.Children;
+        var content = context.Content(node);
+        return content == null ? [] : node.Children.Where(child => !content.Contains(child));
     }
 
     private static GltfMesh ExportMesh(WorldModel model, ExportContext context)
@@ -271,7 +287,13 @@ public static partial class WorldGltf
 
     // ---------------------------------------------------------------- import
 
-    /// <summary>State shared by one load (a LoadGameGen call): its models are shared by repeated references, as the original loader shared them.</summary>
+    /// <summary>
+    /// State shared by one load (a LoadGameGen call). The original loader read a referenced file once per cache, and
+    /// every copy from that cache shares its models (see <see cref="OriginalLoader"/>): within one reading of a file, the
+    /// references that name a file by the same text share one reading of it, with its models, and each reading reads the
+    /// files it references afresh. A file named by another text (a second path), or read again by another file, has models
+    /// of its own.
+    /// </summary>
     public sealed class ImportContext
     {
         public required GameZWorld World { get; init; }
@@ -282,6 +304,9 @@ public static partial class WorldGltf
         public List<string> Warnings { get; } = [];
         /// <summary>Called for each node a glTF node becomes, with the file's path and the glTF node (a shared node once).</summary>
         public Action<WorldNode, string, GltfNode>? NodeImported { get; init; }
+        /// <summary>While a referenced file is imported, the node that references it (the innermost, for nested references).</summary>
+        public WorldNode? Referencing => referencing.Count > 0 ? referencing[^1] : null;
+        internal readonly List<WorldNode> referencing = [];
         /// <summary>Cancels a load between nodes and between batches of polygons.</summary>
         public CancellationToken Token { get; init; }
         /// <summary>Reads a file relative to a referencing file (terrain recipes): its bytes and project path.</summary>
@@ -294,9 +319,12 @@ public static partial class WorldGltf
         public Dictionary<string, string> TextureFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Each texture's clamp word (1 clamps U, 2 clamps V) from the first sampler that uses it; the pack stores it.</summary>
         public Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
-        internal Dictionary<(string Path, GltfMesh Mesh), WorldModel> Models { get; } = [];
-        /// <summary>Models without polygons, carried in node extras, shared by identical values within a file.</summary>
-        internal Dictionary<(string Path, string Values), WorldModel> ValueModels { get; } = [];
+        /// <summary>
+        /// Models by the reading of their file (see <see cref="Reading"/>) and mesh, and point-only models by the reading
+        /// and node; readings compare ignoring case, as the loader's caches do.
+        /// </summary>
+        internal Dictionary<(string Reading, GltfMesh Mesh), WorldModel> Models { get; } = new(ReadingComparer<GltfMesh>.Instance);
+        internal Dictionary<(string Reading, GltfNode Node), WorldModel> ValueModels { get; } = new(ReadingComparer<GltfNode>.Instance);
         internal Dictionary<(string Path, GltfDocument Doc), bool> Loading { get; } = [];
         /// <summary>Nodes this load created; with the world's, never more than a world can hold.</summary>
         internal int Created { get; set; }
@@ -307,9 +335,16 @@ public static partial class WorldGltf
 
     /// <summary>Engine nodes for a document's scene roots, loaded from <paramref name="path"/> under a parent with <paramref name="parentZone"/>.</summary>
     /// <remarks>Malformed engine values are reported as <see cref="InvalidDataException"/>.</remarks>
-    public static List<WorldNode> Import(GltfDocument doc, string path, uint parentZone, ImportContext context) => Import(doc, path, parentZone, context, 0);
+    public static List<WorldNode> Import(GltfDocument doc, string path, uint parentZone, ImportContext context) => Import(doc, path, path, parentZone, context, 0);
 
-    private static List<WorldNode> Import(GltfDocument doc, string path, uint parentZone, ImportContext context, int depth)
+    /// <summary>
+    /// Which reading of a file a reference copies: the reading of the file that holds the reference, and the reference's
+    /// text as written there (the key the original loader cached the file by).
+    /// </summary>
+    private static string Reading(string holder, string uri) => holder + "\u001F" + uri;
+
+    /// <param name="reading">This reading of the file (see <see cref="ImportContext"/>): its models are its own.</param>
+    private static List<WorldNode> Import(GltfDocument doc, string path, string reading, uint parentZone, ImportContext context, int depth)
     {
         if (!context.Loading.TryAdd((path, doc), true)) throw new InvalidDataException($"{path} references itself.");
         Dictionary<int, WorldNode> instances = [];
@@ -324,7 +359,7 @@ public static partial class WorldGltf
                     if (depth > 0) throw new InvalidDataException($"{path}: the terrain recipe {recipe} must be a root of the mission database, not of a referenced file.");
                     roots.AddRange(ImportTerrain(Text(recipe, "terrain", path), path, context));
                 }
-                else roots.Add(ImportNode(root, path, parentZone, context, instances, depth));
+                else roots.Add(ImportNode(root, path, reading, parentZone, context, instances, depth));
             }
             return roots;
         }
@@ -334,7 +369,7 @@ public static partial class WorldGltf
     }
 
     /// <summary><paramref name="depth"/> counts levels across external references, which continue the hierarchy.</summary>
-    private static WorldNode ImportNode(GltfNode source, string path, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth)
+    private static WorldNode ImportNode(GltfNode source, string path, string reading, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth)
     {
         if (depth >= GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the node hierarchy, with its external references, is deeper than {GltfDocument.MaximumDepth} levels.");
         context.Token.ThrowIfCancellationRequested();
@@ -374,14 +409,17 @@ public static partial class WorldGltf
             node.SetPayloadFloat(0x24, 1); node.SetPayloadFloat(0x28, 1); node.SetPayloadFloat(0x2C, 1);
             for (int i = 0; i < 12; i++) node.SetPayloadFloat(0x30 + i * 4, rows[i]);
         }
-        if (source.Mesh != null) node.Model = ImportMesh(source.Mesh, path, context);
-        else if (extras?["model"] is { } values) node.Model = ImportValues(values as JsonObject ?? throw new InvalidDataException($"{path}: node {name} has an invalid model record."), path, context);
+        if (source.Mesh != null) node.Model = ImportMesh(source.Mesh, path, reading, context);
+        else if (extras?["model"] is { } values) node.Model = ImportValues(values as JsonObject ?? throw new InvalidDataException($"{path}: node {name} has an invalid model record."), source, path, reading, context);
         if (extras?["ref"] is { } referenceValue)
         {
-            var (doc, referencedPath) = context.Reference(Text(referenceValue, "ref", path), path);
-            foreach (var child in Import(doc, referencedPath, zone, context, depth + 1)) Link(node, child);
+            string uri = Text(referenceValue, "ref", path);
+            var (doc, referencedPath) = context.Reference(uri, path);
+            context.referencing.Add(node);
+            try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1)) Link(node, child); }
+            finally { context.referencing.RemoveAt(context.referencing.Count - 1); }
         }
-        foreach (var child in source.Children) Link(node, ImportNode(child, path, zone, context, instances, depth + 1));
+        foreach (var child in source.Children) Link(node, ImportNode(child, path, reading, zone, context, instances, depth + 1));
         return node;
         static void Link(WorldNode parent, WorldNode child)
         {
@@ -392,9 +430,9 @@ public static partial class WorldGltf
         static bool Descends(WorldNode node, WorldNode ancestor, int depth) => depth <= 256 && node.Parents.Any(p => ReferenceEquals(p, ancestor) || Descends(p, ancestor, depth + 1));
     }
 
-    private static WorldModel ImportMesh(GltfMesh mesh, string path, ImportContext context)
+    private static WorldModel ImportMesh(GltfMesh mesh, string path, string reading, ImportContext context)
     {
-        if (context.Models.TryGetValue((path, mesh), out var existing)) return existing;
+        if (context.Models.TryGetValue((reading, mesh), out var existing)) return existing;
         ModelBuilder builder = new();
         var model = builder.Model;
         ApplyValues(model, mesh.Extras?[Key] as JsonObject, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path);
@@ -426,21 +464,32 @@ public static partial class WorldGltf
         foreach (var warning in builder.Warnings.Distinct()) context.Warnings.Add($"{path}: mesh {mesh.Name}: {warning}");
         builder.Finish();
         context.World.Models.Add(model);
-        context.Models[(path, mesh)] = model;
+        context.Models[(reading, mesh)] = model;
         return model;
     }
 
-    /// <summary>A model without polygons (point entries only) from a node's <c>model</c> values; identical values share one model.</summary>
-    private static WorldModel ImportValues(JsonObject values, string path, ImportContext context)
+    /// <summary>
+    /// A model without polygons (point entries only) from a node's <c>model</c> values. Each node of a reading has its own,
+    /// as the original loader read each object's geometry (1999 <c>redsprks.flt</c>'s four pieces have four models of the
+    /// same values), and copies of one cache share them like meshes.
+    /// </summary>
+    private static WorldModel ImportValues(JsonObject values, GltfNode source, string path, string reading, ImportContext context)
     {
-        string key = values.ToJsonString();
-        if (context.ValueModels.TryGetValue((path, key), out var existing)) return existing;
+        if (context.ValueModels.TryGetValue((reading, source), out var existing)) return existing;
         ModelBuilder builder = new();
         ApplyValues(builder.Model, values, 0, path);
         var model = builder.Finish();
         context.World.Models.Add(model);
-        context.ValueModels[(path, key)] = model;
+        context.ValueModels[(reading, source)] = model;
         return model;
+    }
+
+    /// <summary>Keys of a reading and a glTF object: the reading ignoring case, the object by reference.</summary>
+    private sealed class ReadingComparer<T> : IEqualityComparer<(string Reading, T Item)> where T : class
+    {
+        public static readonly ReadingComparer<T> Instance = new();
+        public bool Equals((string Reading, T Item) x, (string Reading, T Item) y) => ReferenceEquals(x.Item, y.Item) && StringComparer.OrdinalIgnoreCase.Equals(x.Reading, y.Reading);
+        public int GetHashCode((string Reading, T Item) key) => HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(key.Reading), System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(key.Item));
     }
 
     /// <summary>The model values glTF cannot express: display mode and flags, scrolling, morph factor and point entries.</summary>
@@ -629,6 +678,12 @@ public static partial class WorldGltf
     /// <summary>A glTF node's engine name: its recorded name, else its glTF name without an editor's copy suffix (".001").</summary>
     public static string EngineName(GltfNode node) =>
         (node.Extras?[Key] as JsonObject)?["name"] is JsonValue n && n.TryGetValue(out string? named) ? named : BlenderSuffix().Replace(node.Name, "");
+    /// <summary>
+    /// Whether a node is a group of a mission database (<c>extras.recoil.group</c>): the original database's group records,
+    /// which the build creates with the database and deletes with it (<c>DeleteTree %dbName%</c>), so that the objects below
+    /// them join the world. A group has no geometry and no transform of its own.
+    /// </summary>
+    public static bool IsGroup(GltfNode node, string path) => (node.Extras?[Key] as JsonObject)?["group"] is { } group && Flag(group, "group", path);
     /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>
     public static uint? RootFlags(GltfDocument doc) => (doc.SceneExtras?[Key] as JsonObject)?["rootFlags"] is { } flags ? Hex(flags, "rootFlags", "the scene") & CarriedFlags : null;
 

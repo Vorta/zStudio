@@ -45,10 +45,15 @@ public partial class MainWindow
 
     private void RegisterWorkspaceCommands(StudioCommands r)
     {
-        RegisterJob(r, "open_root", "Open and index a ZBD root in the visible workspace. Dirty documents must be explicitly saved or closed first.", [P("path", "string", "Absolute ZBD root directory.", true)], false, async (a, token) =>
+        RegisterJob(r, "open_root", "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first.",
+            [P("path", "string", "Absolute ZBD root or source project directory.", true),
+             P("project", "boolean", "Require an initialized source project (a folder with data and gamegen), as the welcome screen's source project Open does; any other folder is refused with not_project. Default false.")], false, async (a, token) =>
         {
             RequireRootPublication();
+            // A relative folder would resolve against zStudio's own folder, not the client's.
+            if (!Path.IsPathFullyQualified(Text(a, "path"))) throw new StudioCommandException("invalid_argument", "Give the folder as a full path.");
             string path = Path.GetFullPath(Text(a,"path"));
+            if (Flag(a, "project")) { await RequireSourceProjectAsync(path, token); RequireRootPublication(); }
             long workspaceGeneration = ViewModel.WorkspaceGeneration + 1;
             await ViewModel.OpenRootAsync(path, token, RequireRootPublication);
             if (ViewModel.WorkspaceGeneration != workspaceGeneration || !ViewModel.RootPath.Equals(path,StringComparison.OrdinalIgnoreCase)) throw new StudioCommandException("context_changed","Workspace was replaced during indexing.");

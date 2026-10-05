@@ -4,7 +4,14 @@ namespace Recoil.Zbd.Core.Worlds;
 /// A model load in a mission's build: the file the script named, the root it created, the nodes the file contributed,
 /// and whether the script changed the root's flags afterwards (a root's flags otherwise come from its file).
 /// </summary>
-public sealed record LoadedModel(string File, string NodeName, TracedInstruction Instruction, bool Database, WorldNode? Root, IReadOnlyList<WorldNode> Content, bool RootEdited);
+public sealed record LoadedModel(string File, string NodeName, TracedInstruction Instruction, bool Database, WorldNode? Root, IReadOnlyList<WorldNode> Content, bool RootEdited)
+{
+    /// <summary>The load's position in the trace.</summary>
+    public int Step { get; init; }
+}
+
+/// <summary>What a mission's build made: each load, and the node each other creating command (NewObject3D, LightNew, …) made, by trace position.</summary>
+public sealed record WorldDecomposition(IReadOnlyList<LoadedModel> Loads, IReadOnlyDictionary<int, WorldNode> Created);
 
 /// <summary>
 /// Recovers what each <c>LoadGameGen</c> contributed to a shipped world. The build scripts edited the loaded models
@@ -23,7 +30,10 @@ public static class WorldDecomposer
     private static readonly HashSet<string> Creators = ["NewWorld", "NewWindow", "NewCamera", "NewDisplay", "LightNew", "NewObject3D"];
 
     /// <summary>Changes <paramref name="world"/>'s links and names; pass a world read for this purpose.</summary>
-    public static List<LoadedModel> Decompose(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes)
+    public static List<LoadedModel> Decompose(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes) => [.. DecomposeAll(world, trace, notes).Loads];
+
+    /// <inheritdoc cref="Decompose"/>
+    public static WorldDecomposition DecomposeAll(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes)
     {
         var root = world.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World) ?? throw new InvalidDataException("The world has no world node.");
         // Work on a plain graph: the world's cells hold children the same way its own list does.
@@ -111,7 +121,10 @@ public static class WorldDecomposer
             switch (edits[i])
             {
                 case Added(var parent, var child): parent.Children.Remove(child); child.Parents.Remove(parent); break;
-                case Removed(var parent, var child): if (!parent.Children.Contains(child)) { parent.Children.Add(child); child.Parents.Add(parent); } break;
+                // The engine's removal keeps the other children in order and the world does not record where the child was;
+                // in the shipped tank and morph-LOD scripts (morfUtil.gw) the removed children were the first ones, as the
+                // slots the original build gave them show (the corpus test compares every mission's slots with the shipped ones).
+                case Removed(var parent, var child): if (!parent.Children.Contains(child)) { parent.Children.Insert(0, child); child.Parents.Add(parent); } break;
                 case Renamed(var node, var from): node.Name = from; break;
             }
 
@@ -120,11 +133,11 @@ public static class WorldDecomposer
         {
             var step = trace[i]; if (step.Command != "LoadGameGen") continue;
             string file = Arg(step, 0), name = Arg(step, 1);
-            if (i == databaseStep) result.Add(new(file, name, step, true, null, root.Children.ToList(), false));
+            if (i == databaseStep) result.Add(new(file, name, step, true, null, root.Children.ToList(), false) { Step = i });
             else if (!created.TryGetValue(i, out var loadRoot)) notes.Add($"{step.Script}: LoadGameGen {file} {name} left no node in the world.");
-            else result.Add(new(file, name, step, false, loadRoot, loadRoot.Children.ToList(), editedRoots.Contains(loadRoot)));
+            else result.Add(new(file, name, step, false, loadRoot, loadRoot.Children.ToList(), editedRoots.Contains(loadRoot)) { Step = i });
         }
-        return result;
+        return new(result, created.Where(c => trace[c.Key].Command != "LoadGameGen").ToDictionary());
     }
 
     private static string Arg(TracedInstruction step, int index) => index < step.Args.Count ? step.Args[index] : "";

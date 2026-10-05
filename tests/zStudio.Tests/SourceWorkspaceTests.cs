@@ -118,6 +118,24 @@ public sealed class SourceWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public void AWithdrawnChangeLeavesTheHistoryAsItWas()
+    {
+        SourceWorkspace workspace = new(root);
+        // A full history: the next edit pushes out the oldest step, and a withdrawn edit brings it back.
+        for (int i = 0; i < SourceWorkspace.MaximumHistory; i++) workspace.Apply($"Edit {i}", [("gamegen/m1.gs", Bytes($"# {i}\r\n"))], Token);
+        var last = workspace.Apply("Last", [("gamegen/m1.gs", Bytes("# last\r\n"))], Token)!;
+        workspace.Retract(last);
+        for (int i = 0; i < SourceWorkspace.MaximumHistory; i++) workspace.Undo();
+        Assert.False(workspace.CanUndo); Assert.False(workspace.IsDirty);
+        // Undone steps come back too, to be redone.
+        var other = workspace.Apply("Other", [("gamegen/m1.gs", Bytes("# other\r\n"))], Token)!;
+        Assert.False(workspace.CanRedo);
+        workspace.Retract(other);
+        Assert.True(workspace.CanRedo); workspace.Redo();
+        Assert.Equal("# 0\r\n", Text(workspace.Read("gamegen/m1.gs", Token)));
+    }
+
+    [Fact]
     public void RevertedChangesAndGuardedFilesKeepBuildsCurrent()
     {
         SourceWorkspace workspace = new(root);

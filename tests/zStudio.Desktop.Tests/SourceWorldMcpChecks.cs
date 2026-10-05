@@ -32,7 +32,17 @@ internal static class SourceWorldMcpChecks
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
 
             var none = await Job("source_world_open", new() { ["mission"] = "m1" }, "failed"); Assert.Equal("no_project", none["code"]!.GetValue<string>());
+            // Builds left in the project's preview folder (here by another zStudio) are derived data: Files never lists them.
+            string leftover = Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "other", "1", "m1", "gamez.zbd");
+            Directory.CreateDirectory(Path.GetDirectoryName(leftover)!); await File.WriteAllBytesAsync(leftover, [0], token);
+            // Also when the folder opened holds the project.
+            await main.ViewModel.OpenRootAsync(fixture.Root, token);
+            Assert.DoesNotContain(main.ViewModel.Files, f => f.Path.StartsWith(SourceWorlds.PreviewRoot(fixture.Project), StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(main.ViewModel.Files, f => f.RelativePath == Path.Combine("project", "gamegen", "m1.gs"));
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
+            Assert.DoesNotContain(main.ViewModel.Files, f => f.Path.StartsWith(SourceWorlds.PreviewRoot(fixture.Project), StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(main.ViewModel.Files, f => f.RelativePath == Path.Combine("gamegen", "m1.gs"));
+            Directory.Delete(Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "other"), true);
             var unknown = await Job("source_world_open", new() { ["mission"] = "m9" }, "failed"); Assert.Equal("invalid_argument", unknown["code"]!.GetValue<string>());
 
             // Tools lists the project's worlds.
@@ -47,7 +57,8 @@ internal static class SourceWorldMcpChecks
             var doc = Document(opened);
             Assert.Equal("m1", opened["sourceWorld"]!["mission"]!.GetValue<string>());
             Assert.Equal("m1 world (sources)", doc.Title);
-            Assert.False(doc.Path.StartsWith(fixture.Project, StringComparison.OrdinalIgnoreCase));
+            // It is built in zStudio's working folder of the project, never among the sources or outside the project.
+            Assert.StartsWith(SourceWorlds.PreviewRoot(fixture.Project) + Path.DirectorySeparatorChar, doc.Path, StringComparison.OrdinalIgnoreCase);
             sessionFolder = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(doc.Path)));
             Assert.Null(doc.ModelEdits);
             await Preview();
@@ -138,7 +149,7 @@ internal static class SourceWorldMcpChecks
             Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
             Assert.False(redone.IsDirty);
             string script = fixture.Path("gamegen/m1.gs");
-            Assert.Contains("LoadGameGen tank.flt tank\r\n", await File.ReadAllTextAsync(script, token));
+            Assert.Contains("LoadGameGen tank.gltf tank\r\n", await File.ReadAllTextAsync(script, token));
 
             // A changed model marks the world stale; reloading rebuilds it from disk.
             await main.ViewModel.CheckExternalChangesAsync(); Assert.False(redone.IsStale);

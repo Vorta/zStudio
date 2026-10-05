@@ -23,6 +23,9 @@ public static class SourceExtractor
         var probes = files.Select(f => (f.Relative, Probe: FormatRegistry.Probe(f.Path))).ToArray();
         if (probes.FirstOrDefault(f => f.Probe is { Family: FormatFamily.GameZ, Version: 27 } or { Family: FormatFamily.Animation, Version: 39 }) is { Relative: not null } mw3)
             throw new InvalidDataException($"{mw3.Relative} is MechWarrior 3 data; source reconstruction supports RECOIL.");
+        // The 1998 demos' worlds (version 13) open read-only; projects are reconstructed from the releases.
+        if (probes.FirstOrDefault(f => f.Probe is { Family: FormatFamily.GameZ, Version: 13 }) is { Relative: not null } demo)
+            throw new InvalidDataException($"{demo.Relative} is a 1998 demo world (GameZ version 13), which zStudio opens read-only; source projects are reconstructed from the RECOIL releases.");
         // Require positive RECOIL evidence: prepared scripts, a version-15 world or a version-28 animation program.
         if (!probes.Any(f => f.Probe is { Family: FormatFamily.Scripts, Version: 7 } or { Family: FormatFamily.GameZ, Version: 15 } or { Family: FormatFamily.Animation, Version: 28 }))
             throw new InvalidDataException("No RECOIL game data was found. Choose the folder that contains interp.zbd, zrdr.zbd and the mission folders.");
@@ -30,12 +33,20 @@ public static class SourceExtractor
         bool created = !Directory.Exists(projectRoot);
         Directory.CreateDirectory(projectRoot);
         try { return await ExtractFilesAsync(projectRoot, files, progress, token); }
-        catch
+        catch (Exception stopped)
         {
             // The folder was new or empty: remove everything this reconstruction wrote so it can be retried.
-            if (created) Directory.Delete(projectRoot, true);
-            else foreach (var entry in new DirectoryInfo(projectRoot).EnumerateFileSystemInfos())
-                { if (entry is DirectoryInfo directory) directory.Delete(true); else entry.Delete(); }
+            try
+            {
+                if (created) Directory.Delete(projectRoot, true);
+                else foreach (var entry in new DirectoryInfo(projectRoot).EnumerateFileSystemInfos())
+                    { if (entry is DirectoryInfo directory) directory.Delete(true); else entry.Delete(); }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Another program holds a written file: say so, rather than leaving a folder later refused as not empty.
+                throw new IOException($"{(stopped is OperationCanceledException ? "Canceled" : $"Stopped: {stopped.Message}")}. {projectRoot} could not be removed completely ({ex.Message}); delete it before choosing it again.", stopped);
+            }
             throw;
         }
     }
@@ -173,6 +184,8 @@ public static class SourceExtractor
         internal Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Every texture source written, for resolving model textures the way the build searches its folders.</summary>
         internal HashSet<string> TextureFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>How each texture source written is transparent (by project path), for the materials that use it.</summary>
+        internal Dictionary<string, Formats.TextureTransparency> TextureTransparencies { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Reconstructed texture source per mission and name.</summary>
         internal Dictionary<(int Mission, string Name), string> TexturePaths { get; } = [];
 
@@ -240,6 +253,8 @@ public static class SourceExtractor
         {
             var doc = FormatRegistry.Default.OpenBytes(output, bytes, token: token);
             var package = doc.Scripts ?? throw new InvalidDataException("the prepared scripts are not a complete package");
+            // The source scripts name the project's files: glTF models and PNG textures (see GameGenScriptText.ProjectFileNames).
+            var modelMacros = GameGenScriptText.ModelMacros(package.Entries.Select(e => (IReadOnlyList<IReadOnlyList<string>>)[.. e.Instructions.Select(i => (IReadOnlyList<string>)i.Tokens)]));
             foreach (var entry in package.Entries)
             {
                 token.ThrowIfCancellationRequested();
@@ -247,7 +262,7 @@ public static class SourceExtractor
                 if (parts.Any(p => p.Length == 0 || p is "." or ".." || p.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)) { Notes.Add($"{output}: script '{entry.Name}' is not a relative path and was skipped."); continue; }
                 Scripts[entry.Name] = entry.Instructions.Select(i => (IReadOnlyList<string>)i.Tokens).ToArray();
                 string text;
-                try { text = GameGenScriptText.Write(entry.Instructions.Select(i => i.Tokens)); }
+                try { text = GameGenScriptText.Write(GameGenScriptText.ProjectFileNames(Scripts[entry.Name], modelMacros)); }
                 catch (InvalidDataException) { Notes.Add($"{output}: script {entry.Name} has instructions that cannot be written as text and was skipped."); continue; }
                 // The prepared index records each script's modification time; the source file keeps it.
                 await WriteAsync($"{SourceProject.GameGenFolder}/{string.Join('/', parts)}", Encoding.Latin1.GetBytes(text), DateTime.UnixEpoch.AddSeconds(entry.FileTime));
@@ -312,6 +327,7 @@ public static class SourceExtractor
                 string path = $"{folder}/{name}{TextureSources.Extension}";
                 var image = TextureDecoder.Decode(best.Doc, best.Asset, token);
                 await WriteAsync(path, Export.PngEncoder.Encode(image, token)); TextureFiles.Add(path);
+                TextureTransparencies[path] = Formats.TexturePackBuilder.Classify(image);
                 int addressing = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(best.Doc.Bytes.Span[(int)(best.Asset.Offset + 14)..]) & 3;
                 if (addressing != 0) TextureAddressing.TryAdd(name, addressing);
                 foreach (int mission in list.Select(c => c.Mission).Distinct()) TexturePaths.TryAdd((mission, name), path);
@@ -328,14 +344,12 @@ public static class SourceExtractor
                 catch (InvalidDataException ex) { Notes.Add($"{relative}: its models were not reconstructed because {ex.Message}"); }
             }
             foreach (var mission in missions) WorldNodes[mission.Mission] = mission.World.Nodes.Select(n => n.Name).ToArray();
-            SortedSet<string> folders = new(StringComparer.OrdinalIgnoreCase);
             var outputs = await Task.Run(() => WorldSources.Reconstruct(missions, name => Scripts.GetValueOrDefault(name),
-                (mission, name) => TexturePaths.GetValueOrDefault((mission, name)), TextureFiles, name => TextureAddressing.GetValueOrDefault(name), Notes, token, folders), token);
+                (mission, name) => TexturePaths.GetValueOrDefault((mission, name)), TextureFiles, name => TextureAddressing.GetValueOrDefault(name), Notes, token,
+                path => TextureTransparencies.TryGetValue(path, out var transparency) ? transparency : null), token);
+            // Only folders that receive files are created: a folder the scripts search but no shipped file came from (the
+            // multiplayer missions' vehicle folders) is left out; the build finds nothing in a missing folder either.
             foreach (var output in outputs) await WriteAsync(output.Path, output.Bytes);
-            // Every folder the scripts search exists, as in the original tree, including ones no shipped file came from
-            // (data/common/effects/models, data/effects/textures, the vehicle folders of the multiplayer missions).
-            foreach (string folder in folders.Where(f => f.StartsWith(SourceProject.DataFolder + "/", StringComparison.OrdinalIgnoreCase)))
-                Directory.CreateDirectory(SourceProject.Resolve(root, folder));
         }
         /// <summary>Node names of each shipped world, which animation definitions bind to.</summary>
         internal Dictionary<int, IReadOnlyCollection<string>> WorldNodes { get; } = [];

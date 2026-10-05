@@ -173,7 +173,7 @@ public static partial class MissionSceneLoader
         List<int> sources = original.Nodes.Select(n => n.Index).ToList(); List<MissionActor> actors = []; List<string> notes = initialDiagnostics?.ToList() ?? [];
         HashSet<int> positioned = [];
         var previewWorld = new ZbdDocument(world.Path, world.Stamp, world.Probe, world.Bytes) { Scene = scene };
-        AnimationPreviewContext? context = package == null ? null : new() { Package = package, World = previewWorld };
+        AnimationPreviewContext? context = package == null ? null : new() { Package = package, World = previewWorld, LoadedNodeCount = original.Nodes.Count };
         if (context != null) Initialize(true, []);
         try { InitializeTurrets(scene, context, ai, notes, positioned, token); }
         catch (InvalidDataException ex) { notes.Add($"Mission turrets: ai.zrd initialization is incomplete: {ex.Message}"); }
@@ -192,10 +192,11 @@ public static partial class MissionSceneLoader
                 {
                     if (xyz.Count != 3) throw new InvalidDataException("Expected three spawn coordinates.");
                     Vector3 position = new(Number(xyz[0]), Number(xyz[1]), Number(xyz[2])); float yaw = Number(data[2]) * MathF.PI / 180;
-                    int root = scene.Nodes.FirstOrDefault(n => n.Class == "object3d" && n.Name == name)?.Index ?? -1;
+                    // Lookups by name find the highest slot first (docs/engine-evidence.md).
+                    int root = scene.Nodes.LastOrDefault(n => n.Class == "object3d" && n.Name == name)?.Index ?? -1;
                     if (root < 0)
                     {
-                        int template = scene.Nodes.FirstOrDefault(n => n.Class == "object3d" && n.Name == templateName)?.Index ?? -1;
+                        int template = scene.Nodes.LastOrDefault(n => n.Class == "object3d" && n.Name == templateName)?.Index ?? -1;
                         if (template < 0) throw new InvalidDataException($"Missing template {templateName}.");
                         root = CloneTree(template, name);
                     }

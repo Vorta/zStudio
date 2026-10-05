@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
 using Recoil.Zbd.Automation;
+using Recoil.Zbd.Core.Worlds;
 using Recoil.Zbd.Core.Sources;
 
 namespace Recoil.Zbd.Desktop;
@@ -18,10 +19,29 @@ public partial class MainWindow
     internal Func<Task>? SourceExportFinishing { get; set; }
     private long sourceMenuGeneration;
 
+    /// <summary>Reconstructs a source project and optionally opens it (source_reconstruct; the welcome screen's Initialize writes and opens it in two steps).</summary>
     private async Task<SourceReconstructionReport> ReconstructSourceProjectAsync(string source, string destination, bool open, CancellationToken token)
     {
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         if (open) RequireRootPublication();
+        var report = await ExtractSourceProjectAsync(source, destination, token);
+        try
+        {
+            if (open) { RequireRootPublication(); await ViewModel.OpenRootAsync(report.Project, token, RequireRootPublication); }
+        }
+        finally { ListReconstructionNotes(report); }
+        return report;
+    }
+    // Opening a root clears Problems, so a reconstruction's notes are listed once its project is open (or has failed to open).
+    private void ListReconstructionNotes(SourceReconstructionReport report) { foreach (string note in report.Notes.Take(256)) ViewModel.AddProblem(Bounded(note), "Warning", report.Project); }
+
+    /// <summary>Writes a source project without opening it; <paramref name="stage"/> also receives the progress shown in the status bar.</summary>
+    private async Task<SourceReconstructionReport> ExtractSourceProjectAsync(string source, string destination, CancellationToken token, IProgress<string>? stage = null)
+    {
+        if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
+        // A relative folder would resolve against zStudio's own folder, which a new build replaces.
+        if (!Path.IsPathFullyQualified(source) || !Path.IsPathFullyQualified(destination))
+            throw new StudioCommandException("invalid_argument", "Give the game files and the project folder as full paths, such as D:\\Recoil\\zbd.");
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token); operation = cancellation; CancelOperationItem.IsEnabled = true;
         SourceReconstructionReport report;
         try
@@ -29,22 +49,36 @@ public partial class MainWindow
             // After the game files the counter stays at its total, so later work shows what it is doing instead.
             var progress = new Progress<SourceProgress>(p =>
             {
-                if (operation == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = p.Stage switch
+                if (operation != cancellation || cancellation.IsCancellationRequested) return;
+                ViewModel.Status = p.Stage switch
                 {
                     SourceStage.Reconstructing => $"Reconstructing {p.Item}",
                     SourceStage.Validating => $"Validating {p.Item}",
                     _ => $"Reconstructing {p.Completed}/{p.Total}: {p.Item}",
                 };
+                stage?.Report(ViewModel.Status);
             });
             report = await Task.Run(() => SourceExtractor.ExtractAsync(source, destination, progress, cancellation.Token), cancellation.Token);
-            foreach (string note in report.Notes.Take(256)) ViewModel.AddProblem(Bounded(note), "Warning", destination);
             ViewModel.Status = $"Reconstructed {report.SourceFiles:N0} source files into {destination}";
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         finally { operation = null; CancelOperationItem.IsEnabled = false; }
-        if (open) { RequireRootPublication(); await ViewModel.OpenRootAsync(report.Project, token, RequireRootPublication); }
         return report;
+    }
+
+    /// <summary>Refuses a folder that is not an initialized source project (one with data and gamegen folders).</summary>
+    private static async Task RequireSourceProjectAsync(string path, CancellationToken token)
+    {
+        // Folder checks can block on unavailable network shares; keep them off the dispatcher.
+        if (!await Task.Run(() => SourceProject.IsProject(path), token).WaitAsync(token))
+            throw new StudioCommandException("not_project", $"{path} is not a source project: it has no data and gamegen folders. Initialize one from the retail ZBD files first.");
+    }
+    private void ShowReconstructionSummary(SourceReconstructionReport report)
+    {
+        string skipped = report.NotReconstructed.Count > 0 ? $"\n{report.NotReconstructed.Count} game files were not reconstructed: {string.Join(", ", report.NotReconstructed.Take(5))}{(report.NotReconstructed.Count > 5 ? ", …" : "")}." : "";
+        string notes = report.Notes.Count > 0 ? $"\n{report.Notes.Count} notes are listed in Problems." : "";
+        MessageBox.Show(this, $"Reconstructed {report.SourceFiles:N0} source files into {report.Project}.{skipped}{notes}", "Source project ready", MessageBoxButton.OK, MessageBoxImage.Information);
     }
     private static object ReconstructResult(SourceReconstructionReport report, bool open) => new
     {
@@ -77,9 +111,12 @@ public partial class MainWindow
     {
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
+        // A relative folder would resolve against zStudio's own folder, which a new build replaces.
+        if (destination != null && !Path.IsPathFullyQualified(destination))
+            throw new StudioCommandException("invalid_argument", "Give the destination as a full path, such as D:\\Recoil\\game.");
         RequireNoDrafts();
         // Exports read source files from disk, so pending edits to them must be saved or discarded first. A source
-        // world shows a private build outside the project, but its pending edits belong to the project's scripts.
+        // world shows a private build in the project's zstudio/cache/worlds, but its pending edits belong to the project's scripts.
         string project = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), prefix = project + Path.DirectorySeparatorChar;
         if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && (d.SourceWorld is { } world ? world.Root.Equals(project, StringComparison.OrdinalIgnoreCase)
             : Path.GetFullPath(d.Path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) is { } dirty)
@@ -102,6 +139,10 @@ public partial class MainWindow
                 foreach (string warning in output.Warnings.Take(64)) ViewModel.AddProblem(Bounded($"{output.Path}: {warning}"), "Warning", root);
             }
             foreach (string note in report.Notes.Take(64)) ViewModel.AddProblem(Bounded(note), "Warning", report.Destination ?? root);
+            // The lookups by name several nodes share, which edits can make find another node; each run replaces the last list.
+            foreach (var old in ViewModel.Problems.Where(p => p.Severity == "Info" && p.File == root && p.Message.Contains(" nodes have the name; the game finds ", StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
+            foreach (var lookup in report.Lookups.Take(256))
+                ViewModel.AddProblem(Bounded($"{lookup.Mission}: {WorldLookups.Describe(lookup)}: {lookup.Candidates} nodes have the name; the game finds {lookup.Found} (slot {lookup.Slot})."), "Info", root);
             ViewModel.Status = destination == null
                 ? $"Checked {GameFiles(report.Outputs.Count)}: {report.Built} build, {report.Failed} failed"
                 : $"Exported {GameFiles(report.Built)} to {destination}";
@@ -111,6 +152,7 @@ public partial class MainWindow
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         finally { operation = null; CancelOperationItem.IsEnabled = false; }
     }
+    private static object Lookup(SourceLookup l) => new { mission = l.Mission, kind = l.Kind, name = Bounded(l.Name, 64), source = Bounded(l.Source, 256), candidates = l.Candidates, slot = l.Slot, found = l.Found == null ? null : Bounded(l.Found, 512) };
     private static object ExportResult(string root, SourceExportReport report)
     {
         const int shown = 256;
@@ -118,6 +160,8 @@ public partial class MainWindow
         {
             project = root, destination = report.Destination, written = report.Destination != null, built = report.Built, failed = report.Failed, profile = report.Profile,
             notes = report.Notes.Take(16).Select(n => Bounded(n, 512)).ToArray(), noteCount = report.Notes.Count,
+            lookups = report.Lookups.Take(shown).Select(Lookup).ToArray(), lookupCount = report.Lookups.Count, lookupsTruncated = report.Lookups.Count > shown,
+            lookupChanges = report.LookupChanges.Take(64).Select(c => new { before = Lookup(c.Before), after = Lookup(c.After) }).ToArray(), lookupChangeCount = report.LookupChanges.Count,
             outputs = report.Outputs.Take(shown).Select(o => new
             {
                 path = o.Path, family = o.Family, status = o.Status, bytes = o.Bytes, items = o.Items,
@@ -147,7 +191,7 @@ public partial class MainWindow
             profiles = profiles.Select(p => new
             {
                 name = p.Name, status = p.Status, @default = p.IsDefault, source = p.Source, description = Bounded(p.Description, 512),
-                texturePacks = p.TexturePacks.Select(t => new { file = t.File, budgetMiB = t.BudgetBytes / (1024.0 * 1024), maximumDimension = t.MaximumDimension }).ToArray()
+                texturePacks = p.TexturePacks.Select(t => new { file = t.File, automatic = t.Automatic, budgetMiB = t.BudgetBytes / (1024.0 * 1024), maximumDimension = t.MaximumDimension, missions = t.Missions }).ToArray()
             }).ToArray(),
             families = plan.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
             outputs = Page(plan, a, o => o.Path, o => new
@@ -168,15 +212,15 @@ public partial class MainWindow
     private void RegisterSourceCommands(StudioCommands r)
     {
         RegisterJob(r, "source_reconstruct", "Reconstruct a RECOIL source project (data/ and gamegen/ in the original build layout, without zStudio metadata) from a shipped data folder into a new or empty folder. Only the original shipped files can be unpacked (their resource archives carry the animation definitions); exported files are refused. Resources become text .zrd files in their recorded folders and animation definitions .zad files beside them (pickup.zrd keeps its pickup data, its animation goes to pickup.zad), prepared scripts become .gs/.gw text, each sound keeps its best-quality WAV and each texture its best-quality PNG, mission worlds become glTF models loaded by the build scripts, and animations keep their definitions with .zan keyframe scripts; files it does not reconstruct are listed. Optionally opens the project as the workspace root; dirty documents must be resolved first.",
-            [P("source", "string", "Shipped game data folder (for example the folder containing interp.zbd and m1\\).", true), P("destination", "string", "New or empty project folder outside the source folder.", true),
+            [P("source", "string", "Full path of the shipped game data folder (for example the folder containing interp.zbd and m1\\).", true), P("destination", "string", "Full path of a new or empty project folder outside the source folder.", true),
              P("open", "boolean", "Open the project as the workspace root afterwards; default true.")], true,
             async (a, token) =>
             {
                 bool open = a["open"] == null || Flag(a, "open");
                 return Result(ReconstructResult(await ReconstructSourceProjectAsync(Text(a, "source"), Text(a, "destination"), open, token), open));
             });
-        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first.",
-            [P("destination", "string", "Optional output folder; omit to check without writing."),
+        RegisterJob(r, "source_export", "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes).",
+            [P("destination", "string", "Optional output folder (a full path); omit to check without writing."),
              new("outputs", "array", "Optional game files to build, as listed by zstudio_source_status (for example m1/zrdr.zbd); omitted builds all.", Items: new("", "string", "Game file path."), MinItems: 1, MaxItems: 256),
              P("overwrite", "boolean", "Replace game files that already exist in destination; default false."),
              P("profile", "string", "Build profile (zstudio_source_status lists them): which texture packs to build, with what budgets and largest texture side. Default: the profile checked in Tools → Build profile (source_status selected), which is the project's default unless the user chose another.")], true,
@@ -192,25 +236,34 @@ public partial class MainWindow
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 
-    private async void ReconstructSourceClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
+    // Welcome screen, Work with source project: Initialize unpacks the retail files into a new project and opens it.
+    private async void WelcomeInitializeClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
     {
-        OpenFolderDialog input = new() { Title = "Choose the shipped RECOIL data folder (contains interp.zbd and m1)" };
-        // An open ZBD folder is the likely source: it starts selected, so confirming the dialog uses it.
-        if (ViewModel.HasRoot && SourceProjectRoot == null && Directory.Exists(ViewModel.RootPath))
-        {
-            string current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(ViewModel.RootPath));
-            input.InitialDirectory = Path.GetDirectoryName(current) ?? current; input.FolderName = current;
-        }
-        if (input.ShowDialog(this) != true) return;
-        OpenFolderDialog output = new() { Title = "Choose a new or empty folder for the source project" };
-        if (output.ShowDialog(this) != true) return;
-        bool open = !ViewModel.Documents.Any(d => d.IsDirty) &&
-            MessageBox.Show(this, "Open the source project when reconstruction finishes?", "Reconstruct source project", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
-        var report = await ReconstructSourceProjectAsync(input.FolderName, output.FolderName, open, CancellationToken.None);
-        string skipped = report.NotReconstructed.Count > 0 ? $"\n{report.NotReconstructed.Count} game files were not reconstructed: {string.Join(", ", report.NotReconstructed.Take(5))}{(report.NotReconstructed.Count > 5 ? ", …" : "")}." : "";
-        string notes = report.Notes.Count > 0 ? $"\n{report.Notes.Count} notes are listed in Problems." : "";
-        MessageBox.Show(this, $"Reconstructed {report.SourceFiles:N0} source files into {output.FolderName}.{skipped}{notes}", "Source project ready", MessageBoxButton.OK, MessageBoxImage.Information);
+        var dialog = CreateInitializeDialog();
+        if (dialog.ShowDialog() != true || dialog.Report is not { } report) return;
+        await OpenInitializedProjectAsync(report);
+        ShowReconstructionSummary(report);
     });
+    // The dialog writes the project while it shows the progress; the root is replaced once it has closed, since a modal
+    // dialog holds the workspace.
+    internal SourceInitializeDialog CreateInitializeDialog() => new(this, null, (retail, project, progress, token) => ExtractSourceProjectAsync(retail, project, token, progress));
+    internal async Task OpenInitializedProjectAsync(SourceReconstructionReport report)
+    {
+        try { await ViewModel.OpenRootAsync(report.Project); UpdateRecent(); }
+        finally { ListReconstructionNotes(report); }
+    }
+    // Welcome screen, Work with source project: Open accepts only an initialized project folder.
+    private async void WelcomeOpenProjectClick(object sender, RoutedEventArgs e)
+    {
+        OpenFolderDialog dialog = new() { Title = "Choose a source project folder (contains data and gamegen)", InitialDirectory = Directory.Exists(ViewModel.Settings.LastRoot) ? ViewModel.Settings.LastRoot : "" };
+        if (dialog.ShowDialog(this) != true) return;
+        await RunUi(async () =>
+        {
+            try { await RequireSourceProjectAsync(dialog.FolderName, CancellationToken.None); }
+            catch (StudioCommandException ex) when (ex.Code == "not_project") { MessageBox.Show(this, ex.Message, "Open source project", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+            await ViewModel.OpenRootAsync(dialog.FolderName); UpdateRecent();
+        });
+    }
     private async void ExportSourceClick(object sender, RoutedEventArgs e) => await RunUi(() => ExportSourceInteractiveAsync(null));
     private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs)
     {
@@ -245,7 +298,7 @@ public partial class MainWindow
     {
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
-        ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceProfileMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility =
+        SourceMenuSeparator.Visibility = ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceProfileMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility =
             EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = SourceRecoveryMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
         AddSourceModelMenu.IsEnabled = UpdateFromBlenderMenu.IsEnabled = CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         EditInBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld != null && selectedNode != null;
@@ -267,7 +320,7 @@ public partial class MainWindow
             {
                 Header = new TextBlock { Text = profile.Name + (profile.IsDefault ? " (default)" : "") + (profile.Status == "experimental" ? " · experimental" : "") },
                 IsCheckable = true, IsChecked = profile.Name.Equals(chosen, StringComparison.OrdinalIgnoreCase),
-                ToolTip = $"{profile.Description}\n{string.Join(", ", profile.TexturePacks.Select(p => p.File))}" + (profile.Source is { } source ? $"\n{source}" : "\nBuilt in"),
+                ToolTip = $"{profile.Description}\n{string.Join(", ", profile.TexturePacks.Select(p => p.File + (p.Automatic ? $" (automatic, up to {p.BudgetBytes / (1024 * 1024)} MB)" : "") + (p.Missions is { } missions ? $" ({string.Join(", ", missions)})" : "")))}" + (profile.Source is { } source ? $"\n{source}" : "\nBuilt in"),
             };
             System.Windows.Automation.AutomationProperties.SetName(item, profile.Name);
             string name = profile.Name; bool isDefault = profile.IsDefault;

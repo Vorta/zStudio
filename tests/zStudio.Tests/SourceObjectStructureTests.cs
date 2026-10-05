@@ -17,22 +17,246 @@ public sealed class SourceObjectStructureTests
 
     private static async Task<(SourceWorldBuild Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission)
     {
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, mission, Path.Combine(fixture.Root, "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
+        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, mission, Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
         Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         return (build, world);
     }
-    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceWorldBuild build, GameZWorld world, string name)
+    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceWorldBuild build, GameZWorld world, string name) =>
+        Target(workspace, mission, build, world, world.Nodes.Single(n => n.Name == name));
+    private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceWorldBuild build, GameZWorld world, WorldNode picked)
     {
         var slots = GameZWriter.NodeSlots(world);
         Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
         foreach (var (node, slot) in slots) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
-        var picked = world.Nodes.Single(n => n.Name == name);
         return new(workspace, mission, world, SourceObjectEdits.ObjectOf(picked, provenance), provenance, build.Executions);
     }
     private static void Apply(SourceWorkspace workspace, SourceEditPlan plan) => Assert.NotNull(workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token));
     private static string Text(SourceWorkspace workspace, string path) => Encoding.Latin1.GetString(workspace.Read(path, Token)!);
     private static WorldNode WorldNode(GameZWorld world) => world.Nodes.Single(n => n.Class == WorldNodeClass.World);
+
+    [Fact]
+    public async Task NodesSeveralParentsShareAreNotEditedThroughOneCopy()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteSharedDatabase();
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var gate = world.Nodes.Single(n => n.Name == "gate");
+        var shared = Assert.Single(gate.Parents);
+        Assert.Equal(2, shared.Parents.Count);
+        // The file holds the shared node once per gate and the build reads the first: changing that copy alone would let
+        // the other come back once the first is removed. Moving, copying, deleting and changing gate are refused.
+        var target = Target(workspace, "m1", build, world, gate);
+        Assert.Contains("several parents share", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(target, null, Token)).Message);
+        Assert.Contains("instance", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(target, "gate2", null, Token)).Message);
+        Assert.Contains("instance", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDelete(target, Token)).Message);
+        Assert.Contains("instance", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "gate", target.Origin, build.Executions, new(new(0, 5, 0), Vector3.Zero, Vector3.One), Token)).Message);
+        // So is the shared node itself, and moving another object into it, which would place that object under each gate.
+        var sharedOrigin = build.Provenance[GameZWriter.NodeSlots(world)[shared]];
+        Assert.Contains("instance", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "", sharedOrigin, build.Executions, new(new(0, 5, 0), Vector3.Zero, Vector3.One), Token)).Message);
+        Assert.Contains("placed under each", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "ground"), gate, Token)).Message);
+        // The gates themselves move freely; deleting the first leaves the shared node, unchanged, under the second.
+        var first = Target(workspace, "m1", build, world, "sgate1");
+        Apply(workspace, SourceObjectEdits.PlanTransform(workspace, "sgate1", first.Origin, build.Executions, new(new(10, 0, 0), Vector3.Zero, Vector3.One), Token));
+        Apply(workspace, SourceObjectEdits.PlanDelete(Target(workspace, "m1", build, world, "sgate1"), Token));
+        (_, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal("sgate2", Assert.Single(Assert.Single(world.Nodes.Single(n => n.Name == "gate").Parents).Parents).Name);
+    }
+
+    [Fact]
+    public async Task ChildrenAScriptMovedElsewhereStillCountForTheirFilesParent()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteNestedDatabase();
+        // As gamegen's morfUtil.gw does with morph LODs, a script takes the lid out of the crate and attaches it to the ground.
+        fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs"))).Replace("# no vehicles", "FindNode crate\r\nDeleteChild lid\r\nFindNode ground\r\nAddChild lid", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal("ground", Assert.Single(world.Nodes.Single(n => n.Name == "lid").Parents).Name);
+        // Copying the crate copies its lid in the file too; the script's AddChild lid would then find the copy's.
+        Assert.Contains("acts on lid", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, "crate"), "crate2", null, Token)).Message);
+    }
+
+    [Fact]
+    public async Task NodesAScriptPlacesElsewhereAreNotCopiedOrUsedAsParents()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteNestedDatabase();
+        // The script attaches the lid to the ground: a copy of it would stand in the crate, where the file puts it.
+        string script = Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs")));
+        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "FindNode crate\r\nDeleteChild lid\r\nFindNode ground\r\nAddChild lid", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Contains("places lid elsewhere", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, "lid"), "lid2", null, Token)).Message);
+        // Taken out of the world instead, the lid is no parent to move the ground under: the ground would leave the world.
+        fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "FindNode crate\r\nDeleteChild lid", StringComparison.Ordinal));
+        workspace = new(fixture.Project);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Empty(world.Nodes.Single(n => n.Name == "lid").Parents);
+        Assert.Contains("not placed in the world", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "ground"), world.Nodes.Single(n => n.Name == "lid"), Token)).Message);
+    }
+
+    [Fact]
+    public async Task ScriptLoadedObjectsWhosePartsScriptsChangeAreNotCopied()
+    {
+        using SourceWorldFixture fixture = new();
+        // The tank is placed in the world and a script scales its hull: a copy would repeat only the tank's own lines.
+        string script = Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m2.gs")));
+        fixture.Write("gamegen/m2.gs", script.Replace("LoadGameGen tank.flt tank", "LoadGameGen tank.flt tank\r\nFindNode world\r\nAddChild tank\r\nFindNode hull\r\nObject3DScale 1.0 1.0 1.0", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m2");
+        Assert.Contains("acts on hull, which is below tank", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(Target(workspace, "m2", build, world, "tank"), "tank2", null, Token)).Message);
+    }
+
+    [Fact]
+    public async Task ABuildShowsInstructionsThatFindANodeOnlyAfterAMove()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteNestedDatabase();
+        // FindSubNode lid finds nothing under the ground until the lid moves there.
+        fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs"))).Replace("# no vehicles", "FindNode ground\r\nFindSubNode lid\r\nSetLandmark on", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Apply(workspace, SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "lid"), world.Nodes.Single(n => n.Name == "ground"), Token));
+        var (after, _) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Contains("instead of no node", SourceObjectEdits.TargetChange(build, after));
+    }
+
+    [Fact]
+    public async Task ABuildTellsCopiesOfAReferencedFileApart()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteReferencingDatabase(twice: true);
+        // Both crates reference lidm.gltf; the script marks the newest lid. Moving the first crate under the second makes
+        // its lid the newest: another copy of the same glTF node.
+        fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs"))).Replace("# no vehicles", "FindNode lid\r\nSetLandmark on", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal(2, world.Nodes.Count(n => n.Name == "lid"));
+        Apply(workspace, SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "crate"), world.Nodes.Single(n => n.Name == "crate_b"), Token));
+        var (after, _) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Contains("would act on", SourceObjectEdits.TargetChange(build, after));
+    }
+
+    [Fact]
+    public async Task ABuildShowsWhenAMoveMakesAScriptActOnAnotherNode()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WritePartDatabase(secondGround: true);
+        // The script marks the newest ground as a landmark; moving the other ground under it makes that one the newest.
+        fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs"))).Replace("# no vehicles", "FindNode ground\r\nSetLandmark on", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Null(SourceObjectEdits.TargetChange(build, build));
+        var slots = GameZWriter.NodeSlots(world);
+        var grounds = world.Nodes.Where(n => n.Name == "ground").ToList();
+        var flagged = grounds.Single(g => build.Provenance[slots[g]].Applied.Count > 0);
+        var plain = grounds.Single(g => !ReferenceEquals(g, flagged));
+        // The plan cannot know; the rebuilt world shows it, and the editor takes such a change back.
+        Apply(workspace, SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, plain), flagged, Token));
+        var (after, _) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Contains("would act on", SourceObjectEdits.TargetChange(build, after));
+    }
+
+    [Fact]
+    public async Task CopiesAreRefusedWhileAScriptTakesAPartOutOfTheNode()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteReferencingDatabase();
+        // The lid comes from the file the crate references, so neither the crate's built subtree nor its file holds it once
+        // the script moves it; copying the crate would still copy it, and AddChild lid would find the copy's.
+        fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs"))).Replace("# no vehicles", "FindNode crate\r\nDeleteChild lid\r\nFindNode ground\r\nAddChild lid", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal("ground", Assert.Single(world.Nodes.Single(n => n.Name == "lid").Parents).Name);
+        Assert.Contains("(DeleteChild) takes a part out of crate", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, "crate"), "crate2", null, Token)).Message);
+    }
+
+    [Fact]
+    public async Task PartEditsRespectScriptsActingOnAnyCopy()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WritePartDatabase();
+        // A script scales one copy's lid (FindNode finds the newest). Deleting or copying either crate edits the part, so both copies: the
+        // script would lose its lid, or find the other one, whichever copy was chosen.
+        fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs"))).Replace("# no vehicles", "FindNode lid\r\nObject3DScale 1.0 1.0 1.0", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var crates = world.Nodes.Where(n => n.Name == "crate").ToList();
+        Assert.Equal(2, crates.Count);
+        foreach (var crate in crates)
+        {
+            var target = Target(workspace, "m1", build, world, crate);
+            Assert.Contains("(Object3DScale) acts on lid", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDelete(target, Token)).Message);
+            Assert.Contains("(Object3DScale) acts on lid", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(target, "crate2", null, Token)).Message);
+        }
+        // One copy's lid is scaled by the script and the other's is not, so the refusal for that crate comes from the other copy.
+        var slots = GameZWriter.NodeSlots(world);
+        Assert.Equal([0, 1], world.Nodes.Where(n => n.Name == "lid").Select(lid => build.Provenance[slots[lid]].Applied.Count).Order());
+        // Moving the unscaled copy's lid edits the part's node too, so the other copy's script scale would stop applying.
+        var plain = world.Nodes.Where(n => n.Name == "lid").Select(lid => build.Provenance[slots[lid]]).Single(p => p.Applied.Count == 0);
+        // Copying the unscaled lid would give every copy's part a lid built without the other copy's script scale.
+        var unscaled = world.Nodes.Where(n => n.Name == "lid").Single(lid => build.Provenance[slots[lid]].Applied.Count == 0);
+        Assert.Contains("in another copy of it", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, unscaled), "lid2", null, Token)).Message);
+        // Copying the scaled one would give the unscaled copy's part a scaled lid.
+        var scaled = world.Nodes.Where(n => n.Name == "lid").Single(lid => build.Provenance[slots[lid]].Applied.Count > 0);
+        Assert.Contains("one copy of lid", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, scaled), "lid2", null, Token)).Message);
+        Assert.Contains("another copy of lid", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "lid", plain, build.Executions,
+            new(new(1, 2, 3), Vector3.Zero, Vector3.One), Token, "m1", null, SourceObjectEdits.CopiesOf(plain, build.Provenance.Values))).Message);
+    }
+
+    [Fact]
+    public async Task PartsOfTheDatabaseAreEditedInTheirOwnFileForEveryCopy()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WritePartDatabase();
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        const string Part = "data/m1/models/m1_01.gltf";
+        List<WorldNode> Named(string name) => [.. world.Nodes.Where(n => n.Name == name)];
+        // The database copies the part twice; each copy's objects join the world and come from the part's file.
+        Assert.Equal(2, Named("crate").Count);
+        Assert.All(Named("crate").Concat(Named("post")), n => Assert.Equal([WorldNode(world)], n.Parents));
+        var crate = Target(workspace, "m1", build, world, Named("crate")[1]);
+        Assert.Equal(Part, crate.Origin.ModelFile); Assert.True(crate.Origin.Database); Assert.True(crate.Origin.Part);
+        Assert.False(Target(workspace, "m1", build, world, "ground").Origin.Part);
+
+        // A move edits the part's node, so both copies move.
+        var move = SourceObjectEdits.PlanTransform(workspace, "crate", crate.Origin, build.Executions, new(new(20, 0, -40), Vector3.Zero, Vector3.One), Token);
+        Assert.Equal(Part, move.Changes.Single().Relative);
+        Assert.Contains(move.Notes, n => n.Contains("part of the mission database", StringComparison.Ordinal));
+        Apply(workspace, move);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.All(Named("crate"), c => Assert.Equal(new Vector3(20, 0, -40), WorldUpdate.LocalMatrix(c)!.Value.Translation));
+        // A copy in the part appears in every copy of it.
+        var copy = SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, Named("post")[0]), "post2", null, Token);
+        Assert.Equal(Part, copy.Changes.Single().Relative);
+        Assert.Contains(copy.Notes, n => n.Contains("2 nodes named post2", StringComparison.Ordinal));
+        Apply(workspace, copy);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal(2, Named("post2").Count);
+        // It moves under another node of the part, never under a node of another file; the lid moves to the part's top.
+        Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, Named("post2")[0]), world.Nodes.Single(n => n.Name == "ground"), Token));
+        Apply(workspace, SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, Named("post2")[0]), Named("crate")[0], Token));
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.All(Named("post2"), p => Assert.Equal("crate", Assert.Single(p.Parents).Name));
+        var top = SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, Named("lid")[0]), null, Token);
+        Assert.Contains(top.Notes, n => n.Contains("root of " + Part, StringComparison.Ordinal));
+        Assert.Equal($"Move lid to the top of {Path.GetFileName(Part)}", top.Label);
+        Apply(workspace, top);
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.All(Named("lid"), l => Assert.Equal([WorldNode(world)], l.Parents));
+        // Moving it there again changes nothing, so it is refused rather than reported as a move.
+        Assert.Contains("already a root of the world", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, Named("lid")[0]), null, Token)).Message);
+        // Deleting it removes it from the part, so from both copies; the database file never changed.
+        Apply(workspace, SourceObjectEdits.PlanDelete(Target(workspace, "m1", build, world, Named("post2")[0]), Token));
+        (_, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Empty(Named("post2"));
+        Assert.Equal(File.ReadAllBytes(fixture.Path("data/m1/models/m1.gltf")), workspace.Read("data/m1/models/m1.gltf", Token));
+        for (int i = 0; i < 5; i++) workspace.Undo();
+        Assert.False(workspace.IsDirty);
+    }
 
     [Fact]
     public async Task DatabaseObjectsAreCopiedMovedAndDeletedInTheirGltfFile()
@@ -70,6 +294,140 @@ public sealed class SourceObjectStructureTests
     }
 
     [Fact]
+    public void TransformsSurviveTinyScalesAndNearlyVerticalPitches()
+    {
+        static Vector3 Row(Matrix4x4 m, int row) => new(m[row, 0], m[row, 1], m[row, 2]);
+        // Decompose replaces axes shorter than its epsilon (here with a quaternion 147° off): such a matrix is written whole.
+        var tiny = Matrix4x4.CreateScale(1e-5f) * Matrix4x4.CreateFromYawPitchRoll(0.5f, 0.3f, 0.7f) * Matrix4x4.CreateTranslation(10, 0, 0);
+        JsonObject node = [];
+        GltfNodeEdits.SetLocal(node, tiny);
+        var back = GltfNodeEdits.Local(node);
+        for (int row = 0; row < 3; row++) Assert.True((Row(back, row) - Row(tiny, row)).Length() <= 1e-3f * Row(tiny, row).Length(), $"row {row}");
+        // Near ±90° pitch, a rotation stored as glTF's quaternion reads back as angles giving the same orientation.
+        foreach (var angles in new Vector3[] { new(89.9999f, 10, 70), new(89.999f, 37, 12), new(-89.999f, -20, 5), new(-90, 0, 33), new(45, 30, 15) })
+        {
+            var m = new ObjectTransform(Vector3.Zero, angles, Vector3.One).Matrix();
+            JsonObject stored = [];
+            GltfNodeEdits.SetLocal(stored, m);
+            var shown = ObjectTransform.FromMatrix(GltfNodeEdits.Local(stored));
+            var again = new ObjectTransform(Vector3.Zero, shown.RotationDegrees, Vector3.One).Matrix();
+            for (int row = 0; row < 3; row++) Assert.True((Row(again, row) - Row(m, row)).Length() < 1e-3f, $"{angles} row {row}: {shown.RotationDegrees}");
+        }
+        // Edits read the angles back each time: near ±90° their float noise must not build up into a turn.
+        var start = new ObjectTransform(Vector3.Zero, new(89.9825f, -156.37941f, 109.36977f), Vector3.One).Matrix();
+        JsonObject chain = [];
+        GltfNodeEdits.SetLocal(chain, start);
+        for (int edit = 0; edit < 30; edit++)
+        {
+            var shown = ObjectTransform.FromMatrix(GltfNodeEdits.Local(chain));
+            GltfNodeEdits.SetLocal(chain, new ObjectTransform(shown.Position, ObjectTransform.Snap(shown.RotationDegrees, angles: true), new Vector3(edit % 2 == 0 ? 1.5f : 1)).Matrix());
+        }
+        var end = GltfNodeEdits.Local(chain);
+        for (int row = 0; row < 3; row++) Assert.True((Row(end, row) - Row(start, row)).Length() < 3e-4f, $"after 30 edits, row {row}");
+    }
+
+    [Fact]
+    public void MovesUnderBadlyConditionedParentsAreRefused()
+    {
+        // b, under a, is sheared and badly conditioned: its inverse is too imprecise to keep c in place under it.
+        var root = JsonNode.Parse("""
+            {"scene":0,"scenes":[{"nodes":[0,2]}],"nodes":[
+              {"name":"a","children":[1],"matrix":[-0.13071162,0.049208876,0.4451546,0,0.0044525927,-0.00023183179,0.0013330502,0,15.219602,194.42451,-17.023403,0,0,0,0,1]},
+              {"name":"b","matrix":[138.63388,21.302254,-73.82902,0,0.00066238473,-0.0006774366,0.0010483419,0,-3.7498612,-26.3116,-14.633194,0,0,0,0,1]},
+              {"name":"c","translation":[100,20,30]}]}
+            """)!.AsObject();
+        Assert.Contains("badly conditioned", Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 2, 1)).Message);
+        // A half turn reads as 180°, not atan2's −180°.
+        Assert.Equal(new Vector3(0, 180, 180), ObjectTransform.Snap(new(0, -180, -180), angles: true));
+    }
+
+    [Fact]
+    public async Task GltfEditsKeepWhatTheFileCanHold()
+    {
+        foreach (bool far in new[] { false, true })
+        {
+            using SourceWorldFixture fixture = new();
+            fixture.WriteNestedDatabase();
+            var json = JsonNode.Parse(File.ReadAllText(fixture.Path("data/m1/models/m1.gltf")))!;
+            JsonObject Named(string name) => json["nodes"]!.AsArray().Single(n => n!["name"]!.GetValue<string>() == name)!.AsObject();
+            // Under a crate 20000 times larger the ground's scale would flatten; under a crate 1000 times smaller the ground,
+            // 2000 units away, would lie 2,000,000 units from it.
+            Named("crate")["scale"] = far ? new JsonArray(0.001f, 0.001f, 0.001f) : new JsonArray(20000f, 20000f, 20000f);
+            Named("ground")["scale"] = new JsonArray(0.01f, 0.01f, 0.01f);
+            if (far) Named("ground")["translation"] = new JsonArray(2000f, 0f, 0f);
+            // The lid holds a sheared matrix: its axes are not perpendicular, so no rotation and scale can show it.
+            var lid = Named("lid");
+            foreach (var key in new[] { "translation", "rotation", "scale" }) lid.Remove(key);
+            lid["matrix"] = new JsonArray(1f, 0f, 0f, 0f, 1f, 1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f);
+            fixture.Write("data/m1/models/m1.gltf", json.ToJsonString());
+            SourceWorkspace workspace = new(fixture.Project);
+            var (build, world) = await BuildAsync(fixture, workspace, "m1");
+            Assert.Contains(far ? "beyond" : "flattens", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "ground"), world.Nodes.Single(n => n.Name == "crate"), Token)).Message);
+            if (far) continue;
+            var target = Target(workspace, "m1", build, world, "lid");
+            var shown = ObjectTransform.Of(world.Nodes.Single(n => n.Name == "lid"));
+            Assert.Contains("shear", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "lid", target.Origin, build.Executions, shown with { RotationDegrees = new(0, 45, 0) }, Token, "m1", shown)).Message);
+            Assert.Contains("shear", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(target, "lid2", shown with { RotationDegrees = new(0, 45, 0) }, Token)).Message);
+            // Moving it, or copying it with a new position only, keeps the matrix.
+            Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "lid", target.Origin, build.Executions, shown with { Position = new(3, 0, 0) }, Token, "m1", shown).Changes);
+            Assert.NotEmpty(SourceObjectEdits.PlanDuplicate(target, "lid2", shown with { Position = new(3, 0, 0) }, Token, keepBasis: true).Changes);
+        }
+    }
+
+    [Fact]
+    public async Task NearlyVerticalTurnsAtLargeScalesStayEditable()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        // Pitched 89.99° and scaled 20: Euler angles read back imprecisely there, but the axes stay perpendicular (no shear).
+        Apply(workspace, SourceObjectEdits.PlanTransform(workspace, "ground", Target(workspace, "m1", build, world, "ground").Origin, build.Executions, new(Vector3.Zero, new(89.99f, 30, 0), new(20, 20, 20)), Token, "m1"));
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var origin = Target(workspace, "m1", build, world, "ground").Origin;
+        Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "ground", origin, build.Executions, new(Vector3.Zero, new(45, 0, 0), new(20, 20, 20)), Token, "m1").Changes);
+        // A scale of 0 would leave no rotation to read back: it is refused.
+        Assert.Contains("scale of 0", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "ground", origin, build.Executions, new(Vector3.Zero, Vector3.Zero, new(0, 1, 1)), Token, "m1")).Message);
+        // So is one so small that after the build it could read back as flattened.
+        Assert.Contains("0.00001", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "ground", origin, build.Executions, new(Vector3.Zero, new(-10, 37, 0), new(1e-6f, 1e-6f, 1e-6f)), Token, "m1")).Message);
+    }
+
+    [Fact]
+    public async Task FlattenedNodesKeepTheRotationTheyHide()
+    {
+        using SourceWorldFixture fixture = new();
+        // Blender hides an object by scaling an axis to 0; its rotation stays in the file, but no matrix shows it.
+        var json = JsonNode.Parse(File.ReadAllText(fixture.Path("data/m1/models/m1.gltf")))!;
+        var ground = json["nodes"]!.AsArray().Single(n => n!["name"]!.GetValue<string>() == "ground")!.AsObject();
+        ground["rotation"] = new JsonArray(0f, 0.38268343f, 0f, 0.9238795f); ground["scale"] = new JsonArray(0f, 1f, 1f);
+        fixture.Write("data/m1/models/m1.gltf", json.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var origin = Target(workspace, "m1", build, world, "ground").Origin;
+        var shown = ObjectTransform.Of(world.Nodes.Single(n => n.Name == "ground"));
+        // Setting the scale would rebuild the matrix from the rotation shown (0), losing the authored one.
+        Assert.Contains("zero scale", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "ground", origin, build.Executions, shown with { Scale = Vector3.One }, Token, "m1", shown)).Message);
+        // A value that is not a number is checked even beside unchanged ones.
+        Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanTransform(workspace, "ground", origin, build.Executions, shown with { Scale = new(float.NaN, 1, 1) }, Token, "m1", shown));
+        // A move keeps the matrix, and a copy in place or at a new position keeps it too.
+        Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "ground", origin, build.Executions, shown with { Position = new(5, 0, 0) }, Token, "m1", shown).Changes);
+        Assert.NotEmpty(SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, "ground"), "ground2", shown with { Position = new(5, 0, 0) }, Token, keepBasis: true).Changes);
+    }
+
+    [Fact]
+    public async Task ScriptObjectsDoNotMoveWhereTheirTransformWouldShear()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_a", new(100, 0, -50)), []), Token);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_b", new(0, 0, 30)), []), Token);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Apply(workspace, SourceObjectEdits.PlanTransform(workspace, "tank_a", Target(workspace, "m1", build, world, "tank_a").Origin, build.Executions, new(new(100, 0, -50), new(0, 37, 0), new(2, 1, 0.5f)), Token, "m1"));
+        (build, world) = await BuildAsync(fixture, workspace, "m1");
+        // Under the turned, unevenly scaled tank_a, tank_b would need a shear, which script transforms cannot hold.
+        Assert.Contains("sheared", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "tank_b"), world.Nodes.Single(n => n.Name == "tank_a"), Token)).Message);
+    }
+
+    [Fact]
     public async Task ScriptObjectsAreCopiedMovedAndDeletedThroughTheirInstructions()
     {
         using SourceWorldFixture fixture = new();
@@ -84,7 +442,7 @@ public sealed class SourceObjectStructureTests
         // The copy repeats the load and its flag, at a new place, before the world is written.
         var copy = SourceObjectEdits.PlanDuplicate(hull, "tank_b", new(new(0, 0, 30), new(0, 90, 0), Vector3.One), Token);
         string script = Encoding.Latin1.GetString(copy.Changes.Single().Content);
-        Assert.Contains("SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.flt tank_b\r\nSetIntersectSurface on\r\nObject3DTranslate 0.0 0.0 30.0\r\nObject3DRotate 0.0 90.0 0.0\r\nFindNode world\r\nAddChild tank_b\r\nGameZWriteZBDFile", script);
+        Assert.Contains("SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.gltf tank_b\r\nSetIntersectSurface on\r\nObject3DTranslate 0.0 0.0 30.0\r\nObject3DRotate 0.0 90.0 0.0\r\nFindNode world\r\nAddChild tank_b\r\nGameZWriteZBDFile", script);
         Assert.Equal("tank_b", Assert.Single(copy.Additions).Name);
         Apply(workspace, copy);
         (build, world) = await BuildAsync(fixture, workspace, "m1");
@@ -100,7 +458,7 @@ public sealed class SourceObjectStructureTests
         string before = Text(workspace, "gamegen/m1.gs");
         Apply(workspace, SourceObjectEdits.PlanDelete(Target(workspace, "m1", build, world, "tank_at"), Token));
         string deleted = Text(workspace, "gamegen/m1.gs");
-        foreach (string line in new[] { "LoadGameGen tank.flt tank_at", "Object3DTranslate 100.0 0.0 -50.0", "SetIntersectSurface on", "AddChild tank_at" })
+        foreach (string line in new[] { "LoadGameGen tank.gltf tank_at", "Object3DTranslate 100.0 0.0 -50.0", "SetIntersectSurface on", "AddChild tank_at" })
             Assert.Contains("# " + line, deleted);
         Assert.Equal(before.Length + 8, deleted.Length);
         (_, world) = await BuildAsync(fixture, workspace, "m1");
@@ -381,5 +739,61 @@ public sealed class SourceObjectStructureTests
         Assert.Equal(new Vector3(11, 0, 0), GltfNodeEdits.World(root, 2).Translation);
         Assert.Equal(new Vector3(11, 0, 0), GltfNodeEdits.Local(root["nodes"]![2]!.AsObject()).Translation);
         Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 1, 3));
+    }
+
+    [Fact]
+    public async Task AMovedObjectKeepsTheZoneItWasBuiltWith()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteTerrainDatabase();
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        // sky has no zone of its own (the database's 0xFF reaches it); under ground (zone 3) it would take 3.
+        Assert.Equal(0xFFu, world.Nodes.Single(n => n.Name == "sky").Zone & 0xFF);
+        Apply(workspace, SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "sky"), world.Nodes.Single(n => n.Name == "ground"), Token));
+        (_, world) = await BuildAsync(fixture, workspace, "m1");
+        var sky = world.Nodes.Single(n => n.Name == "sky");
+        Assert.Equal("ground", Assert.Single(sky.Parents).Name);
+        Assert.Equal(0xFFu, sky.Zone & 0xFF);
+    }
+
+    [Fact]
+    public async Task MembersOfDeletedGroupsAreAlreadyUnderTheWorld()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteTerrainDatabase(grouped: true);
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        // The build deletes g1 and its pieces join the world: moving one there changes nothing in the world.
+        Assert.Equal([WorldNode(world)], world.Nodes.Single(n => n.Name == "flat_a").Parents);
+        Assert.Contains("already a root of the world", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "flat_a"), null, Token)).Message);
+    }
+
+    [Fact]
+    public void ReparentingKeepsTheZoneANodeInherited()
+    {
+        // g sets zone 0, which o (no zone of its own) and o's child take; r is a root with zone 3; w has no zone either.
+        var root = JsonNode.Parse("""
+            { "scene": 0, "scenes": [ { "nodes": [0, 2, 4] } ], "nodes": [
+              { "name": "g", "children": [1], "extras": { "recoil": { "zone": 0 } } },
+              { "name": "o", "children": [3] },
+              { "name": "r", "extras": { "recoil": { "zone": 3 } } },
+              { "name": "c" },
+              { "name": "w" },
+              { "name": "v" } ] }
+            """)!.AsObject();
+        root["scenes"]![0]!["nodes"]!.AsArray().Add(5);
+        int? Zone(int node) => root["nodes"]![node]!["extras"]?["recoil"]?["zone"]?.GetValue<int>();
+        // To the top it would take the database's 0xFF: it keeps zone 0, and so does its child.
+        GltfNodeEdits.Reparent(root, 1, null);
+        Assert.Equal(0, Zone(1)); Assert.Null(Zone(3));
+        // A root that took its zone from outside the file keeps the built one under a node with another zone.
+        GltfNodeEdits.Reparent(root, 4, 2, 0xFF);
+        Assert.Equal(0xFF, Zone(4));
+        // Without the built zone (a part whose copies take different ones), a move that would replace it is refused.
+        Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 5, 2));
+        // A node with a zone of its own keeps it unchanged.
+        GltfNodeEdits.Reparent(root, 2, 0);
+        Assert.Equal(3, Zone(2));
     }
 }

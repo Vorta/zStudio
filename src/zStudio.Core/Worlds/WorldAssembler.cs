@@ -15,7 +15,7 @@ public interface IProjectFiles
 /// <summary>
 /// Assembles a mission world from a source project the way the original gamegen build did: it runs the mission's
 /// scripts (<c>gamegen/mN.gs</c>) with the retail interpreter's command semantics and loads models with
-/// <c>LoadGameGen</c>, reading glTF where the scripts name OpenFlight files. The world is captured where the script
+/// <c>LoadGameGen</c>, reading the glTF files the scripts name (or, for an OpenFlight name, its glTF). The world is captured where the script
 /// writes it (<c>GameZWriteZBDFile</c>), after the engine's update pass.
 /// </summary>
 public sealed partial class WorldAssembler(IProjectFiles files, CancellationToken token = default)
@@ -72,6 +72,17 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private WorldNode? current, pendingWorld;
     private bool written;
     private int instructions;
+    /// <summary>
+    /// The engine's node table (gwNodeNew 0x4478c0, FreeNodeToFreeList 0x447a70): one free list for every node class,
+    /// chained in slot order at start; a freed slot goes to its head and is taken again before any other, last in, first
+    /// out. Lookups by name in the game take the highest slot, so the written world keeps every node in the slot the
+    /// build gave it, with freed slots that were not taken again between them.
+    /// </summary>
+    private readonly Dictionary<WorldNode, int> slots = new(ReferenceEqualityComparer.Instance);
+    private readonly Stack<int> freeSlots = new();
+    /// <summary>The node each freed slot last held: the slot keeps its name, as the engine leaves it.</summary>
+    private readonly Dictionary<int, WorldNode> freedNodes = [];
+    private int nextSlot;
 
     /// <summary>Runs <paramref name="script"/> (relative to the gamegen folder, e.g. <c>m1.gs</c>) and returns the written world.</summary>
     public GameZWorld Assemble(string script)
@@ -295,9 +306,25 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // Node lookups scan the table, so it never grows past what a world can hold.
         if (World.Nodes.Count >= GameZWorld.MaximumNodeCapacity) throw new InvalidDataException($"The scripts create more nodes than a world holds ({GameZWorld.MaximumNodeCapacity:N0}).");
         WorldNode node = new(name, kind) { Flags = 0x0108001C, Zone = 0xFF };
-        World.Nodes.Add(node); current = node;
+        Allocate(node); current = node;
         return node;
     }
+    private void Allocate(WorldNode node)
+    {
+        token.ThrowIfCancellationRequested();
+        if (deferredRemovals?.Remove(node) == true) World.Nodes.Remove(node);
+        World.Nodes.Add(node);
+        int slot = freeSlots.Count > 0 ? freeSlots.Pop() : nextSlot++;
+        freedNodes.Remove(slot); slots[node] = slot;
+    }
+    private void Free(WorldNode node)
+    {
+        if (deferredRemovals != null) deferredRemovals.Add(node); else World.Nodes.Remove(node);
+        if (!slots.Remove(node, out int slot)) return;
+        freeSlots.Push(slot); freedNodes[slot] = node;
+    }
+    /// <summary>Nodes a model load freed (its caches), removed from the world's list once the load ends rather than one search each.</summary>
+    private HashSet<WorldNode>? deferredRemovals;
     private static void Object3D(WorldNode node)
     {
         node.Flags |= 0x02000000; node.BoundsFlags = 4;
@@ -389,7 +416,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                 n.Children.Remove(child); child.Parents.Remove(n);
                 if (child.Parents.Count == 0) Destroy(child);
             }
-            World.Nodes.Remove(n);
+            Free(n);
             if (current == n) current = null;
         }
     }
@@ -398,28 +425,44 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
 
     /// <summary>
     /// LoadGameGen file name: an object3d root named <paramref name="name"/> holding the file's scene. After
-    /// GameGenSetWorld the next load is the mission database: its scene roots also become world children, so they
-    /// survive when the script deletes the root. OpenFlight names resolve to .gltf files in the model directories.
+    /// GameGenSetWorld the next load is the mission database: its objects (its scene roots, or below its groups, also in
+    /// the parts its groups reference) also become world children, in the order they were made, so they survive when the
+    /// script deletes the root with the groups. OpenFlight names resolve
+    /// to .gltf files in the model directories. Nodes take slots in the order the original loader created them (see
+    /// <see cref="OriginalLoader"/>).
     /// </summary>
     private void LoadGameGen(string file, string name, string script)
     {
-        var root = Create(name, WorldNodeClass.Object3D); Object3D(root); LoadedRoots.Add(root);
+        // The root takes its slot after the caches of the files the load references (see OriginalLoader).
+        WorldNode root = new(name, WorldNodeClass.Object3D) { Flags = 0x0108001C, Zone = 0xFF }; Object3D(root); LoadedRoots.Add(root); current = root;
         string? path = ResolveModel(file);
-        if (path == null) { Warn($"{script}: LoadGameGen found no model for {file} in {string.Join(", ", modelDirectories)}."); pendingWorld = null; return; }
-        // One load reads each referenced file once, so repeated references share their models, as the loader shared them.
+        if (path == null) { Allocate(root); Warn($"{script}: LoadGameGen found no model for {file} in {string.Join(", ", modelDirectories)}."); pendingWorld = null; return; }
+        // One load parses each file once; models follow the loader's caches (see WorldGltf.ImportContext).
         Dictionary<string, (GltfDocument, string)> documents = new(StringComparer.OrdinalIgnoreCase);
         (GltfDocument, string) Load(string file) => documents.TryGetValue(file, out var loaded) ? loaded : documents[file] = LoadDocument(file);
         var (doc, documentPath) = Load(path);
         if (WorldGltf.RootFlags(doc) is { } rootFlags) root.Flags = (root.Flags & ~WorldGltf.CarriedFlags) | rootFlags;
         bool database = pendingWorld != null; var load = instruction;
         Origin(root).LoadedFile = documentPath;
-        WorldGltf.ImportContext context = new()
+        HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
+        // A reference's file as its node names it: references naming one file by different paths each have a cache.
+        Dictionary<WorldNode, string> referenceText = new(ReferenceEqualityComparer.Instance);
+        HashSet<string> parts = new(StringComparer.OrdinalIgnoreCase);
+        WorldGltf.ImportContext context = null!;
+        context = new()
         {
             World = World,
             NodeImported = (node, file, source) =>
             {
+                if (context.Referencing is { } referencing) Origin(node).ReferencedBy = Origin(referencing);
                 var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.ModelNodeName = source.Name; origin.ModelTransformAuthored = source.Matrix is { } m && !m.IsIdentity; origin.Load = load;
-                origin.Database = database && string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase);
+                // The database's nodes: of its file and of its parts, the files its groups reference.
+                bool part = parts.Contains(file);
+                origin.Database = database && (part || string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase));
+                origin.Part = database && part;
+                string? uri = (source.Extras?[WorldGltf.Key] as System.Text.Json.Nodes.JsonObject)?["ref"] is System.Text.Json.Nodes.JsonValue text && text.TryGetValue(out string? value) ? value : null;
+                if (uri != null) referenceText[node] = uri;
+                if (origin.Database && WorldGltf.IsGroup(source, file)) { groups.Add(node); if (uri != null) parts.Add(Relative(file, uri)); }
             },
             Reference = (uri, from) => Load(Relative(from, uri)),
             ReadFile = (uri, from) =>
@@ -438,28 +481,61 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             Token = token,
         };
         List<WorldNode> nodes;
+        int firstModel = World.Models.Count;
         try { nodes = WorldGltf.Import(doc, documentPath, 0xFF, context); }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
         foreach (var w in context.Warnings) Warn(w);
         foreach (var (texture, addressing) in context.TextureAddressing)
             if (!TextureAddressing.TryAdd(texture, addressing) && TextureAddressing[texture] != addressing)
                 Warn($"Texture {texture} is sampled with different edge modes in different models; the pack keeps the first.");
-        // A shared node is reached once per parent but enters the node table once.
-        HashSet<WorldNode> added = new(ReferenceEqualityComparer.Instance);
-        foreach (var node in nodes)
+        // Nodes take slots as the original loader made and freed them (caches of referenced files, the root, the records,
+        // each reference's content after the next record). A referenced file's nodes are the children from another file.
+        string FileOf(WorldNode node) => Provenance.TryGetValue(node, out var p) && p.ModelFile != null ? p.ModelFile : documentPath;
+        List<WorldNode> Content(WorldNode node) => [.. node.Children.Where(c => !string.Equals(FileOf(c), FileOf(node), StringComparison.OrdinalIgnoreCase))];
+        // The loader made a model when it read the node from its file (a cache's load or the file's own records), so the
+        // load's models are in that order, as the world stores them.
+        Dictionary<WorldModel, int> read = new(ReferenceEqualityComparer.Instance);
+        deferredRemovals = new(ReferenceEqualityComparer.Instance);
+        try
         {
-            AddNodes(node);
-            root.Children.Add(node); node.Parents.Add(root);
-            if (pendingWorld != null) { node.Parents.Add(pendingWorld); worldChildren.Add(node); }
+            OriginalLoader.Load(root, nodes, nodes, new()
+            {
+                Allocate = Allocate, Free = Free, Content = Content,
+                File = node => $"{FileOf(node)}|{(referenceText.TryGetValue(node, out var text) ? text : FileOf(Content(node)[0]))}",
+                Read = node => { if (node.Model != null) read.TryAdd(node.Model, read.Count); },
+            });
+        }
+        finally
+        {
+            var removed = deferredRemovals; deferredRemovals = null;
+            if (removed.Count > 0) World.Nodes.RemoveAll(removed.Contains);
+        }
+        var loaded = World.Models.GetRange(firstModel, World.Models.Count - firstModel).OrderBy(m => read.GetValueOrDefault(m, int.MaxValue)).ToList();
+        World.Models.RemoveRange(firstModel, loaded.Count); World.Models.AddRange(loaded);
+        foreach (var node in nodes) { root.Children.Add(node); node.Parents.Add(root); }
+        if (pendingWorld != null)
+        {
+            // Objects join the world as they were made, also those copied from the database's parts after a later record.
+            Dictionary<WorldNode, int> made = new(ReferenceEqualityComparer.Instance);
+            for (int i = 0; i < World.Nodes.Count; i++) made[World.Nodes[i]] = i;
+            foreach (var member in Members(nodes, new(ReferenceEqualityComparer.Instance)).OrderBy(m => made.GetValueOrDefault(m, int.MaxValue)))
+            { member.Parents.Add(pendingWorld); worldChildren.Add(member); }
         }
         // FindNode and AddChild take the newest node with a name, and the file's own nodes are newer than the root.
-        if (added.Any(n => n.Name == name)) Warn($"{script}: {file} has a node of its own named {name}, so FindNode and AddChild {name} find that node rather than the loaded root.");
+        if (nodes.SelectMany(Subtree).Any(n => n.Name == name)) Warn($"{script}: {file} has a node of its own named {name}, so FindNode and AddChild {name} find that node rather than the loaded root.");
         pendingWorld = null; current = root;
-        void AddNodes(WorldNode node)
+        // The database's objects: its scene roots, and for a group the objects below it. A group's own transform would be
+        // lost when the script deletes it (its objects keep theirs), so a group has none.
+        IEnumerable<WorldNode> Members(IEnumerable<WorldNode> records, HashSet<WorldNode> seen)
         {
-            if (!added.Add(node)) return;
-            World.Nodes.Add(node);
-            foreach (var child in node.Children) AddNodes(child);
+            foreach (var node in records)
+            {
+                if (!seen.Add(node)) continue;
+                if (!groups.Contains(node)) { yield return node; continue; }
+                if (node.Class != WorldNodeClass.Object3D || node.Model != null || WorldUpdate.LocalMatrix(node) is { } m && !m.IsIdentity)
+                    throw new InvalidDataException($"{path}: group {node.Name} has geometry or a transform; a group of the mission database holds only objects, which keep their own transforms when the build deletes it.");
+                foreach (var member in Members(node.Children, seen)) yield return member;
+            }
         }
     }
 
@@ -467,12 +543,16 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private static Terrain.TerrainGrid Grid(WorldNode world) => new(world.PayloadFloat(0x34), world.PayloadFloat(0x38), world.PayloadFloat(0x3C), world.PayloadFloat(0x40),
         world.PayloadFloat(0x54), world.PayloadFloat(0x58), world.PayloadInt(0x78), world.PayloadInt(0x7C));
 
-    /// <summary>The first model directory (most recently added first) holding the file, as .gltf or .glb.</summary>
+    /// <summary>
+    /// The first model directory (most recently added first) holding the file the script names: a .gltf or .glb file as
+    /// named, or for another name (the original OpenFlight .flt of older projects) its .gltf or .glb.
+    /// </summary>
     public string? ResolveModel(string file)
     {
-        string stem = Path.GetFileNameWithoutExtension(file.Replace('\\', '/'));
+        string name = Path.GetFileName(file.Replace('\\', '/')), stem = Path.GetFileNameWithoutExtension(name), named = Path.GetExtension(name).ToLowerInvariant();
+        string[] extensions = named is ".gltf" or ".glb" ? [named] : [".gltf", ".glb"];
         foreach (string directory in modelDirectories)
-            foreach (string extension in new[] { ".gltf", ".glb" })
+            foreach (string extension in extensions)
             {
                 string candidate = $"{directory}/{stem}{extension}";
                 if (files.Exists(candidate)) return candidate;
@@ -559,6 +639,24 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // Models no node uses are not written.
         var used = World.Nodes.Where(n => n.Model != null).Select(n => n.Model!).ToHashSet(ReferenceEqualityComparer.Instance);
         World.Models.RemoveAll(m => !used.Contains(m));
+        // Every node in its slot; the free list runs from the last freed slot down to the first, then on to the never-used slots.
+        var ordered = World.Nodes.OrderBy(n => slots[n]).ToList();
+        World.Nodes.Clear(); World.Nodes.AddRange(ordered);
+        World.FreedSlots.Clear();
+        int[] chain = [.. freeSlots];
+        // A full table ends the list with -1, as the engine's initial chain does.
+        int tail = nextSlot < World.NodeCapacity ? nextSlot : -1;
+        for (int i = 0; i < chain.Length; i++) World.FreedSlots[chain[i]] = FreedSlot(freedNodes[chain[i]], i + 1 < chain.Length ? chain[i + 1] : tail);
+        World.FreeHead = chain.Length > 0 ? chain[0] : tail;
+    }
+    /// <summary>A slot on the free list as the world file stores it: the name it last held, no model, and the next free slot.</summary>
+    private static byte[] FreedSlot(WorldNode node, int next)
+    {
+        byte[] slot = new byte[GameZWriter.NodeSlotSize];
+        node.NameField.CopyTo(slot, 0);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(slot.AsSpan(60), -1);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(slot.AsSpan(GameZWriter.NodeSlotSize - 4), (uint)next & 0x00FFFFFF);
+        return slot;
     }
     /// <summary>MatApplyLocalTRS (retail 0x474010): R = Ry·Rx·Rz on column vectors, scaled rows, then the translation.</summary>
     private static void SetTrsMatrix(WorldNode node)

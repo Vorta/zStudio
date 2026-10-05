@@ -13,14 +13,22 @@
   },
   {
     "Name": "zstudio_open_root",
-    "Description": "Open and index a ZBD root in the visible workspace. Dirty documents must be explicitly saved or closed first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
         "Name": "path",
         "Type": "string",
-        "Description": "Absolute ZBD root directory.",
+        "Description": "Absolute ZBD root or source project directory.",
         "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "project",
+        "Type": "boolean",
+        "Description": "Require an initialized source project (a folder with data and gamegen), as the welcome screen\u0027s source project Open does; any other folder is refused with not_project. Default false.",
+        "Required": false,
         "Choices": null,
         "Properties": null
       }
@@ -655,7 +663,7 @@
   },
   {
     "Name": "zstudio_operation",
-    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available only for export, validation and source reconstruction/export.",
+    "Description": "Read operation status/result. Poll at sensible intervals; cancel is available for exports, validation, source project and source world operations and world comparisons.",
     "Mutates": true,
     "Parameters": [
       {
@@ -669,7 +677,7 @@
       {
         "Name": "cancel",
         "Type": "boolean",
-        "Description": "Request cancellation of an export, validation or source operation.",
+        "Description": "Request cancellation of an export, validation, source project or source world operation, or world comparison.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -4863,7 +4871,7 @@
       {
         "Name": "source",
         "Type": "string",
-        "Description": "Shipped game data folder (for example the folder containing interp.zbd and m1\\).",
+        "Description": "Full path of the shipped game data folder (for example the folder containing interp.zbd and m1\\).",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -4871,7 +4879,7 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "New or empty project folder outside the source folder.",
+        "Description": "Full path of a new or empty project folder outside the source folder.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -4888,13 +4896,13 @@
   },
   {
     "Name": "zstudio_source_export",
-    "Description": "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Build game files of the open source project from its files on disk. Without destination, only check that they build. With destination (outside the project), stage, re-parse and then write the selected outputs, or nothing if any fails; existing game files are replaced only with overwrite, and restored if publication fails. Outputs work in the game but are not byte-identical to the shipped files. Unsaved edits to project files must be resolved first. The result lists the lookups by name the built missions make as the game loads them (texture-effect FindNode, animation roots, attach nodes outside their root, node and tracked-node names inside animations that fall back to the whole world, the first node of each activation prerequisite path) whose name several nodes share, with the node the game finds (lookups, at most 256), and those that find another node than in the destination files the export replaced (lookupChanges, also in notes). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "Optional output folder; omit to check without writing.",
+        "Description": "Optional output folder (a full path); omit to check without writing.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -4980,7 +4988,7 @@
   },
   {
     "Name": "zstudio_source_world_open",
-    "Description": "Open (or activate) a mission world of the open source project as its build script assembles it from the project\u0027s glTF models, textures, resources and animation definitions, including the project\u0027s unsaved edits. The world is built privately, as the export builds it, and shown in Whole world. Edit it with zstudio_source_world_add_model, the placement commands (pickup_lock, pickup_move, scene_card), undo_redo and save_document, which change only the project\u0027s sources; every open world of the project shares one edit history and one save. Build problems are listed in problems. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Open (or activate) a mission world of the open source project as its build script assembles it from the project\u0027s glTF models, textures, resources and animation definitions, including the project\u0027s unsaved edits. The world is built privately, as the export builds it, into the project\u0027s zstudio/cache/worlds folder (zStudio\u0027s derived data, which builds never read and which is removed when the world closes), and shown in Whole world. Edit it with zstudio_source_world_add_model, the placement commands (pickup_lock, pickup_move, scene_card), undo_redo and save_document, which change only the project\u0027s sources; every open world of the project shares one edit history and one save. Build problems are listed in problems. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5177,7 +5185,7 @@
   },
   {
     "Name": "zstudio_source_world_object",
-    "Description": "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from \u2014 the glTF file and node it was imported from, or the script instruction that created it \u2014 with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world.",
+    "Description": "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from \u2014 the glTF file and node it was imported from (origin.part marks a part of the mission database, a file it references and copies wherever it does), or the script instruction that created it \u2014 with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5281,7 +5289,7 @@
   },
   {
     "Name": "zstudio_source_world_object_edit",
-    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, or move it under another parent. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The world rebuilds and the result is the replacement document (with the copy\u0027s node index); a change the world cannot be built with is taken back. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Edit a world object of a source world as one undoable change of the project\u0027s workspace: move, rotate or scale it, set or clear one of its node flags, copy it, delete it, or move it under another parent. The edit changes the source that placed the object: the transform or extras of its glTF node (the mission database or one of its parts, which every copy of the part uses, or a model file, which every load of it uses), or the script instruction that set the value (refused when it ran more than once or takes the value from a macro); a value nothing set yet is added as an instruction after the one that created the object. Copying, deleting and re-parenting apply to the whole object: a node of a model a script loaded stands for that load (zstudio_source_world_object names it). A mission database object is copied, deleted or moved in its glTF file; a script\u0027s object is deleted by turning its instructions into comments, copied by loading it again before the world is written, and moved by attaching it there. The world rebuilds and the result is the replacement document (with the copy\u0027s node index); a change the world cannot be built with is taken back. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5460,7 +5468,7 @@
       {
         "Name": "parent",
         "Type": "integer",
-        "Description": "The new parent\u0027s scene node index (parent); -1 or the world\u0027s node makes it a root of the world.",
+        "Description": "The new parent\u0027s scene node index (parent); -1 or the world\u0027s node makes it a root of the world (a node of a part of the mission database: a root of the part).",
         "Required": false,
         "Choices": null,
         "Properties": null,
@@ -5884,6 +5892,101 @@
         "Name": "recipe",
         "Type": "string",
         "Description": "Optional recipe path.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_world_compare",
+    "Description": "Compare two RECOIL GameZ worlds (gamez.zbd) of version 15, or 13 for the 1998 demos, such as a retail world and one rebuilt from a source project or a demo world, in the visible Compare worlds window (Tools \u2192 Compare worlds\u2026). Their node trees are merged by parent-child structure: children match by name, then repeated names by structure, their children\u0027s names and position, independent of node order and slots. Each pair is the same or changed (class, flags, zone, grid cell, transform, class data, model, number of children); other nodes are only in one world. The result gives both versions, counts them, and the names several nodes share whose whole-world lookup (the engine finds a name\u0027s highest slot first) finds another node in the rebuilt world; animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every one changes behaviour. Indistinguishable copies (same parents, same contents all the way down) count as the same node. Read rows with zstudio_world_compare_tree. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "retail",
+        "Type": "string",
+        "Description": "Full path of the retail (expected) world file.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "rebuilt",
+        "Type": "string",
+        "Description": "Full path of the rebuilt (actual) world file.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_world_compare_tree",
+    "Description": "Read the merged node tree of the Compare worlds window: its roots (the world node with its members, then the nodes no parent holds) or a row\u0027s children, optionally filtered before paging. A row is a pair of nodes or a node only one world has, with both slots, its status, how many rows below differ, whether a whole-world lookup of its name finds another node in the rebuilt world, and its differences (at most 16, values shortened). select shows a row\u0027s properties in the window; expand and collapse change only the window\u0027s tree.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "context",
+        "Type": "string",
+        "Description": "Comparison context from zstudio_world_compare or a read; required for actions and row queries.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Tree action; default read.",
+        "Required": false,
+        "Choices": [
+          "read",
+          "expand",
+          "collapse",
+          "select"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "row",
+        "Type": "string",
+        "Description": "Opaque row ID: whose children to read, or the row to act on.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "differencesOnly",
+        "Type": "boolean",
+        "Description": "List only rows that differ, or hold differences below them. Independent of the window\u0027s checkbox; default false.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based result offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": -2147483648,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive text: rows whose node name, or a name below them, contains it. Independent of the window\u0027s filter.",
         "Required": false,
         "Choices": null,
         "Properties": null

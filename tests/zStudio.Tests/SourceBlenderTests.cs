@@ -1,8 +1,10 @@
 using System.IO;
 using System.Text;
 using System.Text.Json.Nodes;
+using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Export;
 using Recoil.Zbd.Core.Sources;
+using Recoil.Zbd.Core.Worlds;
 using Xunit;
 
 namespace Recoil.Zbd.Tests;
@@ -113,6 +115,35 @@ public sealed class SourceBlenderTests
         Assert.Contains("data/m1/textures/grass.png", combined.Files);
         // Refused updates leave no sealed copy behind; the forced one above left its own.
         Assert.Single(Directory.GetDirectories(Path.Combine(checkout.Folder, "sealed")));
+    }
+
+    [Fact]
+    public void CheckoutsShowTransparentTexturesAndHideCollisionVolumes()
+    {
+        using SourceWorldFixture fixture = new();
+        // A pickup model written before models carried these hints: a glow texture with graded alpha, and its collision volume.
+        byte[] rgba = new byte[4 * 4 * 4];
+        for (int i = 0; i < 16; i++) { rgba[i * 4] = 255; rgba[i * 4 + 3] = (byte)(i * 16); }
+        fixture.Write("data/m1/textures/glow.png", PngEncoder.Encode(new DecodedImage(4, 4, rgba), Token));
+        WorldNode Node(string name, WorldMaterial material)
+        {
+            ModelBuilder builder = new();
+            builder.Add(new([new(0, 0, 0), new(1, 0, 0), new(1, 0, -1), new(0, 0, -1)], [new(0, 0), new(1, 0), new(1, 1), new(0, 1)], [], [], material));
+            WorldNode node = new(name, WorldNodeClass.Object3D) { Model = builder.Finish(), Flags = WorldGltf.DefaultCarried }; node.SetPayloadInt(0, 0x28);
+            return node;
+        }
+        var (json, bin) = WorldGltf.Export([Node("box", new() { Texture = new("glow"), Flags = 0x1FF }), Node("bvol", new() { Color = new(63, 15, 254), Flags = 0xFF })], 0xFF,
+            new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("ammo.bin");
+        Assert.DoesNotContain("alphaMode", Encoding.UTF8.GetString(json));
+        fixture.Write("data/m1/models/ammo.gltf", json); fixture.Write("data/m1/models/ammo.bin", bin);
+
+        var checkout = SourceBlender.Checkout(new SourceWorkspace(fixture.Project), "data/m1/models/ammo.gltf", Token);
+        var materials = JsonNode.Parse(File.ReadAllText(checkout.Input))!["materials"]!.AsArray();
+        Assert.Equal(["BLEND", "MASK"], materials.Select(m => (string?)m!["alphaMode"]));
+        Assert.Equal(["glow~flat", "color_3F0FFE~flat~hidden"], materials.Select(m => (string?)m!["name"]));
+        Assert.Equal(0, materials[1]!["pbrMetallicRoughness"]!["baseColorFactor"]![3]!.GetValue<double>());
+        // The project's model is unchanged; only the copy Blender opens shows the hints.
+        Assert.Equal(json, File.ReadAllBytes(fixture.Path("data/m1/models/ammo.gltf")));
     }
 
     [Fact]

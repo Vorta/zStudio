@@ -81,9 +81,12 @@ public static class GltfNodeEdits
 
     /// <summary>
     /// Moves node <paramref name="index"/> under <paramref name="parent"/> (null: a root of the default scene), keeping its
-    /// place in the world: its local transform becomes its world transform relative to the new parent.
+    /// place in the world: its local transform becomes its world transform relative to the new parent. It keeps its zone
+    /// too: a node without a zone of its own takes its parent's, so when the new place would give it another, the one it
+    /// had is written to it (<paramref name="currentZone"/>, the built node's, when it came from whatever loads the file;
+    /// without it, such a move is refused).
     /// </summary>
-    public static void Reparent(JsonObject root, int index, int? parent)
+    public static void Reparent(JsonObject root, int index, int? parent, uint? currentZone = null)
     {
         var nodes = Nodes(root);
         if (parent is int p && (p < 0 || p >= nodes.Count)) throw new InvalidDataException($"The file has no node {p}.");
@@ -91,7 +94,18 @@ public static class GltfNodeEdits
         if (Parent(nodes, index) == parent && (parent != null || SceneRoots(root).Contains(index))) return;
         Matrix4x4 world = World(root, index), parentWorld = parent is int np ? World(root, np) : Matrix4x4.Identity;
         if (!Matrix4x4.Invert(parentWorld, out var inverse)) throw new InvalidDataException("The new parent's transform cannot be inverted (a zero scale).");
+        var moved = (JsonObject)nodes[index]!;
+        bool ownZone = OwnZone(moved) != null;
+        uint? zoneBefore = ownZone ? null : FileZone(nodes, Parent(nodes, index));
         Detach(root, nodes, index);
+        if (!ownZone && zoneBefore != FileZone(nodes, parent))
+        {
+            // From outside the file, the zone is the built node's; without one (copies that differ), it cannot be kept.
+            uint keep = zoneBefore ?? currentZone ?? throw new InvalidDataException("The node takes its zone from what loads the file, which differs between its copies; under the new parent the file's zone would replace it, so move it in Blender or the scripts.");
+            if (moved["extras"] is not JsonObject extras) moved["extras"] = extras = new JsonObject();
+            if (extras[WorldGltf.Key] is not JsonObject engine) extras[WorldGltf.Key] = engine = new JsonObject();
+            engine["zone"] = (int)(keep & 0xFF);
+        }
         if (parent is int target)
         {
             var node = (JsonObject)nodes[target]!;
@@ -106,9 +120,36 @@ public static class GltfNodeEdits
             if (chosen["nodes"] is not JsonArray list) chosen["nodes"] = list = [];
             list.Add(index);
         }
-        SetLocal((JsonObject)nodes[index]!, world * inverse);
+        // Under a far larger parent the node's own scale would fall below what an edit can read back (a flattened axis).
+        // (A node already flattened stays so wherever it moves.)
+        var local = world * inverse;
+        // A parent whose matrix is sheared and badly conditioned inverts imprecisely: the node must land where it is.
+        local.M14 = local.M24 = local.M34 = 0; local.M44 = 1;
+        var placed = local * parentWorld;
+        float reach = MathF.Max(1, new[] { world.M41, world.M42, world.M43 }.Max(MathF.Abs));
+        for (int row = 0; row < 4; row++)
+        {
+            Vector3 wanted = new(world[row, 0], world[row, 1], world[row, 2]), got = new(placed[row, 0], placed[row, 1], placed[row, 2]);
+            if (!((got - wanted).Length() <= 1e-4f * (row < 3 ? MathF.Max(wanted.Length(), 1e-12f) : reach)))
+                throw new InvalidDataException("The new parent's transform cannot be undone precisely enough to keep the node in place (its matrix is sheared and badly conditioned); choose another parent.");
+        }
+        static bool Flat(Matrix4x4 m) => new Vector3(m.M11, m.M12, m.M13).Length() < 1e-6f || new Vector3(m.M21, m.M22, m.M23).Length() < 1e-6f || new Vector3(m.M31, m.M32, m.M33).Length() < 1e-6f;
+        if (Flat(local) && !Flat(Local((JsonObject)nodes[index]!)))
+            throw new InvalidDataException("Under the new parent the node's scale would fall below 1e-6 of its parent's, which flattens it for later edits; choose another parent.");
+        if (MathF.Abs(local.M41) > SourceWorlds.MaximumCoordinate || MathF.Abs(local.M42) > SourceWorlds.MaximumCoordinate || MathF.Abs(local.M43) > SourceWorlds.MaximumCoordinate)
+            throw new InvalidDataException($"Under the new parent the node's position would lie beyond ±{SourceWorlds.MaximumCoordinate:N0} of it; choose another parent.");
+        SetLocal((JsonObject)nodes[index]!, local);
     }
 
+    private static uint? OwnZone(JsonObject node) =>
+        node["extras"]?[WorldGltf.Key]?["zone"] is JsonValue v && v.TryGetValue(out double zone) && double.IsFinite(zone) ? (uint)(long)zone & 0xFF : null;
+    /// <summary>The zone a node at <paramref name="index"/> takes within the file: its own or its nearest ancestor's; null when it comes from outside.</summary>
+    private static uint? FileZone(JsonArray nodes, int? index)
+    {
+        for (int depth = 0; index is int i && i >= 0 && i < nodes.Count && depth <= 1024; depth++, index = Parent(nodes, i))
+            if (nodes[i] is JsonObject node && OwnZone(node) is uint zone) return zone;
+        return null;
+    }
     /// <summary>A node's local transform as the reader composes it (matrix, or scale · rotation · translation).</summary>
     public static Matrix4x4 Local(JsonObject node)
     {
@@ -127,9 +168,15 @@ public static class GltfNodeEdits
     {
         node.Remove("matrix"); node.Remove("translation"); node.Remove("rotation"); node.Remove("scale");
         if (m.IsIdentity) return;
+        // TRS only when it gives the matrix back, each axis within a fraction of its own length: Decompose replaces axes
+        // shorter than its epsilon, which an absolute comparison would let through as a turned object.
         if (Matrix4x4.Decompose(m, out var scale, out var rotation, out var translation)
-            && (Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation) - m) is var error
-            && new[] { error.M11, error.M12, error.M13, error.M21, error.M22, error.M23, error.M31, error.M32, error.M33 }.All(e => MathF.Abs(e) < 1e-4f))
+            && Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(translation) is var recomposed
+            && Enumerable.Range(0, 3).All(row =>
+            {
+                Vector3 wanted = new(m[row, 0], m[row, 1], m[row, 2]), got = new(recomposed[row, 0], recomposed[row, 1], recomposed[row, 2]);
+                return (got - wanted).Length() <= 1e-4f * wanted.Length();
+            }))
         {
             if (translation != Vector3.Zero) node["translation"] = new JsonArray(translation.X, translation.Y, translation.Z);
             if (rotation != Quaternion.Identity) node["rotation"] = new JsonArray(rotation.X, rotation.Y, rotation.Z, rotation.W);
@@ -166,6 +213,8 @@ public static class GltfNodeEdits
         return null;
     }
     private static HashSet<int> SceneRoots(JsonObject root) => (root["scenes"] as JsonArray ?? []).SelectMany(s => s?["nodes"] as JsonArray ?? []).Select(n => n!.GetValue<int>()).ToHashSet();
+    /// <summary>Node <paramref name="index"/> and every node below it in the file.</summary>
+    public static IReadOnlySet<int> Descendants(JsonObject root, int index) => Subtree(Nodes(root), index);
     private static HashSet<int> Subtree(JsonArray nodes, int index)
     {
         if (index < 0 || index >= nodes.Count) throw new InvalidDataException($"The file has no node {index}.");

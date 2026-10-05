@@ -10,7 +10,8 @@ namespace Recoil.Zbd.Tests;
 /// <summary>
 /// Convert to editable terrain on shipped missions: the converted terrain gives the altitude probe the same heights, zones,
 /// soils and node attributes everywhere, in a world built from the same project. Runs with ZSTUDIO_SOURCE_PROJECT (a
-/// reconstructed project, only read) or ZSTUDIO_CORPUS (reconstructed into a temporary folder first).
+/// reconstructed project, only read: its sources are copied into a temporary folder, since previews are built inside the
+/// project) or ZSTUDIO_CORPUS (reconstructed into a temporary folder first).
 /// </summary>
 public sealed class TerrainConversionCorpusTests
 {
@@ -22,27 +23,30 @@ public sealed class TerrainConversionCorpusTests
     [InlineData("m6")]
     public async Task ConvertedTerrainProbesLikeTheShippedPieces(string mission)
     {
-        string? project = Environment.GetEnvironmentVariable("ZSTUDIO_SOURCE_PROJECT");
+        string? given = Environment.GetEnvironmentVariable("ZSTUDIO_SOURCE_PROJECT");
         string temp = Path.Combine(Path.GetTempPath(), "zstudio-terrain-" + Guid.NewGuid().ToString("N"));
+        string project = Path.Combine(temp, "project");
         try
         {
-            if (string.IsNullOrEmpty(project))
+            // Previews are built inside the project, so a given project is only read: its sources are copied first.
+            if (!string.IsNullOrEmpty(given))
+                foreach (string folder in new[] { SourceProject.DataFolder, SourceProject.GameGenFolder }) Copy(Path.Combine(given, folder), Path.Combine(project, folder));
+            else
             {
                 string? corpus = Environment.GetEnvironmentVariable("ZSTUDIO_CORPUS");
                 if (string.IsNullOrEmpty(corpus)) return;
-                project = Path.Combine(temp, "project");
                 await SourceExtractor.ExtractAsync(corpus, project, token: Token);
             }
             SourceWorkspace workspace = new(project);
             string database = $"data/{mission}/models/{mission}.gltf";
-            var before = await SourceWorlds.BuildPreviewAsync(project, mission, Path.Combine(temp, "before"), workspace.Overlay(), token: Token);
+            var before = await SourceWorlds.BuildPreviewAsync(project, mission, Path.Combine(SourceWorlds.PreviewRoot(project), "before"), workspace.Overlay(), token: Token);
             var plan = SourceTerrainConversion.Plan(workspace, database, SourceTerrainConversion.References(workspace, before.Dependencies, Token), Token);
             var output = TestContext.Current.TestOutputHelper;
             output?.WriteLine($"{mission}: {plan.Converted} pieces into {plan.Groups.Count} surfaces; kept {plan.Kept.Count}: " +
                 string.Join("; ", plan.Kept.GroupBy(k => k.Reason).Select(g => $"{g.Key} ×{g.Count()}")));
             Assert.True(plan.Converted > 0);
             SourceTerrainConversion.Apply(workspace, plan, Token);
-            var after = await SourceWorlds.BuildPreviewAsync(project, mission, Path.Combine(temp, "after"), workspace.Overlay(), token: Token);
+            var after = await SourceWorlds.BuildPreviewAsync(project, mission, Path.Combine(SourceWorlds.PreviewRoot(project), "after"), workspace.Overlay(), token: Token);
             var (worldA, nodesA) = await Read(before, p => p.ModelFile == database && p.Database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode)));
             var (worldB, nodesB) = await Read(after, p => p.Terrain == plan.Recipe);
             output?.WriteLine($"{mission}: {nodesA.Count} pieces before, {nodesB.Count} after; nodes {worldA.Nodes.Count} → {worldB.Nodes.Count}");
@@ -82,6 +86,14 @@ public sealed class TerrainConversionCorpusTests
         finally { try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch (IOException) { } }
     }
 
+    /// <summary>Copies a folder of a given project (regular files and folders; links are not followed).</summary>
+    private static void Copy(string from, string to)
+    {
+        var options = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint };
+        Directory.CreateDirectory(to);
+        foreach (string folder in Directory.EnumerateDirectories(from, "*", options)) Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, folder)));
+        foreach (string file in Directory.EnumerateFiles(from, "*", options)) File.Copy(file, Path.Combine(to, Path.GetRelativePath(from, file)));
+    }
     private static async Task<(GameZWorld World, List<WorldNode> Nodes)> Read(SourceWorldBuild build, Func<WorldNodeProvenance, bool> select)
     {
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);

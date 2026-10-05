@@ -103,7 +103,7 @@ internal sealed class SourceObjectPropertiesEditor : SourcePropertiesEditor
         {
             // Deleting, copying and re-parenting apply to the whole object (a loaded model's root), named when it is not this node.
             if (state.Object != null) ReadOnlyText(form, $"Part of {state.Object}: copying, deleting and moving to another parent apply to {state.Object}.");
-            Input(form, "Parent", state.Parent ?? "", _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "a node's name; the world's name makes it a root of the world",
+            Input(form, "Parent", state.Parent ?? "", _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "a node's name; the world's name makes it a root of the world (of its part, for a part's node)",
                 asyncCommit: async text => { text = text.Trim(); if (text.Length == 0) throw new FormatException("Enter the parent's name."); if (text != state.Parent) await structure.Reparent(text); });
             Input(form, "Copy as", "", _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "the copy's name; Enter makes the copy",
                 asyncCommit: async text => { text = text.Trim(); if (text.Length > 0) await structure.Duplicate(text); });

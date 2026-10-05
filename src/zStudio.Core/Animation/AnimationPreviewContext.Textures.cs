@@ -64,8 +64,9 @@ public sealed partial class AnimationPreviewContext
                     {
                         case "quit": return;
                         case "source": Read(arg.Replace('/', '\\')); break;
-                        case "findnode": node = Scene.Nodes.FirstOrDefault(n => n.Name == arg)?.Index ?? -1; break;
-                        case "findsubnode": node = node >= 0 ? FindBelow(node, arg) : -1; break;
+                        // The scripts run as the mission loads: the world file's highest slot of the name.
+                        case "findnode": node = LoadedNamed(arg) is { Count: > 0 } named ? named[0] : -1; break;
+                        case "findsubnode": node = node >= 0 ? FindSubBelow(node, arg) : -1; break;
                         case "cycletextureseton":
                             material = FirstMaterial(node) ?? -1; maps = []; speed = 15; loop = false;
                             count = int.TryParse(arg, out int n) && n is > 0 and <= 65536 ? n : 0; break;

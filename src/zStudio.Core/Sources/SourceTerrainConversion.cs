@@ -30,8 +30,10 @@ public sealed record TerrainConversionPlan(string Database, string Surfaces, str
 /// Pieces whose node attributes match merge into one surface, unless they overlap in plan view (the altitude probe
 /// takes the first polygon of a node, so stacked sheets stay separate surfaces). Each surface keeps its pieces'
 /// polygons, UVs, normals and materials (with their polygon zones and soils) exactly, and the recipe gives it the
-/// pieces' exact node flags and zone. Objects stay as they are: the horizon and other landmarks, transformed or grouped
-/// nodes, references, shared nodes, and any piece a script, resource or animation names (or matches by wildcard).
+/// pieces' exact node flags and zone. Pieces inside the database's groups (which the build deletes) count too; the parts
+/// of the database in files of their own stay, since every copy of a part shares its file. Objects stay as they are:
+/// the horizon and other landmarks, transformed nodes or nodes with children, references, shared nodes, and any piece
+/// a script, resource or animation names (or matches by wildcard).
 /// </summary>
 public static class SourceTerrainConversion
 {
@@ -79,10 +81,12 @@ public static class SourceTerrainConversion
         var json = (JsonArray)root["nodes"]!;
         List<TerrainConversionKept> kept = [];
         Dictionary<(uint Flags, int Zone, string Values), List<GltfNode>> groups = [];
-        foreach (var node in doc.Roots)
+        foreach (var (node, inherited) in Members(doc.Roots, 0xFF))
         {
             token.ThrowIfCancellationRequested();
             var extras = node.Extras?[WorldGltf.Key] as JsonObject;
+            // A piece without a zone of its own takes its group's, as the importer gives it.
+            int zone = Zone(extras, inherited);
             string name = WorldGltf.EngineName(node);
             var values = node.Mesh?.Extras?[WorldGltf.Key] as JsonObject;
             string? reason = extras?["terrain"] != null ? "terrain marker"
@@ -99,10 +103,10 @@ public static class SourceTerrainConversion
                 : values?["mode"] is JsonValue mode && mode.ToString() != "0" ? "a facade or point model"
                 : references.Names.Contains(name) ? "named by a script, resource or animation"
                 : references.Patterns.FirstOrDefault(p => p.IsMatch(name)) is { } pattern ? $"matched by the wildcard {pattern}"
-                : extras?["zoneWord"] is JsonValue word && word.ToString() is var w && Zone(extras) is var z && !w.Equals($"0x{(uint)z:X}", StringComparison.OrdinalIgnoreCase) && !w.Equals($"0x{(uint)z:X8}", StringComparison.OrdinalIgnoreCase) ? "has a zone word beyond its zone"
+                : extras?["zoneWord"] is JsonValue word && word.ToString() is var w && zone is var z && !w.Equals($"0x{(uint)z:X}", StringComparison.OrdinalIgnoreCase) && !w.Equals($"0x{(uint)z:X8}", StringComparison.OrdinalIgnoreCase) ? "has a zone word beyond its zone"
                 : null;
             if (reason != null) { kept.Add(new(name, reason)); continue; }
-            var key = (Flags(extras), Zone(extras), values?.ToJsonString() ?? "");
+            var key = (Flags(extras), zone, values?.ToJsonString() ?? "");
             if (!groups.TryGetValue(key, out var list)) groups[key] = list = [];
             list.Add(node);
         }
@@ -130,6 +134,19 @@ public static class SourceTerrainConversion
                 { ModelValues = values.Length == 0 ? null : JsonNode.Parse(values) as JsonObject });
         }
         return new(database, surfaces, recipe, result, kept);
+
+        // The database's objects: its roots and, in their place, what its groups hold (a part's reference holds the
+        // database's own records; the part's objects are in its file), with the zone each inherits (the roots' 0xFF).
+        IEnumerable<(GltfNode Node, int Zone)> Members(IEnumerable<GltfNode> nodes, int inherited)
+        {
+            foreach (var node in nodes)
+            {
+                if (!WorldGltf.IsGroup(node, database)) { yield return (node, inherited); continue; }
+                var extras = node.Extras?[WorldGltf.Key] as JsonObject;
+                if (extras?["ref"] != null) kept.Add(new(WorldGltf.EngineName(node), "a part of the mission database in a file of its own"));
+                foreach (var member in Members(node.Children, Zone(extras, inherited))) yield return member;
+            }
+        }
     }
 
     /// <summary>Applies a plan as one change: the surfaces file, the recipe, and the database without the pieces and with the marker in the first piece's place.</summary>
@@ -157,13 +174,14 @@ public static class SourceTerrainConversion
         TerrainRecipe recipe = new(TerrainRecipe.CurrentCompiler,
             [.. plan.Groups.Select(g => new TerrainSurface(g.Id, plan.Surfaces[(folder.Length + 1)..], g.Id, new() { Flags = g.Flags & WorldGltf.CarriedFlags, NodeZone = g.Zone == 0xFF ? TerrainAttributes.AnyZone : g.Zone }))],
             TerrainAttributes.None, []);
-        // The database: the pieces leave; the marker stands where the first of them stood among the roots.
+        // The database: the pieces leave; the marker stands among the roots where the first of them (or its group) stood.
         var nodes = (JsonArray)root["nodes"]!;
         var scenes = (JsonArray)root["scenes"]!;
         int sceneIndex = root["scene"] is JsonValue s && s.TryGetValue(out int si) ? si : 0;
         var sceneRoots = (JsonArray)scenes[sceneIndex]!["nodes"]!;
         var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
-        int place = sceneRoots.Select(n => n!.GetValue<int>()).TakeWhile(n => !converted.Contains(n)).Count();
+        bool Holds(GltfNode node) => converted.Contains(node.Index) || node.Children.Any(Holds);
+        int place = sceneRoots.Select(n => n!.GetValue<int>()).TakeWhile(n => !(byIndex.TryGetValue(n, out var node) && Holds(node))).Count();
         foreach (int index in converted.OrderDescending()) GltfNodeEdits.Remove(root, index);
         string stem = Path.GetFileName(plan.Recipe)[..^TerrainRecipe.Extension.Length];
         nodes.Add(new JsonObject { ["name"] = stem, ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = SourceTerrain.RelativePath(plan.Database, plan.Recipe) } } });
@@ -191,10 +209,10 @@ public static class SourceTerrainConversion
     private static uint Flags(JsonObject? extras) =>
         extras?["flags"] is JsonValue v && v.TryGetValue(out string? hex)
             && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint flags) ? flags & WorldGltf.CarriedFlags : WorldGltf.DefaultCarried;
-    /// <summary>A node's zone as the importer reads it: a whole number, written as an integer or a float.</summary>
-    private static int Zone(JsonObject? extras) => extras?["zone"] is JsonValue v
-        ? v.TryGetValue(out long whole) ? (int)(whole & 0xFF) : v.TryGetValue(out double zone) && zone == Math.Floor(zone) && Math.Abs(zone) < 9e18 ? (int)((long)zone & 0xFF) : 0xFF
-        : 0xFF;
+    /// <summary>A node's zone as the importer reads it: a whole number, written as an integer or a float; without one, <paramref name="inherited"/>.</summary>
+    private static int Zone(JsonObject? extras, int inherited = 0xFF) => extras?["zone"] is JsonValue v
+        ? v.TryGetValue(out long whole) ? (int)(whole & 0xFF) : v.TryGetValue(out double zone) && zone == Math.Floor(zone) && Math.Abs(zone) < 9e18 ? (int)((long)zone & 0xFF) : inherited
+        : inherited;
     /// <summary>The plan-view area a node's triangles cover.</summary>
     private static PathsD PlanArea(GltfNode node)
     {

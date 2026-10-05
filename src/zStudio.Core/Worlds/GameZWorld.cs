@@ -186,6 +186,11 @@ public sealed class WorldNode
 public sealed class GameZWorld
 {
     public const int NodeCapacityDefault = 16000, ModelCapacityDefault = 6000, MaterialCapacityDefault = 5000;
+    /// <summary>
+    /// The file version the world was read from: 15 (the releases, and every world zStudio writes) or 13 (the 1998 demos,
+    /// read into the same model; <see cref="GameZWriter"/> always writes version 15).
+    /// </summary>
+    public uint SourceVersion { get; init; } = 15;
     /// <summary>The largest node and model tables a build script can ask for (SetGameZNodeArraySize, SetModel3DArraySize).</summary>
     public const int MaximumNodeCapacity = 65536;
     public List<WorldTexture> Textures { get; } = [];

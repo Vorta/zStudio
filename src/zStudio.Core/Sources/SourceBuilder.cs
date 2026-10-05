@@ -10,6 +10,8 @@ public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<
 {
     /// <summary>For a texture pack, the budget and largest texture side its profile builds it with.</summary>
     public Formats.TexturePackVariant? Pack { get; init; }
+    /// <summary>What planning found about the output, reported with its build (an automatic pack too small for its textures).</summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
 }
 /// <summary>Per-output result: built (and, for an export, written) or failed.</summary>
 public sealed record SourceExportResult(string Path, string Family, string Status, long Bytes, int Items, IReadOnlyList<string> Warnings, string? Error = null);
@@ -19,6 +21,13 @@ public sealed record SourceExportReport(string? Destination, IReadOnlyList<Sourc
     public string Profile { get; init; } = BuildProfiles.Modern.Name;
     /// <summary>Findings about the destination as a whole, such as larger texture packs there that the game would prefer.</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
+    /// <summary>
+    /// The lookups by name the built missions make as the game loads them whose name several nodes share, with the node each
+    /// finds (see <see cref="WorldLookups"/>).
+    /// </summary>
+    public IReadOnlyList<SourceLookup> Lookups { get; init; } = [];
+    /// <summary>Lookups that find another node than in the files this export replaced (also in <see cref="Notes"/>).</summary>
+    public IReadOnlyList<SourceLookupChange> LookupChanges { get; init; } = [];
     public int Built => Outputs.Count(o => o.Status == "built");
     public int Failed => Outputs.Count(o => o.Status == "failed");
 }
@@ -83,7 +92,20 @@ public static partial class SourceBuilder
                 plans.Add(new($"{name}/anim.zbd", "animations", [definitions, .. scriptsFound]));
             }
             var textures = MissionTextures(root, name, added);
-            if (textures.Count > 0) plans.AddRange(profile.TexturePacks.Select(pack => new SourceOutputPlan($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant }));
+            if (textures.Count > 0)
+                foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
+                {
+                    if (!pack.Automatic) { plans.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant }); continue; }
+                    // The automatic pack is named for the texture memory the mission's textures need at full size.
+                    long memory = TextureMemory(root, textures, pack.Variant);
+                    if (BuildProfiles.AutomaticPack(profile, name, memory) is not { } automatic) continue;
+                    plans.Add(new($"{name}/{automatic.FileName}", "textures", textures)
+                    {
+                        Pack = automatic,
+                        Notes = automatic.BudgetBytes is long budget
+                            ? [$"The {name} textures need {(memory + (1 << 20) - 1) >> 20} MB of texture memory at full size, more than the {budget >> 20} MB the profile's automatic rtexture pack may hold; {automatic.FileName} holds them reduced to fit."] : [],
+                    });
+                }
         }
         return plans;
         static bool Png(string name) => name.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase);
@@ -186,7 +208,11 @@ public static partial class SourceBuilder
             }
         }
     }
-    internal sealed record Built(byte[] Bytes, int Items, IReadOnlyList<string> Warnings);
+    internal sealed record Built(byte[] Bytes, int Items, IReadOnlyList<string> Warnings)
+    {
+        /// <summary>For a mission's animations, the compiled package, which the lookup report binds.</summary>
+        public Animation.AnimationPackage? Package { get; init; }
+    }
     /// <summary>
     /// Whether an exception from building one output means that output failed. Sources are user files in any state
     /// (a glTF with invalid JSON, for example), so every failure is reported with its output and nothing is written;
@@ -228,6 +254,7 @@ public static partial class SourceBuilder
         try
         {
             Snapshot snapshot = new(root); DateTime now = DateTime.UtcNow; List<SourceExportResult> results = [];
+            Dictionary<string, Animation.AnimationPackage> packages = new(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < selected.Count; i++)
             {
                 token.ThrowIfCancellationRequested(); var plan = selected[i]; progress?.Report(new(i, selected.Count, plan.Path));
@@ -239,10 +266,14 @@ public static partial class SourceBuilder
                     if (check.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built file does not reopen: " + error.Message);
                     if (staging != null) { string path = SourceProject.Resolve(staging, plan.Path); Directory.CreateDirectory(Path.GetDirectoryName(path)!); await File.WriteAllBytesAsync(path, built.Bytes, token); }
                     results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, built.Warnings));
+                    if (built.Package != null) packages[plan.Path.Split('/')[0]] = built.Package;
                 }
                 catch (Exception ex) when (IsBuildFailure(ex))
                 { results.Add(new(plan.Path, plan.Family, "failed", 0, 0, [], ex.Message)); }
             }
+            // Before anything is replaced: what the built missions look up by name, and what the replaced files found.
+            progress?.Report(new(selected.Count, selected.Count, "Checking lookups by name"));
+            var (lookups, changes) = await Task.Run(() => MissionLookups(results, packages, snapshot, destination, token), token);
             progress?.Report(new(selected.Count, selected.Count, destination == null ? "Checked" : "Publishing"));
             snapshot.CheckUnchanged(token);
             if (staging != null && destination != null)
@@ -251,14 +282,84 @@ public static partial class SourceBuilder
                 Publish(staging, destination, results.Select(r => r.Path).ToArray(), overwrite, token);
             }
             // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
+            // These notes come first: results show only the first notes, and many lookup changes must not hide them.
             List<string> notes = [];
             if (destination != null)
                 foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
-                    foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, profile))
-                        notes.Add($"{pack} is not a pack the {profile.Name} profile builds, but the game may load it instead of the exported ones. Delete it, or export with a profile that builds it.");
-            return new(destination, results) { Profile = profile.Name, Notes = notes };
+                    foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, all.Where(p => p.Family == "textures" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray()))
+                        notes.Add($"{pack} is not a pack the {profile.Name} profile builds, but the game may load it instead of the exported ones. Delete it, or export with a profile that builds a pack of that name.");
+            notes.AddRange(changes.Select(c => WorldLookups.Describe(c, " in the files this export replaced")));
+            return new(destination, results) { Profile = profile.Name, Notes = notes, Lookups = lookups, LookupChanges = changes };
         }
-        finally { if (staging != null && Directory.Exists(staging)) Directory.Delete(staging, true); }
+        // A staging folder another program holds must not replace the export's own result or error.
+        finally { try { if (staging != null && Directory.Exists(staging)) Directory.Delete(staging, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+    }
+
+    /// <summary>
+    /// Every lookup by name a mission makes as the game loads it (see <see cref="WorldLookups.Resolve"/>), against
+    /// <paramref name="world"/> (by default the world this run builds) and <paramref name="animations"/> (texture effects
+    /// only without them).
+    /// </summary>
+    internal static IReadOnlyList<SourceLookup> MissionLookups(string mission, Snapshot snapshot, Animation.AnimationPackage? animations, CancellationToken token, GameZWorld? world = null)
+    {
+        var files = snapshot.Files();
+        var findNodes = WorldLookups.FindNodes(path => files.Exists(path) ? files.Read(path, token) : null, mission);
+        return WorldLookups.Resolve(mission, world ?? snapshot.World(mission, token).World, animations, findNodes, token);
+    }
+    /// <summary>
+    /// The lookups by name of each mission whose world or animations were built, for the report those several nodes share,
+    /// and those that find another node than in the destination's files this export replaces (read before they are replaced).
+    /// The game binds a built world with the destination's animations when this export leaves them, and built animations
+    /// with the destination's world likewise, so those are resolved together.
+    /// </summary>
+    private static (List<SourceLookup> Lookups, List<SourceLookupChange> Changes) MissionLookups(IReadOnlyList<SourceExportResult> results, IReadOnlyDictionary<string, Animation.AnimationPackage> packages,
+        Snapshot snapshot, string? destination, CancellationToken token)
+    {
+        List<SourceLookup> lookups = []; List<SourceLookupChange> changes = [];
+        foreach (string mission in results.Where(r => r.Status == "built" && r.Family is "world" or "animations").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))
+        {
+            token.ThrowIfCancellationRequested();
+            if (!snapshot.HasWorld(mission)) continue;
+            bool worldBuilt = results.Any(r => r.Status == "built" && r.Family == "world" && r.Path.Equals($"{mission}/gamez.zbd", StringComparison.OrdinalIgnoreCase));
+            (GameZWorld World, Animation.AnimationPackage? Animations)? previous;
+            IReadOnlyList<SourceLookup> resolved; GameZWorld after;
+            // Only a report: nothing it reads or resolves may fail the export.
+            try
+            {
+                previous = destination == null ? null : Replaced(destination, mission, token);
+                after = worldBuilt || previous == null ? snapshot.World(mission, token).World : previous.Value.World;
+                resolved = MissionLookups(mission, snapshot, packages.GetValueOrDefault(mission) ?? previous?.Animations, token, after);
+            }
+            catch (Exception ex) when (IsBuildFailure(ex)) { continue; }
+            lookups.AddRange(resolved.Where(l => l.Ambiguous));
+            // Only a report: files that cannot be paired give no changes rather than failing the export.
+            if (previous is { } replaced)
+                try
+                {
+                    var files = snapshot.Files();
+                    var findNodes = WorldLookups.FindNodes(path => files.Exists(path) ? files.Read(path, token) : null, mission);
+                    var before = WorldLookups.Resolve(mission, replaced.World, replaced.Animations, findNodes, token);
+                    changes.AddRange(WorldLookups.Changes(replaced.World, before, after, resolved, token));
+                }
+                catch (Exception ex) when (IsBuildFailure(ex)) { }
+        }
+        return (lookups, changes);
+    }
+    /// <summary>The destination's world and animations of a mission, when it holds a readable world (version 13 or 15).</summary>
+    private static (GameZWorld World, Animation.AnimationPackage? Animations)? Replaced(string destination, string mission, CancellationToken token)
+    {
+        string world = Path.Combine(destination, mission, "gamez.zbd"), animations = Path.Combine(destination, mission, "anim.zbd");
+        try
+        {
+            if (!File.Exists(world) || new FileInfo(world).Length > FormatRegistry.MaximumDocumentBytes) return null;
+            var doc = FormatRegistry.Default.OpenBytes("gamez.zbd", File.ReadAllBytes(world), token: token);
+            if (doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 }) return null;
+            Animation.AnimationPackage? package = null;
+            if (File.Exists(animations) && new FileInfo(animations).Length <= FormatRegistry.MaximumDocumentBytes)
+                try { package = Animation.AnimationPackage.Read(File.ReadAllBytes(animations), token); } catch (InvalidDataException) { }
+            return (GameZWorldReader.FromDocument(doc, token), package);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { return null; }
     }
 
     /// <summary>
@@ -406,6 +507,22 @@ public static partial class SourceBuilder
                 if (Path.GetDirectoryName(file)!.Replace('\\', '/').Equals(folder, StringComparison.OrdinalIgnoreCase) && names.Add(Path.GetFileNameWithoutExtension(file))) inputs.Add(file);
         return inputs;
     }
+    /// <summary>
+    /// The texture memory a mission's textures need at full size in a Direct3D pack: two bytes a texel at the sizes the pack
+    /// stores (powers of two up to its largest side), from the PNG headers. Textures the world brings from other missions'
+    /// folders are not counted (only a build knows them), nor files not yet on disk.
+    /// </summary>
+    internal static long TextureMemory(string root, IEnumerable<string> textures, TexturePackVariant variant)
+    {
+        long total = 0;
+        foreach (string texture in textures)
+            if (TextureSources.PngSize(SourceProject.Resolve(root, texture)) is var (width, height))
+            {
+                var (w, h) = TexturePackBuilder.Normalize(width, height, variant);
+                total += 2L * w * h;
+            }
+        return total;
+    }
     /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle.</summary>
     internal static bool Multiplayer(string root, string mission)
     {
@@ -432,7 +549,7 @@ public static partial class SourceBuilder
             textures.Add(new(name, TextureSources.SortKey(input), DecodeTexture(input, snapshot.Read(input, token), token), addressing.GetValueOrDefault(name), vehicle || snapshot.DamageMasks(token).Contains(name)));
         }
         var built = TexturePackBuilder.Build(textures, variant, token);
-        return new(built.Bytes, textures.Count, [.. warnings, .. built.Warnings]);
+        return new(built.Bytes, textures.Count, [.. plan.Notes, .. warnings, .. built.Warnings]);
     }
     /// <summary>
     /// A mission pack holds its texture folders and every texture its world uses from elsewhere: a model brought in
@@ -474,7 +591,7 @@ public static partial class SourceBuilder
         // Without an effects.zrd in the project the game's own resource archives supply it, so nothing can be checked.
         var effects = EffectNames(root, mission, snapshot, token);
         var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, token);
-        return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]);
+        return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]) { Package = result.Package };
     }
     /// <summary>
     /// The effect templates the game can find for <paramref name="mission"/>: it loads effects.zrd by name from the
@@ -510,7 +627,7 @@ public static partial class SourceBuilder
     }
     internal static DecodedImage DecodeTexture(string input, byte[] bytes, CancellationToken token)
     {
-        try { return Export.PngDecoder.Decode(bytes, 4096, token); }
+        try { return Export.PngDecoder.Decode(bytes, TextureSources.MaximumSide, token); }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
     }
 

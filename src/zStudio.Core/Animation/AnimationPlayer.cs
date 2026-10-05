@@ -202,7 +202,8 @@ public sealed partial class AnimationPlayer
         var sourceNodes = context.Descendants(root).ToHashSet();
         for (int r = 1; r < entry.References[1].Count; r++)
         {
-            int node = context.ResolveNode(entry, r, root);
+            // As events find them (NodeRef), so every node an event changes belongs to the instance.
+            int node = context.ResolveInstanceNode(entry, r, root);
             // Per-instance mission resets must not fall back to another turret's
             // identically named component when this instance lacks that part.
             if (initializingScene && boundRoot.HasValue && !sourceNodes.Contains(node)) continue;
@@ -227,7 +228,7 @@ public sealed partial class AnimationPlayer
             // Explicitly inspecting an unplaced actor's destruction/effect still
             // needs a local preview. World controllers never enable dormant actors.
             if (!initializingScene && instance.Id == 1 && rootNode.PendingPlacement && !entry.Sequences.SelectMany(s => s.Events).Any(e =>
-                e.Spec != null && e.Bytes.Length >= e.Spec.Size && (e.Type == 12 && context.ResolveNode(entry,e.I32(12),root) == root || e.Type == 7 && context.ResolveNode(entry,e.I16(28),root) == root)))
+                e.Spec != null && e.Bytes.Length >= e.Spec.Size && (e.Type == 12 && context.ResolveInstanceNode(entry,e.I32(12),root) == root || e.Type == 7 && context.ResolveInstanceNode(entry,e.I16(28),root) == root)))
             { rootNode.PendingPlacement = false; AddNote("The selected actor has no recovered starting position; this individual preview uses its stored pose.", "Support", "Information"); }
             if (position is Vector3 p) { Position(rootNode, p); rootNode.Parent = -1; }
         }
@@ -279,7 +280,7 @@ public sealed partial class AnimationPlayer
             foreach (var tracked in instance.Entry.References[0])
             {
                 // Tracked-node records hold 36-byte names, as node references do.
-                int index = context.FindNamedBelow(instance.Root, tracked.Text(0,36));
+                int index = context.ResolveTrackedNode(instance.Entry, tracked.Text(0,36), instance.Root);
                 if (instance.Nodes.TryGetValue(index,out var node) && instance.SavedNodes.TryGetValue(index,out var saved))
                 {
                     node.Active = saved.Active; node.Position = saved.Position; node.Euler = saved.Euler; node.Scale = saved.Scale;

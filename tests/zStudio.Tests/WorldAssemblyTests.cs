@@ -65,8 +65,8 @@ public sealed class WorldAssemblyTests
         return json;
     }
 
-    /// <summary>A mission database with a ground quad, and a crate whose two arms share one claw.</summary>
-    private static MemoryFiles Project()
+    /// <summary>A mission database with a ground quad, and a crate whose two arms share one claw (and a collision volume, when asked).</summary>
+    private static MemoryFiles Project(bool volume = false)
     {
         GameZWorld scratch = new(); WorldTexture rock = new("rock"); WorldMaterial stone = new() { Texture = rock, Flags = 0x1FF };
         Dictionary<string, byte[]> files = new(StringComparer.Ordinal)
@@ -79,7 +79,9 @@ public sealed class WorldAssemblyTests
         var claw = Node("claw", Quad(stone, 1, 3));
         var arm1 = Node("arm1"); var arm2 = Node("arm2");
         foreach (var arm in new[] { arm1, arm2 }) { arm.Children.Add(claw); claw.Parents.Add(arm); }
-        files["data/common/models/crate.gltf"] = Gltf([body, arm1, arm2], "crate", files, "data/common/models");
+        List<WorldNode> crate = [body, arm1, arm2];
+        if (volume) crate.Add(Node("bvol", Quad(new() { Color = new(63, 15, 254), Flags = 0xFF }, 8, 0)));
+        files["data/common/models/crate.gltf"] = Gltf(crate, "crate", files, "data/common/models");
         return new(files);
     }
 
@@ -116,7 +118,7 @@ public sealed class WorldAssemblyTests
     [Fact]
     public void ShippedWorldsDecomposeIntoTheSourcesThatRebuildThem()
     {
-        var project = Project();
+        var project = Project(volume: true);
         var world = new WorldAssembler(project, Token).Assemble("m1.gs");
         byte[] bytes = GameZWriter.Write(world, Token);
         GameZWorld Shipped() => GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", bytes, token: Token), Token);
@@ -131,13 +133,18 @@ public sealed class WorldAssemblyTests
         Assert.Empty(notes);
         var database = loads.Single(l => l.Database); var crate = loads.Single(l => l.NodeName == "crate1");
         Assert.Equal(["ground"], database.Content.Select(n => n.Name));
-        Assert.Equal(["body", "arm1", "arm2"], crate.Content.Select(n => n.Name));
+        Assert.Equal(["body", "arm1", "arm2", "bvol"], crate.Content.Select(n => n.Name));
         Assert.Equal("lid", crate.Content[0].Children.Single().Name);
 
-        // Reconstructed sources reassemble into the same world.
+        // Reconstructed sources reassemble into the same world, also with their hints for viewers (a transparent texture
+        // and a hidden collision volume).
         var outputs = WorldSources.Reconstruct([new(1, Shipped())], n => scripts.GetValueOrDefault(n),
-            (_, name) => $"data/m1/textures/{name}.png", new HashSet<string> { "data/m1/textures/rock.png" }, _ => 0, notes, Token);
+            (_, name) => $"data/m1/textures/{name}.png", new HashSet<string> { "data/m1/textures/rock.png" }, _ => 0, notes, Token,
+            transparency: path => path == "data/m1/textures/rock.png" ? TextureTransparency.Alpha : null);
         Assert.Empty(notes);
+        string crateJson = Encoding.UTF8.GetString(outputs.Single(o => o.Path == "data/common/models/crate.gltf").Bytes);
+        Assert.Contains("\"alphaMode\": \"BLEND\"", crateJson); Assert.Contains("~hidden", crateJson);
+        Assert.Contains("\"alphaMode\": \"BLEND\"", Encoding.UTF8.GetString(outputs.Single(o => o.Path == "data/m1/models/m1.gltf").Bytes));
         Assert.Equal(["data/common/models/crate.bin", "data/common/models/crate.gltf", "data/m1/models/m1.bin", "data/m1/models/m1.gltf"], outputs.Select(o => o.Path).Order(StringComparer.Ordinal));
         MemoryFiles rebuilt = new(new(StringComparer.Ordinal) { ["gamegen/m1.gs"] = project.Files["gamegen/m1.gs"], ["data/m1/textures/rock.png"] = [0] });
         foreach (var output in outputs) rebuilt.Files[output.Path] = output.Bytes;
@@ -145,6 +152,66 @@ public sealed class WorldAssemblyTests
         var reassembled = again.Assemble("m1.gs");
         Assert.Empty(again.Warnings);
         Assert.Empty(WorldComparer.Compare(Shipped(), reassembled));
+    }
+
+    [Fact]
+    public void SharedVehiclesAndEffectsAreKeptInTheCommonFolders()
+    {
+        // Each mission's vehicle script loads tank.flt from the mission's own folder; m1 and m2 hold the same tank, m3 another.
+        // Every mission's weapons script loads an effect from data/effects/models.
+        Dictionary<string, byte[]> files = new(StringComparer.Ordinal);
+        WorldMaterial paint = new() { Color = new(1, 2, 3), Flags = 0xFF };
+        files["gamegen/support/weapons.gw"] = Encoding.ASCII.GetBytes("SetModelDirectory ..\\data\\effects\\models\nLoadGameGen spark.flt spark\n");
+        files["data/effects/models/spark.gltf"] = Gltf([Node("flash", Quad(paint, 1, 2))], "spark", files, "data/effects/models");
+        for (int m = 1; m <= 3; m++)
+        {
+            files[$"gamegen/m{m}.gs"] = Encoding.ASCII.GetBytes($"""
+                set worldName world
+                SetModelDirectory ..\data\m{m}\models
+                SetModelDirectory ..\data\common\models
+                SetModelDirectory ..\data\common\effects\models
+                SetModelDirectory ..\data\effects\models
+                NewWorld %worldName%
+                FindNode %worldName%
+                GameGenSetWorld %worldName%
+                FindNode %worldName%
+                WorldOrigin 0.0 512.0
+                WorldExtents 512.0 -512.0
+                WorldPartition 256 -256
+                LoadGameGen m{m}.flt m{m}.flt
+                DeleteTree m{m}.flt
+                source support\weapons.gw
+                source support\bft{m}.gw
+                GameZWriteZBDFile ..\m{m}\gamez.zbd
+                """);
+            files[$"gamegen/support/bft{m}.gw"] = Encoding.ASCII.GetBytes($"SetModelDirectory ..\\data\\m{m}\\models\\bft\nLoadGameGen tank.flt tank\n");
+            files[$"data/m{m}/models/m{m}.gltf"] = Gltf([Node("ground", Quad(paint, 64, 0))], $"m{m}", files, $"data/m{m}/models");
+            files[$"data/m{m}/models/bft/tank.gltf"] = Gltf([Node("hull", Quad(paint, m == 3 ? 6 : 4, 1))], "tank", files, $"data/m{m}/models/bft");
+        }
+        MemoryFiles project = new(files);
+        byte[][] shipped = [.. Enumerable.Range(1, 3).Select(m => GameZWriter.Write(new WorldAssembler(project, Token).Assemble($"m{m}.gs"), Token))];
+        GameZWorld Shipped(int m) => GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", shipped[m - 1], token: Token), Token);
+        var scripts = files.Where(f => f.Key.StartsWith("gamegen/", StringComparison.Ordinal)).ToDictionary(f => f.Key["gamegen/".Length..].Replace('/', '\\'),
+            f => GameGenScriptText.Tokenize(Encoding.ASCII.GetString(f.Value)), StringComparer.OrdinalIgnoreCase);
+
+        // The version two missions share is one file in data/common/models, which their loads search after their own
+        // folders; m3's own version stays in its folder, found first. The effect is kept in data/common/effects/models,
+        // which the weapons script's loads search after data/effects/models.
+        List<string> notes = [];
+        var outputs = WorldSources.Reconstruct([.. Enumerable.Range(1, 3).Select(m => new WorldSources.MissionWorld(m, Shipped(m)))], n => scripts.GetValueOrDefault(n),
+            (_, _) => null, new HashSet<string>(), _ => 0, notes, Token);
+        Assert.Empty(notes);
+        Assert.Equal(["data/common/effects/models/spark.gltf", "data/common/models/tank.gltf", "data/m1/models/m1.gltf", "data/m2/models/m2.gltf", "data/m3/models/bft/tank.gltf", "data/m3/models/m3.gltf"],
+            outputs.Select(o => o.Path).Where(p => p.EndsWith(".gltf", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
+        MemoryFiles rebuilt = new(files.Where(f => f.Key.StartsWith("gamegen/", StringComparison.Ordinal)).ToDictionary(f => f.Key, f => f.Value, StringComparer.Ordinal));
+        foreach (var output in outputs) rebuilt.Files[output.Path] = output.Bytes;
+        for (int m = 1; m <= 3; m++)
+        {
+            WorldAssembler again = new(rebuilt, Token);
+            var world = again.Assemble($"m{m}.gs");
+            Assert.Empty(again.Warnings);
+            Assert.Empty(WorldComparer.Compare(Shipped(m), world));
+        }
     }
 
     [Fact]
@@ -293,6 +360,109 @@ public sealed class WorldAssemblyTests
         Assert.Contains("1023", error.Message);
         var lines = GameGenScriptText.Tokenize(script);
         Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(n => n == "m1.gs" ? lines : null, "m1.gs", []));
+    }
+
+    [Fact]
+    public void DatabasePartsAreFilesOfTheirOwnThatTheBuildCopies()
+    {
+        // The database references two parts (groups naming files of their own) and two objects reference one model by two
+        // paths; the second part's reference also has a record of its own.
+        WorldTexture rock = new("rock"); WorldMaterial stone = new() { Texture = rock, Flags = 0x1FF };
+        Dictionary<string, byte[]> Files(string secondPath)
+        {
+            Dictionary<string, byte[]> files = new(StringComparer.Ordinal)
+            {
+                ["gamegen/m1.gs"] = Encoding.ASCII.GetBytes(Script),
+                ["data/m1/textures/rock.png"] = [0],
+                ["data/common/models/crate.gltf"] = Project().Files["data/common/models/crate.gltf"],
+                ["data/common/models/crate.bin"] = Project().Files["data/common/models/crate.bin"],
+            };
+            files["data/m1/models/box.gltf"] = Gltf([Node("healthy", Quad(stone, 1, 0))], "box", files, "data/m1/models");
+            Dictionary<WorldNode, string> references = new(ReferenceEqualityComparer.Instance);
+            WorldNode Uses(string name, string uri) { var o = Node(name, Quad(stone, 2, 0)); var r = Node("box.flt"); r.Children.Add(Node("healthy")); o.Children.Add(r); references[r] = uri; return o; }
+            HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
+            Dictionary<WorldNode, IReadOnlyCollection<WorldNode>> content = new(ReferenceEqualityComparer.Instance);
+            byte[] Write(IReadOnlyList<WorldNode> roots, string stem)
+            {
+                var (json, bin) = WorldGltf.Export(roots, 0xFF, new()
+                {
+                    Texture = t => ($"../textures/{t.Name}.png", 0),
+                    Reference = n => references.GetValueOrDefault(n), Group = groups.Contains, Content = n => content.GetValueOrDefault(n),
+                }).Write(stem + ".bin");
+                files[$"data/m1/models/{stem}.bin"] = bin;
+                return json;
+            }
+            var yard = Node("yard"); groups.Add(yard); yard.Children.Add(Uses("crate", "box.gltf"));
+            files["data/m1/models/m1_01.gltf"] = Write([yard, Node("post", Quad(stone, 1, 0))], "m1_01");
+            files["data/m1/models/m1_02.gltf"] = Write([Node("tower", Quad(stone, 3, 0))], "m1_02");
+            var part1 = Node("m1_01.flt"); groups.Add(part1); references[part1] = "m1_01.gltf"; part1.Children.Add(Node("placeholder")); content[part1] = [.. part1.Children];
+            var part2 = Node("m1_02.flt"); groups.Add(part2); references[part2] = "m1_02.gltf"; var tower = Node("tower"); var sign = Node("sign", Quad(stone, 1, 0));
+            part2.Children.Add(tower); part2.Children.Add(sign); content[part2] = [tower];
+            files["data/m1/models/m1.gltf"] = Write([part1, Uses("lamp", "box.gltf"), Uses("lamp2", secondPath), part2], "m1");
+            return files;
+        }
+
+        (GameZWorld World, WorldAssembler Assembler) Build(string secondPath)
+        {
+            var assembler = new WorldAssembler(new MemoryFiles(Files(secondPath)), Token);
+            return (assembler.Assemble("m1.gs"), assembler);
+        }
+        var (world, assembler) = Build("./box.gltf");
+        Assert.Empty(assembler.Warnings);
+        var root = world.Nodes.Single(n => n.Class == WorldNodeClass.World);
+        // The parts' objects join the world as they were made: the first part is copied after the next record, the second
+        // (whose reference has a record of its own) at once, before that record. Groups and part references are deleted.
+        string[] members = ["lamp", "crate", "post", "lamp2", "tower", "sign"];
+        var cell = root.Areas.Single(a => a.Nodes.Any(n => n.Name == "lamp"));
+        Assert.Equal(members, cell.Nodes.Where(c => members.Contains(c.Name)).Select(c => c.Name));
+        Assert.DoesNotContain(world.Nodes, n => n.Name is "yard" or "m1_01.flt" or "m1_02.flt" or "placeholder");
+        var crate = world.Nodes.Single(n => n.Name == "crate");
+        Assert.Equal([root], crate.Parents);
+        Assert.True(assembler.Provenance[crate].Database); Assert.True(assembler.Provenance[crate].Part);
+        Assert.Equal("data/m1/models/m1_01.gltf", assembler.Provenance[crate].ModelFile);
+        var lamp = world.Nodes.Single(n => n.Name == "lamp");
+        Assert.True(assembler.Provenance[lamp].Database); Assert.False(assembler.Provenance[lamp].Part);
+        // A model named by a second path is cached a second time: two more slots than when both name it alike.
+        int Slots(GameZWorld w) => GameZWriter.NodeSlots(w).Values.Max();
+        var (alike, _) = Build("box.gltf");
+        Assert.Equal(Slots(alike) + 2, Slots(world));
+        // Copies of one cache share its models; a second path's cache and the part's own reading of the file have their own.
+        WorldModel Box(GameZWorld w, string user) => WorldAssembler.Subtree(w.Nodes.Single(n => n.Name == user)).Single(n => n.Name == "healthy").Model!;
+        Assert.NotSame(Box(world, "lamp"), Box(world, "lamp2"));
+        Assert.Same(Box(alike, "lamp"), Box(alike, "lamp2"));
+        Assert.NotSame(Box(alike, "lamp"), Box(alike, "crate"));
+        // Models are stored in the order the loader read them: the part's cache (with its own cache of the box) first,
+        // then the database's caches, then the database's records.
+        int At(GameZWorld w, WorldModel m) => w.Models.IndexOf(m);
+        Assert.True(At(world, Box(world, "crate")) < At(world, Box(world, "lamp")));
+        Assert.True(At(world, Box(world, "lamp")) < At(world, Box(world, "lamp2")));
+        Assert.True(At(world, Box(world, "lamp2")) < At(world, world.Nodes.Single(n => n.Name == "lamp").Model!));
+    }
+
+    [Fact]
+    public void SourceScriptsNameTheProjectsModelAndTextureFiles()
+    {
+        // Model files become .gltf (also through the macro LoadGameGen reads), textures .png; node names keep their spelling.
+        var scripts = new[]
+        {
+            GameGenScriptText.Tokenize("set dbName m1.flt\nset other m1.flt\nLoadGameGen %dbName% %dbName%\nDeleteTree %dbName%\n"),
+            GameGenScriptText.Tokenize("LoadGameGen rfpg_mzl.flt rfpg_mzl.flt\nLoadGameGen vtol.FLT vtol1\nFindNode sizzle.flt\nAddChild lite_ref.flt\nCycleTextureSetMap fire101.tif\nWriteTextureSetMap fire1 water.TGA\nTextureAdd name\n"),
+        };
+        var macros = GameGenScriptText.ModelMacros(scripts);
+        Assert.Equal(["dbName"], macros);
+        string Text(int i) => GameGenScriptText.Write(GameGenScriptText.ProjectFileNames(scripts[i], macros));
+        Assert.Equal("set dbName m1.gltf\nset other m1.flt\nLoadGameGen %dbName% %dbName%\nDeleteTree %dbName%\n", Text(0));
+        Assert.Equal("LoadGameGen rfpg_mzl.gltf rfpg_mzl.flt\nLoadGameGen vtol.gltf vtol1\nFindNode sizzle.flt\nAddChild lite_ref.flt\nCycleTextureSetMap fire101.png\nWriteTextureSetMap fire1 water.png\nTextureAdd name\n", Text(1));
+
+        // The build loads the file a script names, and an OpenFlight name (older projects) finds its glTF.
+        var project = Project();
+        project.Files["data/m1/models/crate.glb"] = project.Files["data/common/models/crate.gltf"];
+        var assembler = new WorldAssembler(project, Token);
+        assembler.Assemble("m1.gs");
+        Assert.Equal("data/m1/models/crate.glb", assembler.ResolveModel("crate.glb"));
+        Assert.Equal("data/common/models/crate.gltf", assembler.ResolveModel("crate.gltf"));
+        Assert.Equal("data/common/models/crate.gltf", assembler.ResolveModel("crate.flt"));
+        Assert.Null(assembler.ResolveModel("missing.gltf"));
     }
 
     [Fact]

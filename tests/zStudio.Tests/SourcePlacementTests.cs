@@ -35,7 +35,7 @@ public sealed class SourcePlacementTests
     private static async Task<(SourceWorkspace Workspace, ZbdDocument Archive, PickupPlacementEditSession Session)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace? workspace = null)
     {
         workspace ??= new(fixture.Project);
-        string preview = Path.Combine(fixture.Root, "preview-" + Guid.NewGuid().ToString("N"));
+        string preview = Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview-" + Guid.NewGuid().ToString("N"));
         var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", preview, workspace.Overlay(), token: Token);
         Assert.Equal("built", build.Outputs.Single(o => o.Path == "m1/zrdr.zbd").Status);
         string path = Path.Combine(preview, "m1", "zrdr.zbd");

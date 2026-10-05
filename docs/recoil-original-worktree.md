@@ -60,7 +60,7 @@ Counts are distinct files. `mN` stands for each mission; m1 is shown in full, th
 │  │  ├─ enemies\, explosns\, lighting\, vtol\, weapons\
 │  │  └─ …
 │  ├─ effects\
-│  │  ├─ models\                       searched, but no file can be placed here (see below)
+│  │  ├─ models\                       searched; no script names it (source projects keep the effect models here, see Models)
 │  │  └─ textures\                     196 textures, including pock1–3 and lflare1–4 (packs)
 │  ├─ multi_bft\
 │  │  ├─ model\                        3 models: bft_multi.flt, regenerate.flt, vtol.flt (script, reference)
@@ -70,8 +70,9 @@ Counts are distinct files. `mN` stands for each mission; m1 is shown in full, th
 │  ├─ fonts\, images\                  interface images of image.zbd (image order)
 │
 ├─ effects\
-│  ├─ models\                          99 weapon and effect models loaded by weapons.gw (script)
+│  ├─ models\                          99 weapon and effect models loaded by weapons.gw (script; not certain, see Models)
 │  └─ textures\                        searched, but no packed texture came from here (packs)
+│                                      (source projects leave data\effects out)
 │
 ├─ m1\
 │  ├─ models\                          m1.flt, 4 objects loaded by mission1.gw (search), 55 referenced by m1.flt (reference)
@@ -86,6 +87,7 @@ Counts are distinct files. `mN` stands for each mission; m1 is shown in full, th
 ├─ m2\ … m6\                            as m1 (campaign missions, with models\bft and textures\bft)
 └─ m7\ … m13\                           as m1 without vehicles (multiplayer: common\multi_bft); models\bft and
                                         textures\bft are searched but empty
+                                        (source projects create no empty folders)
 ```
 
 ## How the scripts run
@@ -155,7 +157,7 @@ Folders named by each script (`common.gw` lines use `%MISSION_DIR%`, so they nam
 
 `LoadGameGen file.flt node` loads a model. 185 distinct model files are loaded by the scripts, and 303 more are named only inside other models. Placement by what the scripts record:
 
-- **script:** `bft1.gw`–`bft6.gw`, `bftmulti.gw` and `weapons.gw` set their own model folder and then load, so their models were in that folder (1,488 of 2,033 loads in the 13 builds).
+- **script:** `bft1.gw`–`bft6.gw`, `bftmulti.gw` and `weapons.gw` set their own model folder and then load, so their models were most likely in that folder (1,488 of 2,033 loads in the 13 builds). For the vehicles of `bft1.gw`–`bft6.gw` this is not certain: worlds record no file paths, and those loads also search `data\common\models`, so one shared copy there builds the same worlds; the packs show the vehicles' textures were one shared copy in `data\common\textures` (only each mission's player tank has its own, in `mN\textures\bft`). Every vehicle is identical in all the missions that load it, in both releases, and source projects keep one shared copy ([source-project.md](source-project.md#worlds-and-models)). Nor is it certain for `weapons.gw`: it sets `..\data\effects\textures` too, yet its textures came from `data\common\effects\textures` ([Textures](#textures)), so its `..\data\effects\models` shows no more about its models. Source projects keep the effect models with their textures, in `data\common\effects\models`, which the same loads search.
 - **search:** the mission databases (`loadmN.gw`: `set dbName mN.flt`, `LoadGameGen %dbName%`), the objects of `mission1.gw`, `mission3.gw`, `mission6.gw`, `mission9.gw` and `mission13.gw`, and the pickups of `pickup.gw` load through the whole list. Mission scripts' models are shown in `mN\models`, pickups (the same in every mission) in `common\models`. Any earlier folder in the list is equally consistent with the scripts.
 - **reference:** models referenced from inside another model are shown beside every model that references it, so a model two missions' databases reference is in both missions' folders, as their shared textures are.
 
@@ -440,7 +442,7 @@ The game never reads these definitions, so the mismatch had no effect in play; r
 
 - Which folder each **search** model was in: the scripts only give the order of the folders searched.
 - Where external references were: OpenFlight stores their paths inside the `.flt` files, which did not ship; beside the referencing file is the usual MultiGen practice.
-- What `data\common\effects\models` and `data\effects\textures` held: both are searched, but no shipped file shows a model or packed texture from them.
+- Whether the effect models were in `data\effects\models`, where `weapons.gw` points, or in `data\common\effects\models` with their textures: both are searched, and worlds record no model paths. No packed texture came from `data\effects\textures`. `common.gw` alone spells its `data\common\effects\models` line with doubled backslashes (`..\\data\\common\\effects\\models`), which suggests a later addition, as if effects moved to `data\common\effects` and `weapons.gw` was not updated.
 - `support\bft.gw` (sourced by `testdb.gs`) and `testdb.flt` did not ship.
 
 ## File lists

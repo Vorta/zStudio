@@ -20,7 +20,7 @@ public sealed class TerrainConversionTests
         using SourceWorldFixture fixture = new();
         fixture.WriteTerrainDatabase();
         SourceWorkspace workspace = new(fixture.Project);
-        var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "before"), workspace.Overlay(), token: Token);
+        var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "before"), workspace.Overlay(), token: Token);
         var references = SourceTerrainConversion.References(workspace, before.Dependencies, Token);
         Assert.Contains("ground", references.Names);
         var plan = SourceTerrainConversion.Plan(workspace, "data/m1/models/m1.gltf", references, Token);
@@ -37,7 +37,7 @@ public sealed class TerrainConversionTests
         Assert.Equal(["ground", "m1_terrain", "sky"], roots);
         var recipe = SourceTerrain.Read(workspace, plan.Recipe, Token);
         Assert.All(recipe.Surfaces, s => { Assert.Equal(3, s.Defaults.NodeZone); Assert.Equal(WorldGltf.DefaultCarried, s.Defaults.Flags); });
-        var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "after"), workspace.Overlay(), token: Token);
+        var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "after"), workspace.Overlay(), token: Token);
         var a = await Nodes(before, p => p.Database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode)));
         var b = await Nodes(after, p => p.Terrain == plan.Recipe);
         Assert.Equal(3, a.Count);
@@ -51,6 +51,58 @@ public sealed class TerrainConversionTests
         Assert.Equal([0f, 10f], hits.Select(h => h.Height));
         workspace.Undo();
         Assert.False(workspace.IsDirty);
+    }
+
+    [Fact]
+    public async Task PiecesTakeTheZoneTheirGroupPassesDown()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteTerrainDatabase(grouped: true);
+        const string Database = "data/m1/models/m1.gltf";
+        // The group says zone 3 and its pieces say none, so the importer gives them zone 3: so must the surfaces.
+        var json = JsonNode.Parse(File.ReadAllText(fixture.Path(Database)))!;
+        foreach (var node in json["nodes"]!.AsArray())
+        {
+            string name = node!["name"]!.GetValue<string>();
+            if (name == "g1") node["extras"]!["recoil"]!["zone"] = 3;
+            else if (name.StartsWith("flat_", StringComparison.Ordinal)) node["extras"]!["recoil"]!.AsObject().Remove("zone");
+        }
+        fixture.Write(Database, json.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "zones"), workspace.Overlay(), token: Token);
+        Assert.Null(before.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
+        var plan = SourceTerrainConversion.Plan(workspace, Database, SourceTerrainConversion.References(workspace, before.Dependencies, Token), Token);
+        Assert.Equal(3, plan.Converted);
+        Assert.All(plan.Groups, g => Assert.Equal(3, g.Zone));
+    }
+
+    [Fact]
+    public async Task PiecesInTheDatabasesGroupsConvertAndPartsStay()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WriteTerrainDatabase(grouped: true);
+        SourceWorkspace workspace = new(fixture.Project);
+        const string Database = "data/m1/models/m1.gltf";
+        var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "before"), workspace.Overlay(), token: Token);
+        Assert.Null(before.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
+        var plan = SourceTerrainConversion.Plan(workspace, Database, SourceTerrainConversion.References(workspace, before.Dependencies, Token), Token);
+        // The group's pieces convert; the part, whose file every copy of it shares, stays.
+        Assert.Equal(["ground", "m1_01.flt", "sky"], plan.Kept.Select(k => k.Node));
+        Assert.Equal("a part of the mission database in a file of its own", plan.Kept[1].Reason);
+        Assert.Equal(3, plan.Converted);
+        SourceTerrainConversion.Apply(workspace, plan, Token);
+        Assert.DoesNotContain(workspace.DirtyFiles, f => f.EndsWith("m1_01.gltf", StringComparison.Ordinal));
+        // The marker stands where the group stood; the group stays, empty.
+        var database = JsonNode.Parse(workspace.Read(Database, Token)!)!;
+        var roots = database["scenes"]![0]!["nodes"]!.AsArray().Select(n => database["nodes"]![n!.GetValue<int>()]!["name"]!.GetValue<string>()).ToArray();
+        Assert.Equal(["ground", "m1_terrain", "g1", "m1_01.flt", "sky"], roots);
+        var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "after"), workspace.Overlay(), token: Token);
+        Assert.Null(after.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
+        var a = await Nodes(before, p => p.Database && p.ModelFile == Database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode)));
+        Assert.Equal(["flat_a", "flat_b", "flat_over"], a.Select(n => n.Name).Order());
+        var report = TerrainProbe.Compare(a, await Nodes(after, p => p.Terrain == plan.Recipe), 2, Token);
+        Assert.Equal(0, report.Mismatches); Assert.Equal(0, report.HeightOnly);
+        Assert.Single(await Nodes(after, p => p.Part && p.ModelNodeName == "far"));
     }
 
     [Fact]
@@ -76,7 +128,7 @@ public sealed class TerrainConversionTests
         // As Blender writes it: the literal text 3.0.
         fixture.Write("data/m1/models/m1.gltf", gltf.ToJsonString().Replace("\"zone\":\"THREE\"", "\"zone\":3.0"));
         SourceWorkspace workspace = new(fixture.Project);
-        var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "before"), workspace.Overlay(), token: Token);
+        var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "before"), workspace.Overlay(), token: Token);
         var plan = SourceTerrainConversion.Plan(workspace, "data/m1/models/m1.gltf", SourceTerrainConversion.References(workspace, before.Dependencies, Token), Token);
         Assert.Contains(plan.Kept, k => k.Node == "flat_over" && k.Reason.Contains("bounding box"));
         // flat_a and flat_b no longer share a surface: their model values differ.
@@ -85,7 +137,7 @@ public sealed class TerrainConversionTests
         Assert.Contains("_m", unlit.Id);
         Assert.All(plan.Groups, g => Assert.Equal(3, g.Zone));
         SourceTerrainConversion.Apply(workspace, plan, Token);
-        var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "after"), workspace.Overlay(), token: Token);
+        var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "after"), workspace.Overlay(), token: Token);
         Assert.Null(after.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
         var pieces = await Nodes(after, p => p.Terrain == plan.Recipe && p.TerrainSurface == unlit.Id);
         Assert.NotEmpty(pieces);

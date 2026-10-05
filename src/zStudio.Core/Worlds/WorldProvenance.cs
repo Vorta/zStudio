@@ -24,10 +24,24 @@ public sealed class WorldNodeProvenance
     /// Object3DScale are ignored, while Object3DTranslate still sets its translation (the matrix's last row).
     /// </summary>
     public bool ModelTransformAuthored { get; internal set; }
+    /// <summary>
+    /// For a node of a file another node references (a model file, or a part of the mission database), the referencing
+    /// node's provenance: copies of one file are told apart by it.
+    /// </summary>
+    public WorldNodeProvenance? ReferencedBy { get; internal set; }
     /// <summary>The LoadGameGen that read the node's file.</summary>
     public SourceInstruction? Load { get; internal set; }
-    /// <summary>A node of the mission database file itself (the load after GameGenSetWorld, whose scene roots join the world), not of a file it references.</summary>
+    /// <summary>
+    /// A node of the mission database (the load after GameGenSetWorld, whose objects join the world): of its file or of one
+    /// of its parts, not of a model file it references.
+    /// </summary>
     public bool Database { get; internal set; }
+    /// <summary>
+    /// A node of a part of the mission database: a file of its own that the database (or another part) references with a
+    /// group, holding world objects and groups (<see cref="ModelFile"/>). Every reference to the part copies it, so an edit
+    /// of the part applies to each copy.
+    /// </summary>
+    public bool Part { get; internal set; }
     /// <summary>For a piece a terrain recipe compiled to: the recipe's project path, the surface and the cell (−1 outside the grid).</summary>
     public string? Terrain { get; internal set; }
     public string? TerrainSurface { get; internal set; }

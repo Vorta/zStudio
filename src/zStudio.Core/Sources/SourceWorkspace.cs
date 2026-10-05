@@ -34,6 +34,8 @@ public sealed class SourceWorkspace
     private readonly Saver save;
     private readonly Lock gate = new();
     private int position;
+    /// <summary>What the newest edit displaced (the redo steps after it, the oldest steps trimmed), until another step moves.</summary>
+    private (SourceTransaction Transaction, SourceTransaction[] Redo, SourceTransaction[] Trimmed)? displaced;
     private long nextId = 1;
     public string Root { get; }
     /// <summary>Increases with every applied, undone or redone change, save and discard.</summary>
@@ -137,10 +139,11 @@ public sealed class SourceWorkspace
         SourceTransaction transaction = new(nextId++, label, files);
         lock (gate)
         {
+            SourceTransaction[] redo = [.. history.Skip(position)];
             history.RemoveRange(position, history.Count - position);
             history.Add(transaction); position++;
             foreach (var file in files) working[file.Relative] = file.After;
-            Trim();
+            displaced = (transaction, redo, Trim());
         }
         Publish("apply", label, files.Select(f => f.Relative));
         return transaction;
@@ -154,7 +157,7 @@ public sealed class SourceWorkspace
         // Builds read the overlay in place of the disk and cannot see a file go away: a created file that was saved stays.
         if (transaction.Files.FirstOrDefault(f => f.Before == null && BaselineOf(f.Relative).Bytes != null) is { } created)
             throw new NotSupportedException($"{created.Relative} was created by {transaction.Label} and saved since; undoing it would delete the file, which the workspace does not do. Delete it by hand.");
-        lock (gate) { foreach (var file in transaction.Files) working[file.Relative] = file.Before; position--; }
+        lock (gate) { foreach (var file in transaction.Files) working[file.Relative] = file.Before; position--; displaced = null; }
         return Publish("undo", transaction.Label, transaction.Files.Select(f => f.Relative));
     }
     public SourceWorkspaceChange Redo()
@@ -162,7 +165,7 @@ public sealed class SourceWorkspace
         if (!CanRedo) throw new InvalidOperationException("Nothing to redo.");
         var transaction = history[position];
         Guard(transaction);
-        lock (gate) { foreach (var file in transaction.Files) working[file.Relative] = file.After; position++; }
+        lock (gate) { foreach (var file in transaction.Files) working[file.Relative] = file.After; position++; displaced = null; }
         return Publish("redo", transaction.Label, transaction.Files.Select(f => f.Relative));
     }
     /// <summary>Undo and redo change files too: one another editor holds unsaved changes of is refused, as for an edit.</summary>
@@ -182,20 +185,35 @@ public sealed class SourceWorkspace
     /// <summary>The most steps and bytes (before and after copies) the history keeps; the oldest steps go first.</summary>
     public const int MaximumHistory = 256;
     public const long MaximumHistoryBytes = 1024L * 1024 * 1024;
-    private void Trim()
+    private SourceTransaction[] Trim()
     {
+        List<SourceTransaction> trimmed = [];
         long bytes = history.Sum(t => t.Files.Sum(f => (long)(f.Before?.Length ?? 0) + (f.After?.Length ?? 0)));
         while (history.Count > 1 && position > 1 && (history.Count > MaximumHistory || bytes > MaximumHistoryBytes))
         {
             bytes -= history[0].Files.Sum(f => (long)(f.Before?.Length ?? 0) + (f.After?.Length ?? 0));
-            history.RemoveAt(0); position--;
+            trimmed.Add(history[0]); history.RemoveAt(0); position--;
         }
+        return [.. trimmed];
     }
-    /// <summary>Withdraws the newest transaction, one that turned out not to build; unlike Undo it cannot be redone.</summary>
+    /// <summary>
+    /// Withdraws the newest transaction, one that turned out not to build; unlike Undo it cannot be redone. The history
+    /// is as it was before: the redo steps and the oldest steps the edit displaced return.
+    /// </summary>
     public SourceWorkspaceChange Retract(SourceTransaction transaction)
     {
         if (position == 0 || history[position - 1] != transaction) throw new InvalidOperationException("Only the newest accepted change can be withdrawn.");
-        lock (gate) { foreach (var file in transaction.Files) working[file.Relative] = file.Before; position--; history.RemoveRange(position, history.Count - position); }
+        lock (gate)
+        {
+            foreach (var file in transaction.Files) working[file.Relative] = file.Before;
+            position--; history.RemoveRange(position, history.Count - position);
+            if (displaced is { } d && d.Transaction == transaction)
+            {
+                history.InsertRange(0, d.Trimmed); position += d.Trimmed.Length;
+                history.AddRange(d.Redo);
+            }
+            displaced = null;
+        }
         return Publish("retract", transaction.Label, transaction.Files.Select(f => f.Relative));
     }
 
@@ -248,7 +266,7 @@ public sealed class SourceWorkspace
     {
         if (IsSaving) throw new InvalidOperationException("Wait for the save to finish.");
         var files = DirtyFiles;
-        lock (gate) { working.Clear(); baselines.Clear(); history.Clear(); position = 0; }
+        lock (gate) { working.Clear(); baselines.Clear(); history.Clear(); position = 0; displaced = null; }
         return Publish("discard", "Discard", files);
     }
 
@@ -264,7 +282,7 @@ public sealed class SourceWorkspace
         var conflicts = changed.Where(IsFileDirty).ToArray();
         if (conflicts.Length > 0) throw new SourceFileChangedException($"{string.Join(", ", conflicts)} changed on disk while the workspace holds unsaved edits for {(conflicts.Length == 1 ? "it" : "them")}; save elsewhere or discard the edits first.", conflicts);
         if (changed.Count == 0) return [];
-        lock (gate) { foreach (string relative in changed) { baselines.Remove(relative); working.Remove(relative); } history.Clear(); position = 0; }
+        lock (gate) { foreach (string relative in changed) { baselines.Remove(relative); working.Remove(relative); } history.Clear(); position = 0; displaced = null; }
         Publish("reload", "Reload", changed);
         return changed;
     }

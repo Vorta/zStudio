@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
+using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core.Worlds;
 using Xunit;
@@ -309,7 +310,9 @@ public sealed class WorldGltfTests
         GameZWorld world = new();
         var nodes = WorldGltf.Import(doc, "halo.gltf", 0xFF, Context(world));
         var model = nodes[0].Model!;
-        Assert.Same(model, nodes[1].Model);
+        // Each object read has a model of its own, as the original loader read each object's geometry (1999 redsprks.flt).
+        Assert.NotSame(model, nodes[1].Model);
+        Assert.Equal(model.Points.Single().Vertices, nodes[1].Model!.Points.Single().Vertices);
         Assert.Equal(1u, model.Mode);
         var point = Assert.Single(model.Points);
         Assert.Equal(new Vector3(0, 13.5f, 0), Assert.Single(point.Vertices));
@@ -320,6 +323,44 @@ public sealed class WorldGltfTests
          "meshes":[{"primitives":[],"extras":{"recoil":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}]}
         """;
         Assert.Single(Import(old, new(), out _).Single().Model!.Points);
+    }
+
+    [Fact]
+    public void PointModelsAreSharedByTheCopiesOfOneCache()
+    {
+        // flare.gltf holds two point-only models (a lens flare's halo and glow). The loader reads a file once per reading:
+        // copies of it by the same reference text share its models, as with meshes; another spelling (a second path) or
+        // another holder reads it again.
+        const string flare = """
+        {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1]}],"nodes":[
+         {"name":"halo","extras":{"recoil":{"model":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}},
+         {"name":"glow","extras":{"recoil":{"model":{"mode":1,"points":[{"record":"07000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","vertices":[[0,13.5,0]]}]}}}}]}
+        """;
+        const string lamps = """
+        {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,1,2,3]}],"nodes":[
+         {"name":"l1","extras":{"recoil":{"ref":"flare.gltf"}}},{"name":"l2","extras":{"recoil":{"ref":"flare.gltf"}}},
+         {"name":"l3","extras":{"recoil":{"ref":"FLARE.gltf"}}},{"name":"l4","extras":{"recoil":{"ref":"./flare.gltf"}}}]}
+        """;
+        var flareDoc = GltfDocument.Read(Encoding.UTF8.GetBytes(flare), _ => throw new FileNotFoundException(), Token);
+        GameZWorld world = new();
+        WorldGltf.ImportContext context = new()
+        {
+            World = world, Reference = (uri, _) => (flareDoc, "flare.gltf"),
+            TextureName = (u, n, _) => (n ?? Path.GetFileNameWithoutExtension(u)).ToLowerInvariant(),
+        };
+        var roots = WorldGltf.Import(GltfDocument.Read(Encoding.UTF8.GetBytes(lamps), _ => throw new FileNotFoundException(), Token), "lamps.gltf", 0xFF, context);
+        WorldModel Model(int lamp, string name) => roots[lamp].Children.Single(c => c.Name == name).Model!;
+        // Each object has its own model, even of equal values.
+        Assert.NotSame(Model(0, "halo"), Model(0, "glow"));
+        // Copies by one reference text share them; the loader matches reference text ignoring case.
+        Assert.Same(Model(0, "halo"), Model(1, "halo")); Assert.Same(Model(0, "glow"), Model(1, "glow"));
+        Assert.Same(Model(0, "halo"), Model(2, "halo"));
+        // A second path reads the file again.
+        Assert.NotSame(Model(0, "halo"), Model(3, "halo"));
+        // The file's own load is another reading.
+        var own = WorldGltf.Import(flareDoc, "flare.gltf", 0xFF, context);
+        Assert.NotSame(Model(0, "halo"), own[0].Model);
+        Assert.Equal(6, world.Models.Count);
     }
 
     [Fact]
@@ -369,5 +410,86 @@ public sealed class WorldGltfTests
         """;
         Import(json, new(), out var context);
         Assert.Contains(context.Warnings, w => w.Contains("embedded", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ViewersSeeTransparentTexturesAndNoCollisionVolumes()
+    {
+        WorldTexture glow = new("glow"), cut = new("cut"), rock = new("rock");
+        WorldMaterial violet = new() { Color = new(63, 15, 254), Flags = 0xFF };
+        static WorldModel Quad(WorldMaterial material, float y)
+        {
+            ModelBuilder builder = new();
+            builder.Add(new([new(0, y, 0), new(1, y, 0), new(1, y, -1), new(0, y, -1)], [new(0, 0), new(1, 0), new(1, 1), new(0, 1)], [], [], material));
+            return builder.Finish();
+        }
+        static WorldNode Node(string name, WorldModel model) { WorldNode node = new(name, WorldNodeClass.Object3D) { Model = model, Flags = WorldGltf.DefaultCarried }; node.SetPayloadInt(0, 0x28); return node; }
+        // The pickup's collision volume shares its engine material with a wall the game draws.
+        List<WorldNode> roots = [Node("arc", Quad(new() { Texture = glow, Flags = 0x1FF }, 0)), Node("lock", Quad(new() { Texture = cut, Flags = 0x1FF }, 1)),
+            Node("box", Quad(new() { Texture = rock, Flags = 0x1FF }, 2)), Node("wall", Quad(violet, 3)), Node("bvol", Quad(violet, 4))];
+        var (json, bin) = WorldGltf.Export(roots, 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("ammo.bin");
+        static TextureTransparency? Transparency(string uri) => uri switch
+        {
+            "../textures/glow.png" => TextureTransparency.Alpha, "../textures/cut.png" => TextureTransparency.Keyed, "../textures/rock.png" => TextureTransparency.Opaque, _ => null,
+        };
+        var root = JsonNode.Parse(json)!.AsObject();
+        Assert.True(WorldGltf.ApplyPresentation(root, Transparency));
+        int MaterialOf(string node)
+        {
+            int mesh = root["nodes"]!.AsArray().Single(n => (string?)n!["name"] == node)!["mesh"]!.GetValue<int>();
+            return root["meshes"]![mesh]!["primitives"]![0]!["material"]!.GetValue<int>();
+        }
+        JsonNode Material(string node) => root["materials"]![MaterialOf(node)]!;
+        // Graded alpha blends, alpha of only 0 or 255 is a mask at the cutoff the packs key at, opaque textures stay opaque.
+        Assert.Equal("BLEND", (string?)Material("arc")["alphaMode"]);
+        Assert.Equal("MASK", (string?)Material("lock")["alphaMode"]); Assert.Null(Material("lock")["alphaCutoff"]);
+        Assert.Null(Material("box")["alphaMode"]); Assert.Null(Material("wall")["alphaMode"]);
+        // The volume got a fully transparent copy of the wall's material, with its colour and its engine opacity.
+        Assert.NotEqual(MaterialOf("wall"), MaterialOf("bvol"));
+        var hidden = Material("bvol");
+        Assert.Equal((string?)Material("wall")["name"] + "~hidden", (string?)hidden["name"]);
+        Assert.Equal("MASK", (string?)hidden["alphaMode"]);
+        Assert.Equal([0.24705882, 0.05882353, 0.99607843, 0], hidden["pbrMetallicRoughness"]!["baseColorFactor"]!.AsArray().Select(c => Math.Round(c!.GetValue<double>(), 8)));
+        Assert.Equal(255, hidden["extras"]![WorldGltf.Key]!["opacity"]!.GetValue<int>());
+        Assert.Equal([63, 15, 254], hidden["extras"]![WorldGltf.Key]!["color"]!.AsArray().Select(c => c!.GetValue<int>()));
+        string presented = root.ToJsonString();
+        Assert.False(WorldGltf.ApplyPresentation(root, Transparency));
+        Assert.Equal(presented, root.ToJsonString());
+
+        // Builds read the same engine values from either file, also after an editor turns the volume's material to BLEND.
+        var blended = JsonNode.Parse(presented)!.AsObject();
+        blended["materials"]![MaterialOf("bvol")]!["alphaMode"] = "BLEND";
+        List<string> Surfaces(string gltf)
+        {
+            var doc = GltfDocument.Read(Encoding.UTF8.GetBytes(gltf), _ => bin, Token);
+            WorldGltf.ImportContext context = new() { World = new(), Reference = (_, _) => throw new InvalidOperationException(), TextureName = (uri, name, _) => name ?? Path.GetFileNameWithoutExtension(uri) };
+            return [.. WorldGltf.Import(doc, "ammo.gltf", 0xFF, context).SelectMany(n => n.Model!.Polygons.Select(p =>
+                $"{n.Name} {p.Material!.Flags:X} {p.Material.PackedColor:X} {p.Material.Color} {p.Material.Texture?.Name} {p.Material.Soil} {p.Flags:X} {p.Zone:X} {p.Normals.Length}"))];
+        }
+        var expected = Surfaces(Encoding.UTF8.GetString(json));
+        Assert.Contains(expected, surface => surface.StartsWith("bvol FF ", StringComparison.Ordinal));
+        Assert.Equal(expected, Surfaces(presented));
+        Assert.Equal(expected, Surfaces(blended.ToJsonString()));
+
+        // Files of other shapes are left alone.
+        var odd = JsonNode.Parse("""
+            {"nodes":[{"name":"bvol","mesh":0},{"name":"bvol","mesh":"0"}],"meshes":[{"primitives":[{"material":99},{"material":1}]}],
+             "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":7},"baseColorFactor":[1,"x"]}},5],"textures":[{"source":-1}]}
+            """)!.AsObject();
+        Assert.False(WorldGltf.ApplyPresentation(odd, _ => TextureTransparency.Alpha));
+
+        // A volume an editor made translucent keeps the opacity import read from it, and stays visible when the file
+        // has no engine attributes to keep it in.
+        static JsonObject Volume(string extras) => JsonNode.Parse($$"""
+            {"nodes":[{"name":"bvol","mesh":0}],"meshes":[{"primitives":[{"material":0}]}],
+             "materials":[{"name":"glass","alphaMode":"BLEND","pbrMetallicRoughness":{"baseColorFactor":[1,1,1,0.5]}{{extras}}}]}
+            """)!.AsObject();
+        var recorded = Volume(""","extras":{"recoil":{"color":[1,2,3]}}""");
+        Assert.True(WorldGltf.ApplyPresentation(recorded, _ => null));
+        Assert.Equal(128, recorded["materials"]![0]!["extras"]![WorldGltf.Key]!["opacity"]!.GetValue<int>());
+        Assert.Equal("MASK", (string?)recorded["materials"]![0]!["alphaMode"]);
+        var bare = Volume("");
+        Assert.False(WorldGltf.ApplyPresentation(bare, _ => null));
+        Assert.Equal("BLEND", (string?)bare["materials"]![0]!["alphaMode"]);
     }
 }

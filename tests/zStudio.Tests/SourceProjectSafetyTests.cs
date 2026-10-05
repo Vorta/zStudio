@@ -191,6 +191,23 @@ public sealed class SourceProjectSafetyTests
     }
 
     [Fact]
+    public async Task DemoFoldersAreRefused()
+    {
+        // A RECOIL folder whose world is a 1998 demo's (version 13): its scripts are RECOIL evidence, but the demos open read-only.
+        using var fixture = new SourceFixture();
+        string demo = Path.Combine(fixture.Root, "demo"), project = Path.Combine(fixture.Root, "project-demo");
+        foreach (var file in Directory.GetFiles(fixture.Corpus, "*", SearchOption.AllDirectories))
+        {
+            string target = Path.Combine(demo, Path.GetRelativePath(fixture.Corpus, file)); Directory.CreateDirectory(Path.GetDirectoryName(target)!); File.Copy(file, target);
+        }
+        Directory.CreateDirectory(Path.Combine(demo, "m1"));
+        File.WriteAllBytes(Path.Combine(demo, "m1", "gamez.zbd"), DemoWorldFixture.FromVersion15(Recoil.Zbd.Core.Worlds.GameZWriter.Write(GameZVersion13Tests.SampleWorld(), Token)));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(demo, project, token: Token));
+        Assert.Contains("1998 demo world (GameZ version 13)", error.Message);
+        Assert.False(Directory.Exists(project));
+    }
+
+    [Fact]
     public void OversizedTextAndMisnamedArchivesStayBounded()
     {
         byte[] huge = new byte[SourceProject.MaximumSourceTextBytes + 1]; huge.AsSpan().Fill((byte)'a');

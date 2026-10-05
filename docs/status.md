@@ -1,5 +1,263 @@
 # Desktop implementation status
 
+## Review of the world-reconstruction work (2026-10-05, branch feat/world-editor)
+
+- **Scope:** adversarial review of every uncommitted change since `2fa5074`: reconstruction inference, the original loader, model sharing, GameZ version 13, lookups, Compare worlds, the welcome screen, preview builds, texture profiles and source-world structure edits.
+  - The review ran in thirteen cycles, repeated until two consecutive cycles found nothing serious.
+  - Each cycle used fresh reviewers by risk area and executable sweeps on fresh reconstructions of both releases.
+- **Fixed in the first cycle:**
+  - A PNG whose header claims a side above 2^30 made export planning loop forever (every world open, status and export hung). Planning now ignores sides a build would refuse (over 4096) and files it cannot read.
+  - A profile whose only `rtexture` pack lists `missions` left the other missions without a Direct3D pack; a profile now needs one for every mission.
+  - Export lookup warnings now pair a built world with the animations the destination keeps, and built animations with the destination's world, as the game does; an export of the world alone used to miss every animation change.
+  - A load script `source` line with `.\`, `..` or doubled separators kept the world from opening; such lines are now normalised or skipped, and lookups never block opening or editing a world.
+  - Removing abandoned preview builds could delete through a junction before the link check; the check now comes first.
+  - The lookup comparison after an edit ran between the checks and the replacement of the world, so a world closed meanwhile could leave its problems in the next workspace.
+  - Copies of one cache did not share point-only models (lens flares, sparks) as they share meshes; references spelled with other letter case are one cache, as in the loader.
+  - The animation preview resolved an entry's attachment only inside its root. The engine looks it up there and, failing that, in the whole world, highest slot first, and searches its subtree first for every name the animation uses (also while it plays, and for its tracked nodes): the m4, m6, m12 and m13 hit-wall animations now change the wall they are attached to. A copy or rebinding to another node looks the attachment up only inside that node, as the engine does. The lookup report lists such attachments, and entries that share a name are reported separately.
+  - Smaller: Files hides preview builds also when a parent folder is opened; the preview's world-file lookups no longer see mission clones while the mission layout is built; the editor's entries bind their chain position.
+- **Fixed in later cycles:**
+  - Source-world copies, moves and deletions:
+    - Nodes several parents share (glTF instances) and nodes inside them are not edited through one copy.
+    - Nodes a script places elsewhere (AddChild, DeleteChild, morph LODs) are not copied or used as parents, and a new parent must be placed in the world.
+    - Part edits respect scripts acting on any copy of the part.
+    - Moves keep the zone a node was built with, including an inherited one; terrain pieces take their group's zone.
+  - After a copy or move that changes only glTF files, the rebuilt world is compared with the shown one instruction by instruction. If a build-script line would act on another node (for example a `FindNode` that now finds another copy of a referenced file, or finds a node only after the move), the edit is taken back and undo and redo stay as they were.
+    - On both releases' shipped data this refused none of 7,423 legitimate edits and caught all 681 synthetic retargets.
+  - Transforms are refused, instead of written changed, when they need a shear the script's translate, rotate and scale cannot hold, when they would leave a zero or near-zero scale, when the new parent is too badly conditioned to keep the node in place, or when the position would exceed the coordinate limit.
+    - Rotations near ±90° pitch and tiny or huge scales now read back and write without turning the object.
+      - Across 8.5 million matrices the angles shown give the orientation back within 0.0001°.
+      - Through the glTF file, the orientation is kept within 0.005°.
+      - 30 repeated edits stay within 0.006°.
+  - The animation preview resolves an entry's callback node first, and resolves tracked nodes as the engine does.
+  - Compare worlds pairs repeated names by structure and position, and MCP returns the differing properties as the window shows them.
+  - Smaller:
+    - Nested caches import each reading once.
+    - A Blender checkout removes its folder on failure and refuses while a rebuild runs.
+    - GUI parent-by-name accepts part copies.
+    - Export notes put stale texture packs first.
+- **Open (minor, recorded locally):**
+  - The automatic pack's size estimate ignores alpha planes.
+  - A Cancel pressed after reconstruction finished still opens the project.
+  - Pathological crafted worlds can make the loader emulation and tree comparison slow.
+  - A move of a node several parents share can be taken back when a script finds it by name; this has no shipped trigger.
+  - Properties' parent-by-name checks a level-of-detail node against the first copy of its part.
+- **Checks:**
+  - 1,075 tests with the 1999 and MechWarrior 3 corpora, plus the 1998 source-project corpus test.
+  - Each fix has a regression that fails when the fix is removed (mutation-checked).
+
+## Models shared as the original loader shared them (2026-10-05, branch feat/world-editor)
+
+- **Why:** comparing retail with a rebuild, the user asked whether shared models could make destroying or morphing one wall panel affect the others, then asked for models to follow the original loader.
+- **Before:** a build shared one model per file and mesh across a whole load. Retail has a model per cache: m4 and m12 kept 28 copies of the warehouse pieces, m1 a set of palms per part, and files named by a second path their own models. The rebuilt worlds had 3–120 fewer models.
+- **Changes:**
+  - The glTF import keys models by the reading of their file: the file holding the reference, read as it was, plus the reference's text. So the references that copied one cache share its models, a second path or another file's reading has its own, and each object read has its own model (identical value-only models are no longer merged).
+  - Reconstruction gives a second path to every later reference whose copy shares that cache's models, not only the one that made the cache, for database references, references inside model files and later loads; references of one cache are spelled alike.
+  - The build stores each load's models in the order the loader read them (`OriginalLoader.Hooks.Read`).
+- **Results** (fresh reconstructions and builds of both releases): every mission has the shipped number of models, and every model is used by exactly the shipped nodes. Slots stay exact. Model order matches except where a node with children got its model after them (2–28 nodes per mission) and 1999 m3's `rfpg_mzl.flt` model (shifting 79 models); the order affects nothing in the game.
+- **Effect in the game:** state kept per model (texture scroll, morph, texture cycles) now spreads to the same nodes as in retail. Nothing shipped changed: the only scrolled or morphed model whose sharing differed (m5's `hamscroll`) scrolled identically.
+- **Checks:** the corpus test compares each exact mission's models with the shipped ones (count and the nodes that share each); an assembly test checks models per cache, second paths and the read order.
+
+## M3, M5 and M6 rebuilt in their original record order (2026-10-05, branch feat/world-editor)
+
+- **Why:** the user asked to continue with m3, m5 and m6 after m2.
+- **Changes** (general rules; no mission-specific code):
+  - A reference whose next record is its own deleted child is copied at once, so that record is not where a delayed copy starts (m5's parts 1171 and 1172).
+  - A part's copy may end before its last plain objects anywhere in its last groups, not only at its end: they are the first records of the next group, or the records after the live object the copy followed. Each shortening is also tried with a second path and with groups closing early, together (m5's `clone_burger.flt` part).
+  - After a part is settled, its reference lists its content before its own records, so the written file matches the replay.
+  - Copies of one cache share its models, and a second path's cache has models of its own. Where the slots fit several references as the one that named a file by its second path, the reference with its own models is chosen. m5's third `btundr1.flt` (zone 11) and m3's `lturret.flt` and `pturret.flt` were cached a third time before.
+  - m6's records start inside the copy of its first cache (the city part), which goes on from the slots the caches left free into the fresh ones, so no walk of the fresh slots alone finds where they start. m6 kept that cache's slots free with their names: reconstruction reads the cache from the bottom of the free list (nested by slot order, references that lost their names named by the copy in the database), takes it as the first cache, passes over the end of its copy, and simulates the caches to find the 126 slots the records start on. The strict walk and replay then take over unchanged.
+  - The boundary search tries each plateau's first boundary, then each one's second, and so on (only the first was tried before). Grouping objects differently (`Pops`) is not searched when the cache would free other slots than the free list shows, since it changes only the order of the frees (m1's slowest free-list variant took 13 s of cache matching before; its whole inference now takes about 1.3 s).
+- **ChatGPT Pro** (round 4, fresh thread) found complete allocator witnesses for m6 in both releases with the existing loader rules, and pointed out that the inference could not start inside a copy. Its witnesses pass its verifier; zStudio's own inference reproduces them without witness input. An earlier report that the `hturret.flt` second-path lists were identical compared only their first eight entries; they differ in 86.
+- **Results:**
+  - Every node of every mission of both releases (1999 m1–m13, 1998 m1–m6) takes its shipped slot with the same parents and children when reconstructed and built; m6 has 4,668 nodes in 1999 and 4,663 in 1998.
+  - Every repeated name binds to the shipped node in both releases.
+  - Reconstruction takes 63 s for 1999 and 55 s for 1998 (about 90 s before). m6's database inference takes about 1.4 s.
+- **Checks:** the source-project corpus test now requires every mission to be exact and compares every slot of the exported worlds (name, parent and child slots). Disabling the model rule for second paths makes it fail on slot differences.
+- **Not covered:** a sparse world whose first cache's slots were reused, with records starting inside its copy, would still fall back to the slot order; no shipped world does.
+
+## M2 rebuilt in its original record order (2026-10-04, branch feat/world-editor)
+
+- **Why:** the user asked why `mcar_01` is the world root's first child in the shipped m2 and `mcar_05` in the rebuild, then asked for the proper fix.
+- **Cause:** child order is the database's record order, and slots come from the free list. The m2 database's records start on slots that several caches left free (553–573, 726–756 and 914). The inference only accepted one contiguous run there, so m2 fell back to keeping its objects in slot order. That puts `mcar_05` (slot 553) first.
+- **Change** (general rules, checked against the second model's complete m2 witness):
+  - Where the caches end in the free list is searched for. Each candidate boundary is followed to the boundary its caches' simulation gives back, until it gives back its own; the old contiguous-run guess goes first, then the longest runs of boundaries sharing a high-water mark. The search runs only when no free-list variant is exact with the quick guesses.
+  - A part whose last plain objects are the next group's records may also name a file by a second path (m2's factory part and `nturret1.flt`).
+  - After an end node, the plain objects that follow are the last part's copy (m2's `labradio`).
+- **Results:**
+  - Both releases' m2 now give all 3,956 nodes their shipped slots, parents and children, and `world1` lists `mcar_01` first. Every other mission is unchanged.
+  - A fresh 1999 reconstruction and export resolves all 35,580 lookups the game makes by name to the shipped node (1998: 21,743). Before, the two m2 exceptions were `call_chopper` and `TARGETS vtol`.
+  - Repeated names whose newest node differs: 47 of 2,021 in 1999 and 49 of 1,427 in 1998 (was 94 and 96), all in m3, m5 and m6.
+  - Reconstruction takes about 95 s; the search adds about 10 s, mostly for m3, m5 and m6, which it does not solve.
+- **Checks:** the source-project corpus test now requires m2 to be exact and checks names inside animations as the engine resolves them. With the search disabled it fails on m2's exactness and, on its own, on `call_chopper`'s `healthy` and `destroyed`. Both releases pass.
+- **Not covered:**
+  - m3 and m5 need further searches (parts inside parts, a root taking a leftover slot); m6 is not explained.
+  - One free-list variant of m1 takes 13 s of cache matching, which predates this change.
+
+## Larger Direct3D packs as textures grow (2026-10-04, branch feat/world-editor)
+
+- **Why:** the user asked whether the game reads `rtexture16.zbd`, said Direct3D is the priority, and asked that exports create larger `rtexture` packs automatically when larger textures become available.
+- **Engine:** under Direct3D the game formats `rtexture<N>.zbd` (`"r%s%d.%s"`, stem `texture`) from the texture memory the card reports in MB and counts down to 1, so it opens the largest pack at or below that amount.
+- **Change:**
+  - The automatic pack (`rtexture*.zbd` in a profile; in `modern`, at most 256 MB and 1024 texels) is planned per mission from the PNG headers, as two bytes a texel at the sizes the pack stores.
+  - It is added when that memory exceeds the mission's largest fixed `rtexture` pack, as `rtexture<N>.zbd` with N rounded up to a power of two, and holds every texture at full size.
+  - Above its budget it is `rtexture<budget>.zbd`, fitted to the budget, and the build warns.
+  - The warning about packs left in the destination now compares with the names the export plans. `source_status` marks the pack `automatic`, and the Build profile menu tooltip labels it.
+- **Results:** the unchanged 1999 reconstruction needs at most 16 MB per mission, so no automatic pack is added until textures grow. Planning reads the headers in 1.3 s cold and 0.2 s with the cache.
+- **Not covered:**
+  - Textures a world brings from other missions' folders are not counted in N.
+  - World previews still build `rtexture16`, because every rebuild re-encodes the pack.
+  - The 256 MB default is a guess until the game's memory is measured (in-game tests T3 and T4).
+- **Checks:** `BuildProfileTests` (`TheAutomaticPackIsNamedForTheMemoryItsTexturesNeed`, `ExportsAddTheAutomaticPackWhenTheTexturesOutgrowTheFixedOnes`, and the built-in profile list).
+
+## Texture packs for upscaled textures (2026-10-04, branch feat/world-editor)
+
+- **Why:** the user plans to upscale every texture once exports show no regressions in game, and asked that zStudio support `texture8.zbd` and `texturemax.zbd`.
+- **Already supported:** the `modern` profile (the default) builds `texture8` (8 MiB) and `texturemax` (no budget) for every mission, at up to 1024 texels. Reconstruction reads any `rtexture<N>`, `texture<N>` and `texturemax` as sources, and exports use whatever size the project's PNGs have.
+- **Engine:** these two packs serve only the software renderer. Under Direct3D the game loads `rtexture<N>` and reaches `texturemax` only when no `rtexture` pack exists, and then it refuses paletted textures. The software spans draw textures 8–1024 texels wide and skip wider ones.
+- **Change:** project build profiles refuse a `maximumDimension` above 1024 for software packs.
+- **Not covered:**
+  - The Direct3D tiers of `modern` (`rtexture8`, `rtexture16`) have 8 and 16 MiB budgets, which would shrink upscaled textures again.
+  - An unbudgeted `texturemax` with every texture at 1024 may exceed the game's 2 GiB address space (not measured).
+  - Adding a texture to a compiled pack (`texture_import`) accepts any size from 1 to 4096.
+- **Checks:** `BuildProfileTests.SoftwarePacksStopAt1024Texels`; 1,048 Release tests.
+
+## What an unchanged rebuild changes in the game; the hit-activation countdown (2026-10-04, branch feat/world-editor)
+
+- **Why:** the user asked which differences between `zbd_1999` and an export of an unchanged reconstruction change how the game behaves.
+- **Found:** compiled animations stored 0 at +0xB0, the countdown a hit-activated entry starts from. The original compiler stored the `HEALTH` (+0xAC) there as well, in every entry of both releases and the August and September 1998 demos. The loader keeps the stored value and only a stop resets it, so the 11 entries without load cleanup started on their first hit: the VTOLs' destruction in 1999 m1–m6, which needs 15 damage. `AnimationComparer` had skipped the field as runtime state.
+- **Change:** the compiler writes the `HEALTH` to both fields, and the comparer checks +0xB0.
+- **Traced and harmless:**
+  - Identity transforms: the stored rotation, scale and matrix are the same, and cleanup restores the same pose from either flag.
+  - Animation data: the unread fourth float of position and scale keys, and pointers and runtime fields the loader sets.
+  - Scripts and materials: `.png` and `.gltf` in scripts (the texture lookup drops the extension, and `LoadGameGen` and `dbName` exist only in the build tool), and colour materials no polygon uses.
+  - Bounds: the empty boxes of parentless LOD templates, and bounds flag 0x4 on six turret-gun LODs.
+  - Lookups from resources: `effects.zrd` templates, and turret `TARGETS vtol` in m2 (both `vtol` nodes sit at their parents' origin).
+- **Not covered:**
+  - m2's world root lists its children in slot order, unlike the shipped file. `call_chopper` is bound to `world1`, so its cleanup resets `mcar_05`'s `healthy` and `destroyed` instead of `mcar_01`'s. It has no effect in game: the cleanup runs only at mission load (`ON_STARTUP` with a single `RESET_TIME ( -1 )`, and nothing in m2 stops it), when every minecart is intact and its own cleanup (`mcar.zad`) sets the same states.
+  - Texture packs differ in size and pixels because the export fits extra textures into the budgets and builds new palettes. The area average matches the shipped smaller packs best; bilinear is identical at half size and worse at a quarter.
+  - The lookup report does not list `effects.zrd` or `ai.zrd` names.
+- **Lookup audit** (a temporary corpus diagnostic, since deleted, on the user's 22:27 export from a fresh reconstruction): it covered every animation root and attach node, tracked node, node reference and node prerequisite, texture-effect `FindNode`, `effects.zrd` template, and `ai.zrd` turret target and deactivation, resolved as the engine resolves them. 35,575 of 35,580 find the shipped node. The five that differ are all in m2: `call_chopper`'s `healthy` and `destroyed` (four lookups, `mcar_05` instead of `mcar_01`), and `TARGETS vtol` (`vtol1` instead of `vtol2`). Neither has an effect in game. Child order matches everywhere except m2's world root.
+- **Checks:** `AnimationCompilerTests` asserts the field. The source-project corpus test passes for both releases; with the old compiler line it fails on 214 of 221 1999 definitions (`header@176`).
+
+## Lookups by name: reported, warned about, and previewed as the engine makes them (2026-10-04, branch feat/world-editor)
+
+- **Why:** the user asked whether bigger source edits could change behaviour unexpectedly; the parenting comes straight from the sources, but which node a lookup by a repeated name finds follows creation order. The user asked for a report with warnings, and for the preview to resolve names as the engine does.
+- **Engine rules** (retail source of `LoadZbd`, `FindByTypeAndName`, `gwNodeNew`): every node of every class is in one list (bucket 6), newest first, and a world file's nodes join it in slot order. The root binding loop chains same-named consecutive entries, restarts at the head on a new name or the end of the list, and skips entry 0 and entries in state 5 (entry byte 0x98) without breaking the chain.
+- **Change:**
+  - Core `NameLookups` and `WorldLookups`: the lookups a mission makes as it loads (texture-effect `FindNode` from `mN_zbd.gs` and the scripts it sources, animation roots, names inside animations that their root's subtree lacks), and the changes between two builds, paired by structure. A fingerprint of the found node keeps two different nodes with one path and slot number apart.
+  - Check and export report the lookups several nodes share (Problems as Info, MCP `lookups`), and an export warns about those that find another node than the files it replaces (`lookupChanges`, notes).
+  - A source world keeps the build made when it was opened or last saved. A rebuild after an edit reports, in Problems, each lookup that now finds another node, until it is saved or taken back.
+  - The preview takes the highest live slot for roots (with the chain), the whole-world fallback (newest node), effect templates, texture-effect `FindNode` and AI vehicles. Freed slots that keep a name are no longer candidates.
+- **Results:** exporting 1999 m6 over the shipped files from the earlier reconstruction reports 43 changes (the ramps, lava, `drone_fire`, walls, debris); from the current one, none. 47 of m6's lookups use a name several nodes share.
+- **Checks:** four `NameLookupTests` (chain, preview, resolve and changes, export report and changes against replaced files) and `LookupMcpChecks` (Check's list in the result and Problems, the warning after copying an object whose part a texture effect finds, cleared by Save).
+- **Not covered:** names inside animations are first searched in the subtree of the node that triggered the event, which a build cannot know, so they are reported as the whole-world fallback finds them.
+
+## Lookups by name in m2 and m6 find the shipped nodes (2026-10-04, branch feat/world-editor)
+
+- **Why:** testing the rebuilt 1999 files in the game, the user found m6's teleporter ramps (`scrollramp8`, `scrollramp9`) static where the shipped files scroll them.
+- **Cause:** `tex_fxm6.gw` scrolls the node `FindNode` finds, the highest slot of the name. The shipped one is in `g408/tport7.flt`, made late (slots 4289–4306), but the rebuild made it early. m2 and m6 are the databases whose order no model explains, and their fallback kept the world's object order with no deleted groups. So the objects were made in another order, and the later loads (vehicle and effect templates) landed above the database instead of in its freed slots.
+- **Change:** that fallback now keeps the objects in the order of their shipped slots, with a placeholder group at every slot the deletion freed.
+- **Results:** in both releases, every animation root and texture-effect `FindNode` of every mission finds the shipped node (simulated as the engine looks them up). Whole-world lookups of repeated names that find another node fall from 260 to 94 of 2,021 in 1999 (m6 148 → 14, m2 79 → 47) and from 256 to 96 of 1,427 in 1998. Structure is unchanged everywhere.
+- **Checks:** the corpus round trip asserts those lookups for every mission (with the old fallback it fails on m2's `comdish_rotate`); both releases pass; 1,043 Release tests. `zbd_1999_rebuilt` was re-exported (105 files, the shipped set).
+- **Not covered:** names inside animations are checked only through the root's subtree and the whole world (the engine first searches the triggering node's subtree), so m2's `call_chopper` (`healthy`, `destroyed`: another minecart) may or may not differ in play.
+
+## The original build profile builds each mission's shipped packs (2026-10-04, branch feat/world-editor)
+
+- **Why:** the user noticed that a rebuild exported with the `original` profile had no `texture8.zbd` in m6.
+- **Finding:** reconstruction already keeps each texture's largest copy in any pack. 100 of m6's 812 textures are full size only in `texture8`, and every reconstructed PNG is at least the largest stored copy. The `original` profile, however, built the same five packs for every mission, while the game shipped `texture8` in m6 alone and no `texture6` in m7–m12 (both releases).
+- **Change:** profile packs can name the missions they are built for (`missions`, also in project profile files and `source_status`). `original` builds `texture6` for m1–m6 and m13 and `texture8` for m6; `modern` is unchanged.
+- **Results:** a 1999 export with `original` has exactly the shipped file set (105 files). Its m6 `texture8` holds the 812 retail textures at the same size (804) or larger (8), never smaller. Like the other packs, it also carries 59 textures retail m6 lacks, from the shared folders m6's scripts search.
+- **Checks:** 1,043 Release tests (new per-mission pack and `missions` parsing tests, an MCP assertion) and the 1999 source-project corpus test.
+
+## The 1998 demos' worlds (GameZ version 13), read-only (2026-10-04, branch feat/world-editor)
+
+- **Why:** the user asked for version 13, the world format of the RECOIL demos built from 21 July to 12 August 1998, so the demos' worlds can be compared with the releases.
+- **Format** ([architecture.md](architecture.md)), established from all ten version-13 demo worlds: texture, material and model sections and the other node classes are version 15's. Node slots are 268 bytes, storing the cached box as its eight corners in the parent's space (the model-and-child box under the node's own matrix) before the model and child boxes. Object3D records are 156 bytes, with a translation after the scale that the matrix also carries.
+- **Change:** the probe accepts version 13 ("1998 demo, read-only"), the layout table has a version-13 dialect, and `GameZWorldReader` reads it into the version-15 model (`GameZWorld.SourceVersion` 13). It rebuilds each cached box from the model and child boxes the node's flags name, which reproduces every stored corner, and otherwise maps the corners back through the matrix. Demo worlds open in the explorer (models, Whole world with the mission layer, scene tree, properties) and in Compare worlds, which reports both versions. Model replacement stays version 15/27 only, and reconstruction refuses demo folders.
+- **Results:** every version-13 world of the demo folders reads without diagnostics, and the rebuilt boxes give back all stored corners (worst relative error 1e-7). The July m12 compared with the shipped m12: 1,049 merged rows the same, 146 changed (geometry of about 25 world objects, warehouse flags), 60 only in the release and 49 only in the demo (five world objects swapped, effect templates).
+- **Checks:** four version-13 tests (a world rewritten in the demos' layout reads into the same model and writes back the identical version-15 file; corners the boxes do not explain; read-only and malformed files; the `ZSTUDIO_DEMO_CORPUS` corpus test), a reconstruction refusal test, and the Compare worlds desktop check extended with a version-13 world (versions reported, the explorer opens it and previews Whole world). Mutating the translation drop fails two of them.
+- **Animations:** the August demo pairs version-28 animations with version-13 worlds; RECOIL animations now bind to either world version. On a copy of that demo every entry (240 in m12, 440 in m1) binds to a world node, and 40 of each play 120 steps without errors.
+- **Not covered:** the July demos' animations (versions 26 and 27).
+
+## Compare worlds: shipped and rebuilt node trees side by side (2026-10-04, branch feat/world-editor)
+
+- **Why:** the user pointed out that node order in rebuilt files matters less than parent-child relationships (the shipped files were mixed from different states of the original work tree) and asked for a node tree view to compare retail and rebuilt worlds.
+- **Change:** **Tools → Compare worlds…** (no folder needed) merges two GameZ worlds into one tree by parent-child structure, independent of node order (`WorldComparer.CompareTree`; the flat `Compare` is its differences). Each row is the same, changed, only retail or only rebuilt, with both slots, the number of differing rows below, its properties side by side (differing ones highlighted; slots and the order of parents and children are shown, never highlighted), and filters for differences and names. `⚑` marks a node whose repeated name a whole-world lookup (highest slot first) finds in retail but not in the rebuilt world; an indistinguishable copy (same parents, same contents all the way down) counts as the same node. MCP: `world_compare` (operation) and `world_compare_tree` (read, expand, collapse, select; bounded rows).
+- **Results** (fresh reconstructions of both releases): every rebuilt world has the shipped parent-child structure, with no node changed, missing or extra. Whole-world lookups of repeated names resolve elsewhere for 260 of 2,021 names in 1999 (m2 79, m3 12, m5 21, m6 148) and 256 of 1,427 in 1998 (m2 79, m3 13, m5 21, m6 143). The earlier 250/246 identified nodes by their ancestors' names and missed ten m6 objects directly under the world that share a name. Comparing a world takes 0.4–1.6 s.
+- **Checks:** three comparison tree tests (structure over order, lookups, interchangeable copies; mutations of the lookup flag and the copy recursion fail them); a desktop check drives the window through MCP (refusals, counts, filters, selection, window filter, stale context) and renders it.
+- **Not covered:** the flags are a superset of behaviour changes. Animations search the callback node's and bound root's subtrees before the whole world, so only root bindings and whole-world fallbacks change; zStudio does not yet resolve `anim.zbd` bindings and `tex_fx` `FindNode` the engine's way to list the lookups that really differ. The Browse buttons use the Windows file dialog, which the checks do not drive.
+
+## Mission databases: the original build reproduced for nine missions (2026-10-04, branch feat/world-editor)
+
+- **Why:** the user asked to check the remaining differences with ChatGPT Pro and try its solutions. Three rounds sent it the shipped node tables with their recovered free-list ranks, the loader model and the inference; it returned complete allocator witnesses for 1999 m1, m2, m4, m5 and m13 and the general rules they need.
+- **Rules added** ([engine-evidence.md](engine-evidence.md#name-lookups-and-node-slot-order)): instance definitions (made once before the root, references attach them; a cached file's identical unnamed subtrees are one); the retail destructor for cache cleanup; references among a reference's own records; the database's first records on the slots its caches left; second paths inside model files (`comanche.flt` → `hturret.flt`, `chemplnt.flt` → `chempipl.flt`); groups closing before their last objects; identical later loads told apart by the database's caches.
+- **Inference:** the cache parse continues past a mismatch and its simulated end state gives the records' order (iterated), with a bootstrap for databases whose records start on freed slots; the deletion tree nests by free order; group boundaries, nested second paths and parts inside parts are searched where a part's cache does not match; later-load readings (exchanged loads, a model's second path) are tried and the best kept. Reconstruction writes children in made order, counts second paths per written file, and applies a model's second path in every mission that loads it.
+- **Results:** every node in its shipped slot for 1999 m1, m4, m7–m13 and 1998 m1, m4. Repeated names bound to another node: 250 of 2,021 in 1999 (472 before; m2 79, m3 12, m5 21, m6 138), 246 of 1,427 in 1998 (was 417).
+- **Checks:** 1,032 Release tests; both corpus round trips, now asserting m1, m4 and m7–m13 exact; terrain conversion of the new project matches every probe for M1, M5 and M6. Four loader tests (`OriginalLoaderTests`) with mutations of each rule.
+- **Not solved:** m2, m3 and m5 have witnesses but need searches the inference does not do yet: a part's copy decided by its cache when the record after the reference has no children (m5's part at 1172), parts inside parts found from the database side, and leftovers from several caches (m2). m6 is not explained. The game itself was not run with the rebuilt files.
+
+## Mission databases rebuilt from their parts (2026-10-03, branch feat/world-editor)
+
+- **Why:** the user asked for every ZBD to build from the reconstructed `data` and `gamegen` as the original tool built it, investigating every difference, rather than recording each node's rank; the order of same-named nodes decides which node the game's name lookups find. The user then chose separate sub-files for the database parts.
+- **Evidence:** the retail allocator (`DestroyNodeRecursive` keeps nodes that still have a parent; deferred frees apply only at run time) and the shipped slots and free lists, which record how the lost build tool loaded a file: caches of referenced files first, then the root and records, a reference's content copied after the next record (or at once when the reference has records of its own), a file named by a second path cached again, caches freed at the end. The mission databases referenced parts of the world in other files, and held content the build deleted. Recorded in [engine-evidence.md](engine-evidence.md#name-lookups-and-node-slot-order).
+- **Change:** builds create and free nodes in that order (`OriginalLoader`); world objects join their cells in creation order. Reconstruction recovers each database's records with the groups the build deleted and writes its parts as `mN_NN.gltf` beside it, referenced by group nodes; later paths to one file are written `./name.gltf`. It replays the build and keeps the result when slots match, or when the parts are known but the original tool's own misattachments change some slots; otherwise the database keeps the world's object order. Every such mission is noted. The glTF profile writes a reference's own records as its children. Objects of a part are edited, copied, deleted and moved in the part's file (applying to every copy, which Properties and `source_world_object`'s `origin.part` state). Terrain conversion takes pieces from the database's groups and leaves the parts' pieces as objects.
+- **Results:** 1999 M7, M8, M10, M11 and M12 rebuild with every node in its shipped slot. Names repeated in a world bind to another node than shipped for 472 of 2,021 in 1999 (702 before; M1 20, was 202; M5 21, was 58) and 417 of 1,427 in 1998. Both corpora still rebuild content-equivalent worlds (`SourceProjectCorpusTests`), and terrain conversion of the parts project matches the shipped probes at every sample for M1, M5 and M6.
+- **Checks:** all 1,028 Release tests pass (101 desktop). New: an assembly test of parts (copy after the next record, immediate copy for a reference with records of its own, second paths cached separately, members in creation order, part provenance), part object edits across two copies, and terrain conversion inside groups with a part kept; mutations of the immediate copy, second-path caching and group recursion made them fail. The corpus round trip accepts only mission-database notes besides the rebuilt animation definitions and requires M7, M8, M10–M12 to be exact.
+- **Not solved:** the original tool attached some records of larger parts to other parents than their copies show (1999 M1's part in slots 2067–2367, M3), reused existing nodes by name in places (M9, M13), and began some databases on slots its caches freed (M2–M4, M13); no tested mechanism explains these, so they are not emulated. M5's first part is not identified, and M6 keeps holes whose deleted content is unknown. The game itself was not run with the rebuilt files.
+
+## Mission world previews in the project's `zstudio` folder (2026-10-03, branch feat/world-editor)
+
+- **Why:** the user decided that zStudio builds the mission worlds it shows in the project's `zstudio` folder, with its other working data, rather than in the system's temporary folder.
+- **Change:** `SourceWorlds.BuildPreviewAsync` builds only into `zstudio/cache/worlds` of the project (`SourceWorlds.PreviewFolder`) and refuses any other folder, links and the protected corpora. Each open world has a locked folder there, removed when the world closes; a folder whose zStudio ended without closing it is removed when the next world of the project opens. Files leaves `zstudio/cache/worlds` out, so the builds cannot be opened and edited as game files. `source_world_open` says where it builds.
+- **Checks:** 1,024/1,024 Release. The world-source test refuses the project's other folders, `zstudio` itself and outside folders; the desktop check finds the shown world under the project's preview folder, gone after closing, and a leftover build not listed in Files. Two mutations (accepting any folder; listing the builds) made them fail. `TerrainConversionCorpusTests` copies a project given in `ZSTUDIO_SOURCE_PROJECT` before building in it, because that project is only read.
+
+## Welcome screen: compiled ZBD assets or a source project (2026-10-03, branch feat/world-editor)
+
+- **Why:** the user asked for the welcome screen to offer the two ways to work, with a dedicated dialog for initializing a source project.
+- **Change:** two cards. **Edit compiled ZBD assets** keeps **Choose a ZBD folder…**. **Work with source project** has **Initialize**, a dialog with the retail ZBD folder and a new or empty project folder (text fields with **Browse…**), **Initialize and open** (enabled once both are given) and **Cancel**, and **Open**, which accepts only a folder with `data` and `gamegen`. The dialog runs the reconstruction itself, showing its progress and keeping any refusal (for example "zStudio can unpack only the original ZBD files.") in the dialog; Cancel or closing the dialog cancels it, which removes what it wrote. The project opens once the dialog has closed, because a modal dialog holds the workspace. MCP: `open_root` takes `project` (refused with `not_project`); the dialog maps to `source_reconstruct`.
+- **Fixed on the way:** opening a reconstructed project cleared Problems, so the reconstruction's notes were lost whenever it opened the project (MCP `open`, the Tools menu and now Initialize); they are listed after the project opens.
+- **Checks:** a desktop check drives the dialog (Cancel, the disabled button, a refused folder inside the retail folder that writes nothing, then a reconstruction that opens with its notes in Problems) and MCP `open_root` with `project`; two mutations (enabling with one folder, listing notes before opening) made it fail. In the published build, Initialize on the 1999 files reconstructed 5,664 source files with 5 notes in 27 s and opened the project; canceling midway closed the dialog in under a second and left no folder. 101/101 desktop tests pass.
+- **Tools → Reconstruct source project… removed (user decision):** Initialize replaces it, so the GUI's only way to reconstruct is the welcome screen, which shows only while no folder is open; zStudio has no command that closes a folder. MCP `source_reconstruct` is unchanged.
+- **Not covered:** the welcome Open and Browse buttons show the Windows folder picker, which the checks do not drive.
+
+## Engine evidence for the remaining unknowns (2026-10-03, branch feat/world-editor)
+
+- **Why:** the user asked for the remaining open investigations of the world editor plan to be covered.
+- **Result:** [engine-evidence.md](engine-evidence.md) settles, from the reconstruction, the retail executable and the shipped data: node slot order and name lookups, craters and crater visibility, model limits while clipping, runtime capacity, vehicle roles and animation lifecycle, the animation runtime for Blender action import, mission slots, resource schemas (AI networks, AI vehicles, turrets, objectives, start animations), and the static half of the rendering target. Eight read-only investigations ran in parallel; their central claims were checked again in the executable before they were recorded. The plan's open investigations now hold only test fixtures and game acceptance.
+- **Corrections to earlier docs:**
+  - lookups by name find the highest slot first, and they matter beyond animation roots: 138 animation and 21 `tex_fx` lookups resolve differently in exported worlds;
+  - the crater test sees only active top-level ClipTo nodes with their own model, in model space;
+  - the engine rounds UVs of geometry built during play;
+  - vehicle fire points are `fpnt_c/l/r` (no `firepoint`);
+  - a missing or unrecognized AI attack strategy means head on.
+- **Found in zStudio:** the animation preview resolves repeated names to the lowest slot, while the game takes the highest, so ambiguous roots are previewed on the wrong node (for example the m2 com-centre dish). Not fixed yet.
+- **Still needs the game:** 19 in-game tests, from texture-pack choice and memory to crater limits, cloned-vehicle animation stops and an m14 multiplayer arena ([In-game tests](engine-evidence.md#in-game-tests)).
+
+## Zone probes resolved (2026-10-03, branch feat/world-editor)
+
+- **Why:** the zone probe was the first open engine question gating zone validation and new maps ([world-editor-plan.md](world-editor-plan.md#open-investigations)).
+- **Evidence:** traced in the reconstruction and confirmed in the retail executable for the parts the reconstruction had not byte-matched: the point probe (0x443d20, 0x484960, 0x4856d0), the vehicle probe (0x484b70, 0x484e00), hit selection (0x443c70), the vehicle update (0x428d60) and spawning (0x421830). The specification is in [How the engine sees a map](world-editor-plan.md#how-the-engine-sees-a-map). It corrects the earlier notes: the 500 cap, the camera adding the player's zones, vehicles taking every upward polygon of a node and polygons without zones, and nothing outside the grid for vehicles.
+- **Model:** `ZoneProbe` in Core implements both probes, hit selection, and the camera, vehicle, spawn and renderer zone updates on a compiled world. Ten deterministic cases check one rule each; two rule mutations made them fail.
+- **Shipped data:** a corpus test checks, on every 1998 and 1999 world, that no probe fills its 32 hits and no altitude surface lies above 500, and that the clamp flag is off. A survey at 8-unit spacing found surfaces stacked in one node (up to 738 samples in M6) with no effective camera/vehicle zone difference, and up to 226 samples per mission of ground whose zones include "any".
+- **Not covered:** dynamic objects (vehicles, animated nodes) are not part of the model's world; morphing models are probed at their stored morph factor. Zone views and zone validation in the editor are still to come.
+
+## Shared vehicles and effects in `data\common` (2026-10-02–03, branch feat/world-editor)
+
+- **Why:** reconstruction put every vehicle `bft1.gw`–`bft6.gw` load into each mission's `models\bft`, because those scripts set that folder before loading; the shipped worlds record no model paths, so this was only the scripts' most direct reading. Those loads also search `data\common\models`, the packs show the enemy vehicles' textures were one shared copy in `data\common\textures` (each mission's `textures\bft` holds only its player tank), and every vehicle is identical in all the missions that load it in both releases. The user chose one shared file.
+- **Change:** after placement, the version of a file that most missions' script-chosen mission folders hold identically moves to `data\common\models` when every load of it searches that folder, no folder searched before it holds another file of the name, and the copies' own root flags agree. A differing version stays in its mission's folder, found first; external references follow the file that references them.
+- **Results:** in the 1999 project, 18 vehicles (enemies, `hturret`, `vtol`) are one file each in `data\common\models`; each mission's `models\bft` keeps its player tank, its own vehicles (m4's train and turret, m6's laser designator) and `regenerate`, which the player tank references. 556 glTF files instead of 627, with no new reconstruction notes.
+- **Tests:** a new reconstruction case (two missions sharing a vehicle, a third with its own version, and an effect `weapons.gw` loads) checks the layout and that every mission still assembles the shipped world; the source-project corpus test checks the layout on both releases.
+- **Effects (2026-10-03):** the packs show every effect texture came from `data\common\effects\textures` although `weapons.gw` sets `data\effects\textures`, so its `data\effects\models` is no firmer evidence for the 99 effect models. They are now kept with their textures in `data\common\effects\models` (which the same loads search; same guards). The 1999 reconstruction has no new notes.
+- **No empty folders (2026-10-03):** reconstruction no longer creates every folder the scripts search, only folders that receive files, so `data\effects` and the multiplayer missions' `models\bft` and `textures\bft` are left out; the build already treated a missing folder as empty. The corpus test checks that a project has no empty folder.
+
+## Blender shows models as the game draws them (2026-10-02, branch feat/world-editor)
+
+- **Why:** reconstructed glTF materials were all opaque, so Blender ignored the alpha of 191 transparent textures (the game takes transparency from the texture), and every pickup showed its `bvol` collision volume, which the game switches off when it registers the pickup (retail `Pickup::AssignBvolGroupAndId`, 0x41DB60), as a large violet panel.
+- **Change:** one shared step (`WorldGltf.ApplyPresentation`) marks materials whose texture has alpha as `BLEND` (`MASK` for alpha only 0/255, the packs' key threshold) and gives meshes that only `bvol` nodes show a fully transparent copy of their material (`~hidden`, `MASK` with base alpha 0, engine colour kept and `opacity: 255` recorded). Reconstruction applies it to every model it writes, using the transparency of the PNG it wrote; **Edit in Blender** applies it to the checkout copy, so projects reconstructed earlier get it without changing their files. The transparency classification is the pack builder's.
+- **Results:** the 1999 reconstruction differs from the previous one only in those materials (370 `BLEND`, 2 `MASK`, 36 hidden volumes in 267 of 627 glTF files); all 5,417 other files are byte-identical. Blender 5.2 renders the volume invisible in Solid and EEVEE and the textures with their alpha; its export (glTF Separate, Custom Properties) imports into the same engine surfaces. The source-project corpus test passes on the 1998 and 1999 data.
+- **Tests:** three new cases: presentation rules, sharing, idempotence, malformed files and identical import (including a volume material an editor switched to `BLEND`); checkout copies; reconstruction that still reassembles the shipped world.
+- **Limits:** glTF has no node visibility Blender reads (Blender 5.2 does not import `KHR_node_visibility`), so the volume is hidden by its material: it still counts in bounds-based framing and is visible in wireframe. Projects reconstructed earlier keep their files until reconstructed again; Edit in Blender covers them.
+
 ## Animation definitions as `.zad`; unpacking only the original files (2026-10-02, branch feat/world-editor)
 
 - **Why:** the game never reads animation definitions (only `anim.zbd`), yet the original build packed them into `zrdr.zbd` as `.zrd` files beside the zReader resources. Source projects keep them apart.

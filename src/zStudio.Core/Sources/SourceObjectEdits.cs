@@ -57,7 +57,9 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
     {
         if (angles && MathF.Abs(x) < 1e-4f) return 0;
         float rounded = MathF.Round(x, 3);
-        return MathF.Abs(x) >= 1e-3f && MathF.Abs(x - rounded) <= 1e-6f * MathF.Max(1, MathF.Abs(x)) ? rounded : x;
+        float snapped = MathF.Abs(x) >= 1e-3f && MathF.Abs(x - rounded) <= 1e-6f * MathF.Max(1, MathF.Abs(x)) ? rounded : x;
+        // A half turn reads as 180, not −180 (atan2's −π).
+        return angles && snapped <= -180f ? snapped + 360f : snapped;
     }
     /// <summary>
     /// The transform a local matrix (rows: rotated, scaled axes, then translation) describes. A mirroring matrix has a
@@ -70,10 +72,13 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
         if (scale.X == 0 || scale.Y == 0 || scale.Z == 0) return new(m.Translation, Vector3.Zero, scale);
         if (Vector3.Dot(Vector3.Cross(x, y), z) < 0) scale.X = -scale.X;
         x /= scale.X; y /= scale.Y; z /= scale.Z;
-        // Rows of Rz·Rx·Ry: M32 = −sin x, M31/M33 give y, M12/M22 give z (gimbal lock: z is 0).
-        float rx = MathF.Asin(Math.Clamp(-z.Y, -1f, 1f)), ry, rz;
-        if (MathF.Abs(MathF.Cos(rx)) > 1e-6f) { ry = MathF.Atan2(z.X, z.Z); rz = MathF.Atan2(x.Y, y.Y); }
-        else { rz = 0; ry = MathF.Atan2(-x.Z, x.X); }
+        // Rows of Rz·Rx·Ry (see Matrix): the Z axis gives pitch (atan2 keeps it precise near ±90°, where asin loses digits)
+        // and yaw (undefined at ±90°, any value then does). Roll is fitted to them: R·(Rx·Ry)ᵀ is Rz, read from the whole
+        // rotation, so the noise of the cos(pitch)-scaled elements near ±90° does not build up over edits.
+        float rx = MathF.Atan2(-z.Y, MathF.Sqrt(z.X * z.X + z.Z * z.Z)), ry = MathF.Atan2(z.X, z.Z);
+        var rotation = new Matrix4x4(x.X, x.Y, x.Z, 0, y.X, y.Y, y.Z, 0, z.X, z.Y, z.Z, 0, 0, 0, 0, 1);
+        var roll = rotation * Matrix4x4.Transpose(Matrix4x4.CreateRotationX(rx) * Matrix4x4.CreateRotationY(ry));
+        float rz = MathF.Atan2(roll.M12, roll.M11);
         const float degrees = 180f / MathF.PI;
         return new(m.Translation, new Vector3(rx, ry, rz) * degrees, scale);
     }
@@ -126,14 +131,18 @@ public static class SourceObjectEdits
     /// from it change: a position edit leaves the authored rotation and scale (and a mirroring the decomposition cannot
     /// express) as they are, and a script keeps the tokens of every component not changed.
     /// </summary>
-    public static SourceEditPlan PlanTransform(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, ObjectTransform requested, CancellationToken token = default, string? mission = null, ObjectTransform? current = null)
+    public static SourceEditPlan PlanTransform(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, ObjectTransform requested, CancellationToken token = default, string? mission = null, ObjectTransform? current = null,
+        IEnumerable<WorldNodeProvenance>? copies = null)
     {
         Generated(origin, nodeName);
-        Check(requested.Position); Check(requested.RotationDegrees); Check(requested.Scale);
         string label = $"Move {nodeName}";
         bool position = current is not { } c || Differs(requested.Position, c.Position);
         bool rotation = current is not { } r || Differs(requested.RotationDegrees, r.RotationDegrees);
         bool scale = current is not { } s || Differs(requested.Scale, s.Scale);
+        // Only what changes: a node built at the limit (a scale reading back as 1000000.06) can still move.
+        if (position) Check(requested.Position);
+        if (rotation) Check(requested.RotationDegrees);
+        if (scale) { Check(requested.Scale); CheckScale(requested.Scale); }
         if (!position && !rotation && !scale) return new(label, [], nodeName, []);
         var writers = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).ToArray();
         // A glTF node imported without a transform takes the scripts' TRS whole; one with its own (authored) matrix keeps its
@@ -153,7 +162,10 @@ public static class SourceObjectEdits
             if (scale) edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", requested.Scale, Vector3.One, anchor, current?.Scale);
             return new(label, edit.Changes(), $"{anchor.Script} line {anchor.Line}", edit.Notes);
         }
-        // A node of a glTF file: its transform is the node's, except a translation a script sets.
+        // A node of a glTF file: its transform is the node's, except a translation a script sets. A part's node changes in
+        // every copy, so a script transform of another copy would start or stop applying there.
+        if (origin.Part && (copies ?? []).Where(c => !ReferenceEquals(c, origin)).SelectMany(c => TransformCommands.Where(c.Writers.ContainsKey).Select(k => c.Writers[k])).FirstOrDefault() is { } other)
+            throw new InvalidDataException($"{other.Script} line {other.Line} ({other.Command}) sets the transform of another copy of {nodeName} in {origin.ModelFile}; edit the copies' instructions in the scripts first.");
         List<(string Relative, byte[] Content)> changes = []; List<string> notes = []; List<string> places = [];
         var translate = origin.Writers.GetValueOrDefault("Object3DTranslate");
         if (position && translate != null)
@@ -170,6 +182,10 @@ public static class SourceObjectEdits
             var plan = GltfEdit(workspace, origin, label, node =>
             {
                 var local = GltfNodeEdits.Local(node);
+                // A matrix with a shear (a move under a parent whose scale is not uniform writes one) shows decomposed; rebuilt
+                // from the shown rotation and scale it would change shape.
+                if ((rotation || scale) && HasShear(local))
+                    throw new InvalidDataException($"{nodeName}'s transform has a shear or a zero scale its rotation and scale cannot show; change them in Blender, or move it alone.");
                 var m = local;
                 // Values a decomposition leaves a hair off (89.99999°, a scale of 0.99999994) are written as meant.
                 if (rotation || scale) { m = new ObjectTransform(requested.Position, ObjectTransform.Snap(requested.RotationDegrees, angles: true), ObjectTransform.Snap(requested.Scale, angles: false)).Matrix(); m.Translation = local.Translation; }
@@ -273,7 +289,7 @@ public static class SourceObjectEdits
         {
             if (!origin.Database) throw new InvalidDataException($"{node.Name} is part of the model file {origin.ModelFile}; delete the object that loads it, or remove the part in Blender.");
             // A script instruction that acts on the node or a part of it would act on another node, or none, once it is gone.
-            RefuseUsers(target, Subtree(node), node.Name, "deleted");
+            RefuseUsers(target, FileSubtree(target, node, origin, token), node.Name, "deleted");
             return GltfFile(target.Workspace, origin, label, (root, _) => GltfNodeEdits.Remove(root, origin.ModelNode), token, notes);
         }
         var created = Created(target, ["LoadGameGen", "NewObject3D"], "deleted");
@@ -308,21 +324,42 @@ public static class SourceObjectEdits
         CheckName(name);
         if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can be copied here.");
         if (target.World.Nodes.Any(n => n.Name == name)) throw new InvalidDataException($"The world already has a node named {name}; choose another name.");
-        if (transform != null) { Check(transform.Value.Position); Check(transform.Value.RotationDegrees); Check(transform.Value.Scale); }
+        if (transform != null) { Check(transform.Value.Position); if (!keepBasis) { Check(transform.Value.RotationDegrees); Check(transform.Value.Scale); CheckScale(transform.Value.Scale); } }
         string label = $"Copy {node.Name} as {name}";
         string parts = $"The copy's parts keep the original's part names; an animation that finds a part by name may find the copy's.";
         if (origin.ModelFile != null)
         {
             if (!origin.Database) throw new InvalidDataException($"{node.Name} is part of the model file {origin.ModelFile}; copy the object that loads it.");
+            // The copy stands where the file puts the original (beside it in its file parent): one a script attached or
+            // detached elsewhere would land where the script took the original from (morfUtil.gw's morph objects).
+            if (origin.Named.FirstOrDefault(i => i.Command is "AddChild" or "DeleteChild") is { } placing)
+                throw new InvalidDataException($"{placing.Script} line {placing.Line} ({placing.Command}) places {node.Name} elsewhere than its file does, so a copy would not stand beside it; copy it in the scripts directly.");
             // The copy's parts are newer and keep their names: a script finding one by name would find the copy's.
-            RefuseUsers(target, Subtree(node).Where(n => !ReferenceEquals(n, node)), node.Name, "copied");
+            RefuseUsers(target, FileSubtree(target, node, origin, token).Where(n => !ReferenceEquals(n, node)), node.Name, "copied");
+            // A part a script takes out of the node (from its file or a file it references) would be copied too, and the
+            // script's later lookups would find the copy's.
+            if (origin.Applied.FirstOrDefault(i => i.Command == "DeleteChild") is { } detach)
+                throw new InvalidDataException($"{detach.Script} line {detach.Line} (DeleteChild) takes a part out of {node.Name}; {node.Name} cannot be copied until that changes.");
+            // The copy takes this copy's built place and flags into every copy of a part, so script values on any one copy would
+            // reach the others' copies, or miss its own.
+            var partCopies = WithCopies(target, [node]).ToList();
+            if (partCopies.Count > 1)
+                foreach (var each in partCopies)
+                    if (target.Provenance.TryGetValue(each, out var p) && p.Applied.Concat(p.Named).FirstOrDefault() is { } user)
+                        throw new InvalidDataException($"{user.Script} line {user.Line} ({user.Command}) acts on {(ReferenceEquals(each, node) ? "one" : "another")} copy of {node.Name} in {p.ModelFile}; {node.Name} cannot be copied until that changes.");
             // Script instructions find the original by name, so the copy gets what they set from the build instead: its
             // place (as an authored matrix) and its flags. Other instructions do not reach it.
             var built = WorldUpdate.LocalMatrix(node) ?? Matrix4x4.Identity;
+            // A copy given its own rotation and scale is made of them alone; an original holding a shear would change shape.
+            if (transform != null && !keepBasis && HasShear(built))
+                throw new InvalidDataException($"{node.Name}'s transform has a shear or a zero scale its rotation and scale cannot show; copy it in place, or with a new position only.");
             Matrix4x4? local = transform is { } t ? keepBasis ? built with { Translation = t.Position } : t.Matrix()
                 : TransformCommands.Any(origin.Writers.ContainsKey) ? built : null;
             bool flags = origin.Applied.Any(i => FlagCommands.Values.Contains(i.Command));
-            List<string> copyNotes = ["The copy shares the original's meshes and textures.", parts];
+            List<string> copyNotes = ["The copy shares the original's meshes and textures (a point-only model, such as a lens flare, gets its own).", parts];
+            // A part is copied wherever the database references it, and so is a copy made in it.
+            int copies = target.Provenance.Values.Count(p => p.Part && p.ModelNode == origin.ModelNode && string.Equals(p.ModelFile, origin.ModelFile, StringComparison.OrdinalIgnoreCase));
+            if (origin.Part && copies > 1) copyNotes.Add($"The mission database copies {origin.ModelFile} {copies} times, so the world gets {copies} nodes named {name}.");
             foreach (var i in origin.Applied.Where(i => !TransformCommands.Contains(i.Command) && !FlagCommands.Values.Contains(i.Command) && i.Command is not ("NodeSetLighting" or "FindSubNode")))
                 copyNotes.Add($"{i.Script} line {i.Line} ({i.Command}) acts on {node.Name} by name; the copy does not get it.");
             return GltfFile(target.Workspace, origin, label, (root, _) =>
@@ -335,6 +372,8 @@ public static class SourceObjectEdits
         }
         var created = Created(target, ["LoadGameGen"], "copied");
         string file = origin.LoadedFile ?? throw new InvalidDataException($"{node.Name}'s LoadGameGen found no model file.");
+        // The copy repeats the instructions on the object itself; those that change its parts would not be repeated.
+        RefuseUsers(target, Subtree(node).Where(n => !ReferenceEquals(n, node)), node.Name, "copied");
         var parent = SingleParent(target, node, "copied");
         List<IReadOnlyList<string>> lines = [["SetModelDirectory", "..\\" + Path.GetDirectoryName(file.Replace('\\', '/'))!.Replace('/', '\\')], ["LoadGameGen", Token(created.Args[0]), name]];
         List<string> notes = [parts];
@@ -374,27 +413,58 @@ public static class SourceObjectEdits
         if (parent != null && (ReferenceEquals(parent, node) || Ancestors(parent).Contains(node))) throw new InvalidDataException($"{node.Name} cannot move under itself or one of its own parts.");
         if (parent != null && target.Provenance.TryGetValue(parent, out var parentOrigin) && parentOrigin.Terrain is { } pieceRecipe)
             throw new InvalidDataException($"{parent.Name} is a terrain piece of {pieceRecipe}; its name and place change whenever the recipe does, so objects cannot move under it.");
-        string label = parent == null ? $"Move {node.Name} to the world" : $"Move {node.Name} under {parent.Name}";
+        if (node.Parents.Count == 0) throw new InvalidDataException($"{node.Name} is not placed in the world (a template, or a node a script took out of its parent); move it in the scripts directly.");
+        // A node several parents share (an instance, or a node scripts attached twice) is placed under each: moving it, or a
+        // node inside it, would keep one place, and moving a node into it would place that node under each.
+        if (node.Parents.Count > 1 || Ancestors(node).Any(a => a.Parents.Count > 1))
+            throw new InvalidDataException($"{node.Name} is {(node.Parents.Count > 1 ? "" : "inside ")}a node several parents share; move it in its source directly.");
+        if (parent != null && parent.Class != WorldNodeClass.World && !Ancestors(parent).Any(a => a.Class == WorldNodeClass.World))
+            throw new InvalidDataException($"{parent.Name} is not placed in the world (a script took it out), so {node.Name} would leave the world under it; choose another parent.");
+        if (parent != null && (parent.Parents.Count > 1 || Ancestors(parent).Any(a => a.Parents.Count > 1)))
+            throw new InvalidDataException($"{parent.Name} is {(parent.Parents.Count > 1 ? "" : "inside ")}a node several parents share, so {node.Name} would be placed under each; choose another parent.");
+        // Already under the world (a member of a group the build deletes): moving it there would only reorder the file.
+        if ((parent == null || parent.Class == WorldNodeClass.World) && node.Parents.Any(p => p.Class == WorldNodeClass.World))
+            throw new InvalidDataException($"{node.Name} is already a root of the world.");
+        // A level-of-detail node has no transform of its own (the importer reads none): it stands where its parent is.
+        if (node.Class == WorldNodeClass.Lod && !SamePlace(node.Parents.FirstOrDefault() is { } from ? WorldMatrix(from) : Matrix4x4.Identity, parent == null ? Matrix4x4.Identity : WorldMatrix(parent)))
+            throw new InvalidDataException($"{node.Name} is a level-of-detail node, which stands where its parent is; it cannot keep its place under {parent?.Name ?? "the world"}, which is elsewhere.");
+        // A part's node moves to the top of its part (the part's references hold it), not into the world itself.
+        string label = parent == null || parent.Class == WorldNodeClass.World
+            ? origin.ModelFile != null && origin.Part ? $"Move {node.Name} to the top of {Path.GetFileName(origin.ModelFile)}" : $"Move {node.Name} to the world"
+            : $"Move {node.Name} under {parent.Name}";
         if (origin.ModelFile != null)
         {
             if (!origin.Database) throw new InvalidDataException($"{node.Name} is part of the model file {origin.ModelFile}; move the object that loads it.");
+            // The zone it keeps when the new place would give another (see GltfNodeEdits.Reparent): unknown when a part's copies
+            // take different zones from their references, which one file cannot keep for each.
+            uint? zone = origin.Part && WithCopies(target, [node]).Select(n => n.Zone & 0xFF).Distinct().Skip(1).Any() ? null : node.Zone & 0xFF;
             int? into = null;
             if (parent != null && parent.Class != WorldNodeClass.World)
             {
                 if (!target.Provenance.TryGetValue(parent, out var p) || !p.Database || !string.Equals(p.ModelFile, origin.ModelFile, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException($"{parent.Name} is not a node of {origin.ModelFile}; a mission database node can only move under another node of the database, or to the world.");
+                    throw new InvalidDataException(origin.Part
+                        ? $"{parent.Name} is not a node of {origin.ModelFile}; a node of a part of the mission database can only move under another node of that part, or to its top."
+                        : $"{parent.Name} is not a node of {origin.ModelFile}; a mission database node can only move under another node of the database, or to the world.");
                 into = p.ModelNode;
             }
             // The glTF keeps the node's place from the file's transforms; a script transform along either chain moves it
             // elsewhere, and a script that also attaches a node of either chain places an instance the glTF does not.
-            var chain = Ancestors(node).Prepend(node).Concat(parent == null ? [] : Ancestors(parent).Prepend(parent)).ToList();
+            // Every copy of a part moves: each copy's chain counts.
+            var chain = WithCopies(target, [node]).Concat(parent == null ? [] : WithCopies(target, [parent])).SelectMany(n => Ancestors(n).Prepend(n))
+                .Distinct(ReferenceEqualityComparer.Instance).Cast<WorldNode>().ToList();
             foreach (var n in chain)
                 if (target.Provenance.TryGetValue(n, out var linked) && linked.Named.FirstOrDefault(x => x.Command == "AddChild") is { } attach)
                     throw new InvalidDataException($"{attach.Script} line {attach.Line} also attaches {n.Name} elsewhere; a new place in the glTF would not hold for that instance. Move it in the scripts directly.");
             if (chain.FirstOrDefault(n => target.Provenance.TryGetValue(n, out var p) && TransformCommands.Any(p.Writers.ContainsKey)) is { } scripted)
                 throw new InvalidDataException($"A script sets {scripted.Name}'s transform, so the glTF alone cannot keep {node.Name} in place; move it in the scripts directly.");
-            return GltfFile(target.Workspace, origin, label, (root, _) => GltfNodeEdits.Reparent(root, origin.ModelNode, into), token,
-                [into == null ? $"{node.Name} becomes a root of the mission database, which joins the world and its grid." : $"{node.Name} moves with {parent!.Name} from now on."]);
+            var plan = GltfFile(target.Workspace, origin, label, (root, _) => GltfNodeEdits.Reparent(root, origin.ModelNode, into, zone), token,
+                [into != null ? $"{node.Name} moves with {parent!.Name} from now on."
+                    : origin.Part ? $"{node.Name} becomes a root of {origin.ModelFile}, under each of the mission database's references to it."
+                    : $"{node.Name} becomes a root of the mission database, which joins the world and its grid."]);
+            // Nothing to change is no edit: say where it already is rather than report a move.
+            if (plan.Changes.Count == 0)
+                throw new InvalidDataException(into != null ? $"{node.Name} is already under {parent!.Name}." : origin.Part ? $"{node.Name} is already a root of {origin.ModelFile}." : $"{node.Name} is already a root of the mission database.");
+            return plan;
         }
         var created = Created(target, ["LoadGameGen", "NewObject3D"], "moved");
         var current = SingleParent(target, node, "moved");
@@ -431,8 +501,12 @@ public static class SourceObjectEdits
             }
             else
             {
-                // A scaled or mirrored parent change: the transform is decomposed whole.
-                var local = ObjectTransform.FromMatrix(WorldMatrix(node) * inverse);
+                // A scaled or mirrored parent change: the transform is decomposed whole. Scripts hold translation, rotation and
+                // scale only, so a parent whose scale is not uniform, turned against the node, would shear it.
+                var exact = WorldMatrix(node) * inverse;
+                var local = ObjectTransform.FromMatrix(exact);
+                if (HasShear(exact))
+                    throw new InvalidDataException($"Under {parent.Name}, {node.Name} would need a sheared or flattened transform (a parent whose scale is not uniform, turned against it, or a zero scale), which the script's Object3DTranslate, Object3DRotate and Object3DScale cannot hold; choose another parent or change the scales first.");
                 edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", local.Position, Vector3.Zero, anchor);
                 edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", ObjectTransform.Snap(local.RotationDegrees, angles: true), Vector3.Zero, anchor);
                 edit.Set(origin.Writers.GetValueOrDefault("Object3DScale"), "Object3DScale", ObjectTransform.Snap(local.Scale, angles: false), Vector3.One, anchor);
@@ -454,7 +528,7 @@ public static class SourceObjectEdits
     {
         var origin = target.Origin;
         var created = origin.Created ?? throw new InvalidDataException($"{target.Node.Name} was neither loaded from a model nor created by a script instruction.");
-        if (!commands.Contains(created.Command)) throw new InvalidDataException($"{target.Node.Name} was made by {created.Command} ({created.Script} line {created.Line}); only objects a script loaded or created can be {verb} here.");
+        if (!commands.Contains(created.Command)) throw new InvalidDataException($"{target.Node.Name} was made by {created.Command} ({created.Script} line {created.Line}); here only objects made by {string.Join(" or ", commands)} can be {verb}.");
         if (target.Provenance.Values.Any(p => p.Database && Same(p.Load, created))) throw new InvalidDataException($"{target.Node.Name} is the load of the mission database; it cannot be {verb}.");
         return created;
     }
@@ -489,16 +563,101 @@ public static class SourceObjectEdits
     private static void RefuseUsers(SourceObjectTarget target, IEnumerable<WorldNode> nodes, string name, string verb, IEnumerable<SourceInstruction>? handled = null)
     {
         var skip = (handled ?? []).ToList();
-        foreach (var n in nodes)
+        HashSet<WorldNode> own = new(nodes, ReferenceEqualityComparer.Instance), below = new(Subtree(target.Node), ReferenceEqualityComparer.Instance);
+        // The node itself only when the caller asks (a copy refuses its own instructions elsewhere, see PlanDuplicate).
+        foreach (var n in WithCopies(target, own).Where(n => own.Contains(n) || !ReferenceEquals(n, target.Node)))
             if (target.Provenance.TryGetValue(n, out var p) && p.Applied.Concat(p.Named).FirstOrDefault(u => !skip.Any(h => Same(h, u))) is { } user)
-                throw new InvalidDataException($"{user.Script} line {user.Line} ({user.Command}) acts on {n.Name}{(ReferenceEquals(n, target.Node) ? "" : $", which is below {name}")}; {name} cannot be {verb} until that instruction changes.");
+                throw new InvalidDataException($"{user.Script} line {user.Line} ({user.Command}) acts on {n.Name}{(ReferenceEquals(n, target.Node) ? "" : below.Contains(n) ? $", which is below {name}" : $", which {p.ModelFile} holds below {name} (in another copy of it, or where a script moved it)")}; {name} cannot be {verb} until that instruction changes.");
     }
     /// <summary>An argument as one script token, refused when the tokenizer would read it otherwise.</summary>
     private static string Token(string value) => GameGenScriptText.WriteLine(["X", value]) is not null && value.Length > 0 ? value : throw new InvalidDataException($"'{value}' cannot be written as one script token.");
+    /// <summary>
+    /// The nodes a change of a glTF node's subtree reaches: its built subtree, and every built node made from the node's
+    /// subtree in its file, wherever a script put it (gamegen's morfUtil.gw detaches morph LODs from their parents).
+    /// </summary>
+    private static IEnumerable<WorldNode> FileSubtree(SourceObjectTarget target, WorldNode node, WorldNodeProvenance origin, CancellationToken token)
+    {
+        var built = Subtree(node).ToList();
+        if (origin.ModelFile is not { } file || target.Workspace.Read(file, token) is not { } bytes) return built;
+        JsonObject? root;
+        try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject; }
+        catch (JsonException) { return built; }
+        if (root?["nodes"] is not JsonArray nodes || origin.ModelNode < 0 || origin.ModelNode >= nodes.Count) return built;
+        var indices = GltfNodeEdits.Descendants(root, origin.ModelNode);
+        return built.Concat(target.Provenance.Where(p => indices.Contains(p.Value.ModelNode) && string.Equals(p.Value.ModelFile, file, StringComparison.OrdinalIgnoreCase)).Select(p => p.Key))
+            .Distinct(ReferenceEqualityComparer.Instance).Cast<WorldNode>();
+    }
+    /// <summary>
+    /// The first script instruction that acts on other nodes in <paramref name="after"/> than in <paramref name="before"/>, or
+    /// null: a move or copy in a glTF file changes the order the build makes nodes in, and a script's lookups (FindNode takes
+    /// the newest node of a name, FindSubNode searches below the current node) can then find others. Nodes are identified by
+    /// the load and glTF node they come from, or the instruction that created them; both builds must number the files'
+    /// nodes alike (no node removed), as a move or a copy leaves them.
+    /// </summary>
+    public static string? TargetChange(SourceWorldBuild before, SourceWorldBuild after)
+    {
+        static Dictionary<(string Script, int Line), List<string>> Targets(SourceWorldBuild build)
+        {
+            Dictionary<(string, int), List<string>> targets = [];
+            foreach (var origin in build.Provenance.Values)
+            {
+                string identity = Identity(origin, 0);
+                foreach (var instruction in origin.Applied.Concat(origin.Named))
+                {
+                    if (!targets.TryGetValue((instruction.Script, instruction.Line), out var list)) targets[(instruction.Script, instruction.Line)] = list = [];
+                    list.Add(identity);
+                }
+            }
+            foreach (var list in targets.Values) list.Sort(StringComparer.Ordinal);
+            return targets;
+        }
+        // A glTF node and, for a file another node references, that node too: copies of one file are told apart by it.
+        static string Identity(WorldNodeProvenance origin, int depth) => origin.ModelFile != null
+            ? $"{origin.ModelNodeName} ({origin.ModelFile} node {origin.ModelNode}{(origin.Load is { } load ? $", loaded at {load.Script} line {load.Line}" : "")}{(origin.ReferencedBy is { } by && depth < 16 ? $", in {Identity(by, depth + 1)}" : "")})"
+            : origin.Created is { } created ? $"the node {created.Script} line {created.Line} made" : "a node";
+        var was = Targets(before); var now = Targets(after);
+        // Both ways: an instruction that found nothing before may find a node now (a copy named as a script looks up).
+        foreach (var (script, line) in was.Keys.Union(now.Keys).OrderBy(k => k.Script, StringComparer.Ordinal).ThenBy(k => k.Line))
+        {
+            var nodes = was.GetValueOrDefault((script, line)) ?? [];
+            var then = now.GetValueOrDefault((script, line)) ?? [];
+            if (!nodes.SequenceEqual(then, StringComparer.Ordinal))
+                return $"{script} line {line} would act on {(then.Count == 0 ? "no node" : string.Join(", ", then.Take(3)))} instead of {(nodes.Count == 0 ? "no node" : string.Join(", ", nodes.Take(3)))}: the build finds nodes by name, and this change alters which one it finds. Make the change in Blender or in the scripts.";
+        }
+        return null;
+    }
+    /// <summary>The provenance of every copy of <paramref name="origin"/>'s part node (with itself), from all of a world's.</summary>
+    public static IEnumerable<WorldNodeProvenance> CopiesOf(WorldNodeProvenance origin, IEnumerable<WorldNodeProvenance> all) =>
+        !origin.Part || origin.ModelFile == null ? [origin]
+            : all.Where(p => p.Part && p.ModelNode == origin.ModelNode && string.Equals(p.ModelFile, origin.ModelFile, StringComparison.OrdinalIgnoreCase));
+    /// <summary>
+    /// <paramref name="nodes"/> with every other copy of their part nodes: an edit of a part's file changes each copy the
+    /// mission database references, so what scripts do to any copy counts.
+    /// </summary>
+    private static IEnumerable<WorldNode> WithCopies(SourceObjectTarget target, IEnumerable<WorldNode> nodes)
+    {
+        var list = nodes.ToList();
+        HashSet<(string, int)> parts = [.. list.Select(n => target.Provenance.TryGetValue(n, out var p) && p.Part && p.ModelFile != null ? (p.ModelFile.ToLowerInvariant(), p.ModelNode) : default)
+            .Where(k => k.Item1 != null)];
+        if (parts.Count == 0) return list;
+        return list.Concat(target.Provenance.Where(kv => kv.Value.Part && kv.Value.ModelFile != null && parts.Contains((kv.Value.ModelFile.ToLowerInvariant(), kv.Value.ModelNode))).Select(kv => kv.Key))
+            .Distinct(ReferenceEqualityComparer.Instance).Cast<WorldNode>();
+    }
     private static IEnumerable<WorldNode> Ancestors(WorldNode node)
     {
         HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Stack<WorldNode> pending = new(node.Parents);
         while (pending.TryPop(out var parent)) if (seen.Add(parent)) { yield return parent; foreach (var up in parent.Parents) pending.Push(up); }
+    }
+    /// <summary>Whether two world placements are the same, allowing for the rounding of composed transforms.</summary>
+    private static bool SamePlace(Matrix4x4 a, Matrix4x4 b)
+    {
+        // Relative to the transform's own size: the basis (rotation and scale) and the translation apart.
+        float Largest(int from, int to) { float m = 1; for (int row = from; row < to; row++) for (int column = 0; column < 3; column++) m = MathF.Max(m, MathF.Max(MathF.Abs(a[row, column]), MathF.Abs(b[row, column]))); return m; }
+        float basis = 1e-4f * Largest(0, 3), move = 1e-5f * Largest(3, 4);
+        for (int row = 0; row < 4; row++)
+            for (int column = 0; column < 4; column++)
+                if (MathF.Abs(a[row, column] - b[row, column]) > (row == 3 && column < 3 ? move : basis)) return false;
+        return true;
     }
     /// <summary>A node's world transform: its local transform under its first parent's, up to the root.</summary>
     private static Matrix4x4 WorldMatrix(WorldNode node)
@@ -513,7 +672,8 @@ public static class SourceObjectEdits
     /// doubles), so only the neighbouring float counts as the same.
     /// </summary>
     private static bool Differs(Vector3 requested, Vector3 shown) => Enumerable.Range(0, 3).Any(i => Differs(requested[i], shown[i]));
-    private static bool Differs(float requested, float shown) => requested > MathF.BitIncrement(shown) || requested < MathF.BitDecrement(shown);
+    // NaN differs from everything, so it reaches the checks.
+    private static bool Differs(float requested, float shown) => !(requested <= MathF.BitIncrement(shown) && requested >= MathF.BitDecrement(shown));
     private static bool Near(Matrix4x4 a, Matrix4x4 b)
     {
         for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) if (MathF.Abs(a[i, j] - b[i, j]) > 1e-5f) return false;
@@ -544,6 +704,12 @@ public static class SourceObjectEdits
         // The file may have changed since the build (another program, Blender): the node must still be the one built.
         if (origin.ModelNodeName != null && (node["name"] is JsonValue n && n.TryGetValue(out string? name) ? name : "") != origin.ModelNodeName)
             throw new InvalidDataException($"Node {origin.ModelNode} of {file} is no longer {origin.ModelNodeName}; reload the world before editing it.");
+        // A node the file places under several parents (an instance: copies with one mark) is read from its first copy;
+        // changing that copy alone would let the others come back once it is removed or moves later in the file.
+        int depth = 0;
+        for (int? at = origin.ModelNode; at is int i && i >= 0 && i < nodes.Count && depth++ <= GltfDocument.MaximumDepth; at = GltfNodeEdits.Parent(document, i))
+            if (nodes[i] is JsonObject placed && (placed["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject engine && engine["instance"] != null)
+                throw new InvalidDataException($"{origin.ModelNodeName ?? $"Node {origin.ModelNode}"} is {(i == origin.ModelNode ? "" : "inside ")}a node {file} places under several parents (an instance); edit every copy alike in Blender instead.");
         change(document, node);
         // zStudio and Blender write glTF indented or minified; keep the file's style.
         bool indented = bytes.AsSpan(0, Math.Min(bytes.Length, 4096)).Contains((byte)'\n');
@@ -551,9 +717,29 @@ public static class SourceObjectEdits
         if (content.AsSpan().SequenceEqual(bytes)) return new(label, [], $"{file} node {origin.ModelNode}", notes);
         List<string> all = [.. notes];
         if (!origin.Database) all.Add($"{file} is a model file: the change applies wherever it is loaded.");
+        else if (origin.Part) all.Add($"{file} is a part of the mission database: the change applies to every copy of it the database references.");
         return new(label, [(file, content)], $"{file} node {origin.ModelNode}", all);
     }
     private static JsonArray Array(params float[] values) => new(values.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());
+    /// <summary>A scale of 0 flattens the object and leaves no rotation to read back, so it could not be turned or scaled again.</summary>
+    private static void CheckScale(Vector3 scale)
+    {
+        // Below 1e-5, an axis read back after the build could fall under the 1e-6 a flattened axis counts at (HasShear).
+        if (MathF.Abs(scale.X) < 1e-5f || MathF.Abs(scale.Y) < 1e-5f || MathF.Abs(scale.Z) < 1e-5f)
+            throw new InvalidDataException("A scale of 0 (or below 0.00001) flattens the object for good; use a larger scale.");
+    }
+    /// <summary>
+    /// Whether a transform's basis cannot be shown as rotation and scale: a shear (its axes, the rows, are not perpendicular;
+    /// translation, rotation and scale never make one, whatever the angles, while a parent whose scale is not uniform,
+    /// turned against its child, does), or a flattened axis, which leaves no rotation to read back.
+    /// </summary>
+    private static bool HasShear(Matrix4x4 m)
+    {
+        Vector3 x = new(m.M11, m.M12, m.M13), y = new(m.M21, m.M22, m.M23), z = new(m.M31, m.M32, m.M33);
+        if (x.Length() < 1e-6f || y.Length() < 1e-6f || z.Length() < 1e-6f) return true;
+        static bool Skewed(Vector3 a, Vector3 b) => MathF.Abs(Vector3.Dot(a, b)) > 1e-4f * a.Length() * b.Length();
+        return Skewed(x, y) || Skewed(y, z) || Skewed(x, z);
+    }
     private static void Check(Vector3 v)
     {
         if (!float.IsFinite(v.X) || !float.IsFinite(v.Y) || !float.IsFinite(v.Z) || Math.Abs(v.X) > SourceWorlds.MaximumCoordinate || Math.Abs(v.Y) > SourceWorlds.MaximumCoordinate || Math.Abs(v.Z) > SourceWorlds.MaximumCoordinate)
@@ -583,8 +769,8 @@ public static class SourceObjectEdits
         {
             if (mission == null || sharedChecked) return;
             sharedChecked = true;
-            var others = MissionsRunning(workspace, script, token).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase)).Take(4).ToArray();
-            if (others.Length > 0) throw new InvalidDataException($"{script} also runs in {string.Join(", ", others)}; editing it would change those missions too. Edit it in the script directly.");
+            var others = MissionsRunning(workspace, script, token).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (others.Length > 0) throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Length > 6 ? $" and {others.Length - 6} more" : "")}; editing it would change those missions too. Edit it in the script directly.");
         }
         public void Replace(SourceInstruction instruction, Dictionary<int, string> values)
         {

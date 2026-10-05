@@ -23,13 +23,24 @@ public partial class MainWindow
         return doc.SourceBuild!.Provenance.Values.FirstOrDefault(p => p.Load != null && origin.Created != null && p.Load.Script == origin.Created.Script && p.Load.Line == origin.Created.Line && p.ModelFile != null)?.ModelFile;
     }
 
-    private BlenderCheckout CheckoutForBlender(string model)
+    private async Task<BlenderCheckout> CheckoutForBlenderAsync(string model, CancellationToken token)
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         var workspace = SourceWorkspaceFor(root);
-        try { return SourceBlender.Checkout(workspace, model); }
+        if (sourceWorkspaceBusy) throw new StudioCommandException("busy", "A world of this source project is rebuilding after an edit; check the model out once it is shown.");
+        // Off the UI thread: a checkout copies the model's files and decodes its textures to show their transparency.
+        long revision = workspace.ContentRevision;
+        BlenderCheckout checkout;
+        try { checkout = await Task.Run(() => SourceBlender.Checkout(workspace, model, token), token); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        // The workspace changes on this thread: an edit, undo or reload made while the files were copied could mix two states.
+        if (workspace.ContentRevision != revision)
+        {
+            try { Directory.Delete(checkout.Folder, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            throw new StudioCommandException("context_changed", "The project changed while the model was checked out; check it out again.");
+        }
+        return checkout;
     }
 
     /// <summary>
@@ -76,16 +87,15 @@ public partial class MainWindow
     };
 
     /// <summary>GUI: Edit in Blender for the object selected in a source world (its model), then show the checkout folder.</summary>
-    private void EditInBlenderClick(object sender, RoutedEventArgs e) => _ = RunUi(() =>
+    private void EditInBlenderClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
     {
         if (ViewModel.SelectedDocument is not { SourceWorld: not null } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project and select an object first.");
         if (selectedNode is not int node || SourceObjectNode(node) is not int sourceNode) throw new StudioCommandException("not_ready", "Select an object of the world first.");
         string model = SourceObjectModel(doc, sourceNode) ?? throw new StudioCommandException("unsupported", "The selected object was not loaded from a model file.");
-        var checkout = CheckoutForBlender(model);
+        var checkout = await CheckoutForBlenderAsync(model, shutdownToken);
         string message = $"{model} is checked out for Blender.\n\n1. In Blender, import:\n{checkout.Input}\n2. Export it as glTF 2.0, format glTF Separate (.gltf + .bin + textures), with Custom Properties, into:\n{checkout.Outbox}\n3. Choose Tools → Update from Blender export.\n\nOpen the checkout folder now?";
         if (MessageBox.Show(this, message, "Edit in Blender", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
             Process.Start(new ProcessStartInfo { FileName = checkout.Folder, UseShellExecute = true });
-        return Task.CompletedTask;
     });
 
     /// <summary>GUI: Update from Blender export — the newest export of the newest checkout, after confirmation.</summary>
@@ -112,7 +122,7 @@ public partial class MainWindow
     private void RegisterSourceBlenderCommands(StudioCommands r)
     {
         Register(r, "source_blender_checkout", "Check a project model out for Blender: its glTF, buffers and textures are copied into the project's zstudio/export/<id>/input folder as a self-contained glTF to import in Blender. Export the edited model as glTF Separate (.gltf + .bin + textures, Custom Properties on) into the checkout's outbox, then call source_blender_update. Give the model path, or a source world document and scene node to check out the model that object comes from.", true,
-            [P("model", "string", "Project path of a .gltf model, for example data/m2/models/bft/ltank.gltf."), DocumentParameter with { Required = false }, new("node", "integer", "Scene node of the document whose model to check out.", Minimum: 0, Maximum: int.MaxValue)], a =>
+            [P("model", "string", "Project path of a .gltf model, for example data/m2/models/bft/ltank.gltf."), DocumentParameter with { Required = false }, new("node", "integer", "Scene node of the document whose model to check out.", Minimum: 0, Maximum: int.MaxValue)], async (a, token) =>
         {
             string model;
             if (a["model"] != null) { if (a["node"] != null) throw new StudioCommandException("invalid_argument", "Give a model or a node, not both."); model = Text(a, "model"); }
@@ -121,7 +131,7 @@ public partial class MainWindow
                 var d = TargetDocument(a); if (a["node"] == null) throw new StudioCommandException("invalid_argument", "Give a model path or a node.");
                 model = SourceObjectModel(d, Int(a, "node")) ?? throw new StudioCommandException("unsupported", "That object was not loaded from a model file.");
             }
-            return Result(CheckoutResult(CheckoutForBlender(model)));
+            return Result(CheckoutResult(await CheckoutForBlenderAsync(model, token)));
         });
         Register(r, "source_blender_checkouts", "List the open source project's Blender checkouts (newest first) with the exports found in each outbox (newest first).", false, [], _ =>
         {

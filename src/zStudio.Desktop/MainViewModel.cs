@@ -186,8 +186,25 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             {
                 List<FileEntry> entries = [];
                 var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
+                // A source project's mission world builds are zStudio's derived data, not files to open or edit, also when
+                // the folder opened holds the project.
+                string previews = Path.DirectorySeparatorChar + Recoil.Zbd.Core.Sources.SourceWorlds.PreviewFolder.Replace('/', Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                Dictionary<string, bool> projects = new(StringComparer.OrdinalIgnoreCase);
+                bool Preview(string file)
+                {
+                    // Only below the folder opened: a build folder opened itself lists its files.
+                    int at = file.IndexOf(previews, Math.Max(0, root.Length - 1), StringComparison.OrdinalIgnoreCase);
+                    if (at < 0) return false;
+                    string project = file[..at];
+                    if (!projects.TryGetValue(project, out bool isProject)) projects[project] = isProject = Recoil.Zbd.Core.Sources.SourceProject.IsProject(project);
+                    return isProject;
+                }
                 foreach (string file in Directory.EnumerateFiles(root, "*", options))
-                { token.ThrowIfCancellationRequested(); entries.Add(new(file, Path.GetRelativePath(root, file), FormatRegistry.Probe(file))); }
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (Preview(file)) continue;
+                    entries.Add(new(file, Path.GetRelativePath(root, file), FormatRegistry.Probe(file)));
+                }
                 return entries.OrderBy(f => f.RelativePath, DisplayPathComparer)
                     .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
             }, token).WaitAsync(token);

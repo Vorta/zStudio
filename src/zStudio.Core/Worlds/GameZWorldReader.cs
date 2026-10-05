@@ -7,17 +7,24 @@ namespace Recoil.Zbd.Core.Worlds;
 
 /// <summary>
 /// Builds a <see cref="GameZWorld"/> from a document the shared GameZ reader has opened: its decoded scene supplies
-/// structure and references, and the reader's recorded offsets locate each record's stored fields.
+/// structure and references, and the reader's recorded offsets locate each record's stored fields. Version 13 (the 1998
+/// demos) differs only in its node slots and Object3D records, which are read into the same version-15 model.
 /// </summary>
 public static class GameZWorldReader
 {
+    /// <summary>Version 13 node slots: the version-15 fields up to the sphere, the cached box as eight corners, then the rest.</summary>
+    private const int DemoSlotSize = 268, DemoCorners = 116, DemoModelBox = 212, DemoChildBox = 236, DemoActivation = 260;
+    /// <summary>A version-13 Object3D record: the version-15 fields with a translation (12 bytes) after the scale.</summary>
+    private const int DemoObject3DSize = 156, DemoTranslation = 48;
+
     public static GameZWorld FromDocument(ZbdDocument doc, CancellationToken token = default)
     {
-        if (doc.Probe is not { Family: FormatFamily.GameZ, Version: 15 } || doc.Scene is not { } scene || doc.GameZLayout is not { } layout)
-            throw new InvalidDataException("A RECOIL (version 15) GameZ world is required.");
+        if (doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 } || doc.Scene is not { } scene || doc.GameZLayout is not { } layout)
+            throw new InvalidDataException("A RECOIL (version 13 or 15) GameZ world is required.");
         if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
         var bytes = doc.Bytes.Span;
-        GameZWorld world = new() { MaterialCapacity = layout.MaterialCapacity, ModelCapacity = layout.ModelCapacity, NodeCapacity = layout.NodeCapacity };
+        bool demo = doc.Probe.Version == 13; int slotSize = demo ? DemoSlotSize : GameZWriter.NodeSlotSize;
+        GameZWorld world = new() { SourceVersion = doc.Probe.Version!.Value, MaterialCapacity = layout.MaterialCapacity, ModelCapacity = layout.ModelCapacity, NodeCapacity = layout.NodeCapacity };
         world.FreeHead = BinaryPrimitives.ReadInt32LittleEndian(bytes[28..]);
 
         for (int i = 0; i < scene.Textures.Count; i++)
@@ -84,8 +91,8 @@ public static class GameZWorldReader
         for (int i = 0; i < scene.Nodes.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            var source = scene.Nodes[i]; var slot = bytes.Slice((int)nodeAssets[i].Offset, 196);
-            if (source.Class == "none") { world.FreedSlots[i] = slot.ToArray(); continue; }
+            var source = scene.Nodes[i]; var slot = bytes.Slice((int)nodeAssets[i].Offset, slotSize);
+            if (source.Class == "none") { world.FreedSlots[i] = demo ? Version15Slot(slot) : slot.ToArray(); continue; }
             var kind = source.Class switch
             {
                 "camera" => WorldNodeClass.Camera, "world" => WorldNodeClass.World, "window" => WorldNodeClass.Window, "display" => WorldNodeClass.Display,
@@ -96,10 +103,20 @@ public static class GameZWorldReader
             {
                 NameField = slot[..36].ToArray(), Flags = U(slot[36..]), AuxFlags = U(slot[40..]), BoundsFlags = U(slot[44..]), Zone = U(slot[48..]),
                 Priority = U(slot[68..]), GridColumn = BinaryPrimitives.ReadInt32LittleEndian(slot[76..]), GridRow = BinaryPrimitives.ReadInt32LittleEndian(slot[80..]),
-                SphereCache = slot.Slice(100, 16).ToArray(), CachedBounds = Box(slot[116..]), PrimaryBounds = Box(slot[140..]), SecondaryBounds = Box(slot[164..]),
+                SphereCache = slot.Slice(100, 16).ToArray(),
+                CachedBounds = demo ? WorldBox.Empty : Box(slot[116..]), PrimaryBounds = Box(slot[(demo ? DemoModelBox : 140)..]), SecondaryBounds = Box(slot[(demo ? DemoChildBox : 164)..]),
                 Model = source.ModelIndex is int model && model >= 0 && model < world.Models.Count ? world.Models[model] : null,
             };
-            node.Payload = bytes.Slice((int)layout.NodeDataOffsets[i], node.Payload.Length).ToArray();
+            var data = bytes[(int)layout.NodeDataOffsets[i]..];
+            if (demo && kind == WorldNodeClass.Object3D)
+            {
+                // The matrix carries the translation, so the version-15 record is the version-13 one without it.
+                byte[] payload = new byte[node.Payload.Length];
+                data[..DemoTranslation].CopyTo(payload); data[(DemoTranslation + 12)..DemoObject3DSize].CopyTo(payload.AsSpan(DemoTranslation));
+                node.Payload = payload;
+            }
+            else node.Payload = data[..node.Payload.Length].ToArray();
+            if (demo) node.CachedBounds = DemoCachedBounds(node, slot.Slice(DemoCorners, 96));
             live[i] = node; world.Nodes.Add(node);
         }
         WorldNode Node(int index) => index >= 0 && index < live.Length && live[index] is { } n ? n : throw new InvalidDataException($"A reference names node slot {index}, which is not live.");
@@ -138,6 +155,44 @@ public static class GameZWorldReader
         // The file's links can form any graph; everything that walks a world follows them recursively.
         WorldUpdate.CheckHierarchy(world.Nodes);
         return world;
+    }
+
+    /// <summary>
+    /// A version-13 node's cached box, which the file stores as its eight corners in the parent's space (the box under the
+    /// node's own matrix): the model and child boxes its flags name where they give those corners, which every node of the
+    /// 1998 demos does, otherwise the corners mapped back through the matrix.
+    /// </summary>
+    private static WorldBox DemoCachedBounds(WorldNode node, ReadOnlySpan<byte> stored)
+    {
+        Vector3[] corners = new Vector3[8];
+        for (int k = 0; k < 8; k++) corners[k] = Vec(stored[(k * 12)..]);
+        if (corners.All(c => c == Vector3.Zero)) return WorldBox.Empty;
+        var matrix = node.Class == WorldNodeClass.Object3D ? WorldUpdate.LocalMatrix(node) : null;
+        WorldBox? box = null;
+        if ((node.Flags & WorldUpdate.ModelBoundsFlag) != 0) box = node.PrimaryBounds;
+        if ((node.Flags & WorldUpdate.ChildBoundsFlag) != 0) box = box is { } b ? b.Union(node.SecondaryBounds) : node.SecondaryBounds;
+        if (box is { } candidate)
+        {
+            // The same eight points both ways, so a smaller or flat box that touches one stored corner is not taken for it.
+            var placed = candidate.Corners().Select(c => matrix is { } m ? Vector3.Transform(c, m) : c).ToArray();
+            if (placed.All(c => corners.Any(s => Close(c, s))) && corners.All(s => placed.Any(c => Close(c, s)))) return candidate;
+        }
+        return matrix is { } local && Matrix4x4.Invert(local, out var inverse) ? WorldBox.Of(corners.Select(c => Vector3.Transform(c, inverse))) : WorldBox.Of(corners);
+        static bool Close(Vector3 a, Vector3 b) => Vector3.Distance(a, b) <= 1e-3f * (1 + Math.Max(a.Length(), b.Length()));
+    }
+    /// <summary>A freed version-13 slot as a version-15 one: its name and links, its corners' extent as the box.</summary>
+    private static byte[] Version15Slot(ReadOnlySpan<byte> slot)
+    {
+        byte[] result = new byte[GameZWriter.NodeSlotSize];
+        slot[..DemoCorners].CopyTo(result);
+        Vector3[] corners = new Vector3[8];
+        for (int k = 0; k < 8; k++) corners[k] = Vec(slot[(DemoCorners + k * 12)..]);
+        var box = WorldBox.Of(corners);
+        float[] extent = [box.Min.X, box.Min.Y, box.Min.Z, box.Max.X, box.Max.Y, box.Max.Z];
+        for (int k = 0; k < 6; k++) BinaryPrimitives.WriteSingleLittleEndian(result.AsSpan(116 + k * 4), extent[k]);
+        slot[DemoModelBox..(DemoActivation + 4)].CopyTo(result.AsSpan(140));
+        slot[(DemoActivation + 4)..DemoSlotSize].CopyTo(result.AsSpan(GameZWriter.NodeSlotSize - 4));
+        return result;
     }
 
     private static uint U(ReadOnlySpan<byte> b) => BinaryPrimitives.ReadUInt32LittleEndian(b);

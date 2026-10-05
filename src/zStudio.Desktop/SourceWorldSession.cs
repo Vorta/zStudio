@@ -1,19 +1,19 @@
 using System.Globalization;
 using System.IO;
+using Recoil.Zbd.Core.Worlds;
 using Recoil.Zbd.Core.Sources;
 
 namespace Recoil.Zbd.Desktop;
 
 /// <summary>
 /// A mission world edited from its source project. The world shown is a private build of the mission (see
-/// <see cref="SourceWorlds.BuildPreviewAsync"/>) in a temporary folder outside the project; each build has its own
-/// subfolder, removed with the document that shows it. Edits belong to the project's <see cref="Workspace"/>, which every
+/// <see cref="SourceWorlds.BuildPreviewAsync"/>) in the project's <c>zstudio/cache/worlds</c> folder, zStudio's derived
+/// data that builds never read; each build has its own subfolder, removed with the document that shows it. Edits belong to the project's <see cref="Workspace"/>, which every
 /// open world of the project shares, and reach the project only when saved. The session passes from document to document
 /// as edits rebuild the world.
 /// </summary>
 internal sealed class SourceWorldSession : IDisposable
 {
-    internal static string TemporaryRoot => Path.Combine(Path.GetTempPath(), "zStudio", "source-worlds");
     public SourceWorkspace Workspace { get; }
     public string Root => Workspace.Root;
     public string Mission { get; }
@@ -22,6 +22,16 @@ internal sealed class SourceWorldSession : IDisposable
     public string Label => $"{Mission} world (sources)";
     /// <summary>The document currently showing this world; disposing it ends the session.</summary>
     internal DocumentModel? Owner { get; set; }
+    /// <summary>
+    /// What the mission looked up by name when the world was opened or last saved: that build's world file and lookups. Each
+    /// rebuild after an edit is compared with it, so a change to the node a lookup finds is reported until it is saved or taken back.
+    /// </summary>
+    internal (byte[] World, IReadOnlyList<SourceLookup> Lookups)? LookupBaseline { get; private set; }
+    internal void SetLookupBaseline(SourceWorldBuild build)
+    {
+        try { LookupBaseline = (File.ReadAllBytes(build.WorldPath), build.Lookups); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { LookupBaseline = null; }
+    }
     /// <summary>Cancels the newest build request; a newer request or the session's end supersedes it.</summary>
     internal CancellationTokenSource? Building { get; set; }
     /// <summary>
@@ -38,8 +48,12 @@ internal sealed class SourceWorldSession : IDisposable
     {
         Workspace = workspace; Mission = mission.ToLowerInvariant();
         if (workspace.Read(ScriptPath) == null) throw new InvalidDataException($"The project has no world script {ScriptPath}.");
-        RemoveAbandoned();
-        folder = Path.Combine(TemporaryRoot, Guid.NewGuid().ToString("N"));
+        string previews = SourceWorlds.PreviewRoot(Root);
+        // Never delete or write through a link out of the project: checked before abandoned sessions are removed.
+        SourceProject.RejectLinks(previews);
+        RemoveAbandoned(previews);
+        folder = Path.Combine(previews, Guid.NewGuid().ToString("N"));
+        SourceProject.RejectLinks(folder);
         Directory.CreateDirectory(folder);
         // Held for the session's lifetime; the system deletes it when the process ends, so an unlocked folder is abandoned.
         lockFile = new FileStream(Path.Combine(folder, ".lock"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
@@ -59,14 +73,17 @@ internal sealed class SourceWorldSession : IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    /// <summary>Folders of sessions whose process ended without removing them (no lock file, older than a minute).</summary>
-    private static void RemoveAbandoned()
+    /// <summary>
+    /// Folders of sessions whose process ended without removing them (no lock file, older than a minute). A session of
+    /// another zStudio on the same project holds its lock file, so its folder stays.
+    /// </summary>
+    private static void RemoveAbandoned(string previews)
     {
         try
         {
-            if (!Directory.Exists(TemporaryRoot)) return;
-            foreach (var directory in new DirectoryInfo(TemporaryRoot).EnumerateDirectories())
-                if (!File.Exists(Path.Combine(directory.FullName, ".lock")) && directory.CreationTimeUtc < DateTime.UtcNow.AddMinutes(-1))
+            if (!Directory.Exists(previews)) return;
+            foreach (var directory in new DirectoryInfo(previews).EnumerateDirectories())
+                if (!directory.Attributes.HasFlag(FileAttributes.ReparsePoint) && !File.Exists(Path.Combine(directory.FullName, ".lock")) && directory.CreationTimeUtc < DateTime.UtcNow.AddMinutes(-1))
                     DeleteBuild(directory.FullName);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

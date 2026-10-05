@@ -20,7 +20,7 @@ public sealed class SourceObjectEditTests
 
     private static async Task<(SourceWorldBuild Build, GameZWorld World)> BuildAsync(SourceWorldFixture fixture, SourceWorkspace workspace, string mission = "m2")
     {
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, mission, Path.Combine(fixture.Root, "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
+        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, mission, Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         return (build, world);
     }

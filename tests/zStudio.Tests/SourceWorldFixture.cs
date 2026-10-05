@@ -114,10 +114,72 @@ internal sealed class SourceWorldFixture : IDisposable
         Write($"{folder}/{stem}.bin", bin); Write($"{folder}/{stem}.gltf", json);
     }
     /// <summary>
-    /// Replaces m1's database with: ground (named by an animation), two adjacent flat pieces in zone 3, a piece over
-    /// one of them with the same attributes, and a landmark sky.
+    /// Replaces m1's database with the ground and a crate that references a model file, <c>lidm.gltf</c>, holding a lid;
+    /// <paramref name="twice"/> adds a second crate, crate_b, referencing the same file.
     /// </summary>
-    public void WriteTerrainDatabase()
+    public void WriteReferencingDatabase(bool twice = false)
+    {
+        WorldMaterial rock = new() { Texture = new("rock"), Flags = 0x1FF };
+        var (lidJson, lidBin) = WorldGltf.Export([Node("lid", Quad(rock, 4, 2))], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("lidm.bin");
+        Write("data/m1/models/lidm.bin", lidBin); Write("data/m1/models/lidm.gltf", lidJson);
+        var crate = Node("crate"); crate.Children.Add(Node("placeholder"));
+        var crateB = Node("crate_b"); crateB.Children.Add(Node("placeholder"));
+        HashSet<WorldNode> references = new(ReferenceEqualityComparer.Instance) { crate, crateB };
+        var (json, bin) = WorldGltf.Export([Node("ground", Quad(rock, 64, 0)), crate, .. twice ? [crateB] : Array.Empty<WorldNode>()], 0xFF, new()
+        {
+            Texture = t => ($"../textures/{t.Name}.png", 0),
+            Reference = n => references.Contains(n) ? "lidm.gltf" : null, Content = n => references.Contains(n) ? [.. n.Children] : null,
+        }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+    /// <summary>Replaces m1's database with the ground and a crate holding a lid.</summary>
+    public void WriteNestedDatabase()
+    {
+        WorldMaterial rock = new() { Texture = new("rock"), Flags = 0x1FF };
+        var crate = Node("crate", Quad(rock, 4, 1)); crate.Children.Add(Node("lid", Quad(rock, 4, 2)));
+        var (json, bin) = WorldGltf.Export([Node("ground", Quad(rock, 64, 0)), crate], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+    /// <summary>
+    /// Replaces m1's database with ground and two gates sharing one node (an instance, as 1999 m9's sgate1–sgate8 share
+    /// the node holding gate): the file places the shared node, and its gate, under each gate.
+    /// </summary>
+    public void WriteSharedDatabase()
+    {
+        WorldMaterial rock = new() { Texture = new("rock"), Flags = 0x1FF };
+        var shared = Node(""); shared.Children.Add(Node("gate", Quad(rock, 2, 1)));
+        var gates = new[] { Node("sgate1"), Node("sgate2") };
+        foreach (var g in gates) { g.Children.Add(shared); shared.Parents.Add(g); }
+        var (json, bin) = WorldGltf.Export([Node("ground", Quad(rock, 64, 0)), .. gates], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+    /// <summary>
+    /// Replaces m1's database with the ground and two references to one part, <c>m1_01.gltf</c>, which holds a crate with
+    /// a lid and a post; the build copies the part twice.
+    /// </summary>
+    /// <param name="secondGround">Adds a second, smaller ground as the database's last record, so it is made after the first.</param>
+    public void WritePartDatabase(bool secondGround = false)
+    {
+        WorldMaterial rock = new() { Texture = new("rock"), Flags = 0x1FF };
+        var crate = Node("crate", Quad(rock, 4, 1)); crate.Children.Add(Node("lid", Quad(rock, 4, 2)));
+        var (partJson, partBin) = WorldGltf.Export([crate, Node("post", Quad(rock, 1, 0))], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1_01.bin");
+        Write("data/m1/models/m1_01.bin", partBin); Write("data/m1/models/m1_01.gltf", partJson);
+        HashSet<WorldNode> references = new(ReferenceEqualityComparer.Instance);
+        WorldNode Reference() { var r = Node("m1_01.flt"); r.Children.Add(Node("placeholder")); references.Add(r); return r; }
+        WorldNode[] records = [Node("ground", Quad(rock, 64, 0)), Reference(), Reference(), .. secondGround ? [Node("ground", Quad(rock, 8, 1))] : Array.Empty<WorldNode>()];
+        var (json, bin) = WorldGltf.Export(records, 0xFF, new()
+        {
+            Texture = t => ($"../textures/{t.Name}.png", 0),
+            Reference = n => references.Contains(n) ? "m1_01.gltf" : null, Group = references.Contains, Content = n => references.Contains(n) ? [.. n.Children] : null,
+        }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+    /// <summary>
+    /// Replaces m1's database with: ground (named by an animation), two adjacent flat pieces in zone 3, a piece over
+    /// one of them with the same attributes, and a landmark sky. <paramref name="grouped"/> puts the three pieces in a
+    /// group and adds, before the sky, a reference to a part (<c>m1_01.gltf</c>) holding another piece.
+    /// </summary>
+    public void WriteTerrainDatabase(bool grouped = false)
     {
         WorldTexture rock = new("rock");
         WorldNode Piece(string name, float x0, float z0, float size, float y, uint flags = WorldGltf.DefaultCarried, uint zone = 3)
@@ -129,13 +191,24 @@ internal sealed class SourceWorldFixture : IDisposable
             node.SetPayloadInt(0, 0x28);
             return node;
         }
-        List<WorldNode> roots =
-        [
-            Piece("ground", 0, 0, 64, 0),
-            Piece("flat_a", 200, 300, 50, 0), Piece("flat_b", 250, 300, 50, 0), Piece("flat_over", 210, 310, 20, 10),
-            Piece("sky", 0, 0, 512, 400, WorldGltf.DefaultCarried | 0x80, 0xFF),
-        ];
-        var (json, bin) = WorldGltf.Export(roots, 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1.bin");
+        List<WorldNode> pieces = [Piece("flat_a", 200, 300, 50, 0), Piece("flat_b", 250, 300, 50, 0), Piece("flat_over", 210, 310, 20, 10)];
+        List<WorldNode> roots = [Piece("ground", 0, 0, 64, 0), .. pieces, Piece("sky", 0, 0, 512, 400, WorldGltf.DefaultCarried | 0x80, 0xFF)];
+        HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
+        WorldNode? part = null;
+        if (grouped)
+        {
+            var (partJson, partBin) = WorldGltf.Export([Piece("far", 400, 100, 20, 0)], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1_01.bin");
+            Write("data/m1/models/m1_01.bin", partBin); Write("data/m1/models/m1_01.gltf", partJson);
+            var group = Node("g1"); foreach (var piece in pieces) group.Children.Add(piece);
+            part = Node("m1_01.flt"); part.Children.Add(Node("placeholder"));
+            groups.Add(group); groups.Add(part);
+            roots = [roots[0], group, part, roots[^1]];
+        }
+        var (json, bin) = WorldGltf.Export(roots, 0xFF, new()
+        {
+            Texture = t => ($"../textures/{t.Name}.png", 0),
+            Group = groups.Contains, Reference = n => ReferenceEquals(n, part) ? "m1_01.gltf" : null, Content = n => ReferenceEquals(n, part) ? [.. n.Children] : null,
+        }).Write("m1.bin");
         Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
     }
 

@@ -118,6 +118,8 @@ public sealed class AnimationCompilerTests
         Assert.Equal("gate", gate.RootName); Assert.Equal("gate", gate.AttachName);
         Assert.Equal(0x20u | 0x02 | 0x1000 | 0x10, gate.U32(148)); // single reset time, range, no save log, callback
         Assert.Equal(3, gate.Bytes[153]); Assert.Equal(81f, gate.F32(160)); Assert.Equal(-1f, gate.F32(164)); Assert.Equal(6f, gate.F32(172));
+        // The countdown the game starts from is the health as well; at 0 a hit-activated entry would trigger on its first hit.
+        Assert.Equal(6f, gate.F32(176));
         Assert.Equal("RESET_SEQUENCE", gate.Primary.Name);
         Assert.Equal(["swing", "fly"], gate.Sequences.Select(s => s.Name));
         Assert.Equal(3, gate.Sequences[1].Bytes[32]);

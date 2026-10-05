@@ -27,6 +27,7 @@ public sealed class AnimationWorldDiscoveryTests
 
     [Theory]
     [InlineData(28, 15, 27)]
+    [InlineData(28, 13, 27)] // The August 1998 demo: version-28 animations with version-13 worlds.
     [InlineData(39, 27, 15)]
     public async Task AutoDiscoverySkipsTheOtherGamesWorld(int animationVersion, int worldVersion, int otherVersion)
     {
@@ -38,6 +39,7 @@ public sealed class AnimationWorldDiscoveryTests
 
     [Theory]
     [InlineData(28, 15, 27)]
+    [InlineData(28, 13, 27)] // The August 1998 demo: version-28 animations with version-13 worlds.
     [InlineData(39, 27, 15)]
     public async Task ExplicitSelectionAndMissingCompatibleWorldRetainTheirDiagnostics(int animationVersion, int worldVersion, int otherVersion)
     {

@@ -44,7 +44,7 @@ public sealed class SourceTerrainTests
     {
         using var fixture = Fixture();
         SourceWorkspace workspace = new(fixture.Project);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token);
+        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
         Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         var worldNode = world.Nodes.Single(n => n.Class == WorldNodeClass.World);
@@ -80,7 +80,7 @@ public sealed class SourceTerrainTests
         SourceWorkspace workspace = new(fixture.Project);
         // Widening the road in the workspace: the next build uses the pending recipe.
         workspace.Apply("Widen road", [("data/m1/models/coast.terrain.json", System.Text.Encoding.UTF8.GetBytes(Recipe.Replace("[260, 240], [260, 260]", "[280, 240], [280, 260]")))], Token);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token);
+        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         var road = world.Nodes.Where(n => n.Name.StartsWith("coast_land_", StringComparison.Ordinal) && (n.Flags & 0x20000) != 0).ToArray();
         float area = 0;
@@ -119,7 +119,7 @@ public sealed class SourceTerrainTests
         SourceWorkspace workspace = new(fixture.Project);
         var candidates = SourceTerrain.MeshNodes(workspace, "data/m1/models/coast.gltf", Token);
         Assert.Contains("land", candidates); Assert.Contains("odd", candidates); Assert.DoesNotContain("rock", candidates);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token);
+        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
         Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         var pieces = world.Nodes.Where(n => n.Name.StartsWith("coast_land_", StringComparison.Ordinal)).ToArray();
@@ -139,7 +139,7 @@ public sealed class SourceTerrainTests
         recoil["mode"] = 1;
         fixture.Write("data/m1/models/coast.gltf", coast.ToJsonString());
         SourceWorkspace workspace = new(fixture.Project);
-        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token));
+        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token));
         Assert.Contains("facade or point model", refused.Message);
     }
 
@@ -149,7 +149,7 @@ public sealed class SourceTerrainTests
         using var fixture = Fixture();
         SourceWorkspace workspace = new(fixture.Project);
         SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_at", new(100, 0, -50)), []), Token);
-        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(fixture.Root, "preview"), workspace.Overlay(), token: Token);
+        var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
         foreach (var (node, slot) in GameZWriter.NodeSlots(world)) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
@@ -169,7 +169,7 @@ public sealed class SourceTerrainTests
         tank["nodes"]!.AsArray().Add(new JsonObject { ["name"] = "terrain", ["extras"] = new JsonObject { ["recoil"] = new JsonObject { ["terrain"] = "../coast.terrain.json" } } });
         tank["scenes"]![0]!["nodes"]!.AsArray().Add(tank["nodes"]!.AsArray().Count - 1);
         fixture.Write(fixture.Tank, tank.ToJsonString());
-        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m2", Path.Combine(fixture.Root, "preview"), null, token: Token));
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m2", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), null, token: Token));
         Assert.Contains("mission database", failure.Message);
     }
 }

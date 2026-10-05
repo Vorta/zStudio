@@ -25,6 +25,8 @@ public sealed record SourceWorldBuild(string Mission, string Folder, string Worl
 {
     /// <summary>Every project file the build read or looked for, from the pending content or the disk.</summary>
     public IReadOnlyCollection<string> Dependencies { get; init; } = [];
+    /// <summary>Every lookup by name the mission makes as the game loads it, with the node it finds in this build.</summary>
+    public IReadOnlyList<SourceLookup> Lookups { get; init; } = [];
     /// <summary>Where each node of the built world came from, by its slot in the world file (the scene's node index).</summary>
     public IReadOnlyDictionary<int, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<int, WorldNodeProvenance>();
     /// <summary>How many times each script instruction (script, line) ran while the world was built.</summary>
@@ -89,7 +91,7 @@ public static partial class SourceWorlds
     {
         string model = addition.Model.Replace('\\', '/');
         string folder = "..\\" + Path.GetDirectoryName(model)!.Replace('/', '\\');
-        List<string> lines = [$"SetModelDirectory {folder}", $"LoadGameGen {Path.GetFileNameWithoutExtension(model)}.flt {addition.Name}"];
+        List<string> lines = [$"SetModelDirectory {folder}", $"LoadGameGen {Path.GetFileName(model)} {addition.Name}"];
         if (addition.Position is { } p)
         {
             lines.Add($"Object3DTranslate {Number(p.X)} {Number(p.Y)} {Number(p.Z)}");
@@ -261,9 +263,14 @@ public static partial class SourceWorlds
         }
     }
 
+    /// <summary>Where mission worlds are built to be shown: derived data in zStudio's working folder of the project, which builds never read.</summary>
+    public const string PreviewFolder = SourcePublisher.WorkingFolder + "/cache/worlds";
+    /// <summary>The project's <see cref="PreviewFolder"/>.</summary>
+    public static string PreviewRoot(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), PreviewFolder.Replace('/', Path.DirectorySeparatorChar));
+
     /// <summary>
-    /// Builds <paramref name="mission"/> into <paramref name="destination"/> (a new private folder outside the project) as
-    /// the export would, with <paramref name="overlay"/> replacing project files: the world, its animations and resources,
+    /// Builds <paramref name="mission"/> into <paramref name="destination"/> (a new folder inside the project's
+    /// <see cref="PreviewFolder"/>) as the export would, with <paramref name="overlay"/> replacing project files: the world, its animations and resources,
     /// the common resources, scripts and images the Whole world view reads beside it, and one full-quality texture pack.
     /// Only the world must build; other failures are reported in the outputs. <paramref name="additions"/> are models
     /// the overlay's script has just added (see <see cref="AddModel"/>): the world must load each of them where it is written,
@@ -275,7 +282,11 @@ public static partial class SourceWorlds
         destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
         if (!MissionName().IsMatch(mission)) throw new InvalidDataException($"'{mission}' is not a mission folder name.");
         mission = mission.ToLowerInvariant();
-        SourceProject.ValidateSeparate(destination, root, "preview folder"); SourceProject.RejectLinks(destination);
+        // Only inside the project's preview folder, never through a link: nothing else of the project (or elsewhere) is written.
+        string previews = PreviewRoot(root);
+        if (!destination.StartsWith(previews + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || PickupPlacementEditSession.IsProtectedPath(destination))
+            throw new InvalidDataException($"A mission world is built in the project's {PreviewFolder} folder, not in {destination}.");
+        SourceProject.RejectLinks(destination);
         if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any()) throw new IOException($"The preview folder {destination} is not empty.");
         IReadOnlyCollection<string> added = overlay?.Keys.Where(k => !File.Exists(SourceProject.Resolve(root, k))).ToArray() ?? [];
         var plan = await Task.Run(() => SourceBuilder.Plan(root, added), token).ConfigureAwait(false);
@@ -283,7 +294,7 @@ public static partial class SourceWorlds
             .Select(o => plan.FirstOrDefault(p => p.Path.Equals(o, StringComparison.OrdinalIgnoreCase))).OfType<SourceOutputPlan>().ToArray();
         if (!selected.Any(p => p.Family == "world")) throw new InvalidDataException($"The project has no world script for {mission} ({SourceBuilder.WorldScript(mission)}) or no glTF models.");
         SourceBuilder.Snapshot snapshot = new(root, overlay);
-        DateTime now = DateTime.UtcNow; List<SourceExportResult> results = [];
+        DateTime now = DateTime.UtcNow; List<SourceExportResult> results = []; Animation.AnimationPackage? animations = null;
         Directory.CreateDirectory(destination);
         for (int i = 0; i < selected.Length; i++)
         {
@@ -291,6 +302,7 @@ public static partial class SourceWorlds
             try
             {
                 var built = await Task.Run(() => SourceBuilder.Build(root, output, snapshot, now, token), token).ConfigureAwait(false);
+                if (output.Family == "animations") animations = built.Package;
                 if (output.Family == "world" && additions != null) CheckAdditions(snapshot.World(mission, token).LoadedRoots, additions);
                 var check = FormatRegistry.Default.OpenBytes(output.Path, built.Bytes, token: token);
                 if (check.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built file does not reopen: " + error.Message);
@@ -310,7 +322,12 @@ public static partial class SourceWorlds
         var slots = GameZWriter.SlotIndices(assembled.World);
         Dictionary<int, WorldNodeProvenance> provenance = [];
         foreach (var (node, origin) in assembled.Provenance) if (slots.TryGetValue(node, out int slot)) provenance[slot] = origin;
-        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), Provenance = provenance, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
+        // What the mission looks up by name when the game loads it, so an edit that changes what a lookup finds can say so.
+        // Only the world must build: lookups the project's scripts or animations keep from being resolved are not reported.
+        IReadOnlyList<SourceLookup> lookups;
+        try { lookups = await Task.Run(() => SourceBuilder.MissionLookups(mission, snapshot, animations, token), token).ConfigureAwait(false); }
+        catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex)) { lookups = []; }
+        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), Lookups = lookups, Provenance = provenance, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
     }
 
     /// <summary>

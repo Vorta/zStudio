@@ -35,7 +35,7 @@ Every capability is also available through MCP, on the same commands, undo and s
        export\               Blender exchange, one folder per checkout
        recovery\             save journal with the previous file contents
        staging\              files being prepared for a save
-       cache\                derived data, safe to delete
+       cache\                derived data, safe to delete (worlds\: the mission worlds being shown)
        diagnostics\          measurements and reports
    ```
 
@@ -255,7 +255,7 @@ Measured on the reconstructed 1999 data and read from the retail executable:
   - CanModify and ClipTo.
 - **Craters and quicksand.**
   - At run time, the engine cuts a patch outline into the CanModify surfaces around the impact.
-  - Before cutting, it cancels the whole patch if any polygon of a visible ClipTo node overlaps the outline in plan view (retail 0x46B1F0, 0x46B550, 0x46BB90).
+  - Before cutting, it cancels the whole patch if any polygon of an active top-level ClipTo node with its own model, in the impact cell or the overflow list, overlaps the outline in plan view, tested in model space (retail 0x46B1F0, 0x46B550, 0x46BB90; details in [Engine evidence](engine-evidence.md#craters-and-quicksand)).
   - So **CanModify means "craters can form here" and ClipTo, which the original developers called "no clip", means "no crater may overlap this"**. Neither one affects collision.
   - Because the test is in plan view, a ClipTo surface above can cancel a crater on a floor below it. zStudio reports this; painting cannot change it.
 - **Soil** is set per material: water, seafloor, quicksand, lava, fire, or custom.
@@ -266,12 +266,26 @@ Measured on the reconstructed 1999 data and read from the retail executable:
   - The gate is node flag 0x01000000 and only affects the altitude probes (0x443d20, 0x443f80, 0x4444b0, 0x444890). Rendering (0x44c0e0), segment queries for collision, line of sight and camera obstruction (0x4455f0 and others), proximity queries and turrets check the zone whatever the gate says.
   - Every visited node is tested on its own zone and flags at every level; a rejected parent prunes its subtree. Actors take their zones from the top-level node they stand on, so a top-level piece with zone 0xFF passes every zone test.
   - No script command sets the gate; in files it is a serialized flag.
-- **Camera zone probe** (`UpdateCameraVariantFromCameraPos`, 0x406470):
-  - A vertical line at the camera's x, z, searching only the query cell and the overflow list, in nodes with flags 0x04 and 0x08 whose gate admits the previous zones (it is hysteretic).
-  - Per node, the first polygon in entry order whose plan view contains the point is taken (0x484960); downward-facing polygons are not hit. **Stacked surfaces must therefore be separate nodes.** At most 32 candidates.
-  - The highest candidate at or below the camera wins (0x4290f0); with none below, the first in traversal order.
-  - A polygon with zone count 0 or an id 0xFF keeps the last valid set; no hit changes nothing. Count 0 means "no information", not "none".
-- **Per-player zones:** each tick, probe point 0's ground polygon gives the player's zones and the top-level node's zone; collision, AI line of sight and pickups use them, and AI vehicles only tick while their zones overlap the camera's (0x476370).
+- **Zone probes** (resolved 2026-10-03 from the reconstruction and the retail executable; `ZoneProbe` in Core models them, and its tests check each rule):
+  - **The line.** Every gameplay probe is a vertical line at a point's x, z, from y = 500 down without limit (0x443d20, 0x4444b0). A surface higher than 500 at that point is never found. It searches the point's cell, then the overflow list.
+  - **Outside the grid.** A world flag (+0x50) clamps queries to the edge cell, moving the point into it. It is 0 in every shipped world, so outside the grid the point probe searches only the overflow list and a vehicle's probe nothing.
+  - **Nodes.** A node takes part when it is active (0x04) and an altitude surface (0x08) and, with its gate (0x01000000), when the current zones allow its zone. A LOD group takes part only when its band starts at the viewer (near range² ≤ 5). A node with siblings takes part only when its cached box (flag 0x100) holds the point in plan; one without a cached box is skipped. The player's own vehicle is excluded.
+  - **Polygons.** A polygon holds the point when every edge keeps it on the inner side of an upward winding, within 0.0001 (0x4856d0); the height comes from the first three corners' plane. Morphing models are probed at their current morph factor, which range fading changes at run time.
+  - **Two kinds.** The point probe (camera, spawning, renderer) takes per node only the first polygon in stored order that holds the point at or below the top (0x484960). A vehicle's probe (0x4444b0) takes every polygon of the node that holds it and faces up (normal y > 0). Each keeps at most 32 hits per point; the point probe then reports "Database intersections array is full".
+  - **Choosing a hit** (0x4290f0): the highest hit no more than a window above the reference height, skipping water (soil 1) where asked; with none, hit 0, the first found, and the nearest height. Hits at or below y = −250 are never chosen. Windows: camera 0.001, a moving vehicle min(1 − vertical speed × tick, 4), spawning 4.
+  - **Camera** (0x406470 at the end of the tick, or 0x406110 in the third-person views, which skips water in the submarine; then 0x406510): a point probe at the eye whose gate tests the previous camera zones. The chosen hit's zones, with the player's own added while there is room for three, become current. A hit without zones (count 0), a result that names 0xFF, or no hit keeps the previous zones. Count 0 means "no information", not "none".
+  - **Vehicles**, AI vehicles included (0x428d60, 0x42cf90): every tick a probe at the mode's sample points whose gate tests the vehicle's own previous zones. Sample 0's chosen hit sets the zones even when it has none (count 0 then passes every test). The root node takes the zone of the top-level node it stands on. Without a hit the zones stay and the root zone becomes 0xFF. Collision, AI line of sight and pickups use these zones. AI vehicles are simulated only while their zones overlap the camera's (0x476370) and they are near or were just hit.
+  - **Start and teleport.** Spawning (0x421830) clears the zones, then probes the spawn point with a window of 4, skipping water until the amphibious mode is unlocked. Without ground the zones stay cleared and the root zone is 0xFF. Mission start gives the camera the local player's zones. A teleport (0x42be00) gives the player the camera's.
+  - **Other cameras.** A camera without the game's override, which only the main camera receives, probes from its eye in the renderer (0x44d600 via 0x443c70) with no gate: the highest hit, at equal height one with zones. A hit without zones keeps the previous ones; no hit clears them, so every zone is drawn.
+  - **Shipped data** (1998 and 1999, every world, samples every 8 units):
+    - No altitude surface lies above 500, and no probe fills its 32 hits (at most 10).
+    - Surfaces stacked in one node occur (up to 738 samples in M6). The camera and a vehicle standing there disagree on zones at only two points, and not in effect: M2 `facrds` gives the same set in another order, and M7 `o973` gives the camera a superset.
+    - Up to 226 samples per mission are ground whose zones include 0xFF. Standing there keeps the camera's previous zones.
+  - **For new maps:**
+    - Keep walkable surfaces at or below 500.
+    - Give stacked floors separate nodes, or store the polygon the camera should use first.
+    - Keep each point under 32 surfaces.
+    - Give ground polygons zones: count 0 leaves the camera's zones as they were and gives a vehicle every zone.
 - **Cells:** queries search only the cell(s) they touch plus the overflow list (0x443d20), so geometry overhanging into a neighbouring cell is invisible to probes there: terrain must be cut exactly at cell lines. A cell holds at most 32,767 nodes.
 
 ### Maps
@@ -428,7 +442,7 @@ For shipped maps:
 - Under the modern profile, tiled, uniquely baked and mixed texturing all work within the pack budget.
 - A large painted Blender texture is cut into texture pages that fit the profile's limits. It may also be downsampled, or converted to tiles plus patches, at the artist's choice.
 - **Budget view:** source pixels, encoded bytes, estimated runtime memory and, once measured, the real peak.
-- **UV precision.** GameZ stores UVs as floats. The 1/256 rounding of the shipped models is what the original build tool did, and reconstructed content keeps it. Whether the modern profile can keep full precision, which large textures need, must be confirmed in the game.
+- **UV precision.** GameZ stores UVs as floats, and the hardware path draws shipped models with them unchanged (0x477b30, 0x4abb20). The 1/256 rounding of the shipped models is what the original build tool did, and reconstructed content keeps it. Geometry the engine builds during play (craters, quicksand and the clipped CanModify pieces) is rounded to 1/256 by `AddPolygonEx` (0x483650), up to 2 texels on a 1024 texture. How full precision looks next to a crater must be checked in the game ([T6](engine-evidence.md#in-game-tests)).
 
 ### Target profiles
 
@@ -472,7 +486,7 @@ The upgrade starts from the `ltank` structure:
 healthy
   turret                    game-driven yaw
     gun                     game-driven pitch
-      firepoint
+      fpnt_c, fpnt_l, fpnt_r   fire points (offsets in the aim basis)
   l4   LOD band 0–256       chassis, tracks (ltracks, rtracks), shadow
   l5   LOD band 256–1024    chassis_1
   target
@@ -485,7 +499,7 @@ healthy
   - texture-cycle bindings and behaviour dependencies;
   - every mission load of the vehicle, including aliases such as `ltank_2`.
 - **Kept as they are:** role names and helper numbering.
-- **Gameplay may change with the new model.** Collision and support points, the firepoint, the aim target and the track UV scale can be fitted to the new mesh: suggested from it, then reviewed. The upgrade lists every change that affects gameplay so that each one gets tested.
+- **Gameplay may change with the new model.** Collision and support points, the fire points, the aim target and the track UV scale can be fitted to the new mesh: suggested from it, then reviewed. The upgrade lists every change that affects gameplay so that each one gets tested.
 - **Splitting by role:**
 
   | Part | Treatment |
@@ -494,7 +508,7 @@ healthy
   | A role whose model the game reads directly | Keeps one compliant model on the role node |
   | `ltracks`, `rtracks` | One model each, within the limits, because the game scrolls them |
   | Morph-bearing part | Keeps both shapes in correspondence |
-  | Helpers (`collide`, `support`, `firepoint`, `target`) | Never split |
+  | Helpers (`collide`, `support`, `fpnt_*`, `target`) | Never split |
 
 - **LODs.** One functional skeleton with visual bands. The original model becomes the far band and the original-profile asset, without duplicating role names.
 - **Textures.** Full-quality PNG sources are packed per profile, keeping cycle frames, skins and damage masks. Shared materials are flagged.
@@ -586,7 +600,7 @@ Phase 1 is complete when all three hold:
 | G | Evidence names the operation it establishes: runtime routines do not define the missing build tool's behaviour; animation-binding reports keep logical targets and resolution order, not names or slots, as identity. | See [Verified corrections](#verified-corrections). | Adopted |
 | H | Terrain is authored as unsplit Blender surfaces; splitting and zoning happen in zStudio. The gameplay paint is kept in a terrain recipe (`*.terrain.json`) beside the surfaces: a versioned build input with no editor state. Reconstruction from game files yields pieces, not recipes. | Painted regions must survive re-exports from Blender. | Approved |
 | I | The target is modern hardware (RTX 3080 class) running the unmodified `Recoil.exe`, expressed as measured build profiles; an original-hardware profile remains. | Texture sizes, pack budgets and geometry budgets depend on it. | Approved |
-| J | "New tank" means a higher-fidelity upgrade of an existing vehicle: new model and textures, some texture animations as 3D parts, same key and movement type. Gameplay may change with the new model (collision, firepoint, size). | New movement modes would be engine work. | Approved |
+| J | "New tank" means a higher-fidelity upgrade of an existing vehicle: new model and textures, some texture animations as 3D parts, same key and movement type. Gameplay may change with the new model (collision, fire points, size). | New movement modes would be engine work. | Approved |
 | K | New maps are supported only once every terrain capability works: caves, stacked floors, underwater areas, zone transitions, craters. | A reduced first release would ship maps the later format must replace. | Approved |
 | L | "No clip" means no craters: the ClipTo flag, as the original developers used the term. | Collision and standing are separate flags. | Resolved |
 
@@ -594,31 +608,24 @@ Phase 1 is complete when all three hold:
 
 The review found conflicts between earlier research notes and the source-project rules, and the shipped data and retail code settle them.
 
-- **ClipTo blocks craters.** The reconstruction calls its test "fully inside", but the retail code (0x46B1F0 and 0x46B550, with the byte-matched 0x46BB90) cancels a crater or quicksand patch when any polygon of a visible ClipTo node overlaps it in plan view. Because any one overlapping polygon cancels the patch, splitting a ClipTo node into several does not change the result, as long as the pieces stay visible in the same crater cell. Splitting CanModify surfaces does change how many crater models a crater creates.
-- **UV rounding belongs to the build tool.** GameZ stores UVs as floats. The 1/256 rounding seen in the shipped models is what the original build did, so reconstructed content keeps it; it is not a stated engine limit.
+- **Zone probes** ([details](#how-the-engine-sees-a-map)). Earlier notes described only the camera. They missed four things:
+  - The probe starts at y = 500, so a surface above that is never found.
+  - The camera adds the player's own zones to the hit's.
+  - A vehicle's probe takes every upward polygon of a node and accepts a polygon without zones. So stacked surfaces in one node mislead only the camera, and a zoneless ground polygon gives a vehicle every zone.
+  - Outside the grid, a vehicle's probe finds nothing, not even the overflow list.
+
+- **ClipTo blocks craters.** The reconstruction calls its test "fully inside", but the retail code (0x46B1F0 and 0x46B550, with the byte-matched 0x46BB90) cancels a crater or quicksand patch when any polygon of an active top-level ClipTo node with its own model overlaps it in plan view. Because any one overlapping polygon cancels the patch, splitting a ClipTo node into several does not change the result, as long as the pieces stay visible in the same crater cell. Splitting CanModify surfaces does change how many crater models a crater creates.
+- **UV rounding belongs to the build tool.** GameZ stores UVs as floats. The 1/256 rounding seen in the shipped models is what the original build did, so reconstructed content keeps it; it is not a stated engine limit. The engine itself rounds only the geometry it builds during play (craters, quicksand, clipped CanModify pieces; 0x483650).
 - **Colinear corners.** The runtime's `zDi::AddPolygonEx` (retail 0x483650) removes colinear corners, fans non-planar polygons and extrapolates UVs. The shipped models repeat corners, keep non-planar polygons and keep non-affine UVs, so the original build tool did none of that, and the source importer follows the shipped data.
 - **Animation wildcards match one decimal digit.** Four shipped patterns have world nodes that match with one arbitrary character but not with a digit, and none of those became animations. For example, m4's `stgwin*` produced `stgwin1` and `stgwin2` but not `stgwing` or `stgwinb`; the same holds for m5 `tower**`, m1 `pu***` and m10 `barrel**`.
 
 ## Open investigations
 
-- **Same-name animation binding.** Rebuilt worlds do not reproduce the original node slot order, so an animation can bind a different same-named node (`smoke1`, the M2 radar). The fix is either reproducing the allocation order or an explicit source refactor that disambiguates the names; never a silent rename.
-- **Runtime capacity.** The configured node, model and material pools are not the same as runtime headroom: copied actors, lights, effects and destruction also consume them.
-- **Zone probe.** Its origin, direction and range, which surfaces it accepts, which of stacked hits wins, initialization and no-hit behaviour, and per-player differences. This gates zone validation and general new-map support.
-- **Craters.** How the crater feature grid relates to the world cells, its limits and eviction, overlapping and repeated craters, crater reloading, and how splitting CanModify surfaces changes the number of crater models created. This gates automatic rechunking of crater-capable terrain.
-- **Model limits.** The zDi building API allows 922 vertices (0x482720), 921 valid normals (0x482a10) and 57 corners per polygon, chunk-splitting polygons over 48 (0x483650); the ZBD loader checks nothing, and runtime scratch buffers hold 1,024 vertices and 64 corners. The splitter keeps 921 vertices and normals. Still open: growth while clipping craters.
-- **Vehicle roles.** Which roles need their own model (the tracks do), lookup scope and order, scroll and morph sharing, helper numbering and pivots, and other movement modes' helpers. This gates part splitting and custom rigs.
-- **Animation conversion.** Engine interpolation, spin winding, morph control, reset behaviour and conflicts with game-driven channels. This gates Blender action import.
-- **Modern target measurements.**
-  - On the maintainer's machine: the reported texture memory and maximum texture size, test packs and textures loaded in steps, and address-space peaks.
-  - Runtime growth from craters, clones and effects, and frame time.
-  - Whether full-precision UVs render correctly on the hardware path.
+Resolved 2026-10-03 as far as the code and the shipped data can settle them, in [Engine evidence](engine-evidence.md): same-name animation binding and node slot order, runtime capacity, craters and crater visibility, model limits while clipping, vehicle roles, the vehicle animation lifecycle, animation conversion, new mission slots, typed schemas for AI paths and objectives, and the static half of the modern target. The zone probe is above. What only the running game can settle is listed there under [In-game tests](engine-evidence.md#in-game-tests).
 
-  This gates the modern profile, texture budgets and quality presets.
-- **Vehicle animation lifecycle.** A `start_anims` loop: what happens on player mode changes, saved-game restore and repeated spawns, and that the death sequence stops it on each clone. This gates propellers and other texture animations becoming 3D parts.
-- **Crater visibility.** Which nodes the crater test sees (the crater cell and the camera's list), and its interaction with zones and stacked surfaces. This gates complete cave and stacked-floor support.
+Still open:
+
 - **Test fixtures.**
   - A four-cell terrain: offset origin, two soils, a bridge over another floor, a two-zone transition, separate altitude and intersection cases, and a crater crossing cell and ClipTo boundaries, also built with different subdivisions of the same surface.
   - A tracked vehicle: an oversized cosmetic part, an oversized track that must be rejected, asymmetric track UVs, missing and duplicate helpers, a hatch animation, and repeated death and reset.
-- **New mission slots.** Whether an `m14` can be registered, selected, saved and played is unknown. Until it is established, new missions replace existing slots.
-- **Typed schemas.** AI paths and objectives need typed, evidence-backed schemas; the generic ZRD tree editor remains the escape hatch.
 - **Game acceptance** runs on a separate disposable installation, through the normal runtime scripts (`mN_zbd.gs`), never the build script that writes `gamez.zbd`. Studio preview, parsing and reconstruction fixed points remain separate acceptance labels from passing in the game.
