@@ -1,9 +1,22 @@
 using System.Numerics;
+using System.Text;
 
 namespace Recoil.Zbd.Core.Worlds;
 
 /// <summary>A difference between two worlds, at a node path.</summary>
-public sealed record WorldDifference(string Path, string Field, string Expected, string Actual);
+public sealed class WorldDifference
+{
+    private readonly WorldComparisonNode? node; private readonly string? name;
+    public WorldDifference(string path, string field, string expected, string actual) { name = path; Field = field; Expected = expected; Actual = actual; }
+    /// <summary>A difference at <paramref name="node"/>, or at a name below it.</summary>
+    internal WorldDifference(WorldComparisonNode node, string? name, string field, string expected, string actual) : this(name!, field, expected, actual) => this.node = node;
+    /// <summary>The node's name path ("world/crate/lid"), made when asked, so differences keep no path of their own.</summary>
+    public string Path => node == null ? name ?? "" : name == null ? node.Path : node.Path + "/" + name;
+    public string Field { get; }
+    public string Expected { get; }
+    public string Actual { get; }
+    public override string ToString() => $"{Path} {Field}: {Expected} / {Actual}";
+}
 
 /// <summary>How a node of one world compares with its counterpart in another.</summary>
 public enum WorldComparisonStatus
@@ -21,18 +34,42 @@ public enum WorldComparisonStatus
 /// <summary>A node of the merged tree of two worlds: a matched pair of nodes, or a node only one of them has.</summary>
 public sealed class WorldComparisonNode
 {
-    internal WorldComparisonNode(string path, string name, WorldNode? expected, WorldNode? actual) { Path = path; Name = name; Expected = expected; Actual = actual; }
-    /// <summary>The node's name path, as <see cref="WorldDifference.Path"/> gives it.</summary>
-    public string Path { get; }
+    internal WorldComparisonNode(WorldComparisonNode? parent, string segment, string name, WorldNode? expected, WorldNode? actual) { Parent = parent; this.segment = segment; Name = name; Expected = expected; Actual = actual; }
+    private readonly string segment;
+    internal WorldComparisonNode? Parent { get; }
+    /// <summary>
+    /// The node's name path, as <see cref="WorldDifference.Path"/> gives it; made from its parents when asked, so a deep tree
+    /// keeps no path per node.
+    /// </summary>
+    public string Path
+    {
+        get
+        {
+            List<string> segments = [];
+            for (var node = this; node != null; node = node.Parent) segments.Add(node.segment);
+            segments.Reverse();
+            return string.Join("/", segments);
+        }
+    }
     public string Name { get; }
     public WorldNode? Expected { get; }
     public WorldNode? Actual { get; }
-    /// <summary>What differs in the pair itself (its fields, the number of its children).</summary>
-    public List<WorldDifference> Differences { get; } = [];
+    /// <summary>
+    /// What differs in the pair itself (its fields, the number of its children): at most
+    /// <see cref="WorldComparer.MaximumNodeDifferences"/> of <see cref="DifferenceCount"/>, described once for every place of
+    /// the pair and listed here when asked.
+    /// </summary>
+    public IReadOnlyList<WorldDifference> Differences => differences ??= [.. Described.Select(d => new WorldDifference(this, null, d.Field, d.Expected, d.Actual))];
+    private IReadOnlyList<WorldDifference>? differences;
+    internal (string Field, string Expected, string Actual)[] Described { get; set; } = [];
+    /// <summary>How many differences the pair has, listed or not.</summary>
+    public int DifferenceCount { get; internal set; }
     /// <summary>The pair's children, matched by name and structure, in the expected world's order; the actual world's own after them.</summary>
     public List<WorldComparisonNode> Children { get; } = [];
+    /// <summary>Whether some of its children are not in the tree: the tree reached <see cref="WorldComparer.MaximumTreeNodes"/> nodes or 256 levels.</summary>
+    public bool Truncated { get; internal set; }
     public WorldComparisonStatus Status => Expected == null ? WorldComparisonStatus.OnlyActual : Actual == null ? WorldComparisonStatus.OnlyExpected
-        : Differences.Count > 0 ? WorldComparisonStatus.Changed : WorldComparisonStatus.Same;
+        : DifferenceCount > 0 ? WorldComparisonStatus.Changed : WorldComparisonStatus.Same;
     /// <summary>How many nodes below this one are not the same.</summary>
     public int ChangedBelow { get; internal set; }
     /// <summary>
@@ -60,14 +97,27 @@ public sealed class WorldComparison
     public required IReadOnlyList<WorldComparisonNode> Roots { get; init; }
     public required IReadOnlyDictionary<WorldNode, int> ExpectedSlots { get; init; }
     public required IReadOnlyDictionary<WorldNode, int> ActualSlots { get; init; }
-    /// <summary>Every difference, flattened (at most the limit given).</summary>
+    /// <summary>Every difference of the tree, flattened (at most the limit given, of <see cref="DifferenceCount"/>).</summary>
     public required List<WorldDifference> Differences { get; init; }
+    /// <summary>How many differences the tree has, listed or not.</summary>
+    public int DifferenceCount { get; init; }
     /// <summary>Names more than one node has in either world, with the node lookups by each name find.</summary>
     public required IReadOnlyList<WorldNameBinding> Bindings { get; init; }
     /// <summary>Merged tree nodes by status (a node shared by several parents counts once per place).</summary>
     public required IReadOnlyDictionary<WorldComparisonStatus, int> Counts { get; init; }
-    /// <summary>Whether the merged tree stopped growing at <see cref="WorldComparer.MaximumTreeNodes"/>.</summary>
+    /// <summary>
+    /// Each expected node's match in the actual world, at its first place; it includes the places the tree does not show,
+    /// unless <see cref="PairingTruncated"/>.
+    /// </summary>
+    public required IReadOnlyDictionary<WorldNode, WorldNode> Counterparts { get; init; }
+    /// <summary>
+    /// Whether the merged tree stopped growing at <see cref="WorldComparer.MaximumTreeNodes"/> nodes or 256 levels (the nodes
+    /// it cut are <see cref="WorldComparisonNode.Truncated"/>); the pairs below the cut are matched for
+    /// <see cref="Counterparts"/> but not compared.
+    /// </summary>
     public bool Truncated { get; init; }
+    /// <summary>Whether matching stopped too (256 levels, or <see cref="WorldComparer.MaximumTreeNodes"/> more children paired below the cut), so <see cref="Counterparts"/> may lack nodes.</summary>
+    public bool PairingTruncated { get; init; }
 }
 
 /// <summary>
@@ -81,52 +131,75 @@ public static class WorldComparer
 {
     /// <summary>The most nodes the merged tree holds (a node under several parents appears under each).</summary>
     public const int MaximumTreeNodes = 500_000;
+    /// <summary>The most differences a pair lists (<see cref="WorldComparisonNode.DifferenceCount"/> counts them all).</summary>
+    public const int MaximumNodeDifferences = 64;
+    /// <summary>About the most characters of names a difference lists.</summary>
+    private const int MaximumText = 512;
+    /// <summary>The most characters of differences a comparison describes (each pair once); past them, differences are only counted.</summary>
+    private const long MaximumDescribedText = 1L << 26;
 
-    public static List<WorldDifference> Compare(GameZWorld expected, GameZWorld actual, int limit = 10_000) => CompareTree(expected, actual, limit).Differences;
+    /// <summary>The differences, flattened; a comparison the limit or the tree's size cut ends with a "truncated" line saying so.</summary>
+    public static List<WorldDifference> Compare(GameZWorld expected, GameZWorld actual, int limit = 10_000)
+    {
+        var comparison = CompareTree(expected, actual, limit);
+        if (comparison.Truncated || comparison.DifferenceCount > comparison.Differences.Count)
+            comparison.Differences.Add(new("", "truncated", $"{comparison.DifferenceCount} differences, {comparison.Differences.Count} listed",
+                comparison.Truncated ? $"the merged tree stops at {MaximumTreeNodes} nodes or 256 levels" : ""));
+        return comparison.Differences;
+    }
 
     public static WorldComparison CompareTree(GameZWorld expected, GameZWorld actual, int limit = 10_000, CancellationToken token = default)
     {
+        Memo memo = new(token);
         List<WorldDifference> differences = [];
         List<WorldComparisonNode> roots = [];
-        int made = 0; bool truncated = false;
-        void Add(WorldComparisonNode? node, string path, string field, object? a, object? b)
+        Dictionary<WorldNode, WorldNode> counterpart = new(ReferenceEqualityComparer.Instance);
+        HashSet<(WorldNode, WorldNode)> expanded = [];
+        // A pair's own differences, worked out once however many places share it; described while a pair lists fewer than
+        // MaximumNodeDifferences and the comparison fewer than MaximumDescribedText characters, counted always.
+        Dictionary<(WorldNode, WorldNode, bool), (int Count, (string, string, string)[] Described)> owns = [];
+        int made = 0, found = 0, unshown = MaximumTreeNodes; long described = 0; bool truncated = false, pairingTruncated = false;
+        void Place(WorldComparisonNode node, (int Count, (string, string, string)[] Described) own)
         {
-            WorldDifference difference = new(path, field, $"{a}", $"{b}");
-            node?.Differences.Add(difference);
-            if (differences.Count < limit) differences.Add(difference);
+            node.DifferenceCount = own.Count; node.Described = own.Described; found += own.Count;
+            foreach (var (field, a, b) in own.Described) if (differences.Count < limit) differences.Add(new(node, null, field, a, b));
         }
-        WorldComparisonNode? New(string path, string name, WorldNode? a, WorldNode? b)
+        // A difference no pair holds (how many nodes have a name, the textures): only in the flat list.
+        void Other(WorldComparisonNode? at, string name, string field, object? a, object? b)
         {
-            if (made >= MaximumTreeNodes) { truncated = true; return null; }
+            found++;
+            if (differences.Count < limit) differences.Add(at == null ? new(name, field, $"{a}", $"{b}") : new(at, name, field, $"{a}", $"{b}"));
+        }
+        WorldComparisonNode? New(WorldComparisonNode parent, string name, WorldNode? a, WorldNode? b)
+        {
+            if (made >= MaximumTreeNodes) { truncated = parent.Truncated = true; return null; }
             made++;
-            return new(path, name, a, b);
+            return new(parent, name, name, a, b);
         }
         var worldA = expected.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World); var worldB = actual.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World);
-        if (worldA == null || worldB == null) Add(null, "", "world", worldA?.Name, worldB?.Name);
+        if (worldA == null || worldB == null) Other(null, "", "world", worldA?.Name, worldB?.Name);
         else
         {
-            var world = New("world", worldA.Name, worldA, worldB)!;
-            roots.Add(world);
-            CompareClassData(world, worldA, worldB, "world");
-            Match(world, "world", Members(worldA), Members(worldB), true, 0);
+            WorldComparisonNode world = new(null, "world", worldA.Name, worldA, worldB); made++;
+            roots.Add(world); counterpart[worldA] = worldB; expanded.Add((worldA, worldB));
+            Place(world, Differ(worldA, worldB, false, true));
+            Match(world, Members(worldA), Members(worldB), true, 0);
         }
         // The nodes no parent holds (templates the build loaded, cameras, lights): a merged level of their own.
-        WorldComparisonNode detached = new("", "", null, null);
-        Match(detached, "", expected.Nodes.Where(n => n.Parents.Count == 0 && n.Class != WorldNodeClass.World).ToList(), actual.Nodes.Where(n => n.Parents.Count == 0 && n.Class != WorldNodeClass.World).ToList(), false, 0);
+        WorldComparisonNode detached = new(null, "", "", null, null);
+        Match(detached, expected.Nodes.Where(n => n.Parents.Count == 0 && n.Class != WorldNodeClass.World).ToList(), actual.Nodes.Where(n => n.Parents.Count == 0 && n.Class != WorldNodeClass.World).ToList(), false, 0);
         roots.AddRange(detached.Children);
         var texturesA = expected.Textures.Select(t => t.Name.ToLowerInvariant()).ToHashSet(); var texturesB = actual.Textures.Select(t => t.Name.ToLowerInvariant()).ToHashSet();
-        foreach (var t in texturesA.Except(texturesB).Order()) Add(null, "textures", "missing", t, "");
-        foreach (var t in texturesB.Except(texturesA).Order()) Add(null, "textures", "extra", "", t);
+        foreach (var t in texturesA.Except(texturesB).Order()) Other(null, "textures", "missing", t, "");
+        foreach (var t in texturesB.Except(texturesA).Order()) Other(null, "textures", "extra", "", t);
 
         Dictionary<WorldComparisonStatus, int> counts = Enum.GetValues<WorldComparisonStatus>().ToDictionary(s => s, _ => 0);
-        Dictionary<WorldNode, WorldNode> counterpart = new(ReferenceEqualityComparer.Instance);
         Dictionary<WorldNode, List<WorldComparisonNode>> places = new(ReferenceEqualityComparer.Instance);
         int Summarize(WorldComparisonNode node)
         {
             counts[node.Status]++;
             if (node.Expected != null)
             {
-                if (node.Actual != null) counterpart.TryAdd(node.Expected, node.Actual);
                 if (!places.TryGetValue(node.Expected, out var list)) places[node.Expected] = list = [];
                 list.Add(node);
             }
@@ -142,110 +215,136 @@ public static class WorldComparer
         foreach (var group in expected.Nodes.GroupBy(n => n.Name))
         {
             token.ThrowIfCancellationRequested();
-            if (!byNameB.TryGetValue(group.Key, out var others) || group.Count() < 2 && others.Count < 2) continue;
-            var first = group.MaxBy(n => slotsA[n])!; var found = others.MaxBy(n => slotsB[n])!;
+            int count = group.Count();
+            if (!byNameB.TryGetValue(group.Key, out var others) || count < 2 && others.Count < 2) continue;
+            var first = group.MaxBy(n => slotsA[n])!; var highest = others.MaxBy(n => slotsB[n])!;
             var match = counterpart.GetValueOrDefault(first);
-            WorldNameBinding binding = new(group.Key, group.Count(), others.Count, first, match, found,
-                match != null && !ReferenceEquals(match, found) && Interchangeable(match, found, 0));
+            WorldNameBinding binding = new(group.Key, count, others.Count, first, match, highest,
+                match != null && !ReferenceEquals(match, highest) && memo.Interchangeable(match, highest, 0));
             bindings.Add(binding);
             if (!binding.Same) foreach (var place in places.GetValueOrDefault(first) ?? []) place.BindsElsewhere = true;
         }
-        return new() { Roots = roots, ExpectedSlots = slotsA, ActualSlots = slotsB, Differences = differences, Bindings = bindings, Counts = counts, Truncated = truncated };
+        return new()
+        {
+            Roots = roots, ExpectedSlots = slotsA, ActualSlots = slotsB, Differences = differences, DifferenceCount = found, Bindings = bindings, Counts = counts,
+            Counterparts = counterpart, Truncated = truncated, PairingTruncated = pairingTruncated,
+        };
 
         static List<WorldNode> Members(WorldNode world) => [.. world.Children.Concat(world.Areas.SelectMany(a => a.Nodes)).Distinct(ReferenceEqualityComparer.Instance).Cast<WorldNode>()];
 
-        void Match(WorldComparisonNode parent, string path, List<WorldNode> a, List<WorldNode> b, bool worldChildren, int depth)
+        // Pairs two lists of children under parent; with no parent (below the tree's cut) it only matches them, for Counterparts.
+        void Match(WorldComparisonNode? parent, List<WorldNode> a, List<WorldNode> b, bool worldChildren, int depth)
         {
             token.ThrowIfCancellationRequested();
             Dictionary<WorldNode, WorldNode> pairs = new(ReferenceEqualityComparer.Instance);
             HashSet<WorldNode> paired = new(ReferenceEqualityComparer.Instance);
-            foreach (var group in a.GroupBy(n => n.Name))
+            var byName = b.ToLookup(n => n.Name, StringComparer.Ordinal);
+            foreach (var group in a.GroupBy(n => n.Name, StringComparer.Ordinal))
             {
-                var others = b.Where(n => n.Name == group.Key).ToList(); var mine = group.ToList();
-                if (mine.Count != others.Count) Add(null, $"{path}/{group.Key}", "count", mine.Count, others.Count);
-                foreach (var (x, y) in PairUp(mine, others)) { pairs[x] = y; paired.Add(y); }
+                var others = byName[group.Key].ToList(); var mine = group.ToList();
+                if (parent != null && mine.Count != others.Count) Other(parent, group.Key, "count", mine.Count, others.Count);
+                foreach (var (x, y) in PairUp(mine, others, memo)) { pairs[x] = y; paired.Add(y); }
             }
-            foreach (var name in b.Select(n => n.Name).Distinct().Except(a.Select(n => n.Name))) Add(null, $"{path}/{name}", "extra", "", name);
+            if (parent == null) { foreach (var node in a) if (pairs.TryGetValue(node, out var other)) Pair(null, node, other, worldChildren, depth); return; }
+            foreach (var name in b.Select(n => n.Name).Distinct().Except(a.Select(n => n.Name))) Other(parent, name, "extra", "", name);
             foreach (var node in a)
-            {
-                string at = $"{path}/{node.Name}";
-                var child = pairs.TryGetValue(node, out var other) ? CompareNode(at, node, other, worldChildren, depth) : Only(at, node, true, depth);
-                if (child != null) parent.Children.Add(child);
-            }
-            foreach (var node in b.Where(n => !paired.Contains(n)))
-                if (Only($"{path}/{node.Name}", node, false, depth) is { } child) parent.Children.Add(child);
+                if ((pairs.TryGetValue(node, out var other) ? Pair(parent, node, other, worldChildren, depth) : Only(parent, node, true, depth)) is { } child) parent.Children.Add(child);
+            foreach (var node in b)
+                if (!paired.Contains(node) && Only(parent, node, false, depth) is { } child) parent.Children.Add(child);
         }
 
         // A node only one world has, with its subtree.
-        WorldComparisonNode? Only(string path, WorldNode node, bool expectedSide, int depth)
+        WorldComparisonNode? Only(WorldComparisonNode parent, WorldNode node, bool expectedSide, int depth)
         {
-            var result = New(path, node.Name, expectedSide ? node : null, expectedSide ? null : node);
-            if (result == null || depth > 256) return result;
+            var result = New(parent, node.Name, expectedSide ? node : null, expectedSide ? null : node);
+            if (result == null) return null;
+            if (depth > 256) { if (node.Children.Count > 0) truncated = result.Truncated = true; return result; }
             foreach (var child in node.Children)
-                if (Only($"{path}/{child.Name}", child, expectedSide, depth + 1) is { } inner) result.Children.Add(inner);
+                if (Only(result, child, expectedSide, depth + 1) is { } inner) result.Children.Add(inner);
             return result;
         }
 
-        WorldComparisonNode? CompareNode(string path, WorldNode a, WorldNode b, bool worldChild, int depth)
+        WorldComparisonNode? Pair(WorldComparisonNode? parent, WorldNode a, WorldNode b, bool worldChild, int depth)
         {
-            var node = New(path, a.Name, a, b);
-            if (node == null || depth > 256) return node;
-            if (a.Class != b.Class) { Add(node, path, "class", a.Class, b.Class); return node; }
-            uint carried = WorldGltf.CarriedFlags;
-            if ((a.Flags & carried) != (b.Flags & carried)) Add(node, path, "flags.carried", $"{a.Flags & carried:X8}", $"{b.Flags & carried:X8}");
-            if ((a.Flags & ~carried) != (b.Flags & ~carried)) Add(node, path, "flags.derived", $"{a.Flags & ~carried:X8}", $"{b.Flags & ~carried:X8}");
-            if ((a.Zone & 0xFF) != (b.Zone & 0xFF)) Add(node, path, "zone", a.Zone & 0xFF, b.Zone & 0xFF);
-            if (worldChild && (a.GridColumn, a.GridRow) != (b.GridColumn, b.GridRow)) Add(node, path, "cell", (a.GridColumn, a.GridRow), (b.GridColumn, b.GridRow));
-            if (a.Class == WorldNodeClass.Object3D)
+            counterpart.TryAdd(a, b);
+            bool again = !expanded.Add((a, b));
+            var node = parent == null ? null : New(parent, a.Name, a, b);
+            if (node == null)
             {
-                var ma = WorldUpdate.LocalMatrix(a) ?? Matrix4x4.Identity; var mb = WorldUpdate.LocalMatrix(b) ?? Matrix4x4.Identity;
-                if (!Close(ma, mb)) Add(node, path, "matrix", Format(ma), Format(mb));
-                if ((a.PayloadInt(0) & 0x3F) != (b.PayloadInt(0) & 0x3F) && !(Close(ma, Matrix4x4.Identity) && Close(mb, Matrix4x4.Identity))) Add(node, path, "object.flags", $"{a.PayloadInt(0):X}", $"{b.PayloadInt(0):X}");
-                for (int o = 0x18; o < 0x30; o += 4) if (a.PayloadFloat(o) != b.PayloadFloat(o)) { Add(node, path, "object.trs", o, $"{a.PayloadFloat(o)}/{b.PayloadFloat(o)}"); break; }
+                // Below the cut, each pair is matched once more (a node shared by several parents is not), so every node
+                // keeps its counterpart within a bounded amount of work.
+                if (again || a.Class != b.Class) return null;
+                if (depth > 256 || (unshown -= 1 + a.Children.Count) < 0) { pairingTruncated |= a.Children.Count > 0 && b.Children.Count > 0; return null; }
+                Match(null, a.Children, b.Children, false, depth + 1);
+                return null;
             }
-            else CompareClassData(node, a, b, path);
-            if ((a.Model == null) != (b.Model == null)) Add(node, path, "model", a.Model != null, b.Model != null);
-            else if (a.Model != null && b.Model != null) CompareModel(node, path, a.Model, b.Model);
-            if (a.Children.Count != b.Children.Count) Add(node, path, "children", string.Join(",", a.Children.Select(c => c.Name)), string.Join(",", b.Children.Select(c => c.Name)));
-            Match(node, path, a.Children, b.Children, false, depth + 1);
+            Place(node, Differ(a, b, worldChild));
+            if (a.Class != b.Class) return node;
+            if (depth > 256) { if (a.Children.Count + b.Children.Count > 0) truncated = node.Truncated = true; pairingTruncated |= a.Children.Count > 0 && b.Children.Count > 0; }
+            else Match(node, a.Children, b.Children, false, depth + 1);
             return node;
         }
 
-        void CompareModel(WorldComparisonNode node, string path, WorldModel a, WorldModel b)
+        // The pair's own differences (a world root's: its class data only).
+        (int Count, (string, string, string)[] Described) Differ(WorldNode a, WorldNode b, bool worldChild, bool root = false)
         {
-            if (a.Mode != b.Mode || a.Flags != b.Flags) Add(node, path, "model.mode", $"{a.Mode}:{a.Flags:X}", $"{b.Mode}:{b.Flags:X}");
-            if (a.Points.Count != b.Points.Count) Add(node, path, "model.points", a.Points.Count, b.Points.Count);
-            if (a.Morphs.Count != b.Morphs.Count) Add(node, path, "model.morphs", a.Morphs.Count, b.Morphs.Count);
-            if (a.BoundsCentre != b.BoundsCentre || a.BoundsRadius != b.BoundsRadius) Add(node, path, "model.sphere", $"{a.BoundsCentre} {a.BoundsRadius}", $"{b.BoundsCentre} {b.BoundsRadius}");
-            // Polygons compare as multisets: a model may hold the same polygon twice.
-            var pa = Polygons(a); var pb = Polygons(b);
-            var onlyA = Remaining(pa, pb); var onlyB = Remaining(pb, pa);
-            if (onlyA.Count > 0 || onlyB.Count > 0)
-                Add(node, path, "model.polygons", $"{pa.Count}: {Bounded(onlyA.FirstOrDefault())}", $"{pb.Count} ({pa.Count - onlyA.Count} identical): {Bounded(onlyB.FirstOrDefault())}");
-        }
+            if (!root && owns.TryGetValue((a, b, worldChild), out var known)) return known;
+            int count = 0; List<(string, string, string)> list = [];
+            bool Wanted() => list.Count < MaximumNodeDifferences && described < MaximumDescribedText;
+            void Add(string field, object? x, object? y)
+            {
+                count++;
+                if (!Wanted()) return;
+                string expected = $"{x}", actual = $"{y}"; described += expected.Length + actual.Length;
+                list.Add((field, expected, actual));
+            }
+            if (root) ClassData();
+            else if (a.Class != b.Class) Add("class", a.Class, b.Class);
+            else
+            {
+                uint carried = WorldGltf.CarriedFlags;
+                if ((a.Flags & carried) != (b.Flags & carried)) Add("flags.carried", $"{a.Flags & carried:X8}", $"{b.Flags & carried:X8}");
+                if ((a.Flags & ~carried) != (b.Flags & ~carried)) Add("flags.derived", $"{a.Flags & ~carried:X8}", $"{b.Flags & ~carried:X8}");
+                if ((a.Zone & 0xFF) != (b.Zone & 0xFF)) Add("zone", a.Zone & 0xFF, b.Zone & 0xFF);
+                if (worldChild && (a.GridColumn, a.GridRow) != (b.GridColumn, b.GridRow)) Add("cell", (a.GridColumn, a.GridRow), (b.GridColumn, b.GridRow));
+                if (a.Class == WorldNodeClass.Object3D)
+                {
+                    var ma = WorldUpdate.LocalMatrix(a) ?? Matrix4x4.Identity; var mb = WorldUpdate.LocalMatrix(b) ?? Matrix4x4.Identity;
+                    if (!Close(ma, mb)) Add("matrix", Format(ma), Format(mb));
+                    if ((a.PayloadInt(0) & 0x3F) != (b.PayloadInt(0) & 0x3F) && !(Close(ma, Matrix4x4.Identity) && Close(mb, Matrix4x4.Identity))) Add("object.flags", $"{a.PayloadInt(0):X}", $"{b.PayloadInt(0):X}");
+                    for (int o = 0x18; o < 0x30; o += 4) if (a.PayloadFloat(o) != b.PayloadFloat(o)) { Add("object.trs", o, $"{a.PayloadFloat(o)}/{b.PayloadFloat(o)}"); break; }
+                }
+                if ((a.Model == null) != (b.Model == null)) Add("model", a.Model != null, b.Model != null);
+                // A model shared by many nodes is compared once.
+                else if (a.Model != null && b.Model != null) foreach (var (field, x, y) in memo.ModelDifferences(a.Model, b.Model)) Add(field, x, y);
+                if (a.Children.Count != b.Children.Count) { if (Wanted()) Add("children", Names(a.Children.Select(c => c.Name)), Names(b.Children.Select(c => c.Name))); else count++; }
+                // Class data last: a world's many cells must not crowd out the fields above.
+                if (a.Class != WorldNodeClass.Object3D) ClassData();
+            }
+            (int, (string, string, string)[]) result = (count, [.. list]);
+            if (!root) owns[(a, b, worldChild)] = result;
+            return result;
 
-        void CompareClassData(WorldComparisonNode node, WorldNode a, WorldNode b, string path)
-        {
-            // Stored pointers and runtime counters are not compared.
-            HashSet<int> skip = a.Class switch
+            void ClassData()
             {
-                WorldNodeClass.World => [0x04, 0x08, 0x0C, 0x80, 0x90, 0x94, 0x98, 0x9C, 0xA0, 0xA4],
-                WorldNodeClass.Light => [0xDC, 0xE0],
-                WorldNodeClass.Camera => [0, 4, 8, 12],
-                _ => [],
-            };
-            for (int o = 0; o + 4 <= a.Payload.Length; o += 4)
-                if (!skip.Contains(o) && BitConverter.ToUInt32(a.Payload, o) != BitConverter.ToUInt32(b.Payload, o))
-                    Add(node, path, $"data+{o}", BitConverter.ToSingle(a.Payload, o), BitConverter.ToSingle(b.Payload, o));
-            if (a.Class == WorldNodeClass.Camera)
-                foreach (var (x, y, field) in new[] { (a.CameraWorld, b.CameraWorld, "camera.world"), (a.CameraWindow, b.CameraWindow, "camera.window"), (a.CameraHorizon, b.CameraHorizon, "camera.horizon") })
-                    if (x?.Name != y?.Name) Add(node, path, field, x?.Name, y?.Name);
-            if (a.Class == WorldNodeClass.World)
-            {
-                if (!a.WorldLights.Select(l => l.Name).SequenceEqual(b.WorldLights.Select(l => l.Name))) Add(node, path, "world.lights", string.Join(",", a.WorldLights.Select(l => l.Name)), string.Join(",", b.WorldLights.Select(l => l.Name)));
-                if (a.Areas.Count != b.Areas.Count) Add(node, path, "world.areas", a.Areas.Count, b.Areas.Count);
+                var skip = Skipped(a.Class);
+                for (int o = 0; o + 4 <= a.Payload.Length; o += 4)
+                    if (Array.IndexOf(skip, o) < 0 && BitConverter.ToUInt32(a.Payload, o) != BitConverter.ToUInt32(b.Payload, o))
+                        Add($"data+{o}", BitConverter.ToSingle(a.Payload, o), BitConverter.ToSingle(b.Payload, o));
+                if (a.Class == WorldNodeClass.Camera)
+                    foreach (var (x, y, field) in new[] { (a.CameraWorld, b.CameraWorld, "camera.world"), (a.CameraWindow, b.CameraWindow, "camera.window"), (a.CameraHorizon, b.CameraHorizon, "camera.horizon") })
+                        if (x?.Name != y?.Name) Add(field, x?.Name, y?.Name);
+                if (a.Class != WorldNodeClass.World) return;
+                if (!a.WorldLights.Select(l => l.Name).SequenceEqual(b.WorldLights.Select(l => l.Name)))
+                { if (Wanted()) Add("world.lights", Names(a.WorldLights.Select(l => l.Name)), Names(b.WorldLights.Select(l => l.Name))); else count++; }
+                if (a.Areas.Count != b.Areas.Count) Add("world.areas", a.Areas.Count, b.Areas.Count);
                 else for (int i = 0; i < a.Areas.Count; i++)
-                        if (!a.Areas[i].Nodes.Select(n => n.Name).Order().SequenceEqual(b.Areas[i].Nodes.Select(n => n.Name).Order())) Add(node, path, $"world.area{i}", string.Join(",", a.Areas[i].Nodes.Select(n => n.Name).Order()), string.Join(",", b.Areas[i].Nodes.Select(n => n.Name).Order()));
+                    {
+                        // Every area is compared; only the differences listed are described.
+                        var x = a.Areas[i].Nodes.Select(n => n.Name).Order(StringComparer.Ordinal).ToList(); var y = b.Areas[i].Nodes.Select(n => n.Name).Order(StringComparer.Ordinal).ToList();
+                        if (x.SequenceEqual(y)) continue;
+                        if (Wanted()) Add($"world.area{i}", Names(x), Names(y)); else count++;
+                    }
             }
         }
     }
@@ -254,96 +353,351 @@ public static class WorldComparer
     /// Whether two nodes of one world are indistinguishable: the same parents, and the same name, class, flags, zone, grid
     /// cell, transform or class data, model and children, all the way down.
     /// </summary>
-    internal static bool Interchangeable(WorldNode x, WorldNode y, int depth)
-    {
-        if (ReferenceEquals(x, y)) return true;
-        if (depth > 64 || x.Name != y.Name || x.Class != y.Class || x.Flags != y.Flags || (x.Zone & 0xFF) != (y.Zone & 0xFF)
-            || (x.GridColumn, x.GridRow) != (y.GridColumn, y.GridRow) || x.Children.Count != y.Children.Count) return false;
-        if (depth == 0 && !x.Parents.ToHashSet(ReferenceEqualityComparer.Instance).SetEquals(y.Parents)) return false;
-        if (x.Class == WorldNodeClass.Object3D)
-        {
-            if (!Close(WorldUpdate.LocalMatrix(x) ?? Matrix4x4.Identity, WorldUpdate.LocalMatrix(y) ?? Matrix4x4.Identity) || (x.PayloadInt(0) & 0x3F) != (y.PayloadInt(0) & 0x3F)) return false;
-            for (int o = 0x18; o < 0x30; o += 4) if (x.PayloadFloat(o) != y.PayloadFloat(o)) return false;
-        }
-        else if (!x.Payload.AsSpan().SequenceEqual(y.Payload)) return false;
-        if (!ReferenceEquals(x.Model, y.Model))
-        {
-            if (x.Model == null || y.Model == null || x.Model.Mode != y.Model.Mode || x.Model.Flags != y.Model.Flags || x.Model.Points.Count != y.Model.Points.Count
-                || x.Model.Morphs.Count != y.Model.Morphs.Count || x.Model.BoundsCentre != y.Model.BoundsCentre || x.Model.BoundsRadius != y.Model.BoundsRadius) return false;
-            var px = Polygons(x.Model); var py = Polygons(y.Model);
-            if (px.Count != py.Count || Remaining(px, py).Count > 0) return false;
-        }
-        var cx = x.Children.OrderBy(c => c.Name, StringComparer.Ordinal).ThenBy(PairKey, StringComparer.Ordinal).ToList();
-        var cy = y.Children.OrderBy(c => c.Name, StringComparer.Ordinal).ThenBy(PairKey, StringComparer.Ordinal).ToList();
-        for (int i = 0; i < cx.Count; i++) if (!Interchangeable(cx[i], cy[i], depth + 1)) return false;
-        return true;
-    }
+    internal static bool Interchangeable(WorldNode x, WorldNode y, int depth = 0, CancellationToken token = default) => new Memo(token).Interchangeable(x, y, depth);
 
     /// <summary>
-    /// Pairs nodes of one name: identical copies (structure, children's names and position) first, so that moving, adding or
-    /// removing one copy leaves the others paired with themselves; then the same structure at the nearest position; then the
-    /// nearest position; then order (only order past <see cref="MaximumNearestPairs"/> candidate pairs).
+    /// Pairs nodes of one name: identical copies first (the same contents all the way down, then the same structure,
+    /// children's names and position), so that moving, adding or removing one copy leaves the others paired with themselves;
+    /// then the same structure at the nearest position; then the nearest position; then order (positions that are not finite,
+    /// or past <see cref="MaximumNearestPairs"/> candidate pairs).
     /// </summary>
-    internal static List<(WorldNode A, WorldNode B)> PairUp(IReadOnlyList<WorldNode> mine, IReadOnlyList<WorldNode> others)
+    internal static List<(WorldNode A, WorldNode B)> PairUp(IReadOnlyList<WorldNode> mine, IReadOnlyList<WorldNode> others) => PairUp(mine, others, new(default));
+    private static List<(WorldNode A, WorldNode B)> PairUp(IReadOnlyList<WorldNode> mine, IReadOnlyList<WorldNode> others, Memo memo)
     {
         List<(WorldNode, WorldNode)> pairs = [];
-        Dictionary<WorldNode, (string Key, string Structure, Vector3 At)> keys = new(ReferenceEqualityComparer.Instance);
-        (string Key, string Structure, Vector3 At) Keys(WorldNode node)
+        List<WorldNode> restA = [.. mine], restB = [.. others];
+        for (int pass = 0; pass < 2 && restA.Count > 0 && restB.Count > 0; pass++)
         {
-            if (keys.TryGetValue(node, out var known)) return known;
-            var at = node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) is { } m ? m.Translation : Vector3.Zero;
-            string structure = $"{Signature(node)}|{string.Join(",", node.Children.Select(c => c.Name))}";
-            return keys[node] = ($"{structure}|{Round(at)}", structure, at);
+            (ulong, Vector3) Key(WorldNode node) => pass == 0 ? (memo.Identity(node), Vector3.Zero) : (memo.Structure(node), Round(At(node)));
+            Dictionary<(ulong, Vector3), Queue<WorldNode>> identical = [];
+            foreach (var node in restB) { var key = Key(node); if (!identical.TryGetValue(key, out var queue)) identical[key] = queue = new(); queue.Enqueue(node); }
+            HashSet<WorldNode> taken = new(ReferenceEqualityComparer.Instance); List<WorldNode> left = [];
+            foreach (var node in restA)
+                if (identical.TryGetValue(Key(node), out var queue) && queue.TryDequeue(out var other)) { pairs.Add((node, other)); taken.Add(other); }
+                else left.Add(node);
+            restA = left; restB = [.. restB.Where(n => !taken.Contains(n))];
         }
-        Dictionary<string, Queue<WorldNode>> identical = new(StringComparer.Ordinal);
-        foreach (var node in others) { string key = Keys(node).Key; if (!identical.TryGetValue(key, out var queue)) identical[key] = queue = new(); queue.Enqueue(node); }
-        HashSet<WorldNode> taken = new(ReferenceEqualityComparer.Instance);
-        List<WorldNode> restA = [];
-        foreach (var node in mine)
-            if (identical.TryGetValue(Keys(node).Key, out var queue) && queue.Count > 0) { var other = queue.Dequeue(); pairs.Add((node, other)); taken.Add(other); }
-            else restA.Add(node);
-        List<WorldNode> restB = [.. others.Where(n => !taken.Contains(n))];
         foreach (bool sameStructure in new[] { true, false })
-        {
-            if (restA.Count == 0 || restB.Count == 0 || (long)restA.Count * restB.Count > MaximumNearestPairs) break;
-            List<(float Distance, int I, int J)> candidates = [];
-            for (int i = 0; i < restA.Count; i++)
-                for (int j = 0; j < restB.Count; j++)
-                    if (!sameStructure || Keys(restA[i]).Structure == Keys(restB[j]).Structure)
-                        candidates.Add((Vector3.DistanceSquared(Keys(restA[i]).At, Keys(restB[j]).At), i, j));
-            candidates.Sort();
-            bool[] usedA = new bool[restA.Count], usedB = new bool[restB.Count];
-            foreach (var (_, i, j) in candidates)
-                if (!usedA[i] && !usedB[j]) { usedA[i] = usedB[j] = true; pairs.Add((restA[i], restB[j])); }
-            restA = [.. restA.Where((_, i) => !usedA[i])]; restB = [.. restB.Where((_, j) => !usedB[j])];
-        }
-        var orderedA = restA.OrderBy(n => Keys(n).Key, StringComparer.Ordinal).ToList();
-        var orderedB = restB.OrderBy(n => Keys(n).Key, StringComparer.Ordinal).ToList();
+            if (restA.Count > 0 && restB.Count > 0) Nearest(ref restA, ref restB, sameStructure, memo, pairs);
+        var orderedA = restA.OrderBy(n => Order(n, memo)).ToList(); var orderedB = restB.OrderBy(n => Order(n, memo)).ToList();
         for (int k = 0; k < Math.Min(orderedA.Count, orderedB.Count); k++) pairs.Add((orderedA[k], orderedB[k]));
         return pairs;
+        static (ulong, float, float, float) Order(WorldNode node, Memo memo) { var at = Round(At(node)); return (memo.Structure(node), at.X, at.Y, at.Z); }
     }
-    /// <summary>Candidate pairs of one name compared by position before the rest pair by order.</summary>
-    private const int MaximumNearestPairs = 65536;
+    /// <summary>Remaining pairs of one name are all listed and sorted when there are at most this many.</summary>
+    private const int AllPairs = 65536;
+    /// <summary>The most candidate pairs of one name listed by position before the rest pair by order.</summary>
+    private const int MaximumNearestPairs = 1 << 21;
 
-    internal static string PairKey(WorldNode node)
+    /// <summary>
+    /// Pairs nodes nearest first (ties by their order), as if every pair were listed by distance: rounds over a doubling
+    /// radius list only the pairs within it, found on a grid of that cell size, so a large group lists few pairs and pairs the
+    /// same way. A pair within the radius whose nodes are both left would have been taken in that round, so each round
+    /// continues the full order exactly.
+    /// </summary>
+    private static void Nearest(ref List<WorldNode> restA, ref List<WorldNode> restB, bool sameStructure, Memo memo, List<(WorldNode, WorldNode)> pairs)
     {
-        var at = node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) is { } m ? Round(m.Translation) : Vector3.Zero;
-        return $"{Signature(node)}|{string.Join(",", node.Children.Select(c => c.Name))}|{at}";
+        List<WorldNode> a = restA, b = restB;
+        Vector3[] at = [.. a.Concat(b).Select(At)];
+        bool[] usedA = new bool[a.Count], usedB = new bool[b.Count];
+        Vector3 min = new(float.MaxValue), max = new(float.MinValue);
+        foreach (var p in at) if (Finite(p)) { min = Vector3.Min(min, p); max = Vector3.Max(max, p); }
+        double span = Finite(max - min) ? Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)) : 0;
+        long listed = 0;
+        bool Allowed(int i, int j) => !sameStructure || memo.Structure(a[i]) == memo.Structure(b[j]);
+        double Distance(int i, int j) { Vector3 p = at[i], q = at[a.Count + j]; double x = (double)p.X - q.X, y = (double)p.Y - q.Y, z = (double)p.Z - q.Z; return x * x + y * y + z * z; }
+        for (double radius = Math.Max(1e-3, span / (1 << 30)); ; radius *= 2)
+        {
+            memo.Token.ThrowIfCancellationRequested();
+            int[] ia = [.. Enumerable.Range(0, a.Count).Where(i => !usedA[i] && Finite(at[i]))], jb = [.. Enumerable.Range(0, b.Count).Where(j => !usedB[j] && Finite(at[a.Count + j]))];
+            if (ia.Length == 0 || jb.Length == 0) break;
+            bool all = (long)ia.Length * jb.Length <= AllPairs || radius >= 2 * span;
+            if (all && listed + (long)ia.Length * jb.Length > MaximumNearestPairs) break;
+            List<(double Distance, int I, int J)> candidates = [];
+            if (all) { foreach (int i in ia) foreach (int j in jb) if (Allowed(i, j)) candidates.Add((Distance(i, j), i, j)); }
+            else
+            {
+                // Cells as wide as the radius: a pair within it lies in neighbouring cells.
+                Dictionary<(long, long, long), List<int>> cells = [];
+                (long, long, long) Cell(Vector3 p) => ((long)Math.Floor(((double)p.X - min.X) / radius), (long)Math.Floor(((double)p.Y - min.Y) / radius), (long)Math.Floor(((double)p.Z - min.Z) / radius));
+                foreach (int j in jb) { var cell = Cell(at[a.Count + j]); if (!cells.TryGetValue(cell, out var list)) cells[cell] = list = []; list.Add(j); }
+                foreach (int i in ia)
+                {
+                    var (cx, cy, cz) = Cell(at[i]);
+                    for (long x = cx - 1; x <= cx + 1; x++) for (long y = cy - 1; y <= cy + 1; y++) for (long z = cz - 1; z <= cz + 1; z++)
+                                if (cells.TryGetValue((x, y, z), out var list))
+                                    foreach (int j in list)
+                                    {
+                                        double d = Distance(i, j);
+                                        if (d <= radius * radius && Allowed(i, j)) candidates.Add((d, i, j));
+                                    }
+                    if (listed + candidates.Count > MaximumNearestPairs) break;
+                }
+                if (listed + candidates.Count > MaximumNearestPairs) break;
+            }
+            listed += candidates.Count;
+            candidates.Sort();
+            foreach (var (_, i, j) in candidates)
+                if (!usedA[i] && !usedB[j]) { usedA[i] = usedB[j] = true; pairs.Add((a[i], b[j])); }
+            if (all) break;
+        }
+        restA = [.. a.Where((_, i) => !usedA[i])]; restB = [.. b.Where((_, j) => !usedB[j])];
+        static bool Finite(Vector3 p) => float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z);
     }
-    private static string Signature(WorldNode node, int depth = 0) => depth > 6 ? "" :
-        $"{node.Class}:{node.Model?.Polygons.Count}:{node.Children.Count}[{string.Join(",", node.Children.Select(c => Signature(c, depth + 1)))}]";
-    private static List<string> Polygons(WorldModel m) => m.Polygons.Select(p => string.Join(";", p.Vertices.Select((v, i) => $"{Round(m.Vertices[v])}|{(p.Uvs.Length > 0 ? p.Uvs[i].ToString() : "")}"))
-        + $"#{p.Material?.Texture?.Name}{p.Material?.Color}{p.Material?.Flags & 0xFF:X}s{p.Material?.Soil}p{p.Priority}f{p.Flags & 0x100:X}z{p.Zone:X}n{p.Normals.Length > 0}").ToList();
-    /// <summary>The entries of <paramref name="a"/> left after removing one match in <paramref name="b"/> for each.</summary>
-    private static List<string> Remaining(List<string> a, List<string> b)
+
+    /// <summary>A node's structure (class, polygon and child counts six levels down), its children's names and its rounded position.</summary>
+    internal static string PairKey(WorldNode node) => $"{new Memo(default).Structure(node):X16}|{Round(At(node))}";
+    private static Vector3 At(WorldNode node) => node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) is { } m ? m.Translation : Vector3.Zero;
+    /// <summary>Class data words a comparison skips: stored pointers and runtime counters.</summary>
+    private static int[] Skipped(WorldNodeClass kind) => kind switch
     {
-        Dictionary<string, int> counts = [];
-        foreach (var s in b) counts[s] = counts.GetValueOrDefault(s) + 1;
-        List<string> left = [];
-        foreach (var s in a) if (counts.GetValueOrDefault(s) > 0) counts[s]--; else left.Add(s);
-        return left;
+        WorldNodeClass.World => [0x04, 0x08, 0x0C, 0x80, 0x90, 0x94, 0x98, 0x9C, 0xA0, 0xA4],
+        WorldNodeClass.Light => [0xDC, 0xE0],
+        WorldNodeClass.Camera => [0, 4, 8, 12],
+        _ => [],
+    };
+
+    /// <summary>
+    /// What a comparison works out once, however many places share it: each node's structure and contents, each model's
+    /// polygons, each pair of models' differences and which copies are indistinguishable.
+    /// </summary>
+    private sealed class Memo(CancellationToken token)
+    {
+        public CancellationToken Token => token;
+        private readonly Dictionary<(WorldNode, int), ulong> signatures = [];
+        private readonly Dictionary<WorldNode, ulong> structures = new(ReferenceEqualityComparer.Instance), identities = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<WorldModel, Polygon[]> polygons = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<WorldModel, ulong> models = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<(WorldModel, WorldModel), (string Field, string Expected, string Actual)[]> modelDifferences = [];
+        private readonly Dictionary<(WorldNode, WorldNode, int), bool> interchangeable = [];
+        /// <summary>Copies sharing copies could ask about the same nodes at very many places: past this many checks, copies count as different.</summary>
+        private int checks = 1 << 20;
+
+        /// <summary>The node's class, polygon and child counts six levels down, and its children's names.</summary>
+        public ulong Structure(WorldNode node)
+        {
+            if (structures.TryGetValue(node, out ulong known)) return known;
+            ulong hash = Signature(node, 0);
+            foreach (var child in node.Children) hash = Mix(hash, Text(child.Name));
+            return structures[node] = hash;
+        }
+        private ulong Signature(WorldNode node, int depth)
+        {
+            if (depth > 6) return 0;
+            if (signatures.TryGetValue((node, depth), out ulong known)) return known;
+            ulong hash = Mix(Mix((ulong)node.Class, node.Model == null ? ulong.MaxValue : (ulong)node.Model.Polygons.Count), (ulong)node.Children.Count);
+            foreach (var child in node.Children) hash = Mix(hash, Signature(child, depth + 1));
+            return signatures[(node, depth)] = hash;
+        }
+
+        /// <summary>The node's contents all the way down, rounded transforms included, its children in any order.</summary>
+        public ulong Identity(WorldNode root)
+        {
+            if (identities.TryGetValue(root, out ulong known)) return known;
+            HashSet<WorldNode> open = new(ReferenceEqualityComparer.Instance) { root };
+            Stack<(WorldNode Node, int Next)> stack = new([(root, 0)]);
+            while (stack.TryPop(out var top))
+            {
+                var (node, next) = top;
+                if (next < node.Children.Count)
+                {
+                    stack.Push((node, next + 1));
+                    var child = node.Children[next];
+                    if (!identities.ContainsKey(child) && open.Add(child)) stack.Push((child, 0));
+                    continue;
+                }
+                ulong children = 0;
+                foreach (var child in node.Children) children += Mix(0, identities.GetValueOrDefault(child));
+                identities[node] = Mix(Mix(Own(node), children), (ulong)node.Children.Count);
+                open.Remove(node);
+            }
+            return identities[root];
+        }
+        private ulong Own(WorldNode node)
+        {
+            ulong hash = Mix(Mix(Mix(Text(node.Name), (ulong)node.Class), node.Flags), node.Zone & 0xFF);
+            if (node.Class == WorldNodeClass.Object3D)
+            {
+                var m = WorldUpdate.LocalMatrix(node) ?? Matrix4x4.Identity;
+                for (int r = 0; r < 4; r++) for (int c = 0; c < 3; c++) hash = Mix(hash, Bits(MathF.Round(m[r, c], 3)));
+                hash = Mix(hash, (ulong)(node.PayloadInt(0) & 0x3F));
+                for (int o = 0x18; o < 0x30; o += 4) hash = Mix(hash, Bits(node.PayloadFloat(o)));
+            }
+            else
+            {
+                var skip = Skipped(node.Class);
+                for (int o = 0; o + 4 <= node.Payload.Length; o += 4) if (Array.IndexOf(skip, o) < 0) hash = Mix(hash, BitConverter.ToUInt32(node.Payload, o));
+            }
+            return Mix(hash, node.Model == null ? 0 : Model(node.Model));
+        }
+        private ulong Model(WorldModel model)
+        {
+            if (models.TryGetValue(model, out ulong known)) return known;
+            ulong hash = Mix(Mix(Mix(model.Mode, model.Flags), (ulong)model.Points.Count << 32 | (uint)model.Morphs.Count), Bits(model.BoundsRadius));
+            hash = Mix(Mix(Mix(hash, Bits(model.BoundsCentre.X)), Bits(model.BoundsCentre.Y)), Bits(model.BoundsCentre.Z));
+            ulong all = 0;
+            foreach (var polygon in Polygons(model)) all += Mix(0, polygon.Hash);
+            return models[model] = Mix(Mix(hash, all), (ulong)model.Polygons.Count);
+        }
+
+        private Polygon[] Polygons(WorldModel model)
+        {
+            if (polygons.TryGetValue(model, out var known)) return known;
+            Vector3[] rounded = [.. model.Vertices.Select(Round)];
+            return polygons[model] = [.. model.Polygons.Select(p => new Polygon(rounded, p, Polygon.HashOf(rounded, p)))];
+        }
+
+        /// <summary>The differences of two models (each pair of models is compared once).</summary>
+        public (string Field, string Expected, string Actual)[] ModelDifferences(WorldModel a, WorldModel b)
+        {
+            if (ReferenceEquals(a, b)) return [];
+            if (modelDifferences.TryGetValue((a, b), out var known)) return known;
+            token.ThrowIfCancellationRequested();
+            List<(string, string, string)> list = [];
+            if (a.Mode != b.Mode || a.Flags != b.Flags) list.Add(("model.mode", $"{a.Mode}:{a.Flags:X}", $"{b.Mode}:{b.Flags:X}"));
+            if (a.Points.Count != b.Points.Count) list.Add(("model.points", $"{a.Points.Count}", $"{b.Points.Count}"));
+            if (a.Morphs.Count != b.Morphs.Count) list.Add(("model.morphs", $"{a.Morphs.Count}", $"{b.Morphs.Count}"));
+            if (a.BoundsCentre != b.BoundsCentre || a.BoundsRadius != b.BoundsRadius) list.Add(("model.sphere", $"{a.BoundsCentre} {a.BoundsRadius}", $"{b.BoundsCentre} {b.BoundsRadius}"));
+            // Polygons compare as multisets: a model may hold the same polygon twice.
+            var pa = Polygons(a); var pb = Polygons(b);
+            var onlyA = Polygon.Unmatched(pa, pb); var onlyB = Polygon.Unmatched(pb, pa);
+            if (onlyA.Count > 0 || onlyB.Count > 0)
+                list.Add(("model.polygons", $"{pa.Length}: {Polygon.Describe(onlyA.First)}", $"{pb.Length} ({pa.Length - onlyA.Count} identical): {Polygon.Describe(onlyB.First)}"));
+            return modelDifferences[(a, b)] = [.. list];
+        }
+
+        public bool Interchangeable(WorldNode x, WorldNode y, int depth)
+        {
+            if (ReferenceEquals(x, y)) return true;
+            if (--checks < 0 || depth > 64 || x.Name != y.Name || x.Class != y.Class || x.Flags != y.Flags || (x.Zone & 0xFF) != (y.Zone & 0xFF)
+                || (x.GridColumn, x.GridRow) != (y.GridColumn, y.GridRow) || x.Children.Count != y.Children.Count) return false;
+            if ((checks & 0xFFF) == 0) token.ThrowIfCancellationRequested();
+            if (depth == 0 && !x.Parents.ToHashSet(ReferenceEqualityComparer.Instance).SetEquals(y.Parents)) return false;
+            if (interchangeable.TryGetValue((x, y, depth), out bool known)) return known;
+            bool same = OwnSame(x, y) && ChildrenSame(x, y, depth);
+            interchangeable[(x, y, depth)] = same;
+            return same;
+        }
+        private bool OwnSame(WorldNode x, WorldNode y)
+        {
+            if (x.Class == WorldNodeClass.Object3D)
+            {
+                if (!Close(WorldUpdate.LocalMatrix(x) ?? Matrix4x4.Identity, WorldUpdate.LocalMatrix(y) ?? Matrix4x4.Identity) || (x.PayloadInt(0) & 0x3F) != (y.PayloadInt(0) & 0x3F)) return false;
+                for (int o = 0x18; o < 0x30; o += 4) if (x.PayloadFloat(o) != y.PayloadFloat(o)) return false;
+            }
+            else if (!x.Payload.AsSpan().SequenceEqual(y.Payload)) return false;
+            return ReferenceEquals(x.Model, y.Model) || x.Model != null && y.Model != null && ModelDifferences(x.Model, y.Model).Length == 0;
+        }
+        /// <summary>The children as multisets: each of x's takes an unused one of y's indistinguishable from it, those of its structure and position first.</summary>
+        private bool ChildrenSame(WorldNode x, WorldNode y, int depth)
+        {
+            if (x.Children.Count == 0) return true;
+            bool[] used = new bool[y.Children.Count];
+            Dictionary<(string, ulong, Vector3), List<int>> placed = [];
+            Dictionary<string, List<int>> named = new(StringComparer.Ordinal);
+            (string, ulong, Vector3) Key(WorldNode node) => (node.Name, Structure(node), Round(At(node)));
+            for (int j = 0; j < y.Children.Count; j++)
+            {
+                var child = y.Children[j];
+                if (!placed.TryGetValue(Key(child), out var list)) placed[Key(child)] = list = []; list.Add(j);
+                if (!named.TryGetValue(child.Name, out list)) named[child.Name] = list = []; list.Add(j);
+            }
+            foreach (var child in x.Children)
+            {
+                int found = placed.TryGetValue(Key(child), out var list) ? Take(list, child) : -1;
+                if (found < 0 && named.TryGetValue(child.Name, out list)) found = Take(list, child);
+                if (found < 0) return false;
+                used[found] = true;
+            }
+            return true;
+            // The first unused candidate indistinguishable from child; candidates taken meanwhile leave the list.
+            int Take(List<int> list, WorldNode child)
+            {
+                for (int k = 0; k < list.Count; k++)
+                {
+                    int j = list[k];
+                    if (used[j]) { list[k--] = list[^1]; list.RemoveAt(list.Count - 1); continue; }
+                    if (Interchangeable(child, y.Children[j], depth + 1)) return j;
+                }
+                return -1;
+            }
+        }
     }
-    private static string Bounded(string? text) => text == null ? "" : text.Length > 400 ? text[..400] + "…" : text;
+
+    /// <summary>A polygon as models compare it: its corners at rounded positions with their UVs, its material and draw attributes.</summary>
+    private readonly record struct Polygon(Vector3[] Rounded, WorldPolygon Source, ulong Hash)
+    {
+        private Vector3 Corner(int i) => Source.Vertices[i] is int v && v >= 0 && v < Rounded.Length ? Rounded[v] : new(float.NaN);
+        private (bool, Vector2) Uv(int i) => Source.Uvs.Length == 0 ? (false, default) : (true, i < Source.Uvs.Length ? Source.Uvs[i] : new(float.NaN));
+        public static ulong HashOf(Vector3[] rounded, WorldPolygon source)
+        {
+            Polygon p = new(rounded, source, 0);
+            var m = source.Material;
+            ulong hash = Mix(Mix(Mix(Mix((ulong)source.Vertices.Length, (ulong)source.Priority), source.Flags & 0x100), source.Zone), source.Normals.Length > 0 ? 1UL : 0);
+            hash = m == null ? Mix(hash, ulong.MaxValue) : Mix(Mix(Mix(Mix(Mix(Mix(hash, Text(m.Texture?.Name ?? "")), Bits(m.Color.X)), Bits(m.Color.Y)), Bits(m.Color.Z)), (ulong)(m.Flags & 0xFF)), m.Soil);
+            for (int i = 0; i < source.Vertices.Length; i++)
+            {
+                var (c, (has, uv)) = (p.Corner(i), p.Uv(i));
+                hash = Mix(Mix(Mix(Mix(hash, Bits(c.X)), Bits(c.Y)), Bits(c.Z)), has ? Bits(uv.X) | (ulong)Bits(uv.Y) << 32 : ulong.MaxValue);
+            }
+            return hash;
+        }
+        public bool Matches(Polygon other)
+        {
+            WorldPolygon a = Source, b = other.Source;
+            if (Hash != other.Hash || a.Vertices.Length != b.Vertices.Length || a.Priority != b.Priority || (a.Flags & 0x100) != (b.Flags & 0x100) || a.Zone != b.Zone
+                || (a.Normals.Length > 0) != (b.Normals.Length > 0)) return false;
+            if (a.Material is { } x ? b.Material is not { } y || (x.Texture?.Name ?? "") != (y.Texture?.Name ?? "") || !x.Color.Equals(y.Color) || (x.Flags & 0xFF) != (y.Flags & 0xFF) || x.Soil != y.Soil : b.Material != null) return false;
+            for (int i = 0; i < a.Vertices.Length; i++) if (!Corner(i).Equals(other.Corner(i)) || !Uv(i).Equals(other.Uv(i))) return false;
+            return true;
+        }
+        /// <summary>How many of <paramref name="a"/> are left after removing one match in <paramref name="b"/> for each, and the first of them.</summary>
+        public static (int Count, Polygon? First) Unmatched(Polygon[] a, Polygon[] b)
+        {
+            Dictionary<Polygon, int> counts = new(Comparer.Instance);
+            foreach (var p in b) counts[p] = counts.GetValueOrDefault(p) + 1;
+            int left = 0; Polygon? first = null;
+            foreach (var p in a)
+                if (counts.TryGetValue(p, out int n) && n > 0) counts[p] = n - 1;
+                else { left++; first ??= p; }
+            return (left, first);
+        }
+        /// <summary>The polygon as a difference shows it (at most 400 characters).</summary>
+        public static string Describe(Polygon? polygon)
+        {
+            if (polygon is not { } p) return "";
+            StringBuilder text = new();
+            for (int i = 0; i < p.Source.Vertices.Length && text.Length <= 400; i++)
+                text.Append(i > 0 ? ";" : "").Append($"{p.Corner(i)}|{(p.Uv(i) is (true, var uv) ? uv.ToString() : "")}");
+            var m = p.Source.Material;
+            text.Append($"#{m?.Texture?.Name}{m?.Color}{m?.Flags & 0xFF:X}s{m?.Soil}p{p.Source.Priority}f{p.Source.Flags & 0x100:X}z{p.Source.Zone:X}n{p.Source.Normals.Length > 0}");
+            return text.Length > 400 ? text.ToString(0, 400) + "…" : text.ToString();
+        }
+        private sealed class Comparer : IEqualityComparer<Polygon>
+        {
+            public static readonly Comparer Instance = new();
+            public bool Equals(Polygon x, Polygon y) => x.Matches(y);
+            public int GetHashCode(Polygon p) => (int)p.Hash ^ (int)(p.Hash >> 32);
+        }
+    }
+
+    /// <summary>Names joined by commas, kept to about <see cref="MaximumText"/> characters; a longer list ends with how many it holds.</summary>
+    private static string Names(IEnumerable<string> names)
+    {
+        StringBuilder text = new(); int count = 0, shown = 0;
+        foreach (var name in names) { if (text.Length < MaximumText) text.Append(shown++ > 0 ? "," : "").Append(name); count++; }
+        return shown < count ? text.Append($",… ({count} in all)").ToString() : text.ToString();
+    }
+    private static ulong Text(string text) { ulong hash = 0xCBF29CE484222325; foreach (char c in text) hash = (hash ^ c) * 0x100000001B3; return hash; }
+    /// <summary>A float's bits, with 0 and -0 alike and every NaN alike, as <see cref="float.Equals(float)"/> compares them.</summary>
+    private static uint Bits(float value) => value == 0 ? 0 : float.IsNaN(value) ? 0x7FC00000 : BitConverter.SingleToUInt32Bits(value);
+    /// <summary>A deterministic mix of a hash and a value (keys must order the same way in every run).</summary>
+    private static ulong Mix(ulong hash, ulong value)
+    {
+        ulong z = (hash ^ value * 0xC2B2AE3D27D4EB4FUL) + 0x9E3779B97F4A7C15UL + (hash << 6) + (hash >> 2);
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+        return z ^ (z >> 31);
+    }
     private static Vector3 Round(Vector3 v) => new(MathF.Round(v.X, 3), MathF.Round(v.Y, 3), MathF.Round(v.Z, 3));
     private static bool Close(Matrix4x4 a, Matrix4x4 b)
     {

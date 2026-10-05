@@ -197,16 +197,15 @@ public static class WorldLookups
         // Without any difference in what the lookups find (slot, path and candidates), nothing changed and no pairing is needed.
         var candidates = a.Where(x => later.TryGetValue(x.Key, out var y) && x.MayDiffer(y)).ToList();
         if (candidates.Count == 0) return [];
-        Dictionary<WorldNode, WorldNode> counterpart = new(ReferenceEqualityComparer.Instance);
-        void Walk(WorldComparisonNode n) { if (n.Expected is { } x && n.Actual is { } y) counterpart.TryAdd(x, y); foreach (var c in n.Children) Walk(c); }
-        foreach (var root in WorldComparer.CompareTree(before, after, token: token).Roots) Walk(root);
+        // Every node's counterpart, including those of places too many for the comparison's tree.
+        var counterpart = WorldComparer.CompareTree(before, after, token: token).Counterparts;
         var nodesBefore = Nodes(before); var nodesAfter = Nodes(after);
         List<SourceLookupChange> changes = [];
         foreach (var x in candidates)
         {
             var y = later[x.Key];
             WorldNode? p = nodesBefore.GetValueOrDefault(x.Slot), q = nodesAfter.GetValueOrDefault(y.Slot);
-            bool same = p == null ? q == null : q != null && (ReferenceEquals(counterpart.GetValueOrDefault(p), q) || counterpart.GetValueOrDefault(p) is { } c && WorldComparer.Interchangeable(c, q, 0));
+            bool same = p == null ? q == null : q != null && (ReferenceEquals(counterpart.GetValueOrDefault(p), q) || counterpart.GetValueOrDefault(p) is { } c && WorldComparer.Interchangeable(c, q, 0, token));
             if (!same) changes.Add(new(x, y));
         }
         return changes;
