@@ -145,8 +145,8 @@ public static class GltfNodeEdits
         SetLocal((JsonObject)nodes[index]!, local);
     }
 
-    private static uint? OwnZone(JsonObject node) =>
-        node["extras"]?[WorldGltf.Key]?["zone"] is JsonValue v && v.TryGetValue(out double zone) && double.IsFinite(zone) ? (uint)(long)zone & 0xFF : null;
+    /// <summary>The zone a node states (its zone, or its zone word's low byte), which its children inherit.</summary>
+    private static uint? OwnZone(JsonObject node) => WorldGltf.StatedZone((node["extras"] as JsonObject)?[WorldGltf.Key]);
     /// <summary>The zone a node at <paramref name="index"/> takes within the file: its own or its nearest ancestor's; null when it comes from outside.</summary>
     private static uint? FileZone(JsonArray nodes, int? index)
     {

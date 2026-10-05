@@ -79,7 +79,7 @@ public static class SourceTerrainConversion
         string surfaces = $"{folder}/{stem}_terrain.gltf", recipe = $"{folder}/{stem}_terrain{TerrainRecipe.Extension}", buffer = $"{folder}/{stem}_terrain.bin";
         if (workspace.Exists(surfaces) || workspace.Exists(recipe) || workspace.Exists(buffer)) throw new InvalidDataException($"{surfaces}, {buffer} or {recipe} already exists; the database was converted before.");
         var json = (JsonArray)root["nodes"]!;
-        List<TerrainConversionKept> kept = [];
+        List<TerrainConversionKept> kept = []; HashSet<string> shared = new(StringComparer.Ordinal);
         Dictionary<(uint Flags, int Zone, string Values), List<GltfNode>> groups = [];
         foreach (var (node, inherited) in Members(doc.Roots, 0xFF))
         {
@@ -143,6 +143,9 @@ public static class SourceTerrainConversion
             {
                 if (!WorldGltf.IsGroup(node, database)) { yield return (node, inherited); continue; }
                 var extras = node.Extras?[WorldGltf.Key] as JsonObject;
+                // A group several parents share is written once per parent and imported from its first copy alone: its
+                // pieces would be converted once per copy, and the copies would no longer agree.
+                if (extras?["instance"] != null) { if (shared.Add(extras["instance"]!.ToJsonString())) kept.Add(new(WorldGltf.EngineName(node), "a group several parents share")); continue; }
                 if (extras?["ref"] != null) kept.Add(new(WorldGltf.EngineName(node), "a part of the mission database in a file of its own"));
                 foreach (var member in Members(node.Children, Zone(extras, inherited))) yield return member;
             }
@@ -209,10 +212,8 @@ public static class SourceTerrainConversion
     private static uint Flags(JsonObject? extras) =>
         extras?["flags"] is JsonValue v && v.TryGetValue(out string? hex)
             && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint flags) ? flags & WorldGltf.CarriedFlags : WorldGltf.DefaultCarried;
-    /// <summary>A node's zone as the importer reads it: a whole number, written as an integer or a float; without one, <paramref name="inherited"/>.</summary>
-    private static int Zone(JsonObject? extras, int inherited = 0xFF) => extras?["zone"] is JsonValue v
-        ? v.TryGetValue(out long whole) ? (int)(whole & 0xFF) : v.TryGetValue(out double zone) && zone == Math.Floor(zone) && Math.Abs(zone) < 9e18 ? (int)((long)zone & 0xFF) : inherited
-        : inherited;
+    /// <summary>A node's zone as the importer reads it (<see cref="WorldGltf.StatedZone"/>); without one, <paramref name="inherited"/>.</summary>
+    private static int Zone(JsonObject? extras, int inherited = 0xFF) => WorldGltf.StatedZone(extras) is { } zone ? (int)zone : inherited;
     /// <summary>The plan-view area a node's triangles cover.</summary>
     private static PathsD PlanArea(GltfNode node)
     {

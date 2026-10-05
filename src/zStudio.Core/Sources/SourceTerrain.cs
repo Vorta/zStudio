@@ -41,7 +41,8 @@ public static class SourceTerrain
     /// <summary>
     /// Creates a recipe for <paramref name="nodes"/> of the glTF file <paramref name="model"/> (each named once there, with a
     /// mesh) and adds a marker for it at the end of the mission database's roots (<paramref name="database"/>), as one change.
-    /// The surfaces must be in their own file: nodes of the database itself would also stay ordinary objects.
+    /// The surfaces must be in their own file: nodes of the database itself, or of a file it references (its parts), would
+    /// also stay ordinary objects.
     /// </summary>
     public static SourceTransaction Create(SourceWorkspace workspace, string database, string model, IReadOnlyList<string> nodes, string? recipePath = null, CancellationToken token = default)
     {
@@ -49,6 +50,10 @@ public static class SourceTerrain
         if (!database.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"The mission database {database} must be a .gltf file to hold a terrain marker.");
         if (!model.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) && !model.EndsWith(".glb", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{model} is not a glTF file.");
         if (model.Equals(database, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Terrain surfaces must be in their own glTF file, not in the mission database, whose nodes are objects of the world.");
+        // A file the database references (a part of it, or a model its objects reference) is loaded with it: its nodes would
+        // stay objects as well, and take their zones from the references.
+        if (Referenced(workspace, database, token).Contains(model))
+            throw new InvalidDataException($"{model} is loaded with the mission database (a part of it, or a model its objects reference), so its nodes are objects of the world; terrain surfaces must be in a glTF file of their own.");
         if (nodes.Count is 0 or > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"Choose 1–{TerrainRecipe.MaximumSurfaces} surfaces.");
         recipePath = Checked(recipePath ?? model[..model.LastIndexOf('.')] + TerrainRecipe.Extension);
         if (!recipePath.EndsWith(TerrainRecipe.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"A recipe's name ends with {TerrainRecipe.Extension}.");
@@ -96,6 +101,27 @@ public static class SourceTerrain
             && (parsed & WorldGltf.CarriedFlags) != WorldGltf.DefaultCarried ? parsed & WorldGltf.CarriedFlags : null;
         return new() { Flags = flags, NodeZone = !zone.Explicit ? null : zone.Zone == 0xFF ? TerrainAttributes.AnyZone : (int)zone.Zone };
     }
+    /// <summary>The files a glTF file references (<c>extras.recoil.ref</c>), and theirs in turn, as project paths.</summary>
+    private static HashSet<string> Referenced(SourceWorkspace workspace, string file, CancellationToken token)
+    {
+        HashSet<string> found = new(StringComparer.OrdinalIgnoreCase); Queue<string> pending = new([file]);
+        while (pending.TryDequeue(out var current) && found.Count < SourceProject.MaximumFiles)
+        {
+            token.ThrowIfCancellationRequested();
+            if (workspace.Read(current, token) is not { } bytes) continue;
+            JsonObject? root;
+            try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject; }
+            catch (JsonException) { continue; }
+            foreach (var node in root?["nodes"] as JsonArray ?? [])
+                if (((node as JsonObject)?["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject engine && engine["ref"] is JsonValue reference && reference.TryGetValue(out string? uri))
+                {
+                    string target;
+                    try { target = WorldAssembler.Relative(current, uri); } catch (InvalidDataException) { continue; }
+                    if (found.Add(target)) pending.Enqueue(target);
+                }
+        }
+        return found;
+    }
     /// <summary>The project path of a recipe surface's glTF file.</summary>
     public static string SurfaceFile(string recipe, TerrainSurface surface) => WorldAssembler.Relative(recipe, surface.Model);
     /// <summary>
@@ -109,9 +135,9 @@ public static class SourceTerrain
         while (pending.TryPop(out var item))
         {
             if (zones.ContainsKey(item.Node) || zones.Count > 1_000_000) continue;
-            bool own = (item.Node.Extras?[WorldGltf.Key] as JsonObject)?["zone"] is JsonValue z && z.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e18;
-            uint zone = own ? (uint)((long)((JsonValue)((JsonObject)item.Node.Extras![WorldGltf.Key]!)["zone"]!).GetValue<double>() & 0xFF) : item.Parent;
-            bool isExplicit = own || item.Explicit;
+            uint? own = WorldGltf.StatedZone(item.Node.Extras?[WorldGltf.Key]);
+            uint zone = own ?? item.Parent;
+            bool isExplicit = own != null || item.Explicit;
             zones[item.Node] = (zone, isExplicit);
             foreach (var child in item.Node.Children) pending.Push((child, zone, isExplicit));
         }

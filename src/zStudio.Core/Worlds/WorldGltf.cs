@@ -397,8 +397,11 @@ public static partial class WorldGltf
         uint carried = extras?["flags"] is { } flags ? Hex(flags, "flags", path) & CarriedFlags : DefaultCarried;
         node.Flags = (lod ? 0x0108001Cu : 0x0308001Cu) & ~CarriedFlags | carried;
         node.BoundsFlags = 4;
-        uint zone = extras?["zone"] is { } z ? (uint)Integer(z, "zone", path) & 0xFF : parentZone;
-        node.Zone = extras?["zoneWord"] is { } word ? Hex(word, "zoneWord", path) : zone;
+        // A node's zone is the low byte of its zone word: zone states it (also over the word's), and it is what the node's
+        // children inherit, so a word without a zone of its own passes its low byte on (see StatedZone).
+        uint? word = extras?["zoneWord"] is { } w ? Hex(w, "zoneWord", path) : null;
+        uint zone = extras?["zone"] is { } z ? (uint)Integer(z, "zone", path) & 0xFF : word is { } stated ? stated & 0xFF : parentZone;
+        node.Zone = word is { } full ? full & ~0xFFu | zone : zone;
         if (lod)
         {
             var fields = extras?["lod"] is { } values ? values as JsonArray ?? throw new InvalidDataException($"{path}: node {name} has an invalid lod record.") : [];
@@ -693,6 +696,19 @@ public static partial class WorldGltf
     public static bool IsGroup(GltfNode node, string path) => (node.Extras?[Key] as JsonObject)?["group"] is { } group && Flag(group, "group", path);
     /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>
     public static uint? RootFlags(GltfDocument doc) => (doc.SceneExtras?[Key] as JsonObject)?["rootFlags"] is { } flags ? Hex(flags, "rootFlags", "the scene") & CarriedFlags : null;
+    /// <summary>
+    /// The zone a node's engine values (<c>extras.recoil</c>) state, which its children inherit: its <c>zone</c>, else its
+    /// <c>zoneWord</c>'s low byte. Null when they state none (the node takes its parent's) or hold a value import refuses.
+    /// </summary>
+    public static uint? StatedZone(JsonNode? engine)
+    {
+        if (engine is not JsonObject values) return null;
+        if (values["zone"] is JsonValue zone)
+            return zone.TryGetValue(out long a) ? (uint)a & 0xFF : zone.TryGetValue(out int b) ? (uint)b & 0xFF : zone.TryGetValue(out uint c) ? c & 0xFF
+                : zone.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e15 ? (uint)(long)d & 0xFF : null;
+        return values["zoneWord"] is JsonValue word && word.TryGetValue(out string? text)
+            && uint.TryParse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint full) ? full & 0xFF : null;
+    }
 
     // Engine values in extras. Editors may rewrite their types (Blender stores a list mixing whole and fractional numbers
     // as floats, so 1 comes back as 1.0), so whole numbers are accepted in either form; anything else is invalid data.
