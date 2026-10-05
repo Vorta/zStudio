@@ -76,7 +76,7 @@ public partial class MainWindow
     }
     private void ShowReconstructionSummary(SourceReconstructionReport report)
     {
-        string skipped = report.NotReconstructed.Count > 0 ? $"\n{report.NotReconstructed.Count} game files were not reconstructed: {string.Join(", ", report.NotReconstructed.Take(5))}{(report.NotReconstructed.Count > 5 ? ", …" : "")}." : "";
+        string skipped = report.NotReconstructed.Count > 0 ? $"\n{report.NotReconstructed.Count} files were not reconstructed: {string.Join(", ", report.NotReconstructed.Take(5))}{(report.NotReconstructed.Count > 5 ? ", …" : "")}." : "";
         string notes = report.Notes.Count > 0 ? $"\n{report.Notes.Count} notes are listed in Problems." : "";
         MessageBox.Show(this, $"Reconstructed {report.SourceFiles:N0} source files into {report.Project}.{skipped}{notes}", "Source project ready", MessageBoxButton.OK, MessageBoxImage.Information);
     }
@@ -181,14 +181,16 @@ public partial class MainWindow
             // Without a profile, the one chosen in Tools → Build profile (as source_export uses), else the project's default.
             string? name = a["profile"] is null ? SourceProfileFor(root) : Text(a, "profile");
             profile = name == null ? profiles.Single(p => p.IsDefault) : profiles.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"The project has no build profile {name}.");
-            if (profile.Error != null) throw new InvalidDataException(profile.Error);
-            plan = await Task.Run(() => SourceBuilder.Plan(root, null, profile), token);
+            // A profile chosen in Tools → Build profile whose file can no longer be used: the status still lists every
+            // profile, with that one's error and no outputs, so the choice can be seen and another profile named.
+            if (profile.Error != null && a["profile"] is not null) throw new InvalidDataException(profile.Error);
+            plan = profile.Error != null ? [] : await Task.Run(() => SourceBuilder.Plan(root, null, profile), token);
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         return new
         {
-            project = root, profile = profile.Name, selected = SourceProfileFor(root) ?? profiles.Single(p => p.IsDefault).Name,
+            project = root, profile = profile.Name, profileError = profile.Error == null ? null : Bounded(profile.Error, 512), selected = SourceProfileFor(root) ?? profiles.Single(p => p.IsDefault).Name,
             profiles = profiles.Select(p => new
             {
                 name = p.Name, status = p.Status, @default = p.IsDefault, source = p.Source, description = Bounded(p.Description, 512), error = p.Error == null ? null : Bounded(p.Error, 512),

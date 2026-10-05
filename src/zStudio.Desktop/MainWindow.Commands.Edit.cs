@@ -97,7 +97,7 @@ public partial class MainWindow
             return Page(edits.Records, a, p => p.Type + " " + p.Source.ResourceName + " " + edits.TargetPath(p.Source.ArchivePath),
                 p => new { source = p.Source, p.Type, position = edits.Position(p.Source), rotationRadians = edits.Rotation(p.Source), p.OriginalPosition, scope = edits.Scope(p.Source).Description, target = edits.TargetPath(p.Source.ArchivePath) });
         });
-        Register(r, "pickup_lock", "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked. Pending drafts require explicit resolution.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.", true)], a =>
+        Register(r, "pickup_lock", "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked, and a 1998 demo world (GameZ version 13) stays locked (unlocking it is refused as read_only). Pending drafts require explicit resolution.", true, [DocumentParameter, RevisionParameter, P("locked", "boolean", "Whether Whole world cards and placement edits are locked; inverse of Unlock editing.", true)], a =>
         {
             var d = TargetDocument(a, true);
             if (!Flag(a, "locked") && PickupPlacementEditSession.ReadOnlyWorld(d.Document.Probe) is { } reason) throw new StudioCommandException("read_only", reason);

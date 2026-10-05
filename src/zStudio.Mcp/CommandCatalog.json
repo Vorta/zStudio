@@ -3276,7 +3276,7 @@
   },
   {
     "Name": "zstudio_pickup_lock",
-    "Description": "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked. Pending drafts require explicit resolution.",
+    "Description": "Gate Whole world object cards, selection bounds and transform editing. Locking closes the card; unlock alone does not select an object. Source/tree inspection and hover remain available. Legacy command/state names are retained; new documents start locked, and a 1998 demo world (GameZ version 13) stays locked (unlocking it is refused as read_only). Pending drafts require explicit resolution.",
     "Mutates": true,
     "Parameters": [
       {

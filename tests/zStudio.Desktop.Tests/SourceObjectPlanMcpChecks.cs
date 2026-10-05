@@ -85,6 +85,11 @@ internal static class SourceObjectPlanMcpChecks
                 Assert.True(job["State"]!.GetValue<string>() == expected, job.ToJsonString()); return job["result"]!;
             }
         }
-        finally { main.Close(); }
+        finally
+        {
+            // A failed assertion may leave unsaved edits: resolve them, so no Unsaved changes dialog blocks the next checks.
+            foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
+            main.Close();
+        }
     }
 }

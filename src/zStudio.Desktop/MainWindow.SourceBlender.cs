@@ -132,7 +132,10 @@ public partial class MainWindow
                 var d = TargetDocument(a); if (a["node"] == null) throw new StudioCommandException("invalid_argument", "Give a model path or a node.");
                 model = SourceObjectModel(d, Int(a, "node")) ?? throw new StudioCommandException("unsupported", "That object was not loaded from a model file.");
             }
-            return Result(CheckoutResult(await CheckoutForBlenderAsync(model, token)));
+            var checkout = await CheckoutForBlenderAsync(model, token);
+            // Written: the job completes with the checkout, even when a cancel arrives as it finishes (the copy stays).
+            CommitRunningJob();
+            return Result(CheckoutResult(checkout));
         });
         Register(r, "source_blender_checkouts", "List the open source project's Blender checkouts (newest first) with the exports found in each outbox (newest first).", false, [], _ =>
         {

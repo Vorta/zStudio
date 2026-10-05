@@ -153,6 +153,17 @@ internal static class ExportSafetyMcpChecks
         var profiles = ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().ToArray();
         Assert.False(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "old").IsEnabled);
         Assert.True(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "modern").IsChecked);
+        // The profile chosen in Tools → Build profile can break later: source_status still answers, listing the profiles with
+        // the chosen one's error, so another can be named.
+        fixture.Write("gamegen/build-profiles/fine.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" } ] }""");
+        typeof(MainWindow).GetMethod("ToolsMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+        ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "fine").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        fixture.Write("gamegen/build-profiles/fine.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" }, { "file": "texturemax.zbd", "maximumDimension": 2048 } ] }""");
+        status = await job("source_status", new(), "completed");
+        Assert.Equal(("fine", "fine"), (status["profile"]!.GetValue<string>(), status["selected"]!.GetValue<string>()));
+        Assert.Contains("software renderer", status["profileError"]!.GetValue<string>());
+        Assert.Equal(["fine", "modern", "old", "original"], status["profiles"]!.AsArray().Select(p => p!["name"]!.GetValue<string>()).Order());
+        File.Delete(fixture.Path("gamegen/build-profiles/fine.json"));
 
         // The checkout returns an operation, which can be cancelled, and completes with the checkout.
         var started = await call("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });

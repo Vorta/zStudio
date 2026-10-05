@@ -20,7 +20,7 @@ internal static class WorldCompareBoundsChecks
 {
     internal static async Task Run()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180)); var token = deadline.Token;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120)); var token = deadline.Token;
         string folder = Path.Combine(Path.GetTempPath(), "zstudio-compare-bounds-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         string retail = Path.Combine(folder, "retail.zbd"), rebuilt = Path.Combine(folder, "rebuilt.zbd"), ladder = Path.Combine(folder, "ladder.zbd"), ladderRebuilt = Path.Combine(folder, "ladder-rebuilt.zbd");
@@ -106,6 +106,7 @@ internal static class WorldCompareBoundsChecks
         }
         finally
         {
+            foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc);
             main.Close();
             try { Directory.Delete(folder, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
