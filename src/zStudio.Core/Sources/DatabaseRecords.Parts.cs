@@ -76,7 +76,8 @@ internal static partial class DatabaseRecords
         {
             this.slot = slot; this.isModelReference = isModelReference; this.mission = mission; this.token = token; this.tolerant = tolerant; this.prefix = prefix;
             deletedSlots = [.. deletion];
-            foreach (var o in database.Content) { top[slot[o]] = o; foreach (var n in WorldAssembler.Subtree(o)) live[slot[n]] = n; }
+            foreach (var o in database.Content) top[slot[o]] = o;
+            foreach (var n in WorldAssembler.Subtree(database.Content)) live[slot[n]] = n;
             int root = order[0];
             this.order = [.. order];
             for (int i = 0; i < order.Count; i++) position[order[i]] = i;
@@ -146,7 +147,7 @@ internal static partial class DatabaseRecords
         {
             if (list.Count == 0 || database.Content.Count == 0) return null;
             int root = list[0];
-            HashSet<int> objectSlots = [.. database.Content.SelectMany(WorldAssembler.Subtree).Select(n => slot[n])];
+            HashSet<int> objectSlots = [.. WorldAssembler.Subtree(database.Content).Select(n => slot[n])];
             int max = objectSlots.Max();
             // Two starting guesses, each refined by the order its caches leave; the better replay is kept.
             List<Parts> results = [];
@@ -179,16 +180,17 @@ internal static partial class DatabaseRecords
                 {
                     visited.Clear(); budget = MaximumRetainedAttempts;
                     Dictionary<int, WorldNode> live = [];
-                    foreach (var o in database.Content) foreach (var n in WorldAssembler.Subtree(o)) live[slot[n]] = n;
+                    foreach (var n in WorldAssembler.Subtree(database.Content)) live[slot[n]] = n;
                     // A plateau's boundaries settle alike, so each mark is tried once.
                     HashSet<int> marks = [];
                     foreach (var (deleted, high) in Boundaries())
                     {
                         if (budget <= 0) break;
                         if (marks.Contains(high)) continue;
+                        token.ThrowIfCancellationRequested();
                         // Only where the fresh slots can end the cache's copy (a quick check before any walk).
                         List<int> fresh = [root, .. Enumerable.Range(high, Math.Max(0, max - high + 2))];
-                        if (retained.Continue(fresh, live, list.Take(deleted).ToHashSet()) == null) continue;
+                        if (retained.Continue(fresh, live, list.Take(deleted).ToHashSet(), token) == null) continue;
                         marks.Add(high);
                         if (Settle(deleted, high, visited, ref budget, retained) is not { } settled) continue;
                         if (Refine(settled) is { } leftover) { results.Add(leftover); if (leftover.Inexact == null) break; }
@@ -230,27 +232,35 @@ internal static partial class DatabaseRecords
                 int[] below = new int[list.Count + 1]; below[last] = -1;
                 for (int i = last - 1; i >= 0; i--) below[i] = Math.Max(below[i + 1], list[i]);
                 List<(int Count, int High)> candidates = [];
+                // Each boundary once: those the first rule finds are among the plateaus' too.
+                HashSet<int> found = [];
                 for (int d = 1; d < last; d++)
                 {
+                    token.ThrowIfCancellationRequested();
                     int high = High(d, below);
                     if (high <= root) continue;
                     if (search) candidates.Add((d, high));
                     int top = list[d];
                     var run = objectSlots.Where(s => s < high).Concat(list.Take(d).Where(s => s < high)).ToHashSet();
-                    if (run.Count > 0 && run.Contains(root) && run.Min() == top - run.Count && run.Max() == top - 1) yield return (d, high);
+                    if (run.Count > 0 && run.Contains(root) && run.Min() == top - run.Count && run.Max() == top - 1 && found.Add(d)) yield return (d, high);
                 }
                 // Each plateau's first boundary, then each one's second, and so on: a plateau's first boundary usually settles on
                 // its true one (1999 m6 settles from 78 on 81), and a long plateau must not take every attempt.
                 var plateaus = candidates.GroupBy(c => c.High).OrderByDescending(g => g.Count()).ThenBy(g => g.First().Count).Select(g => g.ToList()).ToList();
                 for (int rank = 0; plateaus.Any(p => rank < p.Count); rank++)
-                    foreach (var plateau in plateaus.Where(p => rank < p.Count)) yield return plateau[rank];
+                    foreach (var plateau in plateaus.Where(p => rank < p.Count))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (found.Add(plateau[rank].Count)) yield return plateau[rank];
+                    }
             }
 
             // From a boundary, the boundary its caches' simulation gives back, until it gives back its own: the tolerant attempt
-            // there, or null when the walk fails or the boundaries cycle.
+            // there, or null when the walk fails or the boundaries cycle. Only an attempt costs budget; a boundary seen before
+            // (reached again from another start) ends the walk at no cost.
             Parts? Settle(int deleted, int high, HashSet<(int, int)> visited, ref int budget, Retained? prefix)
             {
-                while (budget-- > 0 && visited.Add((deleted, high)))
+                while (visited.Add((deleted, high)) && budget-- > 0)
                 {
                     var attempt = Attempt([root, .. Enumerable.Range(high, Math.Max(0, max - high + 2))], list.Take(deleted).ToList(), tolerant: true, prefix);
                     if (attempt?.Leftover is not { } leftover) return null;
@@ -286,7 +296,7 @@ internal static partial class DatabaseRecords
             if (prefix != null)
             {
                 // The fresh slots first continue the first cache's copy: that is passed over, and the cache is the first one.
-                if (prefix.Continue(order, live, deletedSlots) is not var (reference, passed)) return false;
+                if (prefix.Continue(order, live, deletedSlots, token) is not var (reference, passed)) return false;
                 at = 1 + passed;
                 prefixReference = reference;
                 Content[reference] = [.. reference.Children];
@@ -458,9 +468,11 @@ internal static partial class DatabaseRecords
 
         // ------------------------------------------------------------ the caches
 
+        /// <summary>The cache a part's reference copies: references with the same key copy one cache (one file).</summary>
+        public string CacheKey(WorldNode reference) => Key(reference);
         private string Key(WorldNode node)
         {
-            if (Content.TryGetValue(node, out var content)) return "part:" + string.Join(";", content.Select(Signature));
+            if (Content.TryGetValue(node, out var content)) return "part:" + Signatures.Of(content);
             string file = node.Name.ToLowerInvariant();
             if (SecondPaths.TryGetValue(node, out int path)) return $"{file}#{path}";
             return Place(node) is { } place && FilePaths.Contains(place) ? $"{file}#{place.File}" : file;
@@ -559,7 +571,9 @@ internal static partial class DatabaseRecords
                 }
             return false;
         }
-        private string Signature(WorldNode node) => node.Name + (Made.ContainsKey(node) ? "~" : "") + "(" + string.Join(",", node.Children.Select(Signature)) + ")";
+        /// <summary>A part's records by their names and shape, the deleted ones marked (see <see cref="Key"/>).</summary>
+        private Shapes? signatureShapes;
+        private Shapes Signatures => signatureShapes ??= new(node => node.Name + (Made.ContainsKey(node) ? "~" : ""));
 
         /// <summary>
         /// Copies of one cache share its models, and another cache of the file (a second path) has models of its own. Where
@@ -610,8 +624,10 @@ internal static partial class DatabaseRecords
 
         private List<WorldNode> ReferencesInOrder()
         {
-            // A walk passing over records made before the fresh slots: their references were among the first.
-            List<WorldNode> found = prefixReference != null ? [prefixReference] : tolerant ? [.. live.Where(p => !position.ContainsKey(p.Key) && isModelReference(p.Value) && !live.Values.Any(o => o.Children.Contains(p.Value) && isModelReference(o))).OrderBy(p => p.Key).Select(p => p.Value)] : [];
+            // A walk passing over records made before the fresh slots: their references were among the first (those not
+            // inside another reference's content).
+            HashSet<WorldNode>? held = prefixReference == null && tolerant ? new(live.Values.Where(isModelReference).SelectMany(o => o.Children), ReferenceEqualityComparer.Instance) : null;
+            List<WorldNode> found = prefixReference != null ? [prefixReference] : held != null ? [.. live.Where(p => !position.ContainsKey(p.Key) && isModelReference(p.Value) && !held.Contains(p.Value)).OrderBy(p => p.Key).Select(p => p.Value)] : [];
             void Walk(WorldNode node)
             {
                 if (Content.TryGetValue(node, out var content)) { found.Add(node); foreach (var child in node.Children.Where(c => !content.Contains(c))) Walk(child); return; }
@@ -636,8 +652,8 @@ internal static partial class DatabaseRecords
             private readonly WorldNode root;
             private readonly List<WorldNode> copyOrder;
             private readonly HashSet<WorldNode> lostReferences;
-            private readonly ILookup<string, WorldNode> references;
-            private readonly Dictionary<WorldNode, string> shapes = new(ReferenceEqualityComparer.Instance);
+            private readonly ILookup<int, WorldNode> references;
+            private readonly Shapes outlines = new(_ => ""); private readonly Dictionary<WorldNode, int> outlined = new(ReferenceEqualityComparer.Instance);
             private HashSet<string>? liveNames;
 
             private Retained(WorldNode root, HashSet<WorldNode> lostReferences, IEnumerable<WorldNode> references)
@@ -649,7 +665,7 @@ internal static partial class DatabaseRecords
                 this.references = references.ToLookup(Shape);
             }
 
-            private string Shape(WorldNode n) => shapes.TryGetValue(n, out var known) ? known : shapes[n] = "(" + string.Join(",", n.Children.Select(Shape)) + ")";
+            private int Shape(WorldNode n) => outlines.Of(n, outlined);
 
             /// <param name="references">The world's references, which name references whose names were lost.</param>
             public static Retained? Read(List<int> list, IReadOnlyDictionary<int, string> kept, IEnumerable<WorldNode> references)
@@ -701,13 +717,14 @@ internal static partial class DatabaseRecords
             /// reference to the cache's file (its children the cache's records, named where the copy shows them) and how many
             /// fresh slots the copy takes, or null when the copy's end is not there.
             /// </summary>
-            public (WorldNode Reference, int Passed)? Continue(IReadOnlyList<int> order, IReadOnlyDictionary<int, WorldNode> live, IReadOnlySet<int> deleted)
+            public (WorldNode Reference, int Passed)? Continue(IReadOnlyList<int> order, IReadOnlyDictionary<int, WorldNode> live, IReadOnlySet<int> deleted, CancellationToken token)
             {
                 liveNames ??= [.. live.Values.Select(n => n.Name)];
                 for (int k = 0; k <= copyOrder.Count; k++)
                 {
                     int length = copyOrder.Count - k;
                     if (1 + length > order.Count) continue;
+                    token.ThrowIfCancellationRequested();
                     bool fits = true;
                     for (int i = 0; i < length && fits; i++)
                     {
@@ -752,13 +769,18 @@ internal static partial class DatabaseRecords
         {
             Dictionary<WorldNode, int> taken = new(ReferenceEqualityComparer.Instance);
             Dictionary<WorldNode, WorldNode> original = new(ReferenceEqualityComparer.Instance);
-            var root = OriginalLoader.Mirror(name, content, original, ContentOf);
+            // Each node's content once, as a set: asked per child, a wide part would cost its width for every child.
+            Dictionary<WorldNode, HashSet<WorldNode>> contents = new(ReferenceEqualityComparer.Instance);
+            HashSet<WorldNode> ContentSet(WorldNode node) => contents.TryGetValue(node, out var found) ? found : contents[node] = new(ContentOf(node), ReferenceEqualityComparer.Instance);
+            System.Runtime.CompilerServices.StrongBox<int> mirrored = new();
+            var root = OriginalLoader.Mirror(name, content, original, ContentOf, token, mirrored);
             OriginalLoader.Load(root, root.Children.ToList(), root.Children.ToList(), new()
             {
                 Allocate = n => taken[n] = table.Take(),
                 Free = n => table.Push(taken[n]),
-                Content = m => original.TryGetValue(m, out var o) ? [.. m.Children.Where(c => original.TryGetValue(c, out var oc) && ContentOf(o).Contains(oc))] : [],
+                Content = m => original.TryGetValue(m, out var o) ? [.. m.Children.Where(c => original.TryGetValue(c, out var oc) && ContentSet(o).Contains(oc))] : [],
                 File = m => original.TryGetValue(m, out var o) ? Key(o) : m.Name,
+                Token = token, Mirrored = mirrored,
             });
             List<int> freedOrder = [];
             OriginalLoader.Destroy(root, x => freedOrder.Add(taken[x]));
@@ -1057,11 +1079,11 @@ internal static partial class DatabaseRecords
                     bool exact = FreesNext(freedOrder, exact: true);
                     if (!exact && Fits(offset >= 0 ? offset : 0, freedOrder, exact: false) && Pops(group.Name, items, out var popped, out var poppedOrder) && FreesNext(poppedOrder, exact: true))
                     { exact = true; trial = popped; }
-                    if (!exact && !FreesNext(freedOrder, exact: false)) { foreach (var made in items.SelectMany(WorldAssembler.Subtree).Where(Made.ContainsKey).ToList()) Made.Remove(made); continue; }
+                    if (!exact && !FreesNext(freedOrder, exact: false)) { foreach (var made in WorldAssembler.Subtree(items).Where(Made.ContainsKey).ToList()) Made.Remove(made); continue; }
                     if (!exact) Inexact ??= $"the cache of the part beginning with {items[0].Name} frees its slots in another order than the shipped free list shows";
                     // The database's records in the range become the copy.
                     HashSet<int> inRange = [.. Enumerable.Range(from + 1, end - from).Select(z => order[z])];
-                    HashSet<WorldNode> fresh = new(items.SelectMany(WorldAssembler.Subtree), ReferenceEqualityComparer.Instance);
+                    HashSet<WorldNode> fresh = new(WorldAssembler.Subtree(items), ReferenceEqualityComparer.Instance);
                     HashSet<WorldNode> stale = new(Made.Where(p => inRange.Contains(p.Value) && !fresh.Contains(p.Key)).Select(p => p.Key), ReferenceEqualityComparer.Instance);
                     bool InRange(WorldNode c) => stale.Contains(c) || (!Made.ContainsKey(c) && slot.TryGetValue(c, out int cs) && inRange.Contains(cs));
                     var own = group.Children.Where(c => !InRange(c)).ToList();
@@ -1132,6 +1154,7 @@ internal static partial class DatabaseRecords
                 Free = n => t.Push(taken[n]),
                 Content = ContentOf,
                 File = Key,
+                Token = token,
             });
             Matched = matched;
             if (mismatch != null) { Inexact ??= $"{mismatch} ({matched} nodes took their slots first)"; return; }

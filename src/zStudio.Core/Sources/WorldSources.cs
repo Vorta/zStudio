@@ -53,6 +53,8 @@ internal static partial class WorldSources
         Dictionary<WorldNode, string> hashes = new(ReferenceEqualityComparer.Instance);
         Dictionary<(string Stem, string Hash), Unit> references = [];
         Dictionary<WorldNode, (Unit Unit, int Mission)> referenceOf = new(ReferenceEqualityComparer.Instance);
+        // Each part's file by the name its references share (mN_NN.flt, unique to its mission).
+        Dictionary<string, Unit> partUnits = new(StringComparer.OrdinalIgnoreCase);
         List<(int Mission, LoadedModel Load, string Hash)> traced = [];
         Dictionary<(string Folder, string Stem, string Hash), Unit> loadUnits = [];
         HashSet<WorldNode> roots = new(ReferenceEqualityComparer.Instance);
@@ -66,7 +68,8 @@ internal static partial class WorldSources
         string? Spelled(WorldNode reference, string? uri) => uri == null ? null : string.Concat(Enumerable.Repeat("./", secondPaths.GetValueOrDefault(reference))) + uri;
 
         List<(int Mission, List<LoadedModel> Loads, List<WorldNode> DatabaseReferences)> decompositions = [];
-        HashSet<(string LoadFile, string Reference, int Occurrence)> laterPaths = [];
+        // The second paths each mission's database inference found in model files, with the loads it checked them on.
+        List<(HashSet<(string LoadFile, string Reference, int Occurrence)> Paths, List<LoadedModel> Loads)> laterPaths = [];
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
@@ -82,38 +85,44 @@ internal static partial class WorldSources
             // The database in its file's record order, with the groups the build deleted.
             int database = decomposed.FindIndex(l => l.Database);
             List<WorldNode> databaseReferences = [];
-            if (database >= 0 && DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token) is { } records)
+            DatabaseRecords.Records? records = null;
+            // A world the inference cannot replay (its caches exceed what a load can hold) keeps its order, like any other.
+            try { if (database >= 0) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token); }
+            catch (InvalidDataException ex) { notes.Add($"m{mission.Mission}: the mission database keeps the world's object order without its groups: {ex.Message}"); }
+            if (records != null)
             {
                 decomposed[database] = decomposed[database] with { Content = records.Roots };
                 groups.UnionWith(records.Groups);
                 foreach (var (reference, content) in records.Parts) parts[reference] = content;
                 foreach (var (reference, path) in records.SecondPaths) secondPaths[reference] = path;
                 databaseReferences = DatabaseReferences(records.Roots);
-                laterPaths.UnionWith(records.LaterPaths);
+                // The inference replayed the loads after the database (and the database) with these paths, the loads
+                // before it without them; another mission's file of the name is another reading.
+                if (records.LaterPaths.Count > 0)
+                    laterPaths.Add(([.. records.LaterPaths], [.. decomposed.Where(l => l.Database || l.Root != null && l.Step > decomposed[database].Step)]));
             }
             decompositions.Add((mission.Mission, decomposed, databaseReferences));
         }
-        // A model file that named another file by a second path does so wherever it is loaded or referenced.
-        void Paths(string file, IReadOnlyList<WorldNode> records)
+        // A model file that named another file by a second path does so where it is loaded or referenced in those loads.
+        void Paths(string file, IReadOnlyList<WorldNode> records, HashSet<(string, string, int)> found)
         {
             foreach (var group in OwnReferences(records).GroupBy(r => r.Name.ToLowerInvariant()))
                 for (int k = 1; k < group.Count(); k++)
-                    if (laterPaths.Contains((file.ToLowerInvariant(), group.Key, k))) secondPaths[group.ElementAt(k)] = 1;
+                    if (found.Contains((file.ToLowerInvariant(), group.Key, k))) secondPaths[group.ElementAt(k)] = 1;
         }
         HashSet<WorldNode> pathsSeen = new(ReferenceEqualityComparer.Instance);
-        void PathsWithin(WorldNode node)
+        void PathsWithin(WorldNode node, HashSet<(string, string, int)> found)
         {
             if (!pathsSeen.Add(node)) return;
-            if (Reference(node) && !parts.ContainsKey(node)) Paths(node.Name, node.Children);
-            foreach (var child in node.Children) PathsWithin(child);
+            if (Reference(node) && !parts.ContainsKey(node)) Paths(node.Name, node.Children, found);
+            foreach (var child in node.Children) PathsWithin(child, found);
         }
-        if (laterPaths.Count > 0)
-            foreach (var (_, decomposed, _) in decompositions)
-                foreach (var load in decomposed.Where(l => l.Root != null || l.Database))
-                {
-                    if (!load.Database) Paths(load.File, load.Content);
-                    foreach (var record in load.Content) PathsWithin(record);
-                }
+        foreach (var (found, checkedLoads) in laterPaths)
+            foreach (var load in checkedLoads)
+            {
+                if (!load.Database) Paths(load.File, load.Content, found);
+                foreach (var record in load.Content) PathsWithin(record, found);
+            }
         foreach (var (mission, decomposed, databaseReferences) in decompositions)
         {
             // External references anywhere in loaded content, innermost first so their hashes are known.
@@ -165,11 +174,15 @@ internal static partial class WorldSources
             if (!visited.Add((node, mission))) return;
             foreach (var child in node.Children) Visit(child, mission, textureDirectories);
             if (!Reference(node) || referenceOf.ContainsKey(node)) return;
+            // The references the inference found copying one part's cache (one name) are one file, written from the first
+            // copy: another copy's records may differ where a script changed them after the load, which it does again.
+            if (parts.ContainsKey(node) && partUnits.TryGetValue(node.Name, out var part)) { part.Missions.Add(mission); referenceOf[node] = (part, mission); return; }
             var content = ContentOf(node);
             string hash = Hash(content, node.Zone & 0xFF);
             var key = (Stem(node.Name), hash);
             if (!references.TryGetValue(key, out var unit)) references[key] = unit = new(key.Item1, hash, content.ToList(), node.Zone & 0xFF) { TextureDirectories = textureDirectories };
             unit.Missions.Add(mission); referenceOf[node] = (unit, mission);
+            if (parts.ContainsKey(node)) partUnits[node.Name] = unit;
         }
         string Hash(IReadOnlyList<WorldNode> content, uint zone)
         {
@@ -209,12 +222,16 @@ internal static partial class WorldSources
         GatherEffects();
         foreach (var unit in loadUnits.Values.OrderBy(u => u.Folder, StringComparer.Ordinal).ThenBy(u => u.Stem, StringComparer.Ordinal).ThenBy(u => u.Missions.Min))
             Place(unit, unit.Folder!);
-        foreach (var (mission, load, unit) in loads)
-        {
-            string? resolved = load.Instruction.ModelDirectories.Select(d => $"{d}/{Stem(load.File)}.gltf").FirstOrDefault(taken.Contains);
-            if (resolved == null) notes.Add($"m{mission}: {load.File} is written to {unit.Path}, which the build does not search when it loads {load.NodeName}.");
-            else if (!resolved.Equals(unit.Path, StringComparison.OrdinalIgnoreCase)) notes.Add($"m{mission}: {load.File} ({load.NodeName}) resolves to {resolved}, not to its own version {unit.Path}.");
-        }
+        // The names loads find their files by, in the folders each searches up to its own file's: a reference's copy (found
+        // by its path) takes none of them, where it would shadow a load's file (such as a vehicle moved to data/common/models
+        // that a mission's own vehicle folder references).
+        HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var (_, load, unit) in loads)
+            foreach (string directory in load.Instruction.ModelDirectories)
+            {
+                reserved.Add($"{directory}/{Stem(load.File)}.gltf");
+                if (directory.Equals(unit.Folder, StringComparison.OrdinalIgnoreCase)) break;
+            }
 
         // External references are found by path from the file that names them. Each goes beside every file that
         // references it (following references of references), with the texture folders that file searched.
@@ -256,8 +273,15 @@ internal static partial class WorldSources
             // A file the folder already holds for a load with the same content serves the reference too.
             if (loadUnits.TryGetValue((folder, unit.Stem, unit.Hash), out var same)) { copyPaths[(unit, folder)] = same.Path!; continue; }
             string path = $"{folder}/{unit.Stem}.gltf";
-            for (int i = 2; !taken.Add(path); i++) path = $"{folder}/{unit.Stem}_{i}.gltf";
+            for (int i = 2; reserved.Contains(path) || !taken.Add(path); i++) path = $"{folder}/{unit.Stem}_{i}.gltf";
             copyPaths[(unit, folder)] = path;
+        }
+        // Each load finds its own file among every file written.
+        foreach (var (mission, load, unit) in loads)
+        {
+            string? resolved = load.Instruction.ModelDirectories.Select(d => $"{d}/{Stem(load.File)}.gltf").FirstOrDefault(taken.Contains);
+            if (resolved == null) notes.Add($"m{mission}: {load.File} is written to {unit.Path}, which the build does not search when it loads {load.NodeName}.");
+            else if (!resolved.Equals(unit.Path, StringComparison.OrdinalIgnoreCase)) notes.Add($"m{mission}: {load.File} ({load.NodeName}) resolves to {resolved}, not to its own version {unit.Path}.");
         }
         HashSet<Unit> copied = new(copies.Keys.Select(k => k.Unit), ReferenceEqualityComparer.Instance);
         foreach (var unit in references.Values.Where(u => !copied.Contains(u)).OrderBy(u => u.Stem, StringComparer.Ordinal))

@@ -369,15 +369,24 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// </summary>
     internal static WorldNode? FindSub(WorldNode node, string name) => Subtree(node).FirstOrDefault(n => n.Name == name);
     /// <summary>A node and its descendants, each once, in FindSubNodeByName's order; the walk keeps its own stack.</summary>
-    internal static IEnumerable<WorldNode> Subtree(WorldNode node)
+    internal static IEnumerable<WorldNode> Subtree(WorldNode node) => Subtree([node]);
+    /// <summary>
+    /// The nodes and their descendants, each once: records sharing nodes (instances) are walked together, not once per
+    /// record. Each subtree comes in FindSubNodeByName's order, without the nodes an earlier one held.
+    /// </summary>
+    internal static IEnumerable<WorldNode> Subtree(IEnumerable<WorldNode> roots)
     {
-        HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Stack<WorldNode> stack = new([node]);
-        while (stack.Count > 0)
+        HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Stack<WorldNode> stack = new();
+        foreach (var root in roots)
         {
-            var next = stack.Pop();
-            if (!seen.Add(next)) continue;
-            yield return next;
-            foreach (var child in next.Children) stack.Push(child);
+            stack.Push(root);
+            while (stack.Count > 0)
+            {
+                var next = stack.Pop();
+                if (!seen.Add(next)) continue;
+                yield return next;
+                foreach (var child in next.Children) stack.Push(child);
+            }
         }
     }
 
@@ -492,7 +501,10 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // Nodes take slots as the original loader made and freed them (caches of referenced files, the root, the records,
         // each reference's content after the next record). A referenced file's nodes are the children from another file.
         string FileOf(WorldNode node) => Provenance.TryGetValue(node, out var p) && p.ModelFile != null ? p.ModelFile : documentPath;
-        List<WorldNode> Content(WorldNode node) => [.. node.Children.Where(c => !string.Equals(FileOf(c), FileOf(node), StringComparison.OrdinalIgnoreCase))];
+        // Each node's content once: the loader asks for it several times per node (the load's children no longer change).
+        Dictionary<WorldNode, List<WorldNode>> contents = new(ReferenceEqualityComparer.Instance);
+        List<WorldNode> Content(WorldNode node) => contents.TryGetValue(node, out var found) ? found
+            : contents[node] = [.. node.Children.Where(c => !string.Equals(FileOf(c), FileOf(node), StringComparison.OrdinalIgnoreCase))];
         // The loader made a model when it read the node from its file (a cache's load or the file's own records), so the
         // load's models are in that order, as the world stores them.
         Dictionary<WorldModel, int> read = new(ReferenceEqualityComparer.Instance);
@@ -504,6 +516,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                 Allocate = Allocate, Free = Free, Content = Content,
                 File = node => $"{FileOf(node)}|{(referenceText.TryGetValue(node, out var text) ? text : FileOf(Content(node)[0]))}",
                 Read = node => { if (node.Model != null) read.TryAdd(node.Model, read.Count); },
+                // A reference to a file without nodes is cached and copied like any other.
+                IsReference = referenceText.ContainsKey, Token = token,
             });
         }
         finally
@@ -523,7 +537,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             { member.Parents.Add(pendingWorld); worldChildren.Add(member); }
         }
         // FindNode and AddChild take the newest node with a name, and the file's own nodes are newer than the root.
-        if (nodes.SelectMany(Subtree).Any(n => n.Name == name)) Warn($"{script}: {file} has a node of its own named {name}, so FindNode and AddChild {name} find that node rather than the loaded root.");
+        if (Subtree(nodes).Any(n => n.Name == name)) Warn($"{script}: {file} has a node of its own named {name}, so FindNode and AddChild {name} find that node rather than the loaded root.");
         pendingWorld = null; current = root;
         // The database's objects: its scene roots, and for a group the objects below it. A group's own transform would be
         // lost when the script deletes it (its objects keep theirs), so a group has none.

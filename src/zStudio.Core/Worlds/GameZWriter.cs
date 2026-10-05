@@ -191,7 +191,9 @@ public static class GameZWriter
     internal static List<object> SlotSequence(GameZWorld world)
     {
         List<object> slots = []; int live = 0;
-        while (live < world.Nodes.Count || world.FreedSlots.Keys.Any(k => k >= slots.Count))
+        // The last freed slot, found once: freed slots above every live node are written up to it.
+        int lastFreed = world.FreedSlots.Count > 0 ? world.FreedSlots.Keys.Max() : -1;
+        while (live < world.Nodes.Count || slots.Count <= lastFreed)
         {
             if (world.FreedSlots.TryGetValue(slots.Count, out var freed)) slots.Add(freed);
             else if (live < world.Nodes.Count) slots.Add(world.Nodes[live++]);

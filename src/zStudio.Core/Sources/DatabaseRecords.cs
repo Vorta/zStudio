@@ -67,15 +67,14 @@ internal static partial class DatabaseRecords
         foreach (var (_, load, node) in steps.Where(s => s.Step < database.Step))
         {
             token.ThrowIfCancellationRequested();
-            if (load != null) OriginalLoader.Load(load.Root!, load.Content, load.Content, new() { Allocate = n => Check(n, before.Take(n)), Free = before.Release, Content = Content, File = File });
+            if (load != null) OriginalLoader.Load(load.Root!, load.Content, load.Content, new() { Allocate = n => Check(n, before.Take(n)), Free = before.Release, Content = Content, File = File, Token = token });
             else Check(node!, before.Take(node!));
         }
         if (mismatch != null) return Fail($"before it, {mismatch}.");
 
         // 2. After the deletion the free list held every slot below the database's end that no live node holds, in an
         //    order the later nodes reveal: each entry is unknown until a node of the world takes it.
-        HashSet<int> objectSlots = [];
-        foreach (var o in database.Content) foreach (var n in WorldAssembler.Subtree(o)) objectSlots.Add(slot[n]);
+        HashSet<int> objectSlots = [.. WorldAssembler.Subtree(database.Content).Select(n => slot[n])];
         if (objectSlots.Count == 0) return Fail("it has no records.");
         int end = objectSlots.Max() + 1;
         HashSet<int> liveBefore = [.. before.Slots.Where(p => slot.ContainsKey(p.Key)).Select(p => p.Value)];
@@ -126,19 +125,23 @@ internal static partial class DatabaseRecords
             }
             if (parts is { Inexact: null }) break;
         }
+        // The second path a later load's free list needs also serves the file's later references that copy its cache,
+        // whichever reading of the database below is kept: they all build on that free list.
+        var followed = Follow(laterPaths);
         if (parts != null && parts.Inexact == null)
         {
             parts.FollowModels();
-            return FromParts(parts, world, mission) with { LaterPaths = [.. Follow(laterPaths), .. parts.FilePaths] };
+            return FromParts(parts, world, mission) with { LaterPaths = [.. followed, .. parts.FilePaths] };
         }
         // 4. Otherwise the database as one file, when its order gives every node its shipped slot; else the parts as far
         //    as they go, or the world's object order.
         var single = Single(out string? reason);
-        if (single != null) return single with { LaterPaths = laterPaths };
+        if (single != null) return single with { LaterPaths = followed };
         if (parts != null)
         {
             notes.Add($"{mission}: the mission database is reconstructed with {parts.Content.Count} parts in files of their own, but not every node takes its shipped slot when built: {parts.Inexact}.");
-            return FromParts(parts, world, mission) with { LaterPaths = [.. laterPaths, .. parts.FilePaths] };
+            parts.FollowModels();
+            return FromParts(parts, world, mission) with { LaterPaths = [.. followed, .. parts.FilePaths] };
         }
         return SlotOrder(reason!);
 
@@ -203,11 +206,12 @@ internal static partial class DatabaseRecords
         // Later loads of one file under one name whose nodes have the same names and shape.
         IEnumerable<(LoadedModel A, LoadedModel B)> Interchangeable()
         {
-            string Signature(WorldNode n) => n.Name + "(" + string.Join(",", n.Children.Select(Signature)) + ")";
             var later = build.Loads.Where(l => !l.Database && l.Root != null && l.Step > database.Step).ToList();
+            Shapes names = new(n => n.Name);
+            var shapes = later.Select(l => names.Of([l.Root!])).ToList();
             for (int i = 0; i < later.Count; i++)
                 for (int j = i + 1; j < later.Count; j++)
-                    if (string.Equals(later[i].File, later[j].File, StringComparison.OrdinalIgnoreCase) && later[i].NodeName == later[j].NodeName && Signature(later[i].Root!) == Signature(later[j].Root!))
+                    if (string.Equals(later[i].File, later[j].File, StringComparison.OrdinalIgnoreCase) && later[i].NodeName == later[j].NodeName && shapes[i] == shapes[j])
                         yield return (later[i], later[j]);
         }
 
@@ -234,7 +238,7 @@ internal static partial class DatabaseRecords
         foreach (var (_, load, node) in steps.Where(s => s.Step > database.Step))
         {
             token.ThrowIfCancellationRequested();
-            if (load != null) OriginalLoader.Load(load.Root!, load.Content, load.Content, new() { Allocate = Take, Free = n => pushed.Push(marks[n]), Content = Content, File = n => otherPaths != null && otherPaths.Contains(n) ? File(n) + "#2" : File(n) });
+            if (load != null) OriginalLoader.Load(load.Root!, load.Content, load.Content, new() { Allocate = Take, Free = n => pushed.Push(marks[n]), Content = Content, File = n => otherPaths != null && otherPaths.Contains(n) ? File(n) + "#2" : File(n), Token = token });
             else Take(node!);
         }
         if (mismatch != null) { failure = $"after it, {mismatch}."; return null; }
@@ -286,7 +290,7 @@ internal static partial class DatabaseRecords
                     else { WorldNode group = Group(); groups.Add(group); records.Add(group); yield return group; }
                 }
             }
-            OriginalLoader.Load(root, Records(), order, new() { Allocate = n => Check(n, table.Take(n)), Free = table.Release, Content = DatabaseContent, File = File });
+            OriginalLoader.Load(root, Records(), order, new() { Allocate = n => Check(n, table.Take(n)), Free = table.Release, Content = DatabaseContent, File = File, Token = token });
             List<WorldNode> recorded = [.. records.Where(r => !groups.Contains(r))];
             bool settled = inline.Count == inlineBefore && recorded.SequenceEqual(order);
             order = [.. recorded, .. order.Where(o => !placed.Contains(o))];
@@ -348,30 +352,31 @@ internal static partial class DatabaseRecords
     /// <summary>
     /// The records of the parts model. Deleted nodes keep the names their freed slots still hold, else <c>groupN</c>; a
     /// reference to a part is named for the mission database and its part, <c>mN_NN.flt</c> (the files' names are lost),
-    /// with the same name for references whose parts are equal.
+    /// with the same name for references the replay cached as one: copies of one cache, one file.
     /// </summary>
     private static Records FromParts(Parts parts, GameZWorld world, string mission)
     {
         parts.OrderChildren();
         var freedSlots = world.FreedSlots;
-        int groupCount = 0, partCount = 0;
+        int groupCount = 0;
+        var made = parts.Made.Where(p => !ReferenceEquals(p.Key, parts.Root) && p.Key.Name != "end").OrderBy(p => p.Value).ToList();
+        // Which references copy one cache, before any of the copies' groups is renamed.
+        Dictionary<WorldNode, string> keys = new(ReferenceEqualityComparer.Instance);
+        foreach (var (node, _) in made) if (parts.Content.ContainsKey(node)) keys[node] = parts.CacheKey(node);
         Dictionary<string, string> partNames = [];
         HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
-        foreach (var (node, at) in parts.Made.OrderBy(p => p.Value))
+        foreach (var (node, at) in made)
         {
-            if (ReferenceEquals(node, parts.Root) || node.Name == "end") continue;
             groups.Add(node);
-            if (parts.Content.TryGetValue(node, out var content))
+            if (keys.TryGetValue(node, out var key))
             {
-                string signature = string.Join(";", content.Select(c => Signature(c)));
-                if (!partNames.TryGetValue(signature, out var name)) partNames[signature] = name = $"{mission}_{++partCount:D2}.flt";
+                if (!partNames.TryGetValue(key, out var name)) partNames[key] = name = $"{mission}_{partNames.Count + 1:D2}.flt";
                 node.Name = name;
             }
             else node.Name = freedSlots.TryGetValue(at, out var bytes) && NameOf(bytes) is { Length: > 0 } kept ? kept : $"group{++groupCount}";
             // A deleted record: an object3d with no geometry and no transform, carrying the default flags.
             var shape = Group(); node.Flags = shape.Flags; node.Zone = shape.Zone; node.BoundsFlags = shape.BoundsFlags; node.SetPayloadInt(0, 0x28);
         }
-        string Signature(WorldNode n) => n.Name + "(" + string.Join(",", n.Children.Select(Signature)) + ")";
         return new([.. parts.Root.Children], groups,
             parts.Content.ToDictionary<KeyValuePair<WorldNode, List<WorldNode>>, WorldNode, IReadOnlyList<WorldNode>>(p => p.Key, p => p.Value, ReferenceEqualityComparer.Instance),
             new Dictionary<WorldNode, int>(parts.SecondPaths, ReferenceEqualityComparer.Instance));
@@ -383,6 +388,32 @@ internal static partial class DatabaseRecords
         HashSet<WorldModel> models = new(ReferenceEqualityComparer.Instance);
         foreach (var n in a) if (n.Model != null) models.Add(n.Model);
         return models.Count > 0 && b.Any(n => n.Model != null && models.Contains(n.Model));
+    }
+
+    /// <summary>
+    /// Numbers subtrees alike when their nodes' labels and shapes are alike. The numbers stay comparable from call to call,
+    /// and a call numbers each node once: a node reached along several edges (an instance) is not spelled out once per path.
+    /// </summary>
+    private sealed class Shapes(Func<WorldNode, string> label)
+    {
+        private readonly Dictionary<string, int> numbers = new(StringComparer.Ordinal);
+        /// <summary>The subtrees of <paramref name="nodes"/> as they are now.</summary>
+        public string Of(IEnumerable<WorldNode> nodes)
+        {
+            Dictionary<WorldNode, int> known = new(ReferenceEqualityComparer.Instance);
+            return string.Join(";", nodes.Select(n => Of(n, known)));
+        }
+        /// <param name="known">The nodes numbered so far, while none of them changes.</param>
+        public int Of(WorldNode node, Dictionary<WorldNode, int> known)
+        {
+            if (known.TryGetValue(node, out int number)) return number;
+            string own = label(node);
+            System.Text.StringBuilder text = new(); text.Append(own.Length).Append(':').Append(own);
+            foreach (var child in node.Children) text.Append(',').Append(Of(child, known));
+            string key = text.ToString();
+            if (!numbers.TryGetValue(key, out number)) numbers[key] = number = numbers.Count;
+            return known[node] = number;
+        }
     }
 
     private static string NameOf(byte[] slotBytes) => new WorldNode("", WorldNodeClass.Object3D) { NameField = slotBytes[..36] }.Name;

@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using System.Text;
+
 namespace Recoil.Zbd.Core.Worlds;
 
 /// <summary>
@@ -18,10 +21,18 @@ namespace Recoil.Zbd.Core.Worlds;
 /// node's children in order, a shared node with the last parent that lets it go.</item>
 /// </list>
 /// A file named by two different paths is cached twice: <see cref="Hooks.File"/> returns the path as the reference
-/// wrote it. Parts of a mission database (files of groups and objects it references) load like any other file.
+/// wrote it. Parts of a mission database (files of groups and objects it references) load like any other file. A
+/// reference to a file without nodes is a reference too: its cache is a root alone and its empty copy waits for the next
+/// record (see <see cref="Hooks.IsReference"/>).
 /// </summary>
 internal static class OriginalLoader
 {
+    /// <summary>
+    /// The most nodes the caches of one load may mirror, nested caches included. The shipped loads mirror a few thousand;
+    /// a crafted file that nests references to a large file many levels deep would otherwise mirror it at every level.
+    /// </summary>
+    public const int MaximumCachedNodes = 1 << 20;
+
     public sealed class Hooks
     {
         /// <summary>The engine took a slot for the node.</summary>
@@ -39,6 +50,25 @@ internal static class OriginalLoader
         /// every copy of the cache shares).
         /// </summary>
         public Action<WorldNode>? Read { get; init; }
+        /// <summary>
+        /// Whether the node is an external reference. A reference to a file without nodes has no content, but the loader
+        /// still caches the file (a root alone) and copies it after the next record like any other. By default a node with
+        /// content is a reference.
+        /// </summary>
+        public Func<WorldNode, bool>? IsReference { get; init; }
+        public CancellationToken Token { get; init; }
+        /// <summary>The nodes the caches of the outermost load mirrored so far (see <see cref="MaximumCachedNodes"/>).</summary>
+        internal StrongBox<int>? Mirrored { get; init; }
+    }
+
+    private static bool Referenced(WorldNode node, IReadOnlyList<WorldNode> content, Hooks hooks) => hooks.IsReference?.Invoke(node) ?? content.Count > 0;
+    /// <summary>Membership in a reference's content: a set once the content is wide, so a wide file costs no more than its size.</summary>
+    private static Func<WorldNode, bool> Within(IReadOnlyList<WorldNode> content)
+    {
+        if (content.Count == 0) return static _ => false;
+        if (content.Count <= 8) return content.Contains;
+        HashSet<WorldNode> set = new(content, ReferenceEqualityComparer.Instance);
+        return set.Contains;
     }
 
     /// <summary>
@@ -50,8 +80,10 @@ internal static class OriginalLoader
     {
         List<WorldNode> caches = [];
         HashSet<string> files = new(StringComparer.OrdinalIgnoreCase);
+        // One count for the outermost load and every cache inside it.
+        var mirrored = hooks.Mirrored ?? new StrongBox<int>();
         foreach (var reference in References(cached, hooks))
-            if (files.Add(hooks.File(reference))) caches.Add(Cache(reference, hooks));
+            if (files.Add(hooks.File(reference))) caches.Add(Cache(reference, hooks, mirrored));
         HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
         foreach (var definition in Definitions(cached, hooks)) Define(definition);
         hooks.Allocate(root);
@@ -68,16 +100,17 @@ internal static class OriginalLoader
         {
             // An instance reference attaches its definition, made before the root; it makes no node.
             if (!seen.Add(node)) return;
+            hooks.Token.ThrowIfCancellationRequested();
             hooks.Allocate(node); hooks.Read?.Invoke(node);
             Flush();
-            var content = hooks.Content(node);
-            if (content.Count > 0)
+            var content = hooks.Content(node); var inner = Within(content);
+            if (Referenced(node, content, hooks))
             {
                 // A reference with records of its own is copied at once, before them; otherwise after the next record.
-                if (node.Children.Any(child => !content.Contains(child))) foreach (var copied in content) Copy(copied);
+                if (node.Children.Any(child => !inner(child))) foreach (var copied in content) Copy(copied);
                 else pending = node;
             }
-            foreach (var child in node.Children) if (!content.Contains(child)) Record(child);
+            foreach (var child in node.Children) if (!inner(child)) Record(child);
         }
         void Flush()
         {
@@ -89,6 +122,7 @@ internal static class OriginalLoader
         void Copy(WorldNode node)
         {
             if (!seen.Add(node)) return;
+            hooks.Token.ThrowIfCancellationRequested();
             hooks.Allocate(node);
             foreach (var child in node.Children) Copy(child);
         }
@@ -96,9 +130,10 @@ internal static class OriginalLoader
         void Define(WorldNode node)
         {
             if (!seen.Add(node)) return;
+            hooks.Token.ThrowIfCancellationRequested();
             hooks.Allocate(node); hooks.Read?.Invoke(node);
-            var content = hooks.Content(node);
-            foreach (var child in node.Children) if (content.Contains(child)) Copy(child); else Define(child);
+            var inner = Within(hooks.Content(node));
+            foreach (var child in node.Children) if (inner(child)) Copy(child); else Define(child);
         }
     }
 
@@ -114,10 +149,12 @@ internal static class OriginalLoader
             if (!level.MoveNext()) { stack.Pop(); continue; }
             var node = level.Current;
             if (!seen.Add(node)) continue;
+            hooks.Token.ThrowIfCancellationRequested();
             var content = hooks.Content(node);
-            if (content.Count > 0) yield return node;
+            if (Referenced(node, content, hooks)) yield return node;
             // A reference's own records follow its content and are the file's records too.
-            stack.Push(node.Children.Where(child => !content.Contains(child)).GetEnumerator());
+            var inner = Within(content);
+            stack.Push(node.Children.Where(child => !inner(child)).GetEnumerator());
         }
     }
 
@@ -131,16 +168,17 @@ internal static class OriginalLoader
             int count = reached.GetValueOrDefault(node);
             reached[node] = count + 1;
             if (count > 0) return;
+            hooks.Token.ThrowIfCancellationRequested();
             order.Add(node);
-            var content = hooks.Content(node);
-            foreach (var child in node.Children) if (!content.Contains(child)) Walk(child);
+            var inner = Within(hooks.Content(node));
+            foreach (var child in node.Children) if (!inner(child)) Walk(child);
         }
         foreach (var record in records) Walk(record);
         return [.. order.Where(node => reached[node] > 1)];
     }
 
     /// <summary>A file's cache: its own nodes (copies of a reference's content), loaded as a load of their own under a root named for the file.</summary>
-    private static WorldNode Cache(WorldNode reference, Hooks hooks)
+    private static WorldNode Cache(WorldNode reference, Hooks hooks, StrongBox<int> mirrored)
     {
         Dictionary<WorldNode, WorldNode> original = new(ReferenceEqualityComparer.Instance);
         // Each node's content once per cache: asked per child and per nested cache level, it would multiply with every level.
@@ -149,7 +187,7 @@ internal static class OriginalLoader
         Dictionary<WorldNode, IReadOnlyList<WorldNode>> copies = new(ReferenceEqualityComparer.Instance);
         IReadOnlyList<WorldNode> ContentOf(WorldNode node) => contents.TryGetValue(node, out var found) ? found : contents[node] = hooks.Content(node);
         HashSet<WorldNode> ContentSet(WorldNode node) => contentSets.TryGetValue(node, out var found) ? found : contentSets[node] = new(ContentOf(node), ReferenceEqualityComparer.Instance);
-        var root = Mirror(reference.Name, ContentOf(reference), original, ContentOf);
+        var root = Mirror(reference.Name, ContentOf(reference), original, ContentOf, hooks.Token, mirrored);
         Load(root, root.Children.ToList(), root.Children.ToList(), new()
         {
             Allocate = hooks.Allocate, Free = hooks.Free,
@@ -157,6 +195,8 @@ internal static class OriginalLoader
                 ? [.. copy.Children.Where(c => original.TryGetValue(c, out var oc) && ContentSet(node).Contains(oc))] : [],
             File = copy => original.TryGetValue(copy, out var node) ? hooks.File(node) : copy.Name,
             Read = hooks.Read == null ? null : copy => { if (original.TryGetValue(copy, out var node)) hooks.Read(node); },
+            IsReference = hooks.IsReference == null ? null : copy => original.TryGetValue(copy, out var node) && hooks.IsReference(node),
+            Token = hooks.Token, Mirrored = mirrored,
         });
         return root;
     }
@@ -165,27 +205,57 @@ internal static class OriginalLoader
     /// The graph of a file as it is loaded, from <paramref name="content"/> (a copy of it): a root named
     /// <paramref name="name"/> over mirrors of the content, the content of references inside it copied as it is. A copy
     /// expands the file's instances, so the file's own identical unnamed subtrees are one shared node again: an OpenFlight
-    /// instance definition has no name of its own.
+    /// instance definition has no name of its own, but its copies keep its children, models and transforms.
     /// </summary>
-    internal static WorldNode Mirror(string name, IReadOnlyList<WorldNode> content, Dictionary<WorldNode, WorldNode> original, Func<WorldNode, IReadOnlyList<WorldNode>> contentOf)
+    internal static WorldNode Mirror(string name, IReadOnlyList<WorldNode> content, Dictionary<WorldNode, WorldNode> original, Func<WorldNode, IReadOnlyList<WorldNode>> contentOf,
+        CancellationToken token = default, StrongBox<int>? mirrored = null)
     {
+        mirrored ??= new();
         Dictionary<WorldNode, WorldNode> mirror = new(ReferenceEqualityComparer.Instance);
-        Dictionary<string, WorldNode> definitions = new(StringComparer.Ordinal);
-        string Signature(WorldNode n) => n.Name + "(" + string.Join(",", n.Children.Select(Signature)) + ")";
+        Dictionary<int, WorldNode> definitions = [];
+        Shapes shapes = new();
         WorldNode Make(WorldNode node, bool copied)
         {
             if (mirror.TryGetValue(node, out var made)) return made;
-            string? key = !copied && node.Name.Length == 0 ? Signature(node) : null;
-            if (key != null && definitions.TryGetValue(key, out var shared)) return shared;
+            token.ThrowIfCancellationRequested();
+            int? key = !copied && node.Name.Length == 0 ? shapes.Of(node) : null;
+            if (key is { } shape && definitions.TryGetValue(shape, out var shared)) return shared;
+            if (++mirrored.Value > MaximumCachedNodes) throw new InvalidDataException($"The files a model references, nested in each other, make the loader cache more than {MaximumCachedNodes:N0} nodes.");
             made = new(node.Name, node.Class); mirror[node] = made; original[made] = node;
-            if (key != null) definitions[key] = made;
-            var inner = contentOf(node);
-            foreach (var child in node.Children) made.Children.Add(Make(child, copied || inner.Contains(child)));
+            if (key is { } first) definitions[first] = made;
+            var inner = Within(contentOf(node));
+            foreach (var child in node.Children) made.Children.Add(Make(child, copied || inner(child)));
             return made;
         }
         WorldNode root = new(name, WorldNodeClass.Object3D);
         foreach (var node in content) root.Children.Add(Make(node, false));
         return root;
+    }
+
+    /// <summary>
+    /// Numbers identical subtrees alike: a node's name, class, model and own transform with its children's numbers. Each
+    /// node is numbered once, so a graph whose shared nodes are reached along many edges costs no more than its size.
+    /// </summary>
+    private sealed class Shapes
+    {
+        private readonly Dictionary<WorldNode, int> known = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<WorldModel, int> models = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<string, int> numbers = new(StringComparer.Ordinal);
+        public int Of(WorldNode node)
+        {
+            if (known.TryGetValue(node, out int number)) return number;
+            string name = node.Name;
+            StringBuilder key = new();
+            key.Append(name.Length).Append(':').Append(name).Append('|').Append((int)node.Class).Append('|')
+                .Append(node.Model is not { } model ? -1 : models.TryGetValue(model, out int m) ? m : models[model] = models.Count).Append('|');
+            // An object's local matrix, a level of detail's ranges: what an instance's copies keep from its definition.
+            if (node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) != null) key.Append(Convert.ToHexString(node.Payload, 0x30, 48));
+            else if (node.Class == WorldNodeClass.Lod) key.Append(Convert.ToHexString(node.Payload));
+            foreach (var child in node.Children) key.Append(',').Append(Of(child));
+            string text = key.ToString();
+            if (!numbers.TryGetValue(text, out number)) numbers[text] = number = numbers.Count;
+            return known[node] = number;
+        }
     }
 
     /// <summary>The engine's DestroyNodeRecursive on a graph no one else holds: children in order, each freed once its last parent lets it go.</summary>
