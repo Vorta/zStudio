@@ -27,7 +27,11 @@ public sealed record BuildProfilePack(string File, long? BudgetBytes, int Maximu
 /// <c>gamegen/build-profiles/&lt;name&gt;.json</c> files, plus the built-in <see cref="Original"/> and <see cref="Modern"/>.
 /// <see cref="Status"/> says whether its numbers were measured in the game or are still a guess.
 /// </summary>
-public sealed record BuildProfile(string Name, string Description, string Status, IReadOnlyList<BuildProfilePack> TexturePacks, string? Source = null, bool IsDefault = false);
+public sealed record BuildProfile(string Name, string Description, string Status, IReadOnlyList<BuildProfilePack> TexturePacks, string? Source = null, bool IsDefault = false)
+{
+    /// <summary>Why the project's file of this profile cannot be used (null when it can); such a profile has no packs and is not the default.</summary>
+    public string? Error { get; init; }
+}
 
 public static class BuildProfiles
 {
@@ -59,9 +63,11 @@ public static class BuildProfiles
     /// <summary>
     /// The automatic Direct3D pack of a mission whose textures need <paramref name="memory"/> bytes of texture memory at full
     /// size (two bytes a texel: Direct3D keeps opaque, colour-keyed and alpha textures as 565, 1555 and 4444):
-    /// <c>rtexture&lt;N&gt;</c>, N that memory in MiB rounded up to a power of two and at most the pack's budget. It holds every
-    /// texture at full size unless they need more than the budget, and it exists only when it is larger than every fixed
-    /// rtexture pack the mission gets (the game opens the largest that the card's reported memory allows).
+    /// <c>rtexture&lt;N&gt;</c>, N that memory in MiB rounded up to a power of two and at most the pack's budget. It exists only
+    /// when it is larger than every fixed rtexture pack the mission gets (the game opens the largest that the card's reported
+    /// memory allows). Its budget is N MiB, counted as every pack's is (alpha planes too), so the build reduces the textures
+    /// only when they need more: above the profile's budget, or with what this estimate cannot count (textures the world
+    /// brings from other folders, alpha planes).
     /// </summary>
     public static TexturePackVariant? AutomaticPack(BuildProfile profile, string mission, long memory)
     {
@@ -72,23 +78,44 @@ public static class BuildProfiles
         while (megabytes < needed) megabytes *= 2;
         megabytes = Math.Min(megabytes, budget / MiB);
         if (needed <= largest || megabytes <= largest) return null;
-        return new($"rtexture{megabytes}.zbd", TexturePackKind.Hardware, memory <= budget ? null : budget, automatic.MaximumDimension);
+        return new($"rtexture{megabytes}.zbd", TexturePackKind.Hardware, megabytes * MiB, automatic.MaximumDimension);
     }
 
-    /// <summary>Every profile of a project: the built-in ones, replaced or joined by the project's files, in name order.</summary>
+    /// <summary>
+    /// Every profile of a project: the built-in ones, replaced or joined by the project's files, in name order. A file that
+    /// cannot be used (one written for looser rules, say) is listed with its <see cref="BuildProfile.Error"/>, so it blocks only
+    /// itself; it fails the list when it may be the default (it says so, or its JSON cannot be read), which could not be chosen.
+    /// </summary>
     public static IReadOnlyList<BuildProfile> List(string root, Func<string, byte[]?>? read = null, IEnumerable<string>? files = null)
     {
         Dictionary<string, BuildProfile> profiles = new(StringComparer.OrdinalIgnoreCase) { [Original.Name] = Original, [Modern.Name] = Modern };
         foreach (string path in ProfileFiles(root, files))
         {
-            var profile = Parse(Path.GetFileNameWithoutExtension(path), ReadProfile(root, path, read), path);
+            string name = Path.GetFileNameWithoutExtension(path);
+            byte[] json = ReadProfile(root, path, read);
+            BuildProfile profile;
+            try { profile = Parse(name, json, path); }
+            catch (InvalidDataException ex) when (!MayBeDefault(json)) { profile = new(name, "", "invalid", [], path) { Error = ex.Message }; }
             profiles[profile.Name] = profile;
         }
         var defaults = profiles.Values.Where(p => p.IsDefault).ToArray();
         if (defaults.Length > 1) throw new InvalidDataException($"Several build profiles are the default ({string.Join(", ", defaults.Select(d => d.Source))}); mark only one.");
-        if (defaults.Length == 0) profiles[Modern.Name] = profiles[Modern.Name] with { IsDefault = true };
+        if (defaults.Length == 0)
+        {
+            // Without a project default the modern profile is, unless a file that cannot be used replaced it.
+            if (profiles[Modern.Name].Error is { } error) throw new InvalidDataException(error);
+            profiles[Modern.Name] = profiles[Modern.Name] with { IsDefault = true };
+        }
         return profiles.Values.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToArray();
     }
+    /// <summary>Whether a profile file that cannot be used may be the default: it says so, or it is not a JSON object whose <c>default</c> is false or absent.</summary>
+    private static bool MayBeDefault(byte[] json)
+    {
+        if (json.Length > 64 * 1024) return true;
+        try { return JsonNode.Parse(json, documentOptions: JsonOptions) is not JsonObject root || root["default"] is not null && !(root["default"] is JsonValue v && v.TryGetValue(out bool flag) && !flag); }
+        catch (JsonException) { return true; }
+    }
+    private static readonly JsonDocumentOptions JsonOptions = new() { MaxDepth = 16, CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
 
     /// <summary>
     /// The named profile, reading only its own file, so another malformed profile does not block it; the project's
@@ -131,7 +158,7 @@ public static class BuildProfiles
         if (name.Length is 0 or > 64 || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_'))) throw new InvalidDataException($"{source}: a profile name has 1–64 letters, digits, - or _.");
         if (json.Length > 64 * 1024) throw new InvalidDataException($"{source} is larger than 64 KB.");
         JsonObject root;
-        try { root = JsonNode.Parse(json.ToArray(), documentOptions: new() { MaxDepth = 16, CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }) as JsonObject ?? throw new InvalidDataException($"{source} is not a JSON object."); }
+        try { root = JsonNode.Parse(json.ToArray(), documentOptions: JsonOptions) as JsonObject ?? throw new InvalidDataException($"{source} is not a JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{source} is not valid JSON: {ex.Message}", ex); }
         if (Text(root, "format") != Format) throw new InvalidDataException($"{source}: format must be \"{Format}\".");
         if (root["version"] is not JsonValue v || !v.TryGetValue(out int version) || version != 1) throw new InvalidDataException($"{source}: only version 1 is known.");

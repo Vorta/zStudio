@@ -10,6 +10,8 @@ public sealed record SourceOutputPlan(string Path, string Family, IReadOnlyList<
 {
     /// <summary>For a texture pack, the budget and largest texture side its profile builds it with.</summary>
     public Formats.TexturePackVariant? Pack { get; init; }
+    /// <summary>Whether the pack is the profile's automatic one, named for what its textures need (see <see cref="BuildProfiles.AutomaticPack"/>).</summary>
+    public bool Automatic { get; init; }
     /// <summary>What planning found about the output, reported with its build (an automatic pack too small for its textures).</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
 }
@@ -52,8 +54,10 @@ public static partial class SourceBuilder
     /// <summary>
     /// Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see
     /// <see cref="SourceWorkspace"/>). Texture packs follow <paramref name="profile"/> (the built-in modern one when null).
+    /// Without <paramref name="automaticPacks"/> the automatic packs are left out: naming them reads every mission texture's
+    /// PNG header, which listing the worlds or building one for a preview does not need.
     /// </summary>
-    public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, BuildProfile? profile = null)
+    public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, BuildProfile? profile = null, bool automaticPacks = true)
     {
         profile ??= BuildProfiles.Modern;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
@@ -96,13 +100,14 @@ public static partial class SourceBuilder
                 foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
                 {
                     if (!pack.Automatic) { plans.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant }); continue; }
+                    if (!automaticPacks) continue;
                     // The automatic pack is named for the texture memory the mission's textures need at full size.
                     long memory = TextureMemory(root, textures, pack.Variant);
-                    if (BuildProfiles.AutomaticPack(profile, name, memory) is not { } automatic) continue;
+                    if (BuildProfiles.AutomaticPack(profile, name, memory) is not { BudgetBytes: long budget } automatic) continue;
                     plans.Add(new($"{name}/{automatic.FileName}", "textures", textures)
                     {
-                        Pack = automatic,
-                        Notes = automatic.BudgetBytes is long budget
+                        Pack = automatic, Automatic = true,
+                        Notes = memory > budget
                             ? [$"The {name} textures need {(memory + (1 << 20) - 1) >> 20} MB of texture memory at full size, more than the {budget >> 20} MB the profile's automatic rtexture pack may hold; {automatic.FileName} holds them reduced to fit."] : [],
                     });
                 }
@@ -274,6 +279,18 @@ public static partial class SourceBuilder
             // Before anything is replaced: what the built missions look up by name, and what the replaced files found.
             progress?.Report(new(selected.Count, selected.Count, "Checking lookups by name"));
             var (lookups, changes) = await Task.Run(() => MissionLookups(results, packages, snapshot, destination, token), token);
+            // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
+            // These notes come first: results show only the first notes, and many lookup changes must not hide them. Only a
+            // report, read before publishing: a destination that cannot be listed must not turn a written export into a failure.
+            List<string> notes = [];
+            if (destination != null)
+                try
+                {
+                    foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
+                        foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, all.Where(p => p.Family == "textures" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray()))
+                            notes.Add($"{pack} is not a pack the {profile.Name} profile builds, but the game may load it instead of the exported ones. Delete it, or export with a profile that builds a pack of that name.");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's texture packs could not be listed ({ex.Message}); a pack left there by another export may be loaded instead of the exported ones."); }
             progress?.Report(new(selected.Count, selected.Count, destination == null ? "Checked" : "Publishing"));
             snapshot.CheckUnchanged(token);
             if (staging != null && destination != null)
@@ -281,13 +298,6 @@ public static partial class SourceBuilder
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException("Nothing was written because some outputs failed: " + string.Join("; ", results.Where(r => r.Status == "failed").Select(r => $"{r.Path}: {r.Error}")));
                 Publish(staging, destination, results.Select(r => r.Path).ToArray(), overwrite, token);
             }
-            // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
-            // These notes come first: results show only the first notes, and many lookup changes must not hide them.
-            List<string> notes = [];
-            if (destination != null)
-                foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
-                    foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, all.Where(p => p.Family == "textures" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray()))
-                        notes.Add($"{pack} is not a pack the {profile.Name} profile builds, but the game may load it instead of the exported ones. Delete it, or export with a profile that builds a pack of that name.");
             notes.AddRange(changes.Select(c => WorldLookups.Describe(c, " in the files this export replaced")));
             return new(destination, results) { Profile = profile.Name, Notes = notes, Lookups = lookups, LookupChanges = changes };
         }
@@ -509,8 +519,10 @@ public static partial class SourceBuilder
     }
     /// <summary>
     /// The texture memory a mission's textures need at full size in a Direct3D pack: two bytes a texel at the sizes the pack
-    /// stores (powers of two up to its largest side), from the PNG headers. Textures the world brings from other missions'
-    /// folders are not counted (only a build knows them), nor files not yet on disk.
+    /// stores (powers of two up to its largest side), from the PNG headers. Planning names the automatic pack from it; only
+    /// the build knows the textures the world brings from other missions' folders and which textures have alpha planes,
+    /// so it counts them and keeps the pack within its name (see <see cref="BuildTexturePack"/>). Files not yet on disk are
+    /// not counted.
     /// </summary>
     internal static long TextureMemory(string root, IEnumerable<string> textures, TexturePackVariant variant)
     {
@@ -549,6 +561,10 @@ public static partial class SourceBuilder
             textures.Add(new(name, TextureSources.SortKey(input), DecodeTexture(input, snapshot.Read(input, token), token), addressing.GetValueOrDefault(name), vehicle || snapshot.DamageMasks(token).Contains(name)));
         }
         var built = TexturePackBuilder.Build(textures, variant, token);
+        // The automatic pack was named from its folders' PNG headers. Counted as every pack's budget is, its textures (with
+        // those the world brings from other folders, and alpha planes) may need more than its name holds: they are fitted to it.
+        if (plan.Automatic && plan.Notes.Count == 0 && built.FullSizeBytes > variant.BudgetBytes)
+            warnings.Add($"The {plan.Path.Split('/')[0]} pack's textures need {(built.FullSizeBytes + (1 << 20) - 1) >> 20} MB at full size, counting those its world brings from other folders and their alpha planes, more than {variant.FileName} holds; they were reduced to fit.");
         return new(built.Bytes, textures.Count, [.. plan.Notes, .. warnings, .. built.Warnings]);
     }
     /// <summary>

@@ -138,12 +138,12 @@ public partial class MainWindow
                 CheckResourceContext(d, revision); return Result(new { d.Revision, targets = Page(targets, a, t => t.Path + " " + t.Name).Data });
             });
         RegisterJob(r, "texture_import", "Replace a texture from RGB/RGBA PNG (16 MiB; up to 4096×4096), or add a named texture when index is omitted. Replacement dimensions must match the selected record. Explicit sibling targets retain their dimensions, using premultiplied-alpha resampling and private palettes for indexed records. One undo step owns the complete batch.",
-            [DocumentParameter, RevisionParameter, P("path","string","PNG input path.",true), new("index","integer","Texture to replace; omit to add.",Minimum:0,Maximum:4095), P("name","string","New texture name, required when adding."), new("targets","array","Optional explicit replacement targets, including the selected record; one per sibling pack, maximum 64.",Items:new("","object","Target identity.",Properties:[P("path","string","Texture pack path.",true),new("index","integer","Record index.",true,Minimum:0,Maximum:4095)]),MinItems:1,MaxItems:64)], false,
+            [DocumentParameter, RevisionParameter, P("path","string","Full path of the PNG input.",true), new("index","integer","Texture to replace; omit to add.",Minimum:0,Maximum:4095), P("name","string","New texture name, required when adding."), new("targets","array","Optional explicit replacement targets, including the selected record; one per sibling pack, maximum 64.",Items:new("","object","Target identity.",Properties:[P("path","string","Full texture pack path, as texture_targets returns it.",true),new("index","integer","Record index.",true,Minimum:0,Maximum:4095)]),MinItems:1,MaxItems:64)], false,
             async (a, token) =>
             {
-                var d = TargetDocument(a, true); var edits = TextureSession(d);
-                var targets = (a["targets"] as JsonArray)?.Select(n => new TextureTarget(Text((JsonObject)n!,"path"), Int((JsonObject)n!,"index"))).ToArray();
-                await ApplyContentAsync(d, ct => edits.PrepareAsync(Text(a,"path"), a.ContainsKey("index") ? Int(a,"index") : null, Text(a,"name"), targets, ViewModel.Resolver!, ct), d.Revision, token);
+                var d = TargetDocument(a, true); var edits = TextureSession(d); string png = FullPath(a, "path");
+                var targets = (a["targets"] as JsonArray)?.Select(n => new TextureTarget(FullPath((JsonObject)n!, "path"), Int((JsonObject)n!,"index"))).ToArray();
+                await ApplyContentAsync(d, ct => edits.PrepareAsync(png, a.ContainsKey("index") ? Int(a,"index") : null, Text(a,"name"), targets, ViewModel.Resolver!, ct), d.Revision, token);
                 return Result(new { document = DocumentState(d), files = edits.Documents.Select(x => new { x.Path, destination = edits.TargetPath(x.Path), diagnostics = x.Diagnostics.Take(32) }) });
             });
         Register(r, "script_records", "Page scripts in stored order, or instructions of one script. UUIDs survive edits and undo. Token previews are capped at 64 characters and 16 tokens; source offsets refer to original bytes.", false,

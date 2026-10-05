@@ -127,7 +127,7 @@ internal static class SourceEditingMcpChecks
             Assert.Equal("invalid_argument", refused["code"]!.GetValue<string>());
 
             // Blender: check the database out, "export" a changed copy into the outbox, and update from it.
-            var checkout = await Call("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });
+            var checkout = await Job("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });
             string input = checkout["input"]!.GetValue<string>(), outbox = Path.Combine(checkout["outbox"]!.GetValue<string>(), "edit");
             Assert.StartsWith(Path.Combine(fixture.Project, "zstudio", "export"), checkout["folder"]!.GetValue<string>());
             Directory.CreateDirectory(Path.Combine(outbox, "textures"));

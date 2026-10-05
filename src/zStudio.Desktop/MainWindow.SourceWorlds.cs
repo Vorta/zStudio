@@ -121,7 +121,7 @@ public partial class MainWindow
             if (ViewModel.WorkspaceGeneration != workspace || SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The workspace changed while the world was building.");
             if (OpenSourceWorld(root, mission) is { } other) { session.Dispose(); SourceWorldSession.DeleteBuild(built.Build.Folder); ViewModel.SelectedDocument = other; return other; }
             doc = new DocumentModel(built.World, session, built.Build, built.Revision);
-            session.SetLookupBaseline(built.Build);
+            session.SetLookupBaseline(built.Build, built.World.Bytes);
             ReportSourceBuild(session, built.Build);
             ViewModel.AddDocument(doc, true);
             SelectNavigatorSection(1);
@@ -256,7 +256,7 @@ public partial class MainWindow
             // Canceled with the build that asks (see BuildSourceWorldAsync), so closing or shutting down never waits for it.
             return await Task.Run(() =>
             {
-                var before = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", baseline.World, token: token), token);
+                var before = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", baseline.World.ToArray(), token: token), token);
                 return WorldLookups.Changes(before, baseline.Lookups, GameZWorldReader.FromDocument(built.World, token), built.Build.Lookups, token);
             }, token);
         }
@@ -308,6 +308,8 @@ public partial class MainWindow
             try { view = scene.CaptureView(); } catch (InvalidOperationException) { }
         IReadOnlyList<string> kept = [.. notes ?? []];
         var replacement = new DocumentModel(built.World, session, built.Build, built.Revision) { PickupsLocked = current.PickupsLocked, SourceEditNotes = kept };
+        // A world that was stale when the project was saved takes the first build that reads only saved sources as its baseline.
+        if (session.LookupBaselinePending && ReadsOnlySaved(session, built.Build)) session.SetLookupBaseline(built.Build, built.World.Bytes);
         ReportSourceBuild(session, built.Build, built.LookupChanges);
         pendingSourceView = view == null ? null : (replacement, view);
         ViewModel.ReplaceDocument(current, replacement);
@@ -477,7 +479,7 @@ public partial class MainWindow
             var reloaded = await RebuildSourceWorldAsync(session, token);
             // With nothing unsaved, the reloaded world is the saved one: lookups are compared with it from now on, as after a save.
             if (!workspace.IsDirty && reloaded.SourceBuild is { } build)
-            { session.SetLookupBaseline(build); ReportSourceBuild(session, build); ViewModel.Status = $"Rebuilt the {session.Mission} world from its sources."; }
+            { session.SetLookupBaseline(build, reloaded.Document.Bytes); ReportSourceBuild(session, build); ViewModel.Status = $"Rebuilt the {session.Mission} world from its sources."; }
             return reloaded;
         }
         // The status showed the build's progress.
@@ -501,11 +503,23 @@ public partial class MainWindow
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         ViewModel.Status = written.Count == 0 ? "The source project's files already match" : $"Saved {string.Join(", ", written.Take(8))}{(written.Count > 8 ? $" and {written.Count - 8} more" : "")}";
-        // The saved worlds are what later edits are compared with; their lookup warnings are settled.
+        // The saved worlds are what later edits are compared with; their lookup warnings are settled. A world whose build is
+        // older than the saved sources (an edit in another world changed a file it reads) does not show what was saved: its
+        // baseline waits for a build that reads only saved sources.
         foreach (var saved in ViewModel.Documents.Where(d => d.SourceWorld?.Workspace == session.Workspace && d.SourceBuild != null && d.SourceWorld.Owner == d).ToArray())
-        { saved.SourceWorld!.SetLookupBaseline(saved.SourceBuild!); ReportSourceBuild(saved.SourceWorld, saved.SourceBuild!); }
+        {
+            if (saved.SourceInputsChanged()) saved.SourceWorld!.ForgetLookupBaseline();
+            else saved.SourceWorld!.SetLookupBaseline(saved.SourceBuild!, saved.Document.Bytes);
+            ReportSourceBuild(saved.SourceWorld, saved.SourceBuild!);
+        }
         UpdateDocumentCommands();
         return Task.FromResult(written);
+    }
+    /// <summary>Whether a build read none of the workspace's unsaved sources: it shows the mission as saved.</summary>
+    private static bool ReadsOnlySaved(SourceWorldSession session, SourceWorldBuild build)
+    {
+        HashSet<string> dirty = new(session.Workspace.DirtyFiles, StringComparer.OrdinalIgnoreCase);
+        return !build.Dependencies.Any(dirty.Contains);
     }
     private async Task<bool> SaveSourceWorldDocumentAsync(DocumentModel doc)
     {

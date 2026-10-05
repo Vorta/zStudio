@@ -45,7 +45,11 @@ public sealed record TexturePackVariant(string FileName, TexturePackKind Kind, l
 public sealed record PackTexture(string Name, string SortKey, DecodedImage Master, int Addressing = 0, bool Direct = false);
 
 /// <summary>Result of building a pack: its bytes and, per texture, the stored size.</summary>
-public sealed record TexturePackBuild(byte[] Bytes, IReadOnlyList<(string Name, int Width, int Height)> Sizes, int Pages, IReadOnlyList<string> Warnings);
+public sealed record TexturePackBuild(byte[] Bytes, IReadOnlyList<(string Name, int Width, int Height)> Sizes, int Pages, IReadOnlyList<string> Warnings)
+{
+    /// <summary>What the textures need of the budget at the largest sizes the pack stores (texels plus alpha planes), before fitting.</summary>
+    public long FullSizeBytes { get; init; }
+}
 
 /// <summary>How a texture is transparent: not at all, by a colour key (alpha only 0 or 255) or by an alpha plane.</summary>
 public enum TextureTransparency { Opaque, Keyed, Alpha }
@@ -77,6 +81,7 @@ public static class TexturePackBuilder
         bool Paletted(int i) => variant.Kind == TexturePackKind.Software && !ordered[i].Direct;
         long Cost(int i, int w, int h) => (long)w * h * (Paletted(i) ? 1 : 2) + (modes[i] == TextureTransparency.Alpha ? (long)w * h : 0);
         var sizes = ordered.Select(t => threeD ? Normalize(t.Master.Width, t.Master.Height, variant) : (t.Master.Width, t.Master.Height)).ToArray();
+        long fullSize = 0; for (int i = 0; i < sizes.Length; i++) fullSize += Cost(i, sizes[i].Width, sizes[i].Height);
         if (variant.BudgetBytes is { } budget) Fit(sizes, Cost, budget, variant, token, warnings);
 
         // Resample every texture from its master, then quantize the paletted ones into shared pages.
@@ -102,7 +107,7 @@ public static class TexturePackBuilder
             stored.Add((ordered[i].Name, images[i].Width, images[i].Height));
         }
         FormatRegistry.ValidateDocumentSize(output.Length);
-        return new(output.ToArray(), stored, pages.Count, warnings);
+        return new(output.ToArray(), stored, pages.Count, warnings) { FullSizeBytes = fullSize };
     }
 
     /// <summary>Opaque when every alpha is 255; colour-keyed when alpha is only 0 or 255 (1555 on hardware keeps more colour); else an alpha plane.</summary>

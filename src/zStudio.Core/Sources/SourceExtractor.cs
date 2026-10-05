@@ -30,18 +30,14 @@ public static class SourceExtractor
         if (!probes.Any(f => f.Probe is { Family: FormatFamily.Scripts, Version: 7 } or { Family: FormatFamily.GameZ, Version: 15 } or { Family: FormatFamily.Animation, Version: 28 }))
             throw new InvalidDataException("No RECOIL game data was found. Choose the folder that contains interp.zbd, zrdr.zbd and the mission folders.");
         if (!CarriesDefinitions(files)) throw new InvalidDataException(NotOriginal);
-        bool created = !Directory.Exists(projectRoot);
-        Directory.CreateDirectory(projectRoot);
-        try { return await ExtractFilesAsync(projectRoot, files, progress, token); }
+        Writes writes = new();
+        writes.CreateDirectory(projectRoot);
+        try { return await ExtractFilesAsync(projectRoot, files, writes, progress, token); }
         catch (Exception stopped)
         {
-            // The folder was new or empty: remove everything this reconstruction wrote so it can be retried.
-            try
-            {
-                if (created) Directory.Delete(projectRoot, true);
-                else foreach (var entry in new DirectoryInfo(projectRoot).EnumerateFileSystemInfos())
-                    { if (entry is DirectoryInfo directory) directory.Delete(true); else entry.Delete(); }
-            }
+            // The folder was new or empty: remove everything this reconstruction wrote so it can be retried. Only that: a file
+            // another program put there during the run stays, with the folders holding it.
+            try { writes.Remove(); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // Another program holds a written file: say so, rather than leaving a folder later refused as not empty.
@@ -76,10 +72,33 @@ public static class SourceExtractor
             .All(f => carrying.Contains(Path.GetDirectoryName(f.Relative) ?? ""));
     }
 
-    private static async Task<SourceReconstructionReport> ExtractFilesAsync(string projectRoot, List<(string Path, string Relative)> files, IProgress<SourceProgress>? progress, CancellationToken token)
+    /// <summary>The files and folders a reconstruction created, in order, so that stopping removes exactly those.</summary>
+    private sealed class Writes
     {
-        Context context = new(projectRoot, token);
-        Directory.CreateDirectory(Path.Combine(projectRoot, SourceProject.DataFolder)); Directory.CreateDirectory(Path.Combine(projectRoot, SourceProject.GameGenFolder));
+        private readonly List<string> files = [], folders = [];
+        /// <summary>Creates <paramref name="folder"/> with the parents it lacks, recording each one created.</summary>
+        internal void CreateDirectory(string folder)
+        {
+            List<string> missing = [];
+            for (string? f = folder; f != null && !Directory.Exists(f); f = Path.GetDirectoryName(f)) missing.Add(f);
+            Directory.CreateDirectory(folder);
+            folders.AddRange(Enumerable.Reverse(missing));
+        }
+        /// <summary>Records a file before it is written, so a write that fails part-way is removed too.</summary>
+        internal void File(string path) => files.Add(path);
+        /// <summary>Deletes the recorded files, then the recorded folders left empty, deepest first.</summary>
+        internal void Remove()
+        {
+            foreach (string file in files) if (System.IO.File.Exists(file)) System.IO.File.Delete(file);
+            for (int i = folders.Count - 1; i >= 0; i--)
+                if (Directory.Exists(folders[i]) && !Directory.EnumerateFileSystemEntries(folders[i]).Any()) Directory.Delete(folders[i]);
+        }
+    }
+
+    private static async Task<SourceReconstructionReport> ExtractFilesAsync(string projectRoot, List<(string Path, string Relative)> files, Writes writes, IProgress<SourceProgress>? progress, CancellationToken token)
+    {
+        Context context = new(projectRoot, writes, token);
+        writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.DataFolder)); writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.GameGenFolder));
         Dictionary<string, int> families = []; List<string> skipped = [];
         List<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> soundBanks = [];
         List<(string Relative, ZbdDocument Document)> texturePacks = [];
@@ -172,7 +191,7 @@ public static class SourceExtractor
         return SourceProject.DataFolder + "/" + string.Join('/', parts[..^1]).ToLowerInvariant();
     }
 
-    private sealed class Context(string root, CancellationToken token)
+    private sealed class Context(string root, Writes writes, CancellationToken token)
     {
         private readonly Dictionary<string, string> sources = new(StringComparer.OrdinalIgnoreCase);
         internal List<string> Notes { get; } = [];
@@ -195,7 +214,7 @@ public static class SourceExtractor
             string sha = SourceProject.Sha256(bytes);
             if (sources.TryGetValue(relative, out string? existing)) { if (existing != sha) Notes.Add($"{relative} has another version with different content; the first one was kept."); return; }
             string path = SourceProject.Resolve(root, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            writes.CreateDirectory(Path.GetDirectoryName(path)!); writes.File(path);
             await File.WriteAllBytesAsync(path, bytes, token);
             if (modified is { } time) File.SetLastWriteTimeUtc(path, time);
             sources[relative] = sha;

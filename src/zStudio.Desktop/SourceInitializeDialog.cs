@@ -10,7 +10,7 @@ namespace Recoil.Zbd.Desktop;
 /// <summary>
 /// Chooses the retail ZBD folder and a new or empty folder, then initializes a source project there; the caller opens it
 /// once the dialog has closed. The work runs while the dialog is open, so its progress and any refusal show here and Cancel
-/// stops it (nothing stays written).
+/// stops it (nothing stays written). A Cancel that comes once the project is written leaves it unopened in its folder.
 /// </summary>
 internal sealed class SourceInitializeDialog : Window
 {
@@ -101,7 +101,11 @@ internal sealed class SourceInitializeDialog : Window
         // A refusal (for example a folder that is not the original game files) stays in the dialog so the folders can be changed.
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { error.Text = ex.Message; }
         finally { running = null; }
-        if (report != null) { Report = report; DialogResult = true; return; }
+        // Cancel came after the work's last check: the project is written, but it is not opened (as source_reconstruct leaves
+        // a project cancelled while it opens), and the dialog says where it is.
+        if (report != null && cancellation.IsCancellationRequested)
+            error.Text = $"Canceled once the project was written: it stays in {report.Project} and was not opened. Open it from the welcome screen, or delete the folder.";
+        else if (report != null) { Report = report; DialogResult = true; return; }
         // Closing waits for the work to stop; a refusal it ends with (such as a folder it could not remove) stays visible.
         if (closeWhenStopped && error.Text.Length == 0) { Close(); return; }
         closeWhenStopped = false;

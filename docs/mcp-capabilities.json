@@ -212,7 +212,7 @@
         "zstudio_source_status",
         "zstudio_source_export"
       ],
-      "note": "Tools > Build profile lists the project's build profiles (source_status profiles: built-in original and modern plus gamegen/build-profiles/*.json, the default marked); the checked one is passed as source_export profile by Export all ZBD files, Export ZBD file and Check source project."
+      "note": "Tools > Build profile lists the project's build profiles (source_status profiles: built-in original and modern plus gamegen/build-profiles/*.json, the default marked; a file that cannot be used is shown disabled with its reason, source_status profiles error); the checked one is passed as source_export profile by Export all ZBD files, Export ZBD file and Check source project."
     },
     {
       "gui": "MainWindow.SourceWorlds:SourceWorldMenu",
@@ -251,7 +251,7 @@
         "zstudio_source_reconstruct",
         "zstudio_operation"
       ],
-      "note": "The Initialize source project dialog's retail ZBD folder and source project folder (typed or browsed) are source_reconstruct's source and destination; Initialize and open (enabled once both are given) runs it with open true, showing its progress and refusals in the dialog, and Cancel or closing the dialog cancels the running operation (zstudio_operation cancel), which removes what it wrote; a refusal, including a folder it could not remove, stays shown in the dialog."
+      "note": "The Initialize source project dialog's retail ZBD folder and source project folder (typed or browsed) are source_reconstruct's source and destination; Initialize and open (enabled once both are given) runs it with open true, showing its progress and refusals in the dialog, and Cancel or closing the dialog cancels the running operation (zstudio_operation cancel), which removes what it wrote; a Cancel that comes once the project is written leaves it unopened in its folder, as a cancel while source_reconstruct opens it does; a refusal, including a folder it could not remove, stays shown in the dialog."
     },
     {
       "gui": "WorldCompareWindow:Controls",

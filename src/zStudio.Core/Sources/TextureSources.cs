@@ -45,6 +45,9 @@ public static class TextureSources
         return (width, height);
     }
 
+    /// <summary>Whether <see cref="PngSize"/> read the header of <paramref name="path"/> (what planning cost, for tests).</summary>
+    internal static bool HeaderRead(string path) => Sizes.ContainsKey(path);
+
     /// <summary>Folders searched for a mission's textures, as <c>support\common.gw</c> sets them.</summary>
     public static IReadOnlyList<string> MissionFolders(string mission, bool multiplayer) => multiplayer
         ? [EffectsTextures, MultiBftTextures, CommonTextures, $"data/{mission}/textures"]

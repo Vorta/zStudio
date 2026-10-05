@@ -84,7 +84,8 @@ public sealed class BuildProfileTests
         // Up to the largest fixed pack (rtexture16) nothing is added; above it, N rounds the need up to a power of two.
         Assert.Null(BuildProfiles.AutomaticPack(BuildProfiles.Modern, "m1", 16 * MiB));
         var next = BuildProfiles.AutomaticPack(BuildProfiles.Modern, "m1", 16 * MiB + 1)!;
-        Assert.Equal(("rtexture32.zbd", TexturePackKind.Hardware, (long?)null, 1024), (next.FileName, next.Kind, next.BudgetBytes, next.MaximumDimension));
+        // Its budget is what its name holds: the build fits the textures to it only when they need more.
+        Assert.Equal(("rtexture32.zbd", TexturePackKind.Hardware, (long?)(32 * MiB), 1024), (next.FileName, next.Kind, next.BudgetBytes, next.MaximumDimension));
         Assert.Equal("rtexture256.zbd", BuildProfiles.AutomaticPack(BuildProfiles.Modern, "m6", 200 * MiB)!.FileName);
         // Beyond the budget the pack is the budget's size and fitted to it.
         var capped = BuildProfiles.AutomaticPack(BuildProfiles.Modern, "m6", 300 * MiB)!;
@@ -145,7 +146,7 @@ public sealed class BuildProfileTests
         for (int i = 0; i < 9; i++) fixture.Write($"data/m1/textures/large{i}.png", large);
         var plan = SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Modern);
         var automatic = Assert.Single(plan, p => p.Path == "m1/rtexture32.zbd");
-        Assert.Null(automatic.Pack!.BudgetBytes);
+        Assert.Equal((32L << 20, true), (automatic.Pack!.BudgetBytes!.Value, automatic.Automatic));
         Assert.Equal(["m2/rtexture2.zbd", "m2/rtexture4.zbd", "m2/rtexture8.zbd", "m2/rtexture16.zbd"], plan.Where(p => p.Path.StartsWith("m2/rtexture", StringComparison.Ordinal)).Select(p => p.Path));
 
         // Exported, it keeps them at full size; a pack left from an earlier export is reported, the one it writes is not.

@@ -181,6 +181,7 @@ public partial class MainWindow
             // Without a profile, the one chosen in Tools → Build profile (as source_export uses), else the project's default.
             string? name = a["profile"] is null ? SourceProfileFor(root) : Text(a, "profile");
             profile = name == null ? profiles.Single(p => p.IsDefault) : profiles.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"The project has no build profile {name}.");
+            if (profile.Error != null) throw new InvalidDataException(profile.Error);
             plan = await Task.Run(() => SourceBuilder.Plan(root, null, profile), token);
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
@@ -190,7 +191,7 @@ public partial class MainWindow
             project = root, profile = profile.Name, selected = SourceProfileFor(root) ?? profiles.Single(p => p.IsDefault).Name,
             profiles = profiles.Select(p => new
             {
-                name = p.Name, status = p.Status, @default = p.IsDefault, source = p.Source, description = Bounded(p.Description, 512),
+                name = p.Name, status = p.Status, @default = p.IsDefault, source = p.Source, description = Bounded(p.Description, 512), error = p.Error == null ? null : Bounded(p.Error, 512),
                 texturePacks = p.TexturePacks.Select(t => new { file = t.File, automatic = t.Automatic, budgetMiB = t.BudgetBytes / (1024.0 * 1024), maximumDimension = t.MaximumDimension, missions = t.Missions }).ToArray()
             }).ToArray(),
             families = plan.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
@@ -316,6 +317,16 @@ public partial class MainWindow
         string chosen = SourceProfileFor(root) ?? profiles.Single(p => p.IsDefault).Name;
         foreach (var profile in profiles)
         {
+            // A file that cannot be used is shown with the reason, and cannot be chosen; one chosen before stays chosen, so
+            // exports report it rather than building another profile's packs.
+            if (profile.Error is { } error)
+            {
+                MenuItem broken = new() { Header = new TextBlock { Text = profile.Name + " · cannot be used" }, IsCheckable = true, IsChecked = profile.Name.Equals(chosen, StringComparison.OrdinalIgnoreCase), IsEnabled = false, ToolTip = Bounded(error, 512) };
+                System.Windows.Automation.AutomationProperties.SetName(broken, profile.Name);
+                ToolTipService.SetShowOnDisabled(broken, true);
+                SourceProfileMenu.Items.Add(broken);
+                continue;
+            }
             MenuItem item = new()
             {
                 Header = new TextBlock { Text = profile.Name + (profile.IsDefault ? " (default)" : "") + (profile.Status == "experimental" ? " · experimental" : "") },

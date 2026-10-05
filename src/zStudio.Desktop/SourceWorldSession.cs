@@ -23,15 +23,18 @@ internal sealed class SourceWorldSession : IDisposable
     /// <summary>The document currently showing this world; disposing it ends the session.</summary>
     internal DocumentModel? Owner { get; set; }
     /// <summary>
-    /// What the mission looked up by name when the world was opened or last saved: that build's world file and lookups. Each
+    /// What the mission looked up by name when the world was opened or last saved: that build's world and lookups. Each
     /// rebuild after an edit is compared with it, so a change to the node a lookup finds is reported until it is saved or taken back.
     /// </summary>
-    internal (byte[] World, IReadOnlyList<SourceLookup> Lookups)? LookupBaseline { get; private set; }
-    internal void SetLookupBaseline(SourceWorldBuild build)
-    {
-        try { LookupBaseline = (File.ReadAllBytes(build.WorldPath), build.Lookups); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { LookupBaseline = null; }
-    }
+    internal (ReadOnlyMemory<byte> World, IReadOnlyList<SourceLookup> Lookups)? LookupBaseline { get; private set; }
+    /// <summary>
+    /// The project was saved while this world showed a build older than the saved sources: what it looks up as saved is not
+    /// known until a build reads none of the unsaved sources, which becomes the baseline. Until then nothing is compared.
+    /// </summary>
+    internal bool LookupBaselinePending { get; private set; }
+    /// <summary>The build shown and its world as the document holds it (the build's files are not read again).</summary>
+    internal void SetLookupBaseline(SourceWorldBuild build, ReadOnlyMemory<byte> world) { LookupBaseline = (world, build.Lookups); LookupBaselinePending = false; }
+    internal void ForgetLookupBaseline() { LookupBaseline = null; LookupBaselinePending = true; }
     /// <summary>How many lookups by name the shown build finds another node for than <see cref="LookupBaseline"/>, as Problems lists them.</summary>
     internal int LookupChangeCount { get; set; }
     /// <summary>Cancels the newest build request; a newer request or the session's end supersedes it.</summary>
