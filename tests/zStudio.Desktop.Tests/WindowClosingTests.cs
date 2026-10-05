@@ -59,6 +59,7 @@ public sealed class WindowClosingTests
                     await SourceProjectMcpChecks.Run();
                     await SourceWorldMcpChecks.Run();
                     await SourceEditingMcpChecks.Run();
+                    await SourceTakeBackMcpChecks.Run();
                     await SourceTerrainMcpChecks.Run();
                     await WorldCompareMcpChecks.Run();
                     await LookupMcpChecks.Run();

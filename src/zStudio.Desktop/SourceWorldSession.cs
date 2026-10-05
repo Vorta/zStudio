@@ -32,6 +32,8 @@ internal sealed class SourceWorldSession : IDisposable
         try { LookupBaseline = (File.ReadAllBytes(build.WorldPath), build.Lookups); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { LookupBaseline = null; }
     }
+    /// <summary>How many lookups by name the shown build finds another node for than <see cref="LookupBaseline"/>, as Problems lists them.</summary>
+    internal int LookupChangeCount { get; set; }
     /// <summary>Cancels the newest build request; a newer request or the session's end supersedes it.</summary>
     internal CancellationTokenSource? Building { get; set; }
     /// <summary>

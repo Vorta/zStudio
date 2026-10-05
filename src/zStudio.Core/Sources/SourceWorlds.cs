@@ -29,6 +29,11 @@ public sealed record SourceWorldBuild(string Mission, string Folder, string Worl
     public IReadOnlyList<SourceLookup> Lookups { get; init; } = [];
     /// <summary>Where each node of the built world came from, by its slot in the world file (the scene's node index).</summary>
     public IReadOnlyDictionary<int, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<int, WorldNodeProvenance>();
+    /// <summary>
+    /// Where the nodes came from that script instructions acted on and the build freed again (a DeleteTree's, such as the
+    /// mission database's root and groups), which the world does not hold.
+    /// </summary>
+    public IReadOnlyList<WorldNodeProvenance> Freed { get; init; } = [];
     /// <summary>How many times each script instruction (script, line) ran while the world was built.</summary>
     public IReadOnlyDictionary<(string Script, int Line), int> Executions { get; init; } = new Dictionary<(string, int), int>();
     /// <summary>The GameZWriteZBDFile instruction that wrote the world.</summary>
@@ -320,14 +325,16 @@ public static partial class SourceWorlds
         progress?.Report(new(selected.Length, selected.Length, "Built"));
         var assembled = snapshot.World(mission, token);
         var slots = GameZWriter.SlotIndices(assembled.World);
-        Dictionary<int, WorldNodeProvenance> provenance = [];
-        foreach (var (node, origin) in assembled.Provenance) if (slots.TryGetValue(node, out int slot)) provenance[slot] = origin;
+        Dictionary<int, WorldNodeProvenance> provenance = []; List<WorldNodeProvenance> freed = [];
+        foreach (var (node, origin) in assembled.Provenance)
+            if (slots.TryGetValue(node, out int slot)) provenance[slot] = origin;
+            else if (origin.Applied.Count > 0 || origin.Named.Count > 0) freed.Add(origin);
         // What the mission looks up by name when the game loads it, so an edit that changes what a lookup finds can say so.
         // Only the world must build: lookups the project's scripts or animations keep from being resolved are not reported.
         IReadOnlyList<SourceLookup> lookups;
         try { lookups = await Task.Run(() => SourceBuilder.MissionLookups(mission, snapshot, animations, token), token).ConfigureAwait(false); }
         catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex)) { lookups = []; }
-        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), Lookups = lookups, Provenance = provenance, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
+        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
     }
 
     /// <summary>

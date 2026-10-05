@@ -124,15 +124,15 @@ public partial class MainWindow
     {
         var state = DescribeSourceObject(doc, node);
         List<SourceModelAddition> additions = [];
+        List<string> notes = [];
         bool gltfOnly = false;
         return EditSourceWorldAsync(doc, $"Editing {state.Object ?? state.Name}", workspace =>
         {
             var planned = plan(SourceObjectTargetFor(doc, node, workspace));
-            foreach (string note in planned.Notes) ViewModel.Status = note;
-            additions.AddRange(planned.Additions);
+            additions.AddRange(planned.Additions); notes.AddRange(planned.Notes);
             gltfOnly = planned.Changes.Count > 0 && planned.Changes.All(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase));
             return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is { } t ? () => workspace.Retract(t) : null;
-        }, token, additions, verifyTargets: () => keepsNodes && gltfOnly);
+        }, token, additions, verifyTargets: () => keepsNodes && gltfOnly, notes: notes);
     }
     /// <summary>
     /// Rounds values a matrix decomposition leaves a hair off (89.99999 → 90), relative to their size: a small authored
@@ -169,12 +169,13 @@ public partial class MainWindow
         var state = DescribeSourceObject(doc, node);
         var executions = doc.SourceBuild!.Executions;
         string label = $"Editing {state.Name}";
+        List<string> notes = [];
         return EditSourceWorldAsync(doc, label, workspace =>
         {
             var planned = plan(workspace, state, executions);
-            foreach (string note in planned.Notes) ViewModel.Status = note;
+            notes.AddRange(planned.Notes);
             return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is { } t ? () => workspace.Retract(t) : null;
-        }, token);
+        }, token, notes: notes);
     }
     private Task<DocumentModel> MoveSourceObjectAsync(DocumentModel doc, int node, ObjectTransform transform, CancellationToken token) =>
         EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanTransform(w, s.Name, s.Origin, e, transform, token, doc.SourceWorld?.Mission, s.Transform,

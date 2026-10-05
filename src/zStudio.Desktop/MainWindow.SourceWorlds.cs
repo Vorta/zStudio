@@ -128,10 +128,12 @@ public partial class MainWindow
             ViewModel.Status = $"Built the {mission} world from its sources";
             return doc;
         }
-        catch
+        catch (Exception ex)
         {
             if (doc == null) session.Dispose();
             else if (!ViewModel.Documents.Contains(doc)) doc.Dispose();
+            // The status showed the build's progress.
+            ViewModel.Status = Bounded($"The {mission} world did not open: {ex.Message}");
             throw;
         }
         finally { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); }
@@ -276,6 +278,7 @@ public partial class MainWindow
             if (output.Family == "images") continue;
             foreach (string warning in output.Warnings.Take(64)) ViewModel.AddProblem(Bounded($"{session.Label}: {output.Path}: {warning}"), "Warning", file);
         }
+        session.LookupChangeCount = lookupChanges?.Count ?? 0;
         foreach (var change in (lookupChanges ?? []).Take(64))
             ViewModel.AddProblem(Bounded($"{session.Label}: {WorldLookups.Describe(change, " when the world was opened or last saved")} The game finds the highest slot of a name first; an object made later, or a copy, takes it."), "Warning", file);
     }
@@ -283,7 +286,8 @@ public partial class MainWindow
     /// <summary>Rebuilds the session's world and replaces the document showing it, keeping the camera.</summary>
     /// <param name="verifyTargets">Whether every script instruction must act on the same nodes as in the shown build (see
     /// <see cref="SourceObjectEdits.TargetChange"/>): a copy or move in a glTF file can change which node a lookup finds.</param>
-    private async Task<DocumentModel> RebuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool verifyTargets = false)
+    /// <param name="notes">The edit's notes on its reach, which the status and the replacement document keep.</param>
+    private async Task<DocumentModel> RebuildSourceWorldAsync(SourceWorldSession session, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool verifyTargets = false, IReadOnlyList<string>? notes = null)
     {
         // The build pairs its lookups too, so nothing can close the world between the checks below and the replacement.
         var built = await BuildSourceWorldAsync(session, token, additions);
@@ -302,11 +306,15 @@ public partial class MainWindow
         SceneViewport.ViewPose? view = null;
         if (shownDocument == current && scene != null && HasPublishedStaticScene)
             try { view = scene.CaptureView(); } catch (InvalidOperationException) { }
-        var replacement = new DocumentModel(built.World, session, built.Build, built.Revision) { PickupsLocked = current.PickupsLocked };
+        IReadOnlyList<string> kept = [.. notes ?? []];
+        var replacement = new DocumentModel(built.World, session, built.Build, built.Revision) { PickupsLocked = current.PickupsLocked, SourceEditNotes = kept };
         ReportSourceBuild(session, built.Build, built.LookupChanges);
         pendingSourceView = view == null ? null : (replacement, view);
         ViewModel.ReplaceDocument(current, replacement);
-        ViewModel.Status = $"Rebuilt the {session.Mission} world from its sources";
+        // The edit's notes, and the lookups by name it left finding other nodes (reported, not refused: Problems lists them).
+        int changed = built.LookupChanges.Count;
+        ViewModel.Status = Bounded(string.Join(" ", [$"Rebuilt the {session.Mission} world from its sources.", .. kept,
+            .. changed == 0 ? Array.Empty<string>() : [$"{changed} lookup{(changed == 1 ? "" : "s")} by name now find{(changed == 1 ? "s" : "")} another node than when the world was opened or last saved; Problems lists {(changed == 1 ? "it" : "them")}."]]));
         return replacement;
     }
 
@@ -324,11 +332,12 @@ public partial class MainWindow
     /// workspace agree.
     /// </summary>
     /// <remarks>
-    /// <paramref name="additions"/> is read after <paramref name="apply"/> runs, so a plan can list the models it adds.
-    /// Edits planned from this world's build (<paramref name="fromBuild"/>: provenance, line numbers, archive layouts) are
-    /// refused once a source the build read changed in the workspace, until the world is reloaded.
+    /// <paramref name="additions"/> and <paramref name="notes"/> are read after <paramref name="apply"/> runs, so a plan can
+    /// list the models it adds and its notes, which the status shows once the world is rebuilt. Edits planned from this
+    /// world's build (<paramref name="fromBuild"/>: provenance, line numbers, archive layouts) are refused once a source the
+    /// build read changed in the workspace, until the world is reloaded.
     /// </remarks>
-    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<bool>? verifyTargets = null)
+    private async Task<DocumentModel> EditSourceWorldAsync(DocumentModel doc, string action, Func<SourceWorkspace, Action?> apply, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<bool>? verifyTargets = null, IReadOnlyList<string>? notes = null)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
@@ -350,23 +359,29 @@ public partial class MainWindow
         try
         {
             SetSourceRebuilding(session, true);
-            return await RebuildSourceWorldAsync(session, token, additions, verifyTargets?.Invoke() == true);
+            return await RebuildSourceWorldAsync(session, token, additions, verifyTargets?.Invoke() == true, notes);
         }
         // The rebuilt world was never shown (failed, canceled, or its world closed meanwhile): the edit is taken back, so no
-        // other world keeps an edit nothing was built with, and worlds built before it are current again.
+        // other world keeps an edit nothing was built with, and worlds built before it are current again. The status (the
+        // build's progress until now) says so, however the edit was asked for.
         catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException))
         {
             bool discardApproved = discardApprovedWorkspace is { } approved && approved.Workspace == session.Workspace && approved.Revision == session.Workspace.Revision;
             try { revert(); }
             catch (Exception undo) when (undo is InvalidDataException or SourceFileChangedException or IOException or InvalidOperationException or NotSupportedException)
             {
-                throw new StudioCommandException("build_failed", $"{action} did not finish ({(ex as StudioCommandException)?.Message ?? ex.Message}) and could not be taken back: {undo.Message} Reload the world before continuing.");
+                StudioCommandException stuck = new("build_failed", $"{action} did not finish ({(ex as StudioCommandException)?.Message ?? ex.Message}) and could not be taken back: {undo.Message} Reload the world before continuing.");
+                ViewModel.Status = Bounded(stuck.Message);
+                throw stuck;
             }
             // The take-back changes the revision; a Discard chosen meanwhile still covers the workspace.
             finally { if (discardApproved) discardApprovedWorkspace = (session.Workspace, session.Workspace.Revision); }
             session.Workspace.ForgetChangesAfter(contentBefore);
-            if (ex is StudioCommandException { Code: not "context_changed" } failure)
-                throw new StudioCommandException(failure.Code, failure.Code == "build_failed" ? $"{action} was reverted because the world does not build with it: {failure.Message}" : $"{action} was reverted: {failure.Message}");
+            StudioCommandException? reverted = ex is StudioCommandException { Code: not "context_changed" } failure
+                ? new(failure.Code, failure.Code == "build_failed" ? $"{action} was reverted because the world does not build with it: {failure.Message}" : $"{action} was reverted: {failure.Message}")
+                : null;
+            ViewModel.Status = Bounded(reverted?.Message ?? $"{action} was reverted: {ex.Message}");
+            if (reverted != null) throw reverted;
             throw;
         }
         finally { SetSourceRebuilding(session, false); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
@@ -461,9 +476,12 @@ public partial class MainWindow
             SetSourceRebuilding(session, true);
             var reloaded = await RebuildSourceWorldAsync(session, token);
             // With nothing unsaved, the reloaded world is the saved one: lookups are compared with it from now on, as after a save.
-            if (!workspace.IsDirty && reloaded.SourceBuild is { } build) { session.SetLookupBaseline(build); ReportSourceBuild(session, build); }
+            if (!workspace.IsDirty && reloaded.SourceBuild is { } build)
+            { session.SetLookupBaseline(build); ReportSourceBuild(session, build); ViewModel.Status = $"Rebuilt the {session.Mission} world from its sources."; }
             return reloaded;
         }
+        // The status showed the build's progress.
+        catch (Exception ex) when (ex is not (OutOfMemoryException or StackOverflowException)) { ViewModel.Status = Bounded($"The {session.Mission} world was not reloaded: {ex.Message}"); throw; }
         finally { SetSourceRebuilding(session, false); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
     }
     /// <summary>Other open worlds whose build read a file the workspace changed since show as stale until reloaded.</summary>
@@ -540,7 +558,10 @@ public partial class MainWindow
     {
         mission = world.Mission, project = world.Root, script = world.ScriptPath, definitions = world.Workspace.Exists(world.DefinitionsPath) ? world.DefinitionsPath : null,
         current = world.Owner == d, rebuilding = world.IsRebuilding, builtRevision = d.SourceRevision, workspace = SourceWorkspaceState(world.Workspace),
-        outputs = d.SourceBuild?.Outputs.Select(o => new { path = o.Path, status = o.Status, warningCount = o.Warnings.Count, error = o.Error == null ? null : Bounded(o.Error, 512) }).ToArray()
+        outputs = d.SourceBuild?.Outputs.Select(o => new { path = o.Path, status = o.Status, warningCount = o.Warnings.Count, error = o.Error == null ? null : Bounded(o.Error, 512) }).ToArray(),
+        // The edit this build was made for: its notes on its reach, and the lookups by name now finding another node (Problems lists them).
+        editNotes = d.SourceEditNotes.Take(16).Select(n => Bounded(n, 512)).ToArray(), editNoteCount = d.SourceEditNotes.Count,
+        lookupChangeCount = world.Owner == d ? world.LookupChangeCount : (int?)null
     };
     /// <summary>The project's accepted, unsaved state: what Save would write and what Undo/Redo would change.</summary>
     private static object SourceWorkspaceState(SourceWorkspace workspace)

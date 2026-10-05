@@ -7,6 +7,29 @@ namespace Recoil.Zbd.Core.Worlds;
 public sealed record SourceInstruction(string Script, int Line, string Command, IReadOnlyList<string> Tokens, IReadOnlyList<string> Args);
 
 /// <summary>
+/// A place in a node a glTF file places under several parents (an instance): the instance itself (its number in the
+/// file), or a child at <see cref="Child"/> (its position among its parent's children) of a place in it.
+/// </summary>
+public sealed class InstancePlace
+{
+    internal InstancePlace(int number, InstancePlace? parent = null, int child = 0) { Number = number; Parent = parent; Child = child; }
+    /// <summary>The instance's number in its file (the <c>instance</c> mark its copies share).</summary>
+    public int Number { get; }
+    /// <summary>The place of the node's parent in the instance, or null for the instance itself.</summary>
+    public InstancePlace? Parent { get; }
+    /// <summary>The node's position among its parent's children in the file.</summary>
+    public int Child { get; }
+    /// <summary>The instance's number and the child positions from it, such as 3/0/1.</summary>
+    public override string ToString()
+    {
+        List<int> path = [];
+        for (var at = this; at.Parent is { } up && path.Count < 256; at = up) path.Add(at.Child);
+        path.Reverse();
+        return string.Join("/", path.Prepend(Number));
+    }
+}
+
+/// <summary>
 /// Where a world node came from and which instructions last changed it: the glTF node it was imported from (with the load
 /// that read the file), or the instruction that created it, and per command the last instruction that changed it. Kept
 /// beside the world while it is built; nothing of it is written to the world or the project.
@@ -29,6 +52,12 @@ public sealed class WorldNodeProvenance
     /// node's provenance: copies of one file are told apart by it.
     /// </summary>
     public WorldNodeProvenance? ReferencedBy { get; internal set; }
+    /// <summary>
+    /// For a node its file places under several parents (an instance) or a node inside one, where it is in the instance.
+    /// The copies are one node, read from the file's first copy (<see cref="ModelNode"/> is that copy's), so this names the
+    /// node whichever copy comes first.
+    /// </summary>
+    public InstancePlace? Instance { get; internal set; }
     /// <summary>The LoadGameGen that read the node's file.</summary>
     public SourceInstruction? Load { get; internal set; }
     /// <summary>

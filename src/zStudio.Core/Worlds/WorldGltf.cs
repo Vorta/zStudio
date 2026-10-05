@@ -302,8 +302,11 @@ public static partial class WorldGltf
         /// <summary>Texture name for a material's image URI (relative to the file at the given path).</summary>
         public required Func<string, string?, string, string> TextureName { get; init; }
         public List<string> Warnings { get; } = [];
-        /// <summary>Called for each node a glTF node becomes, with the file's path and the glTF node (a shared node once).</summary>
-        public Action<WorldNode, string, GltfNode>? NodeImported { get; init; }
+        /// <summary>
+        /// Called for each node a glTF node becomes, with the file's path, the glTF node (a shared node once, from its first
+        /// copy) and, for a shared node or a node inside one, its place there.
+        /// </summary>
+        public Action<WorldNode, string, GltfNode, InstancePlace?>? NodeImported { get; init; }
         /// <summary>While a referenced file is imported, the node that references it (the innermost, for nested references).</summary>
         public WorldNode? Referencing => referencing.Count > 0 ? referencing[^1] : null;
         internal readonly List<WorldNode> referencing = [];
@@ -368,8 +371,11 @@ public static partial class WorldGltf
         finally { context.Loading.Remove((path, doc)); }
     }
 
-    /// <summary><paramref name="depth"/> counts levels across external references, which continue the hierarchy.</summary>
-    private static WorldNode ImportNode(GltfNode source, string path, string reading, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth)
+    /// <summary>
+    /// <paramref name="depth"/> counts levels across external references, which continue the hierarchy; <paramref name="place"/>
+    /// is the node's place in a shared node of its file, if it is inside one.
+    /// </summary>
+    private static WorldNode ImportNode(GltfNode source, string path, string reading, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth, InstancePlace? place = null)
     {
         if (depth >= GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the node hierarchy, with its external references, is deeper than {GltfDocument.MaximumDepth} levels.");
         context.Token.ThrowIfCancellationRequested();
@@ -386,8 +392,8 @@ public static partial class WorldGltf
         bool lod = extras?["class"] is { } kind && Text(kind, "class", path) == "lod";
         string name = extras?["name"] is { } authored ? Text(authored, "name", path) : BlenderSuffix().Replace(source.Name, "");
         WorldNode node = new(name, lod ? WorldNodeClass.Lod : WorldNodeClass.Object3D);
-        if (instance is { } first) instances[first] = node;
-        context.NodeImported?.Invoke(node, path, source);
+        if (instance is { } first) { instances[first] = node; place = new(first); }
+        context.NodeImported?.Invoke(node, path, source, place);
         uint carried = extras?["flags"] is { } flags ? Hex(flags, "flags", path) & CarriedFlags : DefaultCarried;
         node.Flags = (lod ? 0x0108001Cu : 0x0308001Cu) & ~CarriedFlags | carried;
         node.BoundsFlags = 4;
@@ -419,7 +425,8 @@ public static partial class WorldGltf
             try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1)) Link(node, child); }
             finally { context.referencing.RemoveAt(context.referencing.Count - 1); }
         }
-        foreach (var child in source.Children) Link(node, ImportNode(child, path, reading, zone, context, instances, depth + 1));
+        for (int i = 0; i < source.Children.Count; i++)
+            Link(node, ImportNode(source.Children[i], path, reading, zone, context, instances, depth + 1, place == null ? null : new(place.Number, place, i)));
         return node;
         static void Link(WorldNode parent, WorldNode child)
         {

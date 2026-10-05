@@ -72,6 +72,8 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     internal Recoil.Zbd.Core.Sources.SourceWorldBuild? SourceBuild { get; }
     /// <summary>The project workspace's content revision the shown build was made from.</summary>
     internal long SourceRevision { get; }
+    /// <summary>The notes on the reach of the edit this build was made for (a copy's part names, a part's other copies).</summary>
+    internal IReadOnlyList<string> SourceEditNotes { get; init; } = [];
     public event Action? SourceWorldChanged;
     private void SourceEditsChanged(Recoil.Zbd.Core.Sources.SourceWorkspaceChange change)
     {

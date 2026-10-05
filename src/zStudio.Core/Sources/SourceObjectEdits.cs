@@ -588,43 +588,99 @@ public static class SourceObjectEdits
             .Distinct(ReferenceEqualityComparer.Instance).Cast<WorldNode>();
     }
     /// <summary>
-    /// The first script instruction that acts on other nodes in <paramref name="after"/> than in <paramref name="before"/>, or
-    /// null: a move or copy in a glTF file changes the order the build makes nodes in, and a script's lookups (FindNode takes
-    /// the newest node of a name, FindSubNode searches below the current node) can then find others. Nodes are identified by
-    /// the load and glTF node they come from, or the instruction that created them; both builds must number the files'
-    /// nodes alike (no node removed), as a move or a copy leaves them.
+    /// The script instructions that act on other nodes in <paramref name="after"/> than in <paramref name="before"/> (the
+    /// first three, and how many more), or null: a move or copy in a glTF file changes the order the build makes nodes in,
+    /// and a script's lookups (FindNode takes the newest node of a name, FindSubNode searches below the current node) can
+    /// then find others. Nodes the build freed again count too (<see cref="SourceWorldBuild.Freed"/>). Nodes are identified
+    /// by the load and glTF node they come from (a node its file places under several parents by its place in that
+    /// instance, whichever copy the build read), with the node that references their file, or by the instruction that
+    /// created them; both builds must number the files' nodes alike (no node removed), as a move or a copy leaves them.
     /// </summary>
     public static string? TargetChange(SourceWorldBuild before, SourceWorldBuild after)
     {
-        static Dictionary<(string Script, int Line), List<string>> Targets(SourceWorldBuild build)
+        TargetIdentities identities = new();
+        var was = identities.Targets(before); var now = identities.Targets(after);
+        List<string> changed = []; int count = 0;
+        // Both ways: an instruction that found nothing before may find a node now (a copy named as a script looks up).
+        foreach (var (script, line) in was.Keys.Union(now.Keys).OrderBy(k => k.Script, StringComparer.Ordinal).ThenBy(k => k.Line))
         {
-            Dictionary<(string, int), List<string>> targets = [];
-            foreach (var origin in build.Provenance.Values)
+            var nodes = was.GetValueOrDefault((script, line)) ?? [];
+            var then = now.GetValueOrDefault((script, line)) ?? [];
+            if (!nodes.SequenceEqual(then) && ++count <= 3)
+                changed.Add($"{TargetIdentities.Short(script, 160)} line {line} would act on {identities.Describe(then)} instead of {identities.Describe(nodes)}");
+        }
+        return count == 0 ? null
+            : $"{string.Join("; ", changed)}{(count > 3 ? $"; and {count - 3} more instructions" : "")}: the build finds nodes by name, and this change alters which one it finds. Make the change in Blender or in the scripts.";
+    }
+    /// <summary>
+    /// Numbers for the nodes script instructions act on, shared by the builds compared: nodes made from the same source get
+    /// the same number. Each source, referencing node and place in an instance is numbered once, so a build costs one pass
+    /// over the nodes instructions acted on.
+    /// </summary>
+    private sealed class TargetIdentities
+    {
+        private readonly record struct Key(int Kind, string? File, string? Name, int Index, int Place, string? Script, int Line, int Within);
+        private readonly Dictionary<Key, int> numbers = [];
+        private readonly Dictionary<object, int> known = new(ReferenceEqualityComparer.Instance);
+        /// <summary>A source of each number, to describe it (null for a place in an instance).</summary>
+        private readonly List<WorldNodeProvenance?> sources = [];
+
+        public Dictionary<(string Script, int Line), List<int>> Targets(SourceWorldBuild build)
+        {
+            Dictionary<(string, int), List<int>> targets = [];
+            foreach (var origin in build.Provenance.Values.Concat(build.Freed))
             {
-                string identity = Identity(origin, 0);
+                if (origin.Applied.Count == 0 && origin.Named.Count == 0) continue;
+                int identity = Number(origin, 0);
                 foreach (var instruction in origin.Applied.Concat(origin.Named))
                 {
                     if (!targets.TryGetValue((instruction.Script, instruction.Line), out var list)) targets[(instruction.Script, instruction.Line)] = list = [];
                     list.Add(identity);
                 }
             }
-            foreach (var list in targets.Values) list.Sort(StringComparer.Ordinal);
+            foreach (var list in targets.Values) list.Sort();
             return targets;
         }
-        // A glTF node and, for a file another node references, that node too: copies of one file are told apart by it.
-        static string Identity(WorldNodeProvenance origin, int depth) => origin.ModelFile != null
-            ? $"{origin.ModelNodeName} ({origin.ModelFile} node {origin.ModelNode}{(origin.Load is { } load ? $", loaded at {load.Script} line {load.Line}" : "")}{(origin.ReferencedBy is { } by && depth < 16 ? $", in {Identity(by, depth + 1)}" : "")})"
-            : origin.Created is { } created ? $"the node {created.Script} line {created.Line} made" : "a node";
-        var was = Targets(before); var now = Targets(after);
-        // Both ways: an instruction that found nothing before may find a node now (a copy named as a script looks up).
-        foreach (var (script, line) in was.Keys.Union(now.Keys).OrderBy(k => k.Script, StringComparer.Ordinal).ThenBy(k => k.Line))
+        /// <summary>
+        /// A glTF node by its file, load and index (in an instance, by its place there) and, for a file another node
+        /// references, by that node too, so copies of one file are told apart; a terrain piece by its recipe, surface and
+        /// cell; anything else by the instruction that created it.
+        /// </summary>
+        private int Number(WorldNodeProvenance origin, int depth)
         {
-            var nodes = was.GetValueOrDefault((script, line)) ?? [];
-            var then = now.GetValueOrDefault((script, line)) ?? [];
-            if (!nodes.SequenceEqual(then, StringComparer.Ordinal))
-                return $"{script} line {line} would act on {(then.Count == 0 ? "no node" : string.Join(", ", then.Take(3)))} instead of {(nodes.Count == 0 ? "no node" : string.Join(", ", nodes.Take(3)))}: the build finds nodes by name, and this change alters which one it finds. Make the change in Blender or in the scripts.";
+            if (known.TryGetValue(origin, out int number)) return number;
+            Key key = origin.Terrain is { } recipe ? new(3, recipe, origin.TerrainSurface, origin.TerrainCell.Column, origin.TerrainCell.Row, origin.Load?.Script, origin.Load?.Line ?? 0, -1)
+                : origin.ModelFile is { } file ? new(1, file, origin.ModelNodeName, origin.Instance == null ? origin.ModelNode : -1, origin.Instance is { } place ? Place(place, 0) : -1,
+                    origin.Load?.Script, origin.Load?.Line ?? 0, origin.ReferencedBy is { } by && depth < GltfDocument.MaximumDepth ? Number(by, depth + 1) : -1)
+                : origin.Created is { } created ? new(2, null, null, 0, -1, created.Script, created.Line, -1) : default;
+            return known[origin] = Intern(key, origin);
         }
-        return null;
+        private int Place(InstancePlace place, int depth)
+        {
+            if (known.TryGetValue(place, out int number)) return number;
+            Key key = place.Parent is { } parent && depth < GltfDocument.MaximumDepth ? new(5, null, null, place.Child, Place(parent, depth + 1), null, 0, -1) : new(4, null, null, place.Number, -1, null, 0, -1);
+            return known[place] = Intern(key, null);
+        }
+        private int Intern(Key key, WorldNodeProvenance? source)
+        {
+            if (numbers.TryGetValue(key, out int number)) return number;
+            numbers[key] = number = sources.Count; sources.Add(source);
+            return number;
+        }
+        /// <summary>Up to three of the nodes in words, and how many more.</summary>
+        public string Describe(IReadOnlyList<int> nodes) => nodes.Count == 0 ? "no node"
+            : string.Join(", ", nodes.Take(3).Select(n => sources[n] is { } origin ? Describe(origin, 0) : "a node")) + (nodes.Count > 3 ? $" and {nodes.Count - 3} more" : "");
+        private static string Describe(WorldNodeProvenance origin, int depth)
+        {
+            if (origin.Terrain is { } recipe) return $"a piece of {Short(recipe, 160)} (surface {Short(origin.TerrainSurface, 64)}, cell {origin.TerrainCell.Column}, {origin.TerrainCell.Row})";
+            if (origin.ModelFile is not { } file) return origin.Created is { } created ? $"the node {Short(created.Script, 160)} line {created.Line} made" : "a node";
+            string at = origin.Instance is { } place ? $"instance {Short(place.ToString(), 64)}" : $"node {origin.ModelNode}";
+            string load = origin.Load is { } l ? $", loaded at {Short(l.Script, 160)} line {l.Line}" : "";
+            // The referencing node, and only a mark for those referencing it in turn.
+            string within = origin.ReferencedBy is not { } by ? "" : depth == 0 ? $", in {Describe(by, 1)}" : ", in …";
+            return $"{(string.IsNullOrEmpty(origin.ModelNodeName) ? "an unnamed node" : Short(origin.ModelNodeName, 64))} ({Short(file, 160)} {at}{load}{within})";
+        }
+        internal static string Short(string? text, int length) => text == null ? "" : text.Length <= length ? text : text[..length] + "…";
     }
     /// <summary>The provenance of every copy of <paramref name="origin"/>'s part node (with itself), from all of a world's.</summary>
     public static IEnumerable<WorldNodeProvenance> CopiesOf(WorldNodeProvenance origin, IEnumerable<WorldNodeProvenance> all) =>

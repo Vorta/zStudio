@@ -452,10 +452,11 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         context = new()
         {
             World = World,
-            NodeImported = (node, file, source) =>
+            NodeImported = (node, file, source, place) =>
             {
                 if (context.Referencing is { } referencing) Origin(node).ReferencedBy = Origin(referencing);
                 var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.ModelNodeName = source.Name; origin.ModelTransformAuthored = source.Matrix is { } m && !m.IsIdentity; origin.Load = load;
+                origin.Instance = place;
                 // The database's nodes: of its file and of its parts, the files its groups reference.
                 bool part = parts.Contains(file);
                 origin.Database = database && (part || string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase));
