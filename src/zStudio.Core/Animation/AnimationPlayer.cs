@@ -249,8 +249,10 @@ public sealed partial class AnimationPlayer
         if (reference == 0) return null;
         var entry = instance.Entry; int index = context.ResolveInstanceNode(entry, reference, instance.Root, instance.Binding);
         if (instance.Nodes.TryGetValue(index, out var node)) return node;
-        // ResolveNodeByName finds the entry's own light or sound node before the world's: no scene node.
-        if (index < 0 && reference > 0 && reference < entry.References[1].Count && entry.References[1][reference].Text(0, 36) is var name && AnimationPreviewContext.OwnsNode(entry, name))
+        // RECOIL's ResolveNodeByName finds the entry's own light or sound node before the world's: no scene node. MW3 has no
+        // such evidence, so its unresolved names stay warnings.
+        if (index < 0 && context.World.Game != GameVariant.MechWarrior3 && reference > 0 && reference < entry.References[1].Count
+            && entry.References[1][reference].Text(0, 36) is var name && AnimationPreviewContext.OwnsNode(entry, name))
             AddNote($"{entry.Name}: node reference {reference} is the animation's own light or sound {name}, which the preview does not show as a node.", "Support", "Information");
         else AddNote($"{entry.Name}: unresolved node reference {reference}.");
         return null;

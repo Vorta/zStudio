@@ -4,7 +4,7 @@ zStudio edits existing entries in version-28 animation packs. It preserves origi
 
 ## Using the editor
 
-Open the dataset root, then a mission's `anim.zbd`. Select an animation in Assets. Its matching GameZ scene, mission textures, effect templates from `effects.zrd`, and sample aliases from `sounds.zrd` resolve automatically. **Scene → Choose GameZ…** chooses a scene when opening an exported copy elsewhere. **Scene → Bind root…** changes the preview's root node when a name has multiple matches. These choices affect preview only.
+Open the dataset root, then a mission's `anim.zbd`. Select an animation in Assets. Its matching GameZ scene, mission textures, effect templates from `effects.zrd`, and sample aliases from `sounds.zrd` resolve automatically. **Scene → Choose GameZ…** chooses a scene when opening an exported copy elsewhere. **Scene → Bind root…** changes the preview's root node when a name has multiple matches; the chosen node binds the animation as the game's loader binds a root (references by the root's name find it, and an attach node outside it is looked up in the whole world, as hit walls attached to a wall outside their root are). These choices affect preview only.
 
 For the opening cinematic, select `m1/anim.zbd` → `start_single_player`, enable **Map** and **Follow camera**, then play. Its child `m1_start_animation` animates `camera1`: the view descends toward the docks while turning. Follow camera also applies immediately to a paused pose; turning it off leaves the viewport available for free navigation. **Runtime** identifies the current camera by name and source index and shows horizontal FOV in degrees. Serialized camera FOV fields remain in radians in the Event editor.
 

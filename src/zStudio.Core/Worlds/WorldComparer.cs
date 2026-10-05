@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace Recoil.Zbd.Core.Worlds;
@@ -88,6 +89,11 @@ public sealed class WorldComparisonNode
 public sealed record WorldNameBinding(string Name, int ExpectedCount, int ActualCount, WorldNode Expected, WorldNode? Counterpart, WorldNode Actual, bool Interchangeable = false)
 {
     public bool Same => ReferenceEquals(Counterpart, Actual) || Interchangeable;
+    /// <summary>
+    /// The actual world's node is another one than the counterpart, and the comparison had made too many copy checks to tell
+    /// whether it is indistinguishable from it (<see cref="WorldComparison.UncheckedBindings"/>): it counts as another node.
+    /// </summary>
+    public bool Unchecked { get; init; }
 }
 
 /// <summary>Two worlds compared as one merged tree of nodes, with their differences and node slots.</summary>
@@ -118,6 +124,18 @@ public sealed class WorldComparison
     public bool Truncated { get; init; }
     /// <summary>Whether matching stopped too (256 levels, or <see cref="WorldComparer.MaximumTreeNodes"/> more children paired below the cut), so <see cref="Counterparts"/> may lack nodes.</summary>
     public bool PairingTruncated { get; init; }
+    /// <summary>
+    /// Whether pairing some copies of a repeated name nearest first stopped early, leaving them to pair in order: a name had
+    /// more than <see cref="WorldComparer.MaximumNearestPairs"/> candidate pairs, or the comparison had examined
+    /// <see cref="WorldComparer.MaximumComparisonPairs"/>. Their differences, and the lookups that depend on them, may come
+    /// from the pairing rather than from the worlds.
+    /// </summary>
+    public bool ApproximatePairing { get; init; }
+    /// <summary>
+    /// How many <see cref="Bindings"/> count as another node only because the comparison had made too many copy checks to tell
+    /// whether the node is indistinguishable from the counterpart (<see cref="WorldNameBinding.Unchecked"/>).
+    /// </summary>
+    public int UncheckedBindings { get; init; }
 }
 
 /// <summary>
@@ -219,15 +237,17 @@ public static class WorldComparer
             if (!byNameB.TryGetValue(group.Key, out var others) || count < 2 && others.Count < 2) continue;
             var first = group.MaxBy(n => slotsA[n])!; var highest = others.MaxBy(n => slotsB[n])!;
             var match = counterpart.GetValueOrDefault(first);
-            WorldNameBinding binding = new(group.Key, count, others.Count, first, match, highest,
-                match != null && !ReferenceEquals(match, highest) && memo.Interchangeable(match, highest, 0));
+            bool other = match != null && !ReferenceEquals(match, highest), interchangeable = other && memo.Interchangeable(match!, highest, 0);
+            // The checks are shared by every name: once they run out, a copy is not told apart, and the binding says so.
+            WorldNameBinding binding = new(group.Key, count, others.Count, first, match, highest, interchangeable) { Unchecked = other && !interchangeable && memo.ChecksExhausted };
             bindings.Add(binding);
             if (!binding.Same) foreach (var place in places.GetValueOrDefault(first) ?? []) place.BindsElsewhere = true;
         }
         return new()
         {
             Roots = roots, ExpectedSlots = slotsA, ActualSlots = slotsB, Differences = differences, DifferenceCount = found, Bindings = bindings, Counts = counts,
-            Counterparts = counterpart, Truncated = truncated, PairingTruncated = pairingTruncated,
+            Counterparts = counterpart, Truncated = truncated, PairingTruncated = pairingTruncated, ApproximatePairing = memo.Approximate,
+            UncheckedBindings = bindings.Count(b => b.Unchecked),
         };
 
         static List<WorldNode> Members(WorldNode world) => [.. world.Children.Concat(world.Areas.SelectMany(a => a.Nodes)).Distinct(ReferenceEqualityComparer.Instance).Cast<WorldNode>()];
@@ -236,6 +256,8 @@ public static class WorldComparer
         void Match(WorldComparisonNode? parent, List<WorldNode> a, List<WorldNode> b, bool worldChildren, int depth)
         {
             token.ThrowIfCancellationRequested();
+            // Most pairs are leaves: nothing to match, and nothing to allocate for it.
+            if (a.Count == 0 && b.Count == 0) return;
             Dictionary<WorldNode, WorldNode> pairs = new(ReferenceEqualityComparer.Instance);
             HashSet<WorldNode> paired = new(ReferenceEqualityComparer.Instance);
             var byName = b.ToLookup(n => n.Name, StringComparer.Ordinal);
@@ -243,7 +265,8 @@ public static class WorldComparer
             {
                 var others = byName[group.Key].ToList(); var mine = group.ToList();
                 if (parent != null && mine.Count != others.Count) Other(parent, group.Key, "count", mine.Count, others.Count);
-                foreach (var (x, y) in PairUp(mine, others, memo)) { pairs[x] = y; paired.Add(y); }
+                // A pair at many places, or parents holding the same children, pairs them once.
+                foreach (var (x, y) in memo.Pairs(mine, others)) { pairs[x] = y; paired.Add(y); }
             }
             if (parent == null) { foreach (var node in a) if (pairs.TryGetValue(node, out var other)) Pair(null, node, other, worldChildren, depth); return; }
             foreach (var name in b.Select(n => n.Name).Distinct().Except(a.Select(n => n.Name))) Other(parent, name, "extra", "", name);
@@ -359,7 +382,8 @@ public static class WorldComparer
     /// Pairs nodes of one name: identical copies first (the same contents all the way down, then the same structure,
     /// children's names and position), so that moving, adding or removing one copy leaves the others paired with themselves;
     /// then the same structure at the nearest position; then the nearest position; then order (positions that are not finite,
-    /// or past <see cref="MaximumNearestPairs"/> candidate pairs).
+    /// or past <see cref="MaximumNearestPairs"/> candidate pairs of the name or <see cref="MaximumComparisonPairs"/> of the
+    /// comparison, <see cref="WorldComparison.ApproximatePairing"/>).
     /// </summary>
     internal static List<(WorldNode A, WorldNode B)> PairUp(IReadOnlyList<WorldNode> mine, IReadOnlyList<WorldNode> others) => PairUp(mine, others, new(default));
     private static List<(WorldNode A, WorldNode B)> PairUp(IReadOnlyList<WorldNode> mine, IReadOnlyList<WorldNode> others, Memo memo)
@@ -387,13 +411,19 @@ public static class WorldComparer
     /// <summary>Remaining pairs of one name are all listed and sorted when there are at most this many.</summary>
     private const int AllPairs = 65536;
     /// <summary>The most candidate pairs of one name listed by position before the rest pair by order.</summary>
-    private const int MaximumNearestPairs = 1 << 21;
+    public const int MaximumNearestPairs = 1 << 21;
+    /// <summary>
+    /// The most pairs of positions a comparison examines to pair copies nearest first, over all its names and places; past
+    /// them, copies pair by order (<see cref="WorldComparison.ApproximatePairing"/>).
+    /// </summary>
+    public const long MaximumComparisonPairs = 1L << 24;
 
     /// <summary>
     /// Pairs nodes nearest first (ties by their order), as if every pair were listed by distance: rounds over a doubling
     /// radius list only the pairs within it, found on a grid of that cell size, so a large group lists few pairs and pairs the
     /// same way. A pair within the radius whose nodes are both left would have been taken in that round, so each round
-    /// continues the full order exactly.
+    /// continues the full order exactly. Past <see cref="MaximumNearestPairs"/> listed or the comparison's
+    /// <see cref="MaximumComparisonPairs"/> examined, the rest are left to pair by order.
     /// </summary>
     private static void Nearest(ref List<WorldNode> restA, ref List<WorldNode> restB, bool sameStructure, Memo memo, List<(WorldNode, WorldNode)> pairs)
     {
@@ -406,41 +436,53 @@ public static class WorldComparer
         long listed = 0;
         bool Allowed(int i, int j) => !sameStructure || memo.Structure(a[i]) == memo.Structure(b[j]);
         double Distance(int i, int j) { Vector3 p = at[i], q = at[a.Count + j]; double x = (double)p.X - q.X, y = (double)p.Y - q.Y, z = (double)p.Z - q.Z; return x * x + y * y + z * z; }
+        // One list for every round of the comparison: a round's pairs are sorted and taken before the next is listed.
+        var candidates = memo.Candidates;
         for (double radius = Math.Max(1e-3, span / (1 << 30)); ; radius *= 2)
         {
             memo.Token.ThrowIfCancellationRequested();
             int[] ia = [.. Enumerable.Range(0, a.Count).Where(i => !usedA[i] && Finite(at[i]))], jb = [.. Enumerable.Range(0, b.Count).Where(j => !usedB[j] && Finite(at[a.Count + j]))];
             if (ia.Length == 0 || jb.Length == 0) break;
             bool all = (long)ia.Length * jb.Length <= AllPairs || radius >= 2 * span;
-            if (all && listed + (long)ia.Length * jb.Length > MaximumNearestPairs) break;
-            List<(double Distance, int I, int J)> candidates = [];
-            if (all) { foreach (int i in ia) foreach (int j in jb) if (Allowed(i, j)) candidates.Add((Distance(i, j), i, j)); }
+            // The pairs this round may still list, and examine, before the rest pair by order.
+            long room = MaximumNearestPairs - listed, examinable = memo.Examinable;
+            if (all && ((long)ia.Length * jb.Length > room || (long)ia.Length * jb.Length > examinable)) { memo.Approximate = true; break; }
+            candidates.Clear();
+            bool stopped = false;
+            if (all) { foreach (int i in ia) foreach (int j in jb) if (Allowed(i, j)) candidates.Add((Distance(i, j), i, j)); memo.Examined((long)ia.Length * jb.Length); }
             else
             {
                 // Cells as wide as the radius: a pair within it lies in neighbouring cells.
                 Dictionary<(long, long, long), List<int>> cells = [];
                 (long, long, long) Cell(Vector3 p) => ((long)Math.Floor(((double)p.X - min.X) / radius), (long)Math.Floor(((double)p.Y - min.Y) / radius), (long)Math.Floor(((double)p.Z - min.Z) / radius));
                 foreach (int j in jb) { var cell = Cell(at[a.Count + j]); if (!cells.TryGetValue(cell, out var list)) cells[cell] = list = []; list.Add(j); }
+                long examined = 0;
                 foreach (int i in ia)
                 {
                     var (cx, cy, cz) = Cell(at[i]);
-                    for (long x = cx - 1; x <= cx + 1; x++) for (long y = cy - 1; y <= cy + 1; y++) for (long z = cz - 1; z <= cz + 1; z++)
+                    for (long x = cx - 1; x <= cx + 1 && !stopped; x++) for (long y = cy - 1; y <= cy + 1 && !stopped; y++) for (long z = cz - 1; z <= cz + 1 && !stopped; z++)
                                 if (cells.TryGetValue((x, y, z), out var list))
                                     foreach (int j in list)
                                     {
+                                        if (++examined > examinable) { stopped = true; break; }
+                                        if ((examined & 0xFFFFF) == 0) memo.Token.ThrowIfCancellationRequested();
                                         double d = Distance(i, j);
-                                        if (d <= radius * radius && Allowed(i, j)) candidates.Add((d, i, j));
+                                        if (d > radius * radius || !Allowed(i, j)) continue;
+                                        if (candidates.Count >= room) { stopped = true; break; }
+                                        candidates.Add((d, i, j));
                                     }
-                    if (listed + candidates.Count > MaximumNearestPairs) break;
+                    if (stopped) break;
                 }
-                if (listed + candidates.Count > MaximumNearestPairs) break;
+                memo.Examined(examined);
             }
+            if (stopped) { memo.Approximate = true; break; }
             listed += candidates.Count;
             candidates.Sort();
             foreach (var (_, i, j) in candidates)
                 if (!usedA[i] && !usedB[j]) { usedA[i] = usedB[j] = true; pairs.Add((a[i], b[j])); }
             if (all) break;
         }
+        candidates.Clear();
         restA = [.. a.Where((_, i) => !usedA[i])]; restB = [.. b.Where((_, j) => !usedB[j])];
         static bool Finite(Vector3 p) => float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z);
     }
@@ -470,8 +512,58 @@ public static class WorldComparer
         private readonly Dictionary<WorldModel, ulong> models = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<(WorldModel, WorldModel), (string Field, string Expected, string Actual)[]> modelDifferences = [];
         private readonly Dictionary<(WorldNode, WorldNode, int), bool> interchangeable = [];
-        /// <summary>Copies sharing copies could ask about the same nodes at very many places: past this many checks, copies count as different.</summary>
+        /// <summary>
+        /// Copies sharing copies could ask about the same nodes at very many places: past this many checks, copies count as
+        /// different (<see cref="ChecksExhausted"/>).
+        /// </summary>
         private int checks = 1 << 20;
+        public bool ChecksExhausted => checks < 0;
+        private readonly Dictionary<Group, List<(WorldNode A, WorldNode B)>> pairings = [];
+        private long examinable = MaximumComparisonPairs;
+        /// <summary>How many more pairs of positions <see cref="Nearest"/> may examine in this comparison.</summary>
+        public long Examinable => Math.Max(0, examinable);
+        public void Examined(long count) => examinable -= count;
+        /// <summary>Whether some copies were left to pair by order (<see cref="WorldComparison.ApproximatePairing"/>).</summary>
+        public bool Approximate { get; set; }
+        /// <summary>The candidate pairs of <see cref="Nearest"/>'s current round (one list, so a comparison allocates it once).</summary>
+        public List<(double Distance, int I, int J)> Candidates { get; } = [];
+
+        /// <summary>
+        /// <see cref="PairUp"/>, once for each pair of lists of copies: a pair of nodes at many places, or parents holding the
+        /// same children, pairs the same children the same way, at the cost of one.
+        /// </summary>
+        public List<(WorldNode A, WorldNode B)> Pairs(List<WorldNode> mine, List<WorldNode> others)
+        {
+            // A name only one side has pairs nothing; a name on one node each pairs at once.
+            if (mine.Count == 0 || others.Count == 0) return [];
+            if (mine.Count + others.Count <= 2) return PairUp(mine, others, this);
+            Group key = new(mine, others);
+            if (!pairings.TryGetValue(key, out var known)) pairings[key] = known = PairUp(mine, others, this);
+            return known;
+        }
+        /// <summary>Two lists of nodes, equal when they hold the same nodes in the same order.</summary>
+        private readonly struct Group(List<WorldNode> a, List<WorldNode> b) : IEquatable<Group>
+        {
+            private readonly List<WorldNode> a = a, b = b;
+            private readonly int hash = Hash(a, b);
+            public bool Equals(Group other) => Same(a, other.a) && Same(b, other.b);
+            public override bool Equals(object? obj) => obj is Group other && Equals(other);
+            public override int GetHashCode() => hash;
+            private static bool Same(List<WorldNode> x, List<WorldNode> y)
+            {
+                if (x.Count != y.Count) return false;
+                for (int i = 0; i < x.Count; i++) if (!ReferenceEquals(x[i], y[i])) return false;
+                return true;
+            }
+            private static int Hash(List<WorldNode> a, List<WorldNode> b)
+            {
+                HashCode hash = new();
+                foreach (var node in a) hash.Add(RuntimeHelpers.GetHashCode(node));
+                hash.Add(a.Count);
+                foreach (var node in b) hash.Add(RuntimeHelpers.GetHashCode(node));
+                return hash.ToHashCode();
+            }
+        }
 
         /// <summary>The node's class, polygon and child counts six levels down, and its children's names.</summary>
         public ulong Structure(WorldNode node)

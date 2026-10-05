@@ -170,7 +170,9 @@ internal sealed class WorldCompareWindow : Window
             $"Retail {view.RetailNodes:N0} nodes{Version(view.RetailVersion)}, rebuilt {view.RebuiltNodes:N0}{Version(view.RebuiltVersion)}. Merged tree: {c.Counts[WorldComparisonStatus.Same]:N0} the same, {c.Counts[WorldComparisonStatus.Changed]:N0} changed, {c.Counts[WorldComparisonStatus.OnlyExpected]:N0} only in retail, {c.Counts[WorldComparisonStatus.OnlyActual]:N0} only in rebuilt. ") +
             (c.Bindings.Count == 0 ? "No name is shared by several nodes." : string.Create(CultureInfo.CurrentCulture, $"Of {c.Bindings.Count:N0} names several nodes share, {elsewhere:N0} find another node in a whole-world lookup of the rebuilt world (highest slot first; ⚑ marks the node). Animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every ⚑ changes behaviour.")) +
             (c.Truncated ? string.Create(CultureInfo.CurrentCulture, $" The merged tree is too large to show whole: it stops at {WorldComparer.MaximumTreeNodes:N0} rows or 256 levels, and rows whose children it leaves out say so; the rows and differences counted here are those shown.") : "") +
-            (c.PairingTruncated ? " Not every node below that was matched, so some names' lookups may be marked ⚑ without reason." : "");
+            (c.PairingTruncated ? " Not every node below that was matched, so some names' lookups may be marked ⚑ without reason." : "") +
+            (c.ApproximatePairing ? " Some copies of repeated names were too many to pair by position and were paired in order, so some of their differences and ⚑ may come from the pairing." : "") +
+            (c.UncheckedBindings > 0 ? string.Create(CultureInfo.CurrentCulture, $" {c.UncheckedBindings:N0} of the ⚑ names were not checked for an indistinguishable copy (too many checks), so they may find the same thing.") : "");
         ShowSelection();
     }
     /// <summary>A world's version when it is not the releases' version 15.</summary>

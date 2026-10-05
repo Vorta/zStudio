@@ -23,7 +23,11 @@ public enum AnimationBinding
     Copied,
     /// <summary>Bound again to a node (RebindEntryToNode, CloneEntryForNode): a child animation started at a node, a turret's stop.</summary>
     Rebound,
-    /// <summary>The editor's chosen root, bound again like <see cref="Rebound"/> but answering the entry's root name.</summary>
+    /// <summary>
+    /// The editor's chosen root, bound as if LoadZbd had bound the entry there: it answers the entry's root name, and its
+    /// attach node is looked up inside it, else in the whole world (a hit wall attached outside its root keeps that wall).
+    /// Its lookups search the scene as it is, like <see cref="Rebound"/>.
+    /// </summary>
     Chosen,
 }
 
@@ -322,7 +326,9 @@ public sealed partial class AnimationPreviewContext
     /// and sounds exist: inside the root, else the world's highest slot (m4–m13 hit walls attach to one wall1/ware_5 outside
     /// their root). A copy or rebinding (EnsureCopiedRootTree, CloneEntryForNode, RebindEntryToNode) takes the node itself
     /// when the loaded callback was the root, else looks the attach name up only inside the node; without it the game
-    /// disables the entry (state 5, <see cref="RebindDisables"/>), which the preview approximates with the node.
+    /// disables the entry (state 5, <see cref="RebindDisables"/>), which the preview approximates with the node. The editor's
+    /// chosen root is bound as LoadZbd binds one, in the scene as it is: its root name answers it, and an attach name it lacks
+    /// is the whole world's.
     /// </summary>
     private int Callback(AnimationEntry entry, int root, AnimationBinding binding, int limit)
     {
@@ -333,10 +339,16 @@ public sealed partial class AnimationPreviewContext
         }
         if (entry.AttachName == entry.RootName) return root;
         int below = FindBelow(root, entry.AttachName, limit);
-        return below >= 0 ? below : root;
+        if (below >= 0) return below;
+        return binding == AnimationBinding.Chosen && FindNamed(entry.AttachName) is >= 0 and var world ? world : root;
     }
-    /// <summary>Whether the game disables <paramref name="entry"/> bound by <paramref name="binding"/> at <paramref name="root"/>: a copy or rebinding whose attach node is not inside the node.</summary>
-    public bool RebindDisables(AnimationEntry entry, int root, AnimationBinding binding) => World.Game != GameVariant.MechWarrior3 && binding != AnimationBinding.Loaded &&
+    /// <summary>
+    /// Whether the game disables <paramref name="entry"/> bound by <paramref name="binding"/> at <paramref name="root"/>: a copy
+    /// or rebinding whose attach node is not inside the node. The editor's chosen root is bound as LoadZbd binds a root, which
+    /// finds such an attach node in the whole world.
+    /// </summary>
+    public bool RebindDisables(AnimationEntry entry, int root, AnimationBinding binding) => World.Game != GameVariant.MechWarrior3 &&
+        binding is AnimationBinding.Copied or AnimationBinding.Rebound &&
         entry.AttachName != entry.RootName && FindBelow(root, entry.AttachName, binding == AnimationBinding.Copied ? LoadedCount : Scene.Nodes.Count) < 0;
     private int FindMw3Reference(AnimationEntry entry, int reference, int root)
     {

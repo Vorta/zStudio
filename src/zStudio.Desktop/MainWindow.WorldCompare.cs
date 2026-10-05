@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json.Nodes;
 using System.Windows;
 using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core.Formats;
@@ -86,27 +87,34 @@ public partial class MainWindow
                 if (action == "select") { for (var parent = row.Parent; parent != null; parent = parent.Parent) parent.IsExpanded = true; view.Select(row); }
                 else row.IsExpanded = action == "expand";
             }
-            bool differences = Flag(a, "differencesOnly");
-            var source = (row == null ? view.Roots : row.Children).Where(c => view.Passes(c, differences, ""));
-            var page = Page(source, a, matches: (c, query) => view.Passes(c, false, query.Trim()), project: c => DescribeCompareRow(view, c));
-            var filter = compareWindow!.Filter;
-            return Result(new { DescribeComparison(view).context, summary = DescribeComparison(view), selected = view.Selected == null ? null : DescribeCompareRow(view, view.Selected, properties: true),
-                windowFilter = new { differencesOnly = filter.DifferencesOnly, query = Bounded(filter.Query, 256) }, row = row == null ? null : DescribeCompareRow(view, row, properties: true), children = page.Data });
+            return CompareTreePage(view, row, a, compareWindow!.Filter);
         });
+    }
+
+    /// <summary>A world_compare_tree read: the summary, the selected row and <paramref name="row"/> with their property lines, and a page of the row's children (or the roots).</summary>
+    internal static StudioResult CompareTreePage(WorldCompareView view, WorldCompareRow? row, JsonObject a, (bool DifferencesOnly, string Query) filter)
+    {
+        bool differences = Flag(a, "differencesOnly");
+        var source = (row == null ? view.Roots : row.Children).Where(c => view.Passes(c, differences, ""));
+        var page = Page(source, a, matches: (c, query) => view.Passes(c, false, query.Trim()), project: c => DescribeCompareRow(view, c));
+        return Result(new { DescribeComparison(view).context, summary = DescribeComparison(view), selected = view.Selected == null ? null : DescribeCompareRow(view, view.Selected, properties: true),
+            windowFilter = new { differencesOnly = filter.DifferencesOnly, query = Bounded(filter.Query, 256) }, row = row == null ? null : DescribeCompareRow(view, row, properties: true), children = page.Data });
     }
 
     private static Summary DescribeComparison(WorldCompareView view)
     {
         var c = view.Comparison;
         return new(view.Context, view.RetailPath, view.RebuiltPath, view.RetailVersion, view.RebuiltVersion, view.RetailNodes, view.RebuiltNodes, c.Counts[WorldComparisonStatus.Same], c.Counts[WorldComparisonStatus.Changed],
-            c.Counts[WorldComparisonStatus.OnlyExpected], c.Counts[WorldComparisonStatus.OnlyActual], c.DifferenceCount, c.Bindings.Count, c.Bindings.Count(b => !b.Same), c.Truncated, c.PairingTruncated);
+            c.Counts[WorldComparisonStatus.OnlyExpected], c.Counts[WorldComparisonStatus.OnlyActual], c.DifferenceCount, c.Bindings.Count, c.Bindings.Count(b => !b.Same), c.Truncated, c.PairingTruncated,
+            c.ApproximatePairing, c.UncheckedBindings);
     }
     private sealed record Summary(string context, string retail, string rebuilt, uint retailVersion, uint rebuiltVersion, int retailNodes, int rebuiltNodes, int same, int changed, int onlyRetail, int onlyRebuilt,
-        int differences, int sharedNames, int wholeWorldLookupsDiffering, bool truncated, bool pairingTruncated);
+        int differences, int sharedNames, int wholeWorldLookupsDiffering, bool truncated, bool pairingTruncated, bool approximatePairing, int wholeWorldLookupsUnchecked);
 
     /// <summary>
-    /// The most characters of difference values a tree row returns: a full page of rows, every character escaped, stays
-    /// well within the response limit.
+    /// The most characters of difference fields and values a tree row returns: with its name and path, a full page of rows
+    /// whose every character is escaped stays well within the response limit (about 2.5 of its 4 MiB with the two rows'
+    /// property lines, under 2.9 with file paths of the longest Windows allows).
     /// </summary>
     private const int MaximumRowDifferenceText = 1024;
 
@@ -118,9 +126,9 @@ public partial class MainWindow
         List<object> differences = []; int text = 0;
         foreach (var d in node.Differences.Take(16))
         {
-            string retail = WorldCompareView.Short(d.Expected, 256), rebuilt = WorldCompareView.Short(d.Actual, 256);
-            if ((text += retail.Length + rebuilt.Length) > MaximumRowDifferenceText && differences.Count > 0) break;
-            differences.Add(new { field = WorldCompareView.Short(d.Field, 64), retail, rebuilt });
+            string field = WorldCompareView.Short(d.Field, 64), retail = WorldCompareView.Short(d.Expected, 256), rebuilt = WorldCompareView.Short(d.Actual, 256);
+            if ((text += field.Length + retail.Length + rebuilt.Length) > MaximumRowDifferenceText && differences.Count > 0) break;
+            differences.Add(new { field, retail, rebuilt });
         }
         return new
         {
