@@ -475,7 +475,7 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "New single-file Save As path (animation, ZAR/ZRD, script or texture pack). Omit to save working files.",
+        "Description": "Full path of a new single-file Save As (animation, ZAR/ZRD, script or texture pack). Omit to save working files.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -483,7 +483,7 @@
       {
         "Name": "modelDirectory",
         "Type": "string",
-        "Description": "Model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files.",
+        "Description": "Full path of the model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -498,7 +498,7 @@
         "AdditionalProperties": {
           "Name": "",
           "Type": "string",
-          "Description": "New Save As path for this source archive.",
+          "Description": "New Save As full path for this source archive.",
           "Required": false,
           "Choices": null,
           "Properties": null
@@ -530,7 +530,7 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "Destination directory.",
+        "Description": "Full path of the destination directory.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -3500,7 +3500,7 @@
       {
         "Name": "destination",
         "Type": "string",
-        "Description": "Export folder outside the source tree.",
+        "Description": "Full path of an export folder outside the source tree.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -3659,7 +3659,7 @@
       {
         "Name": "path",
         "Type": "string",
-        "Description": "Input file for add/replace.",
+        "Description": "Full path of the input file for add/replace.",
         "Required": false,
         "Choices": null,
         "Properties": null
@@ -4396,7 +4396,7 @@
       {
         "Name": "path",
         "Type": "string",
-        "Description": "OBJ file path.",
+        "Description": "Full path of the OBJ file.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -4482,7 +4482,7 @@
       {
         "Name": "path",
         "Type": "string",
-        "Description": "PNG input path.",
+        "Description": "Full path of the PNG input.",
         "Required": true,
         "Choices": null,
         "Properties": null
@@ -4522,7 +4522,7 @@
             {
               "Name": "path",
               "Type": "string",
-              "Description": "Texture pack path.",
+              "Description": "Full texture pack path, as texture_targets returns it.",
               "Required": true,
               "Choices": null,
               "Properties": null
@@ -5479,7 +5479,7 @@
   },
   {
     "Name": "zstudio_source_blender_checkout",
-    "Description": "Check a project model out for Blender: its glTF, buffers and textures are copied into the project\u0027s zstudio/export/\u003Cid\u003E/input folder as a self-contained glTF to import in Blender. Export the edited model as glTF Separate (.gltf \u002B .bin \u002B textures, Custom Properties on) into the checkout\u0027s outbox, then call source_blender_update. Give the model path, or a source world document and scene node to check out the model that object comes from.",
+    "Description": "Check a project model out for Blender: its glTF, buffers and textures are copied into the project\u0027s zstudio/export/\u003Cid\u003E/input folder as a self-contained glTF to import in Blender. Export the edited model as glTF Separate (.gltf \u002B .bin \u002B textures, Custom Properties on) into the checkout\u0027s outbox, then call source_blender_update. Give the model path, or a source world document and scene node to check out the model that object comes from. Cancelling removes the partial copy. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5900,7 +5900,7 @@
   },
   {
     "Name": "zstudio_world_compare",
-    "Description": "Compare two RECOIL GameZ worlds (gamez.zbd) of version 15, or 13 for the 1998 demos, such as a retail world and one rebuilt from a source project or a demo world, in the visible Compare worlds window (Tools \u2192 Compare worlds\u2026). Their node trees are merged by parent-child structure: children match by name, then repeated names by structure, their children\u0027s names and position, independent of node order and slots. Each pair is the same or changed (class, flags, zone, grid cell, transform, class data, model, number of children); other nodes are only in one world. The result gives both versions, counts them, and the names several nodes share whose whole-world lookup (the engine finds a name\u0027s highest slot first) finds another node in the rebuilt world; animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every one changes behaviour. Indistinguishable copies (same parents, same contents all the way down) count as the same node. Read rows with zstudio_world_compare_tree. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Compare two RECOIL GameZ worlds (gamez.zbd) of version 15, or 13 for the 1998 demos, such as a retail world and one rebuilt from a source project or a demo world, in the visible Compare worlds window (Tools \u2192 Compare worlds\u2026). Their node trees are merged by parent-child structure: children match by name, then repeated names by their whole contents, then structure, their children\u0027s names and nearest position, independent of node order and slots. Each pair is the same or changed (class, flags, zone, grid cell, transform, class data, model, number of children); other nodes are only in one world. The result gives both versions, counts them and their differences, says whether the tree is truncated (it holds at most 500,000 rows, a node under several parents appearing under each, and 256 levels), and the names several nodes share whose whole-world lookup (the engine finds a name\u0027s highest slot first) finds another node in the rebuilt world; animations bind their roots and fall back to such lookups, but search their own subtrees first, so not every one changes behaviour. Indistinguishable copies (same parents, same contents all the way down) count as the same node. Read rows with zstudio_world_compare_tree. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5923,8 +5923,8 @@
   },
   {
     "Name": "zstudio_world_compare_tree",
-    "Description": "Read the merged node tree of the Compare worlds window: its roots (the world node with its members, then the nodes no parent holds) or a row\u0027s children, optionally filtered before paging. A row is a pair of nodes or a node only one world has, with both slots, its status, how many rows below differ, whether a whole-world lookup of its name finds another node in the rebuilt world, and its differences (at most 16, values shortened). select shows a row\u0027s properties in the window; expand and collapse change only the window\u0027s tree.",
-    "Mutates": true,
+    "Description": "Read the merged node tree of the Compare worlds window: its roots (the world node with its members, then the nodes no parent holds) or a row\u0027s children, optionally filtered before paging. A row is a pair of nodes or a node only one world has, with both slots, its status, how many rows below differ, whether a whole-world lookup of its name finds another node in the rebuilt world, whether the tree leaves out some of its children (truncated), and its differences (at most 16, values shortened to 256 characters and 1,024 in all, of differenceCount). It only reads the comparison, so it stays available while operations run: select shows a row\u0027s properties in the window, expand and collapse change only the window\u0027s tree, and these actions return busy while a dialog is open.",
+    "Mutates": false,
     "Parameters": [
       {
         "Name": "context",
@@ -5937,7 +5937,7 @@
       {
         "Name": "action",
         "Type": "string",
-        "Description": "Tree action; default read.",
+        "Description": "Tree action; default read. expand, collapse and select change only the Compare worlds window\u0027s presentation.",
         "Required": false,
         "Choices": [
           "read",

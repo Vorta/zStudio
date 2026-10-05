@@ -9,7 +9,16 @@ namespace Recoil.Zbd.Core.Export;
 public sealed record ImportedMesh(Vector3[] Positions, Vector3[] Normals, Vector2[] Uvs, int[] Triangles)
 {
     public Vector3[] Colors { get; init; } = [];
-    public (Vector3 Min, Vector3 Max) Bounds => (Positions.Aggregate(Vector3.Min), Positions.Aggregate(Vector3.Max));
+    // A plain loop: Aggregate(Vector3.Min) once returned a wrong minimum under dynamic PGO in a long test run.
+    public (Vector3 Min, Vector3 Max) Bounds
+    {
+        get
+        {
+            Vector3 min = Positions[0], max = Positions[0];
+            foreach (var p in Positions) { min = Vector3.Min(min, p); max = Vector3.Max(max, p); }
+            return (min, max);
+        }
+    }
     public void Validate()
     {
         if (Positions.Length is < 3 or > 65535 || Normals.Length != Positions.Length || Uvs.Length != Positions.Length || Triangles.Length is < 3 or > 60000 || Triangles.Length % 3 != 0)
