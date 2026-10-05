@@ -223,7 +223,7 @@ public sealed partial class AnimationPlayer
                 if ((flags & 9) != 0) position = OffsetPosition(parent, ev.I16(52), ev.Vector(56));
                 if (ev.I16(44) > 0 && NodeRef(parent, ev.I16(44)) is Node n) bound = n.Source;
             }
-            var child = AddInstance(target, position, bound);
+            var child = AddInstance(target, position, bound, started: true);
             if (child != null)
             {
                 sequence.Child = child.Id; if (slot >= 0) parent.Children[slot] = child.Id;

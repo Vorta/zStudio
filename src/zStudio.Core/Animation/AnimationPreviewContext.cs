@@ -14,6 +14,19 @@ public sealed record AnimationSound(string Name, string FileName, bool Loop, Rea
     public double Duration { get; } = WaveDecoder.Read(Bytes).Duration;
 }
 
+/// <summary>How an instance's node names were looked up (docs/engine-evidence.md#name-lookups-and-node-slot-order).</summary>
+public enum AnimationBinding
+{
+    /// <summary>LoadZbd's binding at the root the game loads: the attach node inside the root, else the world's highest slot.</summary>
+    Loaded,
+    /// <summary>A root flagged 0x8000, which LoadAndInstantiate copies and binds again as the mission loads (EnsureCopiedRootTree).</summary>
+    Copied,
+    /// <summary>Bound again to a node (RebindEntryToNode, CloneEntryForNode): a child animation started at a node, a turret's stop.</summary>
+    Rebound,
+    /// <summary>The editor's chosen root, bound again like <see cref="Rebound"/> but answering the entry's root name.</summary>
+    Chosen,
+}
+
 public sealed partial class AnimationPreviewContext
 {
     public required AnimationPackage Package { get; init; }
@@ -37,12 +50,19 @@ public sealed partial class AnimationPreviewContext
     public Dictionary<int, int> RootOverrides { get; } = [];
     // Playback may advance off the UI thread while the dispatcher reads bindings.
     private readonly ConcurrentDictionary<int, int> roots = new();
-    /// <summary>Resolved references per entry object and bound root. Edits replace entry objects, so a retargeted
-    /// reference is a new key and replaced entries are not retained; playback repeats the same lookups on every update.</summary>
-    private readonly ConditionalWeakTable<AnimationEntry, ConcurrentDictionary<(int Root, int Reference, bool Instance), int>> nodes = new();
-    private ConcurrentDictionary<(int Root, int Reference, bool Instance), int> References(AnimationEntry entry) => nodes.GetValue(entry, _ => new());
-    /// <summary>Resolved tracked nodes per entry object, bound root and name (each cleanup restores them).</summary>
-    private readonly ConditionalWeakTable<AnimationEntry, ConcurrentDictionary<(int Root, string Name), int>> trackedNodes = new();
+    /// <summary>
+    /// Resolved references per entry object, bound root and binding. Edits replace entry objects, so a retargeted reference
+    /// is a new key and replaced entries are not retained; playback repeats the same lookups on every update. A rebinding
+    /// searches the whole scene as it is, so its key holds the scene's node count while the mission scene grows. (Keys hold
+    /// the binding as an integer: hashing an enum field of a tuple boxes it.)
+    /// </summary>
+    private readonly ConditionalWeakTable<AnimationEntry, ConcurrentDictionary<(int Root, int Reference, int Binding, int Scene), int>> nodes = new();
+    private ConcurrentDictionary<(int Root, int Reference, int Binding, int Scene), int> References(AnimationEntry entry) => nodes.GetValue(entry, _ => new());
+    /// <summary>Resolved tracked nodes per entry object, bound root, binding and name (each cleanup restores them).</summary>
+    private readonly ConditionalWeakTable<AnimationEntry, ConcurrentDictionary<(int Root, string Name, int Binding, int Scene), int>> trackedNodes = new();
+    /// <summary>The world file's nodes: the scene's first nodes, before those the mission creates (clones, placements).</summary>
+    private int LoadedCount => LoadedNodeCount ?? World.Scene!.Nodes.Count;
+    private int SceneKey(AnimationBinding binding) => binding is AnimationBinding.Rebound or AnimationBinding.Chosen ? Scene.Nodes.Count : 0;
     /// <summary>Freeze editable programs before background analysis; scene and decoded resources are read-only.</summary>
     public AnimationPreviewContext Snapshot()
     {
@@ -191,13 +211,25 @@ public sealed partial class AnimationPreviewContext
     }
     /// <summary>The node an entry is bound to: the editor's chosen root, else the one the game binds when it loads (<see cref="LoadedRoot"/>).</summary>
     public int ResolveRoot(AnimationEntry entry) => RootOverrides.TryGetValue(entry.Index, out int selected) ? selected : LoadedRoot(entry);
+    /// <summary>
+    /// How an instance of <paramref name="entry"/> bound at <paramref name="root"/> looks names up without a node it was
+    /// started at: LoadZbd's binding at the root it loads, the copy LoadAndInstantiate makes of a root flagged 0x8000, the
+    /// editor's chosen root, or another node (<see cref="AnimationBinding"/>).
+    /// </summary>
+    public AnimationBinding Binding(AnimationEntry entry, int root)
+    {
+        if (root != LoadedRoot(entry)) return RootOverrides.TryGetValue(entry.Index, out int chosen) && chosen == root ? AnimationBinding.Chosen : AnimationBinding.Rebound;
+        return (entry.U32(148) & 0x8000) != 0 ? AnimationBinding.Copied : AnimationBinding.Loaded;
+    }
     private int LoadedRoot(AnimationEntry entry)
     {
         if (roots.TryGetValue(entry.Index, out int root)) return root;
         // MW3 has no engine evidence for its load order: a root name must be unique in the mission scene.
         if (World.Game == GameVariant.MechWarrior3)
         {
-            var named = Scene.Nodes.Where(n => n.Name == entry.RootName).ToArray();
+            // A local, not the parameter, is captured: a cached lookup allocates no closure.
+            string name = entry.RootName;
+            var named = Scene.Nodes.Where(n => n.Name == name).ToArray();
             return roots[entry.Index] = named.Length == 1 ? named[0].Index : -1;
         }
         var matches = LoadedNamed(entry.RootName);
@@ -229,74 +261,96 @@ public sealed partial class AnimationPreviewContext
         for (int i = Scene.Nodes.Count - 1; i >= 0; i--) if (Scene.Nodes[i].Name == name && Scene.Nodes[i].Class != "none") return i;
         return -1;
     }
+    /// <summary>A node reference of <paramref name="entry"/> bound at <paramref name="boundRoot"/> (by default its root), bound as <see cref="Binding"/> says.</summary>
     public int ResolveNode(AnimationEntry entry, int reference, int? boundRoot = null)
     {
         int root = boundRoot ?? ResolveRoot(entry);
+        if (World.Game != GameVariant.MechWarrior3) return ResolveInstanceNode(entry, reference, root, Binding(entry, root));
         if (reference is -100 or -200) return root;
         if (reference == 0) return -1; // Reserved null reference, not the bound root.
         if (reference < 0 || reference >= entry.References[1].Count) return -1;
         var cache = References(entry);
-        if (cache.TryGetValue((root, reference, false), out int cached)) return cached;
-        return cache[(root, reference, false)] = FindReference(entry, reference, root);
+        if (cache.TryGetValue((root, reference, 0, 0), out int cached)) return cached;
+        return cache[(root, reference, 0, 0)] = FindMw3Reference(entry, reference, root);
     }
-    /// <summary>A runtime node reference of an instance bound at <paramref name="root"/>.</summary>
-    public int ResolveInstanceNode(AnimationEntry entry, int reference, int root)
+    /// <summary>A runtime node reference of an instance bound at <paramref name="root"/>, bound as <see cref="Binding"/> says.</summary>
+    public int ResolveInstanceNode(AnimationEntry entry, int reference, int root) => ResolveInstanceNode(entry, reference, root, Binding(entry, root));
+    /// <summary>A runtime node reference of an instance bound at <paramref name="root"/> by <paramref name="binding"/>.</summary>
+    public int ResolveInstanceNode(AnimationEntry entry, int reference, int root, AnimationBinding binding)
     {
         if (reference is -100 or -200) return root;
-        if (World.Game == GameVariant.MechWarrior3 || reference <= 0 || reference >= entry.References[1].Count) return ResolveNode(entry, reference, root);
-        var cache = References(entry);
-        if (cache.TryGetValue((root, reference, true), out int cached)) return cached;
-        // RECOIL's ResolveNodeByName prefers the first match below the callback node, then below the bound instance. MW3
-        // names are not unique identities, so ResolveNode's unique-or-unresolved result stands.
-        string name = entry.References[1][reference].Text(0, 36);
-        int local = name == entry.RootName ? root : FindBelow(Callback(entry, root), name);
-        if (local < 0) local = FindBelow(root, name);
-        return cache[(root, reference, true)] = local >= 0 ? local : ResolveNode(entry, reference, root);
+        // MW3 names are not unique identities, so ResolveNode's unique-or-unresolved result stands.
+        if (World.Game == GameVariant.MechWarrior3) return ResolveNode(entry, reference, root);
+        if (reference <= 0 || reference >= entry.References[1].Count) return -1; // 0 is the reserved null reference, not the bound root.
+        var cache = References(entry); var key = (root, reference, (int)binding, SceneKey(binding));
+        if (cache.TryGetValue(key, out int cached)) return cached;
+        return cache[key] = ResolveName(entry, entry.References[1][reference].Text(0, 36), root, binding);
     }
     /// <summary>
     /// A tracked node of an instance bound at <paramref name="root"/> (cleanup restores it): RECOIL resolves it with
     /// ResolveNodeByName like a reference; MW3 names must be unique below the root.
     /// </summary>
-    public int ResolveTrackedNode(AnimationEntry entry, string name, int root)
+    public int ResolveTrackedNode(AnimationEntry entry, string name, int root) => ResolveTrackedNode(entry, name, root, Binding(entry, root));
+    public int ResolveTrackedNode(AnimationEntry entry, string name, int root, AnimationBinding binding)
     {
         if (World.Game == GameVariant.MechWarrior3) return FindNamedBelow(root, name);
-        return trackedNodes.GetValue(entry, _ => new()).GetOrAdd((root, name), key =>
-        {
-            int found = FindBelow(Callback(entry, key.Root), key.Name); if (found < 0) found = FindBelow(key.Root, key.Name);
-            return found >= 0 ? found : FindNamed(key.Name);
-        });
+        return trackedNodes.GetValue(entry, _ => new()).GetOrAdd((root, name, (int)binding, SceneKey(binding)), key => ResolveName(entry, key.Name, key.Root, (AnimationBinding)key.Binding));
     }
     /// <summary>
-    /// The callback (attachment) node of <paramref name="entry"/> bound at <paramref name="root"/>, whose subtree every name
-    /// lookup searches first (ResolveNodeByName). LoadZbd looks the attach name up like any name: inside the root, else the
-    /// world's highest slot (m4–m13 hit walls attach to one wall1/ware_5 outside their root). A copy or rebinding to another
-    /// node (CloneEntryForNode, RebindEntryToNode) looks it up only inside that node, keeping the node itself when the loaded
-    /// entry's callback was its root; a copy without it does not run in the game, which the preview approximates with the root.
+    /// ResolveNodeByName (0x45e5c0): the callback node's subtree, the bound root's (each the node first, then its children
+    /// first to last), the entry's own light and sound nodes (not scene nodes, so −1), then the whole world. Bound as the game
+    /// loads the mission (LoadZbd, the copies LoadAndInstantiate makes), the world is the world file's nodes, highest slot
+    /// first, and the subtrees hold none of the nodes the mission creates later; bound again later, the whole scene as it is,
+    /// the most recently created node first. The editor's chosen root answers the entry's root name, as the node the game
+    /// binds by that name does.
     /// </summary>
-    private int Callback(AnimationEntry entry, int root)
+    private int ResolveName(AnimationEntry entry, string name, int root, AnimationBinding binding)
     {
-        int below = FindBelow(root, entry.AttachName);
-        if (below >= 0 || root != LoadedRoot(entry)) return below >= 0 ? below : root;
-        return LoadedNamed(entry.AttachName) is { Count: > 0 } named ? named[0] : root;
+        bool loading = binding is AnimationBinding.Loaded or AnimationBinding.Copied;
+        int limit = loading ? LoadedCount : Scene.Nodes.Count;
+        int found = FindBelow(Callback(entry, root, binding, limit), name, limit);
+        if (found < 0) found = binding == AnimationBinding.Chosen && name == entry.RootName ? root : FindBelow(root, name, limit);
+        if (found >= 0 || OwnsNode(entry, name)) return found;
+        return loading ? LoadedNamed(name) is { Count: > 0 } named ? named[0] : -1 : FindNamed(name);
     }
-    private int FindReference(AnimationEntry entry, int reference, int root)
+    /// <summary>Whether <paramref name="name"/> is one of the entry's own lights or sounds, which ResolveNodeByName finds before the whole world.</summary>
+    public static bool OwnsNode(AnimationEntry entry, string name) =>
+        name.Length > 0 && (entry.References[2].Skip(1).Any(r => r.Text(0, 36) == name) || entry.References[3].Skip(1).Any(r => r.Text(0, 36) == name));
+    /// <summary>
+    /// The callback (attachment) node of <paramref name="entry"/> bound at <paramref name="root"/>, whose subtree every name
+    /// lookup searches first (ResolveNodeByName). LoadZbd looks the attach name up like any name, before the entry's lights
+    /// and sounds exist: inside the root, else the world's highest slot (m4–m13 hit walls attach to one wall1/ware_5 outside
+    /// their root). A copy or rebinding (EnsureCopiedRootTree, CloneEntryForNode, RebindEntryToNode) takes the node itself
+    /// when the loaded callback was the root, else looks the attach name up only inside the node; without it the game
+    /// disables the entry (state 5, <see cref="RebindDisables"/>), which the preview approximates with the node.
+    /// </summary>
+    private int Callback(AnimationEntry entry, int root, AnimationBinding binding, int limit)
+    {
+        if (binding == AnimationBinding.Loaded)
+        {
+            int found = FindBelow(root, entry.AttachName, limit);
+            return found >= 0 ? found : LoadedNamed(entry.AttachName) is { Count: > 0 } named ? named[0] : root;
+        }
+        if (entry.AttachName == entry.RootName) return root;
+        int below = FindBelow(root, entry.AttachName, limit);
+        return below >= 0 ? below : root;
+    }
+    /// <summary>Whether the game disables <paramref name="entry"/> bound by <paramref name="binding"/> at <paramref name="root"/>: a copy or rebinding whose attach node is not inside the node.</summary>
+    public bool RebindDisables(AnimationEntry entry, int root, AnimationBinding binding) => World.Game != GameVariant.MechWarrior3 && binding != AnimationBinding.Loaded &&
+        entry.AttachName != entry.RootName && FindBelow(root, entry.AttachName, binding == AnimationBinding.Copied ? LoadedCount : Scene.Nodes.Count) < 0;
+    private int FindMw3Reference(AnimationEntry entry, int reference, int root)
     {
         string name = entry.References[1][reference].Text(0, 36);
         if (name == entry.RootName) return root;
-        if (World.Game == GameVariant.MechWarrior3)
-        {
-            var local = Descendants(root).Where(i => Scene.Nodes[i].Name == name).ToArray();
-            if (local.Length == 1) return local[0];
-            if (local.Length > 1) return -1;
-            var global = Scene.Nodes.Where(n => n.Name == name).ToArray();
-            return global.Length == 1 ? global[0].Index : -1;
-        }
-        // References search the callback (attachment) node's subtree first, then the bound root's.
-        int found = FindBelow(Callback(entry, root), name); if (found < 0) found = FindBelow(root, name);
-        // ResolveNodeByName's last step: the whole world, the most recently created node first.
-        return found >= 0 ? found : FindNamed(name);
+        var local = Descendants(root).Where(i => Scene.Nodes[i].Name == name).ToArray();
+        if (local.Length == 1) return local[0];
+        if (local.Length > 1) return -1;
+        var global = Scene.Nodes.Where(n => n.Name == name).ToArray();
+        return global.Length == 1 ? global[0].Index : -1;
     }
     public int FindBelow(int root, string name) => Descendants(root).FirstOrDefault(i => Scene.Nodes[i].Name == name, -1);
+    /// <summary>The first node named <paramref name="name"/> in <paramref name="root"/>'s subtree, among the scene's first <paramref name="limit"/> nodes.</summary>
+    private int FindBelow(int root, string name, int limit) => Descendants(root, limit).FirstOrDefault(i => Scene.Nodes[i].Name == name, -1);
     /// <summary>FindSubNodeByName (scripts' FindSubNode): the node itself, then its children last to first, depth first.</summary>
     public int FindSubBelow(int root, string name)
     {
@@ -317,12 +371,13 @@ public sealed partial class AnimationPreviewContext
         foreach (int i in Descendants(root)) if (Scene.Nodes[i].Name == name) { if (found >= 0) return -1; found = i; }
         return found;
     }
-    public IEnumerable<int> Descendants(int root)
+    public IEnumerable<int> Descendants(int root) => Descendants(root, Scene.Nodes.Count);
+    private IEnumerable<int> Descendants(int root, int limit)
     {
         HashSet<int> visited = []; Stack<int> pending = new(); pending.Push(root);
         while (pending.TryPop(out int index))
         {
-            if (index < 0 || index >= Scene.Nodes.Count || !visited.Add(index)) continue;
+            if (index < 0 || index >= Math.Min(limit, Scene.Nodes.Count) || !visited.Add(index)) continue;
             yield return index; foreach (int child in SceneBuilder.Children(Scene.Nodes[index]).Reverse()) pending.Push(child);
         }
     }

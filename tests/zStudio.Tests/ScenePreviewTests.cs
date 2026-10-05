@@ -59,7 +59,7 @@ public sealed class ScenePreviewTests
         scene.Models[0] = scene.Models[0] with { Polygons = [new(0, 0, [], [], [], [])] };
         var context = Context(scene);
         var scripts = new Dictionary<string, ScriptContent> {
-            ["mission"] = new([["source", "common"], ["CycleTextureSetSpeed", "12"], ["quit"], ["CycleTextureSetSpeed", "99"]], ""),
+            ["mission"] = new([["source", "common"], ["CycleTextureSetSpeed", "12"], ["Quit"], ["CycleTextureSetSpeed", "99"]], ""),
             ["common"] = new([["FindNode", "first"], ["FindSubNode", "highA"], ["CycleTextureSetOn", "2"], ["CycleTextureSetLooping", "on"], ["CycleTextureSetMap", "a"], ["CycleTextureSetMap", "b"], ["source", "mission"]], "")
         };
         string before = scene.Materials[0].ToJsonString(); context.ReadTextureScript("mission", scripts);

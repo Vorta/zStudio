@@ -254,11 +254,8 @@ public partial class MainWindow
         try
         {
             // Canceled with the build that asks (see BuildSourceWorldAsync), so closing or shutting down never waits for it.
-            return await Task.Run(() =>
-            {
-                var before = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", baseline.World.ToArray(), token: token), token);
-                return WorldLookups.Changes(before, baseline.Lookups, GameZWorldReader.FromDocument(built.World, token), built.Build.Lookups, token);
-            }, token);
+            // The baseline's world is read once, for the first rebuild whose lookups may differ, and kept for the next ones.
+            return await Task.Run(() => baseline.Changes(() => GameZWorldReader.FromDocument(built.World, token), built.Build.Lookups, token), token);
         }
         // Only a report: a world that cannot be paired is not one, and must not take back the edit.
         catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException)) { return []; }

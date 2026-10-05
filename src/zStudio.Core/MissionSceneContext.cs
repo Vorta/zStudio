@@ -192,14 +192,17 @@ public static partial class MissionSceneLoader
                 {
                     if (xyz.Count != 3) throw new InvalidDataException("Expected three spawn coordinates.");
                     Vector3 position = new(Number(xyz[0]), Number(xyz[1]), Number(xyz[2])); float yaw = Number(data[2]) * MathF.PI / 180;
-                    // Lookups by name find the highest slot first (docs/engine-evidence.md).
-                    int root = scene.Nodes.LastOrDefault(n => n.Class == "object3d" && n.Name == name)?.Index ?? -1;
+                    // CreateFromNamesAtPose (0x421ab0) looks both names up among all live nodes, the most recently created first
+                    // (FindByTypeAndName, docs/engine-evidence.md), and uses what it finds as the vehicle whatever its class.
+                    int root = Live(name);
                     if (root < 0)
                     {
-                        int template = scene.Nodes.LastOrDefault(n => n.Class == "object3d" && n.Name == templateName)?.Index ?? -1;
+                        int template = Live(templateName);
                         if (template < 0) throw new InvalidDataException($"Missing template {templateName}.");
+                        if (scene.Nodes[template].Class != "object3d") throw new InvalidDataException($"The game copies the {scene.Nodes[template].Class} node {templateName} (#{template}) as this vehicle, which the preview does not show.");
                         root = CloneTree(template, name);
                     }
+                    else if (scene.Nodes[root].Class != "object3d") throw new InvalidDataException($"The game places the {scene.Nodes[root].Class} node #{root} of this name as the vehicle, which the preview does not show.");
                     SetPose(scene, root, Matrix4x4.CreateRotationY(yaw) * Matrix4x4.CreateTranslation(position));
                     scene.Nodes[root].Metadata["flags"] = scene.Nodes[root].Metadata.UInt("flags") | 4;
                     if (!scene.Nodes[root].Parents.Contains(worldRoot)) scene.Nodes[root] = scene.Nodes[root] with { Parents = [worldRoot] };
@@ -247,6 +250,8 @@ public static partial class MissionSceneLoader
         foreach (int root in positioned.Where(i => scene.Nodes[i].Class == "object3d" && !actors.Any(a => a.Root == i)))
             if (scene.Nodes[root].Parents.Contains(worldRoot)) actors.Add(new(root, sources[root], scene.Nodes[root].Name, "Animation initialization"));
         return new(scene, sources, actors, dormant, notes, selection, original.Nodes.Count);
+
+        int Live(string name) => scene.Nodes.LastOrDefault(n => n.Class != "none" && n.Name == name)?.Index ?? -1;
 
         void Initialize(bool cleanup, string[] startup)
         {

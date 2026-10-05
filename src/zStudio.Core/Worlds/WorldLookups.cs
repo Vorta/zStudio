@@ -1,5 +1,7 @@
+using System.Security.Cryptography;
 using System.Text;
 using Recoil.Zbd.Core.Animation;
+using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Sources;
 
 namespace Recoil.Zbd.Core.Worlds;
@@ -65,6 +67,26 @@ public sealed record SourceLookup(string Mission, string Kind, string Name, stri
 /// <summary>A lookup that finds another node than it did before.</summary>
 public sealed record SourceLookupChange(SourceLookup Before, SourceLookup After);
 
+/// <summary>
+/// What a mission looked up by name in a world (the world file's bytes and its lookups), to compare later builds with. The
+/// world is read when a build's lookups first may differ, and kept for the builds after it.
+/// </summary>
+public sealed class SourceLookupBaseline(ReadOnlyMemory<byte> world, IReadOnlyList<SourceLookup> lookups)
+{
+    private GameZWorld? read;
+    public IReadOnlyList<SourceLookup> Lookups { get; } = lookups;
+    /// <summary>The lookups that find another node in <paramref name="after"/> (<see cref="WorldLookups.Changes"/>); no world is read unless one may differ.</summary>
+    public IReadOnlyList<SourceLookupChange> Changes(Func<GameZWorld> after, IReadOnlyList<SourceLookup> lookups, CancellationToken token = default) =>
+        WorldLookups.Differ(Lookups, lookups) ? WorldLookups.Changes(World(token), Lookups, after(), lookups, token) : [];
+    /// <summary>The baseline's world, read once (only read afterwards, so concurrent comparisons may share it).</summary>
+    internal GameZWorld World(CancellationToken token)
+    {
+        if (Volatile.Read(ref read) is { } known) return known;
+        var parsed = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", world.ToArray(), token: token), token);
+        return Interlocked.CompareExchange(ref read, parsed, null) ?? parsed;
+    }
+}
+
 public static class WorldLookups
 {
     /// <summary>The script the game runs when it loads a mission (archive mode), which reads the world and sets up texture effects.</summary>
@@ -73,7 +95,8 @@ public static class WorldLookups
     /// <summary>
     /// The names FindNode looks up in the scripts the game runs when it loads <paramref name="mission"/>: its load script and
     /// the scripts that one sources, in order, except macros (<c>%worldName%</c>). <paramref name="read"/> gives a project
-    /// file's bytes, or null when it does not exist.
+    /// file's bytes, or null when it does not exist. Commands match as the retail interpreter matches them (case-sensitive
+    /// prefixes: <c>source</c>, and <c>FindNode</c> in DispatchCoreCommand 0x4c20a0), and <c>Quit</c> (exactly) ends its script.
     /// </summary>
     public static IReadOnlyList<(string Source, string Name)> FindNodes(Func<string, byte[]?> read, string mission)
     {
@@ -83,9 +106,10 @@ public static class WorldLookups
             if (depth > 8 || !visited.Add(path) || read(path) is not { } bytes) return;
             foreach (var tokens in GameGenScriptText.Tokenize(Encoding.Latin1.GetString(bytes)))
             {
+                if (tokens.Count > 0 && ScriptConditions.IsQuit(tokens[0])) return;
                 if (tokens.Count < 2) continue;
-                if (tokens[0].Equals("source", StringComparison.OrdinalIgnoreCase)) { if (Sourced(tokens[1]) is { } sourced) Run(sourced, depth + 1); }
-                else if (tokens[0].Equals("FindNode", StringComparison.OrdinalIgnoreCase) && !tokens[1].StartsWith('%')) names.Add((path, tokens[1]));
+                if (ScriptConditions.IsSource(tokens[0])) { if (Sourced(tokens[1]) is { } sourced) Run(sourced, depth + 1); }
+                else if (tokens[0].StartsWith("FindNode", StringComparison.Ordinal) && !tokens[1].StartsWith('%')) names.Add((path, tokens[1]));
             }
         }
         Run(LoadScript(mission), 0);
@@ -112,10 +136,13 @@ public static class WorldLookups
         int Count(string name) => byName.TryGetValue(name, out var list) ? list.Count : 0;
         WorldNode? Highest(string name) => byName.TryGetValue(name, out var list) ? list[0] : null;
         List<SourceLookup> result = []; HashSet<(string, string, int, string)> seen = [];
+        // Many lookups find one node (66 hit walls attach to one wall1): its path and fingerprint are made once.
+        Dictionary<WorldNode, (string Path, string Fingerprint)> described = new(ReferenceEqualityComparer.Instance);
         void Add(string kind, string name, string source, WorldNode? found, int occurrence = 0)
         {
-            if (seen.Add((kind, source, occurrence, name)))
-                result.Add(new(mission, kind, name, source, Count(name), found == null ? -1 : slots[found], found == null ? null : Path(found)) { Fingerprint = found == null ? null : Fingerprint(found), Occurrence = occurrence });
+            if (!seen.Add((kind, source, occurrence, name))) return;
+            (string Path, string Fingerprint)? node = found == null ? null : described.TryGetValue(found, out var known) ? known : described[found] = (Path(found), Fingerprint(found));
+            result.Add(new(mission, kind, name, source, Count(name), found == null ? -1 : slots[found], node?.Path) { Fingerprint = node?.Fingerprint, Occurrence = occurrence });
         }
         foreach (var (source, name) in findNodes) Add(SourceLookup.TextureEffect, name, source, Highest(name));
         if (animations != null)
@@ -212,8 +239,9 @@ public static class WorldLookups
         static Dictionary<int, WorldNode> Nodes(GameZWorld world) => GameZWriter.NodeSlots(world).ToDictionary(p => p.Value, p => p.Key);
     }
 
-    private static string Fingerprint(WorldNode node) =>
-        WorldComparer.PairKey(node) + "|" + (node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) is { } m ? m.ToString() : "") + "|" + Convert.ToHexString(node.Payload.AsSpan(0, Math.Min(node.Payload.Length, 4)));
+    /// <summary>A digest of the node's structure (its pairing key: classes and children's names six levels down, which grows with the subtree), transform and flags.</summary>
+    private static string Fingerprint(WorldNode node) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+        WorldComparer.PairKey(node) + "|" + (node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) is { } m ? m.ToString() : "") + "|" + Convert.ToHexString(node.Payload.AsSpan(0, Math.Min(node.Payload.Length, 4))))));
 
     /// <summary>A node's path: its first parents' names from the top (a world's name for its members), unnamed nodes as "(unnamed)".</summary>
     public static string Path(WorldNode node)

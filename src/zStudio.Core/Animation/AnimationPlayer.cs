@@ -189,7 +189,9 @@ public sealed partial class AnimationPlayer
     private void Block(Sequence sequence, string message) { sequence.State = 4; unavailableDuration = true; AddNote(sequence.Data.Name + ": " + message); }
     private float RandomUnit() { float result = randomTable[randomIndex]; randomIndex = (randomIndex + 1) % randomTable.Length; return result; }
 
-    private Instance? AddInstance(AnimationEntry entry, Vector3? position, int? boundRoot, bool primary = false)
+    /// <param name="started">The instance is a child started at <paramref name="boundRoot"/> (ActivateRuntime binds it there
+    /// again even when it is the entry's own root), not a stop at it (StopAndCleanup, which turrets call, only at another node).</param>
+    private Instance? AddInstance(AnimationEntry entry, Vector3? position, int? boundRoot, bool primary = false, bool started = false)
     {
         if (instances.Count + effects.Count >= MaximumInstances) { AddNote("Preview instance limit reached (256). A looping emitter may be producing too many children."); return null; }
         int root = boundRoot ?? context.ResolveRoot(entry);
@@ -198,12 +200,16 @@ public sealed partial class AnimationPlayer
         { AddNote($"{entry.Name}: initialization activation prerequisites are unavailable."); return null; }
         bool shared = IsWorldNode(root) && ((entry.U32(148) & 0x8000) == 0 || boundRoot.HasValue);
         if (!initializingScene && shared && instances.Any(i => i.Entry.Index == entry.Index && i.Root == root && !i.Finished)) return null;
-        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Cleanup = primary, Shared = shared };
+        var binding = context.Binding(entry, root);
+        if (boundRoot.HasValue && (started || binding != AnimationBinding.Loaded)) binding = AnimationBinding.Rebound;
+        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared };
+        if (context.RebindDisables(entry, root, binding))
+            AddNote($"{entry.Name}: the game disables this animation bound at {context.Scene.Nodes[root].Name}, which lacks its attach node {entry.AttachName}; the preview runs it there.", "Support", "Information");
         var sourceNodes = context.Descendants(root).ToHashSet();
         for (int r = 1; r < entry.References[1].Count; r++)
         {
             // As events find them (NodeRef), so every node an event changes belongs to the instance.
-            int node = context.ResolveInstanceNode(entry, r, root);
+            int node = context.ResolveInstanceNode(entry, r, root, binding);
             // Per-instance mission resets must not fall back to another turret's
             // identically named component when this instance lacks that part.
             if (initializingScene && boundRoot.HasValue && !sourceNodes.Contains(node)) continue;
@@ -228,7 +234,7 @@ public sealed partial class AnimationPlayer
             // Explicitly inspecting an unplaced actor's destruction/effect still
             // needs a local preview. World controllers never enable dormant actors.
             if (!initializingScene && instance.Id == 1 && rootNode.PendingPlacement && !entry.Sequences.SelectMany(s => s.Events).Any(e =>
-                e.Spec != null && e.Bytes.Length >= e.Spec.Size && (e.Type == 12 && context.ResolveInstanceNode(entry,e.I32(12),root) == root || e.Type == 7 && context.ResolveInstanceNode(entry,e.I16(28),root) == root)))
+                e.Spec != null && e.Bytes.Length >= e.Spec.Size && (e.Type == 12 && context.ResolveInstanceNode(entry,e.I32(12),root,binding) == root || e.Type == 7 && context.ResolveInstanceNode(entry,e.I16(28),root,binding) == root)))
             { rootNode.PendingPlacement = false; AddNote("The selected actor has no recovered starting position; this individual preview uses its stored pose.", "Support", "Information"); }
             if (position is Vector3 p) { Position(rootNode, p); rootNode.Parent = -1; }
         }
@@ -241,9 +247,13 @@ public sealed partial class AnimationPlayer
     private Node? NodeRef(Instance instance, int reference)
     {
         if (reference == 0) return null;
-        int index = context.ResolveInstanceNode(instance.Entry, reference, instance.Root);
+        var entry = instance.Entry; int index = context.ResolveInstanceNode(entry, reference, instance.Root, instance.Binding);
         if (instance.Nodes.TryGetValue(index, out var node)) return node;
-        AddNote($"{instance.Entry.Name}: unresolved node reference {reference}."); return null;
+        // ResolveNodeByName finds the entry's own light or sound node before the world's: no scene node.
+        if (index < 0 && reference > 0 && reference < entry.References[1].Count && entry.References[1][reference].Text(0, 36) is var name && AnimationPreviewContext.OwnsNode(entry, name))
+            AddNote($"{entry.Name}: node reference {reference} is the animation's own light or sound {name}, which the preview does not show as a node.", "Support", "Information");
+        else AddNote($"{entry.Name}: unresolved node reference {reference}.");
+        return null;
     }
     private Matrix4x4 World(Instance instance, Node node)
     {
@@ -280,7 +290,7 @@ public sealed partial class AnimationPlayer
             foreach (var tracked in instance.Entry.References[0])
             {
                 // Tracked-node records hold 36-byte names, as node references do.
-                int index = context.ResolveTrackedNode(instance.Entry, tracked.Text(0,36), instance.Root);
+                int index = context.ResolveTrackedNode(instance.Entry, tracked.Text(0,36), instance.Root, instance.Binding);
                 if (instance.Nodes.TryGetValue(index,out var node) && instance.SavedNodes.TryGetValue(index,out var saved))
                 {
                     node.Active = saved.Active; node.Position = saved.Position; node.Euler = saved.Euler; node.Scale = saved.Scale;
@@ -384,6 +394,7 @@ public sealed partial class AnimationPlayer
         public required AnimationEntry Entry;
         public long Id;
         public int Root;
+        public AnimationBinding Binding;
         public float Elapsed, StopDelay = -1;
         public bool Cleanup, Finished, FinishRequested, Shared;
         public Dictionary<int, Node> Nodes = [], SavedNodes = [];

@@ -44,7 +44,11 @@ public sealed partial class AnimationPreviewContext
         if (!scripts.ContainsKey(entry)) entry = "support\\tex_fx.gw";
         ReadTextureScript(entry, scripts);
     }
-    /// <summary>Interpret only texture setup commands, with local node lookup and bounded source includes.</summary>
+    /// <summary>
+    /// Interpret only texture setup commands, with local node lookup and bounded source includes. Commands match as the
+    /// retail interpreter matches them: case-sensitive prefixes (<c>source</c>; <c>FindNode</c>, <c>CycleTextureSetOn</c> and
+    /// the rest in DispatchCoreCommand 0x4c20a0), and <c>Quit</c> exactly.
+    /// </summary>
     public void ReadTextureScript(string entry, IReadOnlyDictionary<string, ScriptContent> scripts)
     {
         HashSet<string> active = new(StringComparer.OrdinalIgnoreCase); int node = -1, material = -1, count = 0;
@@ -59,21 +63,21 @@ public sealed partial class AnimationPreviewContext
                 foreach (var args in script.Instructions)
                 {
                     if (args.Length == 0) continue;
-                    string arg = args.Length > 1 ? args[1] : "";
-                    switch (args[0].ToLowerInvariant())
+                    string command = args[0], arg = args.Length > 1 ? args[1] : "";
+                    bool Is(string name) => command.StartsWith(name, StringComparison.Ordinal);
+                    if (Worlds.ScriptConditions.IsQuit(command)) return;
+                    if (Worlds.ScriptConditions.IsSource(command)) Read(arg.Replace('/', '\\'));
+                    // The scripts run as the mission loads: the world file's highest slot of the name.
+                    else if (Is("FindNode")) node = LoadedNamed(arg) is { Count: > 0 } named ? named[0] : -1;
+                    else if (Is("FindSubNode")) node = node >= 0 ? FindSubBelow(node, arg) : -1;
+                    else if (Is("CycleTextureSetLooping")) { loop = arg.Equals("on", StringComparison.OrdinalIgnoreCase) || arg.Equals("true", StringComparison.OrdinalIgnoreCase); Publish(); }
+                    else if (Is("CycleTextureSetMap")) { if (maps.Count < count) maps.Add(arg); Publish(); }
+                    else if (Is("CycleTextureSetOn"))
                     {
-                        case "quit": return;
-                        case "source": Read(arg.Replace('/', '\\')); break;
-                        // The scripts run as the mission loads: the world file's highest slot of the name.
-                        case "findnode": node = LoadedNamed(arg) is { Count: > 0 } named ? named[0] : -1; break;
-                        case "findsubnode": node = node >= 0 ? FindSubBelow(node, arg) : -1; break;
-                        case "cycletextureseton":
-                            material = FirstMaterial(node) ?? -1; maps = []; speed = 15; loop = false;
-                            count = int.TryParse(arg, out int n) && n is > 0 and <= 65536 ? n : 0; break;
-                        case "cycletexturesetspeed": if (float.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) && float.IsFinite(value)) speed = value; Publish(); break;
-                        case "cycletexturesetlooping": loop = arg.Equals("on", StringComparison.OrdinalIgnoreCase) || arg == "1"; Publish(); break;
-                        case "cycletexturesetmap": if (maps.Count < count) maps.Add(arg); Publish(); break;
+                        material = FirstMaterial(node) ?? -1; maps = []; speed = 15; loop = false;
+                        count = int.TryParse(arg, out int n) && n is > 0 and <= 65536 ? n : 0;
                     }
+                    else if (Is("CycleTextureSetSpeed")) { if (float.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) && float.IsFinite(value)) speed = value; Publish(); }
                 }
             }
             finally { active.Remove(path); }
