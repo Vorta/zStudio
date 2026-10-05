@@ -65,28 +65,35 @@ public static class ZoneProbe
     {
         if (world.Class != WorldNodeClass.World) throw new ArgumentException("A world node is required.", nameof(world));
         int columns = world.PayloadInt(0x78), rows = world.PayloadInt(0x7C);
-        int column = (int)Math.Floor(((double)x - world.PayloadFloat(0x34)) * world.PayloadFloat(0x64));
-        int row = (int)Math.Floor(((double)z - world.PayloadFloat(0x38)) * world.PayloadFloat(0x68));
+        int column = Cell(((double)x - world.PayloadFloat(0x34)) * world.PayloadFloat(0x64));
+        int row = Cell(((double)z - world.PayloadFloat(0x38)) * world.PayloadFloat(0x68));
         Search search = new(x, z, top, current, kind);
-        WorldArea? area = null;
-        if (column >= 0 && column < columns && row >= 0 && row < rows) area = Area(column, row);
+        WorldArea? area = null; bool inGrid = false;
+        if (column >= 0 && column < columns && row >= 0 && row < rows) { area = Area(column, row); inGrid = true; }
         else if (world.PayloadInt(0x50) != 0)
         {
-            // Clamped: the edge cell is searched with the point moved into it, as if the edge cell repeated outward.
-            int clampedColumn = Math.Clamp(column, 0, columns - 1), clampedRow = Math.Clamp(row, 0, rows - 1);
-            search.X += (clampedColumn - column) * world.PayloadFloat(0x54); search.Z += (clampedRow - row) * world.PayloadFloat(0x58);
-            area = Area(clampedColumn, clampedRow);
+            // Clamped: the edge cell is searched with the point moved into it, as if the edge cell repeated outward. The
+            // engine clamps as below (an empty grid has no edge cell) and takes the difference in 32 bits.
+            int clampedColumn = column > columns - 1 ? columns - 1 : column < 0 ? 0 : column, clampedRow = row > rows - 1 ? rows - 1 : row < 0 ? 0 : row;
+            search.X += unchecked(clampedColumn - column) * world.PayloadFloat(0x54); search.Z += unchecked(clampedRow - row) * world.PayloadFloat(0x58);
+            area = Area(clampedColumn, clampedRow); inGrid = true;
         }
         if (area != null)
-            foreach (var node in area.Nodes) search.Visit(node, area.Nodes.Count + 1, Matrix4x4.Identity);
+            foreach (var node in area.Nodes) search.Visit(node, area.Nodes.Count + 1);
         (search.X, search.Z) = (x, z);
         // A vehicle's point outside the grid with the clamp off is inactive for the overflow list as well.
-        if (kind == ZoneProbeKind.Point || area != null)
-            foreach (var node in world.Children) search.Visit(node, world.Children.Count + 1, Matrix4x4.Identity);
+        if (kind == ZoneProbeKind.Point || inGrid)
+            foreach (var node in world.Children) search.Visit(node, world.Children.Count + 1);
         return new(search.Hits, search.Full);
 
-        WorldArea? Area(int c, int r) => (long)r * columns + c < world.Areas.Count ? world.Areas[r * columns + c] : null;
+        WorldArea? Area(int c, int r) => c >= 0 && r >= 0 && c < columns && r < rows && (long)r * columns + c < world.Areas.Count ? world.Areas[r * columns + c] : null;
     }
+
+    /// <summary>
+    /// The grid cell of a scaled coordinate as the engine converts it ((int)floor(), x87): a value outside the 32-bit range,
+    /// or not a number, becomes −2³¹ (outside the grid), where .NET would saturate or give 0.
+    /// </summary>
+    private static int Cell(double value) => Math.Floor(value) is var cell && cell >= int.MinValue && cell <= int.MaxValue ? (int)cell : int.MinValue;
 
     /// <summary>
     /// Player::SelectProbeSampleHeightFromCandidates (retail 0x4290f0): the highest hit no more than <paramref name="window"/>
@@ -181,33 +188,61 @@ public static class ZoneProbe
         return null;
     }
 
+    /// <summary>
+    /// The most one probe visits: nodes (once per path, as the engine walks a node several parents share) and the vertices
+    /// it places. A world with every node in the probe's cell stays far below; a malformed one (a cycle, or nodes shared
+    /// along exponentially many paths) is refused beyond it.
+    /// </summary>
+    public const int MaximumVisits = 16 * GameZWorld.MaximumNodeCapacity, MaximumVertices = 64 * 1024 * 1024;
+
     private sealed class Search(float x, float z, float top, ZoneSet current, ZoneProbeKind kind)
     {
         public float X = x, Z = z;
         public List<ZoneHit> Hits { get; } = [];
         public bool Full { get; private set; }
+        private long visits, vertices;
 
-        /// <summary>BuildPickCandidateList (0x443f80) / BuildPickCandidatesForPoints (0x444890) for one node and its subtree.</summary>
-        public void Visit(WorldNode node, int siblings, Matrix4x4 parent)
+        /// <summary>
+        /// BuildPickCandidateList (0x443f80) / BuildPickCandidatesForPoints (0x444890) for one node and its subtree, depth
+        /// first in child order as the engine recurses (walked with a stack of its own, so a deep world cannot overflow
+        /// ours). Object3d nodes test their model and visit their children; a LOD group its children when its band starts
+        /// at the viewer; a camera (no sibling test) and a light their children under their own transform (0x4441c1,
+        /// 0x4443e0, 0x444a52, 0x444d10). Sound nodes and other classes stop the walk.
+        /// </summary>
+        public void Visit(WorldNode top, int siblings)
         {
-            if ((node.Flags & ActiveFlag) == 0 || (node.Flags & AltitudeFlag) == 0) return;
-            if ((node.Flags & GateFlag) != 0 && !current.Allows((byte)node.Zone)) return;
-            if (kind == ZoneProbeKind.Point && Hits.Count >= MaximumHits) { Full = true; return; }
-            switch (node.Class)
+            Stack<(WorldNode Node, int Siblings, Matrix4x4 Parent, int Depth)> pending = new([(top, siblings, Matrix4x4.Identity, 0)]);
+            while (pending.TryPop(out var item))
             {
-                case WorldNodeClass.Object3D:
-                    {
-                        var matrix = WorldUpdate.LocalMatrix(node) is { } local ? local * parent : parent;
-                        if (siblings > 1 && Outside(node, matrix)) return;
+                var (node, count, parent, depth) = item;
+                if ((node.Flags & ActiveFlag) == 0 || (node.Flags & AltitudeFlag) == 0) continue;
+                if ((node.Flags & GateFlag) != 0 && !current.Allows((byte)node.Zone)) continue;
+                if (kind == ZoneProbeKind.Point && Hits.Count >= MaximumHits) { Full = true; continue; }
+                if (depth > WorldUpdate.MaximumDepth) throw new InvalidDataException($"The node hierarchy below {node.Name} is cyclic or deeper than {WorldUpdate.MaximumDepth} levels.");
+                if (++visits > MaximumVisits) throw new InvalidDataException($"The probe would visit more than {MaximumVisits:N0} nodes; the world shares nodes along too many paths.");
+                Matrix4x4 matrix;
+                switch (node.Class)
+                {
+                    case WorldNodeClass.Object3D:
+                        matrix = WorldUpdate.LocalMatrix(node) is { } local ? local * parent : parent;
+                        if (count > 1 && Outside(node, matrix)) continue;
                         if (node.Model is { } model) Test(node, model, matrix);
-                        foreach (var child in node.Children) Visit(child, node.Children.Count, matrix);
                         break;
-                    }
-                case WorldNodeClass.Lod:
-                    if (node.PayloadFloat(4) > 5) return;
-                    if (siblings > 1 && Outside(node, parent)) return;
-                    foreach (var child in node.Children) Visit(child, node.Children.Count, parent);
-                    break;
+                    case WorldNodeClass.Lod:
+                        if (node.PayloadFloat(4) > 5 || count > 1 && Outside(node, parent)) continue;
+                        matrix = parent;
+                        break;
+                    case WorldNodeClass.Camera or WorldNodeClass.Light:
+                        // A light keeps the bounds it was created with, tested like any node's; a camera's are not tested.
+                        if (node.Class == WorldNodeClass.Light && count > 1 && Outside(node, parent)) continue;
+                        // Translation (+0x14) and Euler angles (+0x20), turned Y, X, Z as the engine's matrix stack applies them.
+                        var at = new Vector3(node.PayloadFloat(0x14), node.PayloadFloat(0x18), node.PayloadFloat(0x1C));
+                        var turn = new Vector3(node.PayloadFloat(0x20), node.PayloadFloat(0x24), node.PayloadFloat(0x28));
+                        matrix = Matrix4x4.CreateFromYawPitchRoll(turn.Y, turn.X, turn.Z) * Matrix4x4.CreateTranslation(at) * parent;
+                        break;
+                    default: continue;
+                }
+                for (int i = node.Children.Count - 1; i >= 0; i--) pending.Push((node.Children[i], node.Children.Count, matrix, depth + 1));
             }
         }
 
@@ -222,6 +257,7 @@ public static class ZoneProbe
         /// <summary>zDi::BuildPickCandidateForQueryPoint (0x484960) / PickTestMeshAtQueryXZ (0x484e00) with AddFaceToPlayerProbeSampleBuckets (0x484b70).</summary>
         private void Test(WorldNode node, WorldModel model, Matrix4x4 matrix)
         {
+            if ((this.vertices += model.Vertices.Count) > MaximumVertices) throw new InvalidDataException($"The probe would place more than {MaximumVertices:N0} vertices; the world shares models along too many paths.");
             var vertices = model.Vertices.ToArray();
             if ((model.Flags & 0x08) != 0 && model.MorphFactor != 0)
                 for (int i = 0; i < Math.Min(model.Morphs.Count, vertices.Length); i++) vertices[i] += model.Morphs[i] * model.MorphFactor;
@@ -234,8 +270,9 @@ public static class ZoneProbe
                 if (kind == ZoneProbeKind.Vehicle && !(normal.Y > 0)) continue;
                 if (!Holds(points)) continue;
                 float height = normal.Y == 0 ? points[0].Y : points[0].Y - ((X - points[0].X) * normal.X + (Z - points[0].Z) * normal.Z) / normal.Y;
-                if (kind == ZoneProbeKind.Vehicle && Hits.Count >= MaximumHits) { Full = true; return; }
                 if (!(height <= top)) continue;
+                // The vehicle's buffer drops a surface found once it holds 32 (AddFaceToPlayerProbeSampleBuckets, 0x484b70).
+                if (kind == ZoneProbeKind.Vehicle && Hits.Count >= MaximumHits) { Full = true; return; }
                 Hits.Add(new(height, ZoneSet.FromWord(polygon.Zone), polygon.Material?.Soil ?? 0, node, polygon));
                 if (kind == ZoneProbeKind.Point) return;
             }
