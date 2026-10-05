@@ -18,15 +18,18 @@ public static partial class WorldGltf
     /// <item>a material whose texture is transparent is marked so: alpha only 0 or 255 as MASK at the default 0.5 cutoff
     /// (the packs key texels below 128), any other alpha as BLEND. The game takes transparency from the texture; import
     /// reads opacity only from a BLEND material whose base alpha is below 1, which these are not.</item>
-    /// <item>meshes that only collision volumes (<see cref="CollisionVolume"/>) show get fully transparent materials of
-    /// their own (MASK with base alpha 0, which Blender writes back unchanged), recording their engine opacity so the look
-    /// never becomes it. A material other meshes also use is copied first.</item>
+    /// <item>in a <paramref name="pickup"/>, the mesh that only its collision volume shows gets fully transparent materials
+    /// of its own (MASK with base alpha 0), recording their engine opacity so neither the look nor how an editor writes it
+    /// back becomes it. A material other meshes also use is copied first. The game switches off the one node named
+    /// <see cref="CollisionVolume"/> that FindSubNodeByName finds from the pickup (the file's roots and then each node's
+    /// children from last to first); any other is drawn.</item>
     /// </list>
-    /// <paramref name="texture"/> gives the transparency of an image by its unescaped URI, or null when unknown. Indices
-    /// and values of another shape (a file another tool wrote) are left alone. Returns whether the file changed; applying
-    /// it again changes nothing.
+    /// <paramref name="texture"/> gives the transparency of an image by its unescaped URI, or null when unknown;
+    /// <paramref name="pickup"/> is whether the file is loaded as a pickup (<see cref="IsPickupName"/>). Indices and values
+    /// of another shape (a file another tool wrote) are left alone. Returns whether the file changed; applying it again
+    /// changes nothing.
     /// </summary>
-    public static bool ApplyPresentation(JsonObject root, Func<string, TextureTransparency?> texture)
+    public static bool ApplyPresentation(JsonObject root, Func<string, TextureTransparency?> texture, bool pickup)
     {
         if (root["materials"] is not JsonArray materials) return false;
         bool changed = false;
@@ -44,11 +47,12 @@ public static partial class WorldGltf
             material["alphaMode"] = mode; changed = true;
         }
 
-        // A mesh is hidden when every node that shows it is a collision volume.
+        // A mesh is hidden when the collision volume the game switches off is the only node that shows it.
         Dictionary<int, bool> hidden = [];
+        var volume = pickup ? SwitchedOff(root, nodes) : null;
         foreach (var node in nodes.OfType<JsonObject>())
             if (Index(node["mesh"], meshes.Count) is { } m)
-                hidden[m] = hidden.GetValueOrDefault(m, true) && EngineName(node) == CollisionVolume;
+                hidden[m] = hidden.GetValueOrDefault(m, true) && ReferenceEquals(node, volume);
         HashSet<int> visible = [];
         for (int m = 0; m < meshes.Count; m++)
             if (!hidden.GetValueOrDefault(m))
@@ -59,12 +63,15 @@ public static partial class WorldGltf
             foreach (var primitive in Primitives(meshes[m]))
             {
                 if (Index(primitive["material"], materials.Count) is not { } used || materials[used] is not JsonObject material) continue;
-                if (visible.Contains(used))
+                if (!visible.Contains(used)) { changed |= Hide(material); continue; }
+                if (!copies.TryGetValue(used, out int copy))
                 {
-                    if (!copies.TryGetValue(used, out int copy)) { copies[used] = copy = materials.Count; materials.Add(material.DeepClone()); }
-                    primitive["material"] = copy; material = (JsonObject)materials[copy]!; changed = true;
+                    // A material that cannot be hidden (already hidden, or malformed) is not copied either.
+                    var hiddenCopy = (JsonObject)material.DeepClone();
+                    if (!Hide(hiddenCopy)) continue;
+                    copies[used] = copy = materials.Count; materials.Add(hiddenCopy);
                 }
-                changed |= Hide(material);
+                primitive["material"] = copy; changed = true;
             }
         return changed;
 
@@ -72,25 +79,74 @@ public static partial class WorldGltf
     }
 
     /// <summary>
-    /// Makes a material fully transparent, keeping its colour and recording the opacity import read from it; false when it
-    /// already is, or when it has no engine attributes to record an opacity below 255 in (adding some would also change
-    /// how import reads its normals).
+    /// Whether a node of this name is a pickup the game sets up and switches the collision volume of: a copy of a pickup
+    /// template (pu000–pu039, Pickup::Init 0x41CCF0, Pickup::CreateObjectInstance 0x41DAB0), or a pickup placed in the
+    /// world, named pu and a number whose hundreds are a pickup type (InitAndLoadPuppySpawns 0x41DE70, AssignBvolGroupAndId).
+    /// </summary>
+    public static bool IsPickupName(string name)
+    {
+        if (!name.StartsWith("pu", StringComparison.Ordinal) || name.Length < 5 || !char.IsAsciiDigit(name[2])) return false;
+        if (name.Length == 5) return MissionPickupType.Catalog.Any(t => t.TemplateName == name);
+        // atol: the leading digits; the type is the number's hundreds, refused above 40 (more digits only make it larger).
+        long value = 0;
+        for (int i = 2; i < name.Length && char.IsAsciiDigit(name[i]) && value <= 4100; i++) value = value * 10 + (name[i] - '0');
+        return value / 100 <= 40;
+    }
+
+    /// <summary>
+    /// The node a pickup's AssignBvolGroupAndId switches off: FindSubNodeByName(pickup, "bvol"), which compares names exactly
+    /// and visits a node, then its children from last to first; the pickup's children are the file's roots.
+    /// </summary>
+    private static JsonObject? SwitchedOff(JsonObject root, JsonArray nodes)
+    {
+        var scenes = root["scenes"] as JsonArray ?? [];
+        int scene = Index(root["scene"], scenes.Count) ?? 0;
+        // The scene's roots, or without scenes every node that is no node's child (as GltfDocument reads them).
+        var held = nodes.OfType<JsonObject>().SelectMany(n => n["children"] as JsonArray ?? []).Select(c => Index(c, nodes.Count)).OfType<int>().ToHashSet();
+        var roots = scenes.Count == 0 ? Enumerable.Range(0, nodes.Count).Where(i => !held.Contains(i)).ToList()
+            : (scenes[Math.Min(scene, scenes.Count - 1)] as JsonObject)?["nodes"] is JsonArray list ? list.Select(n => Index(n, nodes.Count)).OfType<int>().ToList() : [];
+        HashSet<int> visited = [];
+        for (int i = roots.Count - 1; i >= 0; i--) if (Find(roots[i], 0) is { } found) return found;
+        return null;
+
+        JsonObject? Find(int index, int depth)
+        {
+            if (depth > Gltf.GltfDocument.MaximumDepth || !visited.Add(index) || nodes[index] is not JsonObject node) return null;
+            if (EngineName(node) == CollisionVolume) return node;
+            var children = (node["children"] as JsonArray ?? []).Select(c => Index(c, nodes.Count)).OfType<int>().ToList();
+            for (int k = children.Count - 1; k >= 0; k--) if (Find(children[k], depth + 1) is { } found) return found;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Makes a material fully transparent, keeping its colour and recording the opacity import reads from it, also in a
+    /// material without engine attributes (with <c>normals</c>, which keeps how import reads them); false when it already
+    /// is, or when its base colour is malformed (left alone).
     /// </summary>
     private static bool Hide(JsonObject material)
     {
+        if (material["pbrMetallicRoughness"] is { } values && values is not JsonObject) return false;
         var pbr = material["pbrMetallicRoughness"] as JsonObject;
         string? mode = Text(material["alphaMode"]); double? alpha = BaseAlpha(pbr);
-        if (mode == "MASK" && material["alphaCutoff"] == null && alpha is 0) return false;
-        var engine = (material["extras"] as JsonObject)?[Key] as JsonObject;
+        if (alpha == null || mode == "MASK" && material["alphaCutoff"] == null && alpha is 0) return false;
+        if (material["extras"] is { } other && other is not JsonObject) return false;
+        var engine = (material["extras"] as JsonObject)?[Key];
+        if (engine != null && engine is not JsonObject) return false;
         // Without a recorded opacity, import reads a BLEND material's base alpha (WorldGltf.ImportMaterial).
         int opacity = mode == "BLEND" && alpha is < 1 ? (int)Math.Clamp(MathF.Round((float)alpha.Value * 255), 0, 255) : 255;
-        if (engine == null && opacity != 255) return false;
+        if (engine == null)
+        {
+            // A material without engine attributes keeps the primitive's normals; one with them only when it says so.
+            if (material["extras"] is not JsonObject extras) material["extras"] = extras = [];
+            extras[Key] = engine = new JsonObject { ["normals"] = true };
+        }
         if (pbr == null) material["pbrMetallicRoughness"] = pbr = [];
-        if (pbr["baseColorFactor"] is JsonArray { Count: 4 } factor && alpha != null) factor[3] = 0.0;
+        if (pbr["baseColorFactor"] is JsonArray factor) factor[3] = 0.0;
         else pbr["baseColorFactor"] = new JsonArray(1.0, 1.0, 1.0, 0.0);
         material["alphaMode"] = "MASK"; material.Remove("alphaCutoff");
         if (Text(material["name"]) is { } name && !name.EndsWith(HiddenSuffix, StringComparison.Ordinal)) material["name"] = name + HiddenSuffix;
-        if (engine != null && engine["opacity"] == null) engine["opacity"] = opacity;
+        if (engine["opacity"] == null) engine["opacity"] = opacity;
         return true;
     }
 

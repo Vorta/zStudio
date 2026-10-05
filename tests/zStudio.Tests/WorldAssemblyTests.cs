@@ -136,14 +136,14 @@ public sealed class WorldAssemblyTests
         Assert.Equal(["body", "arm1", "arm2", "bvol"], crate.Content.Select(n => n.Name));
         Assert.Equal("lid", crate.Content[0].Children.Single().Name);
 
-        // Reconstructed sources reassemble into the same world, also with their hints for viewers (a transparent texture
-        // and a hidden collision volume).
+        // Reconstructed sources reassemble into the same world, also with their hints for viewers (a transparent texture;
+        // the crate's collision volume stays visible, since crate1 is no pickup and the game draws it).
         var outputs = WorldSources.Reconstruct([new(1, Shipped())], n => scripts.GetValueOrDefault(n),
             (_, name) => $"data/m1/textures/{name}.png", new HashSet<string> { "data/m1/textures/rock.png" }, _ => 0, notes, Token,
             transparency: path => path == "data/m1/textures/rock.png" ? TextureTransparency.Alpha : null);
         Assert.Empty(notes);
         string crateJson = Encoding.UTF8.GetString(outputs.Single(o => o.Path == "data/common/models/crate.gltf").Bytes);
-        Assert.Contains("\"alphaMode\": \"BLEND\"", crateJson); Assert.Contains("~hidden", crateJson);
+        Assert.Contains("\"alphaMode\": \"BLEND\"", crateJson); Assert.DoesNotContain("~hidden", crateJson);
         Assert.Contains("\"alphaMode\": \"BLEND\"", Encoding.UTF8.GetString(outputs.Single(o => o.Path == "data/m1/models/m1.gltf").Bytes));
         Assert.Equal(["data/common/models/crate.bin", "data/common/models/crate.gltf", "data/m1/models/m1.bin", "data/m1/models/m1.gltf"], outputs.Select(o => o.Path).Order(StringComparer.Ordinal));
         MemoryFiles rebuilt = new(new(StringComparer.Ordinal) { ["gamegen/m1.gs"] = project.Files["gamegen/m1.gs"], ["data/m1/textures/rock.png"] = [0] });

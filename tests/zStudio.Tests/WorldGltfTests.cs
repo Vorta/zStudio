@@ -433,7 +433,7 @@ public sealed class WorldGltfTests
             "../textures/glow.png" => TextureTransparency.Alpha, "../textures/cut.png" => TextureTransparency.Keyed, "../textures/rock.png" => TextureTransparency.Opaque, _ => null,
         };
         var root = JsonNode.Parse(json)!.AsObject();
-        Assert.True(WorldGltf.ApplyPresentation(root, Transparency));
+        Assert.True(WorldGltf.ApplyPresentation(root, Transparency, pickup: true));
         int MaterialOf(string node)
         {
             int mesh = root["nodes"]!.AsArray().Single(n => (string?)n!["name"] == node)!["mesh"]!.GetValue<int>();
@@ -453,7 +453,7 @@ public sealed class WorldGltfTests
         Assert.Equal(255, hidden["extras"]![WorldGltf.Key]!["opacity"]!.GetValue<int>());
         Assert.Equal([63, 15, 254], hidden["extras"]![WorldGltf.Key]!["color"]!.AsArray().Select(c => c!.GetValue<int>()));
         string presented = root.ToJsonString();
-        Assert.False(WorldGltf.ApplyPresentation(root, Transparency));
+        Assert.False(WorldGltf.ApplyPresentation(root, Transparency, pickup: true));
         Assert.Equal(presented, root.ToJsonString());
 
         // Builds read the same engine values from either file, also after an editor turns the volume's material to BLEND.
@@ -476,20 +476,22 @@ public sealed class WorldGltfTests
             {"nodes":[{"name":"bvol","mesh":0},{"name":"bvol","mesh":"0"}],"meshes":[{"primitives":[{"material":99},{"material":1}]}],
              "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":7},"baseColorFactor":[1,"x"]}},5],"textures":[{"source":-1}]}
             """)!.AsObject();
-        Assert.False(WorldGltf.ApplyPresentation(odd, _ => TextureTransparency.Alpha));
+        Assert.False(WorldGltf.ApplyPresentation(odd, _ => TextureTransparency.Alpha, pickup: true));
 
-        // A volume an editor made translucent keeps the opacity import read from it, and stays visible when the file
-        // has no engine attributes to keep it in.
+        // A volume an editor made translucent keeps the opacity import read from it, also in a material without engine
+        // attributes (given normals, so import reads them as before).
         static JsonObject Volume(string extras) => JsonNode.Parse($$"""
             {"nodes":[{"name":"bvol","mesh":0}],"meshes":[{"primitives":[{"material":0}]}],
              "materials":[{"name":"glass","alphaMode":"BLEND","pbrMetallicRoughness":{"baseColorFactor":[1,1,1,0.5]}{{extras}}}]}
             """)!.AsObject();
         var recorded = Volume(""","extras":{"recoil":{"color":[1,2,3]}}""");
-        Assert.True(WorldGltf.ApplyPresentation(recorded, _ => null));
+        Assert.True(WorldGltf.ApplyPresentation(recorded, _ => null, pickup: true));
         Assert.Equal(128, recorded["materials"]![0]!["extras"]![WorldGltf.Key]!["opacity"]!.GetValue<int>());
         Assert.Equal("MASK", (string?)recorded["materials"]![0]!["alphaMode"]);
         var bare = Volume("");
-        Assert.False(WorldGltf.ApplyPresentation(bare, _ => null));
-        Assert.Equal("BLEND", (string?)bare["materials"]![0]!["alphaMode"]);
+        Assert.True(WorldGltf.ApplyPresentation(bare, _ => null, pickup: true));
+        Assert.Equal("MASK", (string?)bare["materials"]![0]!["alphaMode"]);
+        Assert.Equal(128, bare["materials"]![0]!["extras"]![WorldGltf.Key]!["opacity"]!.GetValue<int>());
+        Assert.True(bare["materials"]![0]!["extras"]![WorldGltf.Key]!["normals"]!.GetValue<bool>());
     }
 }

@@ -354,9 +354,10 @@ internal static partial class WorldSources
             }, loadRoot);
             string stem = System.IO.Path.GetFileNameWithoutExtension(path);
             var (json, bin) = doc.Write(stem + ".bin");
-            // Viewers show transparent textures and hide collision volumes as the game does; builds read the same values.
+            // Viewers show transparent textures and a pickup's collision volume hidden as the game does; builds read the same values.
             var root = (JsonObject)JsonNode.Parse(json)!;
-            if (WorldGltf.ApplyPresentation(root, uri => transparency?.Invoke(WorldAssembler.Relative(path, uri))))
+            bool pickup = loads.Any(l => ReferenceEquals(l.Unit, unit) && WorldGltf.IsPickupName(l.Load.NodeName));
+            if (WorldGltf.ApplyPresentation(root, uri => transparency?.Invoke(WorldAssembler.Relative(path, uri)), pickup))
                 json = Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
             outputs.Add(new(path, json));
             outputs.Add(new($"{folder}/{stem}.bin", bin));

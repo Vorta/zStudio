@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -53,8 +54,10 @@ public static class SourceBlender
 
     /// <summary>
     /// Copies <paramref name="model"/> (a project .gltf, as the workspace holds it) and the files it uses into a new checkout.
-    /// The copy shows transparent textures and hides collision volumes as the game does (<see cref="Worlds.WorldGltf.ApplyPresentation"/>),
-    /// also for models reconstructed before reconstruction wrote that; the project's file is not changed.
+    /// The copy shows transparent textures and, for a model a script loads as a pickup, hides its collision volume as the
+    /// game does (<see cref="Worlds.WorldGltf.ApplyPresentation"/>), also for models reconstructed before reconstruction
+    /// wrote that; it states every node's zone, so a node Blender moves keeps it (<see cref="Worlds.WorldGltf.ExplicitZones"/>).
+    /// The project's file is not changed.
     /// </summary>
     public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default)
     {
@@ -106,7 +109,9 @@ public static class SourceBlender
             files.Add(new(project, "input/textures/" + name, SourceProject.Sha256(bytes)));
             if (Transparency(bytes, token) is { } kind) transparency[name] = kind;
         }
-        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null);
+        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null, LoadedAsPickup(workspace, model, token));
+        // Blender moves nodes freely: each keeps the zone it has (PlanUpdate takes the stated zones back out).
+        Worlds.WorldGltf.ExplicitZones(root);
         File.WriteAllText(Path.Combine(input, Path.GetFileName(model)), root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
         BlenderCheckout checkout = new(id, folder, model, DateTime.UtcNow, files);
         JsonObject manifest = new()
@@ -249,6 +254,10 @@ public static class SourceBlender
         try { document = GltfDocument.Read(json, Use, token); }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{chosen.Relative}: {ex.Message}", ex); }
         if (!document.AllNodes().Any()) throw new InvalidDataException($"{chosen.Relative} has no nodes.");
+        // What Blender cannot keep by itself: copies of a shared node must agree, and a group moved as an empty passes its
+        // transform to its objects (each node keeps the zone the checkout stated for it, below).
+        Worlds.WorldGltf.CheckInstances(document, chosen.Relative);
+        UngroupTransforms(document, root, chosen.Relative);
 
         List<(string, byte[])> changes = []; List<string> notes = [];
         string model = checkout.Model, modelFolder = Path.GetDirectoryName(model)!.Replace('\\', '/');
@@ -297,7 +306,10 @@ public static class SourceBlender
         if (attributesDropped) notes.Add("The export had no engine attributes (Custom Properties off); the model's flags, zones, references and material attributes were dropped.");
         var removed = before.Except(after, StringComparer.Ordinal).Take(16).ToArray();
         if (removed.Length > 0) notes.Add("Nodes no longer present (animations and placements find nodes by name): " + string.Join(", ", removed) + ".");
-        changes.Insert(0, (model, Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }))));
+        // After counting the engine attributes the export carries: the zones the checkout stated go back to what the
+        // file's hierarchy gives, which can leave a node without any.
+        Worlds.WorldGltf.ImplicitZones(root, chosen.Relative);
+        changes.Insert(0, (model,Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }))));
         // What the update replaces must be as the checkout (or an earlier update from it) left it.
         var accepted = checkout.Files.Concat(checkout.Applied).GroupBy(f => f.Project, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Select(f => f.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
         Dictionary<string, string?> expected = new(StringComparer.OrdinalIgnoreCase);
@@ -331,6 +343,69 @@ public static class SourceBlender
             if (FileStamp.Read(path) != stamp || !File.ReadAllBytes(path).AsSpan().SequenceEqual(first)) throw new IOException($"{path} is still changing; wait for Blender to finish exporting.");
             return first;
         }
+    }
+
+    /// <summary>
+    /// Gives the objects of a mission database group the transform an artist gave the group (a Blender empty moved, turned
+    /// or scaled): the build deletes the groups, so their objects carry transforms of their own and a group may have none
+    /// (WorldAssembler). Groups count as the build finds them, from the file's roots through groups. Refused, saying why,
+    /// where the objects cannot take it: a group with geometry, a moved group whose objects are in a part's file, and a
+    /// level-of-detail object (it stands where its parent is) or an object several parents share under a moved group.
+    /// </summary>
+    private static void UngroupTransforms(GltfDocument document, JsonObject root, string path)
+    {
+        var nodes = root["nodes"] as JsonArray ?? [];
+        HashSet<GltfNode> seen = new(ReferenceEqualityComparer.Instance);
+        foreach (var node in document.Roots) Visit(node, Matrix4x4.Identity, 0);
+
+        void Visit(GltfNode group, Matrix4x4 passed, int depth)
+        {
+            if (depth > GltfDocument.MaximumDepth || !seen.Add(group) || !Worlds.WorldGltf.IsGroup(group, path) || group.Index < 0 || group.Index >= nodes.Count || nodes[group.Index] is not JsonObject json) return;
+            string name = Worlds.WorldGltf.EngineName(group);
+            var engine = group.Extras?[Worlds.WorldGltf.Key] as JsonObject;
+            if (group.Mesh != null || engine?["model"] != null || Text(engine?["class"]) == "lod")
+                throw new InvalidDataException($"{path}: group {name} has geometry of its own or is a level-of-detail node; a group of the mission database only holds objects (the build deletes it). Give the geometry an object of its own.");
+            var transform = (group.Matrix ?? Matrix4x4.Identity) * passed;
+            if (!transform.IsIdentity)
+            {
+                if (Text(engine?["ref"]) is { } part)
+                    throw new InvalidDataException($"{path}: group {name} was moved, but the objects it places are in {part}, which every reference to it shares; move them in that file (check it out), or move the group back.");
+                foreach (var child in group.Children)
+                {
+                    if (Worlds.WorldGltf.IsGroup(child, path)) continue;
+                    var values = child.Extras?[Worlds.WorldGltf.Key] as JsonObject;
+                    string childName = Worlds.WorldGltf.EngineName(child);
+                    if (Text(values?["class"]) == "lod") throw new InvalidDataException($"{path}: group {name} was moved, but it holds the level-of-detail node {childName}, which stands where its parent is and cannot take the move; move the objects below it, or move the group back.");
+                    if (values?["instance"] != null) throw new InvalidDataException($"{path}: group {name} was moved, but it holds {childName}, a node several parents share, which would move under each of them; move the group back.");
+                    var local = (child.Matrix ?? Matrix4x4.Identity) * transform;
+                    float[] rows = [local.M11, local.M12, local.M13, local.M21, local.M22, local.M23, local.M31, local.M32, local.M33, local.M41, local.M42, local.M43];
+                    if (!rows.All(float.IsFinite) || new[] { local.M41, local.M42, local.M43 }.Any(v => MathF.Abs(v) > SourceWorlds.MaximumCoordinate))
+                        throw new InvalidDataException($"{path}: group {name} was moved so far that {childName} would lie beyond ±{SourceWorlds.MaximumCoordinate:N0}.");
+                    if (nodes[child.Index] is JsonObject target) GltfNodeEdits.SetLocal(target, local);
+                }
+                GltfNodeEdits.SetLocal(json, Matrix4x4.Identity);
+            }
+            foreach (var child in group.Children) Visit(child, transform, depth + 1);
+        }
+    }
+
+    /// <summary>
+    /// Whether a script loads the model as a pickup (LoadGameGen file puNNN), whose collision volume the game hides. Scripts
+    /// name a model by its file name and find it through their model folders; for what a viewer shows, the name decides.
+    /// </summary>
+    private static bool LoadedAsPickup(SourceWorkspace workspace, string model, CancellationToken token)
+    {
+        string stem = Path.GetFileNameWithoutExtension(model);
+        var added = workspace.Overlay().Keys.Where(k => !File.Exists(SourceProject.Resolve(workspace.Root, k))).ToArray();
+        foreach (string script in SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), added))
+        {
+            token.ThrowIfCancellationRequested();
+            if (workspace.Read(script, token) is not { } bytes) continue;
+            foreach (var line in GameGenScriptSyntax.Parse(bytes).Lines)
+                if (line.Tokens is ["LoadGameGen", var file, var name, ..] && Worlds.WorldGltf.IsPickupName(name)
+                    && Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).Equals(stem, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     /// <summary>How a texture is transparent, or null when it is not a PNG the packs could read (the build reports those).</summary>
