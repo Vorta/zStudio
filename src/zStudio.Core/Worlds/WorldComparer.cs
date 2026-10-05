@@ -376,7 +376,15 @@ public static class WorldComparer
     /// Whether two nodes of one world are indistinguishable: the same parents, and the same name, class, flags, zone, grid
     /// cell, transform or class data, model and children, all the way down.
     /// </summary>
-    internal static bool Interchangeable(WorldNode x, WorldNode y, int depth = 0, CancellationToken token = default) => new Memo(token).Interchangeable(x, y, depth);
+    internal static bool Interchangeable(WorldNode x, WorldNode y, int depth = 0, CancellationToken token = default) => Interchangeable(x, y, out _, depth, token);
+    /// <param name="unchecked">Whether the check ran out of its budget, so the nodes count as different without being told apart.</param>
+    internal static bool Interchangeable(WorldNode x, WorldNode y, out bool @unchecked, int depth = 0, CancellationToken token = default)
+    {
+        Memo memo = new(token);
+        bool same = memo.Interchangeable(x, y, depth);
+        @unchecked = !same && memo.ChecksExhausted;
+        return same;
+    }
 
     /// <summary>
     /// Pairs nodes of one name: identical copies first (the same contents all the way down, then the same structure,

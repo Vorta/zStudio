@@ -65,7 +65,14 @@ public sealed record SourceLookup(string Mission, string Kind, string Name, stri
 }
 
 /// <summary>A lookup that finds another node than it did before.</summary>
-public sealed record SourceLookupChange(SourceLookup Before, SourceLookup After);
+public sealed record SourceLookupChange(SourceLookup Before, SourceLookup After)
+{
+    /// <summary>
+    /// Whether the worlds were too large to tell every copy apart (the comparison paired some copies in order, or ran out of
+    /// copy checks): the lookup may still find the same node.
+    /// </summary>
+    public bool Uncertain { get; init; }
+}
 
 /// <summary>
 /// What a mission looked up by name in a world (the world file's bytes and its lookups), to compare later builds with. The
@@ -225,15 +232,17 @@ public static class WorldLookups
         var candidates = a.Where(x => later.TryGetValue(x.Key, out var y) && x.MayDiffer(y)).ToList();
         if (candidates.Count == 0) return [];
         // Every node's counterpart, including those of places too many for the comparison's tree.
-        var counterpart = WorldComparer.CompareTree(before, after, token: token).Counterparts;
+        var comparison = WorldComparer.CompareTree(before, after, token: token);
+        var counterpart = comparison.Counterparts; bool approximate = comparison.ApproximatePairing || comparison.PairingTruncated;
         var nodesBefore = Nodes(before); var nodesAfter = Nodes(after);
         List<SourceLookupChange> changes = [];
         foreach (var x in candidates)
         {
             var y = later[x.Key];
             WorldNode? p = nodesBefore.GetValueOrDefault(x.Slot), q = nodesAfter.GetValueOrDefault(y.Slot);
-            bool same = p == null ? q == null : q != null && (ReferenceEquals(counterpart.GetValueOrDefault(p), q) || counterpart.GetValueOrDefault(p) is { } c && WorldComparer.Interchangeable(c, q, 0, token));
-            if (!same) changes.Add(new(x, y));
+            bool @unchecked = false;
+            bool same = p == null ? q == null : q != null && (ReferenceEquals(counterpart.GetValueOrDefault(p), q) || counterpart.GetValueOrDefault(p) is { } c && WorldComparer.Interchangeable(c, q, out @unchecked, 0, token));
+            if (!same) changes.Add(new(x, y) { Uncertain = approximate || @unchecked });
         }
         return changes;
         static Dictionary<int, WorldNode> Nodes(GameZWorld world) => GameZWriter.NodeSlots(world).ToDictionary(p => p.Value, p => p.Key);
@@ -254,7 +263,7 @@ public static class WorldLookups
 
     /// <summary>A one-line description of a change for warnings; <paramref name="before"/> says what it is compared with.</summary>
     public static string Describe(SourceLookupChange change, string before = "") =>
-        $"{change.After.Mission}: {Describe(change.After)} finds {change.After.Found ?? "no node"}{(change.After.Slot >= 0 ? $" (slot {change.After.Slot})" : "")} instead of {change.Before.Found ?? "no node"}{(change.Before.Slot >= 0 ? $" (slot {change.Before.Slot})" : "")}{before}.";
+        $"{change.After.Mission}: {Describe(change.After)} finds {change.After.Found ?? "no node"}{(change.After.Slot >= 0 ? $" (slot {change.After.Slot})" : "")} instead of {change.Before.Found ?? "no node"}{(change.Before.Slot >= 0 ? $" (slot {change.Before.Slot})" : "")}{before}{(change.Uncertain ? " (possibly: the worlds are too large to tell every copy apart)" : "")}.";
     /// <summary>What makes a lookup: "FindNode scrollramp8 in gamegen/support/tex_fxm6.gw", "the root scrollramp8 of animation ramp_scroll".</summary>
     public static string Describe(SourceLookup lookup) => lookup.Kind switch
     {

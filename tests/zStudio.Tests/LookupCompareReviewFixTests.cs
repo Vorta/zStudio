@@ -124,6 +124,38 @@ public sealed class LookupCompareReviewFixTests
     }
 
     [Fact]
+    public void LookupChangesTheComparisonCannotConfirmSaySo()
+    {
+        // The crate a lookup finds becomes the copy whose 1,500 slats are listed the other way round: telling the two apart
+        // takes more checks than a comparison makes, so the change is reported as possible rather than certain.
+        GameZWorld Build(bool rebuilt)
+        {
+            WorldNode root = new("world1", WorldNodeClass.World);
+            List<WorldNode> crates = [];
+            for (int c = 0; c < 2; c++)
+            {
+                var crate = Link(root, Node("crate"));
+                foreach (int i in c == 0 ? Enumerable.Range(0, 1500) : Enumerable.Range(0, 1500).Reverse()) Link(crate, Node("slat", flags: (uint)i << 9));
+                crates.Add(crate);
+            }
+            var world = World(root);
+            if (rebuilt) { int i = world.Nodes.IndexOf(crates[0]), j = world.Nodes.IndexOf(crates[1]); (world.Nodes[i], world.Nodes[j]) = (world.Nodes[j], world.Nodes[i]); }
+            return world;
+        }
+        static SourceLookup Lookup(GameZWorld world, string fingerprint)
+        {
+            var top = GameZWriter.NodeSlots(world).Where(p => p.Key.Name == "crate").MaxBy(p => p.Value);
+            return new("m1", SourceLookup.TextureEffect, "crate", "gamegen/support/tex_fxm1.gw", 2, top.Value, WorldLookups.Path(top.Key)) { Fingerprint = fingerprint };
+        }
+        GameZWorld before = Build(false), after = Build(true);
+        var comparison = WorldComparer.CompareTree(before, after, token: Token);
+        Assert.False(comparison.ApproximatePairing || comparison.PairingTruncated);
+        var change = Assert.Single(WorldLookups.Changes(before, [Lookup(before, "reversed")], after, [Lookup(after, "forward")], Token));
+        Assert.True(change.Uncertain);
+        Assert.Contains("possibly", WorldLookups.Describe(change));
+    }
+
+    [Fact]
     public void CopyChecksThatRunOutAreReported()
     {
         // Two crates whose 1,500 slats differ only in their flags, listed the other way round in the second: telling the
