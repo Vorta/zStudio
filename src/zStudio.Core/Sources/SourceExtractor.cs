@@ -10,8 +10,20 @@ public sealed record SourceReconstructionReport(string Project, int SourceFiles,
 public static class SourceExtractor
 {
     public const int MaximumFiles = 10_000;
+    /// <summary>
+    /// What a reconstruction may hold in memory at once from the files it has read: sound banks, texture packs, worlds,
+    /// animations, decoded resources and scripts stay until every file is read, because placing one family's sources needs
+    /// the others' evidence. Each is counted as its bytes and an estimate of what decoding it keeps (see
+    /// <see cref="ExtractFilesAsync"/>); the RECOIL releases need about 500 MiB (1999) and 360 MiB (1998). A folder that needs
+    /// more is refused once the file that exceeds it has been read, and what was written is removed.
+    /// </summary>
+    public const long MaximumRetainedBytes = 1536L * 1024 * 1024;
 
-    public static async Task<SourceReconstructionReport> ExtractAsync(string corpusRoot, string projectRoot, IProgress<SourceProgress>? progress = null, CancellationToken token = default)
+    public static Task<SourceReconstructionReport> ExtractAsync(string corpusRoot, string projectRoot, IProgress<SourceProgress>? progress = null, CancellationToken token = default)
+        => ExtractAsync(corpusRoot, projectRoot, MaximumRetainedBytes, progress, token);
+
+    /// <param name="retainedBudget">The memory the reconstruction may hold at once (<see cref="MaximumRetainedBytes"/>; smaller in tests).</param>
+    internal static async Task<SourceReconstructionReport> ExtractAsync(string corpusRoot, string projectRoot, long retainedBudget, IProgress<SourceProgress>? progress = null, CancellationToken token = default)
     {
         corpusRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(corpusRoot)); projectRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectRoot));
         if (!Directory.Exists(corpusRoot)) throw new DirectoryNotFoundException("The game data folder does not exist.");
@@ -38,7 +50,7 @@ public static class SourceExtractor
         if (!CarriesDefinitions(files)) throw new InvalidDataException(NotOriginal);
         Writes writes = new(projectRoot);
         writes.CreateDirectory(projectRoot);
-        try { return await ExtractFilesAsync(projectRoot, files, [.. all.Where(f => !GameFile(f.Relative)).Select(f => f.Relative)], writes, progress, token); }
+        try { return await ExtractFilesAsync(projectRoot, files, [.. all.Where(f => !GameFile(f.Relative)).Select(f => f.Relative)], writes, retainedBudget, progress, token); }
         catch (Exception stopped)
         {
             // The folder was new or empty: remove everything this reconstruction wrote so it can be retried. Only that: a file
@@ -196,15 +208,26 @@ public static class SourceExtractor
     private static bool MissionWorld(string relative) => TextureSources.MissionNumber(relative) > 0 && Path.GetFileName(relative).Equals("gamez.zbd", StringComparison.OrdinalIgnoreCase);
 
     /// <param name="elsewhere">Files outside the game's folders, listed as not reconstructed.</param>
-    private static async Task<SourceReconstructionReport> ExtractFilesAsync(string projectRoot, List<(string Path, string Relative)> files, List<string> elsewhere, Writes writes, IProgress<SourceProgress>? progress, CancellationToken token)
+    /// <param name="budget">
+    /// The most the files read may keep in memory together (<see cref="MaximumRetainedBytes"/>). Each file is counted with
+    /// what it keeps until the end: a sound bank its bytes, a texture pack its bytes and its decoded records, a world what its
+    /// decoded nodes and geometry hold (its document is not kept), an animation file its bytes and the package decoded from
+    /// them later, and resources and scripts what their decoded trees and tokens take (resources counted before they are
+    /// decoded, since several members may share one payload). Each archive member also counts what is kept of it whatever it
+    /// holds (the source written, or a note), so an archive of many empty members is counted too.
+    /// </param>
+    private static async Task<SourceReconstructionReport> ExtractFilesAsync(string projectRoot, List<(string Path, string Relative)> files, List<string> elsewhere, Writes writes, long budget, IProgress<SourceProgress>? progress, CancellationToken token)
     {
         Context context = new(projectRoot, writes, token);
         writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.DataFolder)); writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.GameGenFolder));
         Dictionary<string, int> families = []; List<string> skipped = [];
         List<(string Relative, IReadOnlyList<ArchiveSources.Member> Members)> soundBanks = [];
         List<(string Relative, ZbdDocument Document)> texturePacks = [];
-        List<(string Relative, ZbdDocument Document)> worlds = [];
+        // A world is kept as the model its sources are reconstructed from (or why it cannot be one), not as its document,
+        // which holds many times more.
+        List<(string Relative, Worlds.GameZWorld? World, string? Failure)> worlds = [];
         List<(string Relative, byte[] Bytes)> animations = [];
+        long retained = 0;
         for (int i = 0; i < files.Count; i++)
         {
             token.ThrowIfCancellationRequested(); var (path, relative) = files[i]; progress?.Report(new(i, files.Count, relative));
@@ -217,26 +240,38 @@ public static class SourceExtractor
                 {
                     var members = ArchiveSources.Read(bytes);
                     bool waves = members.Count > 0 && members.All(m => IsWave(m.Payload.Span));
-                    if (waves && SourceBuilder.Banks.Contains(relative, StringComparer.OrdinalIgnoreCase)) { soundBanks.Add((relative, members)); family = "sounds"; }
+                    if (waves && SourceBuilder.Banks.Contains(relative, StringComparer.OrdinalIgnoreCase)) { Retain(relative, bytes.LongLength + MemberCost * members.Count); soundBanks.Add((relative, members)); family = "sounds"; }
                     else if (waves) context.Notes.Add($"{relative}: an archive of sounds that is not one of the soundsh/m/l banks; it was not reconstructed.");
-                    else { await context.ExtractResourcesAsync(relative, members); family = "resources"; }
+                    else
+                    {
+                        // A decoded tree takes about ten times its compiled bytes, and each member is decoded on its own.
+                        Retain(relative, Math.Max(bytes.LongLength, 16 * members.Sum(m => (long)m.Payload.Length)) + MemberCost * members.Count);
+                        await context.ExtractResourcesAsync(relative, members); family = "resources";
+                    }
                 }
-                else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Scripts, Version: 7 }) { await context.ExtractScriptsAsync(relative, bytes); family = "scripts"; }
+                else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Scripts, Version: 7 }) { Retain(relative, 8L * bytes.LongLength); await context.ExtractScriptsAsync(relative, bytes); family = "scripts"; }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.GameZ, Version: 15 } && MissionWorld(relative))
                 {
                     var doc = FormatRegistry.Default.OpenBytes(relative, bytes, token: token);
                     if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
-                    worlds.Add((relative, doc)); family = "worlds";
+                    // A world whose nodes the builder cannot hold (a cycle, an unsupported class) is reported when the worlds are reconstructed.
+                    Worlds.GameZWorld? world = null; string? failure = null;
+                    try { world = Worlds.GameZWorldReader.FromDocument(doc, token); } catch (InvalidDataException ex) { failure = ex.Message; }
+                    if (world != null) Retain(relative, Footprint(world));
+                    worlds.Add((relative, world, failure)); family = "worlds";
                 }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Animation, Version: 28 } && TextureSources.MissionNumber(relative) > 0 && Path.GetFileName(relative).Equals("anim.zbd", StringComparison.OrdinalIgnoreCase))
                 {
                     _ = Animation.AnimationPackage.Read(bytes, token);
+                    // The packages are decoded again together when the keyframe scripts are reconstructed (about three times the bytes).
+                    Retain(relative, 4L * bytes.LongLength);
                     animations.Add((relative, bytes)); family = "animations";
                 }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.TexturePack } && IsTexturePack(relative))
                 {
                     var doc = FormatRegistry.Default.OpenBytes(relative, bytes, token: token);
                     if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
+                    Retain(relative, bytes.LongLength + 2048L * doc.Assets.Count);
                     texturePacks.Add((relative, doc)); family = TextureSources.MissionNumber(relative) > 0 ? "textures" : "images";
                 }
             }
@@ -251,6 +286,32 @@ public static class SourceExtractor
         if (animations.Count > 0) { Phase(SourceStage.Reconstructing, "animations"); await context.ExtractAnimationsAsync(animations, Phase); }
         progress?.Report(new(files.Count, files.Count, "Done"));
         return new(projectRoot, context.Written, families, [.. skipped, .. elsewhere], context.Notes);
+
+        // Counted as each file is kept, so nothing more is read once the budget is exceeded; a refusal, not a file left out.
+        void Retain(string relative, long bytes)
+        {
+            retained += bytes;
+            if (retained > budget)
+                throw new IOException($"The game data folder needs more memory than reconstruction holds at once ({budget / (1024 * 1024):N0} MiB, about three times what the RECOIL releases need): the sound banks, texture packs, worlds, animations, resources and scripts read up to {relative} are kept together until their sources are written. Reconstruct from the original game files.");
+        }
+    }
+    /// <summary>What an archive member keeps besides its data: the record of its written source, or a note about it.</summary>
+    private const long MemberCost = 512;
+    /// <summary>
+    /// What a decoded world keeps (the reconstruction counts it against <see cref="MaximumRetainedBytes"/>): its geometry as
+    /// decoded, so models that share stored data count each copy, and its nodes, materials and textures. Measured on the
+    /// releases, it is slightly more than the world holds.
+    /// </summary>
+    internal static long Footprint(Worlds.GameZWorld world)
+    {
+        long bytes = 1024L * (world.Nodes.Count + world.FreedSlots.Count) + 256L * (world.Materials.Count + world.Textures.Count);
+        foreach (var model in world.Models)
+        {
+            bytes += 256 + 24L * (model.Vertices.Count + model.Normals.Count + model.Morphs.Count);
+            foreach (var point in model.Points) bytes += 160 + 12L * point.Vertices.Length;
+            foreach (var polygon in model.Polygons) bytes += 160 + 4L * (polygon.Vertices.Length + polygon.Normals.Length) + 8L * polygon.Uvs.Length;
+        }
+        return bytes;
     }
     /// <summary>Mission packs (<c>mN/texture*.zbd</c>, <c>mN/rtexture*.zbd</c>) and the interface pack (<c>image.zbd</c>, <c>rimage.zbd</c>).</summary>
     private static bool IsTexturePack(string relative)
@@ -452,14 +513,14 @@ public static class SourceExtractor
             }
         }
         /// <summary>Model sources from the mission worlds, replayed against their build scripts (see <see cref="WorldSources"/>).</summary>
-        internal async Task ExtractWorldsAsync(IReadOnlyList<(string Relative, ZbdDocument Document)> worlds)
+        internal async Task ExtractWorldsAsync(IReadOnlyList<(string Relative, Worlds.GameZWorld? World, string? Failure)> worlds)
         {
             List<WorldSources.MissionWorld> missions = [];
-            foreach (var (relative, doc) in worlds.OrderBy(w => TextureSources.MissionNumber(w.Relative)))
+            foreach (var (relative, world, failure) in worlds.OrderBy(w => TextureSources.MissionNumber(w.Relative)))
             {
                 // A world whose nodes the builder cannot hold (a cycle, an unsupported class) is left out, like other files.
-                try { missions.Add(new(TextureSources.MissionNumber(relative), Worlds.GameZWorldReader.FromDocument(doc, token))); }
-                catch (InvalidDataException ex) { Notes.Add($"{relative}: its models were not reconstructed because {ex.Message}"); }
+                if (world != null) missions.Add(new(TextureSources.MissionNumber(relative), world));
+                else Notes.Add($"{relative}: its models were not reconstructed because {failure}");
             }
             foreach (var mission in missions) WorldNodes[mission.Mission] = mission.World.Nodes.Select(n => n.Name).ToArray();
             var outputs = await Task.Run(() => WorldSources.Reconstruct(missions, name => Scripts.GetValueOrDefault(name),

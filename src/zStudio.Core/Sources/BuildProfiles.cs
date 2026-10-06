@@ -37,6 +37,8 @@ public static class BuildProfiles
 {
     public const string Folder = "gamegen/build-profiles", Format = "recoil-build-profile";
     public const int MaximumPacks = 16, MaximumProfiles = 64;
+    /// <summary>The largest profile file read.</summary>
+    internal const int MaximumFileBytes = 64 * 1024;
     private const long MiB = 1024 * 1024;
 
     /// <summary>
@@ -148,7 +150,7 @@ public static class BuildProfiles
     {
         if (read != null) return read(path) ?? throw new InvalidDataException($"{path} does not exist.");
         var info = new FileInfo(SourceProject.Resolve(root, path));
-        if (info.Length > 64 * 1024) throw new InvalidDataException($"{path} is larger than 64 KB.");
+        if (info.Length > MaximumFileBytes) throw new InvalidDataException($"{path} is larger than 64 KB.");
         return File.ReadAllBytes(info.FullName);
     }
 

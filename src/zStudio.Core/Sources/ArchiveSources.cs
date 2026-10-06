@@ -8,9 +8,19 @@ namespace Recoil.Zbd.Core.Sources;
 internal static class ArchiveSources
 {
     internal const int RecordSize = 148;
+    /// <summary>
+    /// The longest source field a record holds: 63 Latin-1 characters and the terminating zero. RECOIL's compiler recorded
+    /// its temporary files there (at most 55 characters in the shipped archives).
+    /// </summary>
+    internal const int MaximumSourceField = 63;
     internal sealed record Member(int Index, string Name, uint Aux, string? SourceField, ulong FileTime, ReadOnlyMemory<byte> Payload, long Offset = -1);
-    /// <summary>A member to write. The engine looks members up by name; the source field records where it was built from.</summary>
+    /// <summary>
+    /// A member to write. The engine looks members up by name; the source field records where it was built from, whole
+    /// (see <see cref="FitsSourceField"/>), or is empty.
+    /// </summary>
     internal sealed record Entry(string Name, string SourceField, byte[] Payload);
+    /// <summary>Whether <paramref name="field"/> is stored whole: what reads it back (placement edits) gets exactly this path.</summary>
+    internal static bool FitsSourceField(string field) => field.Length <= MaximumSourceField && !field.Any(c => c == 0 || c > 255);
 
     /// <summary>Records in stored order with their payloads (possibly shared). Source fields are null unless a zero-terminated string.</summary>
     internal static IReadOnlyList<Member> Read(ReadOnlyMemory<byte> bytes)
@@ -55,8 +65,9 @@ internal static class ArchiveSources
             if (m.Name.Length is < 1 or > 63 || m.Name.Any(c => c == 0 || c > 255)) throw new InvalidDataException($"'{m.Name}' is not a valid archive member name (1–63 Latin-1 characters).");
             Encoding.Latin1.GetBytes(m.Name, r[8..72]);
             BinaryPrimitives.WriteUInt32LittleEndian(r[72..], dosTime);
-            string source = m.SourceField.Length > 63 ? m.SourceField[^63..] : m.SourceField;
-            Encoding.Latin1.GetBytes(source.Select(c => c > 255 ? '?' : c).ToArray(), r[76..140]);
+            // Never shortened or altered: a partial path could name another source, which an edit would then change.
+            if (!FitsSourceField(m.SourceField)) throw new InvalidDataException($"The source path of archive member '{m.Name}' ({m.SourceField}) does not fit the {MaximumSourceField} Latin-1 characters a member records.");
+            Encoding.Latin1.GetBytes(m.SourceField, r[76..140]);
             BinaryPrimitives.WriteUInt64LittleEndian(r[140..], fileTime);
         }
         BinaryPrimitives.WriteUInt32LittleEndian(span[^8..], 1); BinaryPrimitives.WriteUInt32LittleEndian(span[^4..], (uint)members.Count);

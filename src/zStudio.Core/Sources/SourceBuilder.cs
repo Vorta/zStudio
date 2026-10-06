@@ -258,7 +258,10 @@ public static partial class SourceBuilder
     private static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, string? profileName)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        var profile = await Task.Run(() => BuildProfiles.Find(root, profileName), token);
+        // The run's view of the project starts before planning: the profile is read through it, so a change to its file is
+        // refused like a changed source, and the plan is made again before publishing (see CheckPlanUnchanged).
+        Snapshot snapshot = new(root);
+        var profile = await Task.Run(() => FindProfile(root, profileName, snapshot, token), token);
         var all = await Task.Run(() => Plan(root, null, profile), token);
         var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException($"This source project cannot build {o}.")).Distinct().ToArray();
@@ -276,7 +279,7 @@ public static partial class SourceBuilder
         }
         try
         {
-            Snapshot snapshot = new(root); DateTime now = DateTime.UtcNow; List<SourceExportResult> results = [];
+            DateTime now = DateTime.UtcNow; List<SourceExportResult> results = [];
             Dictionary<string, Animation.AnimationPackage> packages = new(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < selected.Count; i++)
             {
@@ -310,6 +313,7 @@ public static partial class SourceBuilder
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's texture packs could not be listed ({ex.Message}); a pack left there by another export may be loaded instead of the exported ones."); }
             progress?.Report(new(selected.Count, selected.Count, destination == null ? "Checked" : "Publishing"));
+            await Task.Run(() => CheckPlanUnchanged(root, profileName, profile, outputs == null ? null : selected, all, snapshot, token), token);
             snapshot.CheckUnchanged(token);
             if (staging != null && destination != null)
             {
@@ -321,6 +325,36 @@ public static partial class SourceBuilder
         }
         // A staging folder another program holds must not replace the export's own result or error.
         finally { try { if (staging != null && Directory.Exists(staging)) Directory.Delete(staging, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+    }
+
+    /// <summary>The build profile (the project's default when <paramref name="name"/> is null), its files read through the run's snapshot.</summary>
+    private static BuildProfile FindProfile(string root, string? name, Snapshot snapshot, CancellationToken token) => BuildProfiles.Find(root, name, path =>
+    {
+        // As a profile is read without a snapshot: a file over 64 KB is refused before it is read.
+        if (new FileInfo(SourceProject.Resolve(root, path)).Length > BuildProfiles.MaximumFileBytes) throw new InvalidDataException($"{path} is larger than 64 KB.");
+        return snapshot.Read(path, token);
+    });
+    /// <summary>
+    /// Refuses outputs whose plan the project no longer gives, because it changed after it was planned: the plan is made again,
+    /// as the run made it, and must name the same profile and give each built output the same inputs, pack and notes (with no outputs
+    /// selected, the same outputs, so one added meanwhile is not left out). Planning lists the source folders and reads the
+    /// multiplayer load scripts and the mission textures' PNG headers, which the run's snapshot does not hold; the profile
+    /// files it reads are in the snapshot, so a changed one fails here or in <see cref="Snapshot.CheckUnchanged"/>.
+    /// </summary>
+    private static void CheckPlanUnchanged(string root, string? profileName, BuildProfile profile, IReadOnlyList<SourceOutputPlan>? selected, IReadOnlyList<SourceOutputPlan> planned, Snapshot snapshot, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        BuildProfile again; IReadOnlyList<SourceOutputPlan> now;
+        try { again = FindProfile(root, profileName, snapshot, token); now = Plan(root, null, again); }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        { throw new InvalidDataException($"The project changed while exporting; nothing was written. Export again. ({ex.Message})", ex); }
+        bool same = again.Name == profile.Name && again.Source == profile.Source && (selected == null
+            ? now.Count == planned.Count && planned.Zip(now).All(p => Same(p.First, p.Second))
+            : selected.All(p => now.FirstOrDefault(n => n.Path.Equals(p.Path, StringComparison.OrdinalIgnoreCase)) is { } n && Same(p, n)));
+        if (!same) throw new InvalidDataException("The project's sources changed while exporting (files were added, removed or renamed, a texture changed size, or the build profile changed); nothing was written. Export again.");
+
+        static bool Same(SourceOutputPlan a, SourceOutputPlan b) => a.Path == b.Path && a.Family == b.Family && a.Pack == b.Pack && a.Automatic == b.Automatic
+            && a.Inputs.SequenceEqual(b.Inputs, StringComparer.Ordinal) && a.Notes.SequenceEqual(b.Notes, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -501,7 +535,10 @@ public static partial class SourceBuilder
         _ => throw new InvalidDataException($"Unknown output family '{plan.Family}'.")
     };
 
-    /// <summary>The source-path field carries the project-relative source, so reconstructing an exported archive restores its folders.</summary>
+    /// <summary>
+    /// The source-path field carries the project-relative source (<c>data\m1\zrdr\ai.zrd</c>), which placement edits of a
+    /// built world write back to (see <see cref="SourceResourceEdits"/>).
+    /// </summary>
     internal static string SourceField(string relative) => relative.Replace('/', '\\');
 
     private static Built BuildArchive(SourceOutputPlan plan, Snapshot snapshot, DateTime now, CancellationToken token)
@@ -514,6 +551,11 @@ public static partial class SourceBuilder
             token.ThrowIfCancellationRequested(); string name = Path.GetFileName(input);
             if (names.TryGetValue(name, out string? other)) throw new InvalidDataException($"{other} and {input} would both become archive member {name}; the engine finds members by name.");
             names[name] = input;
+            // The member records its whole source path, which edits made in a built world are written back to.
+            string field = SourceField(input);
+            if (!ArchiveSources.FitsSourceField(field))
+                throw new InvalidDataException($"{input}: an archive member records its source path in at most {ArchiveSources.MaximumSourceField} Latin-1 characters, and edits made in a built world find the source by it; "
+                    + (field.Length > ArchiveSources.MaximumSourceField ? $"this path has {field.Length}. Move the file to a folder with a shorter path." : "this path has characters outside Latin-1. Rename the file or its folders."));
             byte[] bytes = snapshot.Read(input, token);
             byte[] payload;
             try
@@ -525,7 +567,7 @@ public static partial class SourceBuilder
                 payload = ZrdWriter.Write(tree, token);
             }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
-            entries.Add(new(name, SourceField(input), payload));
+            entries.Add(new(name, field, payload));
         }
         return new(ArchiveSources.Write(entries, now), entries.Count, []);
     }
@@ -763,7 +805,10 @@ public static partial class SourceBuilder
                 else { _ = WaveDecoder.Read(source, token); payload = source; if (bank == 0) warnings.Add($"{name} has no format in sounds.zrd; every bank uses the source format."); }
             }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
-            entries.Add(new(name, SourceField(input), payload));
+            // Nothing reads a sound's source field (the game finds sounds by name, and the shipped banks hold no paths there),
+            // so a path the field cannot hold whole is left out rather than refused or shortened.
+            string field = SourceField(input);
+            entries.Add(new(name, ArchiveSources.FitsSourceField(field) ? field : "", payload));
         }
         return new(ArchiveSources.Write(entries, now), entries.Count, warnings);
     }
