@@ -35,14 +35,22 @@
     - A Blender checkout removes its folder on failure and refuses while a rebuild runs.
     - GUI parent-by-name accepts part copies.
     - Export notes put stale texture packs first.
-- **Open (minor, recorded locally):**
-  - The automatic pack's size estimate ignores alpha planes.
-  - A Cancel pressed after reconstruction finished still opens the project.
-  - Pathological crafted worlds can make the loader emulation and tree comparison slow.
-  - A move of a node several parents share can be taken back when a script finds it by name; this has no shipped trigger.
-  - Properties' parent-by-name checks a level-of-detail node against the first copy of its part.
+- **Then every open minor finding was fixed (2026-10-06, before the PR to main):**
+  - The automatic pack holds at most its named size, counting alpha planes and textures from other folders.
+  - A late Cancel in Initialize no longer opens the project, and a stopped reconstruction removes only what it wrote.
+  - The loader emulation, inference and Compare worlds are bounded and cancellable on crafted worlds.
+  - Source-world edits change every copy of an instance, keep instance and inherited zones, move script objects through their scripts, set values that shared scripts set for this mission only, and check other missions' loads of a shared model.
+  - Name lookups follow the engine for copied and rebound animations, the entry's own lights and sounds, and AI vehicles.
+  - Blender round trips keep zones and accept moved groups.
+  - MCP path arguments must be full paths, and the 1998 demo worlds' placements are read-only.
+- **A final review cycle of those fixes** found one serious bug, script objects moved under a far parent landing 360 units off, plus minor findings; all are fixed with regressions.
+- **Kept by decision:** Initialize only from the welcome screen; projects below links are refused.
+- **Remaining limits:**
+  - Objects that a script other missions also run created cannot be deleted or moved to another parent from one mission.
+  - Three inference limits are reachable only with crafted, non-original files.
 - **Checks:**
-  - 1,075 tests with the 1999 and MechWarrior 3 corpora, plus the 1998 source-project corpus test.
+  - 1,170 tests with the 1999 and MechWarrior 3 corpora, plus the 1998 source-project and terrain-conversion corpus tests.
+  - Reconstruction of both releases is byte-identical before and after the fixes.
   - Each fix has a regression that fails when the fix is removed (mutation-checked).
 
 ## Models shared as the original loader shared them (2026-10-05, branch feat/world-editor)

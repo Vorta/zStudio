@@ -171,7 +171,7 @@ public sealed class SourceObjectReviewFixTests
         using SourceWorldFixture fixture = new();
         foreach (string mission in new[] { "m1", "m2" }) Replace(fixture, $"gamegen/{mission}.gs", "NewWorld %worldName%", "source world.gw");
         fixture.Write("gamegen/world.gw", string.Join("\r\n",
-            "NewWorld %worldName%", "WorldSetFogColor 0.1 0.2 0.3", "NewObject3D marker", "Object3DTranslate 1.0 2.0 3.0", "SetLandmark off", "FindNode %worldName%", "AddChild marker",
+            "NewWorld %worldName%", "WorldSetFogColor 0.1 0.2 0.3", "NewObject3D marker", "Object3DTranslate 1.0 2.0 3.0", "Object3DScale 2.0 2.0 2.0", "SetLandmark off", "FindNode %worldName%", "AddChild marker",
             "SetModelDirectory ..\\data\\m2\\models\\bft", "LoadGameGen tank.flt tmpl", "SetIntersectSurface off", "FindSubNode hull", "SetLandmark on", ""));
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace);
@@ -213,6 +213,19 @@ public sealed class SourceObjectReviewFixTests
         Assert.Equal(0u, other.Nodes.Single(n => n.Name == "marker").Flags & 0x80);
         Assert.Equal(new Vector3(1, 2, 3), ObjectTransform.Of(other.Nodes.Single(n => n.Name == "marker")).Position);
         Assert.Equal(0.1f, other.Nodes.Single(n => n.Class == WorldNodeClass.World).PayloadFloat(0x14));
+        // Edited again, the values set for this mission change where they are, with no further FindNode; m2 still keeps its own.
+        (build, world) = await BuildAsync(fixture, workspace);
+        marker = world.Nodes.Single(n => n.Name == "marker"); shown = ObjectTransform.Of(marker);
+        int blocks = Text(workspace, "gamegen/m1.gs").Split("FindNode marker").Length;
+        Apply(workspace, SourceObjectEdits.PlanTransform(workspace, "marker", Origin(build, world, marker), build.Executions, shown with { Position = new(7, 2, 3), RotationDegrees = new(0, 45, 0) }, Token, "m1", shown,
+            null, world, build.WriteInstruction));
+        Assert.Contains("FindNode marker\r\nObject3DTranslate 7.0 2.0 3.0\r\nObject3DRotate 0.0 45.0 0.0\r\n", Text(workspace, "gamegen/m1.gs"));
+        Assert.Equal(blocks, Text(workspace, "gamegen/m1.gs").Split("FindNode marker").Length);
+        (_, world) = await BuildAsync(fixture, workspace);
+        placed = ObjectTransform.Of(world.Nodes.Single(n => n.Name == "marker"));
+        Assert.Equal((new Vector3(7, 2, 3), new Vector3(0, 45, 0)), (placed.Position, placed.RotationDegrees));
+        (_, other) = await BuildAsync(fixture, workspace, "m2");
+        Assert.Equal(new Vector3(1, 2, 3), ObjectTransform.Of(other.Nodes.Single(n => n.Name == "marker")).Position);
 
         // FindNode finds the newest node of a name: with a second hull in m1 the line could not find this one.
         for (int i = 0; i < 5; i++) workspace.Undo();
@@ -222,6 +235,26 @@ public sealed class SourceObjectReviewFixTests
         Assert.Contains("2 nodes are named hull", Message(() => SourceObjectEdits.PlanFlag(workspace, "hull", first, build.Executions, 0x80, false, Token, "m1", null, world, build.WriteInstruction)));
         // An object a shared script made has no exact deletion in one mission.
         Assert.Contains("no line of this mission deletes it exactly", Message(() => SourceObjectEdits.PlanDelete(Target(workspace, build, world, "marker"), Token)));
+    }
+
+    [Fact]
+    public async Task BlenderUpdatesWarnWhereAScriptTurnsANodeThatGainsATransform()
+    {
+        // m1 loads the tank m2 loads; m2's script turns the hull of its load. An export giving the hull a transform of its own
+        // would stop that turn in m2: the update says so (it is not refused: a Blender update replaces the model whole).
+        using SourceWorldFixture fixture = new();
+        Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank", "LoadGameGen tank.flt tank\r\nFindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0");
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_a", new(100, 0, -50)), []), Token);
+        var (build, world) = await BuildAsync(fixture, workspace);
+        string model = Origin(build, world, "hull").ModelFile!;
+        byte[] before = workspace.Read(model, Token)!;
+        var json = JsonNode.Parse(before)!;
+        foreach (var node in json["nodes"]!.AsArray().OfType<JsonObject>().Where(n => n["name"]?.GetValue<string>() == "hull")) node["rotation"] = new JsonArray(0f, 0.38268343f, 0f, 0.9238795f);
+        var notes = SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, Encoding.UTF8.GetBytes(json.ToJsonString()), build.Provenance.Values, Token);
+        Assert.Contains("hull gains a transform of its own in the export, so gamegen/m2.gs line 16 (Object3DRotate, where m2 loads the file) stops turning or scaling it.", notes);
+        // An export that keeps every node's transform as it was warns about nothing.
+        Assert.Empty(SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, before, build.Provenance.Values, Token));
     }
 
     [Fact]
@@ -244,8 +277,11 @@ public sealed class SourceObjectReviewFixTests
         Replace(fixture, "gamegen/m2.gs", "FindSubNode hull\r\nObject3DRotate 0.0 45.0 0.0", "FindNode hull\r\nObject3DScale 2.0 2.0 2.0");
         Assert.Contains("(Object3DScale) may set the transform of hull", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
         // A load's root found by its name, then the hull below it, also once renamed.
-        Replace(fixture, "gamegen/m2.gs", "FindNode hull\r\nObject3DScale 2.0 2.0 2.0", "FindNode tank\r\nFindSubNode hull\r\nNodeSetDescription hull_1\r\nFindNode tank\r\nFindSubNode hull_1\r\nObject3DTranslate 1.0 0.0 0.0");
-        Assert.Contains("gamegen/m2.gs line 20 (Object3DTranslate) sets the transform", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
+        Replace(fixture, "gamegen/m2.gs", "FindNode hull\r\nObject3DScale 2.0 2.0 2.0", "FindNode tank\r\nFindSubNode hull\r\nNodeSetDescription hull_1\r\nFindNode tank\r\nFindSubNode hull_1\r\nObject3DScale 1.5 1.5 1.5");
+        Assert.Contains("gamegen/m2.gs line 20 (Object3DScale) sets the transform", Plan(shown with { RotationDegrees = new(0, 30, 0) }));
+        // A translation there is no reason: it replaces the file's translation whatever the file holds.
+        Replace(fixture, "gamegen/m2.gs", "FindSubNode hull_1\r\nObject3DScale 1.5 1.5 1.5", "FindSubNode hull_1\r\nObject3DTranslate 1.0 0.0 0.0");
+        Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "hull", hull, build.Executions, shown with { RotationDegrees = new(0, 30, 0) }, Token, "m1", shown, SourceObjectEdits.CopiesOf(hull, build.Provenance.Values)).Changes);
         // Through a file that references the tank.
         fixture.Write("data/m2/models/bft/wrapper.gltf", """{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"wrap","extras":{"recoil":{"ref":"tank.gltf"}}}]}""");
         Replace(fixture, "gamegen/m2.gs", "LoadGameGen tank.flt tank\r\nFindNode tank\r\nFindSubNode hull\r\nNodeSetDescription hull_1\r\nFindNode tank\r\nFindSubNode hull_1\r\nObject3DTranslate 1.0 0.0 0.0",

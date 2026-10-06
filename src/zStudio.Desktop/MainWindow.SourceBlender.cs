@@ -56,8 +56,18 @@ public partial class MainWindow
         try
         {
             checkout = SourceBlender.Find(session.Root, checkoutId);
-            var workspace = session.Workspace;
-            plan = await Task.Run(() => SourceBlender.PlanUpdate(workspace, checkout, export, force, token), token);
+            var workspace = session.Workspace; string mission = session.Mission;
+            var provenance = doc.SourceBuild?.Provenance.Values.ToArray() ?? [];
+            plan = await Task.Run(() =>
+            {
+                var planned = SourceBlender.PlanUpdate(workspace, checkout, export, force, token);
+                // Scripts that turn or scale a node whose own transform the export adds or removes, here or in other missions.
+                if (planned.Changes.FirstOrDefault(c => c.Relative.Equals(checkout.Model, StringComparison.OrdinalIgnoreCase)) is { Content: { } content }
+                    && workspace.Read(checkout.Model, token) is { } current
+                    && SourceObjectEdits.ScriptTransformsReached(workspace, mission, checkout.Model, current, content, provenance, token) is { Count: > 0 } reached)
+                    planned = planned with { Notes = [.. planned.Notes, .. reached] };
+                return planned;
+            }, token);
         }
         catch (BlenderConflictException ex) { throw new StudioCommandException("conflict", ex.Message); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }

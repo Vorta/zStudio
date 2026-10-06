@@ -162,12 +162,12 @@ public static class SourceObjectEdits
         // Whole instructions setting the changed values (the others as the build used them), for this mission's world script:
         // each sets its three values outright (Object3DTranslate also over an authored matrix's translation), so the last
         // one decides them.
-        List<IReadOnlyList<string>> Lines(bool translateOnly)
+        List<IReadOnlyList<string>> Lines(bool translateOnly, Func<string, bool>? skip = null)
         {
             List<IReadOnlyList<string>> lines = [];
             void Add(bool changes, string command, Vector3 value, Vector3 unset, Vector3? shown)
             {
-                if (!changes) return;
+                if (!changes || skip?.Invoke(command) == true) return;
                 var (changed, built) = Compare(origin.Writers.GetValueOrDefault(command), value, unset, shown);
                 if (changed.Any(c => c)) lines.Add([command, .. Enumerable.Range(0, 3).Select(i => Number(changed[i] ? value[i] : built[i]))]);
             }
@@ -186,12 +186,17 @@ public static class SourceObjectEdits
             // The scripts place the object: change its transform instructions, adding those it lacks after the last one (or after the
             // instruction that created the object, which leaves it current).
             var anchor = writers.OrderBy(w => w.Line).LastOrDefault() ?? origin.Created ?? throw new InvalidDataException($"{nodeName} was neither loaded from a model nor created by a script instruction.");
-            // The scripts the edit would change: the instruction that set each changed value, or the one a new line follows.
-            List<string> touched = [];
-            if (position) touched.Add(origin.Writers.GetValueOrDefault("Object3DTranslate")?.Script ?? anchor.Script);
-            if (rotation) touched.Add(origin.Writers.GetValueOrDefault("Object3DRotate")?.Script ?? anchor.Script);
-            if (scale) touched.Add(origin.Writers.GetValueOrDefault("Object3DScale")?.Script ?? anchor.Script);
-            if (InThisMission(workspace, nodeName, label, touched, Lines(translateOnly: false), executions, token, mission, world, write) is { } mine) return mine;
+            // When a script other missions run sets part of the transform (or holds the line new commands would follow), the
+            // values change in this mission only: those this mission's world script already sets (a value set for this mission
+            // earlier among them) change there in place, the others are set before the world is written.
+            string? own = mission == null ? null : SourceBuilder.WorldScript(mission);
+            bool Here(string command) => own != null && origin.Writers.GetValueOrDefault(command)?.Script.Equals(own, StringComparison.OrdinalIgnoreCase) == true;
+            if (InThisMission(workspace, nodeName, label, writers.Select(w => w.Script).Append(anchor.Script), Lines(translateOnly: false, Here), executions, token, mission, world, write, edit =>
+                {
+                    if (position && Here("Object3DTranslate")) edit.Set(origin.Writers["Object3DTranslate"], "Object3DTranslate", requested.Position, Vector3.Zero, origin.Writers["Object3DTranslate"], current?.Position);
+                    if (rotation && Here("Object3DRotate")) edit.Set(origin.Writers["Object3DRotate"], "Object3DRotate", requested.RotationDegrees, Vector3.Zero, origin.Writers["Object3DRotate"], current?.RotationDegrees);
+                    if (scale && Here("Object3DScale")) edit.Set(origin.Writers["Object3DScale"], "Object3DScale", requested.Scale, Vector3.One, origin.Writers["Object3DScale"], current?.Scale);
+                }) is { } mine) return mine;
             if (writers.Select(w => w.Script).Append(anchor.Script).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
                 throw new InvalidDataException($"{nodeName}'s transform is set in several scripts; edit them in the scripts directly.");
             ScriptEdit edit = new(workspace, anchor.Script, executions, token, mission);
@@ -346,7 +351,7 @@ public static class SourceObjectEdits
     /// this mission. FindNode finds the newest node of a name, so the name must be the only one in the world. Null when no
     /// such script is shared (the edit changes the scripts as usual); refused when one is but the lines cannot be placed.
     /// </summary>
-    private static SourceEditPlan? InThisMission(SourceWorkspace workspace, string nodeName, string label, IEnumerable<string> scripts, IReadOnlyList<IReadOnlyList<string>> lines, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write)
+    private static SourceEditPlan? InThisMission(SourceWorkspace workspace, string nodeName, string label, IEnumerable<string> scripts, IReadOnlyList<IReadOnlyList<string>> lines, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write, Action<ScriptEdit>? inPlace = null)
     {
         if (mission == null || world == null) return null;
         string own = SourceBuilder.WorldScript(mission);
@@ -361,14 +366,16 @@ public static class SourceObjectEdits
         if (shared == null) return null;
         string missions = $"{string.Join(", ", others.Take(6))}{(others.Length > 6 ? $" and {others.Length - 6} more" : "")}";
         // The lines must follow everything the build ran before it wrote the world: this mission's script must write it.
-        if (write != null && !write.Script.Equals(own, StringComparison.OrdinalIgnoreCase))
+        if (lines.Count > 0 && write != null && !write.Script.Equals(own, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"{shared} also runs in {missions}, and the world is written by {write.Script}, not {own}, so no line of this mission can set {nodeName}'s value after it. Edit it in the scripts directly.");
         int count = nodeName.Length == 0 ? 0 : world.Nodes.Count(n => n.Name == nodeName);
-        if (count != 1)
+        if (lines.Count > 0 && count != 1)
             throw new InvalidDataException($"{shared} also runs in {missions}, so the value would be set in {own} before the world is written, where FindNode finds the node by name; {(nodeName.Length == 0 ? "the node has no name" : $"{count} nodes are named {nodeName}")}. Edit it in the scripts directly.");
-        if (lines.Count == 0) return new(label, [], nodeName, []);
+        if (lines.Count == 0 && inPlace == null) return new(label, [], nodeName, []);
         ScriptEdit end = new(workspace, own, executions, token, mission);
-        end.InsertBeforeWrite([["FindNode", Token(nodeName)], .. lines], write);
+        // Values this mission's world script already sets change where they are (see inPlace).
+        inPlace?.Invoke(end);
+        if (lines.Count > 0) end.InsertBeforeWrite([["FindNode", Token(nodeName)], .. lines], write);
         return new(label, end.Changes(), $"{own}, before the world is written",
             [$"{shared} also runs in {missions}, so {nodeName}'s value is set before {own} writes the world, after that script ran: it changes in this mission only."]);
     }
@@ -944,6 +951,36 @@ public static class SourceObjectEdits
         origin.ModelFile == null ? [origin]
             : all.Where(p => p.ModelNode == origin.ModelNode && string.Equals(p.ModelFile, origin.ModelFile, StringComparison.OrdinalIgnoreCase));
     /// <summary>
+    /// Warnings for a model file's new content (a Blender update replaces it whole): a node that gains or loses a transform
+    /// of its own while a script rotates or scales it, in this world or where another mission loads the file, makes that
+    /// script's rotation and scale stop or start applying. Nodes are matched by name and order among the same name, as the
+    /// file's other nodes are by animations and placements; at most 8 warnings.
+    /// </summary>
+    public static IReadOnlyList<string> ScriptTransformsReached(SourceWorkspace workspace, string mission, string model, byte[] before, byte[] after, IEnumerable<WorldNodeProvenance> provenance, CancellationToken token = default)
+    {
+        static List<(string Name, bool Authored)> Nodes(byte[] bytes) =>
+            JsonNode.Parse(bytes) is JsonObject { } root && root["nodes"] is JsonArray nodes
+                ? [.. nodes.OfType<JsonObject>().Select(n => (n["name"]?.GetValue<string>() ?? "", !GltfNodeEdits.Local(n).IsIdentity))] : [];
+        var was = Nodes(before); var now = Nodes(after);
+        List<string> notes = [];
+        foreach (var group in was.Select((n, i) => (n, i)).GroupBy(p => p.n.Name, StringComparer.Ordinal))
+        {
+            var later = now.Where(n => n.Name == group.Key).ToList(); int occurrence = 0;
+            foreach (var (node, index) in group)
+            {
+                token.ThrowIfCancellationRequested();
+                if (occurrence >= later.Count || later[occurrence++].Authored == node.Authored || node.Name.Length == 0) continue;
+                string change = node.Authored ? "loses its transform" : "gains a transform of its own";
+                var origins = provenance.Where(p => p.ModelNode == index && string.Equals(p.ModelFile, model, StringComparison.OrdinalIgnoreCase)).ToList();
+                var here = origins.SelectMany(o => new[] { "Object3DRotate", "Object3DScale" }.Where(o.Writers.ContainsKey).Select(c => o.Writers[c])).FirstOrDefault();
+                string? reason = here != null ? $"{here.Script} line {here.Line} ({here.Command})"
+                    : origins.FirstOrDefault() is { } origin && TransformElsewhere(workspace, mission, origin, node.Name, token) is { } elsewhere ? $"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}, where {elsewhere.Mission} loads the file)" : null;
+                if (reason != null && notes.Count < 8) notes.Add($"{node.Name} {change} in the export, so {reason} {(node.Authored ? "starts" : "stops")} turning or scaling it.");
+            }
+        }
+        return notes;
+    }
+    /// <summary>
     /// An instruction another mission's build runs that sets the transform of <paramref name="origin"/>'s glTF node where
     /// that mission loads the node's file (itself, or a file that references it): a change of the file's node reaches that
     /// load too, so the script's rotation or scale would start or stop applying there. <see cref="CopiesOf"/> sees only this
@@ -1067,7 +1104,9 @@ public static class SourceObjectEdits
                         case "NodeSetDescription":
                             if (at.Node) targets.Add(A(0)); else if (at.Root && at.Load >= 0) roots[A(0)] = at.Load;
                             break;
-                        case "Object3DTranslate" or "Object3DRotate" or "Object3DScale":
+                        // A script translation replaces the file's whatever the file holds; rotation and scale apply only while
+                        // the file's node has no transform of its own, so an edit of the file makes them start or stop applying.
+                        case "Object3DRotate" or "Object3DScale":
                             if (at.Node && !own.Contains((relative.ToLowerInvariant(), line.Number)) && (at.Load >= 0 ? LoadHolds(at.Load) : Enumerable.Range(0, at.Made).Any(LoadHolds)))
                                 hit = (new SourceInstruction(relative, line.Number, command, raw, args), at.Load >= 0);
                             break;
