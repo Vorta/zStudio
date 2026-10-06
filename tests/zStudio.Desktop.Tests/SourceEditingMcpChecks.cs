@@ -41,7 +41,7 @@ internal static class SourceEditingMcpChecks
             for (int wait = 0; wait < 500 && !main.ViewModel.Problems.Any(p => p.Message.Contains("interrupted save", StringComparison.Ordinal)); wait++) await Task.Delay(10, token);
             Assert.Contains(main.ViewModel.Problems, p => p.Message.Contains("interrupted save", StringComparison.Ordinal));
             string crashId = (await Call("source_recovery", new()))["saves"]![0]!["id"]!.GetValue<string>();
-            await Call("source_recovery_resolve", new() { ["save"] = crashId, ["action"] = "complete" });
+            await Job("source_recovery_resolve", new() { ["save"] = crashId, ["action"] = "complete" });
             Assert.DoesNotContain(main.ViewModel.Problems, p => p.Message.Contains("interrupted save", StringComparison.Ordinal));
             var doc = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
             await Preview();
@@ -169,7 +169,7 @@ internal static class SourceEditingMcpChecks
             blended = Document((await Job("source_world_object_edit", new() { ["document"] = Id(reparented), ["revision"] = reparented.Revision, ["node"] = copyNode, ["action"] = "delete" }))["document"]!);
             Assert.Single(JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf")!)!["nodes"]!.AsArray());
             // Unsaved edits of other files do not block resolving an interrupted save; an unknown save is refused as such.
-            Assert.Contains("invalid_argument", (await Call("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, error: true)).GetValue<string>());
+            Assert.Equal("invalid_argument", (await Job("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, "failed"))["code"]!.GetValue<string>());
 
             // One save writes every changed file of the project together, and leaves no journal behind.
             var saved = await Job("save_document", new() { ["document"] = Id(blended), ["revision"] = blended.Revision });
@@ -181,7 +181,7 @@ internal static class SourceEditingMcpChecks
             Assert.Empty(new SourcePublisher(fixture.Project).FindInterrupted(token));
             // No save was interrupted; resolving an unknown one is refused.
             Assert.Equal(0, (await Call("source_recovery", new()))["saveCount"]!.GetValue<int>());
-            Assert.Contains("invalid_argument", (await Call("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, error: true)).GetValue<string>());
+            Assert.Equal("invalid_argument", (await Job("source_recovery_resolve", new() { ["save"] = "missing", ["action"] = "roll_back" }, "failed"))["code"]!.GetValue<string>());
 
             // Two worlds of one project: an undo in m1 takes back m2's edit, so m2's build is out of date until it is reloaded.
             var second = Document((await Job("source_world_open", new() { ["mission"] = "m2" }))["document"]!);

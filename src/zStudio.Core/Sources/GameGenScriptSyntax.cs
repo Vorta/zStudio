@@ -22,8 +22,10 @@ public sealed class GameGenScriptSyntax
     public string Newline { get; }
     public IReadOnlyList<GameGenScriptLine> Lines { get; }
 
+    /// <remarks>A text past <see cref="GameGenScriptText.CheckBounds"/> is refused before its lines are made.</remarks>
     private GameGenScriptSyntax(string text)
     {
+        GameGenScriptText.CheckBounds(text);
         Text = text;
         int crlf = 0, lf = 0;
         List<GameGenScriptLine> lines = []; int start = 0, number = 0;
@@ -101,24 +103,13 @@ public sealed class GameGenScriptSyntax
         return Text[..line.Start] + "# " + Text[line.Start..];
     }
 
-    /// <summary>CZInterp::TokenizeLine (see <see cref="GameGenScriptText.TokenizeLine"/>), with each token's place in the text.</summary>
+    /// <summary>CZInterp::TokenizeLine (see <see cref="GameGenScriptText.TokenizeLine(string)"/>), with each token's place in the text.</summary>
     private static (IReadOnlyList<string>, IReadOnlyList<TextSpan>) Tokenize(string text, int start, int length)
     {
-        int end = start + length;
-        int comment = text.IndexOf('#', start, length); if (comment >= 0) end = comment;
+        // Blank and comment lines share empty lists.
+        if (GameGenScriptText.TokenizeLine(text, start, start + length, null, null) == 0) return ([], []);
         List<string> tokens = []; List<TextSpan> spans = [];
-        int cursor = start;
-        while (cursor < end && IsSpace(text[cursor])) cursor++;
-        while (true)
-        {
-            int separator = text.IndexOfAny(Separators, cursor, end - cursor);
-            if (separator < 0) break;
-            tokens.Add(text[cursor..separator]); spans.Add(new(cursor, separator - cursor));
-            cursor = separator + 1;
-            while (cursor < end && IsSpace(text[cursor])) cursor++;
-        }
-        if (cursor < end) { tokens.Add(text[cursor..end]); spans.Add(new(cursor, end - cursor)); }
+        GameGenScriptText.TokenizeLine(text, start, start + length, tokens, spans);
         return (tokens, spans);
-        static bool IsSpace(char c) => c is ' ' or '\t' or '\n' or '\v' or '\f' or '\r';
     }
 }

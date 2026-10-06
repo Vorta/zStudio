@@ -91,11 +91,26 @@ public sealed partial class SourcePublisher
             token.ThrowIfCancellationRequested();
             if (journal.RolledBack) continue;
             string folder = JournalPath(journal.Id);
-            var files = journal.Manifest.Files.Select((f, i) => new SourceRecoveryFile(f.Relative, State(f), File.Exists(HeldPath(folder, i)))).ToArray();
+            // Each state reads its file whole, and a journal may list 50,000 files.
+            var files = journal.Manifest.Files.Select((f, i) => { token.ThrowIfCancellationRequested(); return new SourceRecoveryFile(f.Relative, State(f), File.Exists(HeldPath(folder, i))); }).ToArray();
             DateTime created = journal.Manifest.CreatedUtc.Kind == DateTimeKind.Local ? journal.Manifest.CreatedUtc.ToUniversalTime() : DateTime.SpecifyKind(journal.Manifest.CreatedUtc, DateTimeKind.Utc);
             cases.Add(new(journal.Id, journal.Manifest.Description, created, journal.Committed, files));
         }
         return cases;
+    }
+
+    /// <summary>
+    /// The files an interrupted save involves, as its journal lists them (none when there is no such save, or when it was
+    /// rolled back and only its journal remains). Unlike <see cref="FindInterrupted"/>, no file is read. Takes the
+    /// publication lock briefly; nothing is changed.
+    /// </summary>
+    public IReadOnlyList<string> SaveFiles(string saveId)
+    {
+        if (!IsSaveId(saveId) || !Directory.Exists(SourceProject.Resolve(root, RecoveryFolder))) return [];
+        using FileStream gate = Lock();
+        if (!File.Exists(Path.Combine(JournalPath(saveId), ManifestName))) return [];
+        Journal journal = Load(saveId);
+        return journal.RolledBack ? [] : [.. journal.Manifest.Files.Select(f => f.Relative)];
     }
 
     private SourceRecoveryFileState State(JournalFile file)
@@ -111,6 +126,13 @@ public sealed partial class SourcePublisher
     /// conflicts and the journal stays until they are settled (or the save is abandoned). A committed save cannot be rolled
     /// back; completing or abandoning it only retires its journal.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="token"/> is observed between files, never while one is being changed. Canceled before any file
+    /// changed, it throws <see cref="OperationCanceledException"/> with no file changed; canceled later, the resolution stops
+    /// before the next file, as an interruption would, and throws one whose message names the files it changed (its inner
+    /// exception is the cancellation). Either way the journal records exactly what was done, the save still needs a
+    /// decision, and any action resolves it from there.
+    /// </remarks>
     public SourceRecoveryResult Resolve(string saveId, SourceRecoveryAction action, CancellationToken token = default)
     {
         if (!IsSaveId(saveId)) throw new ArgumentException($"'{saveId}' is not a save identity.", nameof(saveId));
@@ -124,14 +146,14 @@ public sealed partial class SourcePublisher
         return action switch
         {
             SourceRecoveryAction.RollBack when journal.Committed => throw new InvalidOperationException($"The save {saveId} was committed: its files are final and only its cleanup remains. Complete or abandon it instead."),
-            SourceRecoveryAction.RollBack => RollBack(journal),
+            SourceRecoveryAction.RollBack => RollBack(journal, token),
             SourceRecoveryAction.Complete when journal.Committed => Retire(saveId),
             SourceRecoveryAction.Complete => Complete(journal, token),
             _ => Abandon(journal),
         };
     }
 
-    private SourceRecoveryResult RollBack(Journal journal)
+    private SourceRecoveryResult RollBack(Journal journal, CancellationToken token)
     {
         string folder = JournalPath(journal.Id); var files = journal.Manifest.Files;
         List<string> changed = []; List<SourceRecoveryConflict> conflicts = [];
@@ -140,6 +162,7 @@ public sealed partial class SourcePublisher
             log.Append("rollback", -1);
             for (int i = files.Count - 1; i >= 0; i--)
             {
+                if (token.IsCancellationRequested) throw Canceled(journal.Id, changed, token);
                 JournalFile file = files[i];
                 bool moved = File.Exists(HeldPath(folder, i));
                 // Files the save never reached (no intent is recorded before a file is touched) keep whatever they have.
@@ -209,7 +232,11 @@ public sealed partial class SourcePublisher
         string folder = JournalPath(journal.Id), staging = StagingPath(journal.Id); var files = journal.Manifest.Files;
         // Decide first: nothing changes unless every file can be finished.
         List<SourceRecoveryConflict> conflicts = [];
-        for (int i = 0; i < files.Count; i++) if (Blocker(folder, files[i], i) is { } blocker) conflicts.Add(blocker);
+        for (int i = 0; i < files.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            if (Blocker(folder, files[i], i) is { } blocker) conflicts.Add(blocker);
+        }
         if (conflicts.Count > 0) return new([], conflicts, false);
         token.ThrowIfCancellationRequested();
         List<string> changed = [];
@@ -217,6 +244,7 @@ public sealed partial class SourcePublisher
         {
             for (int i = 0; i < files.Count; i++)
             {
+                if (token.IsCancellationRequested) throw Canceled(journal.Id, changed, token);
                 JournalFile file = files[i]; string path = SourceProject.Resolve(root, file.Relative), held = HeldPath(folder, i);
                 try
                 {
@@ -260,6 +288,13 @@ public sealed partial class SourcePublisher
         }
         return Retire(journal.Id, changed);
     }
+
+    /// <summary>
+    /// A resolution canceled between two files. With nothing changed, a plain cancellation; otherwise one that says which
+    /// files changed, since the journal (which recorded each step) leaves the save to be resolved again.
+    /// </summary>
+    private static OperationCanceledException Canceled(string id, IReadOnlyCollection<string> changed, CancellationToken token) => changed.Count == 0 ? new(token)
+        : new($"Resolving the interrupted save {id} was canceled after it changed {changed.Count:N0} file{(changed.Count == 1 ? "" : "s")} ({string.Join(", ", changed.Take(8))}{(changed.Count > 8 ? ", …" : "")}); its journal records them, and the save still needs a decision.", new OperationCanceledException(token), token);
 
     /// <summary>Why one file of a save cannot be completed, or null when it can.</summary>
     private SourceRecoveryConflict? Blocker(string journal, JournalFile file, int index)

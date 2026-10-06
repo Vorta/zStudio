@@ -197,7 +197,7 @@ If zStudio or the computer stops in the middle of a save, opening the project re
 - **Complete**, which finishes the save;
 - **Keep files**, which leaves them as they are and moves the journal to `zstudio\recovery\abandoned`.
 
-A file another program changed since is left alone. Until the decision, the project cannot be saved. MCP: `zstudio_source_recovery`, `zstudio_source_recovery_resolve`.
+A file another program changed since is left alone. Until the decision, the project cannot be saved. The decision is carried out in the background while the workspace waits, as during a save; closing zStudio stops it between two files, and the save then still needs a decision. MCP: `zstudio_source_recovery`, `zstudio_source_recovery_resolve`.
 
 ### The zstudio folder
 
@@ -407,7 +407,7 @@ A key's channels start a segment that runs to the next key; the last key's frame
 
 ### Gamegen scripts (`.gs`, `.gw`)
 
-Scripts use the engine's own tokenizer (`CZInterp::TokenizeLine`, retail 0x4C13C0): `#` ends a line, tokens are separated by comma, space, tab or newline, and ASCII whitespace after a separator is skipped. Only a separator directly after another produces an empty token, so zStudio writes empty tokens with commas (`a,,b`; a trailing empty token needs `a,,`).
+Scripts use the engine's own tokenizer (`CZInterp::TokenizeLine`, retail 0x4C13C0): `#` ends a line, tokens are separated by comma, space, tab or newline, and ASCII whitespace after a separator is skipped. Only a separator directly after another produces an empty token, so zStudio writes empty tokens with commas (`a,,b`; a trailing empty token needs `a,,`). A script of more than 1,000,000 lines (as many as the instructions a build runs) or 4,000,000 tokens is refused before its lines are read; the retail scripts have at most a few hundred lines.
 
 ## Keep sources away from a retail install
 

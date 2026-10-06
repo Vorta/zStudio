@@ -694,6 +694,15 @@ public partial class MainWindow : Window
         // A canceled close never reaches this irreversible lifetime boundary.
         allowClose = true; automationCloseRequested = false; IsEnabled = false;
         shutdown.Cancel(); operation?.Cancel();
+        // An interrupted save being resolved stops between two files, so the files and its journal agree when the process ends.
+        if (!sourceRecoveryWork.IsCompleted)
+        {
+            e.Cancel = true; resolvingClose = true;
+            await Dispatcher.Yield(DispatcherPriority.Normal);
+            try { await sourceRecoveryWork.ContinueWith(static _ => { }, TaskScheduler.Default); }
+            finally { resolvingClose = false; }
+            Close(); return;
+        }
         if (mcpHost != null || mcpStopTask is { IsCompleted: false } || automationOperations.Values.Any(j => !j.Work.IsCompleted))
         {
             e.Cancel = true; resolvingClose = true;

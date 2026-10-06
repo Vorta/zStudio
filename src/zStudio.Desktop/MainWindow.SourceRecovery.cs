@@ -25,7 +25,7 @@ public partial class MainWindow
         ViewModel.Status = found == 0 ? "No save of this source project was interrupted." : found == -1 ? "The project's interrupted saves could not be checked; Problems says why." : ViewModel.Status;
     });
 
-    /// <summary>After a source project opens (or on request): report interrupted saves and offer to resolve them; returns how many there are, -1 when they could not be checked, or -2 when a newer check took over.</summary>
+    /// <summary>After a source project opens (or on request): report interrupted saves and offer to resolve them; returns how many there are, -1 when they could not be checked, or -2 when a newer check took over (or closing stopped it).</summary>
     /// <remarks>
     /// On opening, only saves that need a decision ask; a save that finished but was not cleaned up is reported in
     /// Problems, and <paramref name="everySave"/> (Tools → Resolve interrupted save) asks about it too.
@@ -34,7 +34,9 @@ public partial class MainWindow
     {
         long generation = ++recoveryCheckGeneration;
         IReadOnlyList<SourceRecoveryCase> cases;
-        try { cases = await Task.Run(() => new SourcePublisher(root).FindInterrupted()); }
+        // Each file's state reads it whole; closing stops the check.
+        try { cases = await Task.Run(() => new SourcePublisher(root).FindInterrupted(shutdownToken), shutdownToken); }
+        catch (OperationCanceledException) { return -2; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return -2;
@@ -69,10 +71,15 @@ public partial class MainWindow
             var action = choice switch { "Roll back" => SourceRecoveryAction.RollBack, "Complete" => SourceRecoveryAction.Complete, _ => SourceRecoveryAction.Abandon };
             try
             {
-                var result = ResolveSourceRecovery(root, c.SaveId, action);
+                ViewModel.Status = "Resolving the interrupted save…";
+                var result = await ResolveSourceRecoveryAsync(root, c.SaveId, action, shutdownToken);
+                if (shutdownToken.IsCancellationRequested) break;
+                ViewModel.Status = result.Resolved ? "The interrupted save was resolved." : "The interrupted save still needs a decision.";
                 MessageBox.Show(this, result.Resolved ? $"Done: {result.Changed.Count} files changed." : $"Not finished: {string.Join("; ", result.Conflicts.Take(8).Select(x => $"{x.Relative}: {x.Reason}"))}", "Interrupted save", MessageBoxButton.OK, result.Resolved ? MessageBoxImage.Information : MessageBoxImage.Warning);
             }
             catch (StudioCommandException ex) { Report(ex); }
+            // Closing (or another root) canceled it between two files; what it changed is in Problems.
+            catch (OperationCanceledException) { break; }
         }
         return cases.Count;
         static string Describe(SourceRecoveryFileState state) => state switch
@@ -82,38 +89,58 @@ public partial class MainWindow
         };
     }
 
-    private SourceRecoveryResult ResolveSourceRecovery(string root, string saveId, SourceRecoveryAction action)
+    /// <summary>The resolution of an interrupted save running off the UI thread; closing waits for it (canceled, it stops between two files).</summary>
+    private Task sourceRecoveryWork = Task.CompletedTask;
+    /// <summary>Runs the resolution itself off the UI thread (tests hold it to cancel or close while it runs).</summary>
+    internal Func<string, string, SourceRecoveryAction, CancellationToken, SourceRecoveryResult> ResolveSourceSave { get; set; } = static (root, saveId, action, token) => new SourcePublisher(root).Resolve(saveId, action, token);
+
+    /// <summary>
+    /// Resolves an interrupted save (GUI and MCP). The journal is read and the files are hashed and moved off the UI thread
+    /// while the workspace is disabled as during a save, so no edit, save or other MCP change overtakes it; only the result
+    /// is published here. <paramref name="token"/>, a change of root and closing cancel it between two files: the journal
+    /// then records what it did, the save still needs a decision, and a cancellation after files changed says which (also
+    /// in Problems).
+    /// </summary>
+    private async Task<SourceRecoveryResult> ResolveSourceRecoveryAsync(string root, string saveId, SourceRecoveryAction action, CancellationToken token)
     {
-        if (sourceWorkspace is { } workspace && workspace.Root.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase))
-        {
-            if (sourceWorkspaceBusy) throw new StudioCommandException("busy", "Let the project's worlds finish rebuilding before resolving an interrupted save.");
-            // Only edits of the save's own files would be overtaken by resolving it.
-            IReadOnlyList<string> journal;
-            try { journal = new SourcePublisher(root).FindInterrupted().FirstOrDefault(c => c.SaveId == saveId)?.Files.Select(f => f.Relative).ToArray() ?? []; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { throw new StudioCommandException("io_failed", ex.Message); }
-            if (workspace.DirtyFiles.Intersect(journal, StringComparer.OrdinalIgnoreCase).ToArray() is { Length: > 0 } overlap)
-                throw new StudioCommandException("unsaved_changes", $"The project's unsaved edits change {string.Join(", ", overlap.Take(6))}, which the interrupted save also wrote; save or undo those edits first.");
-        }
+        var workspace = sourceWorkspace is { } open && open.Root.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), StringComparison.OrdinalIgnoreCase) ? open : null;
+        if (workspace != null && sourceWorkspaceBusy) throw new StudioCommandException("busy", "Let the project's worlds finish rebuilding before resolving an interrupted save.");
+        if (!sourceRecoveryWork.IsCompleted) throw new StudioCommandException("busy", "Another interrupted save is being resolved.");
+        using var exclusion = BeginDocumentSave();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken, shutdownToken);
         try
         {
-            var result = new SourcePublisher(root).Resolve(saveId, action);
+            if (workspace != null)
+            {
+                // Only edits of the save's own files would be overtaken by resolving it.
+                var journal = await Task.Run(() => new SourcePublisher(root).SaveFiles(saveId), cancellation.Token);
+                if (workspace.DirtyFiles.Intersect(journal, StringComparer.OrdinalIgnoreCase).ToArray() is { Length: > 0 } overlap)
+                    throw new StudioCommandException("unsaved_changes", $"The project's unsaved edits change {string.Join(", ", overlap.Take(6))}, which the interrupted save also wrote; save or undo those edits first.");
+            }
+            var resolve = ResolveSourceSave;
+            var work = Task.Run(() => resolve(root, saveId, action, cancellation.Token), cancellation.Token);
+            sourceRecoveryWork = work;
+            var result = await work;
             // A resolved save no longer needs a decision.
             if (result.Resolved)
                 foreach (var old in ViewModel.Problems.Where(p => p.Message.StartsWith(RecoveryProblem, StringComparison.Ordinal) && p.Message.Contains($"({saveId},", StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
             return result;
         }
+        // Canceled after it changed files: it stays a cancellation, and says what it left (MCP returns the same message).
+        catch (OperationCanceledException ex) when (ex.InnerException is OperationCanceledException) { if (!shutdownToken.IsCancellationRequested) ViewModel.AddProblem(Bounded(ex.Message), "Warning", root); throw; }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { throw new StudioCommandException("io_failed", ex.Message); }
-        finally { ViewModel.CheckExternalChanges(); }
+        finally { if (!shutdownToken.IsCancellationRequested) ViewModel.CheckExternalChanges(); }
     }
 
     private void RegisterSourceRecoveryCommands(StudioCommands r)
     {
-        Register(r, "source_recovery", "List the open source project's interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved.", false, [], _ =>
+        Register(r, "source_recovery", "List the open source project's interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved.", false, [], async (_, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             IReadOnlyList<SourceRecoveryCase> cases;
-            try { cases = new SourcePublisher(root).FindInterrupted(); }
+            // Each file's state reads it whole: off the UI thread, observing the request's cancellation.
+            try { cases = await Task.Run(() => new SourcePublisher(root).FindInterrupted(token), token); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { throw new StudioCommandException("io_failed", ex.Message); }
             return Result(new
             {
@@ -125,12 +152,14 @@ public partial class MainWindow
                 saveCount = cases.Count
             });
         });
-        Register(r, "source_recovery_resolve", "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. Refused while a world rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them).", true,
-            [P("save", "string", "Save id from zstudio_source_recovery.", true), P("action", "string", "What to do.", true, "roll_back", "complete", "abandon")], a =>
+        RegisterJob(r, "source_recovery_resolve", "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Refused while a world rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them).",
+            [P("save", "string", "Save id from zstudio_source_recovery.", true), P("action", "string", "What to do.", true, "roll_back", "complete", "abandon")], true, async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             var action = Text(a, "action") switch { "roll_back" => SourceRecoveryAction.RollBack, "complete" => SourceRecoveryAction.Complete, _ => SourceRecoveryAction.Abandon };
-            var result = ResolveSourceRecovery(root, Text(a, "save"), action);
+            var result = await ResolveSourceRecoveryAsync(root, Text(a, "save"), action, token);
+            // Resolved (or left with conflicts): the job completes with the result, even when a cancel arrives as it ends.
+            CommitRunningJob();
             return Result(new { resolved = result.Resolved, changed = result.Changed.Take(64).ToArray(), changedCount = result.Changed.Count, conflicts = result.Conflicts.Take(64).Select(c => new { file = c.Relative, reason = Bounded(c.Reason, 256) }).ToArray(), conflictCount = result.Conflicts.Count });
         });
     }

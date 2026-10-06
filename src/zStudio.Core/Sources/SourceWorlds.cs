@@ -121,6 +121,7 @@ public static partial class SourceWorlds
         string text = GameGenScriptText.Decode(script);
         var lines = additions.SelectMany(ScriptLines).ToArray();
         if (lines.Length == 0) return script.ToArray();
+        GameGenScriptText.CheckBounds(text);
         string newline = text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
         int start = 0;
         while (start <= text.Length)

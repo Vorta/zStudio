@@ -19,34 +19,88 @@ public static class GameGenScriptText
         if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"Source text larger than {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB is not supported.");
         return Encoding.Latin1.GetString(bytes);
     }
-    /// <summary>Instructions of a script file read in text mode (CRLF becomes LF); blank and comment lines are skipped.</summary>
+    /// <summary>
+    /// The most lines a script may have: as many as the instructions a build runs at most
+    /// (<see cref="Worlds.WorldAssembler.MaximumInstructions"/>). The retail scripts have at most a few hundred.
+    /// </summary>
+    public const int MaximumLines = Worlds.WorldAssembler.MaximumInstructions;
+    /// <summary>The most tokens a script may have: four for each line it may have (the retail scripts have fewer than three per instruction).</summary>
+    public const int MaximumTokens = 4 * MaximumLines;
+
+    /// <summary>
+    /// Refuses a script's text with more than <see cref="MaximumLines"/> lines or <see cref="MaximumTokens"/> tokens
+    /// before anything is made of it: a 16 MiB file of short lines or empty tokens would otherwise become millions of
+    /// line, token and position objects. Counting allocates nothing.
+    /// </summary>
+    public static void CheckBounds(string text)
+    {
+        int lines = text.AsSpan().Count('\n') + (text.Length == 0 || text[^1] != '\n' ? 1 : 0);
+        if (lines > MaximumLines) throw new InvalidDataException($"The script has {lines:N0} lines; scripts of more than {MaximumLines:N0} lines are not supported.");
+        // Each token ends at a separator or at the end of its line, so only longer texts can hold too many.
+        if ((long)text.Length + lines <= MaximumTokens) return;
+        long tokens = 0;
+        foreach (var (start, length) in Lines(text))
+            if ((tokens += TokenizeLine(text, start, start + length, null, null)) > MaximumTokens)
+                throw new InvalidDataException($"The script has more than {MaximumTokens:N0} tokens, which is not supported.");
+    }
+
+    /// <summary>
+    /// The physical lines of a script's text as the engine reads them in text mode: each ends at a newline, a carriage
+    /// return before that newline is not part of it, and a final newline does not start another line.
+    /// </summary>
+    internal static IEnumerable<(int Start, int Length)> Lines(string text)
+    {
+        int start = 0;
+        while (true)
+        {
+            int end = text.IndexOf('\n', start);
+            if (end < 0) { if (start < text.Length || start == 0) yield return (start, text.Length - start); yield break; }
+            yield return (start, end > start && text[end - 1] == '\r' ? end - 1 - start : end - start);
+            start = end + 1;
+        }
+    }
+
+    /// <summary>Instructions of a script file read in text mode (CRLF becomes LF); blank and comment lines are skipped. Refused past <see cref="CheckBounds"/>.</summary>
     public static IReadOnlyList<IReadOnlyList<string>> Tokenize(string text)
     {
+        CheckBounds(text);
         List<IReadOnlyList<string>> lines = [];
-        foreach (string raw in text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        foreach (var (start, length) in Lines(text))
         {
-            var tokens = TokenizeLine(raw);
-            if (tokens.Count > 0) lines.Add(tokens);
+            List<string> tokens = [];
+            if (TokenizeLine(text, start, start + length, tokens, null) > 0) lines.Add(tokens);
         }
         return lines;
     }
 
     public static IReadOnlyList<string> TokenizeLine(string line)
     {
-        int comment = line.IndexOf('#');
-        if (comment >= 0) line = line[..comment];
-        int cursor = 0; List<string> tokens = [];
-        while (cursor < line.Length && IsSpace(line[cursor])) cursor++;
+        List<string> tokens = [];
+        TokenizeLine(line, 0, line.Length, tokens, null);
+        return tokens;
+    }
+
+    /// <summary>
+    /// CZInterp::TokenizeLine over the line <paramref name="text"/>[<paramref name="start"/>..<paramref name="end"/>):
+    /// adds its tokens (and where each lies in the text) to the lists given, and returns how many there are.
+    /// </summary>
+    internal static int TokenizeLine(string text, int start, int end, List<string>? tokens, List<TextSpan>? spans)
+    {
+        int comment = text.IndexOf('#', start, end - start);
+        if (comment >= 0) end = comment;
+        int count = 0, cursor = start;
+        while (cursor < end && IsSpace(text[cursor])) cursor++;
         while (true)
         {
-            int separator = line.IndexOfAny(Separators, cursor);
+            int separator = text.IndexOfAny(Separators, cursor, end - cursor);
             if (separator < 0) break;
-            tokens.Add(line[cursor..separator]);
+            Add(cursor, separator);
             cursor = separator + 1;
-            while (cursor < line.Length && IsSpace(line[cursor])) cursor++;
+            while (cursor < end && IsSpace(text[cursor])) cursor++;
         }
-        if (cursor < line.Length) tokens.Add(line[cursor..]);
-        return tokens;
+        if (cursor < end) Add(cursor, end);
+        return count;
+        void Add(int from, int to) { count++; tokens?.Add(text[from..to]); spans?.Add(new(from, to - from)); }
     }
 
     /// <summary>Encode one instruction so that <see cref="TokenizeLine"/> returns exactly <paramref name="tokens"/>, or null if impossible.</summary>

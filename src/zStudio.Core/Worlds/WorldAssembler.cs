@@ -69,6 +69,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private readonly Dictionary<string, string> variables = new(StringComparer.Ordinal);
     private readonly List<string> modelDirectories = [], textureDirectories = [], readerDirectories = [];
     private readonly ScriptConditions conditions = new();
+    /// <summary>The instruction lines of each script read so far, by project path (the file system finds scripts without case).</summary>
+    private readonly Dictionary<string, Sources.GameGenScriptLine[]> parsedScripts = new(StringComparer.OrdinalIgnoreCase);
     private WorldNode? current, pendingWorld;
     private bool written;
     private int instructions;
@@ -98,7 +100,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         string relative = $"{SourceProject.GameGenFolder}/{script.Replace('\\', '/')}";
         if (!files.Exists(relative)) { Warn($"Script {script} does not exist."); return; }
         ScriptFiles.Add(relative);
-        var lines = Sources.GameGenScriptSyntax.Parse(files.Read(relative, token)).Lines.Where(l => l.IsInstruction);
+        // Each script is read once per assembly: one sourced many times (or holding only comments) costs its instructions, not its text again.
+        if (!parsedScripts.TryGetValue(relative, out var lines))
+            parsedScripts[relative] = lines = [.. Sources.GameGenScriptSyntax.Parse(files.Read(relative, token)).Lines.Where(l => l.IsInstruction)];
         foreach (var line in lines)
         {
             token.ThrowIfCancellationRequested();
