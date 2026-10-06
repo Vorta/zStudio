@@ -23,7 +23,12 @@ public static class TextureSources
     /// header once; null when the file is missing, unreadable, does not start with a PNG header or is larger than a
     /// build decodes (<see cref="MaximumSide"/>; the build reports it).
     /// </summary>
-    internal static (int Width, int Height)? PngSize(string path)
+    internal static (int Width, int Height)? PngSize(string path) => PngSize(path, true);
+    /// <summary>
+    /// <see cref="PngSize(string)"/>, optionally without the cache: a build reads the header of each image it decodes
+    /// anyway, which is not what planning costs (<see cref="HeaderRead"/>).
+    /// </summary>
+    internal static (int Width, int Height)? PngSize(string path, bool cache)
     {
         Span<byte> header = stackalloc byte[24];
         FileInfo info;
@@ -32,16 +37,23 @@ public static class TextureSources
             info = new FileInfo(path);
             if (!info.Exists) return null;
             // A copy keeps the write time but gets a new creation time, so both identify the file's content.
-            if (Sizes.TryGetValue(path, out var cached) && cached.Length == info.Length && cached.Written == info.LastWriteTimeUtc && cached.Created == info.CreationTimeUtc) return (cached.Width, cached.Height);
+            if (cache && Sizes.TryGetValue(path, out var cached) && cached.Length == info.Length && cached.Written == info.LastWriteTimeUtc && cached.Created == info.CreationTimeUtc) return (cached.Width, cached.Height);
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1);
             if (stream.ReadAtLeast(header, header.Length, false) < header.Length) return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
-        if (!header[..8].SequenceEqual((ReadOnlySpan<byte>)[137, 80, 78, 71, 13, 10, 26, 10]) || !header[12..16].SequenceEqual("IHDR"u8)) return null;
-        int width = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(header[16..]), height = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(header[20..]);
-        if (width is < 1 or > MaximumSide || height is < 1 or > MaximumSide) return null;
+        if (PngSize((ReadOnlySpan<byte>)header) is not var (width, height)) return null;
+        if (!cache) return (width, height);
         if (Sizes.Count >= MaximumCachedSizes) Sizes.Clear();
         Sizes[path] = (info.Length, info.LastWriteTimeUtc, info.CreationTimeUtc, width, height);
+        return (width, height);
+    }
+    /// <summary>A PNG's size from the header at the start of <paramref name="png"/>, as <see cref="PngSize(string)"/> reads it.</summary>
+    internal static (int Width, int Height)? PngSize(ReadOnlySpan<byte> png)
+    {
+        if (png.Length < 24 || !png[..8].SequenceEqual((ReadOnlySpan<byte>)[137, 80, 78, 71, 13, 10, 26, 10]) || !png[12..16].SequenceEqual("IHDR"u8)) return null;
+        int width = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png[16..]), height = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png[20..]);
+        if (width is < 1 or > MaximumSide || height is < 1 or > MaximumSide) return null;
         return (width, height);
     }
 

@@ -36,18 +36,20 @@ public static class SourceExtractor
         if (!probes.Any(f => f.Probe is { Family: FormatFamily.Scripts, Version: 7 } or { Family: FormatFamily.GameZ, Version: 15 } or { Family: FormatFamily.Animation, Version: 28 }))
             throw new InvalidDataException("No RECOIL game data was found. Choose the folder that contains interp.zbd, zrdr.zbd and the mission folders.");
         if (!CarriesDefinitions(files)) throw new InvalidDataException(NotOriginal);
-        Writes writes = new();
+        Writes writes = new(projectRoot);
         writes.CreateDirectory(projectRoot);
         try { return await ExtractFilesAsync(projectRoot, files, [.. all.Where(f => !GameFile(f.Relative)).Select(f => f.Relative)], writes, progress, token); }
         catch (Exception stopped)
         {
             // The folder was new or empty: remove everything this reconstruction wrote so it can be retried. Only that: a file
-            // another program put there during the run stays, with the folders holding it.
-            try { writes.Remove(); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            // another program put there or changed during the run stays, with the folders holding it.
+            var (changed, failed) = writes.Remove();
+            if (changed.Count > 0 || failed.Count > 0)
             {
-                // Another program holds a written file: say so, rather than leaving a folder later refused as not empty.
-                throw new IOException($"{(stopped is OperationCanceledException ? "Canceled" : $"Stopped: {stopped.Message}")}. {projectRoot} could not be removed completely ({ex.Message}); delete it before choosing it again.", stopped);
+                // Say so, rather than leaving a folder later refused as not empty.
+                string reason = (changed.Count > 0 ? $" Files another program changed during the reconstruction were left as they are: {string.Join(", ", changed.Take(8))}." : "")
+                    + (failed.Count > 0 ? $" Files that could not be removed: {string.Join(", ", failed.Take(8))}." : "");
+                throw new IOException($"{(stopped is OperationCanceledException ? "Canceled" : $"Stopped: {stopped.Message}")}. {projectRoot} could not be removed completely.{reason} Move them away before choosing the folder again.", stopped);
             }
             throw;
         }
@@ -78,10 +80,16 @@ public static class SourceExtractor
             .All(f => carrying.Contains(Path.GetDirectoryName(f.Relative) ?? ""));
     }
 
-    /// <summary>The files and folders a reconstruction created, in order, so that stopping removes exactly those.</summary>
-    private sealed class Writes
+    /// <summary>
+    /// The files and folders a reconstruction created, in order, and the content it left in each file, so that stopping
+    /// removes exactly those. Files are created as new files: a name another program took during the run is never replaced.
+    /// </summary>
+    private sealed class Writes(string root)
     {
-        private readonly List<string> files = [], folders = [];
+        /// <summary>The content each created file has (null: unknown, after a write that failed and could not be undone).</summary>
+        private readonly Dictionary<string, JournalDigest?> files = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<string> folders = [];
+        private static readonly JournalDigest Empty = JournalDigest.Of(Array.Empty<byte>())!;
         /// <summary>Creates <paramref name="folder"/> with the parents it lacks, recording each one created.</summary>
         internal void CreateDirectory(string folder)
         {
@@ -90,14 +98,95 @@ public static class SourceExtractor
             Directory.CreateDirectory(folder);
             folders.AddRange(Enumerable.Reverse(missing));
         }
-        /// <summary>Records a file before it is written, so a write that fails part-way is removed too.</summary>
-        internal void File(string path) => files.Add(path);
-        /// <summary>Deletes the recorded files, then the recorded folders left empty, deepest first.</summary>
-        internal void Remove()
+        /// <summary>
+        /// Creates <paramref name="path"/> with <paramref name="bytes"/> (and its modification time). No other program can
+        /// write, rename or delete it while it is written; a write that fails part-way leaves it empty, so stopping
+        /// recognises and removes it.
+        /// </summary>
+        internal async Task CreateAsync(string path, byte[] bytes, DateTime? modified, CancellationToken token)
         {
-            foreach (string file in files) if (System.IO.File.Exists(file)) System.IO.File.Delete(file);
+            FileStream stream;
+            // Unbuffered, so nothing reaches the file after a failed write is undone.
+            try { stream = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, 1, FileOptions.Asynchronous); }
+            catch (IOException ex) when (Path.Exists(path))
+            { throw new IOException($"{Display(path)} was created by another program during the reconstruction; it was not replaced, and the reconstruction stopped.", ex); }
+            await using (stream)
+            {
+                files[path] = Empty;
+                await WriteAsync(stream, path, bytes, modified, token);
+            }
+        }
+        /// <summary>
+        /// Rewrites a file this reconstruction created, keeping its modification time, only while it still has the content
+        /// the reconstruction left in it (other programs cannot write it between the comparison and the write); another
+        /// program's change is never overwritten.
+        /// </summary>
+        internal async Task ReplaceAsync(string path, byte[] bytes, CancellationToken token)
+        {
+            if (!files.TryGetValue(path, out var written) || written == null) throw new InvalidOperationException($"{Display(path)} was not written by this reconstruction.");
+            FileStream stream;
+            try { stream = new(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, 1, FileOptions.Asynchronous); }
+            catch (FileNotFoundException ex) { throw ChangedDuringRun(path, ex); }
+            catch (DirectoryNotFoundException ex) { throw ChangedDuringRun(path, ex); }
+            await using (stream)
+            {
+                if (JournalDigest.Of(stream) != written) throw ChangedDuringRun(path);
+                DateTime time = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
+                stream.Position = 0;
+                await WriteAsync(stream, path, bytes, time, token);
+            }
+        }
+        private async Task WriteAsync(FileStream stream, string path, byte[] bytes, DateTime? modified, CancellationToken token)
+        {
+            try
+            {
+                stream.SetLength(0);
+                files[path] = Empty;
+                await stream.WriteAsync(bytes, token); await stream.FlushAsync(token);
+                if (modified is { } time) File.SetLastWriteTimeUtc(stream.SafeFileHandle, time);
+                files[path] = JournalDigest.Of(bytes);
+            }
+            catch
+            {
+                // Still held: emptied, it is recognisably this run's file.
+                try { stream.SetLength(0); files[path] = Empty; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException) { files[path] = null; }
+                throw;
+            }
+        }
+        private IOException ChangedDuringRun(string path, Exception? inner = null) =>
+            new($"{Display(path)} was changed by another program during the reconstruction; it was not replaced, and the reconstruction stopped.", inner);
+        private string Display(string path) => SourceProject.Relative(root, path);
+
+        /// <summary>
+        /// Deletes the recorded files that still have the content this reconstruction left in them, then the recorded
+        /// folders left empty, deepest first. Returns the files left because another program changed them, and those that
+        /// could not be removed.
+        /// </summary>
+        internal (List<string> Changed, List<string> Failed) Remove()
+        {
+            List<string> changed = [], failed = [];
+            foreach (var (path, content) in files)
+            {
+                if (content == null) { if (Path.Exists(path)) failed.Add(Display(path)); continue; }
+                // Moved to a new name beside it and deleted there, only while it is this run's file.
+                string holding = Path.Combine(Path.GetDirectoryName(path)!, $".zstudio-removing-{Guid.NewGuid():N}");
+                try
+                {
+                    switch (SourcePublisher.MoveIfContent(path, holding, content))
+                    {
+                        case SourcePublisher.Moved.Done: File.Delete(holding); break;
+                        case SourcePublisher.Moved.Stranded: changed.Add(Display(holding)); break;
+                        default: if (Path.Exists(path)) changed.Add(Display(path)); break;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { failed.Add(Display(Path.Exists(holding) ? holding : path)); }
+            }
+            // A folder that is not empty holds files reported above or another program's, and stays.
             for (int i = folders.Count - 1; i >= 0; i--)
-                if (Directory.Exists(folders[i]) && !Directory.EnumerateFileSystemEntries(folders[i]).Any()) Directory.Delete(folders[i]);
+                try { if (Directory.Exists(folders[i]) && !Directory.EnumerateFileSystemEntries(folders[i]).Any()) Directory.Delete(folders[i]); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { failed.Add(folders[i]); }
+            return (changed, failed);
         }
     }
 
@@ -226,9 +315,8 @@ public static class SourceExtractor
             string sha = SourceProject.Sha256(bytes);
             if (sources.TryGetValue(relative, out string? existing)) { if (existing != sha) Notes.Add($"{relative} has another version with different content; the first one was kept."); return; }
             string path = SourceProject.Resolve(root, relative);
-            writes.CreateDirectory(Path.GetDirectoryName(path)!); writes.File(path);
-            await File.WriteAllBytesAsync(path, bytes, token);
-            if (modified is { } time) File.SetLastWriteTimeUtc(path, time);
+            writes.CreateDirectory(Path.GetDirectoryName(path)!);
+            await writes.CreateAsync(path, bytes, modified, token);
             sources[relative] = sha;
         }
 
@@ -236,8 +324,7 @@ public static class SourceExtractor
         private async Task ReplaceAsync(string relative, byte[] bytes)
         {
             if (!sources.ContainsKey(relative)) { await WriteAsync(relative, bytes); return; }
-            string path = SourceProject.Resolve(root, relative); DateTime modified = File.GetLastWriteTimeUtc(path);
-            await File.WriteAllBytesAsync(path, bytes, token); File.SetLastWriteTimeUtc(path, modified);
+            await writes.ReplaceAsync(SourceProject.Resolve(root, relative), bytes, token);
             sources[relative] = SourceProject.Sha256(bytes);
         }
 

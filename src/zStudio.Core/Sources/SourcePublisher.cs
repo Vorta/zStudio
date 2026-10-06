@@ -343,14 +343,15 @@ public sealed partial class SourcePublisher
         return Look(SourceProject.Resolve(root, relative));
     }
 
-    private enum Moved { Done, Unchanged, Stranded }
+    internal enum Moved { Done, Unchanged, Stranded }
     /// <summary>
     /// Moves a file only while it has the expected content: other writers are excluded while it is compared, and the moved
     /// file is checked again in case another program renamed something over the name in between. A file that turns out to
     /// differ is moved back while the name is free (<see cref="Moved.Unchanged"/>); otherwise it stays at the destination
-    /// (<see cref="Moved.Stranded"/>).
+    /// (<see cref="Moved.Stranded"/>). Exports and reconstructions undo their own files with it too: moved to a new name
+    /// on the same volume and deleted there, a file is removed only while it still has the content the run wrote.
     /// </summary>
-    private static Moved MoveIfContent(string path, string destination, JournalDigest expected)
+    internal static Moved MoveIfContent(string path, string destination, JournalDigest expected)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         try
