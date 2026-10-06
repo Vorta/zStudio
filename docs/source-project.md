@@ -208,7 +208,7 @@ zStudio keeps its working data in the project's `zstudio\` folder:
 - `staging\` holds files being prepared;
 - `cache\worlds\` holds the builds of the mission worlds zStudio shows, one folder per open world, removed when the world closes. A folder left by a zStudio that ended without closing its world is removed the next time a world of the project opens.
 
-Builds never read it, and Files does not list `cache\`. Leave the folder out when sharing a project. `cache\` is safe to delete while no world of the project is open; the whole folder is safe to delete when no save was interrupted and no Blender edit is pending.
+Builds never read it, and Files does not list `cache\`. Its folders are listed like the sources: `recovery\` and `staging\` when saving or looking for an interrupted save, and `cache\worlds\` when a world opens, each counting every entry there, whoever put it there. One holding more than 250,000 is refused with a message naming it (a world still opens; only the folders of ended sessions stay), and a cancellation stops the listing. A save also lists each folder on the way to the files it writes, counting their entries together towards the same limit. Leave the folder out when sharing a project. `cache\` is safe to delete while no world of the project is open; the whole folder is safe to delete when no save was interrupted and no Blender edit is pending.
 
 ## Build profiles
 

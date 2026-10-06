@@ -163,6 +163,9 @@ public static partial class WorldGltf
         }
         foreach (var root in doc.Roots) Collect(root, null, 0);
         long work = 0;
+        // Each pair of distinct meshes is compared once: copies may all use one mesh, and the first copy's mesh compared with
+        // it again for each copy would repeat a comparison of up to millions of elements and megabytes of values every time.
+        Dictionary<(GltfMesh, GltfMesh), bool> meshes = [];
         foreach (var (mark, list) in copies)
             for (int k = 1; k < list.Count; k++)
                 if (Difference(list[0].Node, list[0].Zone, list[k].Node, list[k].Zone, 0) is { } difference)
@@ -172,10 +175,10 @@ public static partial class WorldGltf
         {
             if (++work > GltfDocument.MaximumNodes * 4L || depth > GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the copies of its shared nodes are too large to compare.");
             if (EngineName(a) != EngineName(b)) return $"name ({JsonData.ShownText(EngineName(a))}, {JsonData.ShownText(EngineName(b))})";
-            if (!JsonNode.DeepEquals(Values(a), Values(b))) return $"the engine values of {JsonData.ShownText(EngineName(a))}";
+            if (!SameValues(a, b)) return $"the engine values of {JsonData.ShownText(EngineName(a))}";
             if (zoneA is { } za && zoneB is { } zb && za != zb) return $"the zone of {JsonData.ShownText(EngineName(a))} ({za}, {zb})";
             if (!SameMatrix(a.Matrix ?? Matrix4x4.Identity, b.Matrix ?? Matrix4x4.Identity)) return $"the transform of {JsonData.ShownText(EngineName(a))}";
-            if (!SameMesh(a.Mesh, b.Mesh)) return $"the mesh of {JsonData.ShownText(EngineName(a))}";
+            if (!MeshesAgree(a.Mesh, b.Mesh)) return $"the mesh of {JsonData.ShownText(EngineName(a))}";
             if (a.Children.Count != b.Children.Count) return $"the children of {JsonData.ShownText(EngineName(a))}";
             for (int k = 0; k < a.Children.Count; k++)
             {
@@ -184,6 +187,12 @@ public static partial class WorldGltf
                 if (Difference(childA, StatedZone(childA.Extras?[Key]) ?? zoneA, childB, StatedZone(childB.Extras?[Key]) ?? zoneB, depth + 1) is { } found) return found;
             }
             return null;
+        }
+        bool MeshesAgree(GltfMesh? x, GltfMesh? y)
+        {
+            if (x == null || y == null || ReferenceEquals(x, y)) return SameMesh(x, y);
+            if (!meshes.TryGetValue((x, y), out bool same)) meshes[(x, y)] = same = SameMesh(x, y);
+            return same;
         }
     }
 
@@ -195,12 +204,27 @@ public static partial class WorldGltf
         long n = v.TryGetValue(out long whole) ? whole : v.TryGetValue(out int small) ? small : v.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e15 ? (long)d : 0;
         return n is >= 1 and <= int.MaxValue ? n : null;
     }
-    /// <summary>A node's engine values apart from those copies may write differently: its zone (relative to each parent) and its instance number and name (compared on their own).</summary>
-    private static JsonObject? Values(GltfNode node)
+    /// <summary>
+    /// Whether two nodes have the same engine values apart from those copies may write differently: their zones (relative to
+    /// each parent) and their instance numbers and names (compared on their own). Compared where they are, as
+    /// <see cref="JsonNode.DeepEquals"/> compares objects, without copying either: the first copy is compared with every other,
+    /// and a copy of its values for each comparison would repeat whatever those leave out (any size) as often as there are copies.
+    /// </summary>
+    private static bool SameValues(GltfNode a, GltfNode b)
     {
-        if ((node.Extras?[Key] as JsonObject)?.DeepClone() is not JsonObject values) return null;
-        foreach (string key in new[] { "zone", "instance", "name", ZoneFromLoad }) values.Remove(key);
-        return values;
+        JsonObject? x = a.Extras?[Key] as JsonObject, y = b.Extras?[Key] as JsonObject;
+        if (x == null || y == null) return x == null && y == null;
+        int compared = 0;
+        foreach (var (name, value) in x)
+        {
+            if (Ignored(name)) continue;
+            compared++;
+            // As DeepEquals does: a missing value of the other compares as null.
+            y.TryGetPropertyValue(name, out var other);
+            if (!JsonNode.DeepEquals(value, other)) return false;
+        }
+        return compared == y.Count(p => !Ignored(p.Key));
+        static bool Ignored(string key) => key is "zone" or "instance" or "name" or ZoneFromLoad;
     }
     private static bool SameMatrix(Matrix4x4 a, Matrix4x4 b)
     {

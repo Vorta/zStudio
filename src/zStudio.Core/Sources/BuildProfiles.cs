@@ -217,14 +217,20 @@ public static class BuildProfiles
     /// Texture packs a destination mission folder holds that the export does not build (<paramref name="built"/>: the pack
     /// files it plans for the mission): the game opens the largest rtexture&lt;N&gt; at or below its texture memory, so a
     /// stale pack of any size, such as an automatic pack of an earlier export, can be chosen instead of the exported ones;
-    /// the software renderer opens texture&lt;N&gt; or texturemax by its option, so a stale one of those can be too.
+    /// the software renderer opens texture&lt;N&gt; or texturemax by its option, so a stale one of those can be too. Every entry
+    /// of the folder counts towards <paramref name="maximumEntries"/> (<see cref="SourceProject.MaximumScannedEntries"/>; beyond
+    /// that the listing is refused with <see cref="IOException"/>), and <paramref name="token"/> is observed at each.
     /// </summary>
-    public static IReadOnlyList<string> ShadowingPacks(string destination, string mission, IReadOnlyCollection<string> built)
+    public static IReadOnlyList<string> ShadowingPacks(string destination, string mission, IReadOnlyCollection<string> built, CancellationToken token = default)
+        => ShadowingPacks(destination, mission, built, SourceProject.MaximumScannedEntries, token);
+    internal static IReadOnlyList<string> ShadowingPacks(string destination, string mission, IReadOnlyCollection<string> built, int maximumEntries, CancellationToken token)
     {
         string folder = Path.Combine(destination, mission);
         if (!Directory.Exists(folder)) return [];
+        SourceProject.ScanBudget budget = new(maximumEntries, maximum => new IOException($"{folder} holds more than {maximum:N0} files and folders."), token);
         // Software packs too: the software renderer opens texture<N> or texturemax by its option, whatever the export built.
-        return Directory.EnumerateFiles(folder, "*texture*.zbd").Select(Path.GetFileName).OfType<string>()
+        return SourceProject.Entries(folder, budget).OfType<FileInfo>().Select(f => f.Name)
+            .Where(f => f.Contains("texture", StringComparison.OrdinalIgnoreCase) && f.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase))
             .Where(f => TexturePackVariant.FromFileName(f) is { Kind: TexturePackKind.Hardware or TexturePackKind.Software } && !built.Contains(f, StringComparer.OrdinalIgnoreCase))
             .Select(f => $"{mission}/{f.ToLowerInvariant()}").Order(StringComparer.Ordinal).ToArray();
     }

@@ -49,14 +49,15 @@ internal sealed class SourceWorldSession : IDisposable
     private int generation;
     public bool IsDisposed { get; private set; }
 
-    public SourceWorldSession(SourceWorkspace workspace, string mission)
+    /// <param name="token">Observed while the folders of ended sessions are looked for (see <see cref="SourceWorlds.AbandonedBuilds"/>).</param>
+    public SourceWorldSession(SourceWorkspace workspace, string mission, CancellationToken token = default)
     {
         Workspace = workspace; Mission = mission.ToLowerInvariant();
         if (workspace.Read(ScriptPath) == null) throw new InvalidDataException($"The project has no world script {ScriptPath}.");
         string previews = SourceWorlds.PreviewRoot(Root);
         // Never delete or write through a link out of the project: checked before abandoned sessions are removed.
         SourceProject.RejectLinks(previews);
-        RemoveAbandoned(previews);
+        RemoveAbandoned(previews, token);
         folder = Path.Combine(previews, Guid.NewGuid().ToString("N"));
         SourceProject.RejectLinks(folder);
         Directory.CreateDirectory(folder);
@@ -82,15 +83,10 @@ internal sealed class SourceWorldSession : IDisposable
     /// Folders of sessions whose process ended without removing them (no lock file, older than a minute). A session of
     /// another zStudio on the same project holds its lock file, so its folder stays.
     /// </summary>
-    private static void RemoveAbandoned(string previews)
+    private static void RemoveAbandoned(string previews, CancellationToken token)
     {
-        try
-        {
-            if (!Directory.Exists(previews)) return;
-            foreach (var directory in new DirectoryInfo(previews).EnumerateDirectories())
-                if (!directory.Attributes.HasFlag(FileAttributes.ReparsePoint) && !File.Exists(Path.Combine(directory.FullName, ".lock")) && directory.CreationTimeUtc < DateTime.UtcNow.AddMinutes(-1))
-                    DeleteBuild(directory.FullName);
-        }
+        // A folder too full to list is left as it is, like one that cannot be read; a cancellation ends the opening.
+        try { foreach (string build in SourceWorlds.AbandonedBuilds(previews, token)) DeleteBuild(build); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 

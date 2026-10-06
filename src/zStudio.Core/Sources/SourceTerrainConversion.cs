@@ -157,7 +157,12 @@ public static partial class SourceTerrainConversion
         if (workspace.Exists(surfaces) || workspace.Exists(recipe) || workspace.Exists(buffer)) throw new InvalidDataException($"{surfaces}, {buffer} or {recipe} already exists; the database was converted before.");
         var json = (JsonArray)root["nodes"]!;
         List<TerrainConversionKept> kept = []; HashSet<string> shared = new(StringComparer.Ordinal);
-        Dictionary<(uint Flags, int Zone, string Values), List<GltfNode>> groups = [];
+        // Many pieces may share one mesh (a valid file may hold 200,000 nodes using one), and its model values may be large:
+        // what a mesh decides is worked out once per mesh, and its values are written out once, as a small number naming them
+        // in the group keys (the same written values, the same number), never once per piece.
+        Dictionary<GltfMesh, MeshFacts> facts = new(ReferenceEqualityComparer.Instance);
+        Dictionary<string, int> valueNumbers = new(StringComparer.Ordinal); List<string> valueTexts = [];
+        Dictionary<(uint Flags, int Zone, int Values), List<GltfNode>> groups = [];
         foreach (var (node, inherited) in Members(doc.Roots, 0xFF))
         {
             token.ThrowIfCancellationRequested();
@@ -165,38 +170,46 @@ public static partial class SourceTerrainConversion
             // A piece without a zone of its own takes its group's, as the importer gives it.
             int zone = Zone(extras, inherited);
             string name = WorldGltf.EngineName(node);
-            var values = node.Mesh?.Extras?[WorldGltf.Key] as JsonObject;
+            MeshFacts? mesh = node.Mesh == null ? null : facts.TryGetValue(node.Mesh, out var known) ? known : facts[node.Mesh] = new(node.Mesh);
             string? reason = extras?["terrain"] != null ? "terrain marker"
-                : node.Mesh == null ? "no mesh of its own"
+                : mesh == null ? "no mesh of its own"
                 : node.Children.Count > 0 ? "has children"
                 : extras?["ref"] != null ? "references a model file"
                 : extras?["instance"] != null ? "shared by several parents"
                 : extras?["class"] is JsonValue c && c.ToString() == "lod" ? "level-of-detail node"
                 : node.Matrix is { } m && !m.IsIdentity ? "placed with a transform"
-                : node.Mesh.Weights.Count > 0 || node.Mesh.Primitives.Any(p => p.Targets.Count > 0) ? "has morph targets"
+                : mesh.Morphs ? "has morph targets"
                 : (Flags(extras) & 0x80) != 0 ? "landmark (the horizon and other always-drawn nodes)"
                 : (Flags(extras) & 0x60) != 0 ? "collides by its bounding box or is a proximity node (both depend on the node's own bounds)"
-                : values?["points"] is JsonArray { Count: > 0 } ? "holds point entries (lens flares)"
-                : values?["mode"] is JsonValue mode && mode.ToString() != "0" ? "a facade or point model"
+                : mesh.ValuesReason is { } byValues ? byValues
                 : references.Names.Contains(name) ? "named by a script, resource or animation"
                 : references.Patterns.FirstOrDefault(p => p.IsMatch(name)) is { } pattern ? $"matched by the wildcard {pattern}"
                 : extras?["zoneWord"] is JsonValue word && word.ToString() is var w && zone is var z && !w.Equals($"0x{(uint)z:X}", StringComparison.OrdinalIgnoreCase) && !w.Equals($"0x{(uint)z:X8}", StringComparison.OrdinalIgnoreCase) ? "has a zone word beyond its zone"
                 : null;
             if (reason != null) { kept.Add(new(name, reason)); continue; }
-            var key = (Flags(extras), zone, values?.ToJsonString() ?? "");
+            if (mesh!.ValuesNumber is not int number)
+            {
+                string text = mesh.Values?.ToJsonString() ?? "";
+                if (!valueNumbers.TryGetValue(text, out number)) { valueNumbers[text] = number = valueTexts.Count; valueTexts.Add(text); }
+                mesh.ValuesNumber = number;
+            }
+            var key = (Flags(extras), zone, number);
             if (!groups.TryGetValue(key, out var list)) groups[key] = list = [];
             list.Add(node);
         }
         if (groups.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need at least {groups.Count} surfaces (different flags, zones or model values), more than a recipe's {TerrainRecipe.MaximumSurfaces}.");
         // Within a group, pieces that overlap in plan view go to different surfaces (first fit, in root order).
         List<TerrainConversionSurface> result = [];
-        foreach (var ((flags, zone, values), nodes) in groups.OrderBy(g => g.Key.Zone).ThenBy(g => g.Key.Flags).ThenBy(g => g.Key.Values, StringComparer.Ordinal))
+        foreach (var ((flags, zone, number), nodes) in groups.OrderBy(g => g.Key.Zone).ThenBy(g => g.Key.Flags).ThenBy(g => valueTexts[g.Key.Values], StringComparer.Ordinal))
         {
+            string values = valueTexts[number];
             List<(List<GltfNode> Members, PathsD Area)> layers = [];
             foreach (var node in nodes)
             {
                 token.ThrowIfCancellationRequested();
-                var area = PlanArea(node);
+                // A mesh's plan-view area is the same for every piece using it (pieces are untransformed).
+                var mesh = facts[node.Mesh!];
+                var area = mesh.Area ??= PlanArea(node.Mesh!);
                 var layer = layers.FirstOrDefault(l => Math.Abs(Clipper.Area(Clipper.Intersect(l.Area, area, FillRule.NonZero, 3))) <= 0.01);
                 if (layer.Members == null && result.Count + layers.Count >= TerrainRecipe.MaximumSurfaces)
                     throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, model values, or stacked sheets).");
@@ -206,9 +219,11 @@ public static partial class SourceTerrainConversion
             if (result.Count + layers.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, model values, or stacked sheets).");
             // Pieces with model values of their own (an unlit or scrolling surface) are a surface of their own, named by a short hash of the values.
             string model = values.Length == 0 ? "" : "_m" + SourceProject.Sha256(Encoding.UTF8.GetBytes(values))[..6];
+            // Read back once for the group: its stacked sheets carry the same values, which applying the plan copies into each surface.
+            JsonObject? modelValues = values.Length == 0 ? null : JsonNode.Parse(values) as JsonObject;
             for (int k = 0; k < layers.Count; k++)
                 result.Add(new($"z{(zone == 0xFF ? "any" : zone.ToString(System.Globalization.CultureInfo.InvariantCulture))}_{flags:x8}{model}" + (layers.Count > 1 ? $"_{k + 1}" : ""), flags, zone, [.. layers[k].Members.Select(n => n.Index)])
-                { ModelValues = values.Length == 0 ? null : JsonNode.Parse(values) as JsonObject });
+                { ModelValues = modelValues });
         }
         return new(database, surfaces, recipe, result, kept);
 
@@ -291,11 +306,29 @@ public static partial class SourceTerrainConversion
             && uint.TryParse(hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.AsSpan(2) : hex.AsSpan(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint flags) ? flags & WorldGltf.CarriedFlags : WorldGltf.DefaultCarried;
     /// <summary>A node's zone as the importer reads it (<see cref="WorldGltf.StatedZone"/>); without one, <paramref name="inherited"/>.</summary>
     private static int Zone(JsonObject? extras, int inherited = 0xFF) => WorldGltf.StatedZone(extras) is { } zone ? (int)zone : inherited;
-    /// <summary>The plan-view area a node's triangles cover.</summary>
-    private static PathsD PlanArea(GltfNode node)
+    /// <summary>
+    /// What planning reads of a mesh, the same for every piece that uses it: whether it has morph targets, the reason its model
+    /// values keep it an object (point entries, a facade or point mode), and, once known, the number of its written values in
+    /// the plan's grouping and its plan-view area.
+    /// </summary>
+    private sealed class MeshFacts(GltfMesh mesh)
+    {
+        public JsonObject? Values { get; } = mesh.Extras?[WorldGltf.Key] as JsonObject;
+        public bool Morphs { get; } = mesh.Weights.Count > 0 || mesh.Primitives.Any(p => p.Targets.Count > 0);
+        public string? ValuesReason { get; } = Reason(mesh.Extras?[WorldGltf.Key] as JsonObject);
+        public int? ValuesNumber { get; set; }
+        public PathsD? Area { get; set; }
+        private static string? Reason(JsonObject? values) =>
+            values?["points"] is JsonArray { Count: > 0 } ? "holds point entries (lens flares)"
+            : values?["mode"] is JsonValue mode && mode.ToString() != "0" ? "a facade or point model"
+            : null;
+    }
+
+    /// <summary>The plan-view area a mesh's triangles cover.</summary>
+    private static PathsD PlanArea(GltfMesh mesh)
     {
         PathsD triangles = [];
-        foreach (var p in node.Mesh!.Primitives)
+        foreach (var p in mesh.Primitives)
             for (int t = 0; t + 2 < p.Indices.Count; t += 3)
             {
                 Vector3 a = p.Positions[p.Indices[t]], b = p.Positions[p.Indices[t + 1]], c = p.Positions[p.Indices[t + 2]];

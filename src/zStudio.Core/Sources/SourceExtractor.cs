@@ -362,14 +362,11 @@ public static class SourceExtractor
     /// <param name="maximumEntries">The files and folders the listing may visit (<see cref="SourceProject.MaximumScannedEntries"/>; smaller in tests).</param>
     internal static List<Input> Corpus(string root, CancellationToken token = default, int maximumEntries = SourceProject.MaximumScannedEntries)
     {
-        EnumerationOptions options = new() { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = 0 };
-        List<Input> files = []; int visited = 0;
-        foreach (var info in new DirectoryInfo(root).EnumerateFileSystemInfos("*", options))
+        List<Input> files = [];
+        // Folders count too: a tree of empty folders costs as much to walk as one of files.
+        SourceProject.ScanBudget budget = new(maximumEntries, maximum => new IOException($"The game data folder holds more than {maximum:N0} files and folders; choose the folder that holds the game's ZBD files."), token);
+        foreach (var info in SourceProject.Entries(root, budget, recurse: true))
         {
-            token.ThrowIfCancellationRequested();
-            // Folders count too: a tree of empty folders costs as much to walk as one of files.
-            if (++visited > maximumEntries)
-                throw new IOException($"The game data folder holds more than {maximumEntries:N0} files and folders; choose the folder that holds the game's ZBD files.");
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{info.FullName} is a link; reconstruct from a folder of regular files.");
             if (info is not FileInfo file) continue;
             // As the file itself records them (a directory listing may lag behind), the way they are compared when it is read.

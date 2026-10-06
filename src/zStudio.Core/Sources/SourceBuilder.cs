@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.RegularExpressions;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Worlds;
 
@@ -49,7 +48,6 @@ public static partial class SourceBuilder
     internal static readonly string[] Banks = ["soundsh.zbd", "soundsm.zbd", "soundsl.zbd"];
     /// <summary>The mission texture packs the default (modern) profile builds; see <see cref="BuildProfiles"/>.</summary>
     public static IReadOnlyList<string> TexturePacks => BuildProfiles.Modern.TexturePacks.Select(p => p.File).ToArray();
-    [GeneratedRegex(@"\Am\d{1,3}\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)] private static partial Regex MissionFolder();
 
     /// <summary>
     /// Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see
@@ -71,17 +69,18 @@ public static partial class SourceBuilder
         if (scripts.Count > 0) plans.Add(new("interp.zbd", "scripts", scripts));
         var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase), added, token);
         if (sounds.Count > 0) plans.AddRange(Banks.Select(bank => new SourceOutputPlan(bank, "sounds", sounds)));
-        var missions = new DirectoryInfo(SourceProject.Resolve(root, SourceProject.DataFolder)).EnumerateDirectories().Where(d => MissionFolder().IsMatch(d.Name)).OrderBy(d => int.Parse(d.Name.AsSpan(1))).ToArray();
+        // Listing data for its mission folders is a scan too: every entry counts, and the token is observed at each.
+        var missions = SourceProject.MissionFolders(root, token);
         // A world may load any model in the project, and animations any keyframe script; which depends on the sources.
         IReadOnlyList<string>? models = null, scriptsFound = null;
         // Interface images: fonts, the images tree and each mission's objective images.
         var images = SourceProject.Files(root, TextureSources.Fonts, Png, added, token).Concat(SourceProject.Files(root, TextureSources.Images, Png, added, token))
-            .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m.Name}/images", Png, added, token))).ToArray();
+            .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m}/images", Png, added, token))).ToArray();
         if (images.Length > 0) plans.Add(new("image.zbd", "images", images));
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
-            string name = mission.Name.ToLowerInvariant();
+            string name = mission.ToLowerInvariant();
             string entry = WorldScript(name);
             if (File.Exists(SourceProject.Resolve(root, entry)) || added?.Contains(entry, StringComparer.OrdinalIgnoreCase) == true)
             {
@@ -320,7 +319,7 @@ public static partial class SourceBuilder
                 try
                 {
                     foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
-                        foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, all.Where(p => p.Family == "textures" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray()))
+                        foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, all.Where(p => p.Family == "textures" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), token))
                             notes.Add($"{pack} is not a pack the {profile.Name} profile builds, but the game may load it instead of the exported ones. Delete it, or export with a profile that builds a pack of that name.");
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's texture packs could not be listed ({ex.Message}); a pack left there by another export may be loaded instead of the exported ones."); }

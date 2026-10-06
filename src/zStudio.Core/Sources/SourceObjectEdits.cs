@@ -1241,13 +1241,18 @@ public static class SourceObjectEdits
         }, token, notes ?? []);
     /// <summary>Whether a glTF node carries an instance mark (it is one of the copies of a node the file places under several parents).</summary>
     private static bool Marked(JsonObject node) => ((node["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject)?["instance"] != null;
-    /// <summary>A glTF node's own values with those of its descendants, as nested children: what makes copies of an instance alike.</summary>
-    private static JsonObject Shape(JsonArray nodes, int index, int depth)
+    /// <summary>
+    /// A glTF node's own values with those of its descendants, as nested children: what makes copies of an instance alike.
+    /// Each node is copied once: a node listed as a child twice (glTF allows one parent) would be copied once for every path
+    /// to it, which doubles with every level, so it is refused.
+    /// </summary>
+    internal static JsonObject Shape(JsonArray nodes, int index, int depth, HashSet<int>? seen = null)
     {
         if (depth > GltfDocument.MaximumDepth) throw new InvalidDataException("The node hierarchy is cyclic or too deep.");
+        if (!(seen ??= []).Add(index)) throw new InvalidDataException($"glTF node {index} is reached twice in the node hierarchy (listed as a child more than once, or as its own descendant); a node may have only one parent.");
         var node = (JsonObject)nodes[index]!;
         var shape = Own(node);
-        shape["children"] = new JsonArray([.. (node["children"] as JsonArray ?? []).Select(c => (JsonNode?)Shape(nodes, c!.GetValue<int>(), depth + 1))]);
+        shape["children"] = new JsonArray([.. (node["children"] as JsonArray ?? []).Select(c => (JsonNode?)Shape(nodes, c!.GetValue<int>(), depth + 1, seen))]);
         return shape;
     }
     /// <summary>A glTF node's own values: all but its children (indices within its copy) and its name (an editor may suffix a copy's).</summary>

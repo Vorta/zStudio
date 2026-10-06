@@ -7,7 +7,7 @@ namespace Recoil.Zbd.Core.Sources;
 /// The tree carries no zStudio metadata; game files are built from it on export and must work in the game, not match
 /// the shipped bytes.
 /// </summary>
-public static class SourceProject
+public static partial class SourceProject
 {
     public const string DataFolder = "data", GameGenFolder = "gamegen";
     /// <summary>Text sources are bounded before they are decoded; retail sources are at most a few hundred kilobytes.</summary>
@@ -89,13 +89,10 @@ public static class SourceProject
             if (step.Exists && step.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{step.FullName} is a link; source projects contain regular files.");
         }
         if (!Directory.Exists(path)) return [];
-        List<string> files = []; int visited = 0;
-        EnumerationOptions options = new() { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = 0 };
-        foreach (var info in new DirectoryInfo(path).EnumerateFileSystemInfos("*", options))
+        List<string> files = [];
+        // Counted before it is looked at: files the scan does not want (editor caches, backups) cost as much to visit.
+        foreach (var info in Entries(path, new ScanBudget(maximumEntries, maximum => TooManyEntries(folder, maximum), token), recurse: true))
         {
-            token.ThrowIfCancellationRequested();
-            // Counted before it is looked at: files the scan does not want (editor caches, backups) cost as much to visit.
-            if (++visited > maximumEntries) throw TooManyEntries(folder, maximumEntries);
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{info.FullName} is a link; source projects contain regular files.");
             if (info is FileInfo file && include(file.Name)) files.Add(Relative(root, file.FullName));
             if (files.Count > MaximumFiles) throw new IOException($"{folder} has more than {MaximumFiles:N0} files.");
@@ -106,6 +103,53 @@ public static class SourceProject
     internal static IOException TooManyEntries(string folder, int maximum) => new(
         $"{folder} holds more than {maximum:N0} files and folders, far more than a source project needs. " +
         $"Move files the build does not use (editor caches, backups, design files) out of the project's {DataFolder} and {GameGenFolder} folders, then try again.");
+
+    /// <summary>
+    /// The files and folders one scan visits, counted together whatever the scan looks for: at most <paramref name="maximum"/>
+    /// (<see cref="MaximumScannedEntries"/>, or less), beyond which <paramref name="refusal"/> says what to do. The token is
+    /// observed at each entry, so a folder of millions of entries neither runs on unbounded nor ignores a cancellation.
+    /// </summary>
+    internal sealed class ScanBudget(int maximum, Func<int, Exception> refusal, CancellationToken token)
+    {
+        private long visited;
+        public void Visit(long entries = 1)
+        {
+            token.ThrowIfCancellationRequested();
+            if ((visited += entries) > maximum) throw refusal(maximum);
+        }
+    }
+    /// <summary>
+    /// The entries of <paramref name="path"/> (with <paramref name="recurse"/>, of every folder below it as well) as the file
+    /// system lists them, hidden ones and links included unless <paramref name="skip"/> leaves them out, and a folder that
+    /// cannot be read refused unless <paramref name="ignoreInaccessible"/>; each is counted by <paramref name="budget"/> before
+    /// it is returned. Every scan of a project's folders, of zStudio's working folder and of a game folder lists through
+    /// this, never through an unbounded enumeration.
+    /// </summary>
+    internal static IEnumerable<FileSystemInfo> Entries(string path, ScanBudget budget, bool recurse = false, FileAttributes skip = 0, bool ignoreInaccessible = false)
+    {
+        EnumerationOptions options = new() { RecurseSubdirectories = recurse, IgnoreInaccessible = ignoreInaccessible, AttributesToSkip = skip };
+        foreach (var info in new DirectoryInfo(path).EnumerateFileSystemInfos("*", options))
+        {
+            budget.Visit();
+            yield return info;
+        }
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"\Am[0-9]{1,3}\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    internal static partial System.Text.RegularExpressions.Regex MissionName();
+    /// <summary>
+    /// The mission folders (<c>data/mN</c>) as the disk spells them, by mission number. Listing <c>data</c> is a scan like any
+    /// other (see <see cref="Files(string, string, Func{string, bool}, IReadOnlyCollection{string}?, CancellationToken)"/>):
+    /// every entry there counts towards <paramref name="maximumEntries"/>, whether it is a mission folder or not, and
+    /// <paramref name="token"/> is observed at each. Links are listed like folders; the scans of what they hold refuse them.
+    /// </summary>
+    internal static IReadOnlyList<string> MissionFolders(string root, CancellationToken token, int maximumEntries = MaximumScannedEntries)
+    {
+        string data = Resolve(root, DataFolder);
+        if (!Directory.Exists(data)) return [];
+        return Entries(data, new ScanBudget(maximumEntries, maximum => TooManyEntries(DataFolder, maximum), token))
+            .Where(e => e is DirectoryInfo && MissionName().IsMatch(e.Name)).Select(e => e.Name).OrderBy(n => int.Parse(n.AsSpan(1))).ToArray();
+    }
 
     /// <summary>
     /// A destination: never a protected original corpus, never inside or containing the input. Both are compared as

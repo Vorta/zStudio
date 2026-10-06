@@ -111,7 +111,7 @@ public sealed partial class SourcePublisher
         if (!Directory.Exists(SourceProject.Resolve(root, RecoveryFolder))) return [];
         using FileStream gate = Lock();
         List<SourceRecoveryCase> cases = [];
-        foreach (var journal in Journals())
+        foreach (var journal in Journals(token))
         {
             token.ThrowIfCancellationRequested();
             if (journal.RolledBack) continue;
@@ -388,15 +388,18 @@ public sealed partial class SourcePublisher
             : new(changed ?? [], [], true);
     }
 
-    /// <summary>Every readable journal in the recovery folder, oldest first; a journal that cannot be read blocks saving.</summary>
-    private List<Journal> Journals()
+    /// <summary>
+    /// Every readable journal in the recovery folder, oldest first; a journal that cannot be read blocks saving. Every entry of
+    /// the folder counts towards <see cref="ScanLimit"/>, a journal or not, and <paramref name="token"/> is observed at each.
+    /// </summary>
+    private List<Journal> Journals(CancellationToken token)
     {
         string recovery = SourceProject.Resolve(root, RecoveryFolder);
         if (!Directory.Exists(recovery)) return [];
         List<string> ids = [];
-        foreach (var directory in new DirectoryInfo(recovery).EnumerateDirectories())
+        foreach (var entry in SourceProject.Entries(recovery, WorkingBudget(RecoveryFolder, token)))
         {
-            if (!IsSaveId(directory.Name) || directory.Attributes.HasFlag(FileAttributes.ReparsePoint) || !File.Exists(Path.Combine(directory.FullName, ManifestName))) continue;
+            if (entry is not DirectoryInfo directory || !IsSaveId(directory.Name) || directory.Attributes.HasFlag(FileAttributes.ReparsePoint) || !File.Exists(Path.Combine(directory.FullName, ManifestName))) continue;
             if (ids.Count == MaximumJournals) throw new SourceRecoveryRequiredException($"{RecoveryFolder} holds more than {MaximumJournals} save journals; resolve or move them before saving.", directory.Name, []);
             ids.Add(directory.Name);
         }

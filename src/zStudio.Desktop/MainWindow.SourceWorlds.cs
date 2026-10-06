@@ -112,7 +112,7 @@ public partial class MainWindow
         // Until the world's document exists, the opening holds the workspace: closing another document must not release it.
         sourceWorldsOpening++;
         SourceWorldSession session;
-        try { session = await Task.Run(() => new SourceWorldSession(project, mission), token); }
+        try { session = await Task.Run(() => new SourceWorldSession(project, mission, token), token); }
         catch (InvalidDataException ex) { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); throw new StudioCommandException("io_failed", ex.Message); }
         catch { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); throw; }

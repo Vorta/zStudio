@@ -58,7 +58,7 @@ public static partial class SourceWorlds
     /// <summary>Game files a preview builds: the world, what the Whole world view reads beside it, and one full-quality texture pack.</summary>
     private static readonly string[] PreviewOutputs = ["{0}/gamez.zbd", "{0}/anim.zbd", "{0}/zrdr.zbd", "{0}/rtexture16.zbd", "zrdr.zbd", "interp.zbd", "image.zbd"];
     [GeneratedRegex(@"\A[A-Za-z0-9_.\-]{1,31}\z", RegexOptions.CultureInvariant)] private static partial Regex NodeName();
-    [GeneratedRegex(@"\Am\d{1,3}\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)] private static partial Regex MissionName();
+    [GeneratedRegex(@"\Am[0-9]{1,3}\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)] private static partial Regex MissionName();
 
     /// <summary>Missions whose world the project builds (those with a gamegen/mN.gs script), in number order.</summary>
     public static IReadOnlyList<string> Missions(string root, CancellationToken token = default) => SourceBuilder.Plan(root, automaticPacks: false, token: token).Where(p => p.Family == "world").Select(p => p.Path.Split('/')[0]).ToArray();
@@ -228,7 +228,8 @@ public static partial class SourceWorlds
         string ownRoot = SourceBuilder.AnimationRoot(mission);
         if (files.Exists(ownRoot)) own.UnionWith(AnimationDefinitionSet.Load(files, ownRoot, token).Files);
         Dictionary<string, (SortedSet<string> Animations, SortedSet<string> Missions)> found = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string other in MissionFolders(projectRoot).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase)))
+        // Listed as any scan of the project is: bounded, and given up when canceled.
+        foreach (string other in SourceProject.MissionFolders(projectRoot, token).Select(m => m.ToLowerInvariant()).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase)))
         {
             token.ThrowIfCancellationRequested();
             string path = SourceBuilder.AnimationRoot(other);
@@ -250,8 +251,6 @@ public static partial class SourceWorlds
         }
         return found.OrderBy(f => f.Key, StringComparer.OrdinalIgnoreCase).Select(f => new SourceDefinitionFile(f.Key, [.. f.Value.Animations], [.. f.Value.Missions.OrderBy(m => int.Parse(m.AsSpan(1)))])).ToArray();
     }
-    private static IEnumerable<string> MissionFolders(string root) => new DirectoryInfo(SourceProject.Resolve(root, SourceProject.DataFolder)).EnumerateDirectories()
-        .Where(d => MissionName().IsMatch(d.Name)).Select(d => d.Name.ToLowerInvariant()).OrderBy(n => int.Parse(n.AsSpan(1)));
 
     /// <summary>The project on disk with some files replaced by pending content; links are refused.</summary>
     internal sealed class DiskFiles(string root, IReadOnlyDictionary<string, byte[]>? overlay) : IProjectFiles
@@ -278,6 +277,24 @@ public static partial class SourceWorlds
     public const string PreviewFolder = SourcePublisher.WorkingFolder + "/cache/worlds";
     /// <summary>The project's <see cref="PreviewFolder"/>.</summary>
     public static string PreviewRoot(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), PreviewFolder.Replace('/', Path.DirectorySeparatorChar));
+    /// <summary>
+    /// The build folders in <paramref name="previews"/> (a project's <see cref="PreviewRoot"/>) whose sessions ended without
+    /// removing them: regular folders without a session's <c>.lock</c> file, created more than a minute ago. Found as they are
+    /// listed, so each can be removed before the next is looked at. The listing is a scan of the project like any other: every
+    /// entry counts towards <see cref="SourceProject.MaximumScannedEntries"/> (beyond that <see cref="IOException"/> ends it),
+    /// and <paramref name="token"/> is observed at each.
+    /// </summary>
+    public static IEnumerable<string> AbandonedBuilds(string previews, CancellationToken token = default) => AbandonedBuilds(previews, SourceProject.MaximumScannedEntries, token);
+    /// <param name="maximumEntries">The files and folders the listing may visit (<see cref="SourceProject.MaximumScannedEntries"/>; smaller in tests).</param>
+    internal static IEnumerable<string> AbandonedBuilds(string previews, int maximumEntries, CancellationToken token)
+    {
+        if (!Directory.Exists(previews)) yield break;
+        SourceProject.ScanBudget budget = new(maximumEntries, maximum => new IOException($"{previews} holds more than {maximum:N0} files and folders; only the world builds zStudio shows belong there."), token);
+        DateTime before = DateTime.UtcNow.AddMinutes(-1);
+        foreach (var entry in SourceProject.Entries(previews, budget))
+            if (entry is DirectoryInfo directory && !directory.Attributes.HasFlag(FileAttributes.ReparsePoint) && !File.Exists(Path.Combine(directory.FullName, ".lock")) && directory.CreationTimeUtc < before)
+                yield return directory.FullName;
+    }
 
     /// <summary>
     /// Builds <paramref name="mission"/> into <paramref name="destination"/> (a new folder inside the project's

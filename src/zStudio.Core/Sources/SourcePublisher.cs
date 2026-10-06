@@ -52,6 +52,11 @@ public sealed partial class SourcePublisher
     private const string AfterFolder = "after", HeldFolder = "held", TakenFolder = "removed";
     private static readonly char[] InvalidNameCharacters = Path.GetInvalidFileNameChars();
     private readonly string root;
+    /// <summary>
+    /// The files and folders one listing may visit: the folders a save writes into (together), and the recovery and staging
+    /// folders (each). <see cref="SourceProject.MaximumScannedEntries"/>, as for any scan of the project; smaller in tests.
+    /// </summary>
+    internal int ScanLimit { get; init; } = SourceProject.MaximumScannedEntries;
 
     /// <summary>A publisher for the source project at <paramref name="projectRoot"/>; nothing is written until a save or recovery.</summary>
     public SourcePublisher(string projectRoot)
@@ -85,8 +90,8 @@ public sealed partial class SourcePublisher
         var (changes, checks) = Plan(writes, token);
         token.ThrowIfCancellationRequested();
         using FileStream gate = Lock();
-        Tidy();
-        if (Journals().FirstOrDefault(j => !j.Committed && !j.RolledBack) is { } pending) throw Blocked(pending);
+        Tidy(token);
+        if (Journals(token).FirstOrDefault(j => !j.Committed && !j.RolledBack) is { } pending) throw Blocked(pending);
         string[] conflicts = [.. changes.Concat(checks).OrderBy(t => t.Order).Where(t => !Look(t.Path, token, t.Expected).Is(t.Expected)).Select(t => t.Name)];
         if (conflicts.Length > 0) throw new SourceConflictException($"{string.Join(", ", conflicts)} changed on disk since {(conflicts.Length == 1 ? "it was" : "they were")} read, or cannot be read now; nothing was saved. Reload to continue from the files on disk.", conflicts);
         foreach (var change in changes)
@@ -201,12 +206,16 @@ public sealed partial class SourcePublisher
         if (writes.Count > SourceProject.MaximumFiles) throw new ArgumentException($"A save can include at most {SourceProject.MaximumFiles:N0} files.", nameof(writes));
         HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase); List<Target> changes = [], checks = [];
         Dictionary<string, Dictionary<string, FileSystemInfo>> listings = new(StringComparer.OrdinalIgnoreCase);
+        // Each folder on the way to a written file is listed once; together the listings are a scan of the project like any other.
+        SourceProject.ScanBudget budget = new(ScanLimit, maximum => new IOException(
+            $"The folders this save writes into hold more than {maximum:N0} files and folders, far more than a source project needs. " +
+            $"Move files the build does not use (editor caches, backups, design files) out of the project's {SourceProject.DataFolder} and {SourceProject.GameGenFolder} folders, then save again."), token);
         for (int i = 0; i < writes.Count; i++)
         {
             token.ThrowIfCancellationRequested();
             SourceFileWrite write = writes[i] ?? throw new ArgumentException($"Save entry {i} is missing.", nameof(writes));
             ArgumentNullException.ThrowIfNull(write.Relative, nameof(writes));
-            string relative = Canonical(write.Relative, listings);
+            string relative = Canonical(write.Relative, listings, budget);
             if (!seen.Add(relative)) throw new ArgumentException($"{write.Relative} is listed more than once in the save.", nameof(writes));
             string path = SourceProject.Resolve(root, relative);
             if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException($"{write.Relative} is inside the protected zbd_1998/zbd_1999 folders; nothing was saved.");
@@ -224,7 +233,7 @@ public sealed partial class SourcePublisher
     /// (so never zStudio's working data), names Windows would alter or treat as devices, other spellings of an existing
     /// entry (such as short 8.3 names, which would let one file be listed twice) and files used as folders.
     /// </summary>
-    private string Canonical(string relative, Dictionary<string, Dictionary<string, FileSystemInfo>> listings)
+    private string Canonical(string relative, Dictionary<string, Dictionary<string, FileSystemInfo>> listings, SourceProject.ScanBudget budget)
     {
         CheckSyntax(relative);
         string[] parts = relative.Split('/'); string current = root; bool exists = true;
@@ -236,7 +245,7 @@ public sealed partial class SourcePublisher
                 if (!listings.TryGetValue(current, out var entries))
                 {
                     entries = new(StringComparer.OrdinalIgnoreCase);
-                    foreach (var info in new DirectoryInfo(current).EnumerateFileSystemInfos("*", new EnumerationOptions { AttributesToSkip = 0, IgnoreInaccessible = false, RecurseSubdirectories = false }))
+                    foreach (var info in SourceProject.Entries(current, budget))
                         if (entries.TryAdd(info.Name, info) && entries.Count > SourceProject.MaximumFiles) throw new IOException($"{current} has more than {SourceProject.MaximumFiles:N0} entries.");
                     listings[current] = entries;
                 }
@@ -429,21 +438,27 @@ public sealed partial class SourcePublisher
     /// Removes what finished saves left behind (under the lock): journals already renamed for removal, committed or rolled-back
     /// journals, journals that never got a manifest and hold no original, and staging folders without a journal.
     /// </summary>
-    private void Tidy()
+    private void Tidy(CancellationToken token)
     {
         string recovery = SourceProject.Resolve(root, RecoveryFolder);
-        foreach (var directory in new DirectoryInfo(recovery).EnumerateDirectories())
+        foreach (var entry in SourceProject.Entries(recovery, WorkingBudget(RecoveryFolder, token)))
         {
-            if (directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+            if (entry is not DirectoryInfo directory || directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
             if (directory.Name.EndsWith(RemovedSuffix, StringComparison.Ordinal) && IsSaveId(directory.Name[..^RemovedSuffix.Length])) TryDelete(directory.FullName);
             else if (IsSaveId(directory.Name) && !File.Exists(Path.Combine(directory.FullName, ManifestName))
                 && !HasFiles(Path.Combine(directory.FullName, HeldFolder)) && !HasFiles(Path.Combine(directory.FullName, TakenFolder))) TryDelete(directory.FullName);
         }
-        foreach (var journal in Journals())
+        foreach (var journal in Journals(token))
             if (journal.Committed || journal.RolledBack && !HasFiles(Path.Combine(JournalPath(journal.Id), HeldFolder))) Discard(journal.Id);
         string staging = SourceProject.Resolve(root, StagingFolder);
         if (Directory.Exists(staging)) // Lock() refused links on the way.
-            foreach (var directory in new DirectoryInfo(staging).EnumerateDirectories())
-                if (!directory.Attributes.HasFlag(FileAttributes.ReparsePoint) && IsSaveId(directory.Name) && !Directory.Exists(JournalPath(directory.Name))) TryDelete(directory.FullName);
+            foreach (var entry in SourceProject.Entries(staging, WorkingBudget(StagingFolder, token)))
+                if (entry is DirectoryInfo directory && !directory.Attributes.HasFlag(FileAttributes.ReparsePoint) && IsSaveId(directory.Name) && !Directory.Exists(JournalPath(directory.Name))) TryDelete(directory.FullName);
     }
+    /// <summary>
+    /// A listing of one of zStudio's own folders (<paramref name="folder"/>: recovery or staging), which holds a folder for each
+    /// save at most: entries other programs put there count too, and <paramref name="token"/> is observed at each.
+    /// </summary>
+    private SourceProject.ScanBudget WorkingBudget(string folder, CancellationToken token) => new(ScanLimit, maximum => new IOException(
+        $"{folder} holds more than {maximum:N0} files and folders, where zStudio keeps a folder for each unfinished save. Move what other programs put there out of it, then try again."), token);
 }
