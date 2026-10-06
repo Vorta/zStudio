@@ -13,6 +13,11 @@ public static class SourceProject
     /// <summary>Text sources are bounded before they are decoded; retail sources are at most a few hundred kilobytes.</summary>
     public const int MaximumSourceTextBytes = 16 * 1024 * 1024;
     public const int MaximumFiles = 50_000;
+    /// <summary>
+    /// The files and folders a scan of a source folder visits, whatever it looks for: the reconstructed releases have about
+    /// 5,750, and editor files, backups and design sources beside them leave a project far below this.
+    /// </summary>
+    public const int MaximumScannedEntries = 250_000;
 
     /// <summary>A folder is a source project when it has both top-level folders of the build layout.</summary>
     public static bool IsProject(string? root) => root != null && Directory.Exists(System.IO.Path.Combine(root, DataFolder)) && Directory.Exists(System.IO.Path.Combine(root, GameGenFolder));
@@ -59,16 +64,22 @@ public static class SourceProject
     /// <summary>
     /// Regular files below <paramref name="folder"/> (root-relative, forward slashes) in a stable order; links are refused.
     /// <paramref name="added"/> are files that exist only as pending content (a workspace's new files) and count as present.
+    /// Every file and folder visited counts towards <see cref="MaximumScannedEntries"/>, whether it is included or not, and
+    /// <paramref name="token"/> is observed at each.
     /// </summary>
-    internal static IReadOnlyList<string> Files(string root, string folder, Func<string, bool> include, IReadOnlyCollection<string>? added = null)
+    internal static IReadOnlyList<string> Files(string root, string folder, Func<string, bool> include, IReadOnlyCollection<string>? added = null, CancellationToken token = default)
+        => Files(root, folder, include, added, MaximumScannedEntries, token);
+    /// <param name="maximumEntries">The entries the scan may visit (<see cref="MaximumScannedEntries"/>; smaller in tests).</param>
+    internal static IReadOnlyList<string> Files(string root, string folder, Func<string, bool> include, IReadOnlyCollection<string>? added, int maximumEntries, CancellationToken token)
     {
-        var files = DiskFiles(root, folder, include);
+        var files = DiskFiles(root, folder, include, maximumEntries, token);
         if (added == null || added.Count == 0) return files;
         string prefix = folder.TrimEnd('/') + "/";
-        var extra = added.Where(a => a.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && include(System.IO.Path.GetFileName(a)) && !files.Contains(a, StringComparer.OrdinalIgnoreCase));
+        HashSet<string> listed = new(files, StringComparer.OrdinalIgnoreCase);
+        var extra = added.Where(a => a.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && include(System.IO.Path.GetFileName(a)) && !listed.Contains(a));
         return files.Concat(extra).Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
-    private static IReadOnlyList<string> DiskFiles(string root, string folder, Func<string, bool> include)
+    private static IReadOnlyList<string> DiskFiles(string root, string folder, Func<string, bool> include, int maximumEntries, CancellationToken token)
     {
         string path = Resolve(root, folder), current = System.IO.Path.GetFullPath(root);
         // The folders leading to the listed one must be regular too; enumeration below only sees their contents.
@@ -78,16 +89,23 @@ public static class SourceProject
             if (step.Exists && step.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{step.FullName} is a link; source projects contain regular files.");
         }
         if (!Directory.Exists(path)) return [];
-        List<string> files = [];
+        List<string> files = []; int visited = 0;
         EnumerationOptions options = new() { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = 0 };
         foreach (var info in new DirectoryInfo(path).EnumerateFileSystemInfos("*", options))
         {
+            token.ThrowIfCancellationRequested();
+            // Counted before it is looked at: files the scan does not want (editor caches, backups) cost as much to visit.
+            if (++visited > maximumEntries) throw TooManyEntries(folder, maximumEntries);
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{info.FullName} is a link; source projects contain regular files.");
             if (info is FileInfo file && include(file.Name)) files.Add(Relative(root, file.FullName));
             if (files.Count > MaximumFiles) throw new IOException($"{folder} has more than {MaximumFiles:N0} files.");
         }
         return files.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
+    /// <summary>A scan that would visit more than <paramref name="maximum"/> files and folders, and what to do about it.</summary>
+    internal static IOException TooManyEntries(string folder, int maximum) => new(
+        $"{folder} holds more than {maximum:N0} files and folders, far more than a source project needs. " +
+        $"Move files the build does not use (editor caches, backups, design files) out of the project's {DataFolder} and {GameGenFolder} folders, then try again.");
 
     /// <summary>
     /// A destination: never a protected original corpus, never inside or containing the input. Both are compared as

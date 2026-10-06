@@ -48,7 +48,7 @@ public sealed class ExportProfileBoundsTests
         // their alpha planes, counted as every pack's budget counts them, they need 2.25 MB.
         byte[] glass = Png(512, 128);
         for (int i = 0; i < 3; i++) fixture.Write($"data/m1/textures/glass{i}.png", glass);
-        var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small")), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
+        var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small"), token: TestContext.Current.CancellationToken), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
         Assert.Equal("m1/rtexture2.zbd", plan.Path);
         Assert.Empty(plan.Notes);
 
@@ -73,7 +73,7 @@ public sealed class ExportProfileBoundsTests
         fixture.Write("data/m2/textures/bft/camo.png", Png(1024, 255));
         byte[] stone = Png(512, 255);
         for (int i = 0; i < 3; i++) fixture.Write($"data/m1/textures/stone{i}.png", stone);
-        var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small")), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
+        var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small"), token: TestContext.Current.CancellationToken), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
         Assert.Equal("m1/rtexture2.zbd", plan.Path);
 
         List<string> warnings = [];
@@ -93,13 +93,13 @@ public sealed class ExportProfileBoundsTests
         fixture.Write("data/m1/textures/stone.png", Png(64, 255));
         string stone = SourceProject.Resolve(fixture.Project, "data/m1/textures/stone.png");
         // The world menu lists missions, and a preview builds a fixed pack: neither names an automatic pack.
-        Assert.Equal(["m1", "m2"], SourceWorlds.Missions(fixture.Project));
-        Assert.DoesNotContain(SourceBuilder.Plan(fixture.Project, automaticPacks: false), p => p.Automatic);
+        Assert.Equal(["m1", "m2"], SourceWorlds.Missions(fixture.Project, TestContext.Current.CancellationToken));
+        Assert.DoesNotContain(SourceBuilder.Plan(fixture.Project, automaticPacks: false, token: TestContext.Current.CancellationToken), p => p.Automatic);
         var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "bounds"), token: Token);
         Assert.Contains(build.Outputs, o => o.Path == "m1/rtexture16.zbd" && o.Status == "built");
         Assert.False(TextureSources.HeaderRead(stone));
         // An export's plan reads them to name the automatic pack.
-        _ = SourceBuilder.Plan(fixture.Project);
+        _ = SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken);
         Assert.True(TextureSources.HeaderRead(stone));
     }
 

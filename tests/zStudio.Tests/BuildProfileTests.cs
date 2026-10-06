@@ -126,7 +126,7 @@ public sealed class BuildProfileTests
             Assert.Null(TextureSources.PngSize(Path.Combine(folder, "huge.png")));
             Assert.Null(TextureSources.PngSize(Path.Combine(folder, "wide.png")));
             var variant = BuildProfiles.Modern.TexturePacks.Single(p => p.Automatic).Variant;
-            Assert.Equal(2L * 64 * 8, SourceBuilder.TextureMemory(folder, ["huge.png", "wide.png", "fine.png"], variant));
+            Assert.Equal(2L * 64 * 8, SourceBuilder.TextureMemory(folder, ["huge.png", "wide.png", "fine.png"], variant, TestContext.Current.CancellationToken));
             // The sizing itself stays bounded for any side.
             Assert.Equal((1024, 1024), TexturePackBuilder.Normalize(int.MaxValue, int.MaxValue, variant));
             // A file another program holds without sharing is not counted rather than failing the plan.
@@ -144,7 +144,7 @@ public sealed class BuildProfileTests
         // Nine 1024-texel textures need 18 MB at full size, more than rtexture16: the modern profile adds rtexture32 to m1 alone.
         byte[] large = PngEncoder.Encode(new(1024, 1024, new byte[1024 * 1024 * 4]), Token);
         for (int i = 0; i < 9; i++) fixture.Write($"data/m1/textures/large{i}.png", large);
-        var plan = SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Modern);
+        var plan = SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Modern, token: TestContext.Current.CancellationToken);
         var automatic = Assert.Single(plan, p => p.Path == "m1/rtexture32.zbd");
         Assert.Equal((32L << 20, true), (automatic.Pack!.BudgetBytes!.Value, automatic.Automatic));
         Assert.Equal(["m2/rtexture2.zbd", "m2/rtexture4.zbd", "m2/rtexture8.zbd", "m2/rtexture16.zbd"], plan.Where(p => p.Path.StartsWith("m2/rtexture", StringComparison.Ordinal)).Select(p => p.Path));
@@ -224,7 +224,7 @@ public sealed class BuildProfileTests
         using SourceWorldFixture fixture = new();
         fixture.Write("gamegen/build-profiles/retro.json", Retro);
         // The plan follows the profile: the default (the project's retro) builds two packs per mission.
-        var plan = SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, null));
+        var plan = SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, null), token: TestContext.Current.CancellationToken);
         Assert.Equal(["m1/rtexture4.zbd", "m1/texture4.zbd"], plan.Where(p => p.Family == "textures" && p.Path.StartsWith("m1/", StringComparison.Ordinal)).Select(p => p.Path));
         Assert.Equal(128, plan.First(p => p.Path == "m1/rtexture4.zbd").Pack!.MaximumDimension);
         string destination = Path.Combine(fixture.Root, "game");
@@ -247,7 +247,7 @@ public sealed class BuildProfileTests
         var original = await SourceBuilder.CheckAsync(fixture.Project, ["m1/rtexture2.zbd"], token: Token, profile: "original");
         Assert.Equal("original", original.Profile);
         // The original profile plans the packs m1 shipped with: texture6, but not m6's texture8.
-        var shipped = SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Original).Where(p => p.Family == "textures" && p.Path.StartsWith("m1/", StringComparison.Ordinal)).Select(p => p.Path).ToArray();
+        var shipped = SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Original, token: TestContext.Current.CancellationToken).Where(p => p.Family == "textures" && p.Path.StartsWith("m1/", StringComparison.Ordinal)).Select(p => p.Path).ToArray();
         Assert.Contains("m1/texture6.zbd", shipped); Assert.DoesNotContain("m1/texture8.zbd", shipped);
         await Assert.ThrowsAsync<InvalidDataException>(() => SourceBuilder.CheckAsync(fixture.Project, null, token: Token, profile: "missing"));
     }

@@ -64,7 +64,7 @@ public sealed class SourceProjectTests
     {
         using var fixture = new SourceFixture();
         await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
-        var plan = SourceBuilder.Plan(fixture.Project);
+        var plan = SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken);
         Assert.Equal(AllOutputs, plan.Select(p => p.Path));
         Assert.Equal(["data/m1/zrdr/ai.zrd", "data/m1/zrdr/envmodels/frcgate.zrd"], plan.Single(p => p.Path == "m1/zrdr.zbd").Inputs);
         Assert.Equal(["gamegen/m1.gs", "gamegen/support/common.gw"], plan.Single(p => p.Path == "interp.zbd").Inputs);
@@ -73,8 +73,8 @@ public sealed class SourceProjectTests
         File.WriteAllText(Path.Combine(fixture.Project, "data", "m10", "zrdr", "x.zrd"), "VALUE ( 1 )");
         Directory.CreateDirectory(Path.Combine(fixture.Project, "data", "m2", "zrdr"));
         File.WriteAllText(Path.Combine(fixture.Project, "data", "m2", "zrdr", "y.zrd"), "VALUE ( 2 )");
-        Assert.Equal(["m1/zrdr.zbd", "m2/zrdr.zbd", "m10/zrdr.zbd"], SourceBuilder.Plan(fixture.Project).Where(p => p.Path.Contains('/')).Select(p => p.Path));
-        Assert.Throws<InvalidDataException>(() => SourceBuilder.Plan(fixture.Corpus));
+        Assert.Equal(["m1/zrdr.zbd", "m2/zrdr.zbd", "m10/zrdr.zbd"], SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken).Where(p => p.Path.Contains('/')).Select(p => p.Path));
+        Assert.Throws<InvalidDataException>(() => SourceBuilder.Plan(fixture.Corpus, token: TestContext.Current.CancellationToken));
     }
 
     [Fact]

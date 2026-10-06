@@ -55,54 +55,56 @@ public static partial class SourceBuilder
     /// Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see
     /// <see cref="SourceWorkspace"/>). Texture packs follow <paramref name="profile"/> (the built-in modern one when null).
     /// Without <paramref name="automaticPacks"/> the automatic packs are left out: naming them reads every mission texture's
-    /// PNG header, which listing the worlds or building one for a preview does not need.
+    /// PNG header, which listing the worlds or building one for a preview does not need. <paramref name="token"/> is
+    /// observed while the project's folders are scanned (each scan visits at most <see cref="SourceProject.MaximumScannedEntries"/>).
     /// </summary>
-    public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, BuildProfile? profile = null, bool automaticPacks = true)
+    public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, BuildProfile? profile = null, bool automaticPacks = true, CancellationToken token = default)
     {
         profile ??= BuildProfiles.Modern;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         List<SourceOutputPlan> plans = [];
         static bool Zrd(string name) => name.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase);
         // Common resources come from every zrdr folder under data/common (including multi_bft/zrdr).
-        var common = SourceProject.Files(root, "data/common", Zrd, added).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase)).ToArray();
+        var common = SourceProject.Files(root, "data/common", Zrd, added, token).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase)).ToArray();
         if (common.Length > 0) plans.Add(new("zrdr.zbd", "archive", common));
-        var scripts = SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), added);
+        var scripts = SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), added, token);
         if (scripts.Count > 0) plans.Add(new("interp.zbd", "scripts", scripts));
-        var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase), added);
+        var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase), added, token);
         if (sounds.Count > 0) plans.AddRange(Banks.Select(bank => new SourceOutputPlan(bank, "sounds", sounds)));
         var missions = new DirectoryInfo(SourceProject.Resolve(root, SourceProject.DataFolder)).EnumerateDirectories().Where(d => MissionFolder().IsMatch(d.Name)).OrderBy(d => int.Parse(d.Name.AsSpan(1))).ToArray();
         // A world may load any model in the project, and animations any keyframe script; which depends on the sources.
         IReadOnlyList<string>? models = null, scriptsFound = null;
         // Interface images: fonts, the images tree and each mission's objective images.
-        var images = SourceProject.Files(root, TextureSources.Fonts, Png, added).Concat(SourceProject.Files(root, TextureSources.Images, Png, added))
-            .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m.Name}/images", Png, added))).ToArray();
+        var images = SourceProject.Files(root, TextureSources.Fonts, Png, added, token).Concat(SourceProject.Files(root, TextureSources.Images, Png, added, token))
+            .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m.Name}/images", Png, added, token))).ToArray();
         if (images.Length > 0) plans.Add(new("image.zbd", "images", images));
         foreach (var mission in missions)
         {
+            token.ThrowIfCancellationRequested();
             string name = mission.Name.ToLowerInvariant();
             string entry = WorldScript(name);
             if (File.Exists(SourceProject.Resolve(root, entry)) || added?.Contains(entry, StringComparer.OrdinalIgnoreCase) == true)
             {
-                models ??= SourceProject.Files(root, SourceProject.DataFolder, IsModelSource, added);
+                models ??= SourceProject.Files(root, SourceProject.DataFolder, IsModelSource, added, token);
                 // A project without glTF models has no world to build (buffers alone are not models).
                 if (models.Any(m => !m.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))) plans.Add(new($"{name}/gamez.zbd", "world", [entry, .. models]));
             }
-            var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd, added);
+            var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd, added, token);
             if (resources.Count > 0) plans.Add(new($"{name}/zrdr.zbd", "archive", resources));
             string definitions = AnimationRoot(name);
             if (File.Exists(SourceProject.Resolve(root, definitions)) || added?.Contains(definitions, StringComparer.OrdinalIgnoreCase) == true)
             {
-                scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase), added);
+                scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase), added, token);
                 plans.Add(new($"{name}/anim.zbd", "animations", [definitions, .. scriptsFound]));
             }
-            var textures = MissionTextures(root, name, added);
+            var textures = MissionTextures(root, name, added, token);
             if (textures.Count > 0)
                 foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
                 {
                     if (!pack.Automatic) { plans.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant }); continue; }
                     if (!automaticPacks) continue;
                     // The automatic pack is named for the texture memory the mission's textures need at full size.
-                    long memory = TextureMemory(root, textures, pack.Variant);
+                    long memory = TextureMemory(root, textures, pack.Variant, token);
                     if (BuildProfiles.AutomaticPack(profile, name, memory) is not { BudgetBytes: long budget } automatic) continue;
                     plans.Add(new($"{name}/{automatic.FileName}", "textures", textures)
                     {
@@ -176,7 +178,7 @@ public static partial class SourceBuilder
         {
             if (damageMasks != null) return damageMasks;
             damageMasks = new(StringComparer.OrdinalIgnoreCase);
-            foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), Added))
+            foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), Added, token))
                 foreach (var line in GameGenScriptText.Tokenize(GameGenScriptText.Decode(Read(script, token))))
                     if (line.Count > 1 && line[0].Equals("WriteTextureSetMap", StringComparison.OrdinalIgnoreCase)) damageMasks.Add(Path.GetFileNameWithoutExtension(line[1]));
             return damageMasks;
@@ -264,7 +266,7 @@ public static partial class SourceBuilder
         // refused like a changed source, and the plan is made again before publishing (see CheckPlanUnchanged).
         Snapshot snapshot = new(root);
         var profile = await Task.Run(() => FindProfile(root, profileName, snapshot, token), token);
-        var all = await Task.Run(() => Plan(root, null, profile), token);
+        var all = await Task.Run(() => Plan(root, null, profile, token: token), token);
         var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException($"This source project cannot build {o}.")).Distinct().ToArray();
         if (selected.Count == 0) throw new InvalidDataException("This source project has nothing to build yet.");
@@ -353,7 +355,7 @@ public static partial class SourceBuilder
     {
         token.ThrowIfCancellationRequested();
         BuildProfile again; IReadOnlyList<SourceOutputPlan> now;
-        try { again = FindProfile(root, profileName, snapshot, token); now = Plan(root, null, again); }
+        try { again = FindProfile(root, profileName, snapshot, token); now = Plan(root, null, again, token: token); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new InvalidDataException($"The project changed while exporting; nothing was written. Export again. ({ex.Message})", ex); }
         bool same = again.Name == profile.Name && again.Source == profile.Source && (selected == null
@@ -636,11 +638,11 @@ public static partial class SourceBuilder
     /// the other campaign missions' vehicle folders. The first folder holding a name wins, as the engine takes the first
     /// match.
     /// </summary>
-    internal static IReadOnlyList<string> MissionTextures(string root, string mission, IReadOnlyCollection<string>? added = null)
+    internal static IReadOnlyList<string> MissionTextures(string root, string mission, IReadOnlyCollection<string>? added = null, CancellationToken token = default)
     {
         List<string> inputs = []; HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
         foreach (string folder in TextureSources.MissionFolders(mission, Multiplayer(root, mission)))
-            foreach (string file in SourceProject.Files(root, folder, n => n.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase), added))
+            foreach (string file in SourceProject.Files(root, folder, n => n.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase), added, token))
                 // Subfolders of a search folder are separate folders (bft is listed on its own).
                 if (Path.GetDirectoryName(file)!.Replace('\\', '/').Equals(folder, StringComparison.OrdinalIgnoreCase) && names.Add(Path.GetFileNameWithoutExtension(file))) inputs.Add(file);
         return inputs;
@@ -652,15 +654,18 @@ public static partial class SourceBuilder
     /// so it counts them and keeps the pack within its name (see <see cref="BuildTexturePack"/>). Files not yet on disk are
     /// not counted.
     /// </summary>
-    internal static long TextureMemory(string root, IEnumerable<string> textures, TexturePackVariant variant)
+    internal static long TextureMemory(string root, IEnumerable<string> textures, TexturePackVariant variant, CancellationToken token = default)
     {
         long total = 0;
         foreach (string texture in textures)
+        {
+            token.ThrowIfCancellationRequested();
             if (TextureSources.PngSize(SourceProject.Resolve(root, texture)) is var (width, height))
             {
                 var (w, h) = TexturePackBuilder.Normalize(width, height, variant);
                 total += 2L * w * h;
             }
+        }
         return total;
     }
     /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle.</summary>
@@ -745,8 +750,8 @@ public static partial class SourceBuilder
     private static HashSet<string>? EffectNames(string root, string mission, Snapshot snapshot, CancellationToken token)
     {
         static bool Effects(string name) => name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase);
-        var sources = SourceProject.Files(root, "data/common", Effects, snapshot.Added).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase))
-            .Concat(SourceProject.Files(root, $"data/{mission}/zrdr", Effects, snapshot.Added)).ToArray();
+        var sources = SourceProject.Files(root, "data/common", Effects, snapshot.Added, token).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase))
+            .Concat(SourceProject.Files(root, $"data/{mission}/zrdr", Effects, snapshot.Added, token)).ToArray();
         if (sources.Length == 0) return null;
         HashSet<string> names = new(StringComparer.Ordinal);
         foreach (string source in sources) names.UnionWith(Animation.AnimationCompiler.EffectNames(Animation.AnimationDefinitionSet.Read(snapshot.Files(), source, token)));

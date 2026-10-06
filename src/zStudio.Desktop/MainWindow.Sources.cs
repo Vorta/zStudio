@@ -192,7 +192,7 @@ public partial class MainWindow
             // A profile chosen in Tools → Build profile whose file can no longer be used: the status still lists every
             // profile, with that one's error and no outputs, so the choice can be seen and another profile named.
             if (profile.Error != null && a["profile"] is not null) throw new InvalidDataException(profile.Error);
-            plan = profile.Error != null ? [] : await Task.Run(() => SourceBuilder.Plan(root, null, profile), token);
+            plan = profile.Error != null ? [] : await Task.Run(() => SourceBuilder.Plan(root, null, profile, token: token), token);
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }

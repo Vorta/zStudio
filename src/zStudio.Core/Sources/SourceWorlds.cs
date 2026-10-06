@@ -56,13 +56,13 @@ public static partial class SourceWorlds
     [GeneratedRegex(@"\Am\d{1,3}\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)] private static partial Regex MissionName();
 
     /// <summary>Missions whose world the project builds (those with a gamegen/mN.gs script), in number order.</summary>
-    public static IReadOnlyList<string> Missions(string root) => SourceBuilder.Plan(root, automaticPacks: false).Where(p => p.Family == "world").Select(p => p.Path.Split('/')[0]).ToArray();
+    public static IReadOnlyList<string> Missions(string root, CancellationToken token = default) => SourceBuilder.Plan(root, automaticPacks: false, token: token).Where(p => p.Family == "world").Select(p => p.Path.Split('/')[0]).ToArray();
 
     /// <summary>Every glTF model under data that a script can load by name, in path order.</summary>
-    public static IReadOnlyList<SourceModelChoice> Models(string root)
+    public static IReadOnlyList<SourceModelChoice> Models(string root, CancellationToken token = default)
     {
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
-        return SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".glb", StringComparison.OrdinalIgnoreCase))
+        return SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".glb", StringComparison.OrdinalIgnoreCase), token: token)
             .Where(p => IsLoadable(Path.GetFileNameWithoutExtension(p)) && IsScriptFolder(Path.GetDirectoryName(p)!))
             .Select(p => new SourceModelChoice(p, Path.GetDirectoryName(p)!.Replace('\\', '/'), Path.GetFileNameWithoutExtension(p))).ToArray();
     }
@@ -296,7 +296,7 @@ public static partial class SourceWorlds
         if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any()) throw new IOException($"The preview folder {destination} is not empty.");
         IReadOnlyCollection<string> added = overlay?.Keys.Where(k => !File.Exists(SourceProject.Resolve(root, k))).ToArray() ?? [];
         // The preview's pack is a fixed one, so the automatic packs are not sized (each would read every PNG header).
-        var plan = await Task.Run(() => SourceBuilder.Plan(root, added, automaticPacks: false), token).ConfigureAwait(false);
+        var plan = await Task.Run(() => SourceBuilder.Plan(root, added, automaticPacks: false, token: token), token).ConfigureAwait(false);
         var selected = PreviewOutputs.Select(o => string.Format(CultureInfo.InvariantCulture, o, mission))
             .Select(o => plan.FirstOrDefault(p => p.Path.Equals(o, StringComparison.OrdinalIgnoreCase))).OfType<SourceOutputPlan>().ToArray();
         if (!selected.Any(p => p.Family == "world")) throw new InvalidDataException($"The project has no world script for {mission} ({SourceBuilder.WorldScript(mission)}) or no glTF models.");

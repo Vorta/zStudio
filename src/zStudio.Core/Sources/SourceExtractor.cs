@@ -30,7 +30,7 @@ public static class SourceExtractor
         SourceProject.ValidateSeparate(projectRoot, corpusRoot, "project folder");
         SourceProject.RejectLinks(projectRoot);
         if (Directory.Exists(projectRoot) && Directory.EnumerateFileSystemEntries(projectRoot).Any()) throw new IOException("Choose a new or empty folder for the source project.");
-        var all = Corpus(corpusRoot);
+        var all = Corpus(corpusRoot, token);
         // The game reads its data from the folder itself and its mission folders (mN): only those files are reconstructed
         // and decide whether the folder can be. Files anywhere else, such as a demo copied into a subfolder, are not read.
         var files = all.Where(f => GameFile(f.Relative)).ToList();
@@ -176,7 +176,8 @@ public static class SourceExtractor
             catch (DirectoryNotFoundException ex) { throw ChangedDuringRun(path, ex); }
             await using (stream)
             {
-                if (JournalDigest.Of(stream) != written) throw ChangedDuringRun(path);
+                // Another length differs without being read.
+                if (!written.Matches(stream, token)) throw ChangedDuringRun(path);
                 DateTime time = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
                 stream.Position = 0;
                 await WriteAsync(stream, path, bytes, time, token);
@@ -358,12 +359,17 @@ public static class SourceExtractor
     private static bool IsWave(ReadOnlySpan<byte> bytes) => bytes.Length >= 12 && bytes[..4].SequenceEqual("RIFF"u8) && bytes.Slice(8, 4).SequenceEqual("WAVE"u8);
 
     /// <summary>Shipped files in a stable order, relative with forward slashes, with their size and modification time. Links are refused.</summary>
-    internal static List<Input> Corpus(string root)
+    /// <param name="maximumEntries">The files and folders the listing may visit (<see cref="SourceProject.MaximumScannedEntries"/>; smaller in tests).</param>
+    internal static List<Input> Corpus(string root, CancellationToken token = default, int maximumEntries = SourceProject.MaximumScannedEntries)
     {
         EnumerationOptions options = new() { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = 0 };
-        List<Input> files = [];
+        List<Input> files = []; int visited = 0;
         foreach (var info in new DirectoryInfo(root).EnumerateFileSystemInfos("*", options))
         {
+            token.ThrowIfCancellationRequested();
+            // Folders count too: a tree of empty folders costs as much to walk as one of files.
+            if (++visited > maximumEntries)
+                throw new IOException($"The game data folder holds more than {maximumEntries:N0} files and folders; choose the folder that holds the game's ZBD files.");
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{info.FullName} is a link; reconstruct from a folder of regular files.");
             if (info is not FileInfo file) continue;
             // As the file itself records them (a directory listing may lag behind), the way they are compared when it is read.

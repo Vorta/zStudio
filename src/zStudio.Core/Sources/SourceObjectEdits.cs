@@ -1049,7 +1049,7 @@ public static class SourceObjectEdits
             return holds[path] = found;
         }
 
-        var worlds = SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        var worlds = SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase), token: token)
             .Where(p => p.Count(c => c == '/') == 1).Order(StringComparer.OrdinalIgnoreCase);
         foreach (string world in worlds)
         {
@@ -1520,7 +1520,7 @@ public static class SourceObjectEdits
     internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, CancellationToken token)
     {
         List<string> missions = [];
-        var worlds = SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        var worlds = SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase), token: token)
             .Where(p => p.Count(c => c == '/') == 1);
         foreach (string world in worlds)
         {

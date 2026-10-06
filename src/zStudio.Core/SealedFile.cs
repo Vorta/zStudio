@@ -50,7 +50,7 @@ internal sealed partial class SealedFile : IDisposable
         else file = new(path, null, new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
         try
         {
-            if (file.Digest() != expected) throw new IOException($"{path} changed after it was checked.");
+            if (!file.Has(expected)) throw new IOException($"{path} changed after it was checked.");
             return file;
         }
         catch { file.Dispose(); throw; }
@@ -144,6 +144,11 @@ internal sealed partial class SealedFile : IDisposable
 
     public void Dispose() { handle?.Dispose(); stream?.Dispose(); }
 
+    /// <summary>
+    /// Whether the held content is <paramref name="expected"/>; a file of another length differs without being read (a
+    /// staged copy another program filled with gigabytes).
+    /// </summary>
+    private bool Has(JournalDigest expected) => (handle != null ? RandomAccess.GetLength(handle) : stream!.Length) == expected.Length && Digest() == expected;
     /// <summary>The held content's length and SHA-256, read through the handle that holds it.</summary>
     private JournalDigest Digest()
     {

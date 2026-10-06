@@ -83,8 +83,8 @@ public sealed class SourceWorldTests
     {
         using SourceWorldFixture fixture = new();
         string root = fixture.Project;
-        Assert.Equal(["m1", "m2"], SourceWorlds.Missions(root));
-        Assert.Contains(SourceWorlds.Models(root), m => m.Path == fixture.Tank && m.Name == "tank" && m.Folder == "data/m2/models/bft");
+        Assert.Equal(["m1", "m2"], SourceWorlds.Missions(root, TestContext.Current.CancellationToken));
+        Assert.Contains(SourceWorlds.Models(root, TestContext.Current.CancellationToken), m => m.Path == fixture.Tank && m.Name == "tank" && m.Folder == "data/m2/models/bft");
         // m2 lists the tank's definitions; m1 does not yet.
         var definitions = SourceWorlds.DefinitionsFor(root, "m1", "tank", token: Token);
         Assert.Equal(SourceWorldFixture.TankDefinitions, definitions.Single().Path);

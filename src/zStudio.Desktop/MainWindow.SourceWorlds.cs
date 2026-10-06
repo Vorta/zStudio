@@ -100,7 +100,7 @@ public partial class MainWindow
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         mission = mission.Trim().ToLowerInvariant();
         IReadOnlyList<string> missions;
-        try { missions = await Task.Run(() => SourceWorlds.Missions(root), token); }
+        try { missions = await Task.Run(() => SourceWorlds.Missions(root, token), token); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         if (!missions.Contains(mission, StringComparer.OrdinalIgnoreCase))
@@ -599,7 +599,7 @@ public partial class MainWindow
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             IReadOnlyList<SourceModelChoice> models;
-            try { models = await Task.Run(() => SourceWorlds.Models(root), token); }
+            try { models = await Task.Run(() => SourceWorlds.Models(root, token), token); }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
             return Page(models, a, m => m.Path, m => new { path = m.Path, folder = m.Folder, name = m.Name });
         });

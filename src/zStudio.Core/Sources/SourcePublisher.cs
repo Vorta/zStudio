@@ -87,7 +87,7 @@ public sealed partial class SourcePublisher
         using FileStream gate = Lock();
         Tidy();
         if (Journals().FirstOrDefault(j => !j.Committed && !j.RolledBack) is { } pending) throw Blocked(pending);
-        string[] conflicts = [.. changes.Concat(checks).OrderBy(t => t.Order).Where(t => !Look(t.Path).Is(t.Expected)).Select(t => t.Name)];
+        string[] conflicts = [.. changes.Concat(checks).OrderBy(t => t.Order).Where(t => !Look(t.Path, token, t.Expected).Is(t.Expected)).Select(t => t.Name)];
         if (conflicts.Length > 0) throw new SourceConflictException($"{string.Join(", ", conflicts)} changed on disk since {(conflicts.Length == 1 ? "it was" : "they were")} read, or cannot be read now; nothing was saved. Reload to continue from the files on disk.", conflicts);
         foreach (var change in changes)
             if (new FileInfo(change.Path) is { Exists: true } file && file.Attributes.HasFlag(FileAttributes.ReadOnly)) throw new UnauthorizedAccessException($"{change.Name} is read-only; nothing was saved.");
@@ -330,12 +330,22 @@ public sealed partial class SourcePublisher
     private string Display(string path) => SourceProject.Relative(root, path);
 
     private enum Presence { Absent, File, Other }
-    /// <summary>What a path holds now: nothing, a regular file with this digest, or something else (a folder, a link, an unreadable file).</summary>
-    private readonly record struct Probe(Presence Kind, JournalDigest? Digest)
+    /// <summary>
+    /// What a path holds now: nothing, a regular file of <see cref="Length"/> bytes, or something else (a folder, a link, an
+    /// unreadable file). A file's <see cref="Digest"/> is known only when its length is that of a content it was probed for.
+    /// </summary>
+    private readonly record struct Probe(Presence Kind, JournalDigest? Digest, long Length = -1)
     {
-        public bool Is(JournalDigest? expected) => expected == null ? Kind == Presence.Absent : Kind == Presence.File && Digest == expected;
+        /// <summary>Whether the path has <paramref name="expected"/> (null: is absent); only contents it was probed for can be compared.</summary>
+        public bool Is(JournalDigest? expected) => expected == null ? Kind == Presence.Absent
+            : Kind == Presence.File && Length == expected.Length && (Digest ?? throw new InvalidOperationException("A file was compared with content it was not probed for.")) == expected;
     }
-    private static Probe Look(string path)
+    /// <summary>
+    /// What <paramref name="path"/> holds, compared with the <paramref name="candidates"/> the caller will ask about. The file
+    /// is held against writers while it is read; it is read (in blocks, observing <paramref name="token"/>) only when its
+    /// length is a candidate's, so a file another program replaced with something of another size is never hashed.
+    /// </summary>
+    private static Probe Look(string path, CancellationToken token, params ReadOnlySpan<JournalDigest?> candidates)
     {
         try
         {
@@ -343,17 +353,20 @@ public sealed partial class SourcePublisher
             if (!info.Exists) return Path.Exists(path) ? new(Presence.Other, null) : new(Presence.Absent, null);
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) return new(Presence.Other, null);
             using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            return new(Presence.File, JournalDigest.Of(stream));
+            long length = stream.Length;
+            foreach (JournalDigest? candidate in candidates)
+                if (candidate?.Length == length) return new(Presence.File, JournalDigest.Of(stream, token), length);
+            return new(Presence.File, null, length);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return new(Presence.Absent, null); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return new(Presence.Other, null); }
     }
     /// <summary><see cref="Look"/> for a journal path, treating a link that appeared on the way as an unexpected entry.</summary>
-    private Probe LookAt(string relative)
+    private Probe LookAt(string relative, CancellationToken token, params ReadOnlySpan<JournalDigest?> candidates)
     {
         try { SourceProject.RejectNestedLinks(root, relative); }
         catch (IOException) { return new(Presence.Other, null); }
-        return Look(SourceProject.Resolve(root, relative));
+        return Look(SourceProject.Resolve(root, relative), token, candidates);
     }
 
     internal enum Moved { Done, Unchanged, Stranded }
@@ -372,11 +385,11 @@ public sealed partial class SourcePublisher
             FileInfo info = new(path);
             if (!info.Exists || info.Attributes.HasFlag(FileAttributes.ReparsePoint)) return Moved.Unchanged;
             using FileStream guard = new(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            if (JournalDigest.Of(guard) != expected) return Moved.Unchanged;
+            if (!expected.Matches(guard)) return Moved.Unchanged;
             File.Move(path, destination, false);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return Moved.Unchanged; }
-        if (Look(destination).Is(expected)) return Moved.Done;
+        if (Look(destination, default, expected).Is(expected)) return Moved.Done;
         try { File.Move(destination, path, false); return Moved.Unchanged; }
         catch (IOException) { return Moved.Stranded; }
     }

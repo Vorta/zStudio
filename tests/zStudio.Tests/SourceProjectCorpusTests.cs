@@ -61,7 +61,7 @@ public sealed class SourceProjectCorpusTests
 
             var export = await SourceBuilder.ExportAsync(project, exported, token: Token);
             Assert.Equal(0, export.Failed);
-            Assert.Equal(SourceBuilder.Plan(project).Count, export.Built);
+            Assert.Equal(SourceBuilder.Plan(project, token: TestContext.Current.CancellationToken).Count, export.Built);
 
             foreach (string archive in Directory.GetFiles(corpus, "zrdr.zbd", SearchOption.AllDirectories))
             {
@@ -142,7 +142,7 @@ public sealed class SourceProjectCorpusTests
             // nodes, every texture its materials use in each pack, and the animations other missions list for it.
             var m1 = World(Path.Combine(exported, "m1", "gamez.zbd"));
             HashSet<string> present = new(m1.Nodes.Select(n => n.Name), StringComparer.Ordinal);
-            var models = SourceWorlds.Models(project);
+            var models = SourceWorlds.Models(project, TestContext.Current.CancellationToken);
             var vehicle = models.FirstOrDefault(m => m.Path == "data/m2/models/bft/ltank.gltf") ??
                 models.First(m => m.Folder.EndsWith("/models/bft", StringComparison.Ordinal) && !m.Folder.StartsWith("data/m1/", StringComparison.Ordinal) && !present.Contains(m.Name));
             Assert.DoesNotContain(vehicle.Name, present);

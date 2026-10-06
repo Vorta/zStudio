@@ -46,7 +46,32 @@ public sealed record SourceRecoveryResult(IReadOnlyList<string> Changed, IReadOn
 internal sealed record JournalDigest(long Length, string Sha256)
 {
     public static JournalDigest? Of(byte[]? bytes) => bytes == null ? null : new(bytes.LongLength, Convert.ToHexStringLower(SHA256.HashData(bytes)));
-    public static JournalDigest Of(Stream stream) { long length = stream.Length; return new(length, Convert.ToHexStringLower(SHA256.HashData(stream))); }
+    /// <summary>
+    /// The digest of a stream's content from its position to its end, read in blocks of 1 MiB with <paramref name="token"/>
+    /// observed before each, so a large file can be given up part-way.
+    /// </summary>
+    public static JournalDigest Of(Stream stream, CancellationToken token = default)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        byte[] block = System.Buffers.ArrayPool<byte>.Shared.Rent(1 << 20);
+        try
+        {
+            long length = 0;
+            for (int read; ; length += read)
+            {
+                token.ThrowIfCancellationRequested();
+                if ((read = stream.Read(block)) == 0) break;
+                hash.AppendData(block, 0, read);
+            }
+            return new(length, Convert.ToHexStringLower(hash.GetHashAndReset()));
+        }
+        finally { System.Buffers.ArrayPool<byte>.Shared.Return(block); }
+    }
+    /// <summary>
+    /// Whether a stream (at its start) has this content. A stream of another length differs without being read, so a file
+    /// another program replaced with gigabytes is not hashed to find that out.
+    /// </summary>
+    public bool Matches(Stream stream, CancellationToken token = default) => stream.Length == Length && Of(stream, token) == this;
     /// <summary>The digest of bytes held in memory (a document's or a built output's), without copying them.</summary>
     public static JournalDigest OfContent(ReadOnlySpan<byte> bytes) => new(bytes.Length, Convert.ToHexStringLower(SHA256.HashData(bytes)));
 }
@@ -91,8 +116,8 @@ public sealed partial class SourcePublisher
             token.ThrowIfCancellationRequested();
             if (journal.RolledBack) continue;
             string folder = JournalPath(journal.Id);
-            // Each state reads its file whole, and a journal may list 50,000 files.
-            var files = journal.Manifest.Files.Select((f, i) => { token.ThrowIfCancellationRequested(); return new SourceRecoveryFile(f.Relative, State(f), File.Exists(HeldPath(folder, i))); }).ToArray();
+            // A state reads its file whole when its length is the journal's, and a journal may list 50,000 files.
+            var files = journal.Manifest.Files.Select((f, i) => { token.ThrowIfCancellationRequested(); return new SourceRecoveryFile(f.Relative, State(f, token), File.Exists(HeldPath(folder, i))); }).ToArray();
             DateTime created = journal.Manifest.CreatedUtc.Kind == DateTimeKind.Local ? journal.Manifest.CreatedUtc.ToUniversalTime() : DateTime.SpecifyKind(journal.Manifest.CreatedUtc, DateTimeKind.Utc);
             cases.Add(new(journal.Id, journal.Manifest.Description, created, journal.Committed, files));
         }
@@ -113,9 +138,9 @@ public sealed partial class SourcePublisher
         return journal.RolledBack ? [] : [.. journal.Manifest.Files.Select(f => f.Relative)];
     }
 
-    private SourceRecoveryFileState State(JournalFile file)
+    private SourceRecoveryFileState State(JournalFile file, CancellationToken token)
     {
-        Probe probe = LookAt(file.Relative);
+        Probe probe = LookAt(file.Relative, token, file.Expected, file.Content);
         return probe.Is(file.Expected) ? SourceRecoveryFileState.Before : probe.Is(file.Content) ? SourceRecoveryFileState.After
             : probe.Kind == Presence.Absent ? SourceRecoveryFileState.Missing : SourceRecoveryFileState.Other;
     }
@@ -127,7 +152,9 @@ public sealed partial class SourcePublisher
     /// back; completing or abandoning it only retires its journal.
     /// </summary>
     /// <remarks>
-    /// <paramref name="token"/> is observed between files, never while one is being changed. Canceled before any file
+    /// <paramref name="token"/> is observed between files, never while one is being changed; it also stops the reading of a
+    /// file that decides what to do (a completion's check of every file before any changes, a rollback's check of the file it
+    /// reaches). A file is read only when its length is one the journal records. Canceled before any file
     /// changed, it throws <see cref="OperationCanceledException"/> with no file changed; canceled later, the resolution stops
     /// before the next file, as an interruption would, and throws one whose message names the files it changed (its inner
     /// exception is the cancellation). Either way the journal records exactly what was done, the save still needs a
@@ -167,15 +194,22 @@ public sealed partial class SourcePublisher
                 bool moved = File.Exists(HeldPath(folder, i));
                 // Files the save never reached (no intent is recorded before a file is touched) keep whatever they have.
                 if (!journal.Intended(i) && !moved) continue;
-                bool installed = file.Content != null && LookAt(file.Relative).Is(file.Content);
+                // Reading a large file to compare it gives way to the cancellation, which then counts as coming between files.
+                bool installed;
+                try { installed = file.Content != null && LookAt(file.Relative, token, file.Content).Is(file.Content); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw Canceled(journal.Id, changed, conflicts, token); }
                 var (done, conflict) = Undo(folder, file, i, log, moved, installed);
                 if (done) changed.Add(file.Relative);
-                conflict ??= State(file) switch
+                try
                 {
-                    SourceRecoveryFileState.Before => null,
-                    SourceRecoveryFileState.Missing => new(file.Relative, "is missing and its original is not in the save journal; it was not recreated"),
-                    _ => new(file.Relative, "was changed by another program during the interrupted save; it was left as it is"),
-                };
+                    conflict ??= State(file, token) switch
+                    {
+                        SourceRecoveryFileState.Before => null,
+                        SourceRecoveryFileState.Missing => new(file.Relative, "is missing and its original is not in the save journal; it was not recreated"),
+                        _ => new(file.Relative, "was changed by another program during the interrupted save; it was left as it is"),
+                    };
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw Canceled(journal.Id, changed, conflicts, token); }
                 if (conflict != null) conflicts.Add(conflict);
             }
             changed.Reverse(); conflicts.Reverse();
@@ -215,8 +249,9 @@ public sealed partial class SourcePublisher
             {
                 if (Path.Exists(path))
                 {
-                    // Another program already put the original content back: the journal's copy is a duplicate.
-                    if (Look(path).Is(file.Expected) && Look(held).Is(file.Expected)) return (changed, null);
+                    // Another program already put the original content back: the journal's copy is a duplicate. Not
+                    // canceled part-way, as the file may have changed above; only a file of the original's length is read.
+                    if (Look(path, default, file.Expected).Is(file.Expected) && Look(held, default, file.Expected).Is(file.Expected)) return (changed, null);
                     return (changed, new(file.Relative, $"holds content from another program, so its original was not put back; it remains as {Display(held)}"));
                 }
                 File.Move(held, path, false); changed = true; log.Append("restored", index);
@@ -235,7 +270,7 @@ public sealed partial class SourcePublisher
         for (int i = 0; i < files.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            if (Blocker(folder, files[i], i) is { } blocker) conflicts.Add(blocker);
+            if (Blocker(folder, files[i], i, token) is { } blocker) conflicts.Add(blocker);
         }
         if (conflicts.Count > 0) return new([], conflicts, false);
         token.ThrowIfCancellationRequested();
@@ -250,7 +285,9 @@ public sealed partial class SourcePublisher
                 {
                     Step("complete", i);
                     SourceProject.RejectNestedLinks(root, file.Relative);
-                    Probe probe = Look(path);
+                    // A file whose turn has come is completed, as a cancellation is observed between files; the check above
+                    // already read it (giving way to the cancellation), and only a file of a journaled length is read again.
+                    Probe probe = Look(path, default, file.Content, file.Expected);
                     if (probe.Is(file.Content)) continue;
                     log.Append("intent", i);
                     if (file.Expected is { } expected && probe.Is(expected))
@@ -262,7 +299,7 @@ public sealed partial class SourcePublisher
                         }
                         log.Append("held", i);
                     }
-                    else if (!probe.Is(file.Expected) && !(probe.Kind == Presence.Absent && Look(held).Is(file.Expected)))
+                    else if (!probe.Is(file.Expected) && !(probe.Kind == Presence.Absent && Look(held, default, file.Expected).Is(file.Expected)))
                     { conflicts.Add(new(file.Relative, "changed while the save was being completed; it was left as it is")); continue; }
                     if (file.Content is { } content)
                     {
@@ -303,23 +340,28 @@ public sealed partial class SourcePublisher
     }
 
     /// <summary>Why one file of a save cannot be completed, or null when it can.</summary>
-    private SourceRecoveryConflict? Blocker(string journal, JournalFile file, int index)
+    private SourceRecoveryConflict? Blocker(string journal, JournalFile file, int index, CancellationToken token)
     {
-        Probe probe = LookAt(file.Relative); string held = HeldPath(journal, index);
+        Probe probe = LookAt(file.Relative, token, file.Content, file.Expected); string held = HeldPath(journal, index);
         if (probe.Is(file.Content)) return null;
-        if (file.Content is { } content && !Look(AfterPath(journal, index)).Is(content)) return new(file.Relative, "cannot be completed because the save journal's copy of its new content is missing or damaged");
+        if (file.Content is { } content && !Look(AfterPath(journal, index), token, content).Is(content)) return new(file.Relative, "cannot be completed because the save journal's copy of its new content is missing or damaged");
         if (probe.Is(file.Expected))
             return file.Expected != null && File.Exists(held) ? new(file.Relative, $"has its original content while the save journal also holds an original ({Display(held)}); it was left as it is") : null;
         if (probe.Kind == Presence.Absent)
             return !File.Exists(held) ? new(file.Relative, "is missing and its original is not in the save journal; it was not recreated")
-                : Look(held).Is(file.Expected) ? null : new(file.Relative, $"cannot be completed because the original the save journal holds ({Display(held)}) differs from the one the save expected");
+                : Look(held, token, file.Expected).Is(file.Expected) ? null : new(file.Relative, $"cannot be completed because the original the save journal holds ({Display(held)}) differs from the one the save expected");
         return new(file.Relative, "was changed by another program; it was left as it is");
     }
 
+    /// <summary>The journal's copy of a new content, read only when it has the journaled length (it may have been replaced since it was checked).</summary>
     private static byte[] NewContent(string journal, int index, JournalDigest content)
     {
-        byte[] bytes = File.ReadAllBytes(AfterPath(journal, index));
-        if (JournalDigest.Of(bytes) != content) throw new InvalidDataException("the save journal's copy of its new content is damaged.");
+        const string Damaged = "the save journal's copy of its new content is damaged.";
+        using FileStream stream = new(AfterPath(journal, index), FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream.Length != content.Length) throw new InvalidDataException(Damaged);
+        if (content.Length > Array.MaxLength) throw new InvalidDataException("its new content is larger than a source file can be.");
+        byte[] bytes = new byte[content.Length]; stream.ReadExactly(bytes);
+        if (JournalDigest.Of(bytes) != content) throw new InvalidDataException(Damaged);
         return bytes;
     }
 

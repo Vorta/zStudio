@@ -168,7 +168,7 @@ public sealed class ReconstructionPlanningReviewFixTests
         // One fixed 1 MB Direct3D pack: three 512-texel textures (1.5 MB at two bytes a texel) make the automatic pack rtexture2.
         fixture.Write("gamegen/build-profiles/small.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture1.zbd" }, { "file": "rtexture*.zbd", "budgetMiB": 64 } ] }""");
         for (int i = 0; i < 3; i++) fixture.Write($"data/m1/textures/glass{i}.png", Png(512));
-        Assert.Contains(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small")), p => p.Path == "m1/rtexture2.zbd" && p.Automatic);
+        Assert.Contains(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small"), token: TestContext.Current.CancellationToken), p => p.Path == "m1/rtexture2.zbd" && p.Automatic);
         string destination = Path.Combine(fixture.Root, "game");
         // Once planned, one texture doubles: the textures now need 3 MB, which names the pack rtexture4.
         bool resized = false;
@@ -178,7 +178,7 @@ public sealed class ReconstructionPlanningReviewFixTests
         Assert.True(resized);
         Assert.Contains("changed while exporting", refused.Message, StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(destination, "m1", "rtexture2.zbd")));
-        Assert.Contains(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small")), p => p.Path == "m1/rtexture4.zbd" && p.Automatic);
+        Assert.Contains(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small"), token: TestContext.Current.CancellationToken), p => p.Path == "m1/rtexture4.zbd" && p.Automatic);
 
         static byte[] Png(int side)
         {

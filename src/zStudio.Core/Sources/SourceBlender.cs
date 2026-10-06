@@ -494,7 +494,7 @@ public static partial class SourceBlender
             return scripts[relative] = project.Exists(relative) ? [.. GameGenScriptSyntax.Parse(project.Read(relative, token)).Lines.Where(l => l.IsInstruction).Select(l => l.Tokens)] : null;
         }
         // The missions the project builds: a data/mN folder with its gamegen/mN.gs.
-        foreach (string entry in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), snapshot.Added))
+        foreach (string entry in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), snapshot.Added, token))
         {
             string name = Path.GetFileNameWithoutExtension(entry);
             if (!MissionScript().IsMatch(entry) || !Directory.Exists(SourceProject.Resolve(root, $"{SourceProject.DataFolder}/{name}"))) continue;

@@ -59,14 +59,14 @@ public sealed class SourceProjectSafetyTests
         string outside = Path.Combine(fixture.Root, "outside");
         Directory.CreateDirectory(outside); File.WriteAllText(Path.Combine(outside, "secret.zrd"), "VALUE ( 1 )");
         if (!Junction(Path.Combine(fixture.Project, "data", "m1", "zrdr", "linked"), outside)) return;
-        Assert.Throws<IOException>(() => SourceBuilder.Plan(fixture.Project));
+        Assert.Throws<IOException>(() => SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken));
         Directory.Delete(Path.Combine(fixture.Project, "data", "m1", "zrdr", "linked"));
         // A linked mission folder is refused too, although enumeration starts inside it.
         Directory.CreateDirectory(Path.Combine(outside, "zrdr"));
         Assert.True(Junction(Path.Combine(fixture.Project, "data", "m2"), outside));
-        Assert.Throws<IOException>(() => SourceBuilder.Plan(fixture.Project));
+        Assert.Throws<IOException>(() => SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken));
         Directory.Delete(Path.Combine(fixture.Project, "data", "m2"));
-        Assert.Equal(6, SourceBuilder.Plan(fixture.Project).Count);
+        Assert.Equal(6, SourceBuilder.Plan(fixture.Project, token: TestContext.Current.CancellationToken).Count);
     }
 
     private static bool Junction(string link, string target)
