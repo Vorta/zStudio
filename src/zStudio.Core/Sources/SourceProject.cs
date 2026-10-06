@@ -31,6 +31,30 @@ public static class SourceProject
     public static string Relative(string root, string path) => System.IO.Path.GetRelativePath(root, path).Replace('\\', '/');
 
     /// <summary>
+    /// Whether the file at <paramref name="path"/> holds exactly <paramref name="expected"/>. The file is read in small
+    /// blocks, so checking a file of hundreds of megabytes against the copy already in memory needs no second copy of it.
+    /// </summary>
+    internal static bool FileEquals(string path, ReadOnlySpan<byte> expected, CancellationToken token = default)
+    {
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 0, FileOptions.SequentialScan);
+        if (stream.Length != expected.Length) return false;
+        byte[] block = System.Buffers.ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
+        {
+            for (int offset = 0; ;)
+            {
+                token.ThrowIfCancellationRequested();
+                int read = stream.Read(block);
+                // A file that grew or shrank since its length was read differs too.
+                if (read == 0) return offset == expected.Length;
+                if (read > expected.Length - offset || !block.AsSpan(0, read).SequenceEqual(expected.Slice(offset, read))) return false;
+                offset += read;
+            }
+        }
+        finally { System.Buffers.ArrayPool<byte>.Shared.Return(block); }
+    }
+
+    /// <summary>
     /// Regular files below <paramref name="folder"/> (root-relative, forward slashes) in a stable order; links are refused.
     /// <paramref name="added"/> are files that exist only as pending content (a workspace's new files) and count as present.
     /// </summary>

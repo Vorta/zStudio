@@ -643,7 +643,7 @@ public partial class MainWindow
                 return Result(new { document = DocumentState(next), definitionFiles = files, duplicateName = duplicate });
             });
         Register(r, "source_changes", "Describe the open source project's unsaved edits: the files save_document would write, the shared edit history (newest last, with undone steps marked) and, for one file, its working text beside the file on disk as a bounded line diff.", false,
-            [P("file", "string", "Optional project path (for example data/m1/zrdr/puppies.zrd) to diff against the disk."), new("maxLines", "integer", "Diff lines to return; default 200.", Minimum: 1, Maximum: 2000)], a =>
+            [P("file", "string", "Optional project path (for example data/m1/zrdr/puppies.zrd) to diff against the disk."), new("maxLines", "integer", "Diff lines to return; default 200.", Minimum: 1, Maximum: 2000)], async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             var workspace = SourceWorkspaceFor(root);
@@ -653,7 +653,9 @@ public partial class MainWindow
                 string file = SourceWorkspace.Normalize(Text(a, "file"));
                 try { workspace.CheckEditable(file); }
                 catch (Exception ex) when (ex is InvalidDataException or IOException) { throw new StudioCommandException("invalid_argument", ex.Message); }
-                diff = SourceDiff.Describe(file, ReadDiskOrNull(root, file), workspace.Read(file), Int(a, "maxLines", 200));
+                int maximumLines = Int(a, "maxLines", 200);
+                // Reading both versions (up to 16 MiB each) and comparing them stays off the UI thread and observes cancellation.
+                diff = await Task.Run(() => SourceDiff.Describe(file, ReadDiskOrNull(root, file), workspace.Read(file, token), maximumLines, token), token);
             }
             return Result(new { project = root, workspace = SourceWorkspaceState(workspace), diff });
         });

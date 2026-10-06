@@ -245,7 +245,7 @@ public static partial class SourceBlender
         sealedFolderCreated = sealedFolder;
         string outbox = Path.GetFullPath(checkout.Outbox), exportFolder = Path.GetDirectoryName(chosen.Gltf)!;
         SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, chosen.Gltf).Replace('\\', '/'));
-        byte[] json = Stable(chosen.Gltf);
+        byte[] json = Stable(chosen.Gltf, token);
         JsonObject root = Parse(json, chosen.Relative);
         Dictionary<string, byte[]> uses = new(StringComparer.OrdinalIgnoreCase);
         long total = json.Length;
@@ -266,7 +266,7 @@ public static partial class SourceBlender
             if (!full.StartsWith(outbox + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"The export uses {relative}, which is outside the outbox.");
             if (uses.TryGetValue(full, out var known)) return known;
             SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, full).Replace('\\', '/'));
-            byte[] bytes = Stable(full);
+            byte[] bytes = Stable(full, token);
             if ((total += bytes.Length) > MaximumExportBytes) throw new InvalidDataException("The export is larger than 512 MiB.");
             Seal(full, bytes);
             return uses[full] = bytes;
@@ -326,7 +326,7 @@ public static partial class SourceBlender
             exported[name] = (unescaped, png);
             // Only what Blender changed: a checked-out texture it wrote back as it was stays as the project has it now.
             string inputCopy = Path.Combine(checkout.Folder, "input", "textures", name);
-            if (original.ContainsKey(name) && File.Exists(inputCopy) && File.ReadAllBytes(inputCopy).AsSpan().SequenceEqual(png)) continue;
+            if (original.ContainsKey(name) && File.Exists(inputCopy) && SourceProject.FileEquals(inputCopy, png, token)) continue;
             byte[]? existing = workspace.Read(project, token);
             if (existing != null && existing.AsSpan().SequenceEqual(png)) continue;
             notes.Add(existing == null ? $"New texture {project}." : $"Texture {project} changes for every model that uses it.");
@@ -367,7 +367,8 @@ public static partial class SourceBlender
         if (conflicts.Count > 0) notes.Add($"Replaced changes made since the checkout in {string.Join(", ", conflicts.Take(8))}.");
         return new($"Update {Path.GetFileName(model)} from Blender", changes, notes, sealedFolder) { Expected = expected };
 
-        static byte[] Stable(string path)
+        // The second read is compared block by block with the first, so a file of hundreds of megabytes is held once.
+        static byte[] Stable(string path, CancellationToken token)
         {
             var info = new FileInfo(path);
             if (!info.Exists) throw new InvalidDataException($"{path} does not exist.");
@@ -375,7 +376,7 @@ public static partial class SourceBlender
             if (info.Length > MaximumExportBytes) throw new InvalidDataException($"{path} is larger than 512 MiB.");
             var stamp = FileStamp.Read(path);
             byte[] first = File.ReadAllBytes(path);
-            if (FileStamp.Read(path) != stamp || !File.ReadAllBytes(path).AsSpan().SequenceEqual(first)) throw new IOException($"{path} is still changing; wait for Blender to finish exporting.");
+            if (FileStamp.Read(path) != stamp || !SourceProject.FileEquals(path, first, token)) throw new IOException($"{path} is still changing; wait for Blender to finish exporting.");
             return first;
         }
     }

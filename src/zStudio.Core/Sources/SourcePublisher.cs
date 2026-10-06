@@ -377,7 +377,7 @@ public sealed partial class SourcePublisher
     private static void WriteVerified(string path, byte[] bytes)
     {
         using (FileStream stream = new(path, FileMode.Create, FileAccess.Write, FileShare.None)) { stream.Write(bytes); stream.Flush(true); }
-        if (!File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes)) throw new IOException($"{path} did not read back as it was written; nothing was saved.");
+        if (!SourceProject.FileEquals(path, bytes)) throw new IOException($"{path} did not read back as it was written; nothing was saved.");
     }
 
     private static void TryDelete(string folder)

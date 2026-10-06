@@ -20,6 +20,16 @@ public static class WaveConverter
     private static WaveFormat Format(WaveInfo info) => info.SampleRate <= int.MaxValue ? new((int)info.SampleRate, info.BitsPerSample, info.Channels)
         : throw new InvalidDataException($"A sample rate of {info.SampleRate:N0} Hz is not supported.");
 
+    /// <summary>Lanczos kernel half-width in output samples.</summary>
+    private const int Taps = 16;
+    /// <summary>Source frames decoded together; the converted samples of each block go straight into the result.</summary>
+    private const int BlockFrames = 1 << 15;
+    /// <summary>
+    /// The most source frames a block may hold for one output block: the kernel spans 32 source frames per output frame
+    /// ratio, so only a rate drop of more than 32,768 times (a source of tens of megahertz) on a long sound needs more.
+    /// </summary>
+    internal const int MaximumBlockFrames = 1 << 20;
+
     public static byte[] Convert(ReadOnlyMemory<byte> wave, WaveFormat declared, CancellationToken token = default)
     {
         var info = WaveDecoder.Read(wave, token);
@@ -27,77 +37,118 @@ public static class WaveConverter
         if (declared.Bits is not (8 or 16) || declared.Channels is not (1 or 2) || declared.Rate is < 1000 or > 192_000) throw new InvalidDataException($"Unsupported declared format {declared.Rate} Hz, {declared.Bits}-bit, {declared.Channels} channels.");
         WaveFormat source = Format(info), target = Target(source, declared);
         if (target == source) return wave.ToArray();
-        // Decode to floating-point frames, mix channels, then resample with a windowed-sinc low-pass when the rate drops.
-        int frames = info.DataLength / info.BlockAlign, channels = info.Channels, step = info.BitsPerSample / 8;
+        // Decode to floating-point frames, mix channels, then resample with a windowed-sinc low-pass when the rate drops. Each
+        // output frame depends only on the source frames its kernel covers, so the sound is converted a block at a time into
+        // the result: a long sound is held as its source and its result, never as floating-point copies of the whole sound.
+        int frames = info.DataLength / info.BlockAlign;
+        double ratio = (double)target.Rate / info.SampleRate, scale = Math.Min(1, ratio);
+        bool resample = target.Rate != info.SampleRate;
+        int outFrames = Math.Max(1, (int)Math.Round(frames * ratio));
+        // The source frames one output block needs: the block's span of the source plus the kernel's reach on both sides.
+        int outBlock = resample ? Math.Max(1, (int)(BlockFrames * ratio)) : BlockFrames;
+        double reach = resample ? outBlock / ratio + 2 * (Taps / scale) + 3 : outBlock;
+        if (Math.Min(frames, reach) > MaximumBlockFrames)
+            throw new InvalidDataException($"Converting {info.SampleRate:N0} Hz to {target.Rate:N0} Hz is not supported: the rate drops too far for a sound of {frames:N0} frames.");
+        int capacity = (int)Math.Min(frames, Math.Ceiling(reach));
+        float[][] block = new float[target.Channels][];
+        for (int c = 0; c < target.Channels; c++) block[c] = new float[capacity];
+
+        var cues = info.Cues.Select(c => (c.Id, Position: (uint)Math.Min(outFrames, Math.Round(c.SampleOffset * ratio)))).ToArray();
+        int outStep = target.Bits / 8, align = outStep * target.Channels;
+        byte[] result = Allocate(target, checked(outFrames * align), cues, out int pcmOffset);
         var data = wave.Span.Slice(info.DataOffset, info.DataLength);
-        float[][] input = new float[target.Channels][];
-        for (int c = 0; c < target.Channels; c++) input[c] = new float[frames];
-        for (int f = 0; f < frames; f++)
+        var pcm = result.AsSpan(pcmOffset, outFrames * align);
+        Span<float> values = stackalloc float[2];
+        for (int o0 = 0; o0 < outFrames; o0 += outBlock)
         {
-            if ((f & 65535) == 0) token.ThrowIfCancellationRequested();
-            float mix = 0;
-            for (int c = 0; c < channels; c++)
+            token.ThrowIfCancellationRequested();
+            int o1 = Math.Min(outFrames, o0 + outBlock);
+            // The source frames this block reads: for a resampled block, from the first frame of its first kernel to the
+            // last of its last (both move forward with the output frame).
+            int lo = resample ? Math.Max(0, First(o0)) : o0, hi = resample ? Math.Min(frames - 1, Last(o1 - 1)) : Math.Min(frames, o1) - 1;
+            Decode(data, info, target.Channels, lo, hi - lo + 1, block);
+            for (int o = o0; o < o1; o++)
+            {
+                if (resample)
+                {
+                    double center = o / ratio, weights = 0, sum0 = 0, sum1 = 0;
+                    for (int j = Math.Max(0, First(o)); j <= Math.Min(frames - 1, Last(o)); j++)
+                    {
+                        double x = (j - center) * scale, w = x == 0 ? 1 : Math.Abs(x) >= Taps ? 0 : Sinc(x) * Sinc(x / Taps);
+                        sum0 += block[0][j - lo] * w; if (target.Channels == 2) sum1 += block[1][j - lo] * w; weights += w;
+                    }
+                    values[0] = weights == 0 ? 0 : (float)(sum0 / weights); values[1] = weights == 0 ? 0 : (float)(sum1 / weights);
+                }
+                // An empty sound still becomes one silent frame.
+                else for (int c = 0; c < target.Channels; c++) values[c] = o < frames ? block[c][o - lo] : 0;
+                for (int c = 0; c < target.Channels; c++)
+                {
+                    float value = Math.Clamp(values[c], -1f, 1f); int p = o * align + c * outStep;
+                    if (outStep == 1) pcm[p] = (byte)Math.Clamp((int)MathF.Round(value * 127f + 128f), 0, 255);
+                    else BinaryPrimitives.WriteInt16LittleEndian(pcm[p..], (short)Math.Clamp((int)MathF.Round(value * 32767f), short.MinValue, short.MaxValue));
+                }
+            }
+        }
+        return result;
+
+        // The kernel of output frame i covers source frames First(i)..Last(i); when downsampling its cutoff follows the new
+        // Nyquist frequency.
+        int First(int i) => (int)Math.Floor(i / ratio - Taps / scale);
+        int Last(int i) => (int)Math.Ceiling(i / ratio + Taps / scale);
+        static double Sinc(double x) => Math.Sin(Math.PI * x) / (Math.PI * x);
+    }
+
+    /// <summary>Decodes <paramref name="count"/> source frames from <paramref name="first"/> into <paramref name="into"/>, mixed down to <paramref name="channels"/>.</summary>
+    private static void Decode(ReadOnlySpan<byte> data, WaveInfo info, int channels, int first, int count, float[][] into)
+    {
+        int sourceChannels = info.Channels, step = info.BitsPerSample / 8;
+        for (int k = 0; k < count; k++)
+        {
+            int f = first + k; float mix = 0;
+            for (int c = 0; c < sourceChannels; c++)
             {
                 int p = f * info.BlockAlign + c * step;
                 float value = step == 1 ? (data[p] - 128) / 128f : BinaryPrimitives.ReadInt16LittleEndian(data[p..]) / 32768f;
-                if (target.Channels == channels) input[c][f] = value; else mix += value;
+                if (channels == sourceChannels) into[c][k] = value; else mix += value;
             }
-            if (target.Channels != channels) for (int c = 0; c < target.Channels; c++) input[c][f] = mix / channels;
+            if (channels != sourceChannels) for (int c = 0; c < channels; c++) into[c][k] = mix / sourceChannels;
         }
-        double ratio = (double)target.Rate / info.SampleRate;
-        int outFrames = Math.Max(1, (int)Math.Round(frames * ratio));
-        float[][] output = target.Rate == info.SampleRate ? input : input.Select(channel => Resample(channel, ratio, outFrames, token)).ToArray();
-        int outStep = target.Bits / 8, align = outStep * target.Channels;
-        byte[] pcm = new byte[checked(outFrames * align)];
-        for (int f = 0; f < outFrames; f++)
-            for (int c = 0; c < target.Channels; c++)
-            {
-                float value = Math.Clamp(output[c][f], -1f, 1f); int p = f * align + c * outStep;
-                if (outStep == 1) pcm[p] = (byte)Math.Clamp((int)MathF.Round(value * 127f + 128f), 0, 255);
-                else BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(p), (short)Math.Clamp((int)MathF.Round(value * 32767f), short.MinValue, short.MaxValue));
-            }
-        var cues = info.Cues.Select(c => (c.Id, Position: (uint)Math.Min(outFrames, Math.Round(c.SampleOffset * ratio)))).ToArray();
-        return Write(target, pcm, cues);
     }
 
     /// <summary>The format a source is converted to: each of rate, sample size and channels is the lower of source and declaration.</summary>
     public static WaveFormat Target(WaveFormat source, WaveFormat declared) =>
         new(Math.Min(source.Rate, declared.Rate), Math.Min(source.Bits, declared.Bits), Math.Min(source.Channels, declared.Channels));
 
-    private static float[] Resample(float[] input, double ratio, int count, CancellationToken token)
-    {
-        // Lanczos kernel; when downsampling the cutoff follows the new Nyquist frequency.
-        const int taps = 16; double scale = Math.Min(1, ratio);
-        float[] result = new float[count];
-        for (int i = 0; i < count; i++)
-        {
-            if ((i & 65535) == 0) token.ThrowIfCancellationRequested();
-            double center = i / ratio, sum = 0, weights = 0; int first = (int)Math.Floor(center - taps / scale), last = (int)Math.Ceiling(center + taps / scale);
-            for (int j = Math.Max(0, first); j <= Math.Min(input.Length - 1, last); j++)
-            {
-                double x = (j - center) * scale, w = x == 0 ? 1 : Math.Abs(x) >= taps ? 0 : Sinc(x) * Sinc(x / taps);
-                sum += input[j] * w; weights += w;
-            }
-            result[i] = weights == 0 ? 0 : (float)(sum / weights);
-        }
-        return result;
-        static double Sinc(double x) => Math.Sin(Math.PI * x) / (Math.PI * x);
-    }
-
     /// <summary>A canonical RIFF/WAVE: fmt, optional cue, then data, as in the retail banks.</summary>
     public static byte[] Write(WaveFormat format, ReadOnlySpan<byte> pcm, IReadOnlyList<(uint Id, uint Position)> cues)
     {
-        int cueBytes = cues.Count == 0 ? 0 : 8 + 4 + cues.Count * 24, pad = pcm.Length & 1;
-        using MemoryStream stream = new(); using BinaryWriter w = new(stream);
-        w.Write("RIFF"u8); w.Write(4 + 24 + cueBytes + 8 + pcm.Length + pad); w.Write("WAVE"u8);
+        byte[] result = Allocate(format, pcm.Length, cues, out int pcmOffset);
+        pcm.CopyTo(result.AsSpan(pcmOffset));
+        return result;
+    }
+
+    /// <summary>A RIFF/WAVE of exactly its size with every chunk but the samples written; returns where the samples go.</summary>
+    private static byte[] Allocate(WaveFormat format, int pcmLength, IReadOnlyList<(uint Id, uint Position)> cues, out int pcmOffset)
+    {
+        int cueBytes = cues.Count == 0 ? 0 : 8 + 4 + cues.Count * 24, pad = pcmLength & 1;
+        long length = 12L + 24 + cueBytes + 8 + pcmLength + pad;
+        if (length > Array.MaxLength) throw new InvalidDataException("The converted sound would be larger than 2 GiB.");
+        byte[] result = new byte[length];
+        int at = 0;
+        void Tag(ReadOnlySpan<byte> tag) { tag.CopyTo(result.AsSpan(at)); at += 4; }
+        void Int(int value) { BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(at), value); at += 4; }
+        void Short(int value) { BinaryPrimitives.WriteInt16LittleEndian(result.AsSpan(at), (short)value); at += 2; }
+        Tag("RIFF"u8); Int(4 + 24 + cueBytes + 8 + pcmLength + pad); Tag("WAVE"u8);
         int align = format.Bits / 8 * format.Channels;
-        w.Write("fmt "u8); w.Write(16); w.Write((short)1); w.Write((short)format.Channels); w.Write(format.Rate); w.Write(format.Rate * align); w.Write((short)align); w.Write((short)format.Bits);
+        Tag("fmt "u8); Int(16); Short(1); Short(format.Channels); Int(format.Rate); Int(format.Rate * align); Short(align); Short(format.Bits);
         if (cues.Count > 0)
         {
-            w.Write("cue "u8); w.Write(4 + cues.Count * 24); w.Write(cues.Count);
-            foreach (var (id, position) in cues) { w.Write(id); w.Write(position); w.Write("data"u8); w.Write(0); w.Write(0); w.Write(position); }
+            Tag("cue "u8); Int(4 + cues.Count * 24); Int(cues.Count);
+            foreach (var (id, position) in cues) { Int((int)id); Int((int)position); Tag("data"u8); Int(0); Int(0); Int((int)position); }
         }
-        w.Write("data"u8); w.Write(pcm.Length); w.Write(pcm); if (pad != 0) w.Write((byte)0);
-        return stream.ToArray();
+        Tag("data"u8); Int(pcmLength);
+        // The samples follow, then the pad byte (already zero).
+        pcmOffset = at;
+        return result;
     }
 }
