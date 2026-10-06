@@ -245,6 +245,57 @@ public static class GltfNodeEdits
         for (int i = 0; i < nodes.Count; i++) if (i != index && Key(i) == key) copies.Add(i);
         return copies;
     }
+    /// <summary>
+    /// The zone import gives each node the file places under several parents (by its instance mark, in the order import
+    /// reaches them): the zone its first copy states, or the one that copy's parents in the file pass on to it; null when
+    /// that comes from whatever loads the file. Import reads the first copy it reaches through the scene's roots and their
+    /// children and joins the later ones to it, so moving or removing the node that holds that copy, or moving another
+    /// copy's holder before it, gives the shared node the zone of the copy read instead.
+    /// </summary>
+    public static IReadOnlyList<(long Mark, uint? Zone)> InstanceZones(JsonObject root)
+    {
+        var nodes = Nodes(root);
+        List<(long, uint?)> zones = [];
+        HashSet<long> marks = []; HashSet<int> reached = [];
+        foreach (int index in ImportRoots(root, nodes)) Walk(index, null, 0);
+        return zones;
+
+        void Walk(int i, uint? passed, int depth)
+        {
+            if (depth > GltfDocument.MaximumDepth || !reached.Add(i)) return;
+            var node = (JsonObject)nodes[i]!;
+            var engine = (node["extras"] as JsonObject)?[WorldGltf.Key] as JsonObject;
+            // A terrain recipe's marker stands for its pieces; import reads no node below it.
+            if (depth == 0 && engine?["terrain"] != null) return;
+            uint? zone = OwnZone(node) ?? passed;
+            if (Instance(engine?["instance"]) is long mark)
+            {
+                // A later copy is the node already read: import does not read below it.
+                if (!marks.Add(mark)) return;
+                zones.Add((mark, zone));
+            }
+            foreach (int child in Children(nodes, i)) Walk(child, zone, depth + 1);
+        }
+    }
+    /// <summary>States <paramref name="zone"/> on every copy of the shared node <paramref name="mark"/>, so it has that zone whichever copy import reads.</summary>
+    public static void SetInstanceZone(JsonObject root, long mark, uint zone)
+    {
+        foreach (var node in Nodes(root).OfType<JsonObject>())
+            if ((node["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject engine && Instance(engine["instance"]) == mark)
+                engine["zone"] = (int)(zone & 0xFF);
+    }
+    /// <summary>The roots import reads, in its order: the default scene's nodes, or without scenes every node no node lists as a child.</summary>
+    private static IEnumerable<int> ImportRoots(JsonObject root, JsonArray nodes)
+    {
+        if (root["scenes"] is JsonArray scenes && scenes.Count > 0)
+        {
+            int chosen = root["scene"] is JsonValue s && s.TryGetValue(out int index) ? index : 0;
+            return (scenes[Math.Clamp(chosen, 0, scenes.Count - 1)]?["nodes"] as JsonArray ?? [])
+                .Select(n => n is JsonValue v && v.TryGetValue(out int k) ? k : -1).Where(k => k >= 0 && k < nodes.Count).ToList();
+        }
+        HashSet<int> children = [.. Enumerable.Range(0, nodes.Count).SelectMany(i => Children(nodes, i))];
+        return Enumerable.Range(0, nodes.Count).Where(i => !children.Contains(i)).ToList();
+    }
     /// <summary>The parent of a node, or null for a root.</summary>
     public static int? Parent(JsonObject root, int index) => Parent(Nodes(root), index);
 

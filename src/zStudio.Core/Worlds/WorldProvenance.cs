@@ -12,13 +12,21 @@ public sealed record SourceInstruction(string Script, int Line, string Command, 
 /// </summary>
 public sealed class InstancePlace
 {
-    internal InstancePlace(int number, InstancePlace? parent = null, int child = 0) { Number = number; Parent = parent; Child = child; }
+    internal InstancePlace(int number, InstancePlace? parent = null, int child = 0, string name = "", int occurrence = 0) { Number = number; Parent = parent; Child = child; Name = name; Occurrence = occurrence; }
     /// <summary>The instance's number in its file (the <c>instance</c> mark its copies share).</summary>
     public int Number { get; }
     /// <summary>The place of the node's parent in the instance, or null for the instance itself.</summary>
     public InstancePlace? Parent { get; }
     /// <summary>The node's position among its parent's children in the file.</summary>
     public int Child { get; }
+    /// <summary>
+    /// The child's name as the build names it. With <see cref="Occurrence"/> it tells the child apart from its siblings
+    /// whatever their positions: a copy inserted beside one of them (named as no node is) leaves the others' places as
+    /// they were, while their positions move.
+    /// </summary>
+    public string Name { get; }
+    /// <summary>How many earlier children of the parent in the file have <see cref="Name"/>.</summary>
+    public int Occurrence { get; }
     /// <summary>The instance's number and the child positions from it, such as 3/0/1.</summary>
     public override string ToString()
     {

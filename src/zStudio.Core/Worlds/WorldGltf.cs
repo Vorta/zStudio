@@ -428,8 +428,19 @@ public static partial class WorldGltf
             try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1)) Link(node, child); }
             finally { context.referencing.RemoveAt(context.referencing.Count - 1); }
         }
+        // Inside a shared node each child's place is its name and how many earlier siblings have it (see InstancePlace).
+        Dictionary<string, int>? named = place == null ? null : new(StringComparer.Ordinal);
         for (int i = 0; i < source.Children.Count; i++)
-            Link(node, ImportNode(source.Children[i], path, reading, zone, context, instances, depth + 1, place == null ? null : new(place.Number, place, i)));
+        {
+            InstancePlace? at = null;
+            if (named != null)
+            {
+                string childName = EngineName(source.Children[i]);
+                int occurrence = named.GetValueOrDefault(childName); named[childName] = occurrence + 1;
+                at = new(place!.Number, place, i, childName, occurrence);
+            }
+            Link(node, ImportNode(source.Children[i], path, reading, zone, context, instances, depth + 1, at));
+        }
         return node;
         static void Link(WorldNode parent, WorldNode child)
         {

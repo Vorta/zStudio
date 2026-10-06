@@ -162,7 +162,7 @@ public static partial class WorldGltf
         : value.TryGetValue(out double d) ? (double.IsFinite(d) ? d : null) : value.TryGetValue(out float f) ? (float.IsFinite(f) ? f : null)
         : value.TryGetValue(out long l) ? l : value.TryGetValue(out int i) ? i : null;
     /// <summary>A node's engine name in glTF JSON, as <see cref="EngineName(GltfNode)"/> gives it.</summary>
-    private static string EngineName(JsonObject node) =>
+    internal static string EngineName(JsonObject node) =>
         Text(((node["extras"] as JsonObject)?[Key] as JsonObject)?["name"]) ?? BlenderSuffix().Replace(Text(node["name"]) ?? "", "");
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
     private static int? Index(JsonNode? node, int count) => node is JsonValue value && value.TryGetValue(out int index) && index >= 0 && index < count ? index : null;

@@ -138,8 +138,15 @@ public static class SourceObjectEdits
     /// from it change: a position edit leaves the authored rotation and scale (and a mirroring the decomposition cannot
     /// express) as they are, and a script keeps the tokens of every component not changed.
     /// </summary>
+    /// <remarks>
+    /// With <paramref name="world"/> and <paramref name="write"/>, a value a script other missions also run set (or, set by
+    /// nothing yet, would get after that script created the node) is set in this mission's world script instead (see
+    /// <see cref="InThisMission"/>). A change of a glTF node is refused while a script sets the transform of another copy or
+    /// load of it, in this world (<paramref name="copies"/>, <see cref="CopiesOf"/>) or in another mission's build that
+    /// loads the file (see <see cref="TransformElsewhere"/>).
+    /// </remarks>
     public static SourceEditPlan PlanTransform(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, ObjectTransform requested, CancellationToken token = default, string? mission = null, ObjectTransform? current = null,
-        IEnumerable<WorldNodeProvenance>? copies = null)
+        IEnumerable<WorldNodeProvenance>? copies = null, GameZWorld? world = null, SourceInstruction? write = null)
     {
         Generated(origin, nodeName);
         string label = $"Move {nodeName}";
@@ -152,6 +159,26 @@ public static class SourceObjectEdits
         if (scale) { Check(requested.Scale); CheckScale(requested.Scale); }
         if (!position && !rotation && !scale) return new(label, [], nodeName, []);
         var writers = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).ToArray();
+        // Whole instructions setting the changed values (the others as the build used them), for this mission's world script:
+        // each sets its three values outright (Object3DTranslate also over an authored matrix's translation), so the last
+        // one decides them.
+        List<IReadOnlyList<string>> Lines(bool translateOnly)
+        {
+            List<IReadOnlyList<string>> lines = [];
+            void Add(bool changes, string command, Vector3 value, Vector3 unset, Vector3? shown)
+            {
+                if (!changes) return;
+                var (changed, built) = Compare(origin.Writers.GetValueOrDefault(command), value, unset, shown);
+                if (changed.Any(c => c)) lines.Add([command, .. Enumerable.Range(0, 3).Select(i => Number(changed[i] ? value[i] : built[i]))]);
+            }
+            Add(position, "Object3DTranslate", requested.Position, Vector3.Zero, current?.Position);
+            if (!translateOnly)
+            {
+                Add(rotation, "Object3DRotate", requested.RotationDegrees, Vector3.Zero, current?.RotationDegrees);
+                Add(scale, "Object3DScale", requested.Scale, Vector3.One, current?.Scale);
+            }
+            return lines;
+        }
         // A glTF node imported without a transform takes the scripts' TRS whole; one with its own (authored) matrix keeps its
         // rotation and scale, while a script Object3DTranslate still sets its translation.
         if (origin.ModelFile == null || writers.Length > 0 && !origin.ModelTransformAuthored)
@@ -159,6 +186,12 @@ public static class SourceObjectEdits
             // The scripts place the object: change its transform instructions, adding those it lacks after the last one (or after the
             // instruction that created the object, which leaves it current).
             var anchor = writers.OrderBy(w => w.Line).LastOrDefault() ?? origin.Created ?? throw new InvalidDataException($"{nodeName} was neither loaded from a model nor created by a script instruction.");
+            // The scripts the edit would change: the instruction that set each changed value, or the one a new line follows.
+            List<string> touched = [];
+            if (position) touched.Add(origin.Writers.GetValueOrDefault("Object3DTranslate")?.Script ?? anchor.Script);
+            if (rotation) touched.Add(origin.Writers.GetValueOrDefault("Object3DRotate")?.Script ?? anchor.Script);
+            if (scale) touched.Add(origin.Writers.GetValueOrDefault("Object3DScale")?.Script ?? anchor.Script);
+            if (InThisMission(workspace, nodeName, label, touched, Lines(translateOnly: false), executions, token, mission, world, write) is { } mine) return mine;
             if (writers.Select(w => w.Script).Append(anchor.Script).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
                 throw new InvalidDataException($"{nodeName}'s transform is set in several scripts; edit them in the scripts directly.");
             ScriptEdit edit = new(workspace, anchor.Script, executions, token, mission);
@@ -174,15 +207,27 @@ public static class SourceObjectEdits
         // applying there.
         if ((copies ?? []).Where(c => !ReferenceEquals(c, origin)).SelectMany(c => TransformCommands.Where(c.Writers.ContainsKey).Select(k => c.Writers[k])).FirstOrDefault() is { } other)
             throw new InvalidDataException($"{other.Script} line {other.Line} ({other.Command}) sets the transform of another {(origin.Database ? "copy" : "load")} of {nodeName} in {origin.ModelFile}; edit those instructions in the scripts first.");
-        List<(string Relative, byte[] Content)> changes = []; List<string> notes = []; List<string> places = [];
         var translate = origin.Writers.GetValueOrDefault("Object3DTranslate");
+        bool gltfPosition = position && translate == null;
+        // Other missions load the file too (a model of data/common/models): a script setting the node's transform in such a
+        // load would start or stop applying there just the same.
+        if ((rotation || scale || gltfPosition) && mission != null && TransformElsewhere(workspace, mission, origin, nodeName, token) is { } elsewhere)
+            throw new InvalidDataException($"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}) {(elsewhere.Certain ? "sets" : "may set")} the transform of {nodeName} where {elsewhere.Mission} loads {origin.ModelFile}"
+                + $"{(elsewhere.Certain ? "" : " (it finds a node of that name once the file is loaded)")}, which a change of the file's node would make start or stop applying there; edit those instructions in the scripts first.");
+        List<(string Relative, byte[] Content)> changes = []; List<string> notes = []; List<string> places = [];
         if (position && translate != null)
         {
-            ScriptEdit edit = new(workspace, translate.Script, executions, token, mission);
-            edit.Set(translate, "Object3DTranslate", requested.Position, Vector3.Zero, translate, current?.Position);
-            changes.AddRange(edit.Changes()); notes.AddRange(edit.Notes); places.Add($"{translate.Script} line {translate.Line}");
+            if (InThisMission(workspace, nodeName, label, [translate.Script], Lines(translateOnly: true), executions, token, mission, world, write) is { } mine)
+            {
+                changes.AddRange(mine.Changes); notes.AddRange(mine.Notes); places.Add(mine.Target);
+            }
+            else
+            {
+                ScriptEdit edit = new(workspace, translate.Script, executions, token, mission);
+                edit.Set(translate, "Object3DTranslate", requested.Position, Vector3.Zero, translate, current?.Position);
+                changes.AddRange(edit.Changes()); notes.AddRange(edit.Notes); places.Add($"{translate.Script} line {translate.Line}");
+            }
         }
-        bool gltfPosition = position && translate == null;
         if (rotation || scale || gltfPosition)
         {
             // Script rotation and scale are ignored only while the node's matrix is authored; an identity matrix would bring them back.
@@ -212,8 +257,8 @@ public static class SourceObjectEdits
     /// <summary>A plan that sets or clears one node flag bit (see <see cref="FlagCommands"/> and <see cref="WorldGltf.CarriedFlags"/>).</summary>
     /// <remarks>
     /// <paramref name="copies"/> (<see cref="CopiesOf"/>) are the nodes a glTF node's edit reaches; with <paramref name="world"/>
-    /// and <paramref name="write"/>, a value nothing set yet goes to this mission's world script when the script that created
-    /// the node also runs in other missions (see <see cref="PlanCommand"/>).
+    /// and <paramref name="write"/>, the value goes to this mission's world script when the script that set it, or that
+    /// created the node when nothing set it yet, also runs in other missions (see <see cref="InThisMission"/>).
     /// </remarks>
     public static SourceEditPlan PlanFlag(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, uint bit, bool on, CancellationToken token = default, string? mission = null,
         IEnumerable<WorldNodeProvenance>? copies = null, GameZWorld? world = null, SourceInstruction? write = null)
@@ -224,6 +269,9 @@ public static class SourceObjectEdits
         string value = on ? "on" : "off";
         if (FlagCommands.TryGetValue(bit, out string? command) && origin.Writers.TryGetValue(command, out var writer))
         {
+            // A flag command sets one bit of the current node, so a later one decides it: set in a script other missions run
+            // too (weapons.gw's templates), this mission sets it again before writing its world.
+            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, value]], executions, token, mission, world, write) is { } mine) return mine;
             ScriptEdit edit = new(workspace, writer.Script, executions, token, mission);
             edit.Replace(writer, new() { [1] = value });
             return new(label, edit.Changes(), $"{writer.Script} line {writer.Line}", edit.Notes);
@@ -256,8 +304,9 @@ public static class SourceObjectEdits
     /// A plan that sets the arguments of one property command (WorldSetFogColor, LightSetDiffuse, …) of a node a script made:
     /// the instruction that last set it changes, or a new one follows the instruction that created the node. When another
     /// mission's world script also runs that script (world.gw's NewWorld), the new line goes before this mission's world is
-    /// written instead, after a FindNode of the node (whose name must be unique in <paramref name="world"/>): nothing set the
-    /// value before, so setting it last is the same.
+    /// written instead, after a FindNode of the node (whose name must be unique in <paramref name="world"/>): the command
+    /// sets the value outright, so setting it last gives this mission the value whether or not the shared script set one
+    /// (see <see cref="InThisMission"/>).
     /// </summary>
     public static SourceEditPlan PlanCommand(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, string command, IReadOnlyList<string> args, CancellationToken token = default, string? mission = null,
         GameZWorld? world = null, SourceInstruction? write = null)
@@ -267,6 +316,8 @@ public static class SourceObjectEdits
         string label = $"{command} on {nodeName}";
         if (origin.Writers.TryGetValue(command, out var writer))
         {
+            // Property commands set their values outright: set in a shared script, this mission sets them again at the end.
+            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, .. args]], executions, token, mission, world, write) is { } mine) return mine;
             ScriptEdit edit = new(workspace, writer.Script, executions, token, mission);
             if (writer.Tokens.Count - 1 != args.Count) edit.ReplaceLine(writer, [command, .. args]);
             else edit.Replace(writer, args.Select((a, i) => (Index: i + 1, Value: a)).ToDictionary(p => p.Index, p => p.Value));
@@ -281,17 +332,45 @@ public static class SourceObjectEdits
     /// </summary>
     private static SourceEditPlan Insert(SourceWorkspace workspace, string nodeName, SourceInstruction anchor, IReadOnlyList<string> tokens, string label, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write)
     {
-        if (mission != null && world != null && nodeName.Length > 0 && world.Nodes.Count(n => n.Name == nodeName) == 1
-            && MissionsRunning(workspace, anchor.Script, token).Any(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase)))
-        {
-            string script = SourceBuilder.WorldScript(mission);
-            ScriptEdit end = new(workspace, script, executions, token, mission);
-            end.InsertBeforeWrite([["FindNode", Token(nodeName)], tokens], write);
-            return new(label, end.Changes(), $"{script}, before the world is written", [$"{anchor.Script} also runs in other missions, so the line goes before {script} writes the world."]);
-        }
+        if (InThisMission(workspace, nodeName, label, [anchor.Script], [tokens], executions, token, mission, world, write) is { } mine) return mine;
         ScriptEdit insert = new(workspace, anchor.Script, executions, token, mission);
         insert.Insert(anchor, tokens);
         return new(label, insert.Changes(), $"{anchor.Script} line {anchor.Line}", insert.Notes);
+    }
+    /// <summary>
+    /// When one of <paramref name="scripts"/> (those an edit would change) also runs in another mission's world script, a
+    /// plan that sets the values in this mission only instead: <paramref name="lines"/> right before this mission's world
+    /// is written, after a FindNode of the node. They run after every instruction the build ran before writing the world,
+    /// the shared script's among them, and their commands set values outright (a flag, a transform component, a property;
+    /// none reaches other nodes), so the world gets exactly these values, as if the shared script's lines had changed for
+    /// this mission. FindNode finds the newest node of a name, so the name must be the only one in the world. Null when no
+    /// such script is shared (the edit changes the scripts as usual); refused when one is but the lines cannot be placed.
+    /// </summary>
+    private static SourceEditPlan? InThisMission(SourceWorkspace workspace, string nodeName, string label, IEnumerable<string> scripts, IReadOnlyList<IReadOnlyList<string>> lines, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write)
+    {
+        if (mission == null || world == null) return null;
+        string own = SourceBuilder.WorldScript(mission);
+        string? shared = null; string[] others = [];
+        foreach (string script in scripts.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            // This mission's world script changes as usual (refused there when another mission runs it too).
+            if (script.Equals(own, StringComparison.OrdinalIgnoreCase)) continue;
+            others = [.. MissionsRunning(workspace, script, token).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase))];
+            if (others.Length > 0) { shared = script; break; }
+        }
+        if (shared == null) return null;
+        string missions = $"{string.Join(", ", others.Take(6))}{(others.Length > 6 ? $" and {others.Length - 6} more" : "")}";
+        // The lines must follow everything the build ran before it wrote the world: this mission's script must write it.
+        if (write != null && !write.Script.Equals(own, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"{shared} also runs in {missions}, and the world is written by {write.Script}, not {own}, so no line of this mission can set {nodeName}'s value after it. Edit it in the scripts directly.");
+        int count = nodeName.Length == 0 ? 0 : world.Nodes.Count(n => n.Name == nodeName);
+        if (count != 1)
+            throw new InvalidDataException($"{shared} also runs in {missions}, so the value would be set in {own} before the world is written, where FindNode finds the node by name; {(nodeName.Length == 0 ? "the node has no name" : $"{count} nodes are named {nodeName}")}. Edit it in the scripts directly.");
+        if (lines.Count == 0) return new(label, [], nodeName, []);
+        ScriptEdit end = new(workspace, own, executions, token, mission);
+        end.InsertBeforeWrite([["FindNode", Token(nodeName)], .. lines], write);
+        return new(label, end.Changes(), $"{own}, before the world is written",
+            [$"{shared} also runs in {missions}, so {nodeName}'s value is set before {own} writes the world, after that script ran: it changes in this mission only."]);
     }
 
     /// <summary>
@@ -331,7 +410,8 @@ public static class SourceObjectEdits
             // A script instruction that acts on the node or a part of it would act on another node, or none, once it is gone
             // (also one attaching it to a second parent). A node the file shares leaves every parent with its copies.
             RefuseUsers(target, FileSubtree(target, node, origin, token), node.Name, "deleted");
-            return GltfFile(target.Workspace, origin, label, (root, copies) => GltfNodeEdits.Remove(root, copies), token, notes);
+            // Taking out the node holding a shared node's first copy makes the build read the next copy, whose zone it keeps.
+            return GltfFile(target.Workspace, origin, label, (root, copies) => GltfNodeEdits.Remove(root, copies), token, notes, loadZone: mark => BuiltInstanceZone(target, origin.ModelFile, mark));
         }
         if (node.Parents.Count > 1) throw new InvalidDataException($"{node.Name} has several parents (a shared node); delete it in its source directly.");
         var created = Created(target, ["LoadGameGen", "NewObject3D"], "deleted");
@@ -357,6 +437,13 @@ public static class SourceObjectEdits
                 if (instruction.Command == "NodeSetDescription" && instruction.Args.Count > 0 && !ReferenceEquals(part, node)) notes.Add($"Animations and resources that find {instruction.Args[0]} by name no longer find it.");
             }
         }
+        // Unlike a value (see InThisMission), an object a shared script made has no exact deletion in this mission alone: a
+        // DeleteTree before the world is written would free its nodes, but their slots would stay in the world's node table
+        // (as freed slots with their names) where a world that never made it numbers the later nodes from them.
+        foreach (string script in instructions.Select(i => i.Script).Distinct(StringComparer.OrdinalIgnoreCase))
+            if (MissionsRunning(target.Workspace, script, token).Where(m => !m.Equals(target.Mission, StringComparison.OrdinalIgnoreCase)).ToArray() is { Length: > 0 } others)
+                throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Length > 6 ? $" and {others.Length - 6} more" : "")}: taking its lines out would delete {node.Name} there too, "
+                    + $"and no line of this mission deletes it exactly (a DeleteTree before the world is written would leave its nodes' slots in the world's node table, which a world that never made it numbers differently). Delete it in the scripts directly.");
         ScriptEdits edits = new(target, token);
         foreach (var instruction in instructions) edits[instruction.Script].Comment(instruction);
         return new(label, edits.Changes(), $"{created.Script} line {created.Line}", notes);
@@ -428,8 +515,10 @@ public static class SourceObjectEdits
             if (origin.Part && copies > 1) copyNotes.Add($"The mission database copies {origin.ModelFile} {copies} times, so the world gets {copies} nodes named {name}.");
             foreach (var i in origin.Applied.Where(i => !TransformCommands.Contains(i.Command) && !FlagCommands.Values.Contains(i.Command) && i.Command is not ("NodeSetLighting" or "FindSubNode")))
                 copyNotes.Add($"{i.Script} line {i.Line} ({i.Command}) acts on {node.Name} by name; the copy does not get it.");
+            uint? LoadZone(long mark) => BuiltInstanceZone(target, origin.ModelFile, mark);
             return GltfFile(target.Workspace, origin, label, (root, copies) =>
             {
+                var zones = GltfNodeEdits.InstanceZones(root).ToDictionary(z => z.Mark, z => z.Zone);
                 // Beside the node in every copy of an instance holding it, as copies of one new instance where it is one.
                 Dictionary<long, long> instances = [];
                 foreach (int each in copies)
@@ -439,7 +528,10 @@ public static class SourceObjectEdits
                     if (local is { } m) GltfNodeEdits.SetLocal(copied, m);
                     if (flags) ((JsonObject)copied["extras"]![WorldGltf.Key]!)["flags"] = $"0x{node.Flags & WorldGltf.CarriedFlags:X8}";
                 }
-            }, token, copyNotes);
+                // A shared node inside the copy is a new one, read from its own first copy: it keeps the zone of the one it copies,
+                // which the original's holder may have given it from elsewhere in the file.
+                KeepInstanceZones(root, origin.ModelFile, zones, instances.ToDictionary(p => p.Value, p => p.Key), LoadZone, copyNotes);
+            }, token, copyNotes, loadZone: LoadZone);
         }
         var created = Created(target, ["LoadGameGen"], "copied");
         string file = origin.LoadedFile ?? throw new InvalidDataException($"{node.Name}'s LoadGameGen found no model file.");
@@ -563,7 +655,9 @@ public static class SourceObjectEdits
                     throw new InvalidDataException($"{(full == origin.ModelNode ? node.Name : $"Group {((JsonObject)root["nodes"]![full]!)["name"]} below {node.Name}")} is a group of the mission database with geometry or a transform{(full == origin.ModelNode ? " where it stands now" : "")}; {(into is null ? "at the top" : $"under {parent!.Name}")} the build would delete it and its objects would join the world, so move its objects instead.");
             }, token, [.. notes, into != null ? $"{node.Name} moves with {parent!.Name} from now on."
                     : origin.Part ? $"{node.Name} becomes a root of {origin.ModelFile}, under each of the mission database's references to it."
-                    : $"{node.Name} becomes a root of the mission database, which joins the world and its grid."], everyCopy: false);
+                    : $"{node.Name} becomes a root of the mission database, which joins the world and its grid."], everyCopy: false,
+                // A move of a node holding a shared node's copy can make the build read another copy first, whose zone it keeps.
+                loadZone: mark => BuiltInstanceZone(target, origin.ModelFile, mark));
             // Nothing to change is no edit: say where it already is rather than report a move.
             if (plan.Changes.Count == 0)
                 throw new InvalidDataException(into != null ? $"{node.Name} is already under {parent!.Name}." : origin.Part ? $"{node.Name} is already a root of {origin.ModelFile}." : $"{node.Name} is already a root of the mission database.");
@@ -748,7 +842,8 @@ public static class SourceObjectEdits
     /// and a script's lookups (FindNode takes the newest node of a name, FindSubNode searches below the current node) can
     /// then find others. Nodes the build freed again count too (<see cref="SourceWorldBuild.Freed"/>). Nodes are identified
     /// by the load and glTF node they come from (a node its file places under several parents by its place in that
-    /// instance, whichever copy the build read), with the node that references their file, or by the instruction that
+    /// instance, whichever copy the build read, each child there by its name among its siblings, so that a copy made
+    /// beside one does not move the others), with the node that references their file, or by the instruction that
     /// created them; both builds must number the files' nodes alike (no node removed), as a move or a copy leaves them.
     /// </summary>
     public static string? TargetChange(SourceWorldBuild before, SourceWorldBuild after)
@@ -810,10 +905,14 @@ public static class SourceObjectEdits
                 : origin.Created is { } created ? new(2, null, null, 0, -1, created.Script, created.Line, -1) : default;
             return known[origin] = Intern(key, origin);
         }
+        /// <summary>
+        /// A place in an instance: the instance's number, then each child by its name and how many earlier siblings have it,
+        /// not its position, which a copy inserted beside an earlier sibling moves.
+        /// </summary>
         private int Place(InstancePlace place, int depth)
         {
             if (known.TryGetValue(place, out int number)) return number;
-            Key key = place.Parent is { } parent && depth < GltfDocument.MaximumDepth ? new(5, null, null, place.Child, Place(parent, depth + 1), null, 0, -1) : new(4, null, null, place.Number, -1, null, 0, -1);
+            Key key = place.Parent is { } parent && depth < GltfDocument.MaximumDepth ? new(5, null, place.Name, place.Occurrence, Place(parent, depth + 1), null, 0, -1) : new(4, null, null, place.Number, -1, null, 0, -1);
             return known[place] = Intern(key, null);
         }
         private int Intern(Key key, WorldNodeProvenance? source)
@@ -844,6 +943,157 @@ public static class SourceObjectEdits
     public static IEnumerable<WorldNodeProvenance> CopiesOf(WorldNodeProvenance origin, IEnumerable<WorldNodeProvenance> all) =>
         origin.ModelFile == null ? [origin]
             : all.Where(p => p.ModelNode == origin.ModelNode && string.Equals(p.ModelFile, origin.ModelFile, StringComparison.OrdinalIgnoreCase));
+    /// <summary>
+    /// An instruction another mission's build runs that sets the transform of <paramref name="origin"/>'s glTF node where
+    /// that mission loads the node's file (itself, or a file that references it): a change of the file's node reaches that
+    /// load too, so the script's rotation or scale would start or stop applying there. <see cref="CopiesOf"/> sees only this
+    /// world; here each other mission's world script is followed as its build runs it (sources, macros and conditions, up
+    /// to writing the world), and so is the node each line acts on, by name: a load's root (LoadGameGen, or a FindNode of
+    /// its name), a FindSubNode below it (certain), and a FindNode or FindSubNode of the node's name once the file is
+    /// loaded (the newest node of the name, possibly another: not certain), through NodeSetDescription renames. The node's
+    /// own transform instructions are skipped: they run in this mission too, and the edit is planned with them.
+    /// </summary>
+    internal static (string Mission, SourceInstruction Instruction, bool Certain)? TransformElsewhere(SourceWorkspace workspace, string mission, WorldNodeProvenance origin, string nodeName, CancellationToken token)
+    {
+        if (origin.ModelFile is not { } file) return null;
+        Dictionary<string, byte[]?> files = new(StringComparer.OrdinalIgnoreCase);
+        byte[]? Read(string path)
+        {
+            if (files.TryGetValue(path, out var bytes)) return bytes;
+            try { bytes = workspace.Read(path, token); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { bytes = null; }
+            return files[path] = bytes;
+        }
+        // The names the build gives the node: its engine name in the file, and the one this world shows.
+        HashSet<string> names = new(StringComparer.Ordinal) { nodeName };
+        if (Parse(Read(file))?["nodes"] is JsonArray fileNodes && origin.ModelNode >= 0 && origin.ModelNode < fileNodes.Count && fileNodes[origin.ModelNode] is JsonObject edited)
+            names.Add(WorldGltf.EngineName(edited));
+        names.Remove("");
+        if (names.Count == 0) return null;
+        HashSet<(string, int)> own = [.. TransformCommands.Where(origin.Writers.ContainsKey).Select(c => (origin.Writers[c].Script.ToLowerInvariant(), origin.Writers[c].Line))];
+
+        // Whether a model file is the edited file or references it (its nodes' refs, followed). Only a file naming the
+        // edited file's name can reference it, which a byte search finds before the file is parsed.
+        string leaf = Path.GetFileName(file);
+        byte[]? needle = leaf.All(ch => ch is > ' ' and < (char)127) ? Encoding.ASCII.GetBytes(leaf.ToLowerInvariant()) : null;
+        Dictionary<string, bool> holds = new(StringComparer.OrdinalIgnoreCase);
+        bool Holds(string path, int depth)
+        {
+            if (path.Equals(file, StringComparison.OrdinalIgnoreCase)) return true;
+            if (holds.TryGetValue(path, out bool known)) return known;
+            holds[path] = false;
+            bool found = false;
+            if (depth < GltfDocument.MaximumDepth && path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) && Read(path) is { } bytes && (needle == null || Mentions(bytes, needle))
+                && Parse(bytes)?["nodes"] is JsonArray nodes)
+                foreach (var n in nodes)
+                {
+                    if (((n as JsonObject)?["extras"] as JsonObject)?[WorldGltf.Key] is not JsonObject engine || engine["ref"] is not JsonValue reference || !reference.TryGetValue(out string? uri)) continue;
+                    string next;
+                    try { next = WorldAssembler.Relative(path, uri); } catch (InvalidDataException) { continue; }
+                    if (Holds(next, depth + 1)) { found = true; break; }
+                }
+            return holds[path] = found;
+        }
+
+        var worlds = SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            .Where(p => p.Count(c => c == '/') == 1).Order(StringComparer.OrdinalIgnoreCase);
+        foreach (string world in worlds)
+        {
+            string other = Path.GetFileNameWithoutExtension(world).ToLowerInvariant();
+            if (other.Equals(mission, StringComparison.OrdinalIgnoreCase)) continue;
+            try { if (Trace(world) is { } hit) return (other, hit.Instruction, hit.Certain); }
+            // A world whose scripts cannot run (a macro expanding past the interpreter's buffer) builds nothing.
+            catch (InvalidDataException) { }
+        }
+        return null;
+
+        (SourceInstruction Instruction, bool Certain)? Trace(string world)
+        {
+            Dictionary<string, string> variables = new(StringComparer.Ordinal);
+            ScriptConditions conditions = new();
+            List<string> directories = [];
+            // Each load: the file as LoadGameGen names it and the model directories then, resolved only when needed.
+            List<(string Name, string[] Directories)> loads = [];
+            Dictionary<int, bool> loadHolds = [];
+            bool LoadHolds(int load)
+            {
+                if (loadHolds.TryGetValue(load, out bool known)) return known;
+                var (name, folders) = loads[load];
+                string leafName = Path.GetFileName(name.Replace('\\', '/')), stem = Path.GetFileNameWithoutExtension(leafName), extension = Path.GetExtension(leafName).ToLowerInvariant();
+                string? path = folders.SelectMany(d => (extension is ".gltf" or ".glb" ? [extension] : new[] { ".gltf", ".glb" }).Select(e => $"{d}/{stem}{e}")).FirstOrDefault(p => Read(p) != null);
+                return loadHolds[load] = path != null && Holds(path, 0);
+            }
+            Dictionary<string, int> roots = new(StringComparer.Ordinal);
+            HashSet<string> targets = new(names, StringComparer.Ordinal);
+            // The node lines act on: in load Load (its root when Root), the edited node (in load Load, or with Load −1 the
+            // newest of its name among the first Made loads), or another (Load −1, not Node).
+            (bool Node, int Load, int Made, bool Root) at = (false, -1, 0, false);
+            int run = 0; bool written = false;
+            (SourceInstruction, bool)? hit = null;
+            Run(world, 0);
+            return hit;
+
+            void Run(string relative, int depth)
+            {
+                if (depth > WorldAssembler.MaximumScriptDepth || Read(relative) is not { } bytes) return;
+                foreach (var line in GameGenScriptSyntax.Parse(bytes).Lines)
+                {
+                    if (written || hit != null) return;
+                    if (!line.IsInstruction) continue;
+                    token.ThrowIfCancellationRequested();
+                    if (++run > WorldAssembler.MaximumInstructions) { written = true; return; }
+                    var raw = line.Tokens; string command = raw[0];
+                    if (!conditions.Runs(raw, variables)) continue;
+                    string[] args = [.. raw.Skip(1).Select(t => ScriptConditions.Expand(t, variables))];
+                    string A(int i) => i < args.Length ? args[i] : "";
+                    if (ScriptConditions.IsQuit(command)) return;
+                    if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; continue; }
+                    if (ScriptConditions.IsSource(command)) { if (args.Length > 0) Run($"{SourceProject.GameGenFolder}/{args[0].Replace('\\', '/')}", depth + 1); continue; }
+                    switch (command)
+                    {
+                        case "SetModelDirectory":
+                            foreach (string part in A(0).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                                if (WorldAssembler.ProjectPath(part) is { } folder) { directories.Remove(folder); directories.Insert(0, folder); }
+                            break;
+                        case "LoadGameGen": loads.Add((A(0), [.. directories])); roots[A(1)] = loads.Count - 1; at = (false, loads.Count - 1, 0, true); break;
+                        case "FindNode":
+                            at = targets.Contains(A(0)) && loads.Count > 0 ? (true, -1, loads.Count, false) : roots.TryGetValue(A(0), out int load) ? (false, load, 0, true) : (false, -1, 0, false);
+                            break;
+                        case "FindSubNode":
+                            // Below a load's root or a node in it, the search stays in that load; from elsewhere it may reach any.
+                            at = targets.Contains(A(0)) ? at.Load >= 0 ? (true, at.Load, 0, false) : at.Node ? at with { Root = false } : loads.Count > 0 ? (true, -1, loads.Count, false) : (false, -1, 0, false)
+                                : at.Load >= 0 ? (false, at.Load, 0, false) : (false, -1, 0, false);
+                            break;
+                        case "NodeSetDescription":
+                            if (at.Node) targets.Add(A(0)); else if (at.Root && at.Load >= 0) roots[A(0)] = at.Load;
+                            break;
+                        case "Object3DTranslate" or "Object3DRotate" or "Object3DScale":
+                            if (at.Node && !own.Contains((relative.ToLowerInvariant(), line.Number)) && (at.Load >= 0 ? LoadHolds(at.Load) : Enumerable.Range(0, at.Made).Any(LoadHolds)))
+                                hit = (new SourceInstruction(relative, line.Number, command, raw, args), at.Load >= 0);
+                            break;
+                        case "GameZWriteZBDFile": written = true; break;
+                        case "NewWorld" or "NewWindow" or "NewDisplay" or "NewCamera" or "LightNew" or "NewObject3D": at = (false, -1, 0, false); break;
+                    }
+                }
+            }
+        }
+        static JsonNode? Parse(byte[]? bytes)
+        {
+            if (bytes == null) return null;
+            try { return JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }); }
+            catch (JsonException) { return null; }
+        }
+        static bool Mentions(byte[] bytes, byte[] lower)
+        {
+            for (int i = 0; i + lower.Length <= bytes.Length; i++)
+            {
+                int k = 0;
+                while (k < lower.Length && (bytes[i + k] is >= (byte)'A' and <= (byte)'Z' ? bytes[i + k] + 32 : bytes[i + k]) == lower[k]) k++;
+                if (k == lower.Length) return true;
+            }
+            return false;
+        }
+    }
     /// <summary>
     /// Which copy of its file a node is in: the chain of references that copied the file (a part the mission database
     /// references several times, a model file several nodes reference), as text that compares across rebuilds; empty for a
@@ -956,7 +1206,13 @@ public static class SourceObjectEdits
     /// the first copy, and the others would come back once it is removed or moves later in the file. Without
     /// <paramref name="everyCopy"/> (a move, which keeps one place) such a node is refused.
     /// </summary>
-    private static SourceEditPlan GltfFile(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject, IReadOnlyList<int>> change, CancellationToken token, IReadOnlyList<string> notes, bool everyCopy = true)
+    /// <remarks>
+    /// A shared node takes its zone from the copy the build reads first, so a change that makes it read another copy writes
+    /// the zone it had onto every copy (see <see cref="KeepInstanceZones"/>); <paramref name="loadZone"/> gives the built
+    /// zone of a shared node whose zone came from whatever loads the file.
+    /// </remarks>
+    private static SourceEditPlan GltfFile(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject, IReadOnlyList<int>> change, CancellationToken token, IReadOnlyList<string> notes, bool everyCopy = true,
+        Func<long, uint?>? loadZone = null)
     {
         string file = origin.ModelFile!;
         byte[] bytes = workspace.Read(file, token) ?? throw new InvalidDataException($"{file} no longer exists.");
@@ -977,16 +1233,59 @@ public static class SourceObjectEdits
         // not stand for the first's.
         if (copies.Count > 1 && Shape(nodes, copies[0], 0) is var shape && copies.Skip(1).Any(c => !JsonNode.DeepEquals(Shape(nodes, c, 0), shape)))
             throw new InvalidDataException($"The copies of {shown} in the instance {file} places under several parents differ; make them alike in Blender first.");
+        var zones = GltfNodeEdits.InstanceZones(document).ToDictionary(z => z.Mark, z => z.Zone);
         change(document, copies);
+        List<string> kept = [];
+        KeepInstanceZones(document, file, zones, new Dictionary<long, long>(), loadZone, kept);
         // zStudio and Blender write glTF indented or minified; keep the file's style.
         bool indented = bytes.AsSpan(0, Math.Min(bytes.Length, 4096)).Contains((byte)'\n');
         byte[] content = Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = indented }));
         if (content.AsSpan().SequenceEqual(bytes)) return new(label, [], $"{file} node {origin.ModelNode}", notes);
-        List<string> all = [.. notes];
+        List<string> all = [.. notes, .. kept];
         if (copies.Count > 1) all.Add($"{file} holds {shown} in an instance it places under several parents: the change applies to each of its {copies.Count} copies.");
         if (!origin.Database) all.Add($"{file} is a model file: the change applies wherever it is loaded.");
         else if (origin.Part) all.Add($"{file} is a part of the mission database: the change applies to every copy of it the database references.");
         return new(label, [(file, content)], $"{file} node {origin.ModelNode}", all);
+    }
+    /// <summary>
+    /// Keeps the zones of the file's shared nodes through a change of its hierarchy. The build gives a shared node without a
+    /// zone of its own the zone of the copy it reads first (see <see cref="GltfNodeEdits.InstanceZones"/>): when the change
+    /// makes it read a copy that would give another, the zone it had (<paramref name="before"/>, by mark) is written onto
+    /// every copy, a zone that came from whatever loads the file as the build gave it (<paramref name="loadZone"/>; refused
+    /// when unknown). A shared node made as a copy of another (<paramref name="copiedFrom"/>: new mark, original mark) keeps
+    /// its original's zone. Outer shared nodes come first: the zone written on one passes on to those inside it.
+    /// </summary>
+    private static void KeepInstanceZones(JsonObject document, string file, IReadOnlyDictionary<long, uint?> before, IReadOnlyDictionary<long, long> copiedFrom, Func<long, uint?>? loadZone, List<string> notes)
+    {
+        // A shared node given its zone states it on every copy, which settles it.
+        HashSet<long> kept = [];
+        for (int round = 0; round <= before.Count + copiedFrom.Count; round++)
+        {
+            (long Mark, long Original, uint? Was, uint? Now)? moved = null;
+            foreach (var (mark, now) in GltfNodeEdits.InstanceZones(document))
+            {
+                long original = copiedFrom.TryGetValue(mark, out long source) ? source : mark;
+                if (!kept.Contains(mark) && before.TryGetValue(original, out uint? was) && was != now) { moved = (mark, original, was, now); break; }
+            }
+            if (moved is not { } m) return;
+            kept.Add(m.Mark);
+            uint keep = m.Was ?? loadZone?.Invoke(m.Original)
+                ?? throw new InvalidDataException($"The node {file} places under several parents (instance {m.Original}) takes its zone from what loads the file, which differs between the file's copies; after this change the build would read its copy under another node, which gives it {(m.Now is uint z ? $"zone {z}" : "another zone")}. Make the change in Blender.");
+            GltfNodeEdits.SetInstanceZone(document, m.Mark, keep);
+            if (m.Mark == m.Original)
+                notes.Add($"The node {file} places under several parents (instance {m.Mark}) keeps zone {keep}: the build now reads its copy under another node, which would give it {(m.Now is uint other ? $"zone {other}" : "the zone of what loads the file")}.");
+        }
+        throw new InvalidDataException($"The zones of the nodes {file} places under several parents could not be kept; make the change in Blender.");
+    }
+    /// <summary>
+    /// The zone the build gave the shared node <paramref name="mark"/> of <paramref name="file"/>, when every copy of the file
+    /// the world holds gave it the same (a part the database references from several zones may not).
+    /// </summary>
+    private static uint? BuiltInstanceZone(SourceObjectTarget target, string file, long mark)
+    {
+        var zones = target.Provenance.Where(p => p.Value.Instance is { Parent: null } place && place.Number == mark && string.Equals(p.Value.ModelFile, file, StringComparison.OrdinalIgnoreCase))
+            .Select(p => p.Key.Zone & 0xFF).Distinct().Take(2).ToList();
+        return zones.Count == 1 ? zones[0] : null;
     }
     private static JsonArray Array(params float[] values) => new(values.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());
     /// <summary>A scale of 0 flattens the object and leaves no rotation to read back, so it could not be turned or scaled again.</summary>
@@ -1012,6 +1311,21 @@ public static class SourceObjectEdits
     {
         if (!float.IsFinite(v.X) || !float.IsFinite(v.Y) || !float.IsFinite(v.Z) || Math.Abs(v.X) > SourceWorlds.MaximumCoordinate || Math.Abs(v.Y) > SourceWorlds.MaximumCoordinate || Math.Abs(v.Z) > SourceWorlds.MaximumCoordinate)
             throw new InvalidDataException($"Values must be finite and within ±{SourceWorlds.MaximumCoordinate:N0}.");
+    }
+
+    /// <summary>
+    /// The components of a vector instruction's new <paramref name="value"/> that change (those differing from
+    /// <paramref name="shown"/>, the value the user saw, or without it from the value the build used by more than a
+    /// decomposition's noise), and the values the build used: <paramref name="writer"/>'s arguments (a missing one reads as
+    /// 0, as the interpreter reads it), or <paramref name="unset"/> without an instruction.
+    /// </summary>
+    private static (bool[] Changed, Vector3 Built) Compare(SourceInstruction? writer, Vector3 value, Vector3 unset, Vector3? shown)
+    {
+        Vector3 built = writer == null ? unset : new(Arg(0), Arg(1), Arg(2));
+        float Arg(int i) => i < writer!.Args.Count ? WorldAssembler.Number(writer.Args[i]) : 0;
+        bool[] changed = [.. Enumerable.Range(0, 3).Select(i => shown is { } s ? Differs(value[i], s[i])
+            : MathF.Abs(value[i] - built[i]) > 1e-5f * MathF.Max(1, MathF.Abs(value[i])))];
+        return (changed, built);
     }
 
     /// <summary>Token replacements and inserted lines of one script, applied together: replacements first, then insertions from the bottom up.</summary>
@@ -1080,11 +1394,7 @@ public static class SourceObjectEdits
         /// </remarks>
         public void Set(SourceInstruction? writer, string command, Vector3 value, Vector3 unset, SourceInstruction anchor, Vector3? shown = null)
         {
-            // The values the build used: a missing argument reads as 0, as the interpreter reads it; no instruction, the default.
-            Vector3 built = writer == null ? unset : new(Arg(0), Arg(1), Arg(2));
-            float Arg(int i) => i < writer!.Args.Count ? WorldAssembler.Number(writer.Args[i]) : 0;
-            bool[] changed = [.. Enumerable.Range(0, 3).Select(i => shown is { } s ? Differs(value[i], s[i])
-                : MathF.Abs(value[i] - built[i]) > 1e-5f * MathF.Max(1, MathF.Abs(value[i])))];
+            var (changed, built) = Compare(writer, value, unset, shown);
             if (!changed.Any(c => c)) return;
             string Component(int i) => Number(changed[i] ? value[i] : built[i]);
             if (writer == null)
