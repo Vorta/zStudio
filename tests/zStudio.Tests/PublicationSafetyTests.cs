@@ -8,7 +8,7 @@ namespace Recoil.Zbd.Tests;
 
 /// <summary>
 /// Exports and reconstructions never overwrite or remove files another program wrote while they ran, and texture packs
-/// are refused before their images are decoded when those would not fit in memory.
+/// are refused before their images are decoded when a pack file could not hold them (see also <see cref="PackDecodingTests"/>).
 /// </summary>
 public sealed class PublicationSafetyTests
 {
@@ -124,7 +124,7 @@ public sealed class PublicationSafetyTests
     }
 
     /// <summary>The 33 bytes of a PNG's signature and header chunk: enough for its size, not for its pixels.</summary>
-    private static byte[] PngHeader(int width, int height)
+    internal static byte[] PngHeader(int width, int height)
     {
         byte[] png = new byte[33];
         new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }.CopyTo(png, 0);
@@ -136,26 +136,29 @@ public sealed class PublicationSafetyTests
     }
 
     [Fact]
-    public void TexturePacksBeyondTheDecodingBudgetAreRefusedBeforeAnyImageIsDecoded()
+    public void PacksWhoseStoredTexturesExceedAPackFileAreRefusedBeforeAnyImageIsDecoded()
     {
         using var folder = new Folder();
         Directory.CreateDirectory(Path.Combine(folder.Root, "data", "m1")); Directory.CreateDirectory(Path.Combine(folder.Root, "gamegen"));
-        // Seventeen 4096 × 4096 images take 1,088 MiB decoded. Only their headers exist: decoding any would fail otherwise.
-        string[] inputs = [.. Enumerable.Range(0, 17).Select(i => $"data/m1/textures/big{i:00}.png")];
+        // 4096 × 4096 PNGs of which only the headers exist: decoding any would fail. texturemax keeps every texture at full
+        // size up to 1024 × 1024, a byte a texel, so 513 of them take more than the 512 MiB a pack file holds.
+        string[] inputs = [.. Enumerable.Range(0, 513).Select(i => $"data/m1/textures/big{i:000}.png")];
         foreach (string input in inputs) folder.Write(input, PngHeader(4096, 4096));
-        var pack = new SourceOutputPlan("m1/rtexture16.zbd", "textures", inputs) { Pack = TexturePackVariant.FromFileName("rtexture16.zbd") };
+        var pack = new SourceOutputPlan("m1/texturemax.zbd", "textures", inputs) { Pack = TexturePackVariant.FromFileName("texturemax.zbd") };
         var error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, pack, new(folder.Root), DateTime.UtcNow, Token));
-        Assert.Contains("1088 MiB", error.Message);
-        Assert.Contains($"{SourceBuilder.MaximumDecodedTextureBytes >> 20} MiB", error.Message);
-        Assert.Contains("1024 × 1024", error.Message);
-        Assert.Contains("data/m1/textures/big00.png (4096 × 4096)", error.Message);
-        // Interface images are held the same way.
-        var images = new SourceOutputPlan("image.zbd", "images", inputs);
+        Assert.StartsWith("texturemax.zbd would take at least 514 MiB with its textures at the sizes it stores, more than the 512 MiB a pack file can hold.", error.Message);
+        Assert.Contains("Give the pack a budget or a smaller largest side", error.Message);
+        Assert.Contains("big000 (1024 × 1024)", error.Message);
+        // Interface images are stored at their authored size, two bytes a pixel: seventeen take 544 MiB.
+        var images = new SourceOutputPlan("image.zbd", "images", inputs[..17]);
         error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, images, new(folder.Root), DateTime.UtcNow, Token));
-        Assert.Contains("1088 MiB", error.Message);
-        // Within the budget, the images are decoded (and these headers fail there).
-        var fits = new SourceOutputPlan("m1/rtexture16.zbd", "textures", inputs[..16]) { Pack = pack.Pack };
+        Assert.StartsWith("image.zbd would take at least 545 MiB", error.Message);
+        Assert.Contains("Use fewer or smaller images", error.Message);
+        Assert.Contains("big000 (4096 × 4096)", error.Message);
+        // What a pack file holds is decoded (and these headers fail there).
+        var fits = new SourceOutputPlan("m1/texturemax.zbd", "textures", inputs[..511]) { Pack = pack.Pack };
         error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, fits, new(folder.Root), DateTime.UtcNow, Token));
+        Assert.StartsWith("data/m1/textures/big000.png:", error.Message);
         Assert.DoesNotContain("MiB", error.Message);
     }
 

@@ -150,6 +150,8 @@ public partial class MainWindow
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        // A canceled publication that could not undo everything says what it left (MCP returns the same message); it stays a cancellation.
+        catch (OperationCanceledException ex) when (ex.InnerException is OperationCanceledException && ViewModel.WorkspaceGeneration == generation) { ViewModel.AddProblem(Bounded(ex.Message), "Warning", destination ?? root); throw; }
         finally { operation = null; CancelOperationItem.IsEnabled = false; }
     }
     private static object Lookup(SourceLookup l) => new { mission = l.Mission, kind = l.Kind, name = Bounded(l.Name, 64), source = Bounded(l.Source, 256), candidates = l.Candidates, slot = l.Slot, found = l.Found == null ? null : Bounded(l.Found, 512) };

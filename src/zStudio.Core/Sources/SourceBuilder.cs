@@ -161,6 +161,13 @@ public static partial class SourceBuilder
             if (overlay?.TryGetValue(relative, out var pending) == true) return TextureSources.PngSize((ReadOnlySpan<byte>)pending);
             return TextureSources.PngSize(SourceProject.Resolve(root, relative), cache: false);
         }
+        private readonly Dictionary<string, (int Width, int Height, TextureTransparency Transparency)> textures = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>
+        /// What decoding a PNG of the run found: its size and transparency. A file's content is the same for the whole run
+        /// (<see cref="Read"/>), so a texture several packs hold is classified once.
+        /// </summary>
+        internal (int Width, int Height, TextureTransparency Transparency)? Texture(string relative) => textures.TryGetValue(relative, out var found) ? found : null;
+        internal void Remember(string relative, int width, int height, TextureTransparency transparency) => textures[relative] = (width, height, transparency);
         private HashSet<string>? damageMasks;
         /// <summary>Textures the scripts register as damage-mark masks (WriteTextureSetMap), read once per run.</summary>
         internal HashSet<string> DamageMasks(CancellationToken token)
@@ -393,8 +400,9 @@ public static partial class SourceBuilder
     {
         foreach (string relative in outputs) { _ = SourceProject.Resolve(destination, relative); SourceProject.RejectNestedLinks(destination, relative); }
         string backup = Path.Combine(destination, ".zstudio-backup-" + Guid.NewGuid().ToString("N"));
-        // Installed: the content this export moved into place, so undoing it removes only that file.
-        List<(string Target, string? Saved, JournalDigest? Installed)> steps = [];
+        // Original: the stamp of the replaced file moved into the backup, so undoing restores it only while the backup still
+        // holds it. Installed: the content this export moved into place, so undoing it removes only that file.
+        List<(string Target, string? Saved, FileStamp? Original, JournalDigest? Installed)> steps = [];
         try
         {
             for (int i = 0; i < outputs.Count; i++)
@@ -404,8 +412,12 @@ public static partial class SourceBuilder
                 string target = SourceProject.Resolve(destination, relative), saved = SourceProject.Resolve(backup, relative), staged = SourceProject.Resolve(staging, relative);
                 fault?.Invoke("replace", i);
                 if (File.Exists(target) && !overwrite) throw new IOException($"{relative} appeared in {destination} during the export; nothing was replaced. Export again and allow replacing it.");
-                if (File.Exists(target)) { Directory.CreateDirectory(Path.GetDirectoryName(saved)!); File.Move(target, saved); steps.Add((target, saved, null)); }
-                else steps.Add((target, null, null));
+                if (File.Exists(target))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(saved)!); File.Move(target, saved);
+                    steps.Add((target, saved, null, null)); steps[^1] = steps[^1] with { Original = FileStamp.Read(saved) };
+                }
+                else steps.Add((target, null, null, null));
                 JournalDigest installed;
                 using (FileStream stream = new(staged, FileMode.Open, FileAccess.Read, FileShare.Read)) installed = JournalDigest.Of(stream);
                 fault?.Invoke("install", i);
@@ -417,13 +429,16 @@ public static partial class SourceBuilder
         catch (Exception failure)
         {
             // Only files this export installed are removed, while they still have the content it installed: a file another
-            // program put at a target meanwhile stays, and the original that moved aside for it stays in the backup.
-            List<string> unrestored = [], leftover = [], others = [], stranded = [];
+            // program put at a target meanwhile stays, and the original that moved aside for it stays in the backup. An
+            // installed file is removed only while the backup still holds the original that replaces it, so a backup another
+            // program changed never leaves a game file missing.
+            List<string> unrestored = [], leftover = [], others = [], stranded = [], kept = [], lost = [];
             for (int i = steps.Count - 1; i >= 0; i--)
             {
-                var (target, saved, installed) = steps[i];
+                var (target, saved, original, installed) = steps[i];
                 try
                 {
+                    if (saved != null && !Holds(saved, original)) { (installed != null ? kept : lost).Add(target); continue; }
                     if (installed != null)
                     {
                         // Moved into the backup and deleted there only while it is the file this export installed.
@@ -443,20 +458,35 @@ public static partial class SourceBuilder
                     }
                     if (saved != null) { if (Path.Exists(target)) unrestored.Add(target); else File.Move(saved, target); }
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { (saved != null ? unrestored : leftover).Add(target); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                { (saved == null ? leftover : Holds(saved, original) ? unrestored : installed != null && Path.Exists(target) ? kept : lost).Add(target); }
             }
             string notes = (leftover.Count > 0 ? $". New files that could not be removed: {string.Join(", ", leftover.Take(8))}" : "")
                 + (others.Count > 0 ? $". Files another program wrote at the outputs' names during the export were left as they are: {string.Join(", ", others.Take(8))}" : "")
-                + (stranded.Count > 0 ? $". Files another program put in place while the export was undone were kept as {string.Join(", ", stranded.Take(8))}" : "");
+                + (stranded.Count > 0 ? $". Files another program put in place while the export was undone were kept as {string.Join(", ", stranded.Take(8))}" : "")
+                + (kept.Count > 0 ? $". The originals of {kept.Count} replaced files are no longer in {backup}, which another program changed, so the files at their names were left as they are: {string.Join(", ", kept.Take(8))}" : "")
+                + (lost.Count > 0 ? $". The originals of {lost.Count} replaced files could not be restored because they are no longer in {backup}, which another program changed: {string.Join(", ", lost.Take(8))}" : "");
+            // A canceled export stays a cancellation, with what it could not undo.
+            string failed = failure is OperationCanceledException ? "The export was canceled" : $"Export failed ({failure.Message})";
+            Exception Failure(string message) => failure is OperationCanceledException ? new OperationCanceledException(message, failure, token) : new IOException(message, failure);
             if (unrestored.Count > 0 || stranded.Count > 0)
-                throw new IOException($"Export failed ({failure.Message})" + (unrestored.Count > 0
+                throw Failure(failed + (unrestored.Count > 0
                     ? $" and {unrestored.Count} previous files could not be restored because another program changed or holds them; the originals remain in {backup}: {string.Join(", ", unrestored.Take(8))}"
-                    : $"; {backup} is kept") + notes, failure);
-            try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            if (leftover.Count > 0 || others.Count > 0) throw new IOException($"Export failed ({failure.Message}){notes}", failure);
+                    : $"; {backup} is kept") + notes);
+            // A backup another program changed is left to it.
+            if (kept.Count == 0 && lost.Count == 0)
+                try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            if (notes.Length > 0) throw Failure(failed + notes);
             throw;
         }
         try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+
+        // Whether the backup still holds a replaced file as it was moved there.
+        static bool Holds(string saved, FileStamp? original)
+        {
+            try { return File.Exists(saved) && (original == null || FileStamp.Read(saved) == original); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        }
     }
 
     internal static Built Build(string root, SourceOutputPlan plan, Snapshot snapshot, DateTime now, CancellationToken token) => plan.Family switch
@@ -530,15 +560,10 @@ public static partial class SourceBuilder
     /// <summary>image.zbd: every interface image at its authored size in direct colour, ordered by source path.</summary>
     private static Built BuildImages(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
-        List<PackTexture> textures = [];
-        CheckDecoding(plan.Path, plan.Inputs, snapshot, null, token);
-        long decoded = 0;
-        foreach (string input in plan.Inputs)
-        {
-            token.ThrowIfCancellationRequested();
-            textures.Add(new(TextureName(input), TextureSources.SortKey(input), DecodeCounted(plan.Path, input, snapshot.Read(input, token), ref decoded, null, token)));
-        }
-        var built = TexturePackBuilder.Build(textures, TexturePackVariant.FromFileName("image.zbd")!, token);
+        CheckCount(plan.Path, plan.Inputs.Count);
+        List<PackSource> textures = [];
+        foreach (string input in plan.Inputs) textures.Add(Source(input, TextureName(input), 0, false, snapshot, token));
+        var built = TexturePackBuilder.BuildFromSources(textures, TexturePackVariant.FromFileName("image.zbd")!, token);
         return new(built.Bytes, textures.Count, built.Warnings);
     }
     /// <summary>
@@ -589,18 +614,16 @@ public static partial class SourceBuilder
     private static Built BuildTexturePack(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         var variant = plan.Pack ?? TexturePackVariant.FromFileName(Path.GetFileName(plan.Path)) ?? throw new InvalidDataException($"{plan.Path} is not a texture pack name.");
-        List<PackTexture> textures = [];
+        List<PackSource> textures = [];
         var (inputs, addressing, warnings) = PackInputs(plan, snapshot, token);
-        CheckDecoding(plan.Path, [.. inputs.Select(i => i.Input)], snapshot, variant.MaximumDimension, token);
-        long decoded = 0;
+        CheckCount(plan.Path, inputs.Count);
         foreach (var (input, name) in inputs)
         {
-            token.ThrowIfCancellationRequested();
             string folder = Path.GetDirectoryName(input)!.Replace('\\', '/');
             bool vehicle = folder.EndsWith("/bft", StringComparison.OrdinalIgnoreCase) || folder.Equals(TextureSources.MultiBftTextures, StringComparison.OrdinalIgnoreCase);
-            textures.Add(new(name, TextureSources.SortKey(input), DecodeCounted(plan.Path, input, snapshot.Read(input, token), ref decoded, variant.MaximumDimension, token), addressing.GetValueOrDefault(name), vehicle || snapshot.DamageMasks(token).Contains(name)));
+            textures.Add(Source(input, name, addressing.GetValueOrDefault(name), vehicle || snapshot.DamageMasks(token).Contains(name), snapshot, token));
         }
-        var built = TexturePackBuilder.Build(textures, variant, token);
+        var built = TexturePackBuilder.BuildFromSources(textures, variant, token);
         // The automatic pack was named from its folders' PNG headers. Counted as every pack's budget is, its textures (with
         // those the world brings from other folders, and alpha planes) may need more than its name holds: they are fitted to it.
         if (plan.Automatic && plan.Notes.Count == 0 && built.FullSizeBytes > variant.BudgetBytes)
@@ -687,39 +710,41 @@ public static partial class SourceBuilder
         catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
     }
 
-    /// <summary>
-    /// The memory the decoded images of one texture or image pack may take. A pack is laid out from every image at its
-    /// authored size (4 bytes a pixel), so they are all held until it is built; 1 GiB is about twenty times what the
-    /// largest shipped mission needs (a 4096 × 4096 PNG alone takes 64 MiB).
-    /// </summary>
-    internal const long MaximumDecodedTextureBytes = 1L << 30;
-    /// <summary>
-    /// Refuses a pack before anything is decoded when it would hold more textures than a pack can, or when its images
-    /// decoded at their authored sizes (from the PNG headers) would exceed <see cref="MaximumDecodedTextureBytes"/>.
-    /// <paramref name="storedSide"/> is the largest side the pack stores (null: images are stored at their authored size).
-    /// </summary>
-    private static void CheckDecoding(string output, IReadOnlyList<string> inputs, Snapshot snapshot, int? storedSide, CancellationToken token)
+    /// <summary>Refuses a pack with more textures than a pack holds before any of their files is read.</summary>
+    private static void CheckCount(string output, int count)
     {
-        if (inputs.Count > TexturePackBuilder.MaximumRecords) throw new InvalidDataException($"{output} would hold {inputs.Count:N0} textures; a texture pack holds at most {TexturePackBuilder.MaximumRecords:N0}.");
-        long total = 0; List<(string Input, int Width, int Height)> sizes = [];
-        foreach (string input in inputs)
-            if (snapshot.PngSize(input, token) is var (width, height)) { total += 4L * width * height; sizes.Add((input, width, height)); }
-        if (total > MaximumDecodedTextureBytes) throw DecodingExceeded(output, total, sizes, storedSide);
+        if (count > TexturePackBuilder.MaximumRecords) throw new InvalidDataException($"{output} would hold {count:N0} textures; a texture pack holds at most {TexturePackBuilder.MaximumRecords:N0}.");
     }
     /// <summary>
-    /// Decodes one image of a pack, counting it against <see cref="MaximumDecodedTextureBytes"/> from the header of the bytes
-    /// read before it is decoded (a file may have changed since <see cref="CheckDecoding"/> read its header).
+    /// One texture of a pack from a project PNG, decoded only when the pack needs its pixels (see
+    /// <see cref="TexturePackBuilder.BuildFromSources"/>): its size comes from the PNG header, so a pack keeps its textures
+    /// only at the sizes it stores. What a decode finds (size and transparency) is remembered for the run, whose files
+    /// cannot change, so later packs need not decode it to classify it.
     /// </summary>
-    private static DecodedImage DecodeCounted(string output, string input, byte[] bytes, ref long decoded, int? storedSide, CancellationToken token)
+    private static PackSource Source(string input, string name, int addressing, bool direct, Snapshot snapshot, CancellationToken token)
     {
-        if (TextureSources.PngSize((ReadOnlySpan<byte>)bytes) is var (width, height) && (decoded += 4L * width * height) > MaximumDecodedTextureBytes)
-            throw DecodingExceeded(output, decoded, [(input, width, height)], storedSide);
-        return DecodeTexture(input, bytes, token);
+        token.ThrowIfCancellationRequested();
+        var known = snapshot.Texture(input);
+        int width, height;
+        if (known is { } found) (width, height) = (found.Width, found.Height);
+        else if (snapshot.PngSize(input, token) is { } header) (width, height) = header;
+        // A file without a readable header is decoded at once, which reports what is wrong with it.
+        else { var image = Decode(input, snapshot, token); (width, height) = (image.Width, image.Height); }
+        return new(name, TextureSources.SortKey(input), width, height, t =>
+        {
+            var image = Decode(input, snapshot, t);
+            // The header was read on its own: the file may have changed before it was read whole.
+            if (image.Width != width || image.Height != height) throw new InvalidDataException($"{input} changed while exporting; export again.");
+            return image;
+        }, addressing, direct) { Transparency = known?.Transparency };
     }
-    private static InvalidDataException DecodingExceeded(string output, long total, IEnumerable<(string Input, int Width, int Height)> sizes, int? storedSide) => new(
-        $"{output}: its images take {(total + (1 << 20) - 1) >> 20} MiB decoded at their authored sizes, more than the {MaximumDecodedTextureBytes >> 20} MiB one pack may hold while it is built. "
-        + (storedSide is int side ? $"The pack stores at most {side} × {side} a texture, so larger PNGs only cost memory; scale the largest down: " : "Scale the largest images down: ")
-        + string.Join(", ", sizes.OrderByDescending(s => (long)s.Width * s.Height).ThenBy(s => s.Input, StringComparer.Ordinal).Take(8).Select(s => $"{s.Input} ({s.Width} × {s.Height})")) + ".");
+    /// <summary>Decodes a project PNG through the run's snapshot, remembering its size and transparency.</summary>
+    private static DecodedImage Decode(string input, Snapshot snapshot, CancellationToken token)
+    {
+        var image = DecodeTexture(input, snapshot.Read(input, token), token);
+        if (snapshot.Texture(input) == null) snapshot.Remember(input, image.Width, image.Height, TexturePackBuilder.Classify(image));
+        return image;
+    }
 
     private static Built BuildSounds(string root, SourceOutputPlan plan, Snapshot snapshot, DateTime now, CancellationToken token)
     {

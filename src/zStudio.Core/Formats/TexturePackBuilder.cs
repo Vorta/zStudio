@@ -44,6 +44,17 @@ public sealed record TexturePackVariant(string FileName, TexturePackKind Kind, l
 /// </summary>
 public sealed record PackTexture(string Name, string SortKey, DecodedImage Master, int Addressing = 0, bool Direct = false);
 
+/// <summary>
+/// A <see cref="PackTexture"/> whose master is decoded only when the pack needs its pixels: its size (from the image's
+/// header, which the decoded master must have) is known before. <see cref="Transparency"/>, when already known (from an
+/// earlier decode of the same image), spares the decode that only classifies it. A pack decodes one master at a time and
+/// keeps only the texture at its stored size (see <see cref="TexturePackBuilder.BuildFromSources"/>).
+/// </summary>
+public sealed record PackSource(string Name, string SortKey, int Width, int Height, Func<CancellationToken, DecodedImage> Decode, int Addressing = 0, bool Direct = false)
+{
+    public TextureTransparency? Transparency { get; init; }
+}
+
 /// <summary>Result of building a pack: its bytes and, per texture, the stored size.</summary>
 public sealed record TexturePackBuild(byte[] Bytes, IReadOnlyList<(string Name, int Width, int Height)> Sizes, int Pages, IReadOnlyList<string> Warnings)
 {
@@ -64,7 +75,20 @@ public static class TexturePackBuilder
     /// </summary>
     public const int SoftwareMaximumDimension = 1024;
 
-    public static TexturePackBuild Build(IReadOnlyList<PackTexture> textures, TexturePackVariant variant, CancellationToken token = default)
+    public static TexturePackBuild Build(IReadOnlyList<PackTexture> textures, TexturePackVariant variant, CancellationToken token = default) =>
+        BuildFromSources([.. textures.Select(t => new PackSource(t.Name, t.SortKey, t.Master.Width, t.Master.Height, _ => t.Master, t.Addressing, t.Direct))], variant, token);
+
+    /// <summary>
+    /// Builds a pack from textures decoded one at a time. Each texture's stored size follows from its own size, the pack's
+    /// largest side and, under a budget, every texture's transparency (alpha planes count against it). So a master whose
+    /// transparency is not known is decoded to classify it and kept only reduced to the size the pack stores without a
+    /// budget, while the textures so kept fit the budget and a pack file; one that the budget then reduces further, or
+    /// that was not kept, is decoded again and resampled to its final size. Building thus holds textures at their stored
+    /// sizes (four bytes a texel, for at most what a pack file holds) and one master. A pack whose file would exceed what a
+    /// pack file may hold (<see cref="FormatRegistry.MaximumDocumentBytes"/>) is refused before its textures are resampled
+    /// to their final sizes: before anything is decoded when its texels alone exceed it.
+    /// </summary>
+    public static TexturePackBuild BuildFromSources(IReadOnlyList<PackSource> textures, TexturePackVariant variant, CancellationToken token = default)
     {
         if (textures.Count > MaximumRecords) throw new InvalidDataException($"A texture pack holds at most {MaximumRecords:N0} textures.");
         List<string> warnings = [];
@@ -72,26 +96,56 @@ public static class TexturePackBuilder
         foreach (var t in ordered)
         {
             TexturePackWriter.ValidateTextureName(t.Name);
-            if (t.Master.Width < 1 || t.Master.Height < 1 || t.Master.Rgba.Length != checked(t.Master.Width * t.Master.Height * 4)) throw new InvalidDataException($"{t.Name}: invalid image.");
+            if (t.Width < 1 || t.Height < 1) throw new InvalidDataException($"{t.Name}: invalid image.");
         }
         foreach (var duplicate in ordered.GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
             warnings.Add($"{duplicate.Key} appears {duplicate.Count()} times; the engine uses the first ({duplicate.First().SortKey}).");
         bool threeD = variant.Kind != TexturePackKind.Interface;
-        var modes = ordered.Select(t => Classify(t.Master)).ToArray();
+        var modes = new TextureTransparency[ordered.Length];
         bool Paletted(int i) => variant.Kind == TexturePackKind.Software && !ordered[i].Direct;
         long Cost(int i, int w, int h) => (long)w * h * (Paletted(i) ? 1 : 2) + (modes[i] == TextureTransparency.Alpha ? (long)w * h : 0);
-        var sizes = ordered.Select(t => threeD ? Normalize(t.Master.Width, t.Master.Height, variant) : (t.Master.Width, t.Master.Height)).ToArray();
-        long fullSize = 0; for (int i = 0; i < sizes.Length; i++) fullSize += Cost(i, sizes[i].Width, sizes[i].Height);
-        if (variant.BudgetBytes is { } budget) Fit(sizes, Cost, budget, variant, token, warnings);
+        var sizes = ordered.Select(t => threeD ? Normalize(t.Width, t.Height, variant) : (t.Width, t.Height)).ToArray();
+        // Without a budget every texture is stored at that size, so the pack's texels are known before anything is decoded.
+        if (variant.BudgetBytes == null) CheckOutput(variant, ordered, sizes, Paletted, _ => false, true);
 
-        // Resample every texture from its master, then quantize the paletted ones into shared pages.
+        // Textures are kept only resampled from their masters, at most at the size the pack stores without a budget; a master
+        // is never kept. What is kept fits the budget and a pack file, so it never exceeds what the pack itself holds.
+        var kept = new DecodedImage?[ordered.Length];
+        long keeping = Math.Min(variant.BudgetBytes ?? long.MaxValue, FormatRegistry.MaximumDocumentBytes), keptCost = 0;
+        for (int i = 0; i < ordered.Length; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            if (ordered[i].Transparency is { } known) { modes[i] = known; continue; }
+            var master = Master(ordered[i], token);
+            modes[i] = Classify(master);
+            long cost = Cost(i, sizes[i].Width, sizes[i].Height);
+            if (keptCost + cost <= keeping) { kept[i] = Resample(master, sizes[i].Width, sizes[i].Height, token); keptCost += cost; }
+        }
+        long fullSize = 0; for (int i = 0; i < sizes.Length; i++) fullSize += Cost(i, sizes[i].Width, sizes[i].Height);
+        if (variant.BudgetBytes is { } budget)
+        {
+            var full = ((int Width, int Height)[])sizes.Clone();
+            Fit(sizes, Cost, budget, variant, token, warnings);
+            // A texture the budget reduced is resampled from its master again, as every texture is resampled once from it.
+            for (int i = 0; i < sizes.Length; i++) if (sizes[i] != full[i]) kept[i] = null;
+        }
+        CheckOutput(variant, ordered, sizes, Paletted, i => modes[i] == TextureTransparency.Alpha, false);
         var images = new DecodedImage[ordered.Length];
-        for (int i = 0; i < ordered.Length; i++) { token.ThrowIfCancellationRequested(); images[i] = Resample(ordered[i].Master, sizes[i].Width, sizes[i].Height, token); }
+        for (int i = 0; i < ordered.Length; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            images[i] = kept[i] ?? Resample(Master(ordered[i], token), sizes[i].Width, sizes[i].Height, token);
+            kept[i] = null;
+        }
+
+        // Quantize the paletted textures into shared pages.
         int[] pageOf = Enumerable.Repeat(-1, ordered.Length).ToArray(); List<ushort[]> pages = [];
         var paletted = Enumerable.Range(0, ordered.Length).Where(Paletted).ToArray();
         if (paletted.Length > 0) BuildPages(paletted, images, modes, pageOf, pages, token);
 
-        using MemoryStream output = new(); using BinaryWriter w = new(output, Encoding.Latin1);
+        // Sized for the whole file, which is then returned without a copy.
+        long expected = OutputBytes(sizes, Paletted, i => modes[i] == TextureTransparency.Alpha) + pages.Count * 512L;
+        using MemoryStream output = new((int)Math.Min(expected, FormatRegistry.MaximumDocumentBytes)); using BinaryWriter w = new(output, Encoding.Latin1);
         w.Write(0); w.Write(1); w.Write(pages.Count); w.Write(ordered.Length); w.Write(0L);
         long tableStart = output.Position; output.Position += ordered.Length * 40L;
         foreach (var page in pages) for (int i = 0; i < 256; i++) w.Write(i < page.Length ? page[i] : (ushort)0);
@@ -107,7 +161,51 @@ public static class TexturePackBuilder
             stored.Add((ordered[i].Name, images[i].Width, images[i].Height));
         }
         FormatRegistry.ValidateDocumentSize(output.Length);
-        return new(output.ToArray(), stored, pages.Count, warnings) { FullSizeBytes = fullSize };
+        byte[] bytes = output.Length == output.Capacity ? output.GetBuffer() : output.ToArray();
+        return new(bytes, stored, pages.Count, warnings) { FullSizeBytes = fullSize };
+    }
+
+    /// <summary>Decodes a texture's master, which must have the size its source gave.</summary>
+    private static DecodedImage Master(PackSource source, CancellationToken token)
+    {
+        var master = source.Decode(token);
+        if (master.Width != source.Width || master.Height != source.Height)
+            throw new InvalidDataException($"{source.Name}: the image is {master.Width} × {master.Height}, not the {source.Width} × {source.Height} its source gave.");
+        if (master.Rgba.Length != checked(master.Width * master.Height * 4)) throw new InvalidDataException($"{source.Name}: invalid image.");
+        return master;
+    }
+
+    /// <summary>
+    /// The pack file's size for these stored sizes, without its palette pages (at most 16 of 512 bytes): the header, and per
+    /// texture a 40-byte record, a 16-byte image header, its texels (a byte each when paletted, else two) and its alpha plane.
+    /// </summary>
+    internal static long OutputBytes((int Width, int Height)[] sizes, Func<int, bool> paletted, Func<int, bool> alpha)
+    {
+        long total = 24;
+        for (int i = 0; i < sizes.Length; i++)
+        {
+            long texels = (long)sizes[i].Width * sizes[i].Height;
+            total += 56 + texels * (paletted(i) ? 1 : 2) + (alpha(i) ? texels : 0);
+        }
+        return total;
+    }
+
+    /// <summary>
+    /// Refuses a pack whose file would hold more than a pack file may (<see cref="FormatRegistry.MaximumDocumentBytes"/>),
+    /// before its textures are resampled to their final sizes. <paramref name="texelsOnly"/>: alpha planes are not known
+    /// yet (nothing is decoded), so the size is the least the pack can take.
+    /// </summary>
+    private static void CheckOutput(TexturePackVariant variant, PackSource[] ordered, (int Width, int Height)[] sizes, Func<int, bool> paletted, Func<int, bool> alpha, bool texelsOnly)
+    {
+        long total = OutputBytes(sizes, paletted, alpha);
+        if (total <= FormatRegistry.MaximumDocumentBytes) return;
+        string advice = variant.Kind == TexturePackKind.Interface ? "Use fewer or smaller images"
+            : variant.BudgetBytes is { } budget ? $"Give the pack a budget below {FormatRegistry.MaximumDocumentBytes >> 20} MiB (it has {budget >> 20} MiB) in its build profile"
+            : "Give the pack a budget or a smaller largest side in a build profile, or use fewer or smaller textures";
+        var largest = Enumerable.Range(0, sizes.Length).OrderByDescending(i => (long)sizes[i].Width * sizes[i].Height).ThenBy(i => i).Take(8)
+            .Select(i => $"{ordered[i].Name} ({sizes[i].Width} × {sizes[i].Height})");
+        throw new InvalidDataException($"{variant.FileName} would take {(texelsOnly ? "at least " : "")}{(total + (1 << 20) - 1) >> 20} MiB with its textures at the sizes it stores, "
+            + $"more than the {FormatRegistry.MaximumDocumentBytes >> 20} MiB a pack file can hold. {advice}. The largest it stores: {string.Join(", ", largest)}.");
     }
 
     /// <summary>Opaque when every alpha is 255; colour-keyed when alpha is only 0 or 255 (1555 on hardware keeps more colour); else an alpha plane.</summary>
