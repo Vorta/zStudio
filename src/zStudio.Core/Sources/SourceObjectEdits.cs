@@ -52,14 +52,16 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
     /// Removes the float noise a conversion leaves (45.000004°, a scale of 0.99999994, an angle of 5e-6°): values within a
     /// millionth of a 3-decimal value take it. Authored values such as a scale of 1.00005 stay.
     /// </summary>
-    internal static Vector3 Snap(Vector3 v, bool angles) => new(SnapOne(v.X, angles), SnapOne(v.Y, angles), SnapOne(v.Z, angles));
-    private static float SnapOne(float x, bool angles)
+    internal static Vector3 Snap(Vector3 v, bool angles) => new(SnapOne(v.X, angles, angles), SnapOne(v.Y, angles, angles), SnapOne(v.Z, angles, angles));
+    /// <summary>A position's noise removed as an angle's (5e-6 becomes 0), but no half turn: −200 stays −200.</summary>
+    internal static Vector3 SnapPosition(Vector3 v) => new(SnapOne(v.X, true, false), SnapOne(v.Y, true, false), SnapOne(v.Z, true, false));
+    private static float SnapOne(float x, bool tiny, bool turn)
     {
-        if (angles && MathF.Abs(x) < 1e-4f) return 0;
+        if (tiny && MathF.Abs(x) < 1e-4f) return 0;
         float rounded = MathF.Round(x, 3);
         float snapped = MathF.Abs(x) >= 1e-3f && MathF.Abs(x - rounded) <= 1e-6f * MathF.Max(1, MathF.Abs(x)) ? rounded : x;
         // A half turn reads as 180, not −180 (atan2's −π).
-        return angles && snapped <= -180f ? snapped + 360f : snapped;
+        return turn && snapped <= -180f ? snapped + 360f : snapped;
     }
     /// <summary>
     /// The transform a local matrix (rows: rotated, scaled axes, then translation) describes. A mirroring matrix has a
@@ -553,7 +555,7 @@ public static class SourceObjectEdits
                 // A level-of-detail node has no transform of its own (the importer reads none): it stands where its parent
                 // is. Compared in the file, which places every copy of a part alike (a part's top is where its references are).
                 if (node.Class == WorldNodeClass.Lod && !SamePlace(GltfNodeEdits.Parent(root, origin.ModelNode) is int from ? GltfNodeEdits.World(root, from) : Matrix4x4.Identity, into is int to ? GltfNodeEdits.World(root, to) : Matrix4x4.Identity))
-                    throw new InvalidDataException($"{node.Name} is a level-of-detail node, which stands where its parent is; it cannot keep its place under {parent?.Name ?? "the world"}, which is elsewhere.");
+                    throw new InvalidDataException($"{node.Name} is a level-of-detail node, which stands where its parent is; it cannot keep its place {(parent != null ? $"under {parent.Name}" : origin.Part ? $"at the top of {Path.GetFileName(origin.ModelFile)}" : "under the world")}, which is elsewhere.");
                 GltfNodeEdits.Reparent(root, origin.ModelNode, into, zone);
                 // A group the build reaches from the file's top (through groups) is deleted with the database, its objects
                 // joining the world: the build refuses one with geometry or a transform.
@@ -600,11 +602,11 @@ public static class SourceObjectEdits
             var stored = ObjectTransform.Of(node);
             var basis = q with { M41 = 0, M42 = 0, M43 = 0 };
             if (Near(basis, Matrix4x4.Identity))
-                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", ObjectTransform.Snap(Vector3.Transform(stored.Position, q), angles: true), Vector3.Zero, anchor, stored.Position);
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", ObjectTransform.SnapPosition(Vector3.Transform(stored.Position, q)), Vector3.Zero, anchor, stored.Position);
             else if (Near(basis * Matrix4x4.Transpose(basis), Matrix4x4.Identity) && basis.GetDeterminant() > 0)
             {
                 var turned = ObjectTransform.FromMatrix(new ObjectTransform(Vector3.Zero, stored.RotationDegrees, Vector3.One).Matrix() * basis).RotationDegrees;
-                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", ObjectTransform.Snap(Vector3.Transform(stored.Position, q), angles: true), Vector3.Zero, anchor, stored.Position);
+                edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", ObjectTransform.SnapPosition(Vector3.Transform(stored.Position, q)), Vector3.Zero, anchor, stored.Position);
                 edit.Set(origin.Writers.GetValueOrDefault("Object3DRotate"), "Object3DRotate", ObjectTransform.Snap(turned, angles: true), Vector3.Zero, anchor, stored.RotationDegrees);
             }
             else

@@ -130,7 +130,10 @@ public static class GltfNodeEdits
         // A parent whose matrix is sheared and badly conditioned inverts imprecisely: the node must land where it is.
         local.M14 = local.M24 = local.M34 = 0; local.M44 = 1;
         var placed = local * parentWorld;
-        float reach = MathF.Max(1, new[] { world.M41, world.M42, world.M43 }.Max(MathF.Abs));
+        // Positions round with their magnitudes: the node's, its parent's and the local offset turned into the parent's space.
+        static float Largest(Matrix4x4 m) => new[] { m.M41, m.M42, m.M43 }.Max(MathF.Abs);
+        float basis = new[] { new Vector3(parentWorld.M11, parentWorld.M12, parentWorld.M13), new Vector3(parentWorld.M21, parentWorld.M22, parentWorld.M23), new Vector3(parentWorld.M31, parentWorld.M32, parentWorld.M33) }.Max(v => v.Length());
+        float reach = MathF.Max(1, MathF.Max(Largest(world), MathF.Max(Largest(parentWorld), Largest(local) * basis)));
         for (int row = 0; row < 4; row++)
         {
             Vector3 wanted = new(world[row, 0], world[row, 1], world[row, 2]), got = new(placed[row, 0], placed[row, 1], placed[row, 2]);

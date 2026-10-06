@@ -322,6 +322,29 @@ public sealed class SourceObjectStructureTests
     }
 
     [Fact]
+    public void MovesUnderFarTurnedParentsAreKept()
+    {
+        // A node at the origin moved under a plainly turned parent far away (1999 m9's horizon under bar_37: a 10° yaw about
+        // 1,700 units out): the inverse rounds with the parent's distance, not the node's, and the move is accepted.
+        int refused = 0;
+        for (int yaw = 1; yaw < 90; yaw += 4)
+            for (float far = 500; far <= 8000; far *= 1.37f)
+            {
+                var q = Quaternion.CreateFromAxisAngle(Vector3.UnitY, yaw * MathF.PI / 180);
+                var root = JsonNode.Parse($$"""
+                    {"scene":0,"scenes":[{"nodes":[0,1]}],"nodes":[
+                      {"name":"bar","rotation":[{{q.X:R}},{{q.Y:R}},{{q.Z:R}},{{q.W:R}}],"translation":[{{far:R}},40,{{far * 0.7f:R}}]},
+                      {"name":"horizon"}]}
+                    """)!.AsObject();
+                try { GltfNodeEdits.Reparent(root, 1, 0); }
+                catch (InvalidDataException) { refused++; continue; }
+                var placed = GltfNodeEdits.World(root, 1);
+                Assert.True(placed.Translation.Length() < 0.05f, $"{yaw}° at {far}: {placed.Translation}");
+            }
+        Assert.Equal(0, refused);
+    }
+
+    [Fact]
     public void MovesUnderBadlyConditionedParentsAreRefused()
     {
         // b, under a, is sheared and badly conditioned: its inverse is too imprecise to keep c in place under it.
@@ -406,6 +429,24 @@ public sealed class SourceObjectStructureTests
         // A move keeps the matrix, and a copy in place or at a new position keeps it too.
         Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "ground", origin, build.Executions, shown with { Position = new(5, 0, 0) }, Token, "m1", shown).Changes);
         Assert.NotEmpty(SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, "ground"), "ground2", shown with { Position = new(5, 0, 0) }, Token, keepBasis: true).Changes);
+    }
+
+    [Fact]
+    public async Task ScriptObjectsKeepTheirPlaceUnderAFarParent()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_a", new(500, 0, 400)), []), Token);
+        SourceWorlds.AddModel(workspace, "m1", new(new(fixture.Tank, "tank_b", new(0, 0, 30)), []), Token);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        // Under tank_a, tank_b stands at (−500, 0, −370): a position, not an angle, so no half turn is added to it.
+        Apply(workspace, SourceObjectEdits.PlanReparent(Target(workspace, "m1", build, world, "tank_b"), world.Nodes.Single(n => n.Name == "tank_a"), Token));
+        Assert.Contains("Object3DTranslate -500.0", Text(workspace, "gamegen/m1.gs"));
+        (_, world) = await BuildAsync(fixture, workspace, "m1");
+        var tank = world.Nodes.Single(n => n.Name == "tank_b");
+        Assert.Equal("tank_a", Assert.Single(tank.Parents).Name);
+        var placed = WorldUpdate.LocalMatrix(tank)!.Value * WorldUpdate.LocalMatrix(tank.Parents[0])!.Value;
+        Assert.True(Vector3.Distance(new(0, 0, 30), placed.Translation) < 1e-3f, placed.Translation.ToString());
     }
 
     [Fact]
