@@ -34,9 +34,11 @@ public static class SourceProject
     /// Whether the file at <paramref name="path"/> holds exactly <paramref name="expected"/>. The file is read in small
     /// blocks, so checking a file of hundreds of megabytes against the copy already in memory needs no second copy of it.
     /// </summary>
-    internal static bool FileEquals(string path, ReadOnlySpan<byte> expected, CancellationToken token = default)
+    /// <param name="share">What others may do meanwhile: by default only read; a file another of zStudio's handles holds
+    /// (a sealed output, <see cref="SealedFile"/>) needs <see cref="FileShare.ReadWrite"/> and <see cref="FileShare.Delete"/>.</param>
+    internal static bool FileEquals(string path, ReadOnlySpan<byte> expected, CancellationToken token = default, FileShare share = FileShare.Read)
     {
-        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 0, FileOptions.SequentialScan);
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, share, 0, FileOptions.SequentialScan);
         if (stream.Length != expected.Length) return false;
         byte[] block = System.Buffers.ArrayPool<byte>.Shared.Rent(64 * 1024);
         try

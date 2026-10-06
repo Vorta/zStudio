@@ -18,14 +18,15 @@ public sealed record FileStamp(long Length, DateTime LastWriteUtc)
     public static readonly FileStamp Unverified = new(-1, DateTime.MinValue);
     /// <summary>
     /// The stamp of a file just saved with <paramref name="bytes"/>, taken while it still holds exactly them (read back
-    /// between two stamps); <see cref="Unverified"/> when another program changed or removed it meanwhile.
+    /// between two stamps); <see cref="Unverified"/> when another program changed or removed it meanwhile. The read shares
+    /// the file with the seal that may still hold it (<see cref="SealedFile"/>), which lets no other program write it.
     /// </summary>
     public static FileStamp ReadHolding(string path, ReadOnlySpan<byte> bytes)
     {
         try
         {
             var stamp = Read(path);
-            return Sources.SourceProject.FileEquals(path, bytes) && Read(path) == stamp ? stamp : Unverified;
+            return Sources.SourceProject.FileEquals(path, bytes, share: FileShare.ReadWrite | FileShare.Delete) && Read(path) == stamp ? stamp : Unverified;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Unverified; }
     }

@@ -28,7 +28,7 @@ public sealed class SavedStampTests
     }
 
     [Fact]
-    public async Task AFileReplacedRightAfterASaveIsAnExternalChange()
+    public async Task ASavedFileIsTheSessionsOwnUntilAnotherProgramWritesIt()
     {
         string root = Path.Combine(Path.GetTempPath(), "zstudio-saved-stamp-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
         try
@@ -38,13 +38,13 @@ public sealed class SavedStampTests
             await File.WriteAllBytesAsync(png, PngEncoder.Encode(new(2, 1, [0, 0, 255, 255, 0, 0, 255, 255]), Token), Token);
             using AssetResolver resolver = new(root); var edits = new TextureEditSession(await resolver.OpenCachedAsync(texture, Token));
             edits.Accept(await edits.PrepareAsync(png, 0, "", [new(texture, 0)], resolver, Token));
-            var publish = edits.PublishFile;
-            // Another program writes the file between zStudio's replace and the stamp it records.
-            edits.PublishFile = (temp, target, createNew) => { publish(temp, target, createNew); File.WriteAllText(target, "external"); };
+            // The stamp is taken while the save's seal still holds the file, so no other program can write it in between:
+            // the saved file is zStudio's own, and a later write by another program is a change.
             var result = await edits.SaveAsync(token: Token);
             Assert.Equal(new[] { texture }, result.SavedPaths);
+            Assert.False(edits.HasExternalChanges());
+            await File.WriteAllTextAsync(texture, "external", Token);
             Assert.True(edits.HasExternalChanges());
-            Assert.Equal("external", await File.ReadAllTextAsync(texture, Token));
         }
         finally { Directory.Delete(root, true); }
     }
