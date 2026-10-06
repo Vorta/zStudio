@@ -5512,7 +5512,7 @@
   },
   {
     "Name": "zstudio_source_blender_checkouts",
-    "Description": "List the open source project\u0027s Blender checkouts (newest first) with the exports found in each outbox (newest first).",
+    "Description": "List the open source project\u0027s Blender checkouts (newest first) with the exports found in each outbox (newest first). The listing runs off the UI thread and observes cancellation; a zstudio/export folder holding more than 250,000 files and folders in all is refused with io_failed.",
     "Mutates": false,
     "Parameters": []
   },
