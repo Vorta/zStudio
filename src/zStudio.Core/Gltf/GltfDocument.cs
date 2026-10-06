@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -75,6 +76,18 @@ public sealed class GltfDocument
     /// has: every buffer is held until the views are read, so many files that each fit would otherwise add up without bound.
     /// </summary>
     public const long MaximumBufferBytes = Formats.FormatRegistry.MaximumDocumentBytes;
+    /// <summary>
+    /// The entries a file's accessors and buffer views may hold, and its primitives (all meshes together), morph targets (all
+    /// primitives together) and weights (all meshes together). Its meshes, materials, images, textures, samplers and scenes may
+    /// each hold as many as <see cref="MaximumNodes"/>. The reader makes an object of every entry of a list it reads or
+    /// indexes, used or not, so the lists are bounded before any entry is read.
+    /// </summary>
+    public const int MaximumEntries = 1_000_000;
+    /// <summary>
+    /// The bytes (as the JSON writes them) of the names, extras and image paths a file may hold together: the reader keeps a
+    /// copy of each, also of entries nothing uses, and its callers read the extras again.
+    /// </summary>
+    public const long MaximumMetadataBytes = 32L * 1024 * 1024;
     public List<GltfNode> Roots { get; } = [];
     public JsonObject? SceneExtras { get; set; }
     public string Generator { get; set; } = "zStudio";
@@ -202,18 +215,31 @@ public sealed class GltfDocument
     /// (relative to the file). Triangle lists, strips and fans are accepted; points and lines are ignored. A malformed
     /// file is reported as <see cref="InvalidDataException"/>, whatever part of it is wrong.
     /// </summary>
-    public static GltfDocument Read(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, CancellationToken token = default) => Read(bytes, resolve, MaximumBufferBytes, token);
+    public static GltfDocument Read(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, CancellationToken token = default) => Read(bytes, resolve, ReadLimits.Default, token);
     /// <summary>Reads as <see cref="Read(ReadOnlySpan{byte}, Func{string, byte[]}, CancellationToken)"/>, with <paramref name="bufferBytes"/> in place of <see cref="MaximumBufferBytes"/>.</summary>
-    internal static GltfDocument Read(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, long bufferBytes, CancellationToken token)
+    internal static GltfDocument Read(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, long bufferBytes, CancellationToken token) =>
+        Read(bytes, resolve, ReadLimits.Default with { BufferBytes = bufferBytes }, token);
+    /// <summary>Reads as <see cref="Read(ReadOnlySpan{byte}, Func{string, byte[]}, CancellationToken)"/>, with other limits in place of the maximums.</summary>
+    internal static GltfDocument Read(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, ReadLimits limits, CancellationToken token)
     {
-        try { return ReadDocument(bytes, resolve, bufferBytes, token); }
+        try { return ReadDocument(bytes, resolve, limits, token); }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or ArgumentException or OverflowException
             or NullReferenceException or IndexOutOfRangeException or KeyNotFoundException or InvalidCastException)
         { throw new InvalidDataException($"The glTF file is malformed: {ex.Message}", ex); }
     }
 
-    private static GltfDocument ReadDocument(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, long bufferBytes, CancellationToken token)
+    /// <summary>What one read may hold: <see cref="MaximumBufferBytes"/>, <see cref="MaximumMetadataBytes"/> and <see cref="MaximumDecodedElements"/>.</summary>
+    internal readonly record struct ReadLimits(long BufferBytes, long MetadataBytes, long DecodedElements)
     {
+        public static ReadLimits Default => new(MaximumBufferBytes, MaximumMetadataBytes, MaximumDecodedElements);
+    }
+
+    /// <summary>What each use of an accessor reads.</summary>
+    private enum AccessorUse { Positions, Normals, TextureCoordinates, Indices }
+
+    private static GltfDocument ReadDocument(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, ReadLimits limits, CancellationToken token)
+    {
+        long bufferBytes = limits.BufferBytes;
         byte[]? glbBinary = null; ReadOnlySpan<byte> jsonBytes = bytes;
         if (bytes.Length >= 12 && bytes[..4].SequenceEqual("glTF"u8))
         {
@@ -228,15 +254,18 @@ public sealed class GltfDocument
             }
             if (jsonBytes.IsEmpty) throw new InvalidDataException("GLB without JSON.");
         }
-        JsonObject root = JsonNode.Parse(jsonBytes, documentOptions: new() { MaxDepth = 64 }) as JsonObject ?? throw new InvalidDataException("glTF JSON must be an object.");
+        // The parsed text is checked before any of it is read into objects (see Bound); the objects read it as they are used.
+        JsonElement parsed = JsonElement.Parse(jsonBytes, new JsonDocumentOptions { MaxDepth = 64 });
+        if (parsed.ValueKind != JsonValueKind.Object) throw new InvalidDataException("glTF JSON must be an object.");
+        JsonObject root = JsonObject.Create(parsed)!;
         if (root["asset"]?["version"]?.GetValue<string>() is not { } version || !version.StartsWith('2')) throw new InvalidDataException("Only glTF 2.0 is supported.");
-        foreach (var required in root["extensionsRequired"] as JsonArray ?? [])
-            throw new InvalidDataException($"The glTF file requires extension {required}, which zStudio does not support.");
+        if (parsed.TryGetProperty("extensionsRequired", out var required) && required.ValueKind == JsonValueKind.Array && required.GetArrayLength() > 0)
+            throw new InvalidDataException($"The glTF file requires extension {Shown(required[0])}, which zStudio does not support.");
+        Bound(parsed, limits.MetadataBytes);
         // Every buffer is held until the views are read, so together they are bounded like one file: a URI listed again is the
         // bytes already read, a buffer's declared length is checked against what is left before its file is read, and what
         // each read returns counts once.
         var jsonBuffers = root["buffers"] as JsonArray ?? [];
-        if (jsonBuffers.Count > MaximumBuffers) throw new InvalidDataException($"The glTF file lists {jsonBuffers.Count:N0} buffers; a model may use at most {MaximumBuffers:N0}.");
         List<byte[]> buffers = [];
         Dictionary<string, byte[]> external = new(StringComparer.Ordinal);
         HashSet<byte[]> held = new(ReferenceEqualityComparer.Instance); long heldBytes = 0;
@@ -271,7 +300,10 @@ public sealed class GltfDocument
             buffers.Add(data);
         }
         JsonArray views = root["bufferViews"] as JsonArray ?? [], accessors = root["accessors"] as JsonArray ?? [];
+        // Accessors may be shared by any number of primitives; every use is decoded, so the file's total is bounded, with what
+        // is made in place of an absent accessor (a morph target that moves nothing).
         long decoded = 0;
+        void Charge(long elements) { if ((decoded += elements) > limits.DecodedElements) throw new InvalidDataException("The glTF file decodes to more data than a model can hold."); }
         static int Size(int componentType) => componentType switch { 5120 or 5121 => 1, 5122 or 5123 => 2, 5125 or 5126 => 4, _ => throw new InvalidDataException($"Unsupported component type {componentType}.") };
         static float Component(ReadOnlySpan<byte> span, int componentType, bool normalized) => componentType switch
         {
@@ -290,14 +322,34 @@ public sealed class GltfDocument
             if (start < 0 || offset < 0 || start + byteCount > data.Length) throw new InvalidDataException("A glTF accessor exceeds its buffer.");
             return (data, start);
         }
-        float[] Accessor(int index, out int components)
+        // An accessor holds what its use reads (glTF 2.0, with the integer vertex attributes of KHR_mesh_quantization): positions
+        // and texture coordinates are vectors of floats or of 8- or 16-bit integers, normals of floats or normalized signed 8- or
+        // 16-bit integers, and indices are single unsigned integers that are not normalized. Anything else would be read as
+        // values other than the file states (fractions truncated, normalized indices scaled, vector components taken for
+        // indices), so it is refused before anything is decoded.
+        float[] Accessor(JsonNode which, AccessorUse use)
         {
+            int index = Reference(which, accessors.Count, "accessor");
             var a = accessors[index] ?? throw new InvalidDataException("Missing accessor.");
-            components = a["type"]!.GetValue<string>() switch { "SCALAR" => 1, "VEC2" => 2, "VEC3" => 3, "VEC4" => 4, "MAT4" => 16, var t => throw new InvalidDataException($"Unsupported accessor type {t}.") };
-            int count = a["count"]!.GetValue<int>(), componentType = a["componentType"]!.GetValue<int>(); bool normalized = a["normalized"]?.GetValue<bool>() ?? false;
+            string type = a["type"]!.GetValue<string>();
+            int componentType = a["componentType"]!.GetValue<int>(); bool normalized = a["normalized"]?.GetValue<bool>() ?? false;
+            var (shape, components, what) = use switch
+            {
+                AccessorUse.Positions => ("VEC3", 3, "positions"), AccessorUse.Normals => ("VEC3", 3, "normals"),
+                AccessorUse.TextureCoordinates => ("VEC2", 2, "texture coordinates"), _ => ("SCALAR", 1, "indices"),
+            };
+            if (type != shape) throw new InvalidDataException($"glTF accessor {index} holds {(type.Length > 16 ? type[..16] + "…" : type)} values, but it is used for {what}, which need {shape}.");
+            bool small = componentType is 5120 or 5121 or 5122 or 5123;
+            var (valid, needed) = use switch
+            {
+                AccessorUse.Indices => (componentType is 5121 or 5123 or 5125 && !normalized, "unsigned bytes, shorts or integers that are not normalized"),
+                AccessorUse.Normals => (componentType == 5126 && !normalized || componentType is 5120 or 5122 && normalized, "floats, or normalized signed bytes or shorts"),
+                _ => (componentType == 5126 && !normalized || small, "floats that are not normalized, or bytes or shorts"),
+            };
+            if (!valid) throw new InvalidDataException($"glTF accessor {index} holds {(normalized ? "normalized " : "")}{ComponentName(componentType)} values, but it is used for {what}, which need {needed}.");
+            int count = a["count"]!.GetValue<int>();
             if (count < 0 || (long)count * components > MaximumElements) throw new InvalidDataException("A glTF accessor is too large.");
-            // Accessors may be shared by any number of primitives; every use is decoded, so the file's total is bounded.
-            if ((decoded += (long)count * components) > MaximumDecodedElements) throw new InvalidDataException("The glTF file decodes to more data than a model can hold.");
+            Charge((long)count * components);
             int size = Size(componentType), element = size * components;
             float[] values = new float[count * components];
             if (a["bufferView"] is { } reference && count > 0)
@@ -329,13 +381,20 @@ public sealed class GltfDocument
             }
             return values;
         }
-        List<Vector3> Vec3(int index) { var v = Accessor(index, out int c); if (c != 3) throw new InvalidDataException("Expected a VEC3 accessor."); return Enumerable.Range(0, v.Length / 3).Select(i => new Vector3(v[i * 3], v[i * 3 + 1], v[i * 3 + 2])).ToList(); }
+        List<Vector3> Vectors(JsonNode reference, AccessorUse use)
+        {
+            var v = Accessor(reference, use); List<Vector3> vectors = new(v.Length / 3);
+            for (int i = 0; i < v.Length / 3; i++) vectors.Add(new(v[i * 3], v[i * 3 + 1], v[i * 3 + 2]));
+            return vectors;
+        }
 
         JsonArray jsonImages = root["images"] as JsonArray ?? [], jsonTextures = root["textures"] as JsonArray ?? [], jsonSamplers = root["samplers"] as JsonArray ?? [];
+        // An image's path is read once and shared by every material that shows it, however long it is and however many do.
+        var imagePaths = new (string? Uri, bool Embedded)?[jsonImages.Count];
         List<GltfMaterial> materials = [];
         foreach (var m in root["materials"] as JsonArray ?? [])
         {
-            GltfMaterial material = new() { Name = m?["name"]?.GetValue<string>() ?? "", DoubleSided = m?["doubleSided"]?.GetValue<bool>() ?? false, AlphaMode = m?["alphaMode"]?.GetValue<string>() ?? "OPAQUE", Extras = m?["extras"]?.DeepClone() as JsonObject };
+            GltfMaterial material = new() { Name = m?["name"]?.GetValue<string>() ?? "", DoubleSided = m?["doubleSided"]?.GetValue<bool>() ?? false, AlphaMode = m?["alphaMode"]?.GetValue<string>() ?? "OPAQUE", Extras = Extras(m) };
             var pbr = m?["pbrMetallicRoughness"];
             if (pbr?["baseColorFactor"] is { } factor)
             {
@@ -348,8 +407,8 @@ public sealed class GltfDocument
                 if (texture["source"] is { } source)
                 {
                     int image = Reference(source, jsonImages.Count, "image");
-                    if (jsonImages[image]?["uri"]?.GetValue<string>() is { } uri && !uri.StartsWith("data:", StringComparison.Ordinal)) material.ImageUri = Uri.UnescapeDataString(uri);
-                    else material.EmbeddedImage = true;
+                    (material.ImageUri, material.EmbeddedImage) = imagePaths[image] ??=
+                        jsonImages[image]?["uri"]?.GetValue<string>() is { } uri && !uri.StartsWith("data:", StringComparison.Ordinal) ? (Uri.UnescapeDataString(uri), false) : ((string?)null, true);
                 }
                 if (texture["sampler"] is { } sampler)
                 {
@@ -363,26 +422,54 @@ public sealed class GltfDocument
         foreach (var m in root["meshes"] as JsonArray ?? [])
         {
             token.ThrowIfCancellationRequested();
-            GltfMesh mesh = new() { Name = m?["name"]?.GetValue<string>() ?? "", Extras = m?["extras"]?.DeepClone() as JsonObject };
+            GltfMesh mesh = new() { Name = m?["name"]?.GetValue<string>() ?? "", Extras = Extras(m) };
             foreach (var w in m?["weights"] as JsonArray ?? []) mesh.Weights.Add(w!.GetValue<float>());
+            int number = -1;
             foreach (var p in m?["primitives"] as JsonArray ?? [])
             {
+                number++;
                 int mode = p?["mode"]?.GetValue<int>() ?? 4;
                 if (mode is not (4 or 5 or 6) || p?["attributes"]?["POSITION"] is null) continue;
-                GltfPrimitive primitive = new() { Extras = p["extras"]?.DeepClone() as JsonObject };
+                GltfPrimitive primitive = new() { Extras = Extras(p) };
                 if (p["material"] is { } material) primitive.Material = materials[Reference(material, materials.Count, "material")];
                 var attributes = p["attributes"]!;
-                primitive.Positions.AddRange(Vec3(attributes["POSITION"]!.GetValue<int>()));
-                if (attributes["NORMAL"] is { } normal) primitive.Normals.AddRange(Vec3(normal.GetValue<int>()));
+                primitive.Positions.AddRange(Vectors(attributes["POSITION"]!, AccessorUse.Positions));
+                int vertices = primitive.Positions.Count;
+                if (attributes["NORMAL"] is { } normal)
+                {
+                    primitive.Normals.AddRange(Vectors(normal, AccessorUse.Normals));
+                    OnePerPosition(primitive.Normals.Count, "normals", vertices, meshes.Count, number);
+                }
                 if (attributes["TEXCOORD_0"] is { } uv)
                 {
-                    var values = Accessor(uv.GetValue<int>(), out int c); if (c != 2) throw new InvalidDataException("Expected VEC2 texture coordinates.");
+                    var values = Accessor(uv, AccessorUse.TextureCoordinates);
+                    OnePerPosition(values.Length / 2, "texture coordinates", vertices, meshes.Count, number);
                     for (int i = 0; i < values.Length / 2; i++) primitive.TexCoords.Add(new(values[i * 2], values[i * 2 + 1]));
                 }
                 foreach (var target in p["targets"] as JsonArray ?? [])
-                    primitive.Targets.Add(target?["POSITION"] is { } delta ? Vec3(delta.GetValue<int>()) : Enumerable.Repeat(Vector3.Zero, primitive.Positions.Count).ToList());
-                int[] indices = p["indices"] is { } ix ? Accessor(ix.GetValue<int>(), out _).Select(v => (int)v).ToArray() : Enumerable.Range(0, primitive.Positions.Count).ToArray();
-                if (indices.Any(i => i < 0 || i >= primitive.Positions.Count)) throw new InvalidDataException("A glTF index is out of range.");
+                {
+                    if (target?["POSITION"] is { } delta)
+                    {
+                        var moved = Vectors(delta, AccessorUse.Positions);
+                        OnePerPosition(moved.Count, "morph target positions", vertices, meshes.Count, number);
+                        primitive.Targets.Add(moved);
+                    }
+                    else
+                    {
+                        // A target that moves nothing is made in full, one delta for each position, so it counts as decoded.
+                        Charge(3L * vertices);
+                        primitive.Targets.Add(Enumerable.Repeat(Vector3.Zero, vertices).ToList());
+                    }
+                }
+                int[] indices;
+                if (p["indices"] is { } ix)
+                {
+                    float[] values = Accessor(ix, AccessorUse.Indices);
+                    indices = new int[values.Length];
+                    // Unsigned integers, exact as floats below 2^24, which no position count reaches.
+                    for (int i = 0; i < values.Length; i++) indices[i] = values[i] < vertices ? (int)values[i] : throw new InvalidDataException("A glTF index is out of range.");
+                }
+                else indices = Enumerable.Range(0, vertices).ToArray();
                 if (mode == 4) primitive.Indices.AddRange(indices.Take(indices.Length / 3 * 3));
                 else for (int i = 2; i < indices.Length; i++)
                     {
@@ -394,8 +481,10 @@ public sealed class GltfDocument
             meshes.Add(mesh);
         }
         JsonArray jsonNodes = root["nodes"] as JsonArray ?? [];
-        if (jsonNodes.Count > MaximumNodes) throw new InvalidDataException($"A glTF file holds at most {MaximumNodes:N0} nodes.");
-        var nodes = jsonNodes.Select((n, i) => new GltfNode { Name = n?["name"]?.GetValue<string>() ?? "", Index = i, Extras = n?["extras"]?.DeepClone() as JsonObject }).ToArray();
+        var nodes = jsonNodes.Select((n, i) => new GltfNode { Name = n?["name"]?.GetValue<string>() ?? "", Index = i, Extras = Extras(n) }).ToArray();
+        // Node hierarchies are trees (glTF requires it): a node under two parents, or listed twice by one, would be walked
+        // once for each path to it, which doubles with every level, so each node has one parent at most.
+        bool[] parented = new bool[nodes.Length];
         for (int i = 0; i < jsonNodes.Count; i++)
         {
             var n = jsonNodes[i] as JsonObject ?? throw new InvalidDataException($"glTF node {i} is not an object."); var node = nodes[i];
@@ -403,6 +492,8 @@ public sealed class GltfDocument
             foreach (var c in n["children"] as JsonArray ?? [])
             {
                 int child = c!.GetValue<int>(); if (child < 0 || child >= nodes.Length || child == i) throw new InvalidDataException("A glTF node has an invalid child.");
+                if (parented[child]) throw new InvalidDataException($"glTF node {child} is listed as a child more than once; a node may have only one parent.");
+                parented[child] = true;
                 node.Children.Add(nodes[child]);
             }
             node.Matrix = LocalTransform(n, i);
@@ -413,15 +504,18 @@ public sealed class GltfDocument
         if (scenes.Count > 0)
         {
             var scene = scenes[sceneIndex]!;
-            doc.SceneExtras = scene["extras"]?.DeepClone() as JsonObject;
-            foreach (var r in scene["nodes"] as JsonArray ?? []) doc.Roots.Add(nodes[Reference(r, nodes.Length, "node")]);
+            doc.SceneExtras = Extras(scene);
+            bool[] rooted = new bool[nodes.Length];
+            foreach (var r in scene["nodes"] as JsonArray ?? [])
+            {
+                int k = Reference(r, nodes.Length, "node");
+                if (parented[k]) throw new InvalidDataException($"The glTF scene lists node {k} as a root, but it is another node's child.");
+                if (rooted[k]) throw new InvalidDataException($"The glTF scene lists node {k} more than once.");
+                rooted[k] = true; doc.Roots.Add(nodes[k]);
+            }
         }
-        else
-        {
-            // Without scenes, every node that is nobody's child is a root.
-            var children = nodes.SelectMany(n => n.Children).ToHashSet(ReferenceEqualityComparer.Instance);
-            doc.Roots.AddRange(nodes.Where(n => !children.Contains(n)));
-        }
+        // Without scenes, every node that is nobody's child is a root.
+        else doc.Roots.AddRange(nodes.Where((n, i) => !parented[i]));
         // Reject cycles and hierarchies too deep to follow before anyone walks them; the walk itself keeps its own stack.
         HashSet<GltfNode> visiting = new(ReferenceEqualityComparer.Instance), done = new(ReferenceEqualityComparer.Instance);
         Stack<(GltfNode Node, int Next)> path = new();
@@ -442,6 +536,87 @@ public sealed class GltfDocument
             }
         }
         return doc;
+    }
+
+    /// <summary>
+    /// Refuses, on the parsed text and before any entry is read, a file whose lists or metadata pass what a model may hold.
+    /// The reader makes an object of every entry of a list it reads or indexes and keeps a copy of names, extras and image
+    /// paths, unused ones too, so a file would otherwise cost far more than its accessor and buffer limits allow. Counting
+    /// reads only the parsed text: no list is made into objects to be counted.
+    /// </summary>
+    private static void Bound(JsonElement root, long metadataBytes)
+    {
+        int nodes = Entries("nodes", MaximumNodes);
+        foreach (string list in (ReadOnlySpan<string>)["meshes", "materials", "images", "textures", "samplers", "scenes"]) Entries(list, MaximumNodes);
+        Entries("accessors", MaximumEntries); Entries("bufferViews", MaximumEntries);
+        if (root.TryGetProperty("buffers", out var buffers) && buffers.ValueKind == JsonValueKind.Array && buffers.GetArrayLength() > MaximumBuffers)
+            throw new InvalidDataException($"The glTF file lists {buffers.GetArrayLength():N0} buffers; a model may use at most {MaximumBuffers:N0}.");
+        long metadata = root.TryGetProperty("asset", out var asset) && asset.ValueKind == JsonValueKind.Object ? Bytes(asset, "generator", JsonValueKind.String) : 0;
+        long children = 0, primitives = 0, targets = 0, weights = 0;
+        foreach (var node in Objects(root, "nodes")) { metadata += Named(node); children += Length(node, "children"); }
+        // Each node has one parent at most, so more children than nodes means some node has several.
+        if (children > nodes) throw new InvalidDataException($"The glTF file's {nodes:N0} nodes list {children:N0} children; a node may have only one parent.");
+        foreach (var scene in Objects(root, "scenes"))
+        {
+            metadata += Bytes(scene, "extras", JsonValueKind.Object);
+            if (Length(scene, "nodes") > nodes) throw new InvalidDataException($"A glTF scene lists {Length(scene, "nodes"):N0} root nodes but the file holds {nodes:N0} nodes; a scene lists each root once.");
+        }
+        foreach (var material in Objects(root, "materials")) metadata += Named(material);
+        foreach (var mesh in Objects(root, "meshes"))
+        {
+            metadata += Named(mesh);
+            if ((weights += Length(mesh, "weights")) > MaximumEntries) throw new InvalidDataException($"The glTF file's meshes list more than {MaximumEntries:N0} morph target weights; a model may hold at most {MaximumEntries:N0}.");
+            if ((primitives += Length(mesh, "primitives")) > MaximumEntries) throw new InvalidDataException($"The glTF file's meshes hold more than {MaximumEntries:N0} primitives; a model may hold at most {MaximumEntries:N0}.");
+            foreach (var primitive in Objects(mesh, "primitives"))
+            {
+                metadata += Bytes(primitive, "extras", JsonValueKind.Object);
+                if ((targets += Length(primitive, "targets")) > MaximumEntries) throw new InvalidDataException($"The glTF file's primitives hold more than {MaximumEntries:N0} morph targets; a model may hold at most {MaximumEntries:N0}.");
+            }
+        }
+        // An embedded image (a data URI) is only recognized, never kept.
+        foreach (var image in Objects(root, "images"))
+            if (image.TryGetProperty("uri", out var uri) && uri.ValueKind == JsonValueKind.String && !JsonMarshal.GetRawUtf8Value(uri).StartsWith("\"data:"u8)) metadata += JsonMarshal.GetRawUtf8Value(uri).Length;
+        if (metadata > metadataBytes)
+            throw new InvalidDataException($"The glTF file's names, extras and image paths hold more than {(metadataBytes % (1024 * 1024) == 0 ? $"{metadataBytes / (1024 * 1024):N0} MiB" : $"{metadataBytes:N0} bytes")} together, more than a model may; remove custom properties (extras) and materials, meshes or nodes it does not need.");
+
+        int Entries(string list, int maximum)
+        {
+            if (!root.TryGetProperty(list, out var array) || array.ValueKind != JsonValueKind.Array) return 0;
+            int count = array.GetArrayLength();
+            if (count > maximum) throw new InvalidDataException($"The glTF file lists {count:N0} {(list == "bufferViews" ? "buffer views" : list)}; a model may hold at most {maximum:N0}, so remove those it does not use or split it into several files.");
+            return count;
+        }
+        static IEnumerable<JsonElement> Objects(JsonElement holder, string list) =>
+            holder.TryGetProperty(list, out var array) && array.ValueKind == JsonValueKind.Array ? array.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object) : [];
+        static int Length(JsonElement holder, string list) => holder.TryGetProperty(list, out var array) && array.ValueKind == JsonValueKind.Array ? array.GetArrayLength() : 0;
+        // The bytes of a value of the kind the reader keeps (a string name, an object of extras), as written.
+        static long Bytes(JsonElement holder, string property, JsonValueKind kind) =>
+            holder.TryGetProperty(property, out var value) && value.ValueKind == kind ? JsonMarshal.GetRawUtf8Value(value).Length : 0;
+        static long Named(JsonElement entry) => Bytes(entry, "name", JsonValueKind.String) + Bytes(entry, "extras", JsonValueKind.Object);
+    }
+
+    /// <summary>An entry's extras when they are an object (anything else is not extras), copied so the parsed text is not held.</summary>
+    private static JsonObject? Extras(JsonNode? entry) => entry?["extras"] is JsonObject extras ? (JsonObject)extras.DeepClone() : null;
+
+    /// <summary>Refuses an attribute that does not hold one value for each position, as glTF requires: the rest would pair values with the wrong corners.</summary>
+    private static void OnePerPosition(int count, string what, int positions, int mesh, int primitive)
+    {
+        if (count != positions)
+            throw new InvalidDataException($"Primitive {primitive} of glTF mesh {mesh} has {count:N0} {what} for {positions:N0} positions; glTF needs one for each position.");
+    }
+
+    private static string ComponentName(int componentType) => componentType switch
+    {
+        5120 => "signed byte", 5121 => "unsigned byte", 5122 => "signed short", 5123 => "unsigned short", 5125 => "unsigned integer", 5126 => "float",
+        _ => $"component type {componentType}",
+    };
+
+    /// <summary>A JSON value for a message: a string as text, anything else as written, at most 64 characters of either.</summary>
+    private static string Shown(JsonElement value)
+    {
+        var raw = JsonMarshal.GetRawUtf8Value(value);
+        string text = value.ValueKind == JsonValueKind.String && raw.Length <= 1024 ? value.GetString()! : Encoding.UTF8.GetString(raw[..Math.Min(raw.Length, 256)]);
+        return text.Length > 64 ? text[..64] + "…" : text;
     }
 
     /// <summary>

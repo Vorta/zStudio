@@ -40,10 +40,18 @@ public sealed class ModelBuilder(WorldModel model)
 
         int count = polygon.Points.Length; bool morphs = polygon.Targets.Length == count;
         int[] vertices = new int[count];
+        // A polygon is added whole or not at all: when a corner finds no room, the vertices and morph deltas its earlier
+        // corners added go again, so they take no room from the polygons after it.
+        int vertexCount = Model.Vertices.Count, morphCount = Model.Morphs.Count;
         for (int i = 0; i < count; i++)
         {
             vertices[i] = morphs ? AddVertexAndMorph(polygon.Points[i], polygon.Targets[i]) : AddVertex(polygon.Points[i]);
-            if (vertices[i] < 0) { Warnings.Add($"The model exceeds {MaximumVertices} vertices; a polygon was discarded."); return false; }
+            if (vertices[i] < 0)
+            {
+                Model.Vertices.RemoveRange(vertexCount, Model.Vertices.Count - vertexCount);
+                Model.Morphs.RemoveRange(morphCount, Model.Morphs.Count - morphCount);
+                Warnings.Add($"The model exceeds {MaximumVertices} vertices; a polygon was discarded."); return false;
+            }
         }
         int[] normals = polygon.Normals.Length == count ? AddNormals(polygon.Normals) : [];
         Vector2[] uvs = textured ? Uvs(polygon.Uvs) : [];
