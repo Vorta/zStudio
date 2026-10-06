@@ -108,13 +108,23 @@ public sealed class GltfModelReviewFixTests
         Assert.Contains("decodes to more data", Refused(File(3), small).Message);
     }
 
-    /// <summary>A triangle (positions in accessor 0) whose <paramref name="use"/> reads accessor 1, holding <paramref name="payload"/>.</summary>
+    /// <summary>
+    /// A triangle (positions in accessor 0) whose <paramref name="use"/> reads accessor 1, holding <paramref name="payload"/>
+    /// (tightly packed). glTF starts each element of a vertex attribute on a 4-byte boundary, so vector elements of another
+    /// size are padded to the next multiple of 4, which their view states as its stride.
+    /// </summary>
     private static GltfPrimitive Primitive(string use, int componentType, string type, int count, bool normalized, string payload)
     {
         byte[] positions = new byte[36];
         float[] corners = [0, 0, 0, 1, 0, 0, 0, 1, 0];
         for (int i = 0; i < corners.Length; i++) BinaryPrimitives.WriteSingleLittleEndian(positions.AsSpan(i * 4), corners[i]);
+        int element = (componentType is 5120 or 5121 ? 1 : componentType is 5122 or 5123 ? 2 : 4) * (type switch { "VEC2" => 2, "VEC3" => 3, _ => 1 });
+        int stride = (element + 3) / 4 * 4;
+        bool padded = type != "SCALAR" && stride != element && payload.Length == element * count * 2;
+        if (padded) payload = string.Concat(Enumerable.Range(0, count).Select(i => payload.Substring(i * element * 2, element * 2) + new string('0', (stride - element) * 2)));
         byte[] data = Convert.FromHexString(payload), buffer = [.. positions, .. data];
+        JsonObject view = new() { ["buffer"] = 0, ["byteOffset"] = 36, ["byteLength"] = data.Length };
+        if (padded) view["byteStride"] = stride;
         JsonObject accessor = new() { ["bufferView"] = 1, ["componentType"] = componentType, ["count"] = count, ["type"] = type };
         if (normalized) accessor["normalized"] = true;
         JsonObject attributes = new() { ["POSITION"] = use == "POSITION" ? 1 : 0 }, primitive = new() { ["attributes"] = attributes };
@@ -129,7 +139,7 @@ public sealed class GltfModelReviewFixTests
             ["nodes"] = new JsonArray(new JsonObject { ["mesh"] = 0 }),
             ["meshes"] = new JsonArray(new JsonObject { ["primitives"] = new JsonArray(primitive) }),
             ["accessors"] = new JsonArray(new JsonObject { ["bufferView"] = 0, ["componentType"] = 5126, ["count"] = 3, ["type"] = "VEC3" }, accessor),
-            ["bufferViews"] = new JsonArray(new JsonObject { ["buffer"] = 0, ["byteLength"] = 36 }, new JsonObject { ["buffer"] = 0, ["byteOffset"] = 36, ["byteLength"] = data.Length }),
+            ["bufferViews"] = new JsonArray(new JsonObject { ["buffer"] = 0, ["byteLength"] = 36 }, view),
             ["buffers"] = new JsonArray(new JsonObject { ["byteLength"] = buffer.Length, ["uri"] = "data:application/octet-stream;base64," + Convert.ToBase64String(buffer) }),
         };
         return Read(json.ToJsonString()).Roots[0].Mesh!.Primitives[0];

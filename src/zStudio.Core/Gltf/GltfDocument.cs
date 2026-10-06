@@ -348,8 +348,11 @@ public sealed class GltfDocument
         // A buffer view's bytes from an extra offset: its buffer and where the data starts. glTF places a view within its
         // buffer's stated length and what an accessor reads within its view, so byteCount bytes must lie in the view, not
         // only in the buffer: bytes past the view's end belong to another view (or to none), which the read would take for
-        // this accessor's. A view holding tightly packed data (sparse indices and values) may not state a stride.
-        (byte[] Data, long Start) View(JsonNode? reference, long offset, long byteCount, string what, bool packed = false)
+        // this accessor's. A view holding tightly packed data (sparse indices and values) may not state a stride. glTF has
+        // the view start at a multiple of the data's component size in its buffer, and the data at such a multiple in the
+        // view (at a multiple of 4 for a vertex attribute, whose elements start on 4-byte boundaries): data placed
+        // otherwise is refused, as other readers refuse it, rather than read from where they would not read it.
+        (byte[] Data, long Start) View(JsonNode? reference, long offset, long byteCount, string what, int componentSize, bool packed = false, bool attribute = false)
         {
             var (index, view) = ViewEntry(reference);
             int buffer = Reference(view["buffer"], buffers.Count, "buffer");
@@ -359,6 +362,11 @@ public sealed class GltfDocument
             if (packed && view["byteStride"] != null) throw new InvalidDataException($"glTF buffer view {index} holds the {what}, which are tightly packed, but it states a byte stride (glTF allows none there).");
             if (offset < 0 || offset > length || byteCount > length - offset)
                 throw new InvalidDataException($"The {what} need {byteCount:N0} bytes from byte {offset:N0} of glTF buffer view {index}, which holds {length:N0}; an accessor reads only its own view.");
+            if (start % componentSize != 0)
+                throw new InvalidDataException($"glTF buffer view {index} starts at byte {start:N0} of buffer {buffer}, but it holds the {what}, whose components take {componentSize} bytes; glTF needs the view to start at a multiple of {componentSize}, so align it in its buffer.");
+            int alignment = attribute ? 4 : componentSize;
+            if (offset % alignment != 0)
+                throw new InvalidDataException($"The {what} start at byte {offset:N0} of glTF buffer view {index}; glTF needs {(attribute ? "a vertex attribute's elements to start on 4-byte boundaries of their view" : $"them to start at a multiple of {componentSize}, the size of their components")}, so move them to a multiple of {alignment}.");
             return (buffers[buffer], start + offset);
         }
         // An accessor holds what its use reads (glTF 2.0): positions, normals and morph target positions are vectors of floats,
@@ -400,11 +408,28 @@ public sealed class GltfDocument
             float[] values = new float[count * components];
             if (a["bufferView"] is { } reference && count > 0)
             {
-                // Elements are tightly packed unless the view has a stride, which must hold an element (glTF: 4 to 252 bytes).
+                // glTF places element i at offset + i × stride, the stride being the view's or, when it states none, an
+                // element's size. Only vertex attributes are read with a stated stride: a multiple of 4 from 4 to 252 bytes that
+                // holds an element and is no longer than the view. A vertex attribute's elements start on 4-byte boundaries, so
+                // elements of another size need a stride (KHR_mesh_quantization's byte normals take 4 bytes, not 3). Other
+                // readers refuse anything else, so it is refused rather than read from offsets they would not read.
                 var (viewIndex, view) = ViewEntry(reference);
-                int stride = view["byteStride"]?.GetValue<int>() ?? element;
-                if (stride < element || stride > 252 && stride != element) throw new InvalidDataException($"glTF buffer view {viewIndex} has a byte stride of {stride}, which cannot hold accessor {index}'s {element}-byte elements (glTF: 4 to 252 bytes).");
-                var (data, start) = View(reference, a["byteOffset"]?.GetValue<long>() ?? 0, (long)(count - 1) * stride + element, $"{count:N0} {what} of glTF accessor {index}");
+                bool attribute = use != AccessorUse.Indices;
+                int stride = element, padded = (element + 3) / 4 * 4;
+                string elements = $"glTF accessor {index}'s {what}, whose elements take {element} bytes";
+                if (view["byteStride"] is { } stated)
+                {
+                    if (!attribute)
+                        throw new InvalidDataException($"glTF buffer view {viewIndex} states a byte stride, but accessor {index} reads indices from it, which glTF has tightly packed (only vertex attributes have a stride); remove the view's byteStride.");
+                    if (!(stated is JsonValue value && value.TryGetValue(out stride)))
+                        throw new InvalidDataException($"glTF buffer view {viewIndex} states a byte stride that is not a whole number.");
+                    long? length = view["byteLength"]?.GetValue<long>();
+                    if (stride < 4 || stride > 252 || stride % 4 != 0 || stride < element || stride > length)
+                        throw new InvalidDataException($"glTF buffer view {viewIndex} states a byte stride of {stride} for {elements}; glTF needs a multiple of 4 from 4 to 252 that holds an element and is no longer than the view{(length is { } bytes ? $" ({bytes:N0} bytes)" : "")}, such as {padded}.");
+                }
+                else if (attribute && element % 4 != 0)
+                    throw new InvalidDataException($"glTF buffer view {viewIndex} states no byte stride, so {elements}, would lie {element} bytes apart; glTF starts each element of a vertex attribute on a 4-byte boundary, so pad each element to {padded} bytes and state a byteStride of {padded}.");
+                var (data, start) = View(reference, a["byteOffset"]?.GetValue<long>() ?? 0, (long)(count - 1) * stride + element, $"{count:N0} {what} of glTF accessor {index}", size, attribute: attribute);
                 for (int i = 0; i < count; i++)
                     for (int c = 0; c < components; c++) values[i * components + c] = Component(data.AsSpan((int)(start + (long)i * stride + c * size)), componentType, normalized);
             }
@@ -416,8 +441,8 @@ public sealed class GltfDocument
                 var indices = sparse["indices"]!; int indexType = indices["componentType"]!.GetValue<int>();
                 if (indexType is not (5121 or 5123 or 5125)) throw new InvalidDataException($"Sparse glTF indices cannot use component type {indexType}.");
                 int indexSize = Size(indexType);
-                var (indexData, indexStart) = View(indices["bufferView"], indices["byteOffset"]?.GetValue<long>() ?? 0, (long)n * indexSize, $"sparse indices of glTF accessor {index}", packed: true);
-                var (valueData, valueStart) = View(sparse["values"]!["bufferView"], sparse["values"]!["byteOffset"]?.GetValue<long>() ?? 0, (long)n * element, $"sparse values of glTF accessor {index}", packed: true);
+                var (indexData, indexStart) = View(indices["bufferView"], indices["byteOffset"]?.GetValue<long>() ?? 0, (long)n * indexSize, $"sparse indices of glTF accessor {index}", indexSize, packed: true);
+                var (valueData, valueStart) = View(sparse["values"]!["bufferView"], sparse["values"]!["byteOffset"]?.GetValue<long>() ?? 0, (long)n * element, $"sparse values of glTF accessor {index}", size, packed: true);
                 // glTF has the indices strictly increase, so each element is replaced once: a repeated one would be replaced
                 // by whichever value a reader applies last, which readers do not agree on.
                 long previous = -1;
@@ -469,10 +494,13 @@ public sealed class GltfDocument
                     (material.ImageUri, material.EmbeddedImage) = imagePaths[image] ??=
                         jsonImages[image]?["uri"]?.GetValue<string>() is { } uri && !uri.StartsWith("data:", StringComparison.Ordinal) ? (Uri.UnescapeDataString(uri), false) : ((string?)null, true);
                 }
+                // Without a sampler the texture repeats (glTF's default); its filters are not kept (see Clamps).
                 if (texture["sampler"] is { } sampler)
                 {
                     int s = Reference(sampler, jsonSamplers.Count, "sampler");
-                    material.ClampS = jsonSamplers[s]?["wrapS"]?.GetValue<int>() == 33071; material.ClampT = jsonSamplers[s]?["wrapT"]?.GetValue<int>() == 33071;
+                    var entry = jsonSamplers[s] as JsonObject ?? throw new InvalidDataException($"glTF sampler {s} is not an object.");
+                    material.ClampS = Clamps(entry["wrapS"], "wrapS", s, materials.Count, material.Name);
+                    material.ClampT = Clamps(entry["wrapT"], "wrapT", s, materials.Count, material.Name);
                 }
             }
             materials.Add(material); sampling.Add(sampled);
@@ -706,6 +734,26 @@ public sealed class GltfDocument
         // A whole number, also when written with a zero fraction (1.0).
         int Set(JsonNode value) => value is JsonValue v && v.TryGetValue(out double d) && d >= 0 && d <= 255 && d == Math.Floor(d) ? (int)d : throw Malformed("a texture coordinate set (texCoord) that is not a whole number of zero or more");
         InvalidDataException Malformed(string problem) => new($"glTF material {material}'s base-colour texture has {problem}.");
+    }
+
+    /// <summary>
+    /// Whether a sampler's wrap mode (<paramref name="property"/>, wrapS or wrapT; glTF's REPEAT when absent) clamps the
+    /// texture at its edges. A RECOIL texture stores one bit for each axis, clamp or repeat (bits 0 and 1 of its header word at
+    /// +0x0E, which retail 0x46DE50 passes to the Direct3D texture record as D3DTADDRESS_CLAMP or D3DTADDRESS_WRAP), so a
+    /// mirrored repeat, which flips every other tile, cannot be stored: it is refused rather than built as a repeat, which
+    /// would show the texture differently, as is a value glTF does not define. The sampler's filters are not read: the engine
+    /// filters every texture alike, whatever its file says.
+    /// </summary>
+    private static bool Clamps(JsonNode? mode, string property, int sampler, int material, string name)
+    {
+        if (mode == null) return false;
+        int value = mode is JsonValue v && v.TryGetValue(out int number) ? number : -1;
+        if (value is 10497 or 33071) return value == 33071;
+        string texture = $"glTF material {material}{(name.Length > 0 ? $" ({JsonData.ShownText(name)})" : "")}'s base-colour texture uses sampler {sampler}";
+        if (value == 33648)
+            throw new InvalidDataException($"{texture}, which mirrors every other tile {(property == "wrapS" ? "horizontally" : "vertically")} ({property} MIRRORED_REPEAT); RECOIL textures repeat or clamp at their edges and are never mirrored, so the game would show it differently. In Blender, set the Image Texture node's extension to Repeat (or Extend, to clamp) instead of Mirror, and replace a ping-pong UV wrap with a plain one.");
+        string shown = mode is JsonValue raw && raw.TryGetValue(out JsonElement element) ? Shown(element) : mode is JsonValue ? JsonData.ShownText(mode.ToJsonString()) : mode is JsonArray ? "a list" : "an object";
+        throw new InvalidDataException($"{texture}, whose {property} is {shown}; glTF wraps a texture with 10497 (REPEAT), 33071 (CLAMP_TO_EDGE) or 33648 (MIRRORED_REPEAT).");
     }
 
     /// <summary>Refuses an attribute that does not hold one value for each position, as glTF requires: the rest would pair values with the wrong corners.</summary>

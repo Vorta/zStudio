@@ -379,6 +379,8 @@ These are the keys the game reads. Anything else in a file is ignored. Types are
   - **No size limit of its own.**
   - **Formats:** opaque textures as the display format (565), alpha planes as ARGB4444, colour keys as 1555.
   - **No mipmaps.**
+  - **Edge modes:** each axis repeats or clamps, nothing else. `zVid_Image::ReadHeader` (0x46ed70 [B]) keeps the texture header's word at +0x0E and `TexDirLoadPendingEntries` (0x46de50 [B]) passes its bits 0 and 1 to `CreateTextureRecord` as clamp U and clamp V, which become D3DTADDRESS_CLAMP or D3DTADDRESS_WRAP, set as TEXTUREADDRESSU/V when the texture is drawn [U]. A texture cannot be mirrored, so the glTF reader refuses a sampler's MIRRORED_REPEAT (and wrap modes glTF does not define) rather than build a repeat.
+  - **Filtering** is the same for every texture: `CreateDeviceState` (0x4a9c20) sets TEXTUREMAG and TEXTUREMIN to linear once [U]. A glTF sampler's filters are not kept.
   - **Memory:** each texture keeps a system-memory copy beside the video-memory surface. All textures load when the mission loads; there is no streaming.
 - **Address space.** No executable is large-address-aware, so the game, the wrapper and the driver share 2 GiB. Expect 2–3 times the pack's size in the process [U].
 - **UVs.** Shipped models are drawn with their stored float UVs (`RenderNodeHardware` 0x477b30, `SubmitPolygon` 0x4abb20 [BN]). Geometry built during play (craters, quicksand, clipped CanModify pieces) is rounded to 1/256 by `AddPolygonEx` 0x483650 [BN], up to 2 texels on a 1024 texture.

@@ -34,18 +34,28 @@ public sealed class GltfPngRound4Tests
             Primitive = new() { ["attributes"] = Attributes };
         }
 
-        /// <summary>A view of <paramref name="hex"/>, tightly packed.</summary>
-        public int View(string hex)
+        /// <summary>A view of <paramref name="hex"/>, tightly packed unless it states a <paramref name="stride"/>.</summary>
+        public int View(string hex, int? stride = null)
         {
             while (buffer.Count % 4 != 0) buffer.Add(0);
             byte[] data = Convert.FromHexString(hex);
             views.Add(new JsonObject { ["buffer"] = 0, ["byteOffset"] = buffer.Count, ["byteLength"] = data.Length });
+            if (stride is { } s) ((JsonObject)views[^1]!)["byteStride"] = s;
             buffer.AddRange(data);
             return views.Count - 1;
         }
+        /// <summary>
+        /// An accessor of <paramref name="count"/> elements given tightly packed in <paramref name="hex"/>. glTF starts each
+        /// element of a vertex attribute on a 4-byte boundary, so vector elements of another size (KHR_mesh_quantization's
+        /// byte and short vectors) are padded to the next multiple of 4, which their view states as its stride.
+        /// </summary>
         public int Accessor(string hex, int componentType, string type, int count, bool normalized = false)
         {
-            JsonObject accessor = new() { ["bufferView"] = View(hex), ["componentType"] = componentType, ["count"] = count, ["type"] = type };
+            int element = (componentType is 5120 or 5121 ? 1 : componentType is 5122 or 5123 ? 2 : 4) * (type switch { "VEC2" => 2, "VEC3" => 3, _ => 1 });
+            int stride = (element + 3) / 4 * 4;
+            bool padded = type != "SCALAR" && stride != element && hex.Length == element * count * 2;
+            if (padded) hex = string.Concat(Enumerable.Range(0, count).Select(i => hex.Substring(i * element * 2, element * 2) + new string('0', (stride - element) * 2)));
+            JsonObject accessor = new() { ["bufferView"] = View(hex, padded ? stride : null), ["componentType"] = componentType, ["count"] = count, ["type"] = type };
             if (normalized) accessor["normalized"] = true;
             accessors.Add(accessor);
             return accessors.Count - 1;
