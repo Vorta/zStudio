@@ -176,6 +176,12 @@ public partial class MainWindow
             ViewModel.Status = "Properties has unfinished input; press Enter in the field to apply it, or Escape to restore it.";
     }
 
+    /// <summary>Told each step of a world's build as it starts, on the build's thread, before the status shows it (tests change sources there).</summary>
+    internal Action<SourceProgress>? SourceBuildStep { get; set; }
+    private sealed class StepProgress(Action<SourceProgress> step, IProgress<SourceProgress> shown) : IProgress<SourceProgress>
+    {
+        public void Report(SourceProgress value) { step(value); shown.Report(value); }
+    }
     private sealed record SourceWorldBuilt(ZbdDocument World, SourceWorldBuild Build, long Revision)
     {
         /// <summary>The lookups that find another node than when the world was opened or last saved (see <see cref="LookupChangesAsync"/>).</summary>
@@ -200,7 +206,8 @@ public partial class MainWindow
             // The overlay and its revision are read together on the UI thread, where the workspace changes.
             long revision = session.Workspace.ContentRevision;
             var overlay = session.Workspace.Overlay();
-            var progress = new Progress<SourceProgress>(p => { if (session.Building == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"Building the {session.Mission} world {p.Completed}/{p.Total}: {p.Item}"; });
+            IProgress<SourceProgress> progress = new Progress<SourceProgress>(p => { if (session.Building == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"Building the {session.Mission} world {p.Completed}/{p.Total}: {p.Item}"; });
+            if (SourceBuildStep is { } step) progress = new StepProgress(step, progress);
             var build = await Task.Run(() => SourceWorlds.BuildPreviewAsync(session.Root, session.Mission, folder, overlay, progress, cancellation.Token, additions), cancellation.Token);
             var world = await Task.Run(() => FormatRegistry.Default.OpenAsync(build.WorldPath, cancellation.Token), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
@@ -214,6 +221,8 @@ public partial class MainWindow
             return result with { LookupChanges = changes };
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested) { throw new StudioCommandException("context_changed", "The world's closing or a workspace change superseded this build."); }
+        // Another program changed a project file while the build read the project: nothing it built is shown.
+        catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
         catch (InvalidDataException ex) { throw new StudioCommandException("build_failed", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         // Malformed project sources (a glTF that is not JSON, for example) can fail the build in other ways.

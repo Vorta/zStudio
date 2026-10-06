@@ -6,7 +6,10 @@ public sealed record SourceFileChange(string Relative, byte[]? Before, byte[]? A
 public sealed record SourceTransaction(long Id, string Label, IReadOnlyList<SourceFileChange> Files);
 /// <summary>A change to the workspace: an applied, undone or redone transaction, a save or a discard, with the files whose content changed.</summary>
 public sealed record SourceWorkspaceChange(string Kind, string Label, IReadOnlyList<string> Files, long Revision);
-/// <summary>A file the workspace holds edits for was changed on disk by another program.</summary>
+/// <summary>
+/// A project file was changed on disk by another program: one the workspace holds edits for, or one a world's build or a
+/// Blender checkout read (or a source added, removed or renamed after a world's build listed the project) before it finished.
+/// </summary>
 public sealed class SourceFileChangedException(string message, IReadOnlyList<string> files) : IOException(message)
 {
     public IReadOnlyList<string> Files { get; } = files;

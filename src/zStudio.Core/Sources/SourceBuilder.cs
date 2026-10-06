@@ -150,10 +150,12 @@ public static partial class SourceBuilder
             var stamp = FileStamp.Read(path);
             if (stamp.Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} exceeds 512 MiB.");
             byte[] bytes = File.ReadAllBytes(path); string sha = SourceProject.Sha256(bytes);
-            if (FileStamp.Read(path) != stamp) throw changed?.Invoke(relative) ?? new InvalidDataException($"{relative} changed while it was read; export again.");
-            if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw changed?.Invoke(relative) ?? new InvalidDataException($"{relative} changed while exporting; export again.");
+            if (FileStamp.Read(path) != stamp) throw Changed(relative, $"{relative} changed while it was read; export again.");
+            if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw Changed(relative, $"{relative} changed while exporting; export again.");
             files[relative] = (sha, stamp); return bytes;
         }
+        /// <summary>The error for a project file that changed during the run: the run's own (see the constructor), else an export's <paramref name="message"/>.</summary>
+        internal Exception Changed(string relative, string message) => changed?.Invoke(relative) ?? new InvalidDataException(message);
         /// <summary>
         /// A PNG's size from its header, without reading the image: what decoding it will take, known before anything is
         /// decoded (null when it has no readable header; decoding reports why).
@@ -231,7 +233,7 @@ public static partial class SourceBuilder
             {
                 token.ThrowIfCancellationRequested();
                 string path = SourceProject.Resolve(root, relative);
-                if (!File.Exists(path) || FileStamp.Read(path) != entry.Stamp) throw changed?.Invoke(relative) ?? new InvalidDataException($"{relative} changed while exporting; nothing was written.");
+                if (!File.Exists(path) || FileStamp.Read(path) != entry.Stamp) throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
             }
         }
     }
@@ -359,13 +361,13 @@ public static partial class SourceBuilder
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new InvalidDataException($"The project changed while exporting; nothing was written. Export again. ({ex.Message})", ex); }
         bool same = again.Name == profile.Name && again.Source == profile.Source && (selected == null
-            ? now.Count == planned.Count && planned.Zip(now).All(p => Same(p.First, p.Second))
-            : selected.All(p => now.FirstOrDefault(n => n.Path.Equals(p.Path, StringComparison.OrdinalIgnoreCase)) is { } n && Same(p, n)));
+            ? now.Count == planned.Count && planned.Zip(now).All(p => SamePlan(p.First, p.Second))
+            : selected.All(p => now.FirstOrDefault(n => n.Path.Equals(p.Path, StringComparison.OrdinalIgnoreCase)) is { } n && SamePlan(p, n)));
         if (!same) throw new InvalidDataException("The project's sources changed while exporting (files were added, removed or renamed, a texture changed size, or the build profile changed); nothing was written. Export again.");
-
-        static bool Same(SourceOutputPlan a, SourceOutputPlan b) => a.Path == b.Path && a.Family == b.Family && a.Pack == b.Pack && a.Automatic == b.Automatic
-            && a.Inputs.SequenceEqual(b.Inputs, StringComparer.Ordinal) && a.Notes.SequenceEqual(b.Notes, StringComparer.Ordinal);
     }
+    /// <summary>Whether two plans of an output build it the same way: the same path, family, inputs (in order), pack and notes.</summary>
+    internal static bool SamePlan(SourceOutputPlan a, SourceOutputPlan b) => a.Path == b.Path && a.Family == b.Family && a.Pack == b.Pack && a.Automatic == b.Automatic
+        && a.Inputs.SequenceEqual(b.Inputs, StringComparer.Ordinal) && a.Notes.SequenceEqual(b.Notes, StringComparer.Ordinal);
 
     /// <summary>
     /// Every lookup by name a mission makes as the game loads it (see <see cref="WorldLookups.Resolve"/>), against
@@ -804,7 +806,7 @@ public static partial class SourceBuilder
         {
             var image = Decode(input, snapshot, t);
             // The header was read on its own: the file may have changed before it was read whole.
-            if (image.Width != width || image.Height != height) throw new InvalidDataException($"{input} changed while exporting; export again.");
+            if (image.Width != width || image.Height != height) throw snapshot.Changed(input, $"{input} changed while exporting; export again.");
             return image;
         }, addressing, direct) { Transparency = known?.Transparency, File = input };
     }

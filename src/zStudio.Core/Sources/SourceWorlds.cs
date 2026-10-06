@@ -277,8 +277,11 @@ public static partial class SourceWorlds
     /// <summary>
     /// Builds <paramref name="mission"/> into <paramref name="destination"/> (a new folder inside the project's
     /// <see cref="PreviewFolder"/>) as the export would, with <paramref name="overlay"/> replacing project files: the world, its animations and resources,
-    /// the common resources, scripts and images the Whole world view reads beside it, and one full-quality texture pack.
-    /// Only the world must build; other failures are reported in the outputs. <paramref name="additions"/> are models
+    /// the common resources, scripts and images the Whole world view reads beside it, and one full-quality texture pack
+    /// (<see cref="PreviewProfile"/>, whatever profile the project's exports use).
+    /// Only the world must build; other failures are reported in the outputs. A project file another program changes while the
+    /// build reads the project (after it was read, or added, removed or renamed after the outputs were planned) fails the build
+    /// with <see cref="SourceFileChangedException"/>, so a world is never shown built from two states of the project. <paramref name="additions"/> are models
     /// the overlay's script has just added (see <see cref="AddModel"/>): the world must load each of them where it is written,
     /// and hold each placed one (see <see cref="CheckAdditions"/>).
     /// </summary>
@@ -294,13 +297,13 @@ public static partial class SourceWorlds
             throw new InvalidDataException($"A mission world is built in the project's {PreviewFolder} folder, not in {destination}.");
         SourceProject.RejectLinks(destination);
         if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any()) throw new IOException($"The preview folder {destination} is not empty.");
-        IReadOnlyCollection<string> added = overlay?.Keys.Where(k => !File.Exists(SourceProject.Resolve(root, k))).ToArray() ?? [];
-        // The preview's pack is a fixed one, so the automatic packs are not sized (each would read every PNG header).
-        var plan = await Task.Run(() => SourceBuilder.Plan(root, added, automaticPacks: false, token: token), token).ConfigureAwait(false);
-        var selected = PreviewOutputs.Select(o => string.Format(CultureInfo.InvariantCulture, o, mission))
-            .Select(o => plan.FirstOrDefault(p => p.Path.Equals(o, StringComparison.OrdinalIgnoreCase))).OfType<SourceOutputPlan>().ToArray();
+        // The build's view of the project starts before planning, as an export's does (see SourceBuilder.ExportAsync): each file
+        // is read once, and the plan and every file read must be unchanged when the build is returned, so the world shown, and
+        // the stamps that later tell it is stale, are one state of the project. A file another program changes meanwhile fails
+        // the build rather than show a world assembled partly from the old file and partly from newer ones.
+        SourceBuilder.Snapshot snapshot = new(root, overlay, relative => new SourceFileChangedException($"{relative} changed on disk while the {mission} world was building; the build was not shown. Try again.", [relative]));
+        var selected = await Task.Run(() => PreviewPlan(root, mission, snapshot.Added, token), token).ConfigureAwait(false);
         if (!selected.Any(p => p.Family == "world")) throw new InvalidDataException($"The project has no world script for {mission} ({SourceBuilder.WorldScript(mission)}) or no glTF models.");
-        SourceBuilder.Snapshot snapshot = new(root, overlay);
         List<SourceExportResult> results = []; Animation.AnimationPackage? animations = null;
         Directory.CreateDirectory(destination);
         for (int i = 0; i < selected.Length; i++)
@@ -320,6 +323,8 @@ public static partial class SourceWorlds
             }
             catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex))
             {
+                // A source another program changed while it was read fails the build, not only the output reading it.
+                ThrowIfChanged(ex);
                 if (output.Family == "world") throw new InvalidDataException($"The {mission} world does not build: {ex.Message}", ex);
                 results.Add(new(output.Path, output.Family, "failed", 0, 0, [], ex.Message));
             }
@@ -335,8 +340,53 @@ public static partial class SourceWorlds
         // Only the world must build: lookups the project's scripts or animations keep from being resolved are not reported.
         IReadOnlyList<SourceLookup> lookups;
         try { lookups = await Task.Run(() => SourceBuilder.MissionLookups(mission, snapshot, animations, token), token).ConfigureAwait(false); }
-        catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex)) { lookups = []; }
+        catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex)) { ThrowIfChanged(ex); lookups = []; }
+        // Before the build is shown, as before an export publishes: the project plans the same outputs from the same sources (none
+        // added, removed or renamed since they were planned), and every file read is as it was read. The stamps returned are
+        // those just verified.
+        await Task.Run(() =>
+        {
+            CheckPreviewPlanUnchanged(root, mission, snapshot.Added, selected, token);
+            snapshot.CheckUnchanged(token);
+        }, token).ConfigureAwait(false);
         return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
+    }
+
+    /// <summary>
+    /// The texture pack a preview builds, whatever profile the project's exports use: the 16-bit Direct3D pack for a 16 MB card,
+    /// every texture at up to 1024 texels, as the built-in modern profile builds <c>rtexture16</c>.
+    /// </summary>
+    internal static BuildProfile PreviewProfile { get; } = new("preview", "The fixed texture pack of a world preview.", "experimental", [new("rtexture16.zbd", 16L << 20, 1024)]);
+    /// <summary>The outputs a preview of <paramref name="mission"/> builds (<see cref="PreviewOutputs"/>), as the project plans them now.</summary>
+    private static SourceOutputPlan[] PreviewPlan(string root, string mission, IReadOnlyCollection<string> added, CancellationToken token)
+    {
+        // The preview's pack is a fixed one, so the automatic packs are not sized (each would read every PNG header).
+        var plan = SourceBuilder.Plan(root, added, PreviewProfile, automaticPacks: false, token: token);
+        return PreviewOutputs.Select(o => string.Format(CultureInfo.InvariantCulture, o, mission))
+            .Select(o => plan.FirstOrDefault(p => p.Path.Equals(o, StringComparison.OrdinalIgnoreCase))).OfType<SourceOutputPlan>().ToArray();
+    }
+    /// <summary>
+    /// Refuses a preview whose outputs the project no longer plans as they were built (a source added, removed or renamed, or a
+    /// mission's texture folders changed, after planning): the plan is made again and must give the same outputs, each with the
+    /// same inputs and pack (see <see cref="SourceBuilder.SamePlan"/>).
+    /// </summary>
+    private static void CheckPreviewPlanUnchanged(string root, string mission, IReadOnlyCollection<string> added, IReadOnlyList<SourceOutputPlan> built, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        SourceOutputPlan[] now;
+        try { now = PreviewPlan(root, mission, added, token); }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        { throw new SourceFileChangedException($"The project changed while the {mission} world was building; the build was not shown. Try again. ({ex.Message})", []); }
+        if (now.Length == built.Count && built.Zip(now).All(p => SourceBuilder.SamePlan(p.First, p.Second))) return;
+        HashSet<string> before = new(built.SelectMany(p => p.Inputs), StringComparer.Ordinal), after = new(now.SelectMany(p => p.Inputs), StringComparer.Ordinal);
+        string[] files = [.. before.Except(after).Concat(after.Except(before)).Order(StringComparer.Ordinal).Take(64)];
+        throw new SourceFileChangedException($"Files of the project were added, removed or renamed while the {mission} world was building{(files.Length == 0 ? "" : $" ({string.Join(", ", files.Take(3))}{(files.Length > 3 ? ", …" : "")})")}; the build was not shown. Try again.", files);
+    }
+    /// <summary>Rethrows the change another program made to a source while the build read it, however the build wrapped it.</summary>
+    private static void ThrowIfChanged(Exception ex)
+    {
+        for (var inner = ex; inner != null; inner = inner.InnerException)
+            if (inner is SourceFileChangedException changed) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(changed);
     }
 
     /// <summary>

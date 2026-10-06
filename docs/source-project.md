@@ -27,7 +27,7 @@ Reconstruction supports RECOIL data and requires RECOIL evidence (prepared scrip
 
 ## Mission worlds
 
-In a source project, a mission's world is what its build script (`gamegen\mN.gs`) assembles from the project's sources, so the world editor edits those sources. **Tools → Open mission world** lists the missions with a world script; choosing one builds that mission privately, as the export would (the world, its animations and resources, and a full-quality texture pack), into the project's `zstudio\cache\worlds` folder, and shows it in Whole world with its mission context. Build problems are listed in Problems under the script's path.
+In a source project, a mission's world is what its build script (`gamegen\mN.gs`) assembles from the project's sources, so the world editor edits those sources. **Tools → Open mission world** lists the missions with a world script; choosing one builds that mission privately, as the export would (the world, its animations and resources, and a full-quality texture pack), into the project's `zstudio\cache\worlds` folder, and shows it in Whole world with its mission context. Build problems are listed in Problems under the script's path. The texture pack is the 16-bit `rtexture16` whatever build profile the project's exports use. A build is one state of the project: when another program changes a project file the build already read, or adds, removes or renames a source while it builds, the world is not shown and the status names the file; open it again.
 
 ### One workspace per project
 
@@ -35,7 +35,7 @@ All open worlds of a project edit one set of pending changes, the project's work
 - **One history.** An edit can change several files, and two missions can share a file, so Undo and Redo work across the whole project, whichever world they are used in.
 - **One save.** **Save** writes every changed source file of the project together, and its tooltip lists them. `zstudio_source_changes` lists them too, with the history and a line diff of any file.
 - **Rebuilds.** Each edit, undo and redo rebuilds the world it was made in and keeps the camera.
-  - An edit the world cannot be built with, or whose rebuild is canceled, is taken back: the world shown, the project's undo and redo steps and Problems stay as they were, and the status says why the edit was reverted. After an accepted edit, the status shows its notes on its reach (a copy's part names, a part's other copies).
+  - An edit the world cannot be built with, whose rebuild is canceled, or whose rebuild sees another program change a project file, is taken back: the world shown, the project's undo and redo steps and Problems stay as they were, and the status says why the edit was reverted. After an accepted edit, the status shows its notes on its reach (a copy's part names, a part's other copies).
   - Until the rebuilt world is shown, the project's other edits, saves and reloads wait (they are disabled, or report that a world is rebuilding).
 - **Other open worlds** whose build read a changed file are marked stale. **Reload** rebuilds them.
 - **Closing.** Closing one of several open worlds keeps the project's edits. Closing the last one asks whether to save or discard them.
