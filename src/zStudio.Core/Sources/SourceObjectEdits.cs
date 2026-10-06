@@ -115,6 +115,8 @@ public sealed record SourceObjectTarget(SourceWorkspace Workspace, string Missio
 public static class SourceObjectEdits
 {
     private static readonly string[] TransformCommands = ["Object3DTranslate", "Object3DRotate", "Object3DScale"];
+    /// <summary>The script transforms that apply to a glTF node only while it has no transform of its own (a translation replaces the file's whatever it holds).</summary>
+    private static readonly string[] TurnAndScale = ["Object3DRotate", "Object3DScale"];
     /// <summary>Script commands that set a property of the node they apply to (fog, lights, cameras, windows), with the arguments each takes.</summary>
     public static readonly IReadOnlyDictionary<string, string> PropertyCommands = new Dictionary<string, string>(StringComparer.Ordinal)
     {
@@ -190,7 +192,8 @@ public static class SourceObjectEdits
             // values change in this mission only: those this mission's world script already sets (a value set for this mission
             // earlier among them) change there in place, the others are set before the world is written.
             string? own = mission == null ? null : SourceBuilder.WorldScript(mission);
-            bool Here(string command) => own != null && origin.Writers.GetValueOrDefault(command)?.Script.Equals(own, StringComparison.OrdinalIgnoreCase) == true;
+            // (A line taking its values from a macro cannot change in place: the value is set after it instead.)
+            bool Here(string command) => own != null && origin.Writers.GetValueOrDefault(command) is { } w && w.Script.Equals(own, StringComparison.OrdinalIgnoreCase) && !w.Tokens.Skip(1).Any(t => t.Contains('%'));
             if (InThisMission(workspace, nodeName, label, writers.Select(w => w.Script).Append(anchor.Script), Lines(translateOnly: false, Here), executions, token, mission, world, write, edit =>
                 {
                     if (position && Here("Object3DTranslate")) edit.Set(origin.Writers["Object3DTranslate"], "Object3DTranslate", requested.Position, Vector3.Zero, origin.Writers["Object3DTranslate"], current?.Position);
@@ -210,7 +213,7 @@ public static class SourceObjectEdits
         // A node of a glTF file: its transform is the node's, except a translation a script sets. The file's node changes in
         // every copy of a part and every load of a model file, so a script transform of another one would start or stop
         // applying there.
-        if ((copies ?? []).Where(c => !ReferenceEquals(c, origin)).SelectMany(c => TransformCommands.Where(c.Writers.ContainsKey).Select(k => c.Writers[k])).FirstOrDefault() is { } other)
+        if ((copies ?? []).Where(c => !ReferenceEquals(c, origin)).SelectMany(c => TurnAndScale.Where(c.Writers.ContainsKey).Select(k => c.Writers[k])).FirstOrDefault() is { } other)
             throw new InvalidDataException($"{other.Script} line {other.Line} ({other.Command}) sets the transform of another {(origin.Database ? "copy" : "load")} of {nodeName} in {origin.ModelFile}; edit those instructions in the scripts first.");
         var translate = origin.Writers.GetValueOrDefault("Object3DTranslate");
         bool gltfPosition = position && translate == null;
@@ -376,7 +379,7 @@ public static class SourceObjectEdits
         // Values this mission's world script already sets change where they are (see inPlace).
         inPlace?.Invoke(end);
         if (lines.Count > 0) end.InsertBeforeWrite([["FindNode", Token(nodeName)], .. lines], write);
-        return new(label, end.Changes(), $"{own}, before the world is written",
+        return new(label, end.Changes(), lines.Count > 0 ? $"{own}, before the world is written" : own,
             [$"{shared} also runs in {missions}, so {nodeName}'s value is set before {own} writes the world, after that script ran: it changes in this mission only."]);
     }
 
@@ -958,11 +961,12 @@ public static class SourceObjectEdits
     /// </summary>
     public static IReadOnlyList<string> ScriptTransformsReached(SourceWorkspace workspace, string mission, string model, byte[] before, byte[] after, IEnumerable<WorldNodeProvenance> provenance, CancellationToken token = default)
     {
+        // By engine name: Blender renames repeated names (wheel.001), which the import reads back.
         static List<(string Name, bool Authored)> Nodes(byte[] bytes) =>
             JsonNode.Parse(bytes) is JsonObject { } root && root["nodes"] is JsonArray nodes
-                ? [.. nodes.OfType<JsonObject>().Select(n => (n["name"]?.GetValue<string>() ?? "", !GltfNodeEdits.Local(n).IsIdentity))] : [];
+                ? [.. nodes.OfType<JsonObject>().Select(n => (WorldGltf.EngineName(n), !GltfNodeEdits.Local(n).IsIdentity))] : [];
         var was = Nodes(before); var now = Nodes(after);
-        List<string> notes = [];
+        List<string> notes = []; int traced = 0, untraced = 0;
         foreach (var group in was.Select((n, i) => (n, i)).GroupBy(p => p.n.Name, StringComparer.Ordinal))
         {
             var later = now.Where(n => n.Name == group.Key).ToList(); int occurrence = 0;
@@ -970,14 +974,21 @@ public static class SourceObjectEdits
             {
                 token.ThrowIfCancellationRequested();
                 if (occurrence >= later.Count || later[occurrence++].Authored == node.Authored || node.Name.Length == 0) continue;
+                if (notes.Count >= 8) return notes;
                 string change = node.Authored ? "loses its transform" : "gains a transform of its own";
                 var origins = provenance.Where(p => p.ModelNode == index && string.Equals(p.ModelFile, model, StringComparison.OrdinalIgnoreCase)).ToList();
-                var here = origins.SelectMany(o => new[] { "Object3DRotate", "Object3DScale" }.Where(o.Writers.ContainsKey).Select(c => o.Writers[c])).FirstOrDefault();
-                string? reason = here != null ? $"{here.Script} line {here.Line} ({here.Command})"
-                    : origins.FirstOrDefault() is { } origin && TransformElsewhere(workspace, mission, origin, node.Name, token) is { } elsewhere ? $"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}, where {elsewhere.Mission} loads the file)" : null;
-                if (reason != null && notes.Count < 8) notes.Add($"{node.Name} {change} in the export, so {reason} {(node.Authored ? "starts" : "stops")} turning or scaling it.");
+                var here = origins.SelectMany(o => TurnAndScale.Where(o.Writers.ContainsKey).Select(c => o.Writers[c])).FirstOrDefault();
+                string? reason = here != null ? $"{here.Script} line {here.Line} ({here.Command})" : null;
+                // Other missions' scripts are followed for a bounded number of nodes (each follows every mission's build).
+                if (reason == null && traced++ >= 64) { untraced++; continue; }
+                // A model this world does not load is still found where other missions load it.
+                var origin = origins.FirstOrDefault() ?? new WorldNodeProvenance { ModelFile = model, ModelNode = index, ModelNodeName = node.Name };
+                if (reason == null && TransformElsewhere(workspace, mission, origin, node.Name, token) is { } elsewhere)
+                    reason = $"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}, where {elsewhere.Mission} loads the file)";
+                if (reason != null) notes.Add($"{node.Name} {change} in the export, so {reason} {(node.Authored ? "starts" : "stops")} turning or scaling it.");
             }
         }
+        if (untraced > 0 && notes.Count < 8) notes.Add($"{untraced} more nodes gain or lose a transform of their own; other missions' scripts were not checked for them.");
         return notes;
     }
     /// <summary>

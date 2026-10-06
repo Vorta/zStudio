@@ -118,12 +118,12 @@ public partial class MainWindow
         if (MessageBox.Show(this, $"Update {checkout.Model} from the Blender export {export!.Relative} ({export.WrittenUtc.ToLocalTime():g})?\n\nThe model, its buffer and changed textures are replaced in the project's unsaved edits; Save writes them.",
             "Update from Blender export", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
         (DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files) result;
-        try { result = await UpdateFromBlenderAsync(doc, checkout.Id, export.Relative, false, CancellationToken.None); }
+        try { result = await UpdateFromBlenderAsync(doc, checkout.Id, export.Relative, false, shutdownToken); }
         catch (StudioCommandException ex) when (ex.Code == "conflict")
         {
             if (MessageBox.Show(this, ex.Message + "\n\nUpdate anyway, accepting all of this?", "Update from Blender export", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             if (ViewModel.SelectedDocument is not { SourceWorld: not null } current) return;
-            result = await UpdateFromBlenderAsync(current, checkout.Id, export.Relative, true, CancellationToken.None);
+            result = await UpdateFromBlenderAsync(current, checkout.Id, export.Relative, true, shutdownToken);
         }
         int count = result.Files.Count;
         ViewModel.Status = count == 0 ? $"{checkout.Model} already matches the Blender export." : $"Updated {checkout.Model} from Blender: {count} file{(count == 1 ? "" : "s")} changed" + (result.Plan.Notes.Count > 0 ? $"; {result.Plan.Notes.Count} notes in Problems" : "");

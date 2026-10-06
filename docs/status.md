@@ -39,7 +39,7 @@
   - The automatic pack holds at most its named size, counting alpha planes and textures from other folders.
   - A late Cancel in Initialize no longer opens the project, and a stopped reconstruction removes only what it wrote.
   - The loader emulation, inference and Compare worlds are bounded and cancellable on crafted worlds.
-  - Source-world edits change every copy of an instance, keep instance and inherited zones, move script objects through their scripts, set values that shared scripts set for this mission only, and check other missions' loads of a shared model.
+  - Source-world edits change every copy of an instance, keep instance and inherited zones, move script objects through their scripts, set values that shared scripts set for this mission only, and refuse a model node's edit while another mission's script rotates or scales that node.
   - Name lookups follow the engine for copied and rebound animations, the entry's own lights and sounds, and AI vehicles.
   - Blender round trips keep zones and accept moved groups.
   - MCP path arguments must be full paths, and the 1998 demo worlds' placements are read-only.

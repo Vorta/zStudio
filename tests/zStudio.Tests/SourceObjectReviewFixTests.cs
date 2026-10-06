@@ -164,6 +164,25 @@ public sealed class SourceObjectReviewFixTests
     }
 
     [Fact]
+    public async Task LinesTakingAMacroGetTheValueSetAfterThem()
+    {
+        // world.gw, which m2 runs too, scales the marker; m1 places it with a macro. A move cannot change the macro's line, so
+        // the position is set before m1 writes its world.
+        using SourceWorldFixture fixture = new();
+        foreach (string mission in new[] { "m1", "m2" }) Replace(fixture, $"gamegen/{mission}.gs", "NewWorld %worldName%", "source world.gw");
+        Replace(fixture, "gamegen/m1.gs", "source world.gw", "source world.gw\r\nset px 4.0\r\nFindNode marker\r\nObject3DTranslate %px% 2.0 3.0");
+        fixture.Write("gamegen/world.gw", string.Join("\r\n", "NewWorld %worldName%", "NewObject3D marker", "Object3DScale 2.0 2.0 2.0", "FindNode %worldName%", "AddChild marker", ""));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace);
+        var marker = world.Nodes.Single(n => n.Name == "marker"); var shown = ObjectTransform.Of(marker);
+        Assert.Equal(new Vector3(4, 2, 3), shown.Position);
+        Apply(workspace, SourceObjectEdits.PlanTransform(workspace, "marker", Origin(build, world, marker), build.Executions, shown with { Position = new(5, 2, 3) }, Token, "m1", shown, null, world, build.WriteInstruction));
+        Assert.Contains("Object3DTranslate %px% 2.0 3.0", Text(workspace, "gamegen/m1.gs"));
+        (_, world) = await BuildAsync(fixture, workspace);
+        Assert.Equal(new Vector3(5, 2, 3), ObjectTransform.Of(world.Nodes.Single(n => n.Name == "marker")).Position);
+    }
+
+    [Fact]
     public async Task ValuesAScriptOtherMissionsRunSetChangeInThisMissionOnly()
     {
         // Both missions make their world in world.gw, which also makes a marker, a template (as weapons.gw does) and sets
@@ -255,6 +274,11 @@ public sealed class SourceObjectReviewFixTests
         Assert.Contains("hull gains a transform of its own in the export, so gamegen/m2.gs line 16 (Object3DRotate, where m2 loads the file) stops turning or scaling it.", notes);
         // An export that keeps every node's transform as it was warns about nothing.
         Assert.Empty(SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, before, build.Provenance.Values, Token));
+        // Blender renames repeated names (hull.001); the engine name is what the build finds. A world that does not load the
+        // model (no provenance for it) still hears about other missions' scripts.
+        foreach (var node in json["nodes"]!.AsArray().OfType<JsonObject>().Where(n => n["name"]?.GetValue<string>() == "hull")) { node["name"] = "hull.001"; (node["extras"]?["recoil"] as JsonObject)?.Remove("name"); }
+        Assert.Contains("hull gains a transform of its own in the export, so gamegen/m2.gs line 16 (Object3DRotate, where m2 loads the file) stops turning or scaling it.",
+            SourceObjectEdits.ScriptTransformsReached(workspace, "m1", model, before, Encoding.UTF8.GetBytes(json.ToJsonString()), [], Token));
     }
 
     [Fact]

@@ -169,6 +169,22 @@ public sealed class SourceObjectStructureTests
     }
 
     [Fact]
+    public async Task AnotherCopysScriptTranslationDoesNotBlockTurningThePart()
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.WritePartDatabase();
+        // A script moves one copy's lid; the move replaces the file's translation whatever the part's node holds, so turning
+        // the lid (an edit of the part's node, in both copies) leaves that copy's script working as before.
+        fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs"))).Replace("# no vehicles", "FindNode lid\r\nObject3DTranslate 1.0 2.0 3.0", StringComparison.Ordinal));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var slots = GameZWriter.NodeSlots(world);
+        var plain = world.Nodes.Where(n => n.Name == "lid").Select(lid => build.Provenance[slots[lid]]).Single(p => p.Applied.Count == 0);
+        Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "lid", plain, build.Executions, new(Vector3.Zero, new(0, 30, 0), Vector3.One), Token, "m1", null,
+            SourceObjectEdits.CopiesOf(plain, build.Provenance.Values)).Changes);
+    }
+
+    [Fact]
     public async Task PartEditsRespectScriptsActingOnAnyCopy()
     {
         using SourceWorldFixture fixture = new();
