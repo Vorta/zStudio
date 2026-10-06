@@ -98,8 +98,10 @@ public sealed class ModelEditSession
                 try
                 {
                     token.ThrowIfCancellationRequested(); ValidateDestination(item.Target);
-                    if (item.Replace) { var prior = saved[item.Doc.Path]; await CheckExternalAsync(prior.Target,prior.Bytes,token); File.Replace(item.Temp,item.Target,null); }
-                    else File.Move(item.Temp,item.Target,false);
+                    // Held from its check against the verified bytes until it is in place.
+                    using SealedFile file = VerifiedDocumentSave.Seal(item.Temp, item.Doc.Bytes);
+                    if (item.Replace) { var prior = saved[item.Doc.Path]; await CheckExternalAsync(prior.Target,prior.Bytes,token); file.MoveTo(item.Target, replace: true); }
+                    else file.MoveTo(item.Target);
                     string previousTarget = saved[item.Doc.Path].Target;
                     saved[item.Doc.Path] = (item.Target,item.Doc.Bytes.ToArray());
                     observedStamps.Remove(previousTarget);

@@ -13,6 +13,8 @@ namespace Recoil.Zbd.Tests;
 public sealed class PublicationSafetyTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+    /// <summary>Staged outputs with the digests of their staged files, as built.</summary>
+    private static (string, JournalDigest)[] Staged(string staging, string[] outputs) => [.. outputs.Select(o => (o, JournalDigest.Of(File.ReadAllBytes(Path.Combine(staging, o)))!))];
     private sealed class OnReport(Action<SourceProgress> action) : IProgress<SourceProgress> { public void Report(SourceProgress value) => action(value); }
 
     private sealed class Folder : IDisposable
@@ -41,7 +43,7 @@ public sealed class PublicationSafetyTests
         if (replacedOriginal) folder.Write("game/zrdr.zbd", "ORIGINAL ARCHIVE");
         string installed = Path.Combine(destination, "zrdr.zbd");
         // Once the first output is in place another program replaces it; then the second output fails.
-        var error = Assert.Throws<IOException>(() => SourceBuilder.Publish(staging, destination, ["zrdr.zbd", "m1/zrdr.zbd"], overwrite: true, Token, (step, index) =>
+        var error = Assert.Throws<IOException>(() => SourceBuilder.Publish(staging, destination, Staged(staging, ["zrdr.zbd", "m1/zrdr.zbd"]), overwrite: true, Token, (step, index) =>
         {
             if (step != "install" || index != 1) return;
             File.WriteAllText(installed, "ANOTHER PROGRAM");
@@ -72,7 +74,7 @@ public sealed class PublicationSafetyTests
         folder.Write("game/.zstudio-staging-test/m1/anim.zbd", "NEW ANIMATIONS");
         folder.Write("game/zrdr.zbd", "ORIGINAL ARCHIVE");
         folder.Write("game/m1/anim.zbd", "ORIGINAL ANIMATIONS");
-        var error = Assert.Throws<IOException>(() => SourceBuilder.Publish(staging, destination, ["zrdr.zbd", "m1/zrdr.zbd", "m1/anim.zbd"], overwrite: true, Token,
+        var error = Assert.Throws<IOException>(() => SourceBuilder.Publish(staging, destination, Staged(staging, ["zrdr.zbd", "m1/zrdr.zbd", "m1/anim.zbd"]), overwrite: true, Token,
             (step, index) => { if (step == "install" && index == 2) throw new IOException("forced failure"); }));
         Assert.Equal("forced failure", error.Message);
         Assert.Equal("ORIGINAL ARCHIVE", File.ReadAllText(Path.Combine(destination, "zrdr.zbd")));
@@ -145,19 +147,19 @@ public sealed class PublicationSafetyTests
         string[] inputs = [.. Enumerable.Range(0, 513).Select(i => $"data/m1/textures/big{i:000}.png")];
         foreach (string input in inputs) folder.Write(input, PngHeader(4096, 4096));
         var pack = new SourceOutputPlan("m1/texturemax.zbd", "textures", inputs) { Pack = TexturePackVariant.FromFileName("texturemax.zbd") };
-        var error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, pack, new(folder.Root), DateTime.UtcNow, Token));
+        var error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, pack, new(folder.Root), Token));
         Assert.StartsWith("texturemax.zbd would take at least 514 MiB with its textures at the sizes it stores, more than the 512 MiB a pack file can hold.", error.Message);
         Assert.Contains("Give the pack a budget or a smaller largest side", error.Message);
         Assert.Contains("big000 (1024 × 1024, data/m1/textures/big000.png)", error.Message);
         // Interface images are stored at their authored size, two bytes a pixel: seventeen take 544 MiB.
         var images = new SourceOutputPlan("image.zbd", "images", inputs[..17]);
-        error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, images, new(folder.Root), DateTime.UtcNow, Token));
+        error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, images, new(folder.Root), Token));
         Assert.StartsWith("image.zbd would take at least 545 MiB", error.Message);
         Assert.Contains("Use fewer or smaller images", error.Message);
         Assert.Contains("big000 (4096 × 4096, data/m1/textures/big000.png)", error.Message);
         // What a pack file holds is decoded (and these headers fail there).
         var fits = new SourceOutputPlan("m1/texturemax.zbd", "textures", inputs[..511]) { Pack = pack.Pack };
-        error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, fits, new(folder.Root), DateTime.UtcNow, Token));
+        error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, fits, new(folder.Root), Token));
         Assert.StartsWith("data/m1/textures/big000.png:", error.Message);
         Assert.DoesNotContain("MiB", error.Message);
         // Within the palette pages' 8 KiB of the limit (16 pages of 512 bytes) the pack cannot be written either.
@@ -167,7 +169,7 @@ public sealed class PublicationSafetyTests
         string[] small = [.. Enumerable.Range(0, fillers).Select(i => $"data/m1/textures/small{i:000}.png")];
         foreach (string input in small) folder.Write(input, PngHeader(64, 64));
         var edge = new SourceOutputPlan("m1/texturemax.zbd", "textures", [.. inputs[..511], .. small]) { Pack = pack.Pack };
-        error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, edge, new(folder.Root), DateTime.UtcNow, Token));
+        error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, edge, new(folder.Root), Token));
         Assert.StartsWith("texturemax.zbd would take at least 513 MiB", error.Message);
     }
 
@@ -180,7 +182,7 @@ public sealed class PublicationSafetyTests
         int count = TexturePackBuilder.MaximumRecords + 1;
         Dictionary<string, byte[]> pending = Enumerable.Range(0, count).ToDictionary(i => $"data/m1/textures/t{i:0000}.png", _ => PngHeader(8, 8), StringComparer.OrdinalIgnoreCase);
         var pack = new SourceOutputPlan("m1/rtexture16.zbd", "textures", [.. pending.Keys]) { Pack = TexturePackVariant.FromFileName("rtexture16.zbd") };
-        var error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, pack, new(folder.Root, pending), DateTime.UtcNow, Token));
+        var error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, pack, new(folder.Root, pending), Token));
         Assert.Contains($"{count:N0} textures", error.Message);
         Assert.Contains($"at most {TexturePackBuilder.MaximumRecords:N0}", error.Message);
     }

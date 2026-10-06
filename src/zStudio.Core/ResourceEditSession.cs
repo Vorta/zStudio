@@ -230,7 +230,8 @@ public sealed class ResourceEditSession
             if (destination == null) await CheckBaseline(token); else if (File.Exists(target)) throw new IOException("Save As requires a new file.");
             await VerifiedDocumentSave.StageAsync(Current.Document, temp, token, target);
             token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(target);
-            if (destination == null) { await CheckBaseline(token); File.Replace(temp, target, null); } else File.Move(temp, target, false);
+            using (SealedFile staged = VerifiedDocumentSave.Seal(temp, Current.Document.Bytes))
+                if (destination == null) { await CheckBaseline(token); staged.MoveTo(target, replace: true); } else staged.MoveTo(target);
             TargetPath = target; TargetStamp = FileStamp.ReadHolding(target, Current.Document.Bytes.Span); saved = Current; return target;
         }
         finally { try { if (File.Exists(temp)) File.Delete(temp); } finally { saving = false; Changed?.Invoke(); } }

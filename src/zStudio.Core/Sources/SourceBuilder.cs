@@ -281,18 +281,24 @@ public static partial class SourceBuilder
         }
         try
         {
-            DateTime now = DateTime.UtcNow; List<SourceExportResult> results = [];
+            List<SourceExportResult> results = [];
+            // The digest of each output's bytes as they were built and reopened, which its staged file must still have when it is installed.
+            Dictionary<string, JournalDigest> contents = new(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, Animation.AnimationPackage> packages = new(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < selected.Count; i++)
             {
                 token.ThrowIfCancellationRequested(); var plan = selected[i]; progress?.Report(new(i, selected.Count, plan.Path));
                 try
                 {
-                    var built = await Task.Run(() => Build(root, plan, snapshot, now, token), token);
+                    var built = await Task.Run(() => Build(root, plan, snapshot, token), token);
                     // Every output must reopen through the shared readers before it can be written.
                     var check = FormatRegistry.Default.OpenBytes(plan.Path, built.Bytes, token: token);
                     if (check.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built file does not reopen: " + error.Message);
-                    if (staging != null) { string path = SourceProject.Resolve(staging, plan.Path); Directory.CreateDirectory(Path.GetDirectoryName(path)!); await File.WriteAllBytesAsync(path, built.Bytes, token); }
+                    if (staging != null)
+                    {
+                        contents[plan.Path] = JournalDigest.OfContent(built.Bytes);
+                        string path = SourceProject.Resolve(staging, plan.Path); Directory.CreateDirectory(Path.GetDirectoryName(path)!); await File.WriteAllBytesAsync(path, built.Bytes, token);
+                    }
                     results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, built.Warnings));
                     if (built.Package != null) packages[plan.Path.Split('/')[0]] = built.Package;
                 }
@@ -320,7 +326,7 @@ public static partial class SourceBuilder
             if (staging != null && destination != null)
             {
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException("Nothing was written because some outputs failed: " + string.Join("; ", results.Where(r => r.Status == "failed").Select(r => $"{r.Path}: {r.Error}")));
-                Publish(staging, destination, results.Select(r => r.Path).ToArray(), overwrite, token);
+                Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token);
             }
             notes.AddRange(changes.Select(c => WorldLookups.Describe(c, " in the files this export replaced")));
             return new(destination, results) { Profile = profile.Name, Notes = notes, Lookups = lookups, LookupChanges = changes };
@@ -428,24 +434,38 @@ public static partial class SourceBuilder
 
     /// <summary>
     /// Move staged outputs into place; replaced files move aside first and are restored if any later step fails. Without
-    /// <paramref name="overwrite"/>, a game file that appeared while the outputs were built is never replaced.
-    /// <paramref name="fault"/> is a test hook called before each output is moved aside ("replace") and installed
-    /// ("install") with its index; it may throw to simulate a failure.
+    /// <paramref name="overwrite"/>, a game file that appeared while the outputs were built is never replaced. Each output's
+    /// <c>Content</c> is the digest of the bytes that were built and reopened. Before anything is replaced every staged file
+    /// is checked against it and held, so no other program can write or rename it, until it is in place (see
+    /// <see cref="SealedFile"/>): a staged file changed after its output was built fails the export before it replaces
+    /// anything. <paramref name="fault"/> is a test hook called with an output's index before its staged file is checked
+    /// ("check"), before its original is moved aside ("replace") and before it is installed ("install"); it may throw to
+    /// simulate a failure.
     /// </summary>
-    internal static void Publish(string staging, string destination, IReadOnlyList<string> outputs, bool overwrite, CancellationToken token, Action<string, int>? fault = null)
+    internal static void Publish(string staging, string destination, IReadOnlyList<(string Relative, JournalDigest Content)> outputs, bool overwrite, CancellationToken token, Action<string, int>? fault = null)
     {
-        foreach (string relative in outputs) { _ = SourceProject.Resolve(destination, relative); SourceProject.RejectNestedLinks(destination, relative); }
+        foreach (var (relative, _) in outputs) { _ = SourceProject.Resolve(destination, relative); SourceProject.RejectNestedLinks(destination, relative); }
         string backup = Path.Combine(destination, ".zstudio-backup-" + Guid.NewGuid().ToString("N"));
         // Original: the stamp of the replaced file moved into the backup, so undoing restores it only while the backup still
         // holds it. Installed: the content this export moved into place, so undoing it removes only that file.
         List<(string Target, string? Saved, FileStamp? Original, JournalDigest? Installed)> steps = [];
+        // Each staged output from its check until it is in place: what is installed is what was built and reopened.
+        var held = new SealedFile?[outputs.Count];
         try
         {
             for (int i = 0; i < outputs.Count; i++)
             {
                 token.ThrowIfCancellationRequested();
-                string relative = outputs[i];
-                string target = SourceProject.Resolve(destination, relative), saved = SourceProject.Resolve(backup, relative), staged = SourceProject.Resolve(staging, relative);
+                var (relative, content) = outputs[i];
+                fault?.Invoke("check", i);
+                try { held[i] = SealedFile.Open(SourceProject.Resolve(staging, relative), content); }
+                catch (IOException ex) { throw new IOException($"The built {relative} was not installed: {ex.Message}", ex); }
+            }
+            for (int i = 0; i < outputs.Count; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                var (relative, content) = outputs[i];
+                string target = SourceProject.Resolve(destination, relative), saved = SourceProject.Resolve(backup, relative);
                 fault?.Invoke("replace", i);
                 if (File.Exists(target) && !overwrite) throw new IOException($"{relative} appeared in {destination} during the export; nothing was replaced. Export again and allow replacing it.");
                 if (File.Exists(target))
@@ -454,16 +474,17 @@ public static partial class SourceBuilder
                     steps.Add((target, saved, null, null)); steps[^1] = steps[^1] with { Original = FileStamp.Read(saved) };
                 }
                 else steps.Add((target, null, null, null));
-                JournalDigest installed;
-                using (FileStream stream = new(staged, FileMode.Open, FileAccess.Read, FileShare.Read)) installed = JournalDigest.Of(stream);
                 fault?.Invoke("install", i);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Move(staged, target);
-                steps[^1] = steps[^1] with { Installed = installed };
+                held[i]!.MoveTo(target);
+                held[i]!.Dispose(); held[i] = null;
+                steps[^1] = steps[^1] with { Installed = content };
             }
         }
         catch (Exception failure)
         {
+            // Released first: undoing moves installed files, which a held file would refuse.
+            foreach (var file in held) file?.Dispose();
             // Only files this export installed are removed, while they still have the content it installed: a file another
             // program put at a target meanwhile stays, and the original that moved aside for it stays in the backup. An
             // installed file is removed only while the backup still holds the original that replaces it, so a backup another
@@ -525,11 +546,11 @@ public static partial class SourceBuilder
         }
     }
 
-    internal static Built Build(string root, SourceOutputPlan plan, Snapshot snapshot, DateTime now, CancellationToken token) => plan.Family switch
+    internal static Built Build(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token) => plan.Family switch
     {
-        "archive" => BuildArchive(plan, snapshot, now, token),
+        "archive" => BuildArchive(plan, snapshot, token),
         "scripts" => BuildScripts(root, plan, snapshot, token),
-        "sounds" => BuildSounds(root, plan, snapshot, now, token),
+        "sounds" => BuildSounds(root, plan, snapshot, token),
         "images" => BuildImages(plan, snapshot, token),
         "textures" => BuildTexturePack(plan, snapshot, token),
         "world" => BuildWorld(plan, snapshot, token),
@@ -543,7 +564,7 @@ public static partial class SourceBuilder
     /// </summary>
     internal static string SourceField(string relative) => relative.Replace('/', '\\');
 
-    private static Built BuildArchive(SourceOutputPlan plan, Snapshot snapshot, DateTime now, CancellationToken token)
+    private static Built BuildArchive(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase); List<ArchiveSources.Entry> entries = [];
         // Members are ordered by source path. The engine scans members for the first case-insensitive name match
@@ -571,7 +592,7 @@ public static partial class SourceBuilder
             catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
             entries.Add(new(name, field, payload));
         }
-        return new(ArchiveSources.Write(entries, now), entries.Count, []);
+        return new(ArchiveSources.Write(entries), entries.Count, []);
     }
 
     private static Built BuildScripts(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
@@ -790,7 +811,7 @@ public static partial class SourceBuilder
         return image;
     }
 
-    private static Built BuildSounds(string root, SourceOutputPlan plan, Snapshot snapshot, DateTime now, CancellationToken token)
+    private static Built BuildSounds(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         int bank = Array.IndexOf(Banks, plan.Path.ToLowerInvariant());
         var declared = File.Exists(SourceProject.Resolve(root, SoundDefinitions)) ? DeclaredFormats(snapshot.Read(SoundDefinitions, token), token) : new();
@@ -812,7 +833,7 @@ public static partial class SourceBuilder
             string field = SourceField(input);
             entries.Add(new(name, ArchiveSources.FitsSourceField(field) ? field : "", payload));
         }
-        return new(ArchiveSources.Write(entries, now), entries.Count, warnings);
+        return new(ArchiveSources.Write(entries), entries.Count, warnings);
     }
 
     /// <summary>

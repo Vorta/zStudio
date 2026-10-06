@@ -47,16 +47,23 @@ internal static class ArchiveSources
         return nul >= 0 && !field[nul..].ContainsAnyExcept((byte)0) ? Encoding.Latin1.GetString(field[..nul]) : null;
     }
 
+    /// <summary>
+    /// The time every written member records: the DOS epoch, 1 January 1980 00:00 UTC. The original compiler stored when it
+    /// packed the archive, as a local DOS time (with bit 1 set) and a FILETIME; the engine reads neither. A fixed time keeps
+    /// exports deterministic: the same sources build the same bytes at any time, in any time zone.
+    /// </summary>
+    internal static readonly DateTime MemberTime = new(1980, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
     /// <summary>Contiguous payloads in member order, then the directory and the {1, count} footer, as the engine expects.</summary>
-    internal static byte[] Write(IReadOnlyList<Entry> members, DateTime builtUtc)
+    internal static byte[] Write(IReadOnlyList<Entry> members)
     {
         long length = members.Sum(m => (long)m.Payload.Length) + members.Count * (long)RecordSize + 8;
         FormatRegistry.ValidateDocumentSize(length);
         byte[] result = new byte[length]; int offset = 0;
         foreach (var m in members) { m.Payload.CopyTo(result, offset); offset += m.Payload.Length; }
-        // The original compiler stored a DOS time (with bit 1 set) and a FILETIME; the engine reads neither.
-        var local = builtUtc.ToLocalTime(); uint dosTime = (uint)(local.Hour << 11 | local.Minute << 5 | local.Second / 2) | 2;
-        ulong fileTime = (ulong)builtUtc.ToFileTimeUtc();
+        // Both fields hold MemberTime, the DOS time in the original form (bit 1 set).
+        uint dosTime = (uint)(MemberTime.Hour << 11 | MemberTime.Minute << 5 | MemberTime.Second / 2) | 2;
+        ulong fileTime = (ulong)MemberTime.ToFileTimeUtc();
         int position = 0; var span = result.AsSpan();
         for (int i = 0; i < members.Count; i++)
         {

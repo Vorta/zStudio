@@ -222,7 +222,13 @@ public sealed partial class ExportService(AssetResolver resolver) : IAssetExport
         string path = DestinationPath(root, relative); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         if (File.Exists(path)) throw new IOException($"Export already exists: {relative}");
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try { await File.WriteAllBytesAsync(temporary, bytes.ToArray(), token).ConfigureAwait(false); token.ThrowIfCancellationRequested(); File.Move(temporary, path, false); }
+        try
+        {
+            await File.WriteAllBytesAsync(temporary, bytes.ToArray(), token).ConfigureAwait(false); token.ThrowIfCancellationRequested();
+            // Held from its check against the exported bytes until it is in place.
+            using SealedFile staged = SealedFile.Open(temporary, Sources.JournalDigest.OfContent(bytes.Span));
+            staged.MoveTo(path);
+        }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
     private static Task WriteJson(string root, string name, JsonNode node, CancellationToken token) => WriteAtomicAsync(root, name, Encoding.UTF8.GetBytes(node.ToJsonString(JsonData.Options) + "\n"), token);

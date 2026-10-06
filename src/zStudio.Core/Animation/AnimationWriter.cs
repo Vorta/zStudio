@@ -65,7 +65,9 @@ public static class AnimationWriter
             { await stream.WriteAsync(bytes, token).ConfigureAwait(false); await stream.FlushAsync(token).ConfigureAwait(false); }
             byte[] check = await File.ReadAllBytesAsync(temporary, token).ConfigureAwait(false);
             if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(bytes), SHA256.HashData(check))) throw new IOException("The written animation did not pass verification.");
-            token.ThrowIfCancellationRequested(); File.Move(temporary, path, false);
+            token.ThrowIfCancellationRequested();
+            // Held from its check against the verified bytes until it is in place.
+            using (SealedFile staged = VerifiedDocumentSave.Seal(temporary, bytes)) staged.MoveTo(path);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }

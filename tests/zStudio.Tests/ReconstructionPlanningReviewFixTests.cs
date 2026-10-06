@@ -72,11 +72,11 @@ public sealed class ReconstructionPlanningReviewFixTests
     {
         string fits = "data\\m1\\zrdr\\" + new string('a', 46) + ".zrd";
         Assert.Equal(63, fits.Length);
-        var member = Assert.Single(ArchiveSources.Read(ArchiveSources.Write([new("a.zrd", fits, [1, 2, 3])], DateTime.UtcNow)));
+        var member = Assert.Single(ArchiveSources.Read(ArchiveSources.Write([new("a.zrd", fits, [1, 2, 3])])));
         Assert.Equal(fits, member.SourceField);
         // One character more, or one the field cannot store, would record another path than the source's.
-        Assert.Throws<InvalidDataException>(() => ArchiveSources.Write([new("a.zrd", "d" + fits, [1, 2, 3])], DateTime.UtcNow));
-        Assert.Throws<InvalidDataException>(() => ArchiveSources.Write([new("a.zrd", "data\\m1\\zrdr\\Ж.zrd", [1, 2, 3])], DateTime.UtcNow));
+        Assert.Throws<InvalidDataException>(() => ArchiveSources.Write([new("a.zrd", "d" + fits, [1, 2, 3])]));
+        Assert.Throws<InvalidDataException>(() => ArchiveSources.Write([new("a.zrd", "data\\m1\\zrdr\\Ж.zrd", [1, 2, 3])]));
     }
 
     [Fact]

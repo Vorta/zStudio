@@ -81,16 +81,29 @@ public static class TexturePackBuilder
         BuildFromSources([.. textures.Select(t => new PackSource(t.Name, t.SortKey, t.Master.Width, t.Master.Height, _ => t.Master, t.Addressing, t.Direct))], variant, token);
 
     /// <summary>
+    /// How much of the textures a build keeps decoded at their stored sizes between its passes, at four bytes a texel
+    /// (<see cref="DecodedImage"/>): a texture beyond it is decoded again when its pixels are needed.
+    /// </summary>
+    internal const long RetainedImageBytes = 256L << 20;
+
+    /// <summary>
     /// Builds a pack from textures decoded one at a time. Each texture's stored size follows from its own size, the pack's
     /// largest side and, under a budget, every texture's transparency (alpha planes count against it). So a master whose
     /// transparency is not known is decoded to classify it and kept only reduced to the size the pack stores without a
     /// budget, while the textures so kept fit the budget and a pack file; one that the budget then reduces further, or
-    /// that was not kept, is decoded again and resampled to its final size. Building thus holds textures at their stored
-    /// sizes (four bytes a texel, for at most what a pack file holds) and one master. A pack whose file would exceed what a
-    /// pack file may hold (<see cref="FormatRegistry.MaximumDocumentBytes"/>) is refused before its textures are resampled
-    /// to their final sizes: before anything is decoded when its texels alone exceed it.
+    /// that was not kept, is decoded again and resampled to its final size. The shared palettes need every paletted
+    /// texture's mean colour and then its colours, and the pack is written after them, so the textures at their final sizes
+    /// are kept for those passes while they fit <see cref="RetainedImageBytes"/> (four bytes a texel, although a paletted
+    /// texel takes one byte of the pack) and the others are decoded again for each pass; every decode resamples the same
+    /// master to the same size, so the pack is the same either way. Building thus holds at most that much, one master and
+    /// the pack file. A pack whose file would exceed what a pack file may hold (<see cref="FormatRegistry.MaximumDocumentBytes"/>)
+    /// is refused before its textures are resampled to their final sizes: before anything is decoded when its texels alone exceed it.
     /// </summary>
     public static TexturePackBuild BuildFromSources(IReadOnlyList<PackSource> textures, TexturePackVariant variant, CancellationToken token = default)
+        => BuildFromSources(textures, variant, RetainedImageBytes, token);
+
+    /// <summary><see cref="BuildFromSources(IReadOnlyList{PackSource}, TexturePackVariant, CancellationToken)"/> keeping at most <paramref name="retainedBytes"/> of decoded textures.</summary>
+    internal static TexturePackBuild BuildFromSources(IReadOnlyList<PackSource> textures, TexturePackVariant variant, long retainedBytes, CancellationToken token)
     {
         if (textures.Count > MaximumRecords) throw new InvalidDataException($"A texture pack holds at most {MaximumRecords:N0} textures.");
         List<string> warnings = [];
@@ -111,9 +124,11 @@ public static class TexturePackBuilder
         if (variant.BudgetBytes == null) CheckOutput(variant, ordered, sizes, Paletted, _ => false, true);
 
         // Textures are kept only resampled from their masters, at most at the size the pack stores without a budget; a master
-        // is never kept. What is kept fits the budget and a pack file, so it never exceeds what the pack itself holds.
+        // is never kept. What is kept fits the budget and a pack file, so it never exceeds what the pack itself holds, and
+        // what the kept images take (four bytes a texel) fits retainedBytes.
         var kept = new DecodedImage?[ordered.Length];
-        long keeping = Math.Min(variant.BudgetBytes ?? long.MaxValue, FormatRegistry.MaximumDocumentBytes), keptCost = 0;
+        long keeping = Math.Min(variant.BudgetBytes ?? long.MaxValue, FormatRegistry.MaximumDocumentBytes), keptCost = 0, retained = 0;
+        long Retains(int i) => 4L * sizes[i].Width * sizes[i].Height;
         for (int i = 0; i < ordered.Length; i++)
         {
             token.ThrowIfCancellationRequested();
@@ -121,7 +136,7 @@ public static class TexturePackBuilder
             var master = Master(ordered[i], token);
             modes[i] = Classify(master);
             long cost = Cost(i, sizes[i].Width, sizes[i].Height);
-            if (keptCost + cost <= keeping) { kept[i] = Resample(master, sizes[i].Width, sizes[i].Height, token); keptCost += cost; }
+            if (keptCost + cost <= keeping && retained + Retains(i) <= retainedBytes) { kept[i] = Resample(master, sizes[i].Width, sizes[i].Height, token); keptCost += cost; retained += Retains(i); }
         }
         long fullSize = 0; for (int i = 0; i < sizes.Length; i++) fullSize += Cost(i, sizes[i].Width, sizes[i].Height);
         if (variant.BudgetBytes is { } budget)
@@ -129,21 +144,27 @@ public static class TexturePackBuilder
             var full = ((int Width, int Height)[])sizes.Clone();
             Fit(sizes, Cost, budget, variant, token, warnings);
             // A texture the budget reduced is resampled from its master again, as every texture is resampled once from it.
-            for (int i = 0; i < sizes.Length; i++) if (sizes[i] != full[i]) kept[i] = null;
+            for (int i = 0; i < sizes.Length; i++) if (sizes[i] != full[i] && kept[i] != null) { kept[i] = null; retained -= 4L * full[i].Width * full[i].Height; }
         }
         CheckOutput(variant, ordered, sizes, Paletted, i => modes[i] == TextureTransparency.Alpha, false);
-        var images = new DecodedImage[ordered.Length];
+        // Every texture at its final size: kept while retainedBytes holds it, else decoded again for each pass that needs it.
+        DecodedImage Final(int i) => Resample(Master(ordered[i], token), sizes[i].Width, sizes[i].Height, token);
+        var images = new DecodedImage?[ordered.Length];
+        var means = new (double R, double G, double B)[ordered.Length];
         for (int i = 0; i < ordered.Length; i++)
         {
             token.ThrowIfCancellationRequested();
-            images[i] = kept[i] ?? Resample(Master(ordered[i], token), sizes[i].Width, sizes[i].Height, token);
+            var image = kept[i] ?? Final(i);
+            if (Paletted(i)) means[i] = Mean(image);
+            if (kept[i] != null) images[i] = image;
+            else if (retained + Retains(i) <= retainedBytes) { images[i] = image; retained += Retains(i); }
             kept[i] = null;
         }
 
         // Quantize the paletted textures into shared pages.
         int[] pageOf = Enumerable.Repeat(-1, ordered.Length).ToArray(); List<ushort[]> pages = [];
         var paletted = Enumerable.Range(0, ordered.Length).Where(Paletted).ToArray();
-        if (paletted.Length > 0) BuildPages(paletted, images, modes, pageOf, pages, token);
+        if (paletted.Length > 0) BuildPages(paletted, means, i => images[i] ?? Final(i), modes, pageOf, pages, token);
 
         // Sized for the whole file, which is then returned without a copy.
         long expected = OutputBytes(sizes, Paletted, i => modes[i] == TextureTransparency.Alpha) + pages.Count * 512L;
@@ -156,11 +177,14 @@ public static class TexturePackBuilder
         {
             token.ThrowIfCancellationRequested();
             long offset = output.Position; if (offset > int.MaxValue) throw new InvalidDataException("The texture pack exceeds 2 GiB.");
-            WriteImage(w, images[i], modes[i], ordered[i].Addressing, pageOf[i] >= 0 ? pages[pageOf[i]] : null, token);
+            var image = images[i] ?? Final(i);
+            // Written: no longer kept.
+            images[i] = null;
+            WriteImage(w, image, modes[i], ordered[i].Addressing, pageOf[i] >= 0 ? pages[pageOf[i]] : null, token);
             long end = output.Position; output.Position = tableStart + i * 40L;
             byte[] name = new byte[32]; Encoding.Latin1.GetBytes(ordered[i].Name.ToLowerInvariant()).CopyTo(name, 0);
             w.Write(name); w.Write((int)offset); w.Write(pageOf[i]); output.Position = end;
-            stored.Add((ordered[i].Name, images[i].Width, images[i].Height));
+            stored.Add((ordered[i].Name, image.Width, image.Height));
         }
         FormatRegistry.ValidateDocumentSize(output.Length);
         byte[] bytes = output.Length == output.Capacity ? output.GetBuffer() : output.ToArray();
@@ -326,10 +350,10 @@ public static class TexturePackBuilder
     /// packs do (12–18 pages); every page and palette is expanded per fog/shade recipe at load, so pages are shared.
     /// Entry 0 is black and reserved: keyed and fully transparent texels use it, opaque texels never do.
     /// </summary>
-    private static void BuildPages(int[] members, DecodedImage[] images, TextureTransparency[] modes, int[] pageOf, List<ushort[]> pages, CancellationToken token)
+    private static void BuildPages(int[] members, (double R, double G, double B)[] meanColours, Func<int, DecodedImage> images, TextureTransparency[] modes, int[] pageOf, List<ushort[]> pages, CancellationToken token)
     {
         int k = Math.Clamp((members.Length + 23) / 24, 1, 16);
-        var means = members.ToDictionary(i => i, i => Mean(images[i]));
+        var means = members.ToDictionary(i => i, i => meanColours[i]);
         // Seeds evenly spaced by luminance; assignments converge within a few iterations.
         var byLuma = members.OrderBy(i => Luma(means[i])).ThenBy(i => i).ToArray();
         var centres = Enumerable.Range(0, k).Select(c => means[byLuma[(int)((c + 0.5) * byLuma.Length / k)]]).ToArray();
@@ -356,8 +380,12 @@ public static class TexturePackBuilder
             if (group.Length == 0) continue;
             int[] histogram = new int[65536];
             foreach (int i in group)
-                for (int p = 0; p < images[i].Width * images[i].Height; p++)
-                    if (images[i].Rgba[p * 4 + 3] >= (modes[i] == TextureTransparency.Keyed ? 128 : 1)) histogram[Rgb565(images[i].Rgba, p)]++;
+            {
+                token.ThrowIfCancellationRequested();
+                var image = images(i);
+                for (int p = 0; p < image.Width * image.Height; p++)
+                    if (image.Rgba[p * 4 + 3] >= (modes[i] == TextureTransparency.Keyed ? 128 : 1)) histogram[Rgb565(image.Rgba, p)]++;
+            }
             histogram[0] = 0;
             var colors = TexturePackWriter.Quantize(histogram, 255, token);
             ushort[] palette = [0, .. colors.Where(color => color != 0)];
@@ -365,17 +393,19 @@ public static class TexturePackBuilder
             int page = pages.Count; pages.Add(palette);
             foreach (int i in group) pageOf[i] = page;
         }
-        static (double R, double G, double B) Mean(DecodedImage image)
-        {
-            double r = 0, g = 0, b = 0, weight = 0;
-            for (int p = 0; p < image.Width * image.Height; p++)
-            {
-                double a = image.Rgba[p * 4 + 3] / 255.0; r += image.Rgba[p * 4] * a; g += image.Rgba[p * 4 + 1] * a; b += image.Rgba[p * 4 + 2] * a; weight += a;
-            }
-            return weight <= 0 ? (0, 0, 0) : (r / weight, g / weight, b / weight);
-        }
         static double Luma((double R, double G, double B) c) => 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
         static double Distance((double R, double G, double B) a, (double R, double G, double B) b) => (a.R - b.R) * (a.R - b.R) + (a.G - b.G) * (a.G - b.G) + (a.B - b.B) * (a.B - b.B);
+    }
+
+    /// <summary>A texture's mean colour weighted by alpha, which groups it with textures of like colour into a palette page.</summary>
+    private static (double R, double G, double B) Mean(DecodedImage image)
+    {
+        double r = 0, g = 0, b = 0, weight = 0;
+        for (int p = 0; p < image.Width * image.Height; p++)
+        {
+            double a = image.Rgba[p * 4 + 3] / 255.0; r += image.Rgba[p * 4] * a; g += image.Rgba[p * 4 + 1] * a; b += image.Rgba[p * 4 + 2] * a; weight += a;
+        }
+        return weight <= 0 ? (0, 0, 0) : (r / weight, g / weight, b / weight);
     }
 
     /// <summary>Exact inverse of the engine's bit-replicating expansion: round(c·31/255) and round(c·63/255).</summary>

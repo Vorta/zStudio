@@ -46,9 +46,9 @@ public abstract class ContentEditSession
     }
     public event Action? Changed;
     public event Action<IEnumerable<string>>? BeforeEdit;
-    // Verification and destination checks remain outside this publication seam.
-    internal Action<string, string, bool> PublishFile { get; set; } = static (temp, target, createNew) =>
-    { if (createNew) File.Move(temp, target, false); else File.Replace(temp, target, null); };
+    // Verification and destination checks remain outside this publication seam. The staged file stays held against writes
+    // and renames from its check against the verified bytes until it is in place (VerifiedDocumentSave.Seal).
+    internal Action<SealedFile, string, bool> PublishFile { get; set; } = static (staged, target, createNew) => staged.MoveTo(target, replace: !createNew);
     protected ContentEditSession(ZbdDocument source, object state)
     {
         if (source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact document is required for editing.");
@@ -112,8 +112,9 @@ public abstract class ContentEditSession
                 try
                 {
                     token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(item.Target);
+                    using SealedFile file = VerifiedDocumentSave.Seal(item.Temp, item.Doc.Bytes);
                     if (!item.CreateNew) await VerifiedDocumentSave.CheckBaselineAsync(item.Target, saved[item.Doc.Path].Bytes, token);
-                    PublishFile(item.Temp, item.Target, item.CreateNew);
+                    PublishFile(file, item.Target, item.CreateNew);
                     saved[item.Doc.Path] = (item.Target, item.Doc.Bytes, FileStamp.ReadHolding(item.Target, item.Doc.Bytes.Span), false); completed.Add(item.Target);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { errors.Add(item.Target + ": " + ex.Message); break; }
@@ -144,6 +145,15 @@ internal static class VerifiedDocumentSave
         await using FileStream file = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
         if (file.Length != bytes.Length || !CryptographicOperations.FixedTimeEquals(await SHA256.HashDataAsync(file, token), SHA256.HashData(bytes.Span)))
             throw new IOException("The file changed outside zStudio. Reload or choose a new Save As destination.");
+    }
+    /// <summary>
+    /// Holds a staged save, checked against the verified <paramref name="bytes"/>, until it is in place: no other program can
+    /// write or rename it after its verification (see <see cref="SealedFile"/>).
+    /// </summary>
+    internal static SealedFile Seal(string temp, ReadOnlyMemory<byte> bytes)
+    {
+        try { return SealedFile.Open(temp, Sources.JournalDigest.OfContent(bytes.Span)); }
+        catch (IOException ex) { throw new IOException("The verified save was not put in place: " + ex.Message, ex); }
     }
     internal static async Task StageAsync(ZbdDocument document, string temp, CancellationToken token, string? destination = null)
     {

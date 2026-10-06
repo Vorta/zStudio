@@ -47,6 +47,8 @@ internal sealed record JournalDigest(long Length, string Sha256)
 {
     public static JournalDigest? Of(byte[]? bytes) => bytes == null ? null : new(bytes.LongLength, Convert.ToHexStringLower(SHA256.HashData(bytes)));
     public static JournalDigest Of(Stream stream) { long length = stream.Length; return new(length, Convert.ToHexStringLower(SHA256.HashData(stream))); }
+    /// <summary>The digest of bytes held in memory (a document's or a built output's), without copying them.</summary>
+    public static JournalDigest OfContent(ReadOnlySpan<byte> bytes) => new(bytes.Length, Convert.ToHexStringLower(SHA256.HashData(bytes)));
 }
 /// <summary>One journaled file: the canonical project-relative path and its previous and new content (null: absent).</summary>
 internal sealed record JournalFile(string Relative, JournalDigest? Expected, JournalDigest? Content);
@@ -240,8 +242,12 @@ public sealed partial class SourcePublisher
                         SourceProject.RejectNestedLinks(root, StagingFolder); Directory.CreateDirectory(staging);
                         WriteVerified(temporary, NewContent(folder, i, content));
                         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                        try { File.Move(temporary, path, false); }
-                        catch (IOException) when (Path.Exists(path)) { conflicts.Add(new(file.Relative, "was created by another program while the save was being completed; it was not replaced")); continue; }
+                        // Held from its check against the journaled content until it is in place (see SealedFile).
+                        using (SealedFile staged = SealedFile.Open(temporary, content))
+                        {
+                            try { staged.MoveTo(path); }
+                            catch (IOException) when (Path.Exists(path)) { conflicts.Add(new(file.Relative, "was created by another program while the save was being completed; it was not replaced")); continue; }
+                        }
                         log.Append("installed", i);
                     }
                     changed.Add(file.Relative);

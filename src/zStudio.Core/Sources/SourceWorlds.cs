@@ -300,14 +300,14 @@ public static partial class SourceWorlds
             .Select(o => plan.FirstOrDefault(p => p.Path.Equals(o, StringComparison.OrdinalIgnoreCase))).OfType<SourceOutputPlan>().ToArray();
         if (!selected.Any(p => p.Family == "world")) throw new InvalidDataException($"The project has no world script for {mission} ({SourceBuilder.WorldScript(mission)}) or no glTF models.");
         SourceBuilder.Snapshot snapshot = new(root, overlay);
-        DateTime now = DateTime.UtcNow; List<SourceExportResult> results = []; Animation.AnimationPackage? animations = null;
+        List<SourceExportResult> results = []; Animation.AnimationPackage? animations = null;
         Directory.CreateDirectory(destination);
         for (int i = 0; i < selected.Length; i++)
         {
             token.ThrowIfCancellationRequested(); var output = selected[i]; progress?.Report(new(i, selected.Length, output.Path));
             try
             {
-                var built = await Task.Run(() => SourceBuilder.Build(root, output, snapshot, now, token), token).ConfigureAwait(false);
+                var built = await Task.Run(() => SourceBuilder.Build(root, output, snapshot, token), token).ConfigureAwait(false);
                 if (output.Family == "animations") animations = built.Package;
                 if (output.Family == "world" && additions != null) CheckAdditions(snapshot.World(mission, token).LoadedRoots, additions);
                 var check = FormatRegistry.Default.OpenBytes(output.Path, built.Bytes, token: token);

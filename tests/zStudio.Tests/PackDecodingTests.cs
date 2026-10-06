@@ -18,6 +18,8 @@ namespace Recoil.Zbd.Tests;
 public sealed class PackDecodingTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+    /// <summary>Staged outputs with the digests of their staged files, as built.</summary>
+    private static (string, JournalDigest)[] Staged(string staging, string[] outputs) => [.. outputs.Select(o => (o, JournalDigest.Of(File.ReadAllBytes(Path.Combine(staging, o)))!))];
 
     private sealed class Folder : IDisposable
     {
@@ -205,7 +207,7 @@ public sealed class PackDecodingTests
         foreach (string input in inputs) folder.Write(input, PublicationSafetyTests.PngHeader(4096, 4096));
         var variant = TexturePackVariant.FromFileName(Path.GetFileName(output))!;
         SourceOutputPlan plan = images ? new(output, "images", inputs) : new(output, "textures", inputs) { Pack = side is int largest ? variant with { MaximumDimension = largest } : variant };
-        var error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, plan, new(folder.Root), DateTime.UtcNow, Token));
+        var error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, plan, new(folder.Root), Token));
         Assert.StartsWith($"{inputs[0]}:", error.Message);
         Assert.DoesNotContain("MiB", error.Message);
     }
@@ -229,7 +231,7 @@ public sealed class PackDecodingTests
         {
             var variant = TexturePackVariant.FromFileName(Path.GetFileName(output))!;
             SourceOutputPlan plan = output == "image.zbd" ? new(output, "images", inputs) : new(output, "textures", inputs) { Pack = variant };
-            var built = SourceBuilder.Build(folder.Root, plan, snapshot, DateTime.UtcNow, Token);
+            var built = SourceBuilder.Build(folder.Root, plan, snapshot, Token);
             // The pack from every image decoded first, as builds made it before (the bft skin stays unpaletted).
             var expected = TexturePackBuilder.Build([.. sources.Select(s => new PackTexture(SourceBuilder.TextureName(s.Input), TextureSources.SortKey(s.Input),
                 PngDecoder.Decode(File.ReadAllBytes(Path.Combine(folder.Root, s.Input))), 0, plan.Family == "textures" && s.Input.Contains("/bft/", StringComparison.Ordinal)))], variant, Token);
@@ -252,7 +254,7 @@ public sealed class PackDecodingTests
         folder.Write("game/zrdr.zbd", "ORIGINAL ARCHIVE");
         // Once the original is in the backup (and, when installed, the new archive in its place), another program deletes the
         // backup or changes the original there; then publication fails.
-        var error = Assert.Throws<IOException>(() => SourceBuilder.Publish(staging, destination, ["zrdr.zbd", "m1/zrdr.zbd"], overwrite: true, Token, (step, index) =>
+        var error = Assert.Throws<IOException>(() => SourceBuilder.Publish(staging, destination, Staged(staging, ["zrdr.zbd", "m1/zrdr.zbd"]), overwrite: true, Token, (step, index) =>
         {
             if (step != "install" || index != (installed ? 1 : 0)) return;
             string backup = Assert.Single(Directory.GetDirectories(destination, ".zstudio-backup-*"));
@@ -280,7 +282,7 @@ public sealed class PackDecodingTests
         folder.Write("game/.zstudio-staging-test/m1/anim.zbd", "NEW ANIMATIONS");
         using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token);
         // After the first output is in place, another program writes over it and the export is canceled.
-        var error = Assert.ThrowsAny<OperationCanceledException>(() => SourceBuilder.Publish(staging, destination, ["zrdr.zbd", "m1/zrdr.zbd", "m1/anim.zbd"], overwrite: false, cancel.Token, (step, index) =>
+        var error = Assert.ThrowsAny<OperationCanceledException>(() => SourceBuilder.Publish(staging, destination, Staged(staging, ["zrdr.zbd", "m1/zrdr.zbd", "m1/anim.zbd"]), overwrite: false, cancel.Token, (step, index) =>
         {
             if (step != "replace" || index != 1) return;
             File.WriteAllText(first, "ANOTHER PROGRAM"); cancel.Cancel();

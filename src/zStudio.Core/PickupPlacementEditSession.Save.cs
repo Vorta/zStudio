@@ -8,10 +8,14 @@ public sealed record PickupPlacementSaveResult(IReadOnlyList<string> SavedPaths,
 public sealed partial class PickupPlacementEditSession
 {
     private sealed record StagedArchive(string Source, ArchiveState Archive, string Destination, string Temporary, byte[] Bytes, bool Replace);
-    internal Action<string, string, bool, string?> PublishFile { get; set; } = (temporary, destination, replace, backup) =>
+    /// <summary>
+    /// Puts a staged archive in place. It stays held against writes and renames from its check against the verified bytes
+    /// until it is in place (<see cref="VerifiedDocumentSave.Seal"/>); a replaced archive is kept as the backup when one is given.
+    /// </summary>
+    internal Action<SealedFile, string, bool, string?> PublishFile { get; set; } = static (staged, destination, replace, backup) =>
     {
-        if (replace) File.Replace(temporary, destination, backup);
-        else File.Move(temporary, destination, false);
+        if (replace) staged.Replace(destination, backup);
+        else staged.MoveTo(destination);
     };
 
     /// <summary>Checks both the supplied and resolved destination. Throws if its location cannot be verified.</summary>
@@ -77,13 +81,14 @@ public sealed partial class PickupPlacementEditSession
                 {
                     token.ThrowIfCancellationRequested();
                     ValidateDestination(output.Destination);
+                    using SealedFile file = VerifiedDocumentSave.Seal(output.Temporary, output.Bytes);
                     if (output.Replace)
                     {
                         await CheckBaselineAsync(output.Archive, token);
                         string? backup = createBackup ? output.Destination + "." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8] + ".bak" : null;
-                        PublishFile(output.Temporary, output.Destination, true, backup);
+                        PublishFile(file, output.Destination, true, backup);
                     }
-                    else PublishFile(output.Temporary, output.Destination, false, null);
+                    else PublishFile(file, output.Destination, false, null);
                     output.Archive.Target = output.Destination; output.Archive.SavedBytes = output.Bytes;
                     output.Archive.PendingCopy = false;
                     output.Archive.Stamp = FileStamp.ReadHolding(output.Destination, output.Bytes);

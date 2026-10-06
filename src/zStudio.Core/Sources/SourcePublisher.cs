@@ -33,8 +33,9 @@ public sealed class SourceRecoveryRequiredException(string message, string saveI
 /// Saves several source files of one project as a recoverable transaction. The new contents are journaled and staged in the
 /// project's <c>zstudio</c> folder first; then, under a project-wide lock, each original is moved aside only while it still
 /// has its expected content (other writers are excluded while it is compared) and each new file is moved in only while its
-/// name is free. A failure undoes exactly what the save did. If that is impossible, or the process ends, the journal stays
-/// and further saves are refused until <see cref="Resolve"/> rolls the save back, completes it or abandons it.
+/// name is free, its staged copy checked against the journaled content and held against other writers until it is in place.
+/// A failure undoes exactly what the save did. If that is impossible, or the process ends, the journal stays and further
+/// saves are refused until <see cref="Resolve"/> rolls the save back, completes it or abandons it.
 /// <para>
 /// Limits: a file name is briefly absent while it is published, and other programs do not see the files change at the
 /// same instant. Replaced files get new file-system metadata (attributes, timestamps, permissions). Publication never
@@ -142,6 +143,9 @@ public sealed partial class SourcePublisher
             {
                 Target file = changes[i]; reached = i;
                 Step("intent", i); log.Append("intent", i);
+                // The staged copy is checked against the journaled content before the original moves aside, and held until it
+                // is in place: no other program can write or rename it meanwhile, so the file installed is the one journaled.
+                using SealedFile? staged = file.Content is { } content ? Seal(StagedPath(staging, i), content, file) : null;
                 Step("hold", i);
                 SourceProject.RejectNestedLinks(root, file.Relative);
                 if (file.Expected is { } expected)
@@ -152,10 +156,10 @@ public sealed partial class SourcePublisher
                     log.Append("held", i);
                 }
                 else if (Path.Exists(file.Path)) throw CreatedDuringSave(file);
-                if (file.Bytes == null) continue;
+                if (staged == null) continue;
                 Step("install", i);
                 Directory.CreateDirectory(Path.GetDirectoryName(file.Path)!);
-                try { File.Move(StagedPath(staging, i), file.Path, false); }
+                try { staged.MoveTo(file.Path); }
                 catch (IOException ex) when (Path.Exists(file.Path)) { throw CreatedDuringSave(file, ex); }
                 installed[i] = true; log.Append("installed", i);
             }
@@ -175,6 +179,12 @@ public sealed partial class SourcePublisher
         }
     }
 
+    /// <summary>Holds a staged copy while it has <paramref name="content"/> (see <see cref="SealedFile"/>).</summary>
+    private static SealedFile Seal(string staged, JournalDigest content, Target file)
+    {
+        try { return SealedFile.Open(staged, content); }
+        catch (IOException ex) { throw new IOException($"The staged copy of {file.Name} was not installed: {ex.Message}", ex); }
+    }
     private static SourceConflictException ChangedDuringSave(Target file) => new($"{file.Name} changed on disk during the save; the save was undone. Reload to continue from the file on disk.", [file.Name]);
     private static SourceConflictException CreatedDuringSave(Target file, Exception? inner = null) => new($"{file.Name} was created by another program during the save; it was not replaced, and the save was undone.", [file.Name], inner);
     private static SourceRecoveryRequiredException Unfinished(string id, IReadOnlyList<string> files, Exception cause, IReadOnlyList<SourceRecoveryConflict>? conflicts = null) => new(
