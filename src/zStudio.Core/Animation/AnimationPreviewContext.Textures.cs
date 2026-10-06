@@ -42,26 +42,34 @@ public sealed partial class AnimationPreviewContext
         string mission = Path.GetFileName(Path.GetDirectoryName(World.Path)!);
         string entry = $"support\\tex_fx{mission}.gw";
         if (!scripts.ContainsKey(entry)) entry = "support\\tex_fx.gw";
-        ReadTextureScript(entry, scripts);
+        ReadTextureScript(entry, scripts, token);
     }
     /// <summary>
     /// Interpret only texture setup commands, with local node lookup and bounded source includes. Commands match as the
     /// retail interpreter matches them: case-sensitive prefixes (<c>source</c>; <c>FindNode</c>, <c>CycleTextureSetOn</c> and
-    /// the rest in DispatchCoreCommand 0x4c20a0), and <c>Quit</c> exactly.
+    /// the rest in DispatchCoreCommand 0x4c20a0), and <c>Quit</c> exactly. Scripts are followed as a build follows them,
+    /// <see cref="Worlds.WorldAssembler.MaximumScriptDepth"/> levels deep and <see cref="Worlds.WorldAssembler.MaximumInstructions"/>
+    /// instructions in all (a script sourced repeatedly runs each time); scripts beyond that stop the reading with a
+    /// diagnostic, so the preview says that the game may set up more cycles than it shows.
     /// </summary>
-    public void ReadTextureScript(string entry, IReadOnlyDictionary<string, ScriptContent> scripts)
+    public void ReadTextureScript(string entry, IReadOnlyDictionary<string, ScriptContent> scripts, CancellationToken token = default)
     {
-        HashSet<string> active = new(StringComparer.OrdinalIgnoreCase); int node = -1, material = -1, count = 0;
-        float speed = 15; bool loop = false; List<string> maps = [];
+        HashSet<string> active = new(StringComparer.OrdinalIgnoreCase); int node = -1, material = -1, count = 0, instructions = 0;
+        float speed = 15; bool loop = false; List<string> maps = []; string? stopped = null;
         void Publish() { if (material >= 0 && maps.Count == count && count > 0) MaterialCycles[material] = new(maps.ToArray(), speed, loop); }
         void Read(string path)
         {
-            if (active.Count >= 32 || !active.Add(path)) return;
+            if (stopped != null) return;
+            if (active.Count > Worlds.WorldAssembler.MaximumScriptDepth) { stopped = $"{JsonData.ShownText(path, 64)} is sourced more than {Worlds.WorldAssembler.MaximumScriptDepth} levels deep"; return; }
+            if (!active.Add(path)) return;
             try
             {
                 if (!scripts.TryGetValue(path, out var script)) return;
                 foreach (var args in script.Instructions)
                 {
+                    if (stopped != null) return;
+                    token.ThrowIfCancellationRequested();
+                    if (++instructions > Worlds.WorldAssembler.MaximumInstructions) { stopped = $"the scripts run more than {Worlds.WorldAssembler.MaximumInstructions:N0} instructions"; return; }
                     if (args.Length == 0) continue;
                     string command = args[0], arg = args.Length > 1 ? args[1] : "";
                     bool Is(string name) => command.StartsWith(name, StringComparison.Ordinal);
@@ -83,5 +91,6 @@ public sealed partial class AnimationPreviewContext
             finally { active.Remove(path); }
         }
         Read(entry);
+        if (stopped != null) Diagnostics.Add($"Texture effect scripts: {stopped}, more than a build follows; the preview shows only the texture cycles set up before that, and the game may set up others.");
     }
 }

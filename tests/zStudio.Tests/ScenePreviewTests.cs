@@ -62,7 +62,7 @@ public sealed class ScenePreviewTests
             ["mission"] = new([["source", "common"], ["CycleTextureSetSpeed", "12"], ["Quit"], ["CycleTextureSetSpeed", "99"]], ""),
             ["common"] = new([["FindNode", "first"], ["FindSubNode", "highA"], ["CycleTextureSetOn", "2"], ["CycleTextureSetLooping", "on"], ["CycleTextureSetMap", "a"], ["CycleTextureSetMap", "b"], ["source", "mission"]], "")
         };
-        string before = scene.Materials[0].ToJsonString(); context.ReadTextureScript("mission", scripts);
+        string before = scene.Materials[0].ToJsonString(); context.ReadTextureScript("mission", scripts, TestContext.Current.CancellationToken);
         Assert.Equal("b", context.MaterialCycles[0].At(1.0 / 12)); Assert.Equal(12, context.MaterialCycles[0].Speed);
         Assert.Equal(before, scene.Materials[0].ToJsonString());
         Assert.Same(context.MaterialCycles[0], context.Snapshot().MaterialCycles[0]);

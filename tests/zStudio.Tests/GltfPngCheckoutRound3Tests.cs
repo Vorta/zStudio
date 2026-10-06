@@ -194,7 +194,7 @@ public sealed class GltfPngCheckoutRound3Tests
 
     private static void AssertNoCheckout(SourceWorldFixture fixture)
     {
-        Assert.Empty(SourceBlender.Checkouts(fixture.Project));
+        Assert.Empty(SourceBlender.Checkouts(fixture.Project, Token));
         string export = Path.Combine(fixture.Project, "zstudio", "export");
         Assert.True(!Directory.Exists(export) || !Directory.EnumerateFileSystemEntries(export).Any());
     }

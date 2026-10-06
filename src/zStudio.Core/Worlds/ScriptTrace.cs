@@ -35,6 +35,8 @@ internal sealed class ScriptConditions
         return true;
     }
 
+    /// <summary>Whether <see cref="Expand"/> changes the token: it holds a pair of <c>%</c>, whose name only the run's macros resolve.</summary>
+    public static bool HasMacro(string token) => token.IndexOf('%') is >= 0 and int first && token.IndexOf('%', first + 1) > first;
     /// <summary>The longest argument a macro expansion can produce: the retail scratch buffer holds 1,024 bytes.</summary>
     public const int MaximumExpansion = 1023;
     /// <summary>

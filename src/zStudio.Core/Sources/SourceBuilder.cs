@@ -311,7 +311,7 @@ public static partial class SourceBuilder
             }
             // Before anything is replaced: what the built missions look up by name, and what the replaced files found.
             progress?.Report(new(selected.Count, selected.Count, "Checking lookups by name"));
-            var (lookups, changes) = await Task.Run(() => MissionLookups(results, packages, snapshot, destination, token), token);
+            var (lookups, changes, notChecked) = await Task.Run(() => MissionLookups(results, packages, snapshot, destination, token), token);
             // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
             // These notes come first: results show only the first notes, and many lookup changes must not hide them. Only a
             // report, read before publishing: a destination that cannot be listed must not turn a written export into a failure.
@@ -332,6 +332,7 @@ public static partial class SourceBuilder
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException("Nothing was written because some outputs failed: " + string.Join("; ", results.Where(r => r.Status == "failed").Select(r => $"{r.Path}: {r.Error}")));
                 Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token);
             }
+            notes.AddRange(notChecked);
             notes.AddRange(changes.Select(c => WorldLookups.Describe(c, " in the files this export replaced")));
             return new(destination, results) { Profile = profile.Name, Notes = notes, Lookups = lookups, LookupChanges = changes };
         }
@@ -376,48 +377,56 @@ public static partial class SourceBuilder
     /// </summary>
     internal static IReadOnlyList<SourceLookup> MissionLookups(string mission, Snapshot snapshot, Animation.AnimationPackage? animations, CancellationToken token, GameZWorld? world = null)
     {
-        var files = snapshot.Files();
-        var findNodes = WorldLookups.FindNodes(path => files.Exists(path) ? files.Read(path, token) : null, mission);
+        var findNodes = FindNodes(mission, snapshot, token);
         return WorldLookups.Resolve(mission, world ?? snapshot.World(mission, token).World, animations, findNodes, token);
     }
+    /// <summary>The names the scripts the game runs as it loads <paramref name="mission"/> look up (<see cref="WorldLookups.FindNodes"/>), read through the run's snapshot.</summary>
+    private static IReadOnlyList<(string Source, string Name)> FindNodes(string mission, Snapshot snapshot, CancellationToken token)
+    {
+        var files = snapshot.Files();
+        return WorldLookups.FindNodes(path => files.Exists(path) ? files.Read(path, token) : null, mission, token);
+    }
+    /// <summary>Why the lookups by name of a mission could not be checked, as a report says it.</summary>
+    internal static string LookupsUnchecked(string mission, Exception ex) =>
+        $"The lookups by name the game makes as it loads {mission} were not checked, so none of them is reported: {ex.Message}";
     /// <summary>
     /// The lookups by name of each mission whose world or animations were built, for the report those several nodes share,
     /// and those that find another node than in the destination's files this export replaces (read before they are replaced).
     /// The game binds a built world with the destination's animations when this export leaves them, and built animations
     /// with the destination's world likewise, so those are resolved together.
     /// </summary>
-    private static (List<SourceLookup> Lookups, List<SourceLookupChange> Changes) MissionLookups(IReadOnlyList<SourceExportResult> results, IReadOnlyDictionary<string, Animation.AnimationPackage> packages,
+    private static (List<SourceLookup> Lookups, List<SourceLookupChange> Changes, List<string> NotChecked) MissionLookups(IReadOnlyList<SourceExportResult> results, IReadOnlyDictionary<string, Animation.AnimationPackage> packages,
         Snapshot snapshot, string? destination, CancellationToken token)
     {
-        List<SourceLookup> lookups = []; List<SourceLookupChange> changes = [];
+        List<SourceLookup> lookups = []; List<SourceLookupChange> changes = []; List<string> notChecked = [];
         foreach (string mission in results.Where(r => r.Status == "built" && r.Family is "world" or "animations").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
             if (!snapshot.HasWorld(mission)) continue;
             bool worldBuilt = results.Any(r => r.Status == "built" && r.Family == "world" && r.Path.Equals($"{mission}/gamez.zbd", StringComparison.OrdinalIgnoreCase));
             (GameZWorld World, Animation.AnimationPackage? Animations)? previous;
-            IReadOnlyList<SourceLookup> resolved; GameZWorld after;
-            // Only a report: nothing it reads or resolves may fail the export.
+            IReadOnlyList<SourceLookup> resolved; GameZWorld after; IReadOnlyList<(string Source, string Name)> findNodes;
+            // Only a report: nothing it reads or resolves may fail the export, but lookups it could not check are not passed
+            // over in silence (a script it cannot follow may look up a node the export moves).
             try
             {
                 previous = destination == null ? null : Replaced(destination, mission, token);
                 after = worldBuilt || previous == null ? snapshot.World(mission, token).World : previous.Value.World;
-                resolved = MissionLookups(mission, snapshot, packages.GetValueOrDefault(mission) ?? previous?.Animations, token, after);
+                findNodes = FindNodes(mission, snapshot, token);
+                resolved = WorldLookups.Resolve(mission, after, packages.GetValueOrDefault(mission) ?? previous?.Animations, findNodes, token);
             }
-            catch (Exception ex) when (IsBuildFailure(ex)) { continue; }
+            catch (Exception ex) when (IsBuildFailure(ex)) { notChecked.Add(LookupsUnchecked(mission, ex)); continue; }
             lookups.AddRange(resolved.Where(l => l.Ambiguous));
             // Only a report: files that cannot be paired give no changes rather than failing the export.
             if (previous is { } replaced)
                 try
                 {
-                    var files = snapshot.Files();
-                    var findNodes = WorldLookups.FindNodes(path => files.Exists(path) ? files.Read(path, token) : null, mission);
                     var before = WorldLookups.Resolve(mission, replaced.World, replaced.Animations, findNodes, token);
                     changes.AddRange(WorldLookups.Changes(replaced.World, before, after, resolved, token));
                 }
                 catch (Exception ex) when (IsBuildFailure(ex)) { }
         }
-        return (lookups, changes);
+        return (lookups, changes, notChecked);
     }
     /// <summary>The destination's world and animations of a mission, when it holds a readable world (version 13 or 15).</summary>
     private static (GameZWorld World, Animation.AnimationPackage? Animations)? Replaced(string destination, string mission, CancellationToken token)

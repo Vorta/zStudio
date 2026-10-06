@@ -363,7 +363,7 @@ public static class SourceObjectEdits
         {
             // This mission's world script changes as usual (refused there when another mission runs it too).
             if (script.Equals(own, StringComparison.OrdinalIgnoreCase)) continue;
-            others = [.. MissionsRunning(workspace, script, token).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase))];
+            others = [.. MissionsRunning(workspace, script, mission, token)];
             if (others.Length > 0) { shared = script; break; }
         }
         if (shared == null) return null;
@@ -451,8 +451,8 @@ public static class SourceObjectEdits
         // DeleteTree before the world is written would free its nodes, but their slots would stay in the world's node table
         // (as freed slots with their names) where a world that never made it numbers the later nodes from them.
         foreach (string script in instructions.Select(i => i.Script).Distinct(StringComparer.OrdinalIgnoreCase))
-            if (MissionsRunning(target.Workspace, script, token).Where(m => !m.Equals(target.Mission, StringComparison.OrdinalIgnoreCase)).ToArray() is { Length: > 0 } others)
-                throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Length > 6 ? $" and {others.Length - 6} more" : "")}: taking its lines out would delete {node.Name} there too, "
+            if (MissionsRunning(target.Workspace, script, target.Mission, token) is { Count: > 0 } others)
+                throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Count > 6 ? $" and {others.Count - 6} more" : "")}: taking its lines out would delete {node.Name} there too, "
                     + $"and no line of this mission deletes it exactly (a DeleteTree before the world is written would leave its nodes' slots in the world's node table, which a world that never made it numbers differently). Delete it in the scripts directly.");
         ScriptEdits edits = new(target, token);
         foreach (var instruction in instructions) edits[instruction.Script].Comment(instruction);
@@ -1089,13 +1089,15 @@ public static class SourceObjectEdits
 
             void Run(string relative, int depth)
             {
-                if (depth > WorldAssembler.MaximumScriptDepth || Read(relative) is not { } bytes) return;
+                // Scripts the build refuses (sourced this deep, or running this many instructions) build nothing.
+                if (depth > WorldAssembler.MaximumScriptDepth) throw new InvalidDataException($"Scripts source each other more than {WorldAssembler.MaximumScriptDepth} levels deep.");
+                if (Read(relative) is not { } bytes) return;
                 foreach (var line in GameGenScriptSyntax.Parse(bytes).Lines)
                 {
                     if (written || hit != null) return;
                     if (!line.IsInstruction) continue;
                     token.ThrowIfCancellationRequested();
-                    if (++run > WorldAssembler.MaximumInstructions) { written = true; return; }
+                    if (++run > WorldAssembler.MaximumInstructions) throw new InvalidDataException("The scripts run too many instructions.");
                     var raw = line.Tokens; string command = raw[0];
                     if (!conditions.Runs(raw, variables)) continue;
                     string[] args = [.. raw.Skip(1).Select(t => ScriptConditions.Expand(t, variables))];
@@ -1407,8 +1409,8 @@ public static class SourceObjectEdits
         {
             if (mission == null || sharedChecked) return;
             sharedChecked = true;
-            var others = MissionsRunning(workspace, script, token).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (others.Length > 0) throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Length > 6 ? $" and {others.Length - 6} more" : "")}; editing it would change those missions too. Edit it in the script directly.");
+            var others = MissionsRunning(workspace, script, mission, token);
+            if (others.Count > 0) throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Count > 6 ? $" and {others.Count - 6} more" : "")}; editing it would change those missions too. Edit it in the script directly.");
         }
         public void Replace(SourceInstruction instruction, Dictionary<int, string> values)
         {
@@ -1514,31 +1516,80 @@ public static class SourceObjectEdits
     }
 
     /// <summary>
-    /// The missions whose world scripts (gamegen/mN.gs) run <paramref name="script"/>, themselves or through the scripts they
-    /// source (every source line counts, whatever condition guards it).
+    /// The missions other than <paramref name="mission"/> whose world scripts (gamegen/mN.gs) run <paramref name="script"/>,
+    /// themselves or through the scripts they source (every source line counts, whatever condition guards it). The whole
+    /// graph the other world scripts source is followed, each script read once, up to <see cref="SourceProject.MaximumFiles"/>
+    /// scripts and <see cref="WorldAssembler.MaximumInstructions"/> source lines in all. Beyond that, or when another
+    /// mission's scripts reach a source line naming its script with a macro (which only the build's run resolves) without
+    /// reaching <paramref name="script"/>, the edit is refused with <see cref="InvalidDataException"/> rather than taken as
+    /// this mission's alone. A script the build cannot read (it refuses the build that runs it) runs in no mission that builds.
     /// </summary>
-    internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, CancellationToken token)
+    internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, CancellationToken token) =>
+        MissionsRunning(workspace, script, mission, SourceProject.MaximumFiles, WorldAssembler.MaximumInstructions, token);
+    /// <param name="maximumScripts">The scripts the graph may name (<see cref="SourceProject.MaximumFiles"/>; smaller in tests).</param>
+    /// <param name="maximumSources">The source lines the graph may hold (<see cref="WorldAssembler.MaximumInstructions"/>; smaller in tests).</param>
+    internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, int maximumScripts, int maximumSources, CancellationToken token)
     {
-        List<string> missions = [];
         var worlds = SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase), token: token)
-            .Where(p => p.Count(c => c == '/') == 1);
+            .Where(p => p.Count(c => c == '/') == 1 && !Path.GetFileNameWithoutExtension(p).Equals(mission, StringComparison.OrdinalIgnoreCase)).ToArray();
+        // Every script the other worlds reach, read once: who sources it, and its first source line a macro names.
+        Dictionary<string, List<string>> sourcedBy = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, (int Line, string Name)> macros = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> named = new(worlds, StringComparer.OrdinalIgnoreCase); Queue<string> pending = new(worlds);
+        int sources = 0;
+        string Refused(string what) => $"The other missions' world scripts {what}, more than zStudio follows to tell whether they run {script}. Edit it in the scripts directly.";
+        while (pending.TryDequeue(out var file))
+        {
+            token.ThrowIfCancellationRequested();
+            // What the edited script sources does not decide whether a mission runs it.
+            if (file.Equals(script, StringComparison.OrdinalIgnoreCase)) continue;
+            GameGenScriptSyntax? syntax = null;
+            // A script the build cannot read (a path it refuses, or a file too large) fails every build that runs it.
+            try { if (workspace.Read(file, token) is { } bytes) syntax = GameGenScriptSyntax.Parse(bytes); }
+            catch (InvalidDataException) { }
+            foreach (var line in syntax?.Lines ?? [])
+            {
+                if (!line.IsInstruction || line.Tokens.Count < 2 || !ScriptConditions.IsSource(line.Tokens[0])) continue;
+                token.ThrowIfCancellationRequested();
+                if (++sources > maximumSources) throw new InvalidDataException(Refused($"hold more than {maximumSources:N0} source lines"));
+                string name = line.Tokens[1];
+                if (ScriptConditions.HasMacro(name)) { macros.TryAdd(file, (line.Number, name)); continue; }
+                string sourced = $"{SourceProject.GameGenFolder}/{name.Replace('\\', '/')}";
+                if (!sourcedBy.TryGetValue(sourced, out var by)) sourcedBy[sourced] = by = [];
+                if (by.Count == 0 || !by[^1].Equals(file, StringComparison.OrdinalIgnoreCase)) by.Add(file);
+                if (!named.Add(sourced)) continue;
+                if (named.Count > maximumScripts) throw new InvalidDataException(Refused($"source more than {maximumScripts:N0} different scripts"));
+                pending.Enqueue(sourced);
+            }
+        }
+        // The scripts that reach the edited one, and those that reach a source line a macro names (with that line's script):
+        // backwards along the sources, each script once.
+        var running = Reaching([script]);
+        var unknown = Reaching(macros.Keys);
+        List<string> missions = [];
         foreach (string world in worlds)
         {
-            HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase); Stack<string> pending = new([world]);
-            while (pending.TryPop(out var file))
+            string other = Path.GetFileNameWithoutExtension(world).ToLowerInvariant();
+            if (running.ContainsKey(world)) missions.Add(other);
+            else if (unknown.TryGetValue(world, out var file))
             {
-                token.ThrowIfCancellationRequested();
-                if (!seen.Add(file) || seen.Count > 512) continue;
-                if (file.Equals(script, StringComparison.OrdinalIgnoreCase)) { missions.Add(Path.GetFileNameWithoutExtension(world).ToLowerInvariant()); break; }
-                byte[]? bytes;
-                try { bytes = workspace.Read(file, token); }
-                catch (InvalidDataException) { continue; }
-                if (bytes == null) continue;
-                foreach (var line in GameGenScriptSyntax.Parse(bytes).Lines)
-                    if (line.IsInstruction && line.Tokens.Count > 1 && ScriptConditions.IsSource(line.Tokens[0]) && !line.Tokens[1].Contains('%'))
-                        pending.Push($"{SourceProject.GameGenFolder}/{line.Tokens[1].Replace('\\', '/')}");
+                var (number, name) = macros[file];
+                throw new InvalidDataException($"{script} may also run in {other}: {file} line {number} sources a script its macros name ({JsonData.ShownText(name, 64)}), which only the build's run resolves. Edit it in the script directly.");
             }
         }
         return missions;
+
+        // Each script that sources one of the scripts from (itself or through others), with the one it reaches.
+        Dictionary<string, string> Reaching(IEnumerable<string> from)
+        {
+            Dictionary<string, string> reached = new(StringComparer.OrdinalIgnoreCase); Queue<string> next = new();
+            foreach (string start in from) if (reached.TryAdd(start, start)) next.Enqueue(start);
+            while (next.TryDequeue(out var file))
+            {
+                token.ThrowIfCancellationRequested();
+                foreach (string by in sourcedBy.GetValueOrDefault(file) ?? []) if (reached.TryAdd(by, reached[file])) next.Enqueue(by);
+            }
+            return reached;
+        }
     }
 }

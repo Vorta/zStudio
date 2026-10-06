@@ -193,16 +193,52 @@ public static partial class SourceBlender
         return checkout;
     }
 
-    /// <summary>The project's checkouts, newest first; a folder without a readable manifest is left out.</summary>
-    public static IReadOnlyList<BlenderCheckout> Checkouts(string root)
+    /// <summary>
+    /// The files and folders a listing of checkouts and exports visits, and the files the manifests it reads list: at most
+    /// <see cref="SourceProject.MaximumScannedEntries"/>, as a scan of the project's sources. The token is observed at each.
+    /// </summary>
+    private sealed class ScanBudget(int maximum, CancellationToken token)
+    {
+        private long visited;
+        public void Visit(long entries = 1)
+        {
+            token.ThrowIfCancellationRequested();
+            if ((visited += entries) > maximum) throw new IOException(
+                $"{ExportFolder} holds more than {maximum:N0} files and folders, far more than Blender checkouts need. Delete the checkouts and exports you no longer need there (each checkout is one folder), then try again.");
+        }
+    }
+
+    /// <summary>
+    /// The project's checkouts, newest first; a folder without a readable manifest is left out. Every file and folder the
+    /// listing visits, and every file a manifest lists, counts towards <see cref="SourceProject.MaximumScannedEntries"/>
+    /// (beyond that it is refused with <see cref="IOException"/>), and <paramref name="token"/> is observed at each.
+    /// </summary>
+    public static IReadOnlyList<BlenderCheckout> Checkouts(string root, CancellationToken token = default) => Checkouts(root, new ScanBudget(SourceProject.MaximumScannedEntries, token));
+    /// <summary>
+    /// The project's checkouts (newest first), each with the exports in its outbox (newest first): one listing, bounded as
+    /// <see cref="Checkouts(string, CancellationToken)"/> is with the outboxes' files and folders counted too.
+    /// </summary>
+    public static IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)> CheckoutExports(string root, CancellationToken token = default) =>
+        CheckoutExports(root, SourceProject.MaximumScannedEntries, token);
+    /// <param name="maximumEntries">The files and folders the listing may visit (<see cref="SourceProject.MaximumScannedEntries"/>; smaller in tests).</param>
+    internal static IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)> CheckoutExports(string root, int maximumEntries, CancellationToken token)
+    {
+        ScanBudget budget = new(maximumEntries, token);
+        List<(BlenderCheckout, IReadOnlyList<BlenderExport>)> result = [];
+        foreach (var checkout in Checkouts(root, budget)) result.Add((checkout, Exports(checkout, budget)));
+        return result;
+    }
+    private static IReadOnlyList<BlenderCheckout> Checkouts(string root, ScanBudget budget)
     {
         string folder = Folder(root);
         if (!Directory.Exists(folder)) return [];
         List<BlenderCheckout> result = [];
-        foreach (var directory in new DirectoryInfo(folder).EnumerateDirectories())
+        // Files beside the checkouts cost as much to pass over as folders.
+        foreach (var entry in new DirectoryInfo(folder).EnumerateFileSystemInfos())
         {
-            if (directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
-            if (Read(directory.FullName) is { } checkout) result.Add(checkout);
+            budget.Visit();
+            if (entry is not DirectoryInfo directory || directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+            if (Read(directory.FullName, budget) is { } checkout) result.Add(checkout);
         }
         return result.OrderByDescending(c => c.CreatedUtc).ToArray();
     }
@@ -213,7 +249,8 @@ public static partial class SourceBlender
         if (new DirectoryInfo(folder) is { Exists: true } info && info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new InvalidDataException($"The checkout {id} is a link.");
         return Read(folder) ?? throw new InvalidDataException($"The project has no Blender checkout {id}.");
     }
-    private static BlenderCheckout? Read(string folder)
+    /// <param name="budget">When the manifest is one of a listing's: the files it lists count towards that listing's entries.</param>
+    private static BlenderCheckout? Read(string folder, ScanBudget? budget = null)
     {
         string path = Path.Combine(folder, ManifestName);
         if (!File.Exists(path) || new FileInfo(path).Length > 4 * 1024 * 1024) return null;
@@ -221,6 +258,7 @@ public static partial class SourceBlender
         {
             var manifest = JsonNode.Parse(File.ReadAllBytes(path)) as JsonObject;
             if (manifest?["format"]?.GetValue<string>() != "zstudio-blender-checkout") return null;
+            budget?.Visit((long)((manifest["files"] as JsonArray)?.Count ?? 0) + ((manifest["applied"] as JsonArray)?.Count ?? 0));
             var files = (manifest["files"] as JsonArray ?? []).Select(f => new BlenderCheckoutFile(f!["project"]!.GetValue<string>(), f["checkout"]!.GetValue<string>(), f["sha256"]!.GetValue<string>())).ToArray();
             var applied = (manifest["applied"] as JsonArray ?? []).Select(f => new BlenderCheckoutFile(f!["project"]!.GetValue<string>(), "", f["sha256"]!.GetValue<string>())).ToArray();
             return new(manifest["id"]!.GetValue<string>(), folder, manifest["model"]!.GetValue<string>(), DateTime.Parse(manifest["created"]!.GetValue<string>(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), files) { Applied = applied };
@@ -228,14 +266,23 @@ public static partial class SourceBlender
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or NullReferenceException) { return null; }
     }
 
-    /// <summary>The glTF files Blender exported into the checkout's outbox, newest first.</summary>
-    public static IReadOnlyList<BlenderExport> Exports(BlenderCheckout checkout)
+    /// <summary>
+    /// The glTF files Blender exported into the checkout's outbox, newest first. Every file and folder below the outbox
+    /// counts towards <see cref="SourceProject.MaximumScannedEntries"/> (beyond that the listing is refused with
+    /// <see cref="IOException"/>), and <paramref name="token"/> is observed at each.
+    /// </summary>
+    public static IReadOnlyList<BlenderExport> Exports(BlenderCheckout checkout, CancellationToken token = default) => Exports(checkout, new ScanBudget(SourceProject.MaximumScannedEntries, token));
+    private static IReadOnlyList<BlenderExport> Exports(BlenderCheckout checkout, ScanBudget budget)
     {
         if (!Directory.Exists(checkout.Outbox)) return [];
         List<BlenderExport> exports = [];
-        foreach (var file in new DirectoryInfo(checkout.Outbox).EnumerateFiles("*.*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }))
-            if (file.Extension.Equals(".gltf", StringComparison.OrdinalIgnoreCase) || file.Extension.Equals(".glb", StringComparison.OrdinalIgnoreCase))
+        // Folders count too: a tree of empty folders costs as much to walk as one of files.
+        foreach (var entry in new DirectoryInfo(checkout.Outbox).EnumerateFileSystemInfos("*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }))
+        {
+            budget.Visit();
+            if (entry is FileInfo file && (file.Extension.Equals(".gltf", StringComparison.OrdinalIgnoreCase) || file.Extension.Equals(".glb", StringComparison.OrdinalIgnoreCase)))
                 exports.Add(new(file.FullName, Path.GetRelativePath(checkout.Outbox, file.FullName).Replace('\\', '/'), file.LastWriteTimeUtc, file.Length));
+        }
         return exports.OrderByDescending(e => e.WrittenUtc).ToArray();
     }
 
@@ -278,7 +325,7 @@ public static partial class SourceBlender
     private static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, ref string? sealedFolderCreated, CancellationToken token)
     {
         SourceProject.RejectLinks(checkout.Folder);
-        var exports = Exports(checkout);
+        var exports = Exports(checkout, token);
         var chosen = export == null ? exports.FirstOrDefault() ?? throw new InvalidDataException($"Nothing was exported into {checkout.Outbox} yet.")
             : exports.FirstOrDefault(e => e.Relative.Equals(export.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"{export} is not an export in the outbox.");
         if (chosen.Gltf.EndsWith(".glb", StringComparison.OrdinalIgnoreCase))

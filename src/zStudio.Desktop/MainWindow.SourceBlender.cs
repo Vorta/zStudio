@@ -91,12 +91,22 @@ public partial class MainWindow
         return (next, plan, written);
     }
 
-    private static object CheckoutResult(BlenderCheckout checkout) => new
+    private static object CheckoutResult(BlenderCheckout checkout, IReadOnlyList<BlenderExport> exports) => new
     {
         id = checkout.Id, folder = checkout.Folder, model = checkout.Model, input = checkout.Input, outbox = checkout.Outbox, created = checkout.CreatedUtc,
         files = checkout.Files.Take(64).Select(f => new { project = f.Project, checkout = f.Checkout }).ToArray(), fileCount = checkout.Files.Count,
-        exports = SourceBlender.Exports(checkout).Take(16).Select(e => new { path = e.Relative, written = e.WrittenUtc, bytes = e.Bytes }).ToArray(), exportCount = SourceBlender.Exports(checkout).Count
+        exports = exports.Take(16).Select(e => new { path = e.Relative, written = e.WrittenUtc, bytes = e.Bytes }).ToArray(), exportCount = exports.Count
     };
+
+    /// <summary>
+    /// The project's checkouts with the exports in their outboxes, listed off the UI thread: a zstudio/export folder of many
+    /// checkouts or files is read on a worker, bounded and cancellable (<see cref="SourceBlender.CheckoutExports(string, CancellationToken)"/>).
+    /// </summary>
+    private static async Task<IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)>> CheckoutExportsAsync(string root, CancellationToken token)
+    {
+        try { return await Task.Run(() => SourceBlender.CheckoutExports(root, token), token); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+    }
 
     /// <summary>GUI: Edit in Blender for the object selected in a source world (its model), then show the checkout folder.</summary>
     private void EditInBlenderClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
@@ -114,9 +124,12 @@ public partial class MainWindow
     private void UpdateFromBlenderClick(object sender, RoutedEventArgs e) => _ = RunUi(async () =>
     {
         if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project first.");
-        var candidates = SourceBlender.Checkouts(session.Root).Select(c => (Checkout: c, Export: SourceBlender.Exports(c).FirstOrDefault())).Where(c => c.Export != null).ToArray();
+        var listed = await CheckoutExportsAsync(session.Root, shutdownToken);
+        // The world may have closed while the checkouts were listed.
+        if (doc.IsDisposed || !ViewModel.Documents.Contains(doc)) throw new StudioCommandException("context_changed", "The world was closed while the Blender exports were listed.");
+        var candidates = listed.Where(c => c.Exports.Count > 0).Select(c => (c.Checkout, Export: c.Exports[0])).ToArray();
         if (candidates.Length == 0) throw new StudioCommandException("not_ready", "No Blender export was found in the project's zstudio/export folder. Use Edit in Blender first.");
-        var (checkout, export) = candidates.OrderByDescending(c => c.Export!.WrittenUtc).First();
+        var (checkout, export) = candidates.OrderByDescending(c => c.Export.WrittenUtc).First();
         if (MessageBox.Show(this, $"Update {checkout.Model} from the Blender export {export!.Relative} ({export.WrittenUtc.ToLocalTime():g})?\n\nThe model, its buffer and changed textures are replaced in the project's unsaved edits; Save writes them.",
             "Update from Blender export", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
         (DocumentModel Document, BlenderUpdatePlan Plan, IReadOnlyList<string> Files) result;
@@ -147,13 +160,14 @@ public partial class MainWindow
             var checkout = await CheckoutForBlenderAsync(model, token);
             // Written: the job completes with the checkout, even when a cancel arrives as it finishes (the copy stays).
             CommitRunningJob();
-            return Result(CheckoutResult(checkout));
+            // A new checkout's outbox is empty: nothing to list.
+            return Result(CheckoutResult(checkout, []));
         });
-        Register(r, "source_blender_checkouts", "List the open source project's Blender checkouts (newest first) with the exports found in each outbox (newest first).", false, [], _ =>
+        Register(r, "source_blender_checkouts", "List the open source project's Blender checkouts (newest first) with the exports found in each outbox (newest first). The listing runs off the UI thread and observes cancellation; a zstudio/export folder holding more than 250,000 files and folders in all is refused with io_failed.", false, [], async (_, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
-            var checkouts = SourceBlender.Checkouts(root);
-            return Result(new { checkouts = checkouts.Take(32).Select(CheckoutResult).ToArray(), checkoutCount = checkouts.Count });
+            var listed = await CheckoutExportsAsync(root, token);
+            return Result(new { checkouts = listed.Take(32).Select(c => CheckoutResult(c.Checkout, c.Exports)).ToArray(), checkoutCount = listed.Count });
         });
         RegisterJob(r, "source_blender_update", "Update a checked-out model from what Blender exported into its outbox, as one undoable change of the project's workspace: the export is sealed (copied while checking it is complete), read as a build reads models, and becomes the model's glTF and buffer, with each texture PNG Blender added or changed; a texture other models use changes for them too (reported in notes). Files changed in the project since the checkout (other edits, or another update), existing project files the checkout did not hold (another model's texture of the same name), and an export without the model's engine attributes (Blender's Custom Properties off) are not applied unless force is true: the command fails with code conflict, naming all of them at once. The source world rebuilds and the result is its replacement document; an export the world cannot be built with is taken back. files lists the files the change wrote. Nothing is written until save_document.",
             [DocumentParameter, RevisionParameter, P("checkout", "string", "Checkout id from source_blender_checkout or source_blender_checkouts.", true), P("export", "string", "Export path relative to the outbox; default the newest."),

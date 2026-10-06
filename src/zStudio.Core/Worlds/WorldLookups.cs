@@ -104,34 +104,56 @@ public static class WorldLookups
     /// the scripts that one sources, in order, except macros (<c>%worldName%</c>). <paramref name="read"/> gives a project
     /// file's bytes, or null when it does not exist. Commands match as the retail interpreter matches them (case-sensitive
     /// prefixes: <c>source</c>, and <c>FindNode</c> in DispatchCoreCommand 0x4c20a0), and <c>Quit</c> (exactly) ends its script.
+    /// Scripts are followed as deep as a build follows them (<see cref="WorldAssembler.MaximumScriptDepth"/> levels) and
+    /// read up to <see cref="WorldAssembler.MaximumInstructions"/> instructions in all, each script once. Scripts sourced
+    /// deeper, more instructions, and a source line naming its script with a macro (which only the game's run resolves) or
+    /// outside the gamegen folder are refused with <see cref="InvalidDataException"/>: the lookups of a script are never
+    /// left out unread.
     /// </summary>
-    public static IReadOnlyList<(string Source, string Name)> FindNodes(Func<string, byte[]?> read, string mission)
+    public static IReadOnlyList<(string Source, string Name)> FindNodes(Func<string, byte[]?> read, string mission, CancellationToken token = default)
     {
-        List<(string, string)> names = []; HashSet<string> visited = new(StringComparer.OrdinalIgnoreCase);
+        List<(string, string)> names = []; HashSet<string> visited = new(StringComparer.OrdinalIgnoreCase); int instructions = 0;
         void Run(string path, int depth)
         {
-            if (depth > 8 || !visited.Add(path) || read(path) is not { } bytes) return;
+            if (!visited.Add(path)) return;
+            if (depth > WorldAssembler.MaximumScriptDepth)
+                throw new InvalidDataException($"{path}: the scripts source each other more than {WorldAssembler.MaximumScriptDepth} levels deep, deeper than a build follows them, so the names they look up are not known.");
+            token.ThrowIfCancellationRequested();
+            if (read(path) is not { } bytes) return;
             // Bounded like every script source before it is decoded.
             string text;
             try { text = GameGenScriptText.Decode(bytes); }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
             foreach (var tokens in GameGenScriptText.Tokenize(text))
             {
+                token.ThrowIfCancellationRequested();
+                if (++instructions > WorldAssembler.MaximumInstructions)
+                    throw new InvalidDataException($"{path}: the scripts hold more than {WorldAssembler.MaximumInstructions:N0} instructions, more than a build runs, so the names they look up are not known.");
                 if (tokens.Count > 0 && ScriptConditions.IsQuit(tokens[0])) return;
                 if (tokens.Count < 2) continue;
-                if (ScriptConditions.IsSource(tokens[0])) { if (Sourced(tokens[1]) is { } sourced) Run(sourced, depth + 1); }
+                if (ScriptConditions.IsSource(tokens[0]))
+                {
+                    // A script only the game's run names (a macro), or one outside the gamegen folder, cannot be read here.
+                    if (ScriptConditions.HasMacro(tokens[1]))
+                        throw new InvalidDataException($"{path} sources a script its macros name ({JsonData.ShownText(tokens[1], 64)}), which only the game's run resolves, so the names that script looks up are not known.");
+                    if (Sourced(tokens[1]) is { } sourced) Run(sourced, depth + 1);
+                    else if (Outside(tokens[1]))
+                        throw new InvalidDataException($"{path} sources {JsonData.ShownText(tokens[1], 64)}, outside the project's {SourceProject.GameGenFolder} folder, so the names that script looks up are not known.");
+                }
                 else if (tokens[0].StartsWith("FindNode", StringComparison.Ordinal) && !tokens[1].StartsWith('%')) names.Add((path, tokens[1]));
             }
         }
         Run(LoadScript(mission), 0);
         return names;
-        // The script a line names inside gamegen (".\" and repeated separators allowed); others are not followed.
+        // The script a line names inside gamegen (".\" and repeated separators allowed); null for none, or one outside it.
         static string? Sourced(string argument)
         {
             if (System.IO.Path.IsPathRooted(argument)) return null;
-            string[] parts = [.. argument.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries).Where(p => p != ".")];
+            string[] parts = Parts(argument);
             return parts.Length == 0 || parts.Contains("..") ? null : $"{SourceProject.GameGenFolder}/{string.Join('/', parts)}";
         }
+        static bool Outside(string argument) => System.IO.Path.IsPathRooted(argument) || Parts(argument).Contains("..");
+        static string[] Parts(string argument) => [.. argument.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries).Where(p => p != ".")];
     }
 
     /// <summary>

@@ -231,7 +231,7 @@ public sealed class GltfPngCheckoutBoundsTests
         fixture.Write("data/m2/textures/rock.png", PngEncoder.Encode(image, Token));
         var refused = Assert.Throws<InvalidDataException>(() => SourceBlender.Checkout(new SourceWorkspace(fixture.Project), Model, Token));
         Assert.Contains("data/m1/textures/rock.png", refused.Message); Assert.Contains("data/m2/textures/rock.png", refused.Message);
-        Assert.Single(SourceBlender.Checkouts(fixture.Project));
+        Assert.Single(SourceBlender.Checkouts(fixture.Project, Token));
         Assert.Single(Directory.GetDirectories(Path.Combine(fixture.Project, "zstudio", "export")));
     }
 

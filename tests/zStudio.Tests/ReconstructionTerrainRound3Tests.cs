@@ -202,7 +202,7 @@ public sealed class ReconstructionTerrainRound3Tests
         "FindNode a\n"u8.CopyTo(script);
         string load = WorldLookups.LoadScript("m1");
         InvalidDataException? error = null;
-        long allocated = Allocated(() => error = Assert.Throws<InvalidDataException>(() => WorldLookups.FindNodes(path => path == load ? script : null, "m1")));
+        long allocated = Allocated(() => error = Assert.Throws<InvalidDataException>(() => WorldLookups.FindNodes(path => path == load ? script : null, "m1", Token)));
         Assert.StartsWith(load + ":", error!.Message, StringComparison.Ordinal);
         Assert.True(allocated <= 1 << 20, $"{allocated:N0} bytes");
     }

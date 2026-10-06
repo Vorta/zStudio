@@ -163,7 +163,7 @@ public sealed class EngineLookupTests
             ["gamegen/support/tex_fxm1.gw"] = "FindNode ramp\nQuit\nFindNode skipped\n",
             ["gamegen/support/skipped.gw"] = "FindNode wrong\n",
         };
-        var findNodes = WorldLookups.FindNodes(p => scripts.TryGetValue(p, out var text) ? Encoding.Latin1.GetBytes(text) : null, "m1");
+        var findNodes = WorldLookups.FindNodes(p => scripts.TryGetValue(p, out var text) ? Encoding.Latin1.GetBytes(text) : null, "m1", Token);
         Assert.Equal([("gamegen/support/tex_fxm1.gw", "ramp"), ("gamegen/m1_zbd.gs", "prefix"), ("gamegen/m1_zbd.gs", "afterquit")], findNodes);
 
         // The texture effects the preview runs: lowercase commands do nothing, and only on or true turn looping on.
@@ -176,7 +176,7 @@ public sealed class EngineLookupTests
         {
             ["mission"] = new([["findnode", "second"], ["FindNode", "first"], ["CycleTextureSetOn", "1"], ["CycleTextureSetLooping", "1"], ["CycleTextureSetMap", "a"],
                 ["FindNode", "second"], ["CycleTextureSetOn", "1"], ["CycleTextureSetLooping", "TRUE"], ["CycleTextureSetMap", "b"], ["cycletexturesetspeed", "99"]], ""),
-        });
+        }, Token);
         var (first, second) = (context.MaterialCycles[0], context.MaterialCycles[1]);
         Assert.Equal(["a"], first.Textures); Assert.Equal(["b"], second.Textures);
         Assert.Equal((false, true, 15f, 15f), (first.Loop, second.Loop, first.Speed, second.Speed));

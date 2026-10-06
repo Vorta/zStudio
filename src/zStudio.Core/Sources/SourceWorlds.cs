@@ -337,10 +337,16 @@ public static partial class SourceWorlds
             if (slots.TryGetValue(node, out int slot)) provenance[slot] = origin;
             else if (origin.Applied.Count > 0 || origin.Named.Count > 0) freed.Add(origin);
         // What the mission looks up by name when the game loads it, so an edit that changes what a lookup finds can say so.
-        // Only the world must build: lookups the project's scripts or animations keep from being resolved are not reported.
+        // Only the world must build: lookups the project's scripts or animations keep from being resolved are not compared,
+        // and the world's output says so (a script they cannot follow may look up a node an edit moves).
         IReadOnlyList<SourceLookup> lookups;
         try { lookups = await Task.Run(() => SourceBuilder.MissionLookups(mission, snapshot, animations, token), token).ConfigureAwait(false); }
-        catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex)) { ThrowIfChanged(ex); lookups = []; }
+        catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex))
+        {
+            ThrowIfChanged(ex); lookups = [];
+            int at = results.FindIndex(r => r.Family == "world");
+            if (at >= 0) results[at] = results[at] with { Warnings = [.. results[at].Warnings, SourceBuilder.LookupsUnchecked(mission, ex)] };
+        }
         // Before the build is shown, as before an export publishes: the project plans the same outputs from the same sources (none
         // added, removed or renamed since they were planned), and every file read is as it was read. The stamps returned are
         // those just verified.

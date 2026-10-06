@@ -235,7 +235,7 @@ public sealed class NameLookupTests
             ["gamegen/support/tex_fxm1.gw"] = "source support\\tex_fx.gw\nFindNode %worldName%\nFindNode ramp\nObject3DSetScroll on 0.0 1.5\nQuit\n",
             ["gamegen/support/tex_fx.gw"] = "FindNode door\nQuit\n",
         };
-        var findNodes = WorldLookups.FindNodes(p => scripts.TryGetValue(p, out var text) ? Encoding.Latin1.GetBytes(text) : null, "m1");
+        var findNodes = WorldLookups.FindNodes(p => scripts.TryGetValue(p, out var text) ? Encoding.Latin1.GetBytes(text) : null, "m1", Token);
         Assert.Equal([("gamegen/support/tex_fx.gw", "door"), ("gamegen/support/tex_fxm1.gw", "ramp")], findNodes);
         var package = new AnimationPackage { Prefix = [], Tail = [] };
         package.Entries.AddRange([Entry(0, ""), Entry(1, "door", 0, "ramp")]);
