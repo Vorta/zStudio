@@ -35,38 +35,90 @@ public sealed record TerrainConversionPlan(string Database, string Surfaces, str
 /// the horizon and other landmarks, transformed nodes or nodes with children, references, shared nodes, and any piece
 /// a script, resource or animation names (or matches by wildcard).
 /// </summary>
-public static class SourceTerrainConversion
+public static partial class SourceTerrainConversion
 {
-    /// <summary>Names and wildcard patterns (each * one digit) the given text sources mention.</summary>
+    [GeneratedRegex(@"[A-Za-z0-9_\-\.\*%]+", RegexOptions.CultureInvariant)] private static partial Regex Word();
+    /// <summary>
+    /// The most distinct wildcard patterns the sources may hold (the releases' projects hold under 400 in all their files):
+    /// planning matches every piece against each one.
+    /// </summary>
+    internal const int MaximumPatterns = 4096;
+
+    /// <summary>
+    /// Names and wildcard patterns (each * one digit) the given sources mention. A text source larger than the text-source
+    /// limit (<see cref="SourceProject.MaximumSourceTextBytes"/>) is refused before it is decoded; a compiled resource is read
+    /// as its decoded strings, never as text.
+    /// </summary>
     public static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) References(SourceWorkspace workspace, IEnumerable<string> files, CancellationToken token = default)
     {
-        HashSet<string> names = new(StringComparer.Ordinal); List<Regex> patterns = [];
+        HashSet<string> names = new(StringComparer.Ordinal), wildcards = new(StringComparer.Ordinal); List<Regex> patterns = [];
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
-            if (!(file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gw", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase))) continue;
+            bool resource = file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase);
+            bool keyframes = file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase);
+            if (!(resource || keyframes || file.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gw", StringComparison.OrdinalIgnoreCase))) continue;
             if (workspace.Read(file, token) is not { } bytes) continue;
             // Every word, and also a resource's strings whole (names may hold spaces) and a script's tokens (names may hold
             // other characters): more names only keep more pieces as objects.
-            IEnumerable<string> tokens = Regex.Matches(Encoding.Latin1.GetString(bytes), @"[A-Za-z0-9_\-\.\*%]+").Select(m => m.Value);
-            if (file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase))
+            if (resource && !ZrdText.LooksLikeText(bytes))
             {
-                try { tokens = tokens.Concat(Strings(ZrdText.LooksLikeText(bytes) ? ZrdText.Parse(Encoding.Latin1.GetString(bytes), token) : ZrdDecoder.Read(bytes, token))).ToList(); }
+                // Compiled zReader data names what its strings hold, as its text form would: their words in order, then each whole.
+                ZrdNode tree;
+                try { tree = ZrdDecoder.Read(bytes, token); }
+                catch (InvalidDataException ex)
+                {
+                    // Not readable as zReader data: its words, as for any text, within the same limit.
+                    if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"{file} is not valid zReader data ({ex.Message}), so the names it holds are unknown.", ex);
+                    Words(Encoding.Latin1.GetString(bytes));
+                    continue;
+                }
+                foreach (string text in InOrder(tree)) { token.ThrowIfCancellationRequested(); Words(text); }
+                foreach (string text in InOrder(tree)) Add(text);
+                continue;
+            }
+            if (bytes.Length > SourceProject.MaximumSourceTextBytes)
+                throw new InvalidDataException($"{file} exceeds {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB, the most a text source may hold, so the names it mentions are unknown.");
+            string source = Encoding.Latin1.GetString(bytes);
+            Words(source);
+            if (resource)
+            {
+                try { foreach (string text in Strings(ZrdText.Parse(source, token))) Add(text); }
                 catch (InvalidDataException) { }
             }
-            else if (!file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase))
-                tokens = tokens.Concat(GameGenScriptSyntax.Parse(bytes).Lines.Where(l => l.IsInstruction).SelectMany(l => l.Tokens)).ToList();
-            foreach (string t in tokens)
-            {
-                if (t.Contains('*')) patterns.Add(new Regex("^" + Regex.Escape(t).Replace("\\*", "[0-9]") + "$", RegexOptions.CultureInvariant));
-                else names.Add(t);
-            }
+            else if (!keyframes)
+                foreach (var line in GameGenScriptSyntax.Parse(source).Lines.Where(l => l.IsInstruction)) foreach (string t in line.Tokens) Add(t);
         }
         return (names, patterns);
+
+        void Words(string text) { foreach (Match m in Word().Matches(text)) Add(m.Value); }
+        // Each distinct pattern once.
+        void Add(string t)
+        {
+            if (!t.Contains('*')) { names.Add(t); return; }
+            if (!wildcards.Add(t)) return;
+            if (wildcards.Count > MaximumPatterns)
+                throw new InvalidDataException($"The sources hold more than {MaximumPatterns:N0} wildcard patterns, and every piece would be matched against each; terrain conversion is refused.");
+            patterns.Add(new Regex("^" + Regex.Escape(t).Replace("\\*", "[0-9]") + "$", RegexOptions.CultureInvariant));
+        }
         static IEnumerable<string> Strings(ZrdNode node)
         {
             Stack<ZrdNode> pending = new([node]);
             while (pending.TryPop(out var n)) { if (n.Kind == ZrdKind.String) yield return n.Text; foreach (var c in n.Children) pending.Push(c); }
+        }
+        // The tree's strings in the order its source lists them, holding only the path to each (a compiled tree may be wide).
+        static IEnumerable<string> InOrder(ZrdNode root)
+        {
+            if (root.Kind == ZrdKind.String) { yield return root.Text; yield break; }
+            Stack<(ZrdNode Node, int Next)> path = new([(root, 0)]);
+            while (path.TryPop(out var at))
+            {
+                if (at.Next >= at.Node.Children.Count) continue;
+                path.Push((at.Node, at.Next + 1));
+                var child = at.Node.Children[at.Next];
+                if (child.Kind == ZrdKind.String) yield return child.Text;
+                else if (child.Children.Count > 0) path.Push((child, 0));
+            }
         }
     }
 

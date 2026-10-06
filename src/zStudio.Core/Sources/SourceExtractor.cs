@@ -47,10 +47,14 @@ public static class SourceExtractor
         // Require positive RECOIL evidence: prepared scripts, a version-15 world or a version-28 animation program.
         if (!probes.Any(f => f.Probe is { Family: FormatFamily.Scripts, Version: 7 } or { Family: FormatFamily.GameZ, Version: 15 } or { Family: FormatFamily.Animation, Version: 28 }))
             throw new InvalidDataException("No RECOIL game data was found. Choose the folder that contains interp.zbd, zrdr.zbd and the mission folders.");
-        if (!CarriesDefinitions(files)) throw new InvalidDataException(NotOriginal);
+        // The checks above decided on the files as the folder was listed; each file is read again when its sources are
+        // reconstructed and must still be that file (see ReadInputAsync), and an archive the definitions check read whole
+        // must still hold what it read.
+        Dictionary<string, string> checkedContent = new(StringComparer.Ordinal);
+        if (!await CarriesDefinitionsAsync(files, checkedContent, token)) throw new InvalidDataException(NotOriginal);
         Writes writes = new(projectRoot);
         writes.CreateDirectory(projectRoot);
-        try { return await ExtractFilesAsync(projectRoot, files, [.. all.Where(f => !GameFile(f.Relative)).Select(f => f.Relative)], writes, retainedBudget, progress, token); }
+        try { return await ExtractFilesAsync(projectRoot, files, checkedContent, [.. all.Where(f => !GameFile(f.Relative)).Select(f => f.Relative)], writes, retainedBudget, progress, token); }
         catch (Exception stopped)
         {
             // The folder was new or empty: remove everything this reconstruction wrote so it can be retried. Only that: a file
@@ -75,21 +79,51 @@ public static class SourceExtractor
     /// carry the animation definitions (<c>anim.zrd</c>) every <c>anim.zbd</c> was compiled from. zStudio's exports leave
     /// the definitions in the project (<c>.zad</c>), so the tree only ever goes on to be exported, not unpacked again.
     /// </summary>
-    private static bool CarriesDefinitions(List<(string Path, string Relative)> files)
+    /// <param name="read">Receives the digest of each archive read (by path), which it must still have when it is reconstructed.</param>
+    private static async Task<bool> CarriesDefinitionsAsync(List<Input> files, Dictionary<string, string> read, CancellationToken token)
     {
         HashSet<string> carrying = new(StringComparer.OrdinalIgnoreCase);
-        foreach (var (path, relative) in files.Where(f => Path.GetFileName(f.Relative).Equals("zrdr.zbd", StringComparison.OrdinalIgnoreCase)))
+        foreach (var file in files.Where(f => Path.GetFileName(f.Relative).Equals("zrdr.zbd", StringComparison.OrdinalIgnoreCase)))
         {
+            token.ThrowIfCancellationRequested();
+            byte[] bytes = await ReadInputAsync(file, null, token);
+            read[file.Path] = SourceProject.Sha256(bytes);
             try
             {
-                if (ArchiveSources.Read(File.ReadAllBytes(path)).Any(m => m.Name.Equals("anim.zrd", StringComparison.OrdinalIgnoreCase)))
-                    carrying.Add(Path.GetDirectoryName(relative) ?? "");
+                if (ArchiveSources.Read(bytes).Any(m => m.Name.Equals("anim.zrd", StringComparison.OrdinalIgnoreCase)))
+                    carrying.Add(Path.GetDirectoryName(file.Relative) ?? "");
             }
             catch (InvalidDataException) { }
         }
         // Every mission's animations need the definitions beside them.
         return carrying.Count > 0 && files.Where(f => Path.GetFileName(f.Relative).Equals("anim.zbd", StringComparison.OrdinalIgnoreCase))
             .All(f => carrying.Contains(Path.GetDirectoryName(f.Relative) ?? ""));
+    }
+
+    /// <summary>A game file as the folder was listed: its size and modification time, which it must still have when it is read.</summary>
+    internal sealed record Input(string Path, string Relative, long Length, DateTime Modified);
+
+    /// <summary>
+    /// A game file's bytes, read while no other program can write it. The checks before reconstruction decided on the files
+    /// as the folder was listed, so a file that is no longer that file (gone, or another size or modification time), or no
+    /// longer holds what a check read whole (<paramref name="checkedDigest"/>), is refused rather than reconstructed from
+    /// data nothing checked: an original archive replaced by an exported one would otherwise give an incomplete project.
+    /// </summary>
+    private static async Task<byte[]> ReadInputAsync(Input file, string? checkedDigest, CancellationToken token)
+    {
+        FileStream stream;
+        try { stream = new(file.Path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous | FileOptions.SequentialScan); }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { throw Changed(ex); }
+        await using (stream)
+        {
+            if (stream.Length != file.Length || File.GetLastWriteTimeUtc(stream.SafeFileHandle) != file.Modified) throw Changed();
+            byte[] bytes = new byte[file.Length];
+            await stream.ReadExactlyAsync(bytes, token);
+            if (checkedDigest != null && SourceProject.Sha256(bytes) != checkedDigest) throw Changed();
+            return bytes;
+        }
+        IOException Changed(Exception? inner = null) =>
+            new($"{file.Relative} changed after the game data folder was checked, so it is not the file that was checked. Reconstruct again once no other program is changing the folder.", inner);
     }
 
     /// <summary>
@@ -207,6 +241,7 @@ public static class SourceExtractor
     /// <summary>A mission's world (<c>mN/gamez.zbd</c>), the worlds reconstruction reads.</summary>
     private static bool MissionWorld(string relative) => TextureSources.MissionNumber(relative) > 0 && Path.GetFileName(relative).Equals("gamez.zbd", StringComparison.OrdinalIgnoreCase);
 
+    /// <param name="checkedContent">The digest of each file the checks before reconstruction read whole (by path), which it must still have.</param>
     /// <param name="elsewhere">Files outside the game's folders, listed as not reconstructed.</param>
     /// <param name="budget">
     /// The most the files read may keep in memory together (<see cref="MaximumRetainedBytes"/>). Each file is counted with
@@ -216,7 +251,7 @@ public static class SourceExtractor
     /// decoded, since several members may share one payload). Each archive member also counts what is kept of it whatever it
     /// holds (the source written, or a note), so an archive of many empty members is counted too.
     /// </param>
-    private static async Task<SourceReconstructionReport> ExtractFilesAsync(string projectRoot, List<(string Path, string Relative)> files, List<string> elsewhere, Writes writes, long budget, IProgress<SourceProgress>? progress, CancellationToken token)
+    private static async Task<SourceReconstructionReport> ExtractFilesAsync(string projectRoot, List<Input> files, IReadOnlyDictionary<string, string> checkedContent, List<string> elsewhere, Writes writes, long budget, IProgress<SourceProgress>? progress, CancellationToken token)
     {
         Context context = new(projectRoot, writes, token);
         writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.DataFolder)); writes.CreateDirectory(Path.Combine(projectRoot, SourceProject.GameGenFolder));
@@ -230,8 +265,8 @@ public static class SourceExtractor
         long retained = 0;
         for (int i = 0; i < files.Count; i++)
         {
-            token.ThrowIfCancellationRequested(); var (path, relative) = files[i]; progress?.Report(new(i, files.Count, relative));
-            byte[] bytes = await File.ReadAllBytesAsync(path, token);
+            token.ThrowIfCancellationRequested(); var file = files[i]; string path = file.Path, relative = file.Relative; progress?.Report(new(i, files.Count, relative));
+            byte[] bytes = await ReadInputAsync(file, checkedContent.GetValueOrDefault(path), token);
             var probe = FormatRegistry.Probe(bytes.AsSpan(0, Math.Min(36, bytes.Length)), bytes.AsSpan(Math.Max(0, bytes.Length - 8)), bytes.Length, Path.GetExtension(path));
             string? family = null;
             try
@@ -322,20 +357,22 @@ public static class SourceExtractor
     }
     private static bool IsWave(ReadOnlySpan<byte> bytes) => bytes.Length >= 12 && bytes[..4].SequenceEqual("RIFF"u8) && bytes.Slice(8, 4).SequenceEqual("WAVE"u8);
 
-    /// <summary>Shipped files in a stable order, relative with forward slashes. Links are refused.</summary>
-    internal static List<(string Path, string Relative)> Corpus(string root)
+    /// <summary>Shipped files in a stable order, relative with forward slashes, with their size and modification time. Links are refused.</summary>
+    internal static List<Input> Corpus(string root)
     {
         EnumerationOptions options = new() { RecurseSubdirectories = true, IgnoreInaccessible = false, AttributesToSkip = 0 };
-        List<(string, string)> files = [];
+        List<Input> files = [];
         foreach (var info in new DirectoryInfo(root).EnumerateFileSystemInfos("*", options))
         {
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{info.FullName} is a link; reconstruct from a folder of regular files.");
             if (info is not FileInfo file) continue;
+            // As the file itself records them (a directory listing may lag behind), the way they are compared when it is read.
+            file.Refresh();
             if (file.Length > FormatRegistry.MaximumDocumentBytes) throw new IOException($"{file.FullName} exceeds 512 MiB.");
-            files.Add((file.FullName, Path.GetRelativePath(root, file.FullName).Replace('\\', '/')));
+            files.Add(new(file.FullName, Path.GetRelativePath(root, file.FullName).Replace('\\', '/'), file.Length, file.LastWriteTimeUtc));
             if (files.Count > MaximumFiles) throw new IOException($"The game data folder has more than {MaximumFiles:N0} files.");
         }
-        return files.OrderBy(f => f.Item2, StringComparer.OrdinalIgnoreCase).ThenBy(f => f.Item2, StringComparer.Ordinal).ToList();
+        return files.OrderBy(f => f.Relative, StringComparer.OrdinalIgnoreCase).ThenBy(f => f.Relative, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>

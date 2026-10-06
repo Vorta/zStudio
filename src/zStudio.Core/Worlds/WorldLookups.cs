@@ -111,7 +111,11 @@ public static class WorldLookups
         void Run(string path, int depth)
         {
             if (depth > 8 || !visited.Add(path) || read(path) is not { } bytes) return;
-            foreach (var tokens in GameGenScriptText.Tokenize(Encoding.Latin1.GetString(bytes)))
+            // Bounded like every script source before it is decoded.
+            string text;
+            try { text = GameGenScriptText.Decode(bytes); }
+            catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
+            foreach (var tokens in GameGenScriptText.Tokenize(text))
             {
                 if (tokens.Count > 0 && ScriptConditions.IsQuit(tokens[0])) return;
                 if (tokens.Count < 2) continue;

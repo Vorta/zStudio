@@ -46,6 +46,17 @@ internal static partial class WorldSources
     /// </summary>
     public static bool IsReference(WorldNode node) => node.Class == WorldNodeClass.Object3D && node.Model == null && node.Name.EndsWith(".flt", StringComparison.OrdinalIgnoreCase);
     private static string Stem(string file) => System.IO.Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).ToLowerInvariant();
+    /// <summary>
+    /// What tells a file's canonical content apart: the first 16 hex digits of the SHA-256 of its glTF JSON followed by its
+    /// binary buffer, hashed as written rather than copied into one buffer.
+    /// </summary>
+    internal static string ContentHash(GltfDocument canonical)
+    {
+        var (json, bin) = canonical.Write("content.bin");
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(json); hash.AppendData(bin);
+        return Convert.ToHexStringLower(hash.GetHashAndReset())[..16];
+    }
 
     /// <param name="textureFiles">Every texture source written (project paths).</param>
     /// <param name="transparency">How a texture source (project path) is transparent, so viewers draw its materials as the game does.</param>
@@ -206,8 +217,7 @@ internal static partial class WorldSources
                 Group = groups.Contains,
                 Canonical = true,
             });
-            var (json, bin) = doc.Write("content.bin");
-            return Convert.ToHexStringLower(SHA256.HashData([.. json, .. bin]))[..16];
+            return ContentHash(doc);
         }
 
         // Loaded files are found through the model directories. A file goes where its script pointed them; otherwise a
