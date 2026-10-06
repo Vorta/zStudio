@@ -124,8 +124,10 @@ public static partial class SourceBuilder
     /// <summary>
     /// Every project file read by one run. A file read by several outputs must have the same content each time, and no
     /// file may change before the run publishes, so an export always corresponds to one state of the project.
+    /// <paramref name="changed"/> makes the error for a file that changed during the run (another run than an export, such
+    /// as a Blender checkout, says what to do again); by default it is an export's.
     /// </summary>
-    internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null)
+    internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null, Func<string, Exception>? changed = null)
     {
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Every project file the run read or asked about, from the overlay or the disk: what its outputs depend on.</summary>
@@ -146,8 +148,8 @@ public static partial class SourceBuilder
             var stamp = FileStamp.Read(path);
             if (stamp.Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} exceeds 512 MiB.");
             byte[] bytes = File.ReadAllBytes(path); string sha = SourceProject.Sha256(bytes);
-            if (FileStamp.Read(path) != stamp) throw new InvalidDataException($"{relative} changed while it was read; export again.");
-            if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw new InvalidDataException($"{relative} changed while exporting; export again.");
+            if (FileStamp.Read(path) != stamp) throw changed?.Invoke(relative) ?? new InvalidDataException($"{relative} changed while it was read; export again.");
+            if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw changed?.Invoke(relative) ?? new InvalidDataException($"{relative} changed while exporting; export again.");
             files[relative] = (sha, stamp); return bytes;
         }
         /// <summary>
@@ -227,7 +229,7 @@ public static partial class SourceBuilder
             {
                 token.ThrowIfCancellationRequested();
                 string path = SourceProject.Resolve(root, relative);
-                if (!File.Exists(path) || FileStamp.Read(path) != entry.Stamp) throw new InvalidDataException($"{relative} changed while exporting; nothing was written.");
+                if (!File.Exists(path) || FileStamp.Read(path) != entry.Stamp) throw changed?.Invoke(relative) ?? new InvalidDataException($"{relative} changed while exporting; nothing was written.");
             }
         }
     }

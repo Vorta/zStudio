@@ -57,12 +57,18 @@ public static partial class SourceBlender
     /// The copy shows transparent textures and, for a model a script loads as a pickup, hides its collision volume as the
     /// game does (<see cref="Worlds.WorldGltf.ApplyPresentation"/>), also for models reconstructed before reconstruction
     /// wrote that; it states every node's zone, so a node Blender moves keeps it (<see cref="Worlds.WorldGltf.ExplicitZones"/>).
-    /// The project's file is not changed.
+    /// The model is read as a build reads it before anything is copied (<see cref="GltfDocument.Read(ReadOnlySpan{byte}, Func{string, byte[]}, CancellationToken)"/>),
+    /// so what the checkout copies is bounded like a model: at most 4,096 buffers, a texture pack's 4,096 textures and
+    /// 512 MiB in all, the most an update from it takes. Every file is read once, from one snapshot of the project (the
+    /// workspace's unsaved edits, the disk for the rest), and a file another program changes before the copy is complete
+    /// refuses the checkout with <see cref="SourceFileChangedException"/>. The project's file is not changed.
     /// </summary>
-    public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default)
+    public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default) => Checkout(workspace, model, token, null);
+    /// <summary>As <see cref="Checkout(SourceWorkspace, string, CancellationToken)"/>; <paramref name="read"/> is told each project file the checkout has read (tests change files there).</summary>
+    internal static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read)
     {
         string? created = null;
-        try { return Checkout(workspace, model, token, ref created); }
+        try { return Checkout(workspace, model, token, read, ref created); }
         catch when (created != null)
         {
             // A canceled or failed checkout leaves no partial folder behind (listings skip folders without a manifest).
@@ -70,21 +76,45 @@ public static partial class SourceBlender
             throw;
         }
     }
-    private static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, ref string? created)
+    private static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read, ref string? created)
     {
         model = SourceWorkspace.Normalize(model);
         workspace.CheckEditable(model);
         if (!model.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{model} is not a .gltf model; Blender checkouts work on glTF files with separate buffers and textures.");
-        byte[] json = workspace.Read(model, token) ?? throw new InvalidDataException($"{model} does not exist.");
+        // One state of the project: the edits the workspace holds now, and the files on disk, each read once and unchanged
+        // until the copies are complete (edits in zStudio meanwhile are the caller's to check: ContentRevision).
+        string checkedOut = model;
+        SourceBuilder.Snapshot snapshot = new(workspace.Root, workspace.Overlay(),
+            relative => new SourceFileChangedException($"{relative} changed while {checkedOut} was checked out; check it out again.", [relative]));
+        var project = snapshot.Files();
+        // Everything read counts, copied or only compared: together at most what an update takes.
+        long total = 0;
+        byte[]? Load(string relative)
+        {
+            if (!project.Exists(relative)) return null;
+            byte[] bytes = project.Read(relative, token);
+            if ((total += bytes.Length) > MaximumExportBytes)
+                throw new InvalidDataException($"{checkedOut} and the buffers and textures it uses hold more than 512 MiB together, more than an update from Blender takes; split the model into several files.");
+            read?.Invoke(relative);
+            return bytes;
+        }
+        byte[] json = Load(model) ?? throw new InvalidDataException($"{model} does not exist.");
         JsonObject root = Parse(json, model);
-        // The id names a folder and is typed back by MCP clients: the model's stem as plain characters, a time and a random tail.
-        string stem = new([.. Path.GetFileNameWithoutExtension(model).Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '_').Take(64)]);
-        string id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + stem + "-" + Guid.NewGuid().ToString("N")[..6];
-        string folder = Path.Combine(Folder(workspace.Root), id), input = Path.Combine(folder, "input");
-        SourceProject.RejectLinks(Folder(workspace.Root));
-        created = folder;
-        Directory.CreateDirectory(Path.Combine(input, "textures")); Directory.CreateDirectory(Path.Combine(folder, "outbox"));
+        // Read as a build reads it before anything is copied: a model the build could not load is refused, and the buffers it
+        // copies are those the reader read and bounded (at most 4,096, of 512 MiB together), each project file once.
+        Dictionary<string, byte[]> bufferBytes = new(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            GltfDocument.Read(json, uri =>
+            {
+                string relative = Worlds.WorldAssembler.Relative(checkedOut, uri);
+                if (!bufferBytes.TryGetValue(relative, out var bytes)) bufferBytes[relative] = bytes = Load(relative) ?? throw new InvalidDataException($"It uses {relative}, which does not exist.");
+                return bytes;
+            }, token);
+        }
+        catch (InvalidDataException ex) { throw new InvalidDataException($"{model}: {ex.Message}", ex); }
         List<BlenderCheckoutFile> files = [new(model, "input/" + Path.GetFileName(model), SourceProject.Sha256(json))];
+        List<(string Name, byte[] Bytes)> copies = [];
         // Buffers sit next to the model in the checkout, each project file once under a name no other copy has (Windows
         // compares names without case): a buffer of the same name from another folder gets a numbered name, so no copy
         // replaces another. The update names the model's buffers itself, so these names never go back to the project.
@@ -93,48 +123,64 @@ public static partial class SourceBlender
         foreach (var buffer in root["buffers"] as JsonArray ?? [])
         {
             if (Text(buffer?["uri"]) is not { } uri || uri.StartsWith("data:", StringComparison.Ordinal)) continue;
-            string project = Worlds.WorldAssembler.Relative(model, Uri.UnescapeDataString(uri));
-            if (!bufferCopies.TryGetValue(project, out string? name))
+            string relative = Worlds.WorldAssembler.Relative(model, Uri.UnescapeDataString(uri));
+            if (!bufferCopies.TryGetValue(relative, out string? name))
             {
-                byte[] bytes = workspace.Read(project, token) ?? throw new InvalidDataException($"{model} uses {project}, which does not exist.");
-                name = Path.GetFileName(project);
-                for (int k = 1; !taken.TryAdd(name, project); k++) name = $"{Path.GetFileNameWithoutExtension(project)}.{k}{Path.GetExtension(project)}";
-                File.WriteAllBytes(Path.Combine(input, name), bytes);
-                files.Add(new(project, "input/" + name, SourceProject.Sha256(bytes)));
-                bufferCopies[project] = name;
+                // The reader read every buffer the file lists, used or not.
+                byte[] bytes = bufferBytes.TryGetValue(relative, out var held) ? held : throw new InvalidDataException($"{model} uses {relative}, which does not exist.");
+                name = Path.GetFileName(relative);
+                for (int k = 1; !taken.TryAdd(name, relative); k++) name = $"{Path.GetFileNameWithoutExtension(relative)}.{k}{Path.GetExtension(relative)}";
+                copies.Add((name, bytes));
+                files.Add(new(relative, "input/" + name, SourceProject.Sha256(bytes)));
+                bufferCopies[relative] = name;
             }
             buffer!["uri"] = Uri.EscapeDataString(name);
         }
         // Textures in its textures folder, under their file names: the engine's names for them, which the update maps back by.
         // Images of one file share its copy; two different files of one name cannot both be shown (nor packed: the build finds
-        // a texture by name), so the checkout refuses them rather than show one file's pixels for the other.
+        // a texture by name), so the checkout refuses them rather than show one file's pixels for the other. A model that
+        // names more textures than one pack holds could not be built.
         Dictionary<string, (string Project, string Sha256)> textures = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> alike = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, Formats.TextureTransparency> transparency = new(StringComparer.OrdinalIgnoreCase);
+        List<(string Name, byte[] Bytes)> textureCopies = [];
         foreach (var image in root["images"] as JsonArray ?? [])
         {
             if (Text(image?["uri"]) is not { } uri || uri.StartsWith("data:", StringComparison.Ordinal)) continue;
-            string project = Worlds.WorldAssembler.Relative(model, Uri.UnescapeDataString(uri));
-            string name = Path.GetFileName(project);
+            string relative = Worlds.WorldAssembler.Relative(model, Uri.UnescapeDataString(uri));
+            string name = Path.GetFileName(relative);
             image!["uri"] = "textures/" + Uri.EscapeDataString(name);
             if (textures.TryGetValue(name, out var copied))
             {
                 // Each other file of the name is read once, however many images use it.
-                if (copied.Project.Equals(project, StringComparison.OrdinalIgnoreCase) || !alike.Add(project)) continue;
-                if (workspace.Read(project, token) is { } other && SourceProject.Sha256(other) != copied.Sha256)
-                    throw new InvalidDataException($"{model} uses two different textures named {name}: {copied.Project} and {project}. The game finds textures by name, so a build packs only one of them; rename one, or let both images use one file, before checking the model out.");
+                if (copied.Project.Equals(relative, StringComparison.OrdinalIgnoreCase) || !alike.Add(relative)) continue;
+                if (Load(relative) is { } other && SourceProject.Sha256(other) != copied.Sha256)
+                    throw new InvalidDataException($"{model} uses two different textures named {name}: {copied.Project} and {relative}. The game finds textures by name, so a build packs only one of them; rename one, or let both images use one file, before checking the model out.");
                 continue;
             }
-            if (workspace.Read(project, token) is not { } bytes) continue;
-            File.WriteAllBytes(Path.Combine(input, "textures", name), bytes);
+            if (textures.Count >= Formats.TexturePackBuilder.MaximumRecords)
+                throw new InvalidDataException($"{model} uses more than {Formats.TexturePackBuilder.MaximumRecords:N0} textures; a texture pack holds at most {Formats.TexturePackBuilder.MaximumRecords:N0}, so a build could not pack them.");
+            if (Load(relative) is not { } bytes) continue;
             string sha = SourceProject.Sha256(bytes);
-            files.Add(new(project, "input/textures/" + name, sha));
-            textures[name] = (project, sha);
+            textureCopies.Add((name, bytes));
+            files.Add(new(relative, "input/textures/" + name, sha));
+            textures[name] = (relative, sha);
             if (Transparency(bytes, token) is { } kind) transparency[name] = kind;
         }
-        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null, LoadedAsPickup(workspace, model, token));
+        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null, LoadedAsPickup(snapshot, workspace.Root, model, token));
         // Blender moves nodes freely: each keeps the zone it has (PlanUpdate takes the stated zones back out).
         Worlds.WorldGltf.ExplicitZones(root);
+        // Nothing read changed on disk since: the copies are one state of the project.
+        snapshot.CheckUnchanged(token);
+        // The id names a folder and is typed back by MCP clients: the model's stem as plain characters, a time and a random tail.
+        string stem = new([.. Path.GetFileNameWithoutExtension(model).Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '_').Take(64)]);
+        string id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + stem + "-" + Guid.NewGuid().ToString("N")[..6];
+        string folder = Path.Combine(Folder(workspace.Root), id), input = Path.Combine(folder, "input");
+        SourceProject.RejectLinks(Folder(workspace.Root));
+        created = folder;
+        Directory.CreateDirectory(Path.Combine(input, "textures")); Directory.CreateDirectory(Path.Combine(folder, "outbox"));
+        foreach (var (name, bytes) in copies) { token.ThrowIfCancellationRequested(); File.WriteAllBytes(Path.Combine(input, name), bytes); }
+        foreach (var (name, bytes) in textureCopies) { token.ThrowIfCancellationRequested(); File.WriteAllBytes(Path.Combine(input, "textures", name), bytes); }
         File.WriteAllText(Path.Combine(input, Path.GetFileName(model)), root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
         BlenderCheckout checkout = new(id, folder, model, DateTime.UtcNow, files);
         JsonObject manifest = new()
@@ -313,8 +359,6 @@ public static partial class SourceBlender
             if (!name.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"Texture {name} is not a PNG; RECOIL textures are PNG files.");
             string stem = Path.GetFileNameWithoutExtension(name).ToLowerInvariant();
             if (stem.Length is < 1 or > 19 || stem.Any(c => !(char.IsAsciiLetterOrDigit(c) || c == '_'))) throw new InvalidDataException($"Texture {name}: names need 1–19 letters, digits or '_' (the engine stores 19).");
-            try { Export.PngDecoder.Decode(png); }
-            catch (Exception ex) when (ex is InvalidDataException or ArgumentException or OverflowException or IndexOutOfRangeException) { throw new InvalidDataException($"Texture {name} is not a readable PNG: {ex.Message}", ex); }
             string project = original.TryGetValue(name, out var known) ? known : $"{textureFolder}/{name}";
             image!["uri"] = RelativeUri(modelFolder, project);
             if (exported.TryGetValue(name, out var first))
@@ -323,6 +367,11 @@ public static partial class SourceBlender
                     throw new InvalidDataException($"The export has two different textures named {name}: {first.Uri} and {unescaped}. A name is one project texture ({project}; the game finds textures by name), so rename one in Blender and export again.");
                 continue;
             }
+            // As many textures as one pack holds, each decoded once however many images show it (and the decoding can be cancelled).
+            if (exported.Count >= Formats.TexturePackBuilder.MaximumRecords)
+                throw new InvalidDataException($"The export uses more than {Formats.TexturePackBuilder.MaximumRecords:N0} textures; a texture pack holds at most {Formats.TexturePackBuilder.MaximumRecords:N0}, so a build could not pack them.");
+            try { Export.PngDecoder.Decode(png, token: token); }
+            catch (Exception ex) when (ex is InvalidDataException or ArgumentException or OverflowException or IndexOutOfRangeException) { throw new InvalidDataException($"Texture {name} is not a readable PNG: {ex.Message}", ex); }
             exported[name] = (unescaped, png);
             // Only what Blender changed: a checked-out texture it wrote back as it was stays as the project has it now.
             string inputCopy = Path.Combine(checkout.Folder, "input", "textures", name);
@@ -430,10 +479,11 @@ public static partial class SourceBlender
     /// the load resolves its file as the build does, through the model folders the scripts set up to that point, so a
     /// model of the same name in another folder is not the pickup (reconstruction decides the same per written file).
     /// </summary>
-    private static bool LoadedAsPickup(SourceWorkspace workspace, string model, CancellationToken token)
+    private static bool LoadedAsPickup(SourceBuilder.Snapshot snapshot, string root, string model, CancellationToken token)
     {
         string stem = Path.GetFileNameWithoutExtension(model);
-        var added = workspace.Overlay().Keys.Where(k => !File.Exists(SourceProject.Resolve(workspace.Root, k))).ToArray();
+        // The scripts are read from the checkout's snapshot, like the model's files.
+        var project = snapshot.Files();
         // Each script once, as the build reads it (instruction lines); null when it does not exist.
         Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
         IReadOnlyList<IReadOnlyList<string>>? Script(string name)
@@ -441,13 +491,13 @@ public static partial class SourceBlender
             string relative = $"{SourceProject.GameGenFolder}/{name.Replace('\\', '/')}";
             if (scripts.TryGetValue(relative, out var lines)) return lines;
             token.ThrowIfCancellationRequested();
-            return scripts[relative] = workspace.Read(relative, token) is { } bytes ? [.. GameGenScriptSyntax.Parse(bytes).Lines.Where(l => l.IsInstruction).Select(l => l.Tokens)] : null;
+            return scripts[relative] = project.Exists(relative) ? [.. GameGenScriptSyntax.Parse(project.Read(relative, token)).Lines.Where(l => l.IsInstruction).Select(l => l.Tokens)] : null;
         }
         // The missions the project builds: a data/mN folder with its gamegen/mN.gs.
-        foreach (string entry in SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), added))
+        foreach (string entry in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), snapshot.Added))
         {
             string name = Path.GetFileNameWithoutExtension(entry);
-            if (!MissionScript().IsMatch(entry) || !Directory.Exists(SourceProject.Resolve(workspace.Root, $"{SourceProject.DataFolder}/{name}"))) continue;
+            if (!MissionScript().IsMatch(entry) || !Directory.Exists(SourceProject.Resolve(root, $"{SourceProject.DataFolder}/{name}"))) continue;
             List<Worlds.TracedInstruction> trace;
             // A mission whose scripts the build cannot run loads nothing.
             try { trace = Worlds.ScriptTrace.Trace(Script, name + ".gs", []); }
@@ -455,7 +505,7 @@ public static partial class SourceBlender
             foreach (var step in trace)
                 if (step is { Command: "LoadGameGen", Args: [var file, var node, ..] } && Worlds.WorldGltf.IsPickupName(node)
                     && Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).Equals(stem, StringComparison.OrdinalIgnoreCase)
-                    && Worlds.WorldAssembler.ResolveModel(file, step.ModelDirectories, workspace.Exists) is { } loaded && loaded.Equals(model, StringComparison.OrdinalIgnoreCase)) return true;
+                    && Worlds.WorldAssembler.ResolveModel(file, step.ModelDirectories, project.Exists) is { } loaded && loaded.Equals(model, StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
     }

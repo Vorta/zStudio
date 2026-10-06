@@ -273,6 +273,8 @@ public sealed class GltfDocument
         // each read returns counts once.
         var jsonBuffers = root["buffers"] as JsonArray ?? [];
         List<byte[]> buffers = [];
+        // The bytes each buffer holds for its views: its stated length (a GLB chunk or a file may hold more).
+        List<long> bufferLengths = [];
         Dictionary<string, byte[]> external = new(StringComparer.Ordinal);
         HashSet<byte[]> held = new(ReferenceEqualityComparer.Instance); long heldBytes = 0;
         InvalidDataException TooLarge() => new($"The glTF file's buffers hold more than {(bufferBytes % (1024 * 1024) == 0 ? $"{bufferBytes / (1024 * 1024):N0} MiB" : $"{bufferBytes:N0} bytes")} together, more than a model may; remove buffers it does not use, or split it into several files.");
@@ -303,7 +305,7 @@ public sealed class GltfDocument
             }
             if (held.Add(data) && (heldBytes += data.Length) > bufferBytes) throw TooLarge();
             if (data.Length < (declared ?? 0)) throw new InvalidDataException("A glTF buffer is shorter than declared.");
-            buffers.Add(data);
+            buffers.Add(data); bufferLengths.Add(declared ?? data.Length);
         }
         JsonArray views = root["bufferViews"] as JsonArray ?? [], accessors = root["accessors"] as JsonArray ?? [];
         // Accessors may be shared by any number of primitives; every use is decoded, so the file's total is bounded, with what
@@ -320,13 +322,26 @@ public sealed class GltfDocument
             5121 => normalized ? span[0] / 255f : span[0],
             _ => normalized ? Math.Max((sbyte)span[0] / 127f, -1) : (sbyte)span[0],
         };
-        // A buffer view's bytes from an extra offset: its buffer and where the data starts, checked to hold byteCount bytes.
-        (byte[] Data, long Start) View(JsonNode? reference, long offset, long byteCount)
+        (int Index, JsonObject View) ViewEntry(JsonNode? reference)
         {
-            var view = views[reference!.GetValue<int>()]!; var data = buffers[view["buffer"]!.GetValue<int>()];
-            long start = (view["byteOffset"]?.GetValue<long>() ?? 0) + offset;
-            if (start < 0 || offset < 0 || start + byteCount > data.Length) throw new InvalidDataException("A glTF accessor exceeds its buffer.");
-            return (data, start);
+            int index = Reference(reference, views.Count, "buffer view");
+            return (index, views[index] as JsonObject ?? throw new InvalidDataException($"glTF buffer view {index} is not an object."));
+        }
+        // A buffer view's bytes from an extra offset: its buffer and where the data starts. glTF places a view within its
+        // buffer's stated length and what an accessor reads within its view, so byteCount bytes must lie in the view, not
+        // only in the buffer: bytes past the view's end belong to another view (or to none), which the read would take for
+        // this accessor's. A view holding tightly packed data (sparse indices and values) may not state a stride.
+        (byte[] Data, long Start) View(JsonNode? reference, long offset, long byteCount, string what, bool packed = false)
+        {
+            var (index, view) = ViewEntry(reference);
+            int buffer = Reference(view["buffer"], buffers.Count, "buffer");
+            long start = view["byteOffset"]?.GetValue<long>() ?? 0, length = view["byteLength"]?.GetValue<long>() ?? throw new InvalidDataException($"glTF buffer view {index} has no byteLength.");
+            if (start < 0 || length < 1 || start > bufferLengths[buffer] - length)
+                throw new InvalidDataException($"glTF buffer view {index} ({length:N0} bytes from byte {start:N0}) does not lie within buffer {buffer}, which holds {bufferLengths[buffer]:N0} bytes.");
+            if (packed && view["byteStride"] != null) throw new InvalidDataException($"glTF buffer view {index} holds the {what}, which are tightly packed, but it states a byte stride (glTF allows none there).");
+            if (offset < 0 || offset > length || byteCount > length - offset)
+                throw new InvalidDataException($"The {what} need {byteCount:N0} bytes from byte {offset:N0} of glTF buffer view {index}, which holds {length:N0}; an accessor reads only its own view.");
+            return (buffers[buffer], start + offset);
         }
         // An accessor holds what its use reads (glTF 2.0, with the integer vertex attributes of KHR_mesh_quantization): positions
         // and texture coordinates are vectors of floats or of 8- or 16-bit integers, normals of floats or normalized signed 8- or
@@ -361,9 +376,10 @@ public sealed class GltfDocument
             if (a["bufferView"] is { } reference && count > 0)
             {
                 // Elements are tightly packed unless the view has a stride, which must hold an element (glTF: 4 to 252 bytes).
-                int stride = views[reference.GetValue<int>()]!["byteStride"]?.GetValue<int>() ?? element;
-                if (stride < element || stride > 252 && stride != element) throw new InvalidDataException($"A glTF buffer view has an invalid byte stride of {stride}.");
-                var (data, start) = View(reference, a["byteOffset"]?.GetValue<long>() ?? 0, (long)(count - 1) * stride + element);
+                var (viewIndex, view) = ViewEntry(reference);
+                int stride = view["byteStride"]?.GetValue<int>() ?? element;
+                if (stride < element || stride > 252 && stride != element) throw new InvalidDataException($"glTF buffer view {viewIndex} has a byte stride of {stride}, which cannot hold accessor {index}'s {element}-byte elements (glTF: 4 to 252 bytes).");
+                var (data, start) = View(reference, a["byteOffset"]?.GetValue<long>() ?? 0, (long)(count - 1) * stride + element, $"{count:N0} {what} of glTF accessor {index}");
                 for (int i = 0; i < count; i++)
                     for (int c = 0; c < components; c++) values[i * components + c] = Component(data.AsSpan((int)(start + (long)i * stride + c * size)), componentType, normalized);
             }
@@ -375,8 +391,8 @@ public sealed class GltfDocument
                 var indices = sparse["indices"]!; int indexType = indices["componentType"]!.GetValue<int>();
                 if (indexType is not (5121 or 5123 or 5125)) throw new InvalidDataException($"Sparse glTF indices cannot use component type {indexType}.");
                 int indexSize = Size(indexType);
-                var (indexData, indexStart) = View(indices["bufferView"], indices["byteOffset"]?.GetValue<long>() ?? 0, (long)n * indexSize);
-                var (valueData, valueStart) = View(sparse["values"]!["bufferView"], sparse["values"]!["byteOffset"]?.GetValue<long>() ?? 0, (long)n * element);
+                var (indexData, indexStart) = View(indices["bufferView"], indices["byteOffset"]?.GetValue<long>() ?? 0, (long)n * indexSize, $"sparse indices of glTF accessor {index}", packed: true);
+                var (valueData, valueStart) = View(sparse["values"]!["bufferView"], sparse["values"]!["byteOffset"]?.GetValue<long>() ?? 0, (long)n * element, $"sparse values of glTF accessor {index}", packed: true);
                 for (int k = 0; k < n; k++)
                 {
                     var at = indexData.AsSpan((int)(indexStart + (long)k * indexSize));

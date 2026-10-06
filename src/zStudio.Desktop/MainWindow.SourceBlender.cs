@@ -32,6 +32,8 @@ public partial class MainWindow
         long revision = workspace.ContentRevision;
         BlenderCheckout checkout;
         try { checkout = await Task.Run(() => SourceBlender.Checkout(workspace, model, token), token); }
+        // Another program changed a file the checkout read before its copies were complete (it removed them).
+        catch (SourceFileChangedException ex) { throw new StudioCommandException("context_changed", ex.Message); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         // The workspace changes on this thread: an edit, undo or reload made while the files were copied could mix two states.
