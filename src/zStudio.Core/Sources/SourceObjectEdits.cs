@@ -662,7 +662,7 @@ public static class SourceObjectEdits
                 // A group the build reaches from the file's top (through groups) is deleted with the database, its objects
                 // joining the world: the build refuses one with geometry or a transform.
                 if (GroupsReached(root, origin.ModelNode, topReached).Where(g => !EmptyGroup((JsonObject)root["nodes"]![g]!)).Select(g => (int?)g).FirstOrDefault() is int full)
-                    throw new InvalidDataException($"{(full == origin.ModelNode ? node.Name : $"Group {((JsonObject)root["nodes"]![full]!)["name"]} below {node.Name}")} is a group of the mission database with geometry or a transform{(full == origin.ModelNode ? " where it stands now" : "")}; {(into is null ? "at the top" : $"under {parent!.Name}")} the build would delete it and its objects would join the world, so move its objects instead.");
+                    throw new InvalidDataException($"{(full == origin.ModelNode ? node.Name : $"Group {JsonData.Shown(((JsonObject)root["nodes"]![full]!)["name"], asText: true)} below {node.Name}")} is a group of the mission database with geometry or a transform{(full == origin.ModelNode ? " where it stands now" : "")}; {(into is null ? "at the top" : $"under {parent!.Name}")} the build would delete it and its objects would join the world, so move its objects instead.");
             }, token, [.. notes, into != null ? $"{node.Name} moves with {parent!.Name} from now on."
                     : origin.Part ? $"{node.Name} becomes a root of {origin.ModelFile}, under each of the mission database's references to it."
                     : $"{node.Name} becomes a root of the mission database, which joins the world and its grid."], everyCopy: false,

@@ -108,7 +108,7 @@ public static partial class SourceBlender
             GltfDocument.Read(json, uri =>
             {
                 string relative = Worlds.WorldAssembler.Relative(checkedOut, uri);
-                if (!bufferBytes.TryGetValue(relative, out var bytes)) bufferBytes[relative] = bytes = Load(relative) ?? throw new InvalidDataException($"It uses {relative}, which does not exist.");
+                if (!bufferBytes.TryGetValue(relative, out var bytes)) bufferBytes[relative] = bytes = Load(relative) ?? throw new InvalidDataException($"It uses {JsonData.ShownText(relative)}, which does not exist.");
                 return bytes;
             }, token);
         }
@@ -127,7 +127,7 @@ public static partial class SourceBlender
             if (!bufferCopies.TryGetValue(relative, out string? name))
             {
                 // The reader read every buffer the file lists, used or not.
-                byte[] bytes = bufferBytes.TryGetValue(relative, out var held) ? held : throw new InvalidDataException($"{model} uses {relative}, which does not exist.");
+                byte[] bytes = bufferBytes.TryGetValue(relative, out var held) ? held : throw new InvalidDataException($"{model} uses {JsonData.ShownText(relative)}, which does not exist.");
                 name = Path.GetFileName(relative);
                 for (int k = 1; !taken.TryAdd(name, relative); k++) name = $"{Path.GetFileNameWithoutExtension(relative)}.{k}{Path.GetExtension(relative)}";
                 copies.Add((name, bytes));
@@ -449,23 +449,23 @@ public static partial class SourceBlender
             string name = Worlds.WorldGltf.EngineName(group);
             var engine = group.Extras?[Worlds.WorldGltf.Key] as JsonObject;
             if (group.Mesh != null || engine?["model"] != null || Text(engine?["class"]) == "lod")
-                throw new InvalidDataException($"{path}: group {name} has geometry of its own or is a level-of-detail node; a group of the mission database only holds objects (the build deletes it). Give the geometry an object of its own.");
+                throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} has geometry of its own or is a level-of-detail node; a group of the mission database only holds objects (the build deletes it). Give the geometry an object of its own.");
             var transform = (group.Matrix ?? Matrix4x4.Identity) * passed;
             if (!transform.IsIdentity)
             {
                 if (Text(engine?["ref"]) is { } part)
-                    throw new InvalidDataException($"{path}: group {name} was moved, but the objects it places are in {part}, which every reference to it shares; move them in that file (check it out), or move the group back.");
+                    throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} was moved, but the objects it places are in {JsonData.ShownText(part)}, which every reference to it shares; move them in that file (check it out), or move the group back.");
                 foreach (var child in group.Children)
                 {
                     if (Worlds.WorldGltf.IsGroup(child, path)) continue;
                     var values = child.Extras?[Worlds.WorldGltf.Key] as JsonObject;
                     string childName = Worlds.WorldGltf.EngineName(child);
-                    if (Text(values?["class"]) == "lod") throw new InvalidDataException($"{path}: group {name} was moved, but it holds the level-of-detail node {childName}, which stands where its parent is and cannot take the move; move the objects below it, or move the group back.");
-                    if (values?["instance"] != null) throw new InvalidDataException($"{path}: group {name} was moved, but it holds {childName}, a node several parents share, which would move under each of them; move the group back.");
+                    if (Text(values?["class"]) == "lod") throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} was moved, but it holds the level-of-detail node {JsonData.ShownText(childName)}, which stands where its parent is and cannot take the move; move the objects below it, or move the group back.");
+                    if (values?["instance"] != null) throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} was moved, but it holds {JsonData.ShownText(childName)}, a node several parents share, which would move under each of them; move the group back.");
                     var local = (child.Matrix ?? Matrix4x4.Identity) * transform;
                     float[] rows = [local.M11, local.M12, local.M13, local.M21, local.M22, local.M23, local.M31, local.M32, local.M33, local.M41, local.M42, local.M43];
                     if (!rows.All(float.IsFinite) || new[] { local.M41, local.M42, local.M43 }.Any(v => MathF.Abs(v) > SourceWorlds.MaximumCoordinate))
-                        throw new InvalidDataException($"{path}: group {name} was moved so far that {childName} would lie beyond ±{SourceWorlds.MaximumCoordinate:N0}.");
+                        throw new InvalidDataException($"{path}: group {JsonData.ShownText(name)} was moved so far that {JsonData.ShownText(childName)} would lie beyond ±{SourceWorlds.MaximumCoordinate:N0}.");
                     if (nodes[child.Index] is JsonObject target) GltfNodeEdits.SetLocal(target, local);
                 }
                 GltfNodeEdits.SetLocal(json, Matrix4x4.Identity);

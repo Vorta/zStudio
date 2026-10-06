@@ -95,9 +95,10 @@ public static class TexturePackBuilder
     /// texture's mean colour and then its colours, and the pack is written after them, so the textures at their final sizes
     /// are kept for those passes while they fit <see cref="RetainedImageBytes"/> (four bytes a texel, although a paletted
     /// texel takes one byte of the pack) and the others are decoded again for each pass; every decode resamples the same
-    /// master to the same size, so the pack is the same either way. Building thus holds at most that much, one master and
-    /// the pack file. A pack whose file would exceed what a pack file may hold (<see cref="FormatRegistry.MaximumDocumentBytes"/>)
-    /// is refused before its textures are resampled to their final sizes: before anything is decoded when its texels alone exceed it.
+    /// master to the same size, so the pack is the same either way. Building thus holds at most that much, one master, the
+    /// texture being resampled from it (with a few rows of workspace, see <see cref="Resample"/>) and the pack file. A pack
+    /// whose file would exceed what a pack file may hold (<see cref="FormatRegistry.MaximumDocumentBytes"/>) is refused
+    /// before its textures are resampled to their final sizes: before anything is decoded when its texels alone exceed it.
     /// </summary>
     public static TexturePackBuild BuildFromSources(IReadOnlyList<PackSource> textures, TexturePackVariant variant, CancellationToken token = default)
         => BuildFromSources(textures, variant, RetainedImageBytes, token);
@@ -284,37 +285,61 @@ public static class TexturePackBuilder
         }
     }
 
-    /// <summary>Area-average downscaling and linear upscaling per axis, on premultiplied alpha so transparent texels do not bleed colour.</summary>
+    /// <summary>
+    /// Area-average downscaling and linear upscaling per axis, on premultiplied alpha so transparent texels do not bleed colour.
+    /// Each output row sums the source rows it covers, each first resampled across, in the order of its weights; the source
+    /// rows are resampled as the output rows reach them. Besides the result it holds one premultiplied source row, the two
+    /// source rows last resampled across (consecutive output rows share at most those) and one output row's sums, never the
+    /// image as floats, so a large master costs a few rows of workspace. Every texel takes the same arithmetic in the same
+    /// order as the whole-image passes would, so the result does not depend on how the work is divided.
+    /// </summary>
     public static DecodedImage Resample(DecodedImage image, int width, int height, CancellationToken token = default)
     {
         if (width == image.Width && height == image.Height) return image;
-        float[] source = new float[image.Width * image.Height * 4];
-        for (int i = 0; i < image.Width * image.Height; i++)
+        int sourceWidth = image.Width;
+        var horizontal = Weights(sourceWidth, width); var vertical = Weights(image.Height, height);
+        float[] premultiplied = new float[sourceWidth * 4];
+        // Source rows resampled across, by source row: the output rows ask for rows in increasing order, going back at most
+        // to the last two, so the older of these two is the one replaced.
+        float[][] across = [new float[width * 4], new float[width * 4]];
+        int[] held = [-1, -1];
+        int resampled = 0;
+        float[] Across(int row)
         {
-            float a = image.Rgba[i * 4 + 3] / 255f;
-            for (int c = 0; c < 3; c++) source[i * 4 + c] = image.Rgba[i * 4 + c] * a;
-            source[i * 4 + 3] = image.Rgba[i * 4 + 3];
-        }
-        var horizontal = Weights(image.Width, width); var vertical = Weights(image.Height, height);
-        float[] rows = new float[width * image.Height * 4];
-        for (int y = 0; y < image.Height; y++)
-        {
-            if ((y & 63) == 0) token.ThrowIfCancellationRequested();
+            if (held[0] == row) return across[0];
+            if (held[1] == row) return across[1];
+            if ((resampled++ & 63) == 0) token.ThrowIfCancellationRequested();
+            int slot = held[0] < held[1] ? 0 : 1; float[] result = across[slot];
+            int start = row * sourceWidth * 4;
+            for (int x = 0; x < sourceWidth; x++)
+            {
+                int i = start + x * 4;
+                float a = image.Rgba[i + 3] / 255f;
+                for (int c = 0; c < 3; c++) premultiplied[x * 4 + c] = image.Rgba[i + c] * a;
+                premultiplied[x * 4 + 3] = image.Rgba[i + 3];
+            }
+            Array.Clear(result);
             for (int x = 0; x < width; x++)
                 foreach (var (index, weight) in horizontal[x])
-                    for (int c = 0; c < 4; c++) rows[(y * width + x) * 4 + c] += source[(y * image.Width + index) * 4 + c] * weight;
+                    for (int c = 0; c < 4; c++) result[x * 4 + c] += premultiplied[index * 4 + c] * weight;
+            held[slot] = row;
+            return result;
         }
-        byte[] rgba = new byte[width * height * 4]; Span<float> sum = stackalloc float[4];
+        byte[] rgba = new byte[width * height * 4]; float[] sums = new float[width * 4];
         for (int y = 0; y < height; y++)
         {
             if ((y & 63) == 0) token.ThrowIfCancellationRequested();
+            Array.Clear(sums);
+            foreach (var (index, weight) in vertical[y])
+            {
+                float[] row = Across(index);
+                for (int k = 0; k < sums.Length; k++) sums[k] += row[k] * weight;
+            }
             for (int x = 0; x < width; x++)
             {
-                sum.Clear();
-                foreach (var (index, weight) in vertical[y]) for (int c = 0; c < 4; c++) sum[c] += rows[(index * width + x) * 4 + c] * weight;
-                int o = (y * width + x) * 4; float alpha = Math.Clamp(sum[3], 0, 255);
+                int o = (y * width + x) * 4; float alpha = Math.Clamp(sums[x * 4 + 3], 0, 255);
                 rgba[o + 3] = (byte)MathF.Round(alpha);
-                for (int c = 0; c < 3; c++) rgba[o + c] = alpha <= 0 ? (byte)0 : (byte)Math.Clamp(MathF.Round(sum[c] / (alpha / 255f)), 0, 255);
+                for (int c = 0; c < 3; c++) rgba[o + c] = alpha <= 0 ? (byte)0 : (byte)Math.Clamp(MathF.Round(sums[x * 4 + c] / (alpha / 255f)), 0, 255);
             }
         }
         return new(width, height, rgba);
@@ -443,7 +468,16 @@ public static class TexturePackBuilder
                 w.Write(index);
             }
         }
-        if (mode == TextureTransparency.Alpha) w.Write(image.Rgba.Where((_, i) => i % 4 == 3).ToArray());
+        if (mode != TextureTransparency.Alpha) return;
+        // The alpha plane, through a small buffer rather than a copy of the plane.
+        Span<byte> plane = stackalloc byte[4096];
+        for (int p = 0; p < count; p += plane.Length)
+        {
+            token.ThrowIfCancellationRequested();
+            int n = Math.Min(plane.Length, count - p);
+            for (int k = 0; k < n; k++) plane[k] = image.Rgba[(p + k) * 4 + 3];
+            w.Write(plane[..n]);
+        }
     }
     private static byte Nearest(ushort[] palette, ushort color)
     {

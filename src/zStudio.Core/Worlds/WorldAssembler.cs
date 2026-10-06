@@ -482,7 +482,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             ReadFile = (uri, from) =>
             {
                 string file = Relative(from, uri);
-                if (!files.Exists(file)) throw new InvalidDataException($"{from} names {uri}, which does not exist.");
+                if (!files.Exists(file)) throw new InvalidDataException($"{from} names {JsonData.ShownText(uri)}, which does not exist.");
                 ModelFiles.Add(file);
                 return (files.Read(file, token), file);
             },
@@ -582,7 +582,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     }
     private (GltfDocument Document, string Path) LoadDocument(string path)
     {
-        if (!files.Exists(path)) throw new InvalidDataException($"The model {path} does not exist.");
+        if (!files.Exists(path)) throw new InvalidDataException($"The model {JsonData.ShownText(path)} does not exist.");
         ModelFiles.Add(path);
         try
         {
@@ -598,12 +598,12 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// <summary>A URI relative to <paramref name="from"/>, as a project path that stays inside the project.</summary>
     internal static string Relative(string from, string uri)
     {
-        if (uri.Contains(':') || uri.StartsWith('/') || uri.StartsWith('\\')) throw new InvalidDataException($"'{uri}' is not a relative reference.");
+        if (uri.Contains(':') || uri.StartsWith('/') || uri.StartsWith('\\')) throw new InvalidDataException($"'{JsonData.ShownText(uri)}' is not a relative reference.");
         List<string> parts = [.. Path.GetDirectoryName(from)!.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries)];
         foreach (string part in uri.Replace('\\', '/').Split('/'))
         {
             if (part is "" or ".") continue;
-            if (part == "..") { if (parts.Count == 0) throw new InvalidDataException($"'{uri}' leaves the project."); parts.RemoveAt(parts.Count - 1); }
+            if (part == "..") { if (parts.Count == 0) throw new InvalidDataException($"'{JsonData.ShownText(uri)}' leaves the project."); parts.RemoveAt(parts.Count - 1); }
             else parts.Add(part);
         }
         return string.Join('/', parts);
@@ -618,7 +618,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         string textureName = (name ?? Path.GetFileNameWithoutExtension(uri)).ToLowerInvariant();
         // The world stores the name in a 20-byte Latin-1 field and the packs are built from files of that name.
         if (textureName.Length is < 1 or > 19 || textureName.Any(c => c > 255 || char.IsControl(c) || c is '/' or '\\' or ':'))
-            throw new InvalidDataException($"{from}: texture name '{textureName}' needs 1–19 Latin-1 characters without path separators.");
+            throw new InvalidDataException($"{from}: texture name '{JsonData.ShownText(textureName)}' needs 1–19 Latin-1 characters without path separators.");
         string? file = textureDirectories.Select(d => $"{d}/{textureName}{TextureSources.Extension}").FirstOrDefault(files.Exists);
         if (file == null && uri.Length > 0) { string candidate = Relative(from, uri); if (files.Exists(candidate)) file = candidate; }
         if (file == null) Warn($"{from}: texture {textureName} has no PNG; the game shows its default texture.");

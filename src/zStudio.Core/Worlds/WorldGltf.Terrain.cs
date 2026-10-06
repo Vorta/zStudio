@@ -14,7 +14,7 @@ public static partial class WorldGltf
     /// </summary>
     private static List<WorldNode> ImportTerrain(string uri, string from, ImportContext context)
     {
-        var grid = context.Grid?.Invoke() ?? throw new InvalidDataException($"{from}: the terrain recipe {uri} must be a root of the mission database (the load after GameGenSetWorld), whose world grid it is cut for.");
+        var grid = context.Grid?.Invoke() ?? throw new InvalidDataException($"{from}: the terrain recipe {JsonData.ShownText(uri)} must be a root of the mission database (the load after GameGenSetWorld), whose world grid it is cut for.");
         var read = context.ReadFile ?? throw new InvalidDataException($"{from}: this load cannot read terrain recipes.");
         var (bytes, recipePath) = read(uri, from);
         var recipe = TerrainRecipe.Parse(bytes, recipePath);
@@ -34,7 +34,7 @@ public static partial class WorldGltf
             var mesh = node.Mesh ?? throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has no mesh.");
             var values = mesh.Extras?[Key] as JsonObject;
             if (values?["points"] is JsonArray { Count: > 0 }) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has point entries (lens flares), which terrain pieces cannot share; keep it an object.");
-            if (values?["mode"] is JsonValue mode && !(mode.TryGetValue(out double m) && m == 0)) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) is a facade or point model (mode {mode}); keep it an object.");
+            if (values?["mode"] is JsonValue mode && !(mode.TryGetValue(out double m) && m == 0)) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) is a facade or point model (mode {JsonData.Shown(mode, asText: true)}); keep it an object.");
             if (mesh.Primitives.Any(p => p.Targets.Count > 0)) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has morph targets; terrain is static.");
             models.Add((values, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path));
             Matrix4x4.Invert(world, out var inverse);

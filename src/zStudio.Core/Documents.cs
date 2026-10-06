@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -205,6 +206,89 @@ public static class JsonData
             return node?.DeepClone();
         }
     }
+    /// <summary>How many characters <see cref="Shown"/> and <see cref="ShownText"/> keep of a value for a message.</summary>
+    public const int ShownCharacters = 64;
+    private static readonly JsonSerializerOptions ShownOptions = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
+    /// <summary>
+    /// A JSON value for a message, at most <paramref name="characters"/> characters and then "…": as JSON writes it (a
+    /// string quoted), or with <paramref name="asText"/> a string as its text. Only what is shown is read, copied or
+    /// escaped (a parsed value's text as written, an object's or list's first entries), so a large malformed value costs
+    /// no more than its preview, however it would serialize.
+    /// </summary>
+    public static string Shown(JsonNode? node, bool asText = false, int characters = ShownCharacters)
+    {
+        System.Text.StringBuilder text = new();
+        bool whole = asText && node is JsonValue value && value.GetValueKind() == JsonValueKind.String ? Text(value) : Write(node);
+        return whole ? text.ToString() : text.Append('…').ToString();
+
+        // Each returns false once the preview is full (the value goes on).
+        bool Add(ReadOnlySpan<char> part)
+        {
+            int room = characters - text.Length;
+            if (part.Length <= room) { text.Append(part); return true; }
+            text.Append(Cut(part, room)); return false;
+        }
+        bool Write(JsonNode? item)
+        {
+            switch (item)
+            {
+                case null: return Add("null");
+                case JsonObject o:
+                    if (!Add("{")) return false;
+                    bool first = true;
+                    foreach (var (key, entry) in o)
+                    {
+                        if (!first && !Add(",")) return false;
+                        first = false;
+                        if (!Quoted(key) || !Add(":") || !Write(entry)) return false;
+                    }
+                    return Add("}");
+                case JsonArray a:
+                    if (!Add("[")) return false;
+                    for (int i = 0; i < a.Count; i++)
+                        if (i > 0 && !Add(",") || !Write(a[i])) return false;
+                    return Add("]");
+            }
+            var scalar = (JsonValue)item;
+            if (scalar.TryGetValue(out JsonElement element)) return Raw(JsonMarshal.GetRawUtf8Value(element));
+            if (scalar.TryGetValue(out string? s)) return Quoted(s);
+            // Values built in memory are numbers, switches and the like, which write short.
+            return Add(scalar.ToJsonString());
+        }
+        bool Quoted(string s)
+        {
+            int room = Math.Max(characters - text.Length, 0);
+            return Add(JsonSerializer.Serialize(s.Length > room ? Cut(s, room).ToString() : s, ShownOptions)) && s.Length <= room;
+        }
+        // A parsed value as written: at most three UTF-8 bytes a character are read, cut at a whole character.
+        bool Raw(ReadOnlySpan<byte> raw)
+        {
+            int length = (int)Math.Min(raw.Length, Math.Max(characters - text.Length, 0) * 3L);
+            while (length > 0 && length < raw.Length && (raw[length] & 0xC0) == 0x80) length--;
+            return Add(System.Text.Encoding.UTF8.GetString(raw[..length])) && length == raw.Length;
+        }
+        bool Text(JsonValue item)
+        {
+            if (!item.TryGetValue(out JsonElement element)) return item.TryGetValue(out string? s) ? Add(s) : Write(item);
+            var raw = JsonMarshal.GetRawUtf8Value(element);
+            // A short string is read as its text; a longer one is shown as written, escapes and all, without its quotes.
+            return raw.Length <= 1024 ? Add(element.GetString()) : Raw(raw[1..^1]);
+        }
+    }
+
+    /// <summary>An authored text (a name, a path) for a message: at most <paramref name="characters"/> characters and then "…".</summary>
+    public static string ShownText(string text, int characters = ShownCharacters) =>
+        text.Length <= characters ? text : string.Concat(Cut(text, characters), "…");
+
+    /// <summary>The first <paramref name="length"/> characters, one fewer when that would split a surrogate pair.</summary>
+    private static ReadOnlySpan<char> Cut(ReadOnlySpan<char> text, int length)
+    {
+        if (length <= 0) return [];
+        if (length >= text.Length) return text;
+        return char.IsHighSurrogate(text[length - 1]) ? text[..(length - 1)] : text[..length];
+    }
+
     public static string Hex(byte[] bytes, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();

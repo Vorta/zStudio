@@ -361,7 +361,7 @@ public static partial class WorldGltf
                 // A terrain recipe stands where its pieces go among the database's roots; it is not a game node itself.
                 if (root.Extras?[Key] is JsonObject marker && marker["terrain"] is { } recipe)
                 {
-                    if (depth > 0) throw new InvalidDataException($"{path}: the terrain recipe {recipe} must be a root of the mission database, not of a referenced file.");
+                    if (depth > 0) throw new InvalidDataException($"{path}: the terrain recipe {JsonData.Shown(recipe, asText: true)} must be a root of the mission database, not of a referenced file.");
                     roots.AddRange(ImportTerrain(Text(recipe, "terrain", path), path, context));
                 }
                 else roots.Add(ImportNode(root, path, reading, parentZone, context, instances, depth));
@@ -382,10 +382,10 @@ public static partial class WorldGltf
         if (depth >= GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the node hierarchy, with its external references, is deeper than {GltfDocument.MaximumDepth} levels.");
         context.Token.ThrowIfCancellationRequested();
         var extras = source.Extras?[Key] as JsonObject;
-        if (extras?["terrain"] != null) throw new InvalidDataException($"{path}: node {source.Name} names a terrain recipe but is not a root of the mission database.");
+        if (extras?["terrain"] != null) throw new InvalidDataException($"{path}: node {JsonData.ShownText(source.Name)} names a terrain recipe but is not a root of the mission database.");
         // Later copies of a shared node are the same node under another parent.
         long? mark = extras?["instance"] is { } marker ? Integer(marker, "instance", path) : null;
-        if (mark is < 1 or > int.MaxValue) throw new InvalidDataException($"{path}: node {source.Name} has an invalid instance number.");
+        if (mark is < 1 or > int.MaxValue) throw new InvalidDataException($"{path}: node {JsonData.ShownText(source.Name)} has an invalid instance number.");
         int? instance = (int?)mark;
         if (instance is { } shared && instances.TryGetValue(shared, out var existing)) return existing;
         // References can repeat a file any number of times; a world holds a bounded number of nodes.
@@ -406,7 +406,7 @@ public static partial class WorldGltf
         node.Zone = word is { } full ? full & ~0xFFu | zone : zone;
         if (lod)
         {
-            var fields = extras?["lod"] is { } values ? values as JsonArray ?? throw new InvalidDataException($"{path}: node {name} has an invalid lod record.") : [];
+            var fields = extras?["lod"] is { } values ? values as JsonArray ?? throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} has an invalid lod record.") : [];
             for (int i = 0; i < 20 && i < fields.Count; i++)
                 if (i is 0 or 12 or 17 or 18) node.SetPayloadInt(i * 4, (int)Integer(fields[i], "lod", path, int.MinValue, int.MaxValue));
                 else node.SetPayloadFloat(i * 4, Real(fields[i], "lod", path));
@@ -415,13 +415,13 @@ public static partial class WorldGltf
         {
             var matrix = source.Matrix ?? Matrix4x4.Identity;
             float[] rows = [matrix.M11, matrix.M12, matrix.M13, matrix.M21, matrix.M22, matrix.M23, matrix.M31, matrix.M32, matrix.M33, matrix.M41, matrix.M42, matrix.M43];
-            if (!rows.All(float.IsFinite)) throw new InvalidDataException($"{path}: node {name} has a transform with a non-finite value.");
+            if (!rows.All(float.IsFinite)) throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} has a transform with a non-finite value.");
             node.SetPayloadInt(0, matrix.IsIdentity ? 0x28 : 0x30);
             node.SetPayloadFloat(0x24, 1); node.SetPayloadFloat(0x28, 1); node.SetPayloadFloat(0x2C, 1);
             for (int i = 0; i < 12; i++) node.SetPayloadFloat(0x30 + i * 4, rows[i]);
         }
         if (source.Mesh != null) node.Model = ImportMesh(source.Mesh, path, reading, context);
-        else if (extras?["model"] is { } values) node.Model = ImportValues(values as JsonObject ?? throw new InvalidDataException($"{path}: node {name} has an invalid model record."), source, path, reading, context);
+        else if (extras?["model"] is { } values) node.Model = ImportValues(values as JsonObject ?? throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} has an invalid model record."), source, path, reading, context);
         if (extras?["ref"] is { } referenceValue)
         {
             string uri = Text(referenceValue, "ref", path);
@@ -468,7 +468,7 @@ public static partial class WorldGltf
             bool textured = material.Texture != null, normals = storesNormals != false && primitive.Normals.Count == primitive.Positions.Count;
             if (textured && primitive.TexCoords.Count != primitive.Positions.Count)
             {
-                context.Warnings.Add($"{path}: mesh {mesh.Name} uses texture {material.Texture!.Name} without texture coordinates; they were set to zero.");
+                context.Warnings.Add($"{path}: mesh {JsonData.ShownText(mesh.Name)} uses texture {material.Texture!.Name} without texture coordinates; they were set to zero.");
             }
             var targets = primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0] : null;
             int added = 0;
@@ -484,7 +484,7 @@ public static partial class WorldGltf
                 builder.Add(input);
             }
         }
-        foreach (var warning in builder.Warnings.Distinct()) context.Warnings.Add($"{path}: mesh {mesh.Name}: {warning}");
+        foreach (var warning in builder.Warnings.Distinct()) context.Warnings.Add($"{path}: mesh {JsonData.ShownText(mesh.Name)}: {warning}");
         builder.Finish();
         context.World.Models.Add(model);
         context.Models[(reading, mesh)] = model;
@@ -637,7 +637,7 @@ public static partial class WorldGltf
                 context.Warnings.Add($"{path}: texture {textureName} is sampled with different edge modes; the pack keeps the first.");
         }
         else if (source?.EmbeddedImage == true)
-            context.Warnings.Add($"{path}: material {source.Name} has an embedded image; texture packs are built from PNG files, so save the image as a PNG beside the model (for example with Blender's glTF Separate format). The surface is untextured.");
+            context.Warnings.Add($"{path}: material {JsonData.ShownText(source.Name)} has an embedded image; texture packs are built from PNG files, so save the image as a PNG beside the model (for example with Blender's glTF Separate format). The surface is untextured.");
         uint opacity = extras?["opacity"] is { } o ? (uint)Integer(o, "opacity", path, 0, 255)
             : source != null && source.AlphaMode == "BLEND" && source.BaseColor.W < 1 ? (uint)Math.Clamp(MathF.Round(source.BaseColor.W * 255), 0, 255) : 0xFF;
         uint extraFlags = extras?["flags"] is { } f ? Hex(f, "flags", path) & ~0x1FFu : 0;
@@ -726,8 +726,9 @@ public static partial class WorldGltf
     // Engine values in extras. Editors may rewrite their types (Blender stores a list mixing whole and fractional numbers
     // as floats, so 1 comes back as 1.0), so whole numbers are accepted in either form; anything else is invalid data.
 
+    /// <summary>The refusal of an engine value, which shows only a preview of it: a value can be as large as the extras may be.</summary>
     private static InvalidDataException Invalid(string what, string path, JsonNode? node) =>
-        new($"{path}: the engine value '{what}' is invalid ({node?.ToJsonString() ?? "null"}).");
+        new($"{path}: the engine value '{what}' is invalid ({JsonData.Shown(node)}).");
     private static long Integer(JsonNode? node, string what, string path, long minimum = long.MinValue, long maximum = long.MaxValue)
     {
         if (node is JsonValue value)

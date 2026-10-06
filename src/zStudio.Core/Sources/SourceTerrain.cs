@@ -59,7 +59,7 @@ public static class SourceTerrain
         if (!recipePath.EndsWith(TerrainRecipe.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"A recipe's name ends with {TerrainRecipe.Extension}.");
         if (workspace.Exists(recipePath)) throw new InvalidDataException($"{recipePath} already exists.");
         var doc = GltfDocument.Read(workspace.Read(model, token) ?? throw new InvalidDataException($"The project has no {model}."),
-            uri => workspace.Read(WorldAssembler.Relative(model, uri), token) ?? throw new InvalidDataException($"{model} names {uri}, which does not exist."), token);
+            uri => workspace.Read(WorldAssembler.Relative(model, uri), token) ?? throw new InvalidDataException($"{model} names {JsonData.ShownText(uri)}, which does not exist."), token);
         List<TerrainSurface> surfaces = [];
         var zones = InheritedZones(doc);
         foreach (string name in nodes)
@@ -151,7 +151,7 @@ public static class SourceTerrain
     {
         model = Checked(model);
         var doc = GltfDocument.Read(workspace.Read(model, token) ?? throw new InvalidDataException($"The project has no {model}."),
-            uri => workspace.Read(WorldAssembler.Relative(model, uri), token) ?? throw new InvalidDataException($"{model} names {uri}, which does not exist."), token);
+            uri => workspace.Read(WorldAssembler.Relative(model, uri), token) ?? throw new InvalidDataException($"{model} names {JsonData.ShownText(uri)}, which does not exist."), token);
         var named = doc.AllNodes().GroupBy(WorldGltf.EngineName).Where(g => g.Count() == 1).Select(g => g.Single());
         return named.Where(n => n.Mesh != null).Select(WorldGltf.EngineName).ToArray();
     }

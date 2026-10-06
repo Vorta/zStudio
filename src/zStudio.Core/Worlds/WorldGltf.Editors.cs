@@ -63,7 +63,7 @@ public static partial class WorldGltf
                 if (own == passed && engine["zone"] != null && engine["zoneWord"] == null) engine.Remove("zone");
             }
             else if (marked && passed is { } zone && !marks[owner])
-                throw new InvalidDataException($"{path}: {EngineName(node)} took its zone from what loads the file; under {EngineName((JsonObject)nodes[parents[i]]!)} it would take zone {zone} instead. Give it a zone of its own (custom property recoil → zone, 255 for any zone) or move it back.");
+                throw new InvalidDataException($"{path}: {JsonData.ShownText(EngineName(node))} took its zone from what loads the file; under {JsonData.ShownText(EngineName((JsonObject)nodes[parents[i]]!))} it would take zone {zone} instead. Give it a zone of its own (custom property recoil → zone, 255 for any zone) or move it back.");
             // A node that had no engine values gets none.
             if (engine.Count == 0 && node["extras"] is JsonObject extras) { extras.Remove(Key); if (extras.Count == 0) node.Remove("extras"); }
         }
@@ -166,17 +166,17 @@ public static partial class WorldGltf
         foreach (var (mark, list) in copies)
             for (int k = 1; k < list.Count; k++)
                 if (Difference(list[0].Node, list[0].Zone, list[k].Node, list[k].Zone, 0) is { } difference)
-                    throw new InvalidDataException($"{path}: the copies of shared node {EngineName(list[0].Node)} (instance {mark}) differ in {difference}. Every copy is the same node, which import reads from the first copy; change all of them alike, or make one a node of its own by removing its recoil → instance property.");
+                    throw new InvalidDataException($"{path}: the copies of shared node {JsonData.ShownText(EngineName(list[0].Node))} (instance {mark}) differ in {difference}. Every copy is the same node, which import reads from the first copy; change all of them alike, or make one a node of its own by removing its recoil → instance property.");
 
         string? Difference(GltfNode a, uint? zoneA, GltfNode b, uint? zoneB, int depth)
         {
             if (++work > GltfDocument.MaximumNodes * 4L || depth > GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the copies of its shared nodes are too large to compare.");
-            if (EngineName(a) != EngineName(b)) return $"name ({EngineName(a)}, {EngineName(b)})";
-            if (!JsonNode.DeepEquals(Values(a), Values(b))) return $"the engine values of {EngineName(a)}";
-            if (zoneA is { } za && zoneB is { } zb && za != zb) return $"the zone of {EngineName(a)} ({za}, {zb})";
-            if (!SameMatrix(a.Matrix ?? Matrix4x4.Identity, b.Matrix ?? Matrix4x4.Identity)) return $"the transform of {EngineName(a)}";
-            if (!SameMesh(a.Mesh, b.Mesh)) return $"the mesh of {EngineName(a)}";
-            if (a.Children.Count != b.Children.Count) return $"the children of {EngineName(a)}";
+            if (EngineName(a) != EngineName(b)) return $"name ({JsonData.ShownText(EngineName(a))}, {JsonData.ShownText(EngineName(b))})";
+            if (!JsonNode.DeepEquals(Values(a), Values(b))) return $"the engine values of {JsonData.ShownText(EngineName(a))}";
+            if (zoneA is { } za && zoneB is { } zb && za != zb) return $"the zone of {JsonData.ShownText(EngineName(a))} ({za}, {zb})";
+            if (!SameMatrix(a.Matrix ?? Matrix4x4.Identity, b.Matrix ?? Matrix4x4.Identity)) return $"the transform of {JsonData.ShownText(EngineName(a))}";
+            if (!SameMesh(a.Mesh, b.Mesh)) return $"the mesh of {JsonData.ShownText(EngineName(a))}";
+            if (a.Children.Count != b.Children.Count) return $"the children of {JsonData.ShownText(EngineName(a))}";
             for (int k = 0; k < a.Children.Count; k++)
             {
                 GltfNode childA = a.Children[k], childB = b.Children[k];

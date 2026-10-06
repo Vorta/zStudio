@@ -77,7 +77,7 @@ public sealed record TerrainAttributes
         if (node is null) return patch ?? None;
         var o = node as JsonObject ?? throw Error("must be an object");
         foreach (var key in o.Select(p => p.Key))
-            if (!Keys.Contains(key)) throw Error($"has an unknown attribute {key} (known: {string.Join(", ", Keys)})");
+            if (!Keys.Contains(key)) throw Error($"has an unknown attribute {JsonData.ShownText(key)} (known: {string.Join(", ", Keys)})");
         var a = patch ?? None;
         bool Has(string key, out JsonNode? value) { bool has = o.TryGetPropertyValue(key, out value); return has; }
         if (Has("zones", out var zones)) a = a with
@@ -223,7 +223,7 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
                     foreach (var id in list as JsonArray ?? throw Error($"region {name} surfaces must be a list"))
                     {
                         string surface = Text(id, $"region {name} surface");
-                        if (!surfaces.Any(s => s.Id == surface)) throw Error($"region {name} names unknown surface {surface}");
+                        if (!surfaces.Any(s => s.Id == surface)) throw Error($"region {name} names unknown surface {JsonData.ShownText(surface)}");
                         if (!on.Contains(surface)) on.Add(surface);
                     }
                 if (regions.Any(x => x.Name == name)) throw Error($"has two regions named {name}");
@@ -245,7 +245,7 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
         string Name(JsonNode? node, string what)
         {
             string text = Text(node, what);
-            if (text.Length is 0 or > 32 || !text.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-')) throw Error($"{what} \"{text}\" must be 1–32 letters, digits, _ or -");
+            if (text.Length is 0 or > 32 || !text.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-')) throw Error($"{what} \"{JsonData.ShownText(text)}\" must be 1–32 letters, digits, _ or -");
             return text;
         }
         string Path(JsonNode? node, string what)

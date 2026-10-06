@@ -255,7 +255,7 @@ public static partial class SourceTerrainConversion
         database = SourceWorkspace.Normalize(database);
         if (!database.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{database} must be a .gltf file to convert.");
         byte[] bytes = workspace.Read(database, token) ?? throw new InvalidDataException($"The project has no {database}.");
-        var doc = GltfDocument.Read(bytes, uri => workspace.Read(WorldAssembler.Relative(database, uri), token) ?? throw new InvalidDataException($"{database} names {uri}, which does not exist."), token);
+        var doc = GltfDocument.Read(bytes, uri => workspace.Read(WorldAssembler.Relative(database, uri), token) ?? throw new InvalidDataException($"{database} names {JsonData.ShownText(uri)}, which does not exist."), token);
         JsonObject root;
         try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject ?? throw new InvalidDataException($"{database} is not a JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{database} is not valid JSON: {ex.Message}", ex); }
