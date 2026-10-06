@@ -13,6 +13,8 @@ namespace Recoil.Zbd.Tests;
 /// the pack file could not hold them. Undoing a publication never removes an output whose original the backup lost, and a
 /// canceled publication stays a cancellation.
 /// </summary>
+// Forces garbage collections; kept apart from tests that run in parallel.
+[Collection("Allocation-sensitive")]
 public sealed class PackDecodingTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;

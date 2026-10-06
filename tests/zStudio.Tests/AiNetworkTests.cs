@@ -7,6 +7,8 @@ using Xunit;
 
 namespace Recoil.Zbd.Tests;
 
+// Relies on a weak cache entry surviving between two reads; kept apart from tests that run in parallel.
+[Collection("Allocation-sensitive")]
 public sealed class AiNetworkTests
 {
     [Theory]
