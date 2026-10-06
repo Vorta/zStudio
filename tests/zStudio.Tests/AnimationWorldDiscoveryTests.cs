@@ -17,10 +17,16 @@ public sealed class AnimationWorldDiscoveryTests
         await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
         var root = ZrdNode.Create(ZrdKind.Array) with { Children = [ZrdNode.Create(ZrdKind.String) with { Text = new string('x', 2_000_000) }] };
         var resource = fixture.AddResource("effects.zrd", ZrdWriter.Write(root, token));
-        long before = GC.GetTotalAllocatedBytes(true);
-        var context = await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
-        long allocated = GC.GetTotalAllocatedBytes(true) - before;
-        Assert.Empty(context.Effects);
+        // The count is the whole process's: other work (the runner reporting results, finalizers) can only add to it, so
+        // the least of a few loads is the setup's own (about 90 KB; expanding the unused string alone takes 4 MB).
+        long allocated = long.MaxValue;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            long before = GC.GetTotalAllocatedBytes(true);
+            var context = await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
+            allocated = Math.Min(allocated, GC.GetTotalAllocatedBytes(true) - before);
+            Assert.Empty(context.Effects);
+        }
         Assert.True(allocated < 1_000_000, $"Animation setup allocated {allocated:N0} bytes for unused effects.");
         Assert.Equal(2_000_000, ((ZrdNode)resource.Assets[0].Content!).Children[0].Text.Length);
     }

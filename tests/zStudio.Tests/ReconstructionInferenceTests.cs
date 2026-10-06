@@ -314,9 +314,20 @@ public sealed class ReconstructionInferenceTests
     {
         // A second in, the search for where the caches end (quadratic in the free list) is under way.
         var (world, build) = Unreadable(20_000);
-        using CancellationTokenSource stop = new(1000);
-        var inference = Task.Run(() => DatabaseRecords.Infer(world, build, _ => false, "m1", [], stop.Token), Token);
-        Assert.Same(inference, await Task.WhenAny(inference, Task.Delay(4000, Token)));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => inference);
+        using CancellationTokenSource stop = new();
+        long stopped = 0;
+        var inference = Task.Run(() =>
+        {
+            try { return DatabaseRecords.Infer(world, build, _ => false, "m1", [], stop.Token); }
+            finally { Volatile.Write(ref stopped, System.Diagnostics.Stopwatch.GetTimestamp()); }
+        }, Token);
+        await Task.Delay(1000, Token);
+        // Canceled here and timed on the inference's own thread: a busy thread pool can delay a timer's cancellation, or
+        // when this test resumes, but not how soon the inference sees the cancellation.
+        long canceled = System.Diagnostics.Stopwatch.GetTimestamp();
+        stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => inference.WaitAsync(TimeSpan.FromMinutes(2), Token));
+        var latency = System.Diagnostics.Stopwatch.GetElapsedTime(canceled, Volatile.Read(ref stopped));
+        Assert.True(latency < TimeSpan.FromSeconds(3), $"The inference stopped {latency.TotalMilliseconds:N0} ms after it was canceled.");
     }
 }
