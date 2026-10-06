@@ -105,7 +105,7 @@ public static partial class WorldGltf
             node.Model = builder.Finish();
             var (modelValues, morph, modelPath) = models[piece.Surface];
             ApplyValues(node.Model, modelValues, morph, modelPath);
-            context.World.Models.Add(node.Model);
+            context.AddModel(node.Model);
             context.TerrainPieceImported?.Invoke(node, recipePath, piece, recipe.Surfaces[piece.Surface].Id);
             nodes.Add(node);
         }

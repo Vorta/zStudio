@@ -84,6 +84,8 @@ public sealed partial class SourcePublisher
 {
     private const int JournalFormat = 1, MaximumJournals = 1024;
     private const long MaximumManifestBytes = 64L * 1024 * 1024;
+    internal long RecoveryBytesLimit { get; init; } = MaximumManifestBytes;
+    internal int RecoveryFilesLimit { get; init; } = SourceProject.MaximumFiles;
     private static readonly JsonSerializerOptions JournalJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true, MaxDepth = 8,
@@ -91,8 +93,9 @@ public sealed partial class SourcePublisher
     };
 
     private readonly record struct JournalEvent(string Step, int Index);
-    private sealed class Journal(JournalManifest manifest, IReadOnlyList<JournalEvent> events)
+    private sealed class Journal(JournalManifest manifest, IReadOnlyList<JournalEvent> events, long workingBytes)
     {
+        public long WorkingBytes { get; } = workingBytes;
         private readonly HashSet<int> intended = [.. events.Where(e => e.Step == "intent").Select(e => e.Index)];
         public JournalManifest Manifest { get; } = manifest;
         public string Id => Manifest.SaveId;
@@ -167,7 +170,7 @@ public sealed partial class SourcePublisher
         token.ThrowIfCancellationRequested();
         using FileStream gate = Lock();
         if (!File.Exists(Path.Combine(JournalPath(saveId), ManifestName))) throw new FileNotFoundException($"There is no save journal {saveId} in {RecoveryFolder}.");
-        Journal journal = Load(saveId);
+        Journal journal = Load(saveId, token: token);
         token.ThrowIfCancellationRequested();
         if (journal.RolledBack) return HasFiles(Path.Combine(JournalPath(saveId), HeldFolder)) ? Abandon(journal) : Retire(saveId);
         return action switch
@@ -232,6 +235,12 @@ public sealed partial class SourcePublisher
         {
             Step("undo", index);
             SourceProject.RejectNestedLinks(root, file.Relative);
+            CheckWorkingPath(held); CheckWorkingPath(Path.Combine(journal, TakenFolder));
+            if (moved && file.Expected == null)
+                return (false, new(file.Relative, "the save journal holds an unexpected original; nothing was replaced"));
+            // Validate and hold the original BEFORE taking back the valid installed file. A damaged or replaced
+            // recovery copy must not destroy the only good version, and cannot change between verification and rename.
+            using SealedFile? original = moved ? SealedFile.Open(held, file.Expected!) : null;
             if (installed && file.Content is { } content)
             {
                 if (file.Expected != null && !moved) return (false, new(file.Relative, "has the saved content but its original is no longer in the save journal, so it was left as it is"));
@@ -251,10 +260,10 @@ public sealed partial class SourcePublisher
                 {
                     // Another program already put the original content back: the journal's copy is a duplicate. Not
                     // canceled part-way, as the file may have changed above; only a file of the original's length is read.
-                    if (Look(path, default, file.Expected).Is(file.Expected) && Look(held, default, file.Expected).Is(file.Expected)) return (changed, null);
+                    if (Look(path, default, file.Expected).Is(file.Expected)) return (changed, null);
                     return (changed, new(file.Relative, $"holds content from another program, so its original was not put back; it remains as {Display(held)}"));
                 }
-                File.Move(held, path, false); changed = true; log.Append("restored", index);
+                original!.MoveTo(path); changed = true; log.Append("restored", index);
             }
             return (changed, null);
         }
@@ -285,6 +294,7 @@ public sealed partial class SourcePublisher
                 {
                     Step("complete", i);
                     SourceProject.RejectNestedLinks(root, file.Relative);
+                    CheckJournalPaths(journal.Id); CheckWorkingPath(held);
                     // A file whose turn has come is completed, as a cancellation is observed between files; the check above
                     // already read it (giving way to the cancellation), and only a file of a journaled length is read again.
                     Probe probe = Look(path, default, file.Content, file.Expected);
@@ -354,9 +364,10 @@ public sealed partial class SourcePublisher
     }
 
     /// <summary>The journal's copy of a new content, read only when it has the journaled length (it may have been replaced since it was checked).</summary>
-    private static byte[] NewContent(string journal, int index, JournalDigest content)
+    private byte[] NewContent(string journal, int index, JournalDigest content)
     {
         const string Damaged = "the save journal's copy of its new content is damaged.";
+        CheckWorkingPath(AfterPath(journal, index));
         using FileStream stream = new(AfterPath(journal, index), FileMode.Open, FileAccess.Read, FileShare.Read);
         if (stream.Length != content.Length) throw new InvalidDataException(Damaged);
         if (content.Length > Array.MaxLength) throw new InvalidDataException("its new content is larger than a source file can be.");
@@ -403,16 +414,28 @@ public sealed partial class SourcePublisher
             if (ids.Count == MaximumJournals) throw new SourceRecoveryRequiredException($"{RecoveryFolder} holds more than {MaximumJournals} save journals; resolve or move them before saving.", directory.Name, []);
             ids.Add(directory.Name);
         }
-        return [.. ids.Order(StringComparer.Ordinal).Select(Load)];
+        List<Journal> journals = []; long remaining = RecoveryBytesLimit; int files = 0;
+        foreach (string id in ids.Order(StringComparer.Ordinal))
+        {
+            token.ThrowIfCancellationRequested();
+            var journal = Load(id, remaining, token);
+            remaining -= journal.WorkingBytes;
+            if ((files += journal.Manifest.Files.Count) > RecoveryFilesLimit)
+                throw new SourceRecoveryRequiredException($"The save journals together list more than {RecoveryFilesLimit:N0} files; resolve or move journals before opening recovery again.", id, []);
+            journals.Add(journal);
+        }
+        return journals;
     }
 
-    private Journal Load(string id)
+    private Journal Load(string id, long maximumBytes = MaximumManifestBytes, CancellationToken token = default)
     {
         string folder = JournalPath(id);
         try
         {
-            JournalManifest manifest = ReadManifest(folder, id);
-            return new(manifest, EventLog.Read(folder, manifest.Files.Count));
+            CheckJournalPaths(id);
+            JournalManifest manifest = ReadManifest(folder, id, maximumBytes, out long bytes);
+            var events = EventLog.Read(folder, manifest.Files.Count, maximumBytes - bytes, out long eventBytes, token);
+            return new(manifest, events, bytes + eventBytes);
         }
         catch (Exception ex) when (ex is InvalidDataException or JsonException or IOException or UnauthorizedAccessException)
         {
@@ -428,11 +451,12 @@ public sealed partial class SourcePublisher
         File.Move(temporary, Path.Combine(journal, ManifestName), false);
     }
 
-    private JournalManifest ReadManifest(string journal, string id)
+    private JournalManifest ReadManifest(string journal, string id, long maximumBytes, out long length)
     {
         FileInfo info = new(Path.Combine(journal, ManifestName));
         if (info.Length > MaximumManifestBytes) throw new InvalidDataException($"its manifest is larger than {MaximumManifestBytes:N0} bytes.");
-        JournalManifest manifest = JsonSerializer.Deserialize<JournalManifest>(File.ReadAllBytes(info.FullName), JournalJson) ?? throw new InvalidDataException("its manifest is empty.");
+        byte[] bytes = SourceRead.All(info.FullName, Math.Min(MaximumManifestBytes, maximumBytes)); length = bytes.LongLength;
+        JournalManifest manifest = JsonSerializer.Deserialize<JournalManifest>(bytes, JournalJson) ?? throw new InvalidDataException("its manifest is empty.");
         if (manifest.Format != JournalFormat) throw new InvalidDataException($"its format {manifest.Format} is not supported by this version of zStudio.");
         if (manifest.SaveId != id) throw new InvalidDataException($"its manifest belongs to the save {manifest.SaveId}.");
         if (manifest.Description.Length > MaximumDescriptionLength) throw new InvalidDataException("its description is too long.");
@@ -452,6 +476,7 @@ public sealed partial class SourcePublisher
         string[] created = [.. manifest.Files.Where(f => f.Content != null).Select(f => f.Relative).Order(StringComparer.OrdinalIgnoreCase)];
         foreach (string folder in manifest.Folders)
         {
+            if (folder == null) throw new InvalidDataException("it lists an empty folder entry.");
             CheckSyntax(folder);
             string prefix = folder + "/";
             int at = Array.BinarySearch(created, prefix, StringComparer.OrdinalIgnoreCase);
@@ -487,12 +512,14 @@ public sealed partial class SourcePublisher
             catch { stream.Dispose(); throw; }
         }
 
-        public static IReadOnlyList<JournalEvent> Read(string journal, int files)
+        public static IReadOnlyList<JournalEvent> Read(string journal, int files, long maximumBytes, out long length, CancellationToken token)
         {
+            length = 0;
             string path = Path.Combine(journal, EventsName);
             if (!File.Exists(path)) return [];
             using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            return Parse(Contents(stream), files).Events;
+            var bytes = Contents(stream, maximumBytes, token); length = bytes.Length;
+            return Parse(bytes, files, token).Events;
         }
 
         public void Append(string step, int index)
@@ -515,17 +542,17 @@ public sealed partial class SourcePublisher
         }
         public void Dispose() => stream.Dispose();
 
-        private static byte[] Contents(FileStream stream)
+        private static byte[] Contents(FileStream stream, long maximumBytes = MaximumBytes, CancellationToken token = default)
         {
-            if (stream.Length > MaximumBytes) throw new InvalidDataException($"its event log is larger than {MaximumBytes:N0} bytes.");
-            byte[] bytes = new byte[stream.Length]; stream.Position = 0; stream.ReadExactly(bytes);
-            return bytes;
+            stream.Position = 0;
+            return SourceRead.All(stream, Math.Min(MaximumBytes, maximumBytes), "its event log", token);
         }
-        private static (List<JournalEvent> Events, long Valid) Parse(byte[] bytes, int files)
+        private static (List<JournalEvent> Events, long Valid) Parse(byte[] bytes, int files, CancellationToken token = default)
         {
             List<JournalEvent> events = []; int start = 0;
             while (start < bytes.Length)
             {
+                token.ThrowIfCancellationRequested();
                 int end = Array.IndexOf(bytes, (byte)'\n', start);
                 if (end < 0) break; // An unterminated last record is torn.
                 if (Record(Encoding.ASCII.GetString(bytes, start, end - start), events.Count + 1, files) is not { } record)

@@ -19,7 +19,9 @@ public static class TerrainShapes
     /// <summary>The shape with <paramref name="stroke"/> added (painted) or subtracted (erased).</summary>
     public static IReadOnlyList<TerrainOutline> Paint(IReadOnlyList<TerrainOutline> shape, IReadOnlyList<TerrainOutline> stroke, bool add)
     {
-        var result = add ? Clipper.Union(Area(shape), Area(stroke), FillRule.NonZero, Precision) : Clipper.Difference(Area(shape), Area(stroke), FillRule.NonZero, Precision);
+        var subject = Area(shape); var clip = Area(stroke);
+        CheckComplexity(subject.Concat(clip));
+        var result = add ? Clipper.Union(subject, clip, FillRule.NonZero, Precision) : Clipper.Difference(subject, clip, FillRule.NonZero, Precision);
         return Outlines(result);
     }
 
@@ -31,6 +33,9 @@ public static class TerrainShapes
         foreach (var p in path) Check(p);
         PathD line = [.. path.Select(p => new PointD(p.X, p.Y))];
         if (line.Count == 1) line.Add(new PointD(line[0].x + 1e-3, line[0].y));
+        // At this arc tolerance a full circle uses fewer than 64 edges. Bound offset
+        // edge pairs before InflatePaths performs its own internal union.
+        CheckComplexity([line], radius, 64);
         var area = Clipper.InflatePaths([line], radius, JoinType.Round, EndType.Round, 2.0, Precision, Math.Max(radius / 64, 0.01));
         return Outlines(area);
     }
@@ -46,17 +51,67 @@ public static class TerrainShapes
     /// <summary>A shape as Clipper paths covering the same area: each polygon minus its holes, unioned.</summary>
     private static PathsD Area(IReadOnlyList<TerrainOutline> shape)
     {
+        if (shape.Sum(p => (long)p.Outer.Count + p.Holes.Sum(h => (long)h.Count)) > MaximumPoints)
+            throw ComplexityError();
         PathsD all = [];
         foreach (var polygon in shape)
         {
             foreach (var p in polygon.Outer) Check(p);
             PathsD outer = [Path(polygon.Outer)];
-            var piece = polygon.Holes.Count == 0 ? Clipper.Union(outer, FillRule.NonZero) : Clipper.Difference(outer, [.. polygon.Holes.Select(Path)], FillRule.NonZero, Precision);
+            PathsD holes = [.. polygon.Holes.Select(Path)];
+            CheckComplexity(outer.Concat(holes));
+            var piece = holes.Count == 0 ? Clipper.Union(outer, [], FillRule.NonZero, Precision) : Clipper.Difference(outer, holes, FillRule.NonZero, Precision);
+            if (all.Sum(p => (long)p.Count) + piece.Sum(p => (long)p.Count) > MaximumPoints) throw ComplexityError();
             all.AddRange(piece);
         }
-        return Clipper.Union(all, FillRule.NonZero);
+        CheckComplexity(all);
+        return Clipper.Union(all, [], FillRule.NonZero, Precision);
     }
-    private static PathD Path(IReadOnlyList<Vector2> ring) => [.. ring.Select(p => new PointD(p.X, p.Y))];
+    private static PathD Path(IReadOnlyList<Vector2> ring)
+    {
+        foreach (var p in ring) Check(p);
+        return [.. ring.Select(p => new PointD(p.X, p.Y))];
+    }
+
+    private static InvalidDataException ComplexityError() => new("The shape exceeds the safe clipping complexity; use simpler outlines or shorter brush strokes.");
+
+    // Bounding-box candidates conservatively bound intersections (and generated vertices).
+    // The sweep itself has a separate work limit, including disjoint Y intervals.
+    private static void CheckComplexity(IEnumerable<PathD> paths, double expansion = 0, int weight = 1)
+    {
+        List<(double Left, double Right, double Bottom, double Top)> edges = [];
+        foreach (var path in paths)
+        {
+            if ((long)(edges.Count + path.Count) * weight > MaximumPoints) throw ComplexityError();
+            for (int i = 0; i < path.Count; i++)
+            {
+                var a = path[i]; var b = path[(i + 1) % path.Count];
+                edges.Add((Math.Min(a.x, b.x) - expansion - 0.001, Math.Max(a.x, b.x) + expansion + 0.001,
+                    Math.Min(a.y, b.y) - expansion - 0.001, Math.Max(a.y, b.y) + expansion + 0.001));
+            }
+        }
+        edges.Sort((a, b) => a.Left.CompareTo(b.Left));
+        List<(double Left, double Right, double Bottom, double Top)> active = [];
+        long candidates = (long)edges.Count * weight * weight;
+        long work = 0;
+        foreach (var edge in edges)
+        {
+            for (int i = active.Count - 1; i >= 0; i--)
+            {
+                if (++work > 4_000_000) throw ComplexityError();
+                var other = active[i];
+                if (other.Right < edge.Left)
+                {
+                    active[i] = active[^1]; active.RemoveAt(active.Count - 1);
+                }
+                else if (other.Top >= edge.Bottom && edge.Top >= other.Bottom)
+                    candidates += (long)weight * weight;
+                if (candidates > 1_000_000) throw ComplexityError();
+            }
+            active.Add(edge);
+        }
+        if (candidates > 1_000_000) throw ComplexityError();
+    }
     private static void Check(Vector2 p)
     {
         if (!float.IsFinite(p.X) || !float.IsFinite(p.Y) || Math.Abs(p.X) > TerrainRecipe.MaximumCoordinate || Math.Abs(p.Y) > TerrainRecipe.MaximumCoordinate)
@@ -66,12 +121,15 @@ public static class TerrainShapes
     /// <summary>Clean paths as polygons with holes, in a stable order (by first point), each ring starting at its smallest point.</summary>
     private static IReadOnlyList<TerrainOutline> Outlines(PathsD paths)
     {
+        CheckComplexity(paths);
         ClipperD clipper = new(Precision);
         clipper.AddSubject(paths);
         PolyTreeD tree = new();
         clipper.Execute(ClipType.Union, FillRule.NonZero, tree);
         List<TerrainOutline> result = [];
-        Visit(tree);
+        Stack<PolyPathD> pending = new();
+        pending.Push(tree);
+        while (pending.TryPop(out var next)) Visit(next);
         if (PointCount(result) > MaximumPoints) throw new InvalidDataException($"The shape would have more than {MaximumPoints:N0} points; paint with a larger brush or fewer strokes.");
         return [.. result.OrderBy(o => o.Outer[0].X).ThenBy(o => o.Outer[0].Y)];
 
@@ -85,7 +143,7 @@ public static class TerrainShapes
                 {
                     var hole = outer[j];
                     holes.Add(Ring(hole.Polygon!));
-                    Visit(hole);
+                    pending.Push(hole);
                 }
                 result.Add(new(Ring(outer.Polygon!), [.. holes.OrderBy(h => h[0].X).ThenBy(h => h[0].Y)]));
             }

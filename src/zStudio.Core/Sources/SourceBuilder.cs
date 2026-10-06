@@ -128,8 +128,17 @@ public static partial class SourceBuilder
     /// <paramref name="changed"/> makes the error for a file that changed during the run (another run than an export, such
     /// as a Blender checkout, says what to do again); by default it is an export's.
     /// </summary>
-    internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null, Func<string, Exception>? changed = null)
+    internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null, Func<string, Exception>? changed = null,
+        long maximumRetainedBytes = SourceExtractor.MaximumRetainedBytes)
     {
+        internal long RetainedBytes { get; private set; }
+        /// <summary>Worlds and compiled animation packages share the run's retained-data limit, across every output.</summary>
+        internal void Retain(long bytes)
+        {
+            if (bytes < 0 || bytes > maximumRetainedBytes - RetainedBytes)
+                throw new InvalidDataException($"The export's retained worlds and animations exceed {maximumRetainedBytes / (1024 * 1024):N0} MiB; export fewer missions together.");
+            RetainedBytes += bytes;
+        }
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Every project file the run read or asked about, from the overlay or the disk: what its outputs depend on.</summary>
         private readonly HashSet<string> dependencies = new(StringComparer.OrdinalIgnoreCase);
@@ -140,15 +149,19 @@ public static partial class SourceBuilder
         internal void Depend(string relative) { lock (dependencyGate) dependencies.Add(relative); }
         /// <summary>The project files read from disk and their stamps (pending content that replaced files is not included).</summary>
         internal IReadOnlyDictionary<string, FileStamp> Stamps() => files.ToDictionary(f => f.Key, f => f.Value.Stamp, StringComparer.OrdinalIgnoreCase);
-        internal byte[] Read(string relative, CancellationToken token)
+        internal byte[] Read(string relative, CancellationToken token, long maximum = FormatRegistry.MaximumDocumentBytes)
         {
             token.ThrowIfCancellationRequested();
             Depend(relative);
-            if (overlay?.TryGetValue(relative, out var pending) == true) return pending;
+            if (overlay?.TryGetValue(relative, out var pending) == true)
+            {
+                if (pending.LongLength > maximum) throw new InvalidDataException($"{JsonData.ShownText(relative)} exceeds {maximum:N0} bytes.");
+                return pending;
+            }
             string path = SourceProject.Resolve(root, relative);
             var stamp = FileStamp.Read(path);
             if (stamp.Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} exceeds 512 MiB.");
-            byte[] bytes = File.ReadAllBytes(path); string sha = SourceProject.Sha256(bytes);
+            byte[] bytes = SourceRead.All(path, maximum, token); string sha = SourceProject.Sha256(bytes);
             if (FileStamp.Read(path) != stamp) throw Changed(relative, $"{relative} changed while it was read; export again.");
             if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw Changed(relative, $"{relative} changed while exporting; export again.");
             files[relative] = (sha, stamp); return bytes;
@@ -181,7 +194,7 @@ public static partial class SourceBuilder
             damageMasks = new(StringComparer.OrdinalIgnoreCase);
             foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), Added, token))
                 foreach (var line in GameGenScriptText.Tokenize(GameGenScriptText.Decode(Read(script, token))))
-                    if (line.Count > 1 && line[0].Equals("WriteTextureSetMap", StringComparison.OrdinalIgnoreCase)) damageMasks.Add(Path.GetFileNameWithoutExtension(line[1]));
+                    if (line.Count > 1 && ScriptCommands.Core(line[0]) == "WriteTextureSetMap") damageMasks.Add(Path.GetFileNameWithoutExtension(line[1]));
             return damageMasks;
         }
         /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>
@@ -201,6 +214,9 @@ public static partial class SourceBuilder
                 {
                     WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token);
                     var world = assembler.Assemble($"{mission}.gs");
+                    // Include per-node provenance and its applied instruction references, beside decoded geometry.
+                    Retain(SourceExtractor.Footprint(world) + 512L * assembler.Provenance.Count + 256L * assembler.Executions.Count
+                        + assembler.Provenance.Values.Sum(p => 128L * p.Applied.Count));
                     cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
                         new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots]) { Provenance = assembler.Provenance, Executions = assembler.Executions, WriteInstruction = assembler.WriteInstruction }, null);
                 }
@@ -294,6 +310,7 @@ public static partial class SourceBuilder
                 try
                 {
                     var built = await Task.Run(() => Build(root, plan, snapshot, token), token);
+                    if (built.Package != null) snapshot.Retain(4L * built.Bytes.LongLength);
                     // Every output must reopen through the shared readers before it can be written.
                     var check = FormatRegistry.Default.OpenBytes(plan.Path, built.Bytes, token: token);
                     if (check.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built file does not reopen: " + error.Message);
@@ -344,7 +361,7 @@ public static partial class SourceBuilder
     {
         // As a profile is read without a snapshot: a file over 64 KB is refused before it is read.
         if (new FileInfo(SourceProject.Resolve(root, path)).Length > BuildProfiles.MaximumFileBytes) throw new InvalidDataException($"{path} is larger than 64 KB.");
-        return snapshot.Read(path, token);
+        return snapshot.Read(path, token, BuildProfiles.MaximumFileBytes);
     });
     /// <summary>
     /// Refuses outputs whose plan the project no longer gives, because it changed after it was planned: the plan is made again,
@@ -434,11 +451,11 @@ public static partial class SourceBuilder
         try
         {
             if (!File.Exists(world) || new FileInfo(world).Length > FormatRegistry.MaximumDocumentBytes) return null;
-            var doc = FormatRegistry.Default.OpenBytes("gamez.zbd", File.ReadAllBytes(world), token: token);
+            var doc = FormatRegistry.Default.OpenBytes("gamez.zbd", SourceRead.All(world, FormatRegistry.MaximumDocumentBytes, token), token: token);
             if (doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 }) return null;
             Animation.AnimationPackage? package = null;
             if (File.Exists(animations) && new FileInfo(animations).Length <= FormatRegistry.MaximumDocumentBytes)
-                try { package = Animation.AnimationPackage.Read(File.ReadAllBytes(animations), token); } catch (InvalidDataException) { }
+                try { package = Animation.AnimationPackage.Read(SourceRead.All(animations, FormatRegistry.MaximumDocumentBytes, token), token); } catch (InvalidDataException) { }
             return (GameZWorldReader.FromDocument(doc, token), package);
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { return null; }
@@ -458,9 +475,9 @@ public static partial class SourceBuilder
     {
         foreach (var (relative, _) in outputs) { _ = SourceProject.Resolve(destination, relative); SourceProject.RejectNestedLinks(destination, relative); }
         string backup = Path.Combine(destination, ".zstudio-backup-" + Guid.NewGuid().ToString("N"));
-        // Original: the stamp of the replaced file moved into the backup, so undoing restores it only while the backup still
+        // Original: the digest of the replaced file moved into the backup, so undoing restores it only while the backup still
         // holds it. Installed: the content this export moved into place, so undoing it removes only that file.
-        List<(string Target, string? Saved, FileStamp? Original, JournalDigest? Installed)> steps = [];
+        List<(string Target, string? Saved, JournalDigest? Original, JournalDigest? Installed)> steps = [];
         // Each staged output from its check until it is in place: what is installed is what was built and reopened.
         var held = new SealedFile?[outputs.Count];
         try
@@ -482,8 +499,12 @@ public static partial class SourceBuilder
                 if (File.Exists(target) && !overwrite) throw new IOException($"{relative} appeared in {destination} during the export; nothing was replaced. Export again and allow replacing it.");
                 if (File.Exists(target))
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(saved)!); File.Move(target, saved);
-                    steps.Add((target, saved, null, null)); steps[^1] = steps[^1] with { Original = FileStamp.Read(saved) };
+                    JournalDigest original;
+                    using (FileStream source = new(target, FileMode.Open, FileAccess.Read, FileShare.Read)) original = JournalDigest.Of(source, token);
+                    // Verify again through a held handle before moving: the original cannot change between its digest and rename.
+                    using SealedFile originalFile = SealedFile.Open(target, original);
+                    Directory.CreateDirectory(Path.GetDirectoryName(saved)!); originalFile.MoveTo(saved);
+                    steps.Add((target, saved, original, null));
                 }
                 else steps.Add((target, null, null, null));
                 fault?.Invoke("install", i);
@@ -507,7 +528,8 @@ public static partial class SourceBuilder
                 var (target, saved, original, installed) = steps[i];
                 try
                 {
-                    if (saved != null && !Holds(saved, original)) { (installed != null ? kept : lost).Add(target); continue; }
+                    // Keep the original sealed through removal of the installed output and restoration of its name.
+                    using SealedFile? restore = saved != null ? SealedFile.Open(saved, original!) : null;
                     if (installed != null)
                     {
                         // Moved into the backup and deleted there only while it is the file this export installed.
@@ -525,7 +547,7 @@ public static partial class SourceBuilder
                                 break;
                         }
                     }
-                    if (saved != null) { if (Path.Exists(target)) unrestored.Add(target); else File.Move(saved, target); }
+                    if (saved != null) { if (Path.Exists(target)) unrestored.Add(target); else restore!.MoveTo(target); }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 { (saved == null ? leftover : Holds(saved, original) ? unrestored : installed != null && Path.Exists(target) ? kept : lost).Add(target); }
@@ -551,9 +573,9 @@ public static partial class SourceBuilder
         try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 
         // Whether the backup still holds a replaced file as it was moved there.
-        static bool Holds(string saved, FileStamp? original)
+        static bool Holds(string saved, JournalDigest? original)
         {
-            try { return File.Exists(saved) && (original == null || FileStamp.Read(saved) == original); }
+            try { if (original == null) return false; using var file = SealedFile.Open(saved, original); return true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
         }
     }
@@ -579,6 +601,8 @@ public static partial class SourceBuilder
     private static Built BuildArchive(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase); List<ArchiveSources.Entry> entries = [];
+        long retained = 8L + plan.Inputs.Count * ArchiveSources.RecordSize;
+        FormatRegistry.ValidateDocumentSize(retained);
         // Members are ordered by source path. The engine scans members for the first case-insensitive name match
         // (zIndexArchive::FindRecordByNameCI, retail 0x4A65D0), so order is free but names must be unique.
         foreach (string input in plan.Inputs.Order(StringComparer.Ordinal))
@@ -602,21 +626,28 @@ public static partial class SourceBuilder
                 payload = ZrdWriter.Write(tree, token);
             }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
+            FormatRegistry.ValidateDocumentSize(retained += payload.Length);
             entries.Add(new(name, field, payload));
         }
         return new(ArchiveSources.Write(entries), entries.Count, []);
     }
 
-    private static Built BuildScripts(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
+    internal static Built BuildScripts(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token,
+        long maximumSourceBytes = 64 * 1024 * 1024, int maximumInstructions = GameGenScriptText.MaximumLines, int maximumTokens = GameGenScriptText.MaximumTokens)
     {
         List<PreparedScriptEntry> entries = [];
+        long sourceBytes = 0, instructionCount = 0, tokenCount = 0;
         foreach (string input in plan.Inputs)
         {
             token.ThrowIfCancellationRequested();
             // Scripts are indexed by their path below the gamegen folder, e.g. support\common.gw.
             string name = input[(SourceProject.GameGenFolder.Length + 1)..].Replace('/', '\\');
             PreparedScriptWriter.ValidateName(name);
-            var lines = GameGenScriptText.Tokenize(GameGenScriptText.Decode(snapshot.Read(input, token)));
+            byte[] source = snapshot.Read(input, token, Math.Min(SourceProject.MaximumSourceTextBytes, maximumSourceBytes - sourceBytes));
+            sourceBytes += source.Length;
+            var lines = GameGenScriptText.Tokenize(GameGenScriptText.Decode(source));
+            if ((instructionCount += lines.Count) > maximumInstructions || (tokenCount += lines.Sum(l => (long)l.Count)) > maximumTokens)
+                throw new InvalidDataException("The prepared scripts together exceed the instruction or token limit; split or simplify the sources.");
             int line = 0; List<ScriptInstruction> instructions = [];
             foreach (var tokens in lines)
             {
@@ -683,7 +714,7 @@ public static partial class SourceBuilder
     {
         string script = SourceProject.Resolve(root, $"{SourceProject.GameGenFolder}/support/load{mission}.gw");
         if (!File.Exists(script) || new FileInfo(script).Length > SourceProject.MaximumSourceTextBytes) return false;
-        return GameGenScriptText.Tokenize(GameGenScriptText.Decode(File.ReadAllBytes(script))).Any(l => l.Any(t => t.Equals("support\\bftmulti.gw", StringComparison.OrdinalIgnoreCase)));
+        return GameGenScriptText.Tokenize(GameGenScriptText.Decode(SourceRead.All(script, SourceProject.MaximumSourceTextBytes))).Any(l => l.Any(t => t.Equals("support\\bftmulti.gw", StringComparison.OrdinalIgnoreCase)));
     }
 
     /// <summary>
@@ -828,6 +859,8 @@ public static partial class SourceBuilder
 
     private static Built BuildSounds(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
+        long retained = 8L + plan.Inputs.Count * ArchiveSources.RecordSize;
+        FormatRegistry.ValidateDocumentSize(retained);
         int bank = Array.IndexOf(Banks, plan.Path.ToLowerInvariant());
         var declared = File.Exists(SourceProject.Resolve(root, SoundDefinitions)) ? DeclaredFormats(snapshot.Read(SoundDefinitions, token), token) : new();
         List<string> warnings = []; List<ArchiveSources.Entry> entries = []; Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase);
@@ -846,6 +879,7 @@ public static partial class SourceBuilder
             // Nothing reads a sound's source field (the game finds sounds by name, and the shipped banks hold no paths there),
             // so a path the field cannot hold whole is left out rather than refused or shortened.
             string field = SourceField(input);
+            FormatRegistry.ValidateDocumentSize(retained += payload.Length);
             entries.Add(new(name, ArchiveSources.FitsSourceField(field) ? field : "", payload));
         }
         return new(ArchiveSources.Write(entries), entries.Count, warnings);

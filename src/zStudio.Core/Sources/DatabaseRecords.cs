@@ -20,6 +20,30 @@ namespace Recoil.Zbd.Core.Sources;
 /// </summary>
 internal static partial class DatabaseRecords
 {
+    private static void CheckDepth(int depth)
+    {
+        if (depth > Gltf.GltfDocument.MaximumDepth)
+            throw new InvalidDataException($"The inferred database has more than {Gltf.GltfDocument.MaximumDepth} nested groups, which its source glTF cannot represent.");
+    }
+    /// <summary>Each free-list boundary's occupied run, maintaining a shrinking high-water mark and a growing prefix.</summary>
+    internal static IEnumerable<(int Count, int High, bool Contiguous)> BoundaryCandidates(IReadOnlyList<int> list, IReadOnlyCollection<int> objectSlots, int root, CancellationToken token)
+    {
+        if (list.Count < 2) yield break;
+        int last = list.Count - 1;
+        int[] below = new int[list.Count]; below[last] = -1;
+        for (int i = last - 1; i >= 0; i--) below[i] = Math.Max(below[i + 1], list[i]);
+        SortedSet<int> run = new(objectSlots);
+        for (int d = 1; d < last; d++)
+        {
+            token.ThrowIfCancellationRequested();
+            int high = below[d] + 1;
+            while (run.Count > 0 && run.Max >= high) run.Remove(run.Max);
+            if (list[d - 1] < high) run.Add(list[d - 1]);
+            if (high <= root) continue;
+            int top = list[d];
+            yield return (d, high, run.Count > 0 && run.Contains(root) && run.Min == top - run.Count && run.Max == top - 1);
+        }
+    }
     /// <summary>
     /// The database file's top-level records in order; the group nodes the build deleted (also those in its parts); the
     /// references to its parts (files of their own) with the content copied from each; and the model references that
@@ -214,7 +238,8 @@ internal static partial class DatabaseRecords
         List<WorldNode> OwnReferences(LoadedModel load)
         {
             List<WorldNode> found = [];
-            void Walk(WorldNode node) { if (isReference(node)) { found.Add(node); return; } foreach (var child in node.Children) Walk(child); }
+            HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
+            void Walk(WorldNode node) { token.ThrowIfCancellationRequested(); if (!seen.Add(node)) return; if (isReference(node)) { found.Add(node); return; } foreach (var child in node.Children) Walk(child); }
             foreach (var record in load.Content) Walk(record);
             return found;
         }
@@ -246,10 +271,18 @@ internal static partial class DatabaseRecords
             var later = build.Loads.Where(l => !l.Database && l.Root != null && l.Step > database.Step).ToList();
             Shapes names = new(n => n.Name);
             var shapes = later.Select(l => names.Of([l.Root!])).ToList();
-            for (int i = 0; i < later.Count; i++)
-                for (int j = i + 1; j < later.Count; j++)
+            // Only swaps involving the first freed slot are candidates (the caller's filter). Find that root once,
+            // rather than enumerating all pairs of later loads before discarding almost every pair.
+            int anchor = later.FindIndex(l => slot[l.Root!] == list[0]);
+            if (anchor < 0) yield break;
+            for (int other = 0; other < later.Count; other++)
+            {
+                token.ThrowIfCancellationRequested();
+                if (other == anchor) continue;
+                int i = Math.Min(anchor, other), j = Math.Max(anchor, other);
                     if (string.Equals(later[i].File, later[j].File, StringComparison.OrdinalIgnoreCase) && later[i].NodeName == later[j].NodeName && shapes[i] == shapes[j])
                         yield return (later[i], later[j]);
+            }
         }
 
         // The free list the deletion left, from its top, as the later steps reveal it.
@@ -283,7 +316,8 @@ internal static partial class DatabaseRecords
             else Take(node!);
         }
         if (mismatch != null) { failure = $"after it, {mismatch}."; return null; }
-        if (pushed.Any(s => s < 0 && !entries.ContainsKey(-s - 1)) || Enumerable.Range(0, taken).Any(k => !entries.ContainsKey(k) && !pushed.Contains(-(k + 1))))
+        var pushedSet = pushed.ToHashSet();
+        if (pushed.Any(s => s < 0 && !entries.ContainsKey(-s - 1)) || Enumerable.Range(0, taken).Any(k => !entries.ContainsKey(k) && !pushedSet.Contains(-(k + 1))))
             { failure = "a freed slot was taken only by nodes the world no longer holds."; return null; }
         // The rest of the list is in the file's own free list, from its head: what the later loads freed and nothing took
         // again, then the entries no later node took.
@@ -338,7 +372,8 @@ internal static partial class DatabaseRecords
                 Allocate = n => Check(n, table.Take(n)), Free = table.Release, Content = DatabaseContent, File = File,
                 IsReference = n => isReference(n) && !inline.Contains(n), Token = token, Mirrored = budget.Load(),
             });
-            List<WorldNode> recorded = [.. records.Where(r => !groups.Contains(r))];
+            HashSet<WorldNode> groupSet = new(groups, ReferenceEqualityComparer.Instance);
+            List<WorldNode> recorded = [.. records.Where(r => !groupSet.Contains(r))];
             bool settled = inline.Count == inlineBefore && recorded.SequenceEqual(order);
             order = [.. recorded, .. order.Where(o => !placed.Contains(o))];
             if (mismatch != null || placed.Count < bySlot.Count)
@@ -356,15 +391,16 @@ internal static partial class DatabaseRecords
             Dictionary<int, int> position = []; for (int i = 0; i < post.Count; i++) position[post[i]] = i;
             Dictionary<int, int> parent = [];
             if (!pre.ToHashSet().SetEquals(post) || !Tree(0, pre.Count - 1, 0, post.Count - 1)) { reason = "its freed slots do not form one tree of groups."; return null; }
-            bool Tree(int a, int b, int c, int d)
+            bool Tree(int a, int b, int c, int d, int depth = 0)
             {
+                CheckDepth(depth);
                 if (pre[a] != post[d]) return false;
                 int i = a + 1, j = c;
                 while (i <= b)
                 {
                     if (!position.TryGetValue(pre[i], out int q) || q < j || q >= d || i + (q - j) > b) return false;
                     parent[pre[i]] = pre[a];
-                    if (!Tree(i, i + (q - j), j, q)) return false;
+                    if (!Tree(i, i + (q - j), j, q, depth + 1)) return false;
                     i += q - j + 1; j = q + 1;
                 }
                 return j == d;

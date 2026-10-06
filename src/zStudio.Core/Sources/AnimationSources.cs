@@ -22,18 +22,24 @@ internal static class AnimationSources
     private sealed record ScriptTrack(string Object, List<AnimationKeyframe> Frames, float Rate, string Text);
 
     /// <summary>The files written so far over the project on disk.</summary>
-    private sealed class Overlay(IProjectFiles project) : IProjectFiles
+    private sealed class Overlay(IProjectFiles project, ReconstructionBudget budget) : IProjectFiles
     {
         public Dictionary<string, byte[]> Written { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public void Write(string path, string text, Encoding encoding)
+        {
+            budget.Retain(encoding.GetByteCount(text));
+            Written[path] = encoding.GetBytes(text);
+        }
         public bool Exists(string relative) => Written.ContainsKey(relative) || project.Exists(relative);
         public byte[] Read(string relative, CancellationToken token) => Written.TryGetValue(relative, out var bytes) ? bytes : project.Read(relative, token);
     }
 
     /// <param name="status">Told what is being done: each keyframe script as it starts being written (from worker threads),
     /// then each mission's check of its rebuilt animations.</param>
-    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token, Action<SourceStage, string>? status = null)
+    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token, Action<SourceStage, string>? status = null, long maximumRetainedBytes = ReconstructionBudget.MaximumBytes)
     {
-        Overlay files = new(project);
+        ReconstructionBudget budget = new(maximumRetainedBytes);
+        Overlay files = new(project, budget);
         HashSet<(string, int)> attempted = [];
         // Script path → its object tracks in the order first seen, and the time its stamp records.
         Dictionary<string, List<ScriptTrack>> scripts = new(StringComparer.OrdinalIgnoreCase);
@@ -70,7 +76,13 @@ internal static class AnimationSources
                     // OBJECT lines separate names with whitespace and comments start with #.
                     if (!AnimationScript.IsObjectName(target)) { notes.Add($"m{mission.Mission}: {entry.Name} moves {target}, which a keyframe script cannot name; the track was not reconstructed."); continue; }
                     string? track; List<AnimationKeyframe> frames;
-                    try { frames = [.. ev.Keyframes(token)]; track = AnimationScript.Decompile(frames, rate); }
+                    try
+                    {
+                        var keys = ev.Keyframes(token);
+                        budget.Retain(256L * keys.Count); // Frame objects, copied channel data and their collection.
+                        frames = [.. keys]; track = AnimationScript.Decompile(frames, rate);
+                        if (track != null) budget.Retain(2L * track.Length);
+                    }
                     catch (InvalidDataException) { frames = []; track = null; }
                     if (track == null) { notes.Add($"m{mission.Mission}: {entry.Name} moves {target} with keyframes that are not on the {rate}/s frame grid of {file}; the track was not reconstructed."); continue; }
                     string path = stamped.TryGetValue(file, out var stamp) ? stamp.Path : $"{Path.GetDirectoryName(definition.File)!.Replace('\\', '/')}/{file}";
@@ -88,10 +100,12 @@ internal static class AnimationSources
             var written = new (string Text, string? Note)[order.Count];
             try
             {
-                Parallel.For(0, order.Count, new ParallelOptions { CancellationToken = token }, i =>
+                Parallel.For(0, order.Count, new ParallelOptions { CancellationToken = token, MaxDegreeOfParallelism = 4 }, i =>
                 {
                     status?.Invoke(SourceStage.Reconstructing, $"keyframe script {order[i]}");
-                    written[i] = WriteScript(order[i], scripts[order[i]], times.TryGetValue(order[i], out uint t) ? t : null, token);
+                    var result = WriteScript(order[i], scripts[order[i]], times.TryGetValue(order[i], out uint t) ? t : null, token);
+                    budget.Retain(2L * result.Text.Length);
+                    written[i] = result;
                 });
             }
             catch (AggregateException ex) when (ex.InnerExceptions.Count > 0)
@@ -101,7 +115,7 @@ internal static class AnimationSources
             }
             for (int i = 0; i < order.Count; i++)
             {
-                files.Written[order[i]] = Encoding.Latin1.GetBytes(written[i].Text);
+                files.Write(order[i], written[i].Text, Encoding.Latin1);
                 if (scriptNotes.TryAdd(order[i], written[i].Note)) noted.Add(order[i]); else scriptNotes[order[i]] = written[i].Note;
             }
 
@@ -220,7 +234,7 @@ internal static class AnimationSources
             catch (InvalidDataException ex) { notes.Add($"{definition.File}: {Name(definition)} does not compile to the shipped animation and could not be rebuilt from it ({ex.Message}); it was kept as shipped."); continue; }
             byte[] original = files.Read(definition.File, token);
             var tree = AnimationDefinitionSet.ReplaceDefinition(AnimationDefinitionSet.Read(files, definition.File, token), definition.Ordinal, items!);
-            files.Written[definition.File] = Encoding.ASCII.GetBytes(ZrdText.Write(tree, token));
+            files.Write(definition.File, ZrdText.Write(tree, token), Encoding.ASCII);
             string? remaining;
             try
             {

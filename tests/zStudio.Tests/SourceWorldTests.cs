@@ -10,7 +10,33 @@ namespace Recoil.Zbd.Tests;
 
 public sealed class SourceWorldTests
 {
+    [Fact]
+    public void ModelInsertionUsesTheBuildsCaseSensitivePrefixDispatch()
+    {
+        var rewritten = Encoding.ASCII.GetString(SourceWorlds.InsertIntoScript("quit\nGameZWriteZBDFileExtra world.zbd\nQuit\n"u8, [new("data/m1/models/a.gltf", "a")]));
+        Assert.Contains("LoadGameGen a.gltf a\nGameZWriteZBDFileExtra", rewritten);
+    }
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+    private sealed class OnReport(Action<SourceProgress> action) : IProgress<SourceProgress> { public void Report(SourceProgress value) => action(value); }
+
+    [Fact]
+    public async Task PreviewBuildRefusesALinkInstalledAfterPlanning()
+    {
+        using var fixture = new SourceWorldFixture();
+        string destination = Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "test"), outside = Path.Combine(fixture.Root, "outside");
+        Directory.CreateDirectory(outside); bool replaced = false;
+        var progress = new OnReport(_ =>
+        {
+            if (replaced) return; replaced = true;
+            Directory.Delete(destination); Directory.CreateSymbolicLink(destination, outside);
+        });
+        try
+        {
+            Assert.Contains("is a link", (await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", destination, progress: progress, token: Token))).Message);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(outside));
+        }
+        finally { if (Directory.Exists(destination) && File.GetAttributes(destination).HasFlag(FileAttributes.ReparsePoint)) Directory.Delete(destination); }
+    }
 
     [Fact]
     public void ModelLinesGoBeforeTheWorldIsWritten()

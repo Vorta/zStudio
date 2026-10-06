@@ -151,7 +151,7 @@ public static class BuildProfiles
         if (read != null) return read(path) ?? throw new InvalidDataException($"{path} does not exist.");
         var info = new FileInfo(SourceProject.Resolve(root, path));
         if (info.Length > MaximumFileBytes) throw new InvalidDataException($"{path} is larger than 64 KB.");
-        return File.ReadAllBytes(info.FullName);
+        return SourceRead.All(info.FullName, MaximumFileBytes);
     }
 
     /// <summary>A profile file: <c>{ "format": "recoil-build-profile", "version": 1, "description", "status", "default", "texturePacks": [ { "file", "budgetMiB", "maximumDimension", "missions" } ] }</c>.</summary>

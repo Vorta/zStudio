@@ -4945,7 +4945,7 @@
   },
   {
     "Name": "zstudio_source_status",
-    "Description": "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed), paged and filtered by path. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5003,7 +5003,7 @@
   },
   {
     "Name": "zstudio_source_world_models",
-    "Description": "List the glTF models of the open source project that a world script can load (every .gltf/.glb under data with a loadable name), paged and filtered by path.",
+    "Description": "List the glTF models of the open source project that a world script can load (every .gltf/.glb under data with a loadable name), paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5160,7 +5160,7 @@
   },
   {
     "Name": "zstudio_source_changes",
-    "Description": "Describe the open source project\u0027s unsaved edits: the files save_document would write, the shared edit history (newest last, with undone steps marked) and, for one file, its working text beside the file on disk as a bounded line diff.",
+    "Description": "Describe the open source project\u0027s unsaved edits: the files save_document would write, the shared edit history (newest last, with undone steps marked) and, for one file, its working text beside the file on disk as a bounded line diff. Workspace and history path summaries keep 256 characters, with pathsTruncated flags; full source identities are retained internally.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5185,7 +5185,7 @@
   },
   {
     "Name": "zstudio_source_world_object",
-    "Description": "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from \u2014 the glTF file and node it was imported from (origin.part marks a part of the mission database, a file it references and copies wherever it does), or the script instruction that created it \u2014 with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world.",
+    "Description": "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from \u2014 the glTF file and node it was imported from (origin.part marks a part of the mission database, a file it references and copies wherever it does), or the script instruction that created it \u2014 with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world. Inspection previews bound script/model paths to 256 characters and tokens to 128, with truncation flags; edits still target document and node identities.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5512,9 +5512,20 @@
   },
   {
     "Name": "zstudio_source_blender_checkouts",
-    "Description": "List the open source project\u0027s Blender checkouts (newest first) with the exports found in each outbox (newest first). The listing runs off the UI thread and observes cancellation; a zstudio/export folder holding more than 250,000 files and folders in all is refused with io_failed.",
+    "Description": "List the open source project\u0027s Blender checkouts (newest first) with the exports found in each outbox (newest first). Returns at most 32 checkouts, 64 files and 16 exports each, with total counts. Large paths shorten pages and nested lists without shortening paths; follow nextOffset. The listing runs off the UI thread and observes cancellation; more than 250,000 entries or 64 MiB of manifests together is refused with io_failed.",
     "Mutates": false,
-    "Parameters": []
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based checkout offset; default 0. Follow nextOffset to continue.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
   },
   {
     "Name": "zstudio_source_blender_update",
@@ -5567,13 +5578,13 @@
   },
   {
     "Name": "zstudio_source_recovery",
-    "Description": "List the open source project\u0027s interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved.",
+    "Description": "List the open source project\u0027s interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved.",
     "Mutates": false,
     "Parameters": []
   },
   {
     "Name": "zstudio_source_recovery_resolve",
-    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Refused while a world rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them). Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5626,6 +5637,16 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Recipe listing offset, or region listing offset with recipe; follow nextOffset. Pages contain at most 64 rows.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
       }
     ]
   },
@@ -5800,7 +5821,7 @@
   },
   {
     "Name": "zstudio_source_terrain_convert",
-    "Description": "Convert to editable terrain: the open source world\u0027s mission database pieces (untransformed mesh roots no script, resource or animation names, except landmarks) become surfaces of a new terrain recipe beside the database, grouped by node flags and zone with plan-view overlaps kept apart, as one undoable change. Without apply, only report the plan: surfaces, pieces and the objects kept with reasons. With apply, convert, rebuild, and compare the altitude probe over the converted area before and after (heights, polygon zones, soils, node flags and zones) on a grid of the given spacing. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Convert to editable terrain: the open source world\u0027s mission database pieces (untransformed mesh roots no script, resource or animation names, except landmarks) become surfaces of a new terrain recipe beside the database, grouped by node flags and zone with plan-view overlaps kept apart, as one undoable change. Without apply, only report the plan: surfaces, pieces and the objects kept with reasons. With apply, convert, rebuild, and compare the altitude probe over the converted area before and after (heights, polygon zones, soils, node flags and zones) on a grid of the given spacing. The probe reports complete=false and a limitation if its index or polygon work budget is exceeded; the conversion remains applied. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {

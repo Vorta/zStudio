@@ -124,6 +124,49 @@ internal static class WorldHighlightMcpChecks
             }
         }
         finally { Set("scene", null); main.Close(); }
+        await SharedModelZones();
         void Set(string name, object? value) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main, value);
+    }
+
+    private static async Task SharedModelZones()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var token = deadline.Token;
+        var material = new Recoil.Zbd.Core.Worlds.WorldMaterial();
+        var builder = new Recoil.Zbd.Core.Worlds.ModelBuilder();
+        builder.Add(new([new(0,0,0),new(0,0,1),new(1,0,1)], [], [], [], material));
+        var root = new Recoil.Zbd.Core.Worlds.WorldNode("world", Recoil.Zbd.Core.Worlds.WorldNodeClass.World);
+        var world = new Recoil.Zbd.Core.Worlds.GameZWorld(); world.Nodes.Add(root); world.Models.Add(builder.Model); world.Materials.Add(material);
+        for (uint zone = 1; zone <= 2; zone++)
+        {
+            var node = new Recoil.Zbd.Core.Worlds.WorldNode("part" + zone, Recoil.Zbd.Core.Worlds.WorldNodeClass.Object3D)
+            { Model = builder.Model, Zone = zone, Flags = Recoil.Zbd.Core.Worlds.WorldGltf.DefaultCarried | 4 };
+            node.SetPayloadInt(0, 0x28); node.Parents.Add(root); root.Children.Add(node); world.Nodes.Add(node);
+        }
+        string folder = Path.Combine(Path.GetTempPath(), "zstudio-zone-batches-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var source = Recoil.Zbd.Core.Formats.FormatRegistry.Default.OpenBytes(Path.Combine(folder,"gamez.zbd"), Recoil.Zbd.Core.Worlds.GameZWriter.Write(world, token), token: token);
+            using var resolver = new AssetResolver(folder);
+            using var viewport = new SceneViewport();
+            await viewport.ShowAsync(source, source.Assets.Single(a => a.Kind == AssetKind.World), resolver, null, 0, token);
+            viewport.SetWorldHighlightMode(WorldHighlightMode.Zones);
+            var batches = (System.Collections.IDictionary)typeof(SceneViewport).GetField("placements", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(viewport)!;
+            Assert.Equal(2, batches.Count);
+            var colors = new HashSet<string>();
+            foreach (System.Collections.DictionaryEntry batch in batches)
+            {
+                var mesh = (HelixToolkit.Wpf.SharpDX.MeshGeometryModel3D)batch.Key;
+                var placement = Assert.Single((ScenePlacement[])batch.Value!);
+                int zone = WorldSurfaceHighlights.NodeZone(source.Scene!, placement.NodeIndex);
+                var actual = Assert.IsType<HelixToolkit.Wpf.SharpDX.DiffuseMaterial>(mesh.Material).DiffuseColor;
+                var expected = WorldSurfaceHighlights.ZoneColor(zone);
+                Assert.Equal(expected.R, actual.Red); Assert.Equal(expected.G, actual.Green); Assert.Equal(expected.B, actual.Blue);
+                colors.Add(actual.ToString()); Assert.Single(mesh.Instances!);
+            }
+            Assert.Equal(2, colors.Count);
+        }
+        finally { Directory.Delete(folder, true); }
     }
 }

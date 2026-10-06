@@ -15,6 +15,34 @@ public sealed class SourceBlenderTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private const string Model = "data/m1/models/m1.gltf";
 
+    [Fact]
+    public void AppliedManifestChargesEscapedPathsBeforeSerializationAndLeavesTheOriginal()
+    {
+        using SourceWorldFixture fixture = new();
+        var checkout = SourceBlender.Checkout(new SourceWorkspace(fixture.Project), Model, Token);
+        string manifest = Path.Combine(checkout.Folder, "manifest.json");
+        byte[] original = File.ReadAllBytes(manifest);
+        string longPath = new('é', 32000);
+        var changes = Enumerable.Range(0, 4096).Select(i => (Relative: longPath + i, Content: Array.Empty<byte>())).ToArray();
+        var plan = new BlenderUpdatePlan("test", changes, [], checkout.Folder);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Contains("4 MiB", Assert.Throws<InvalidDataException>(() => SourceBlender.RecordApplied(checkout, plan)).Message);
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 4 * 1024 * 1024);
+        Assert.Equal(original, File.ReadAllBytes(manifest));
+    }
+
+    [Fact]
+    public void RecordingAnUpdateNeverWritesThroughAPreexistingTemporaryLink()
+    {
+        using SourceWorldFixture fixture = new();
+        var checkout = SourceBlender.Checkout(new SourceWorkspace(fixture.Project), Model, Token);
+        string sentinel = Path.Combine(fixture.Project, "outside.txt"); File.WriteAllText(sentinel, "keep");
+        File.CreateSymbolicLink(Path.Combine(checkout.Folder, "manifest.json.tmp"), sentinel);
+        SourceBlender.RecordApplied(checkout, new("test", [], [], checkout.Folder));
+        Assert.Equal("keep", File.ReadAllText(sentinel));
+        Assert.False(File.GetAttributes(Path.Combine(checkout.Folder, "manifest.json")).HasFlag(FileAttributes.ReparsePoint));
+    }
+
     /// <summary>"Exports" the checkout's input unchanged into the outbox (below <paramref name="folder"/>), as Blender would after an edit.</summary>
     private static string Export(BlenderCheckout checkout, string folder = "edit", Action<JsonObject>? change = null)
     {
@@ -29,6 +57,29 @@ public sealed class SourceBlenderTests
     }
     private static void Apply(SourceWorkspace workspace, BlenderUpdatePlan plan) => workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token);
     private static void Rename(JsonObject gltf, string name) => gltf["nodes"]![0]!["name"] = name;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnsupportedMaterialOrMorphExportIsRejectedWithoutChangingWorkspace(bool morph)
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        byte[] before = workspace.Read(Model, Token)!;
+        var checkout = SourceBlender.Checkout(workspace, Model, Token);
+        string exported = Export(checkout, change: root =>
+        {
+            if (morph)
+                root["meshes"]![0]!["primitives"]![0]!["targets"] = new JsonArray(new JsonObject(), new JsonObject());
+            else root["materials"]![0]!["pbrMetallicRoughness"]!["baseColorFactor"] = new JsonArray(.5f, 1f, 1f, 1f);
+        });
+        Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, exported, force: true, token: Token));
+        Assert.Empty(workspace.History); Assert.Empty(workspace.Overlay()); Assert.Equal(before, workspace.Read(Model, Token));
+        var plan = SourceBlender.PlanUpdate(workspace, checkout, Export(checkout, "valid", root => Rename(root, "ground2")), token: Token);
+        Apply(workspace, plan);
+        Assert.Single(workspace.History);
+        workspace.Undo(); Assert.Equal(before, workspace.Read(Model, Token));
+    }
 
     [Fact]
     public void AnUpdateNeverSilentlyReplacesEditsMadeSinceTheCheckout()

@@ -18,7 +18,7 @@ public static class GameZWriter
 
     public static byte[] Write(GameZWorld world, CancellationToken token = default)
     {
-        Validate(world);
+        Validate(world, token);
         var slotOf = SlotIndices(world);
         var materialIndex = Indices(world.Materials); var modelIndex = Indices(world.Models); var textureIndex = Indices(world.Textures);
         int Texture(WorldTexture? t) => t == null ? -1 : textureIndex.TryGetValue(t, out int i) ? i : throw new InvalidDataException($"Texture {t.Name} is not in the texture directory.");
@@ -210,8 +210,36 @@ public static class GameZWriter
         return result;
     }
 
-    private static void Validate(GameZWorld world)
+    private static void Validate(GameZWorld world, CancellationToken token)
     {
+        GameZLayouts.CheckEntries("node capacity", world.NodeCapacity);
+        GameZLayouts.CheckEntries("model capacity", world.ModelCapacity);
+        GameZLayouts.CheckEntries("material capacity", world.MaterialCapacity, 32767);
+        foreach (var (slot, record) in world.FreedSlots)
+            if (slot < 0 || slot >= world.NodeCapacity || record.Length != NodeSlotSize) throw new InvalidDataException("A freed node slot is outside the table or has an invalid record.");
+        WorldGeometryBudget geometry = new();
+        long bytes = 36L + TextureEntrySize * (long)world.Textures.Count + 16 + MaterialSlotSize * (long)world.MaterialCapacity
+            + 12 + ModelSlotSize * (long)world.ModelCapacity + NodeSlotSize * (long)world.NodeCapacity;
+        foreach (var model in world.Models)
+        {
+            token.ThrowIfCancellationRequested(); geometry.Add(model);
+            bytes += 12L * ((long)model.Vertices.Count + model.Normals.Count + model.Morphs.Count) + 76L * model.Points.Count + 28L * model.Polygons.Count;
+            foreach (var point in model.Points) bytes += 12L * point.Vertices.Length;
+            foreach (var polygon in model.Polygons) bytes += 4L * ((long)polygon.Vertices.Length + polygon.Normals.Length) + 8L * polygon.Uvs.Length;
+            FormatRegistry.ValidateDocumentSize(bytes);
+        }
+        GameZReader.RecordBudget references = new("node reference");
+        foreach (var node in world.Nodes)
+        {
+            token.ThrowIfCancellationRequested();
+            long links = (long)node.Parents.Count + node.Children.Count + node.WorldLights.Count + node.WorldSounds.Count + node.AttachedWorlds.Count;
+            GameZLayouts.CheckEntries("world partition cell", node.Areas.Count);
+            foreach (var area in node.Areas) links += area.Nodes.Count;
+            references.Add(links);
+            bytes += node.Payload.Length + 64L * node.Areas.Count + 4L * links;
+            FormatRegistry.ValidateDocumentSize(bytes);
+        }
+        FormatRegistry.ValidateDocumentSize(bytes);
         if (world.Textures.Count > 0x1000) throw new InvalidDataException("The texture directory holds at most 4,096 entries.");
         if (world.Materials.Count > world.MaterialCapacity || world.MaterialCapacity > 32767) throw new InvalidDataException($"The world uses {world.Materials.Count:N0} of {world.MaterialCapacity:N0} material slots.");
         if (world.Models.Count > world.ModelCapacity) throw new InvalidDataException($"The world uses {world.Models.Count:N0} of {world.ModelCapacity:N0} model slots.");

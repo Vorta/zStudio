@@ -41,7 +41,7 @@ public sealed class GltfModelReviewFixTests
         // Each primitive becomes an object with its attributes: they are bounded like nodes.
         int primitives = GltfDocument.MaximumPrimitives / 2;
         Assert.Contains("more than 200,000 primitives", Refused(Asset($"\"meshes\":[{{\"primitives\":[{Repeat("{}", primitives)}]}},{{\"primitives\":[{Repeat("{}", primitives + 1)}]}}]")).Message);
-        string empty = "\"accessors\":[{\"componentType\":5126,\"count\":0,\"type\":\"VEC3\"}]";
+        string empty = "\"accessors\":[{\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}]";
         Assert.Contains("morph targets", Refused(Asset($"{empty},\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}},\"targets\":[{Repeat("{}", entries)}]}}]}}]")).Message);
         Assert.Contains("weights", Refused(Asset($"\"meshes\":[{{\"weights\":[{Repeat("0", entries)}]}}]")).Message);
 
@@ -69,7 +69,7 @@ public sealed class GltfModelReviewFixTests
         // Within the budget everything is kept; an embedded image's data is only recognized, never kept, so it does not count.
         var doc = Read(Asset($$$"""
             "scene":0,"scenes":[{"nodes":[0],"extras":{{{Extras(300)}}}}],"nodes":[{"name":"crate","mesh":0}],
-            "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],"accessors":[{"componentType":5126,"count":0,"type":"VEC3"}],
+            "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],"accessors":[{"componentType":5126,"count":3,"type":"VEC3"}],
             "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}},"extras":{{{Extras(600)}}}}],
             "textures":[{"source":0}],"images":[{"uri":"data:image/png;base64,{{{new string('A', 4000)}}}"}]
             """), small);
@@ -88,7 +88,7 @@ public sealed class GltfModelReviewFixTests
         string path = "textures/" + new string('a', 5000) + "%20b.png";
         var doc = Read(Asset($"\"textures\":[{{\"source\":0}}],\"images\":[{{\"uri\":\"{path}\"}}],\"materials\":[{Repeat("{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}", 50)}]," +
             $"\"meshes\":[{{\"primitives\":[{string.Join(",", Enumerable.Range(0, 50).Select(i => $"{{\"attributes\":{{\"POSITION\":0}},\"material\":{i}}}"))}]}}]," +
-            "\"accessors\":[{\"componentType\":5126,\"count\":0,\"type\":\"VEC3\"}],\"nodes\":[{\"mesh\":0}]"));
+            "\"accessors\":[{\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}],\"nodes\":[{\"mesh\":0}]"));
         var materials = doc.Roots[0].Mesh!.Primitives.Select(p => p.Material!).ToList();
         Assert.Equal(50, materials.Distinct().Count());
         Assert.Equal("textures/" + new string('a', 5000) + " b.png", materials[0].ImageUri);
@@ -99,12 +99,12 @@ public sealed class GltfModelReviewFixTests
     public void MorphTargetsThatMoveNothingCountAsDecoded()
     {
         // Each target without positions is made in full, one delta per position, so it takes from the decoding budget like
-        // an accessor: ten positions (30 components) and three empty targets (90) pass a budget of 100.
+        // an accessor: nine positions (27 components) and three empty targets (81) pass a budget of 100.
         GltfDocument.ReadLimits small = GltfDocument.ReadLimits.Default with { DecodedElements = 100 };
-        string File(int targets) => Asset($"\"nodes\":[{{\"mesh\":0}}],\"accessors\":[{{\"componentType\":5126,\"count\":10,\"type\":\"VEC3\"}}]," +
+        string File(int targets) => Asset($"\"nodes\":[{{\"mesh\":0}}],\"accessors\":[{{\"componentType\":5126,\"count\":9,\"type\":\"VEC3\"}}]," +
             $"\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}},\"targets\":[{Repeat("{}", targets)}]}}]}}]");
         var read = Read(File(2), small).Roots[0].Mesh!.Primitives[0];
-        Assert.Equal(2, read.Targets.Count); Assert.All(read.Targets, t => Assert.Equal(Enumerable.Repeat(Vector3.Zero, 10), t));
+        Assert.Equal(2, read.Targets.Count); Assert.All(read.Targets, t => Assert.Equal(Enumerable.Repeat(Vector3.Zero, 9), t));
         Assert.Contains("decodes to more data", Refused(File(3), small).Message);
     }
 

@@ -75,7 +75,7 @@ public static partial class WorldGltf
         List<int> roots = [];
         if (root["scenes"] is JsonArray { Count: > 0 } scenes)
         {
-            int scene = root["scene"] is JsonValue value && value.TryGetValue(out int chosen) ? Math.Clamp(chosen, 0, scenes.Count - 1) : 0;
+            int scene = GltfInteger.OptionalInt32(root["scene"], "scene") ?? 0;
             foreach (var r in (scenes[scene] as JsonObject)?["nodes"] as JsonArray ?? []) if (Index(r, nodes.Count) is { } index) roots.Add(index);
         }
         else
@@ -175,6 +175,7 @@ public static partial class WorldGltf
         {
             if (++work > GltfDocument.MaximumNodes * 4L || depth > GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the copies of its shared nodes are too large to compare.");
             if (EngineName(a) != EngineName(b)) return $"name ({JsonData.ShownText(EngineName(a))}, {JsonData.ShownText(EngineName(b))})";
+            if (!a.Weights.SequenceEqual(b.Weights)) return $"the morph weights of {JsonData.ShownText(EngineName(a))}";
             if (!SameValues(a, b)) return $"the engine values of {JsonData.ShownText(EngineName(a))}";
             if (zoneA is { } za && zoneB is { } zb && za != zb) return $"the zone of {JsonData.ShownText(EngineName(a))} ({za}, {zb})";
             if (!SameMatrix(a.Matrix ?? Matrix4x4.Identity, b.Matrix ?? Matrix4x4.Identity)) return $"the transform of {JsonData.ShownText(EngineName(a))}";
@@ -200,9 +201,7 @@ public static partial class WorldGltf
     private static long? Mark(GltfNode node) => Mark((node.Extras?[Key] as JsonObject)?["instance"]);
     private static long? Mark(JsonNode? instance)
     {
-        if (instance is not JsonValue v) return null;
-        long n = v.TryGetValue(out long whole) ? whole : v.TryGetValue(out int small) ? small : v.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e15 ? (long)d : 0;
-        return n is >= 1 and <= int.MaxValue ? n : null;
+        return GltfInteger.TryInt64(instance, out long n) && n is >= 1 and <= int.MaxValue ? n : null;
     }
     /// <summary>
     /// Whether two nodes have the same engine values apart from those copies may write differently: their zones (relative to

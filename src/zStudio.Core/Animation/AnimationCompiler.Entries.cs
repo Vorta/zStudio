@@ -27,8 +27,8 @@ public sealed partial class AnimationCompiler
             string name = Bound(item.TextOf("ANIMATION_NAME") ?? root);
             string attach = Bound(item.TextOf("ANIMATION_ROOT_NAME") ?? root);
             Text(header, 0, name, 32, "ANIMATION_NAME"); Text(header, 32, root, 32, "NAME"); Text(header, 68, attach, 32, "ANIMATION_ROOT_NAME");
-            if (!compiler.NodeExists(root)) compiler.Warn($"{definition.File}: {name} is bound to {root}, which the world lacks; the game rejects the animation file.");
-            if (!compiler.NodeExists(attach)) compiler.Warn($"{definition.File}: {name} is attached to {attach}, which the world lacks; the game rejects the animation file.");
+            if (!compiler.NodeExists(root)) compiler.Warn($"{JsonData.ShownText(definition.File)}: {name} is bound to {root}, which the world lacks; the game rejects the animation file.");
+            if (!compiler.NodeExists(attach)) compiler.Warn($"{JsonData.ShownText(definition.File)}: {name} is attached to {attach}, which the world lacks; the game rejects the animation file.");
 
             uint flags = 0; byte activation = 0, priority = 4; float range = 0, reset = 0, health = 0; bool secondReset = false;
             foreach (var key in item.Items)
@@ -39,7 +39,7 @@ public sealed partial class AnimationCompiler
                         activation = key.Text() switch
                         {
                             "WEAPON_HIT" => 0, "COLLIDE_HIT" => 1, "WEAPON_OR_COLLIDE_HIT" => 2, "ON_CALL" => 3, "ON_STARTUP" => 4,
-                            var other => throw key.Error($"unknown ACTIVATION {other}."),
+                            var other => throw key.Error($"unknown ACTIVATION {JsonData.ShownText(other)}."),
                         };
                         break;
                     case "HEALTH": health = key.Number(); break;
@@ -50,13 +50,13 @@ public sealed partial class AnimationCompiler
                     case "SAVE_LOG": if (key.Text() == "OFF") flags |= 0x1000; break;
                     case "NETWORK_LOG": if (key.Text() == "OFF") flags |= 0x0400; break;
                     case "ACTIVATION_PREREQUISITE": Prerequisites(key); break;
-                    default: compiler.Warn($"{definition.File}: {name}: {key.Key} is not an animation setting and was ignored."); break;
+                    default: compiler.Warn($"{JsonData.ShownText(definition.File)}: {name}: {JsonData.ShownText(key.Key)} is not an animation setting and was ignored."); break;
                 }
             if (!secondReset) flags |= 0x20;
             if (Events(item).Any(e => e.Key == "CALLBACK")) flags |= 0x10;
             BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(148), flags);
             header[153] = activation; header[154] = priority; header[155] = 2;
-            BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(160), (float)((double)range * range));
+            BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(160), Finite((float)((double)range * range)));
             BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(164), reset);
             BinaryPrimitives.WriteSingleLittleEndian(header.AsSpan(172), health);
             // The countdown starts at the health too: the loader keeps the stored value, and only a stop copies 172 into it
@@ -69,21 +69,23 @@ public sealed partial class AnimationCompiler
             // and sbarm definitions name sequences twice and compiled to the second name. (Inside an event the first of
             // a repeated attribute counts, as the shipped machine and pipetrig definitions show.)
             foreach (var sequence in item.All("SEQUENCE_DEFINITION"))
+            {
+                if (entry.Sequences.Count >= 255) throw item.Error("more than 255 sequences.");
                 entry.Sequences.Add(Sequence(sequence.All("NAME").LastOrDefault() is { Scalars.Count: > 0 } named ? named.Text() : "", sequence.Items, sequence));
-            if (entry.Sequences.Count > 255) throw item.Error("more than 255 sequences.");
+            }
             // The loader creates the entry's lights and sound nodes by name before it resolves node references, so
             // those names need not be in the world; any other missing node makes the game reject the file.
             HashSet<string> created = new(tables[2].Skip(1).Concat(tables[3].Skip(1)).Select(r => Name(r, 36)), StringComparer.Ordinal);
             foreach (var record in tables[0].Skip(1).Concat(tables[1].Skip(1)))
             {
                 string node = Name(record, 36);
-                if (!created.Contains(node) && !compiler.NodeExists(node)) compiler.Warn($"{definition.File}: {name} names node {node}, which the world lacks; the game rejects the animation file.");
+                if (!created.Contains(node) && !compiler.NodeExists(node)) compiler.Warn($"{JsonData.ShownText(definition.File)}: {name} names node {node}, which the world lacks; the game rejects the animation file.");
             }
             // LoadZbd also rejects the file when an effect template is not in effects.zrd (retail 0x45F899).
             foreach (var record in tables[5].Skip(1))
             {
                 string effect = Name(record, 32);
-                if (!compiler.EffectExists(effect)) compiler.Warn($"{definition.File}: {name} spawns effect {effect}, which effects.zrd does not define; the game rejects the animation file.");
+                if (!compiler.EffectExists(effect)) compiler.Warn($"{JsonData.ShownText(definition.File)}: {name} spawns effect {effect}, which effects.zrd does not define; the game rejects the animation file.");
             }
             for (int t = 0; t < 8; t++)
                 foreach (var record in tables[t]) entry.References[t].Add(new(record));
@@ -93,7 +95,7 @@ public sealed partial class AnimationCompiler
         }
 
         /// <summary>A setting stored in one byte of the header.</summary>
-        private static byte Byte(AnimationItem key, int value) => value is >= 0 and <= 255 ? (byte)value : throw key.Error($"{key.Key} must be from 0 to 255, not {value}.");
+        private static byte Byte(AnimationItem key, int value) => value is >= 0 and <= 255 ? (byte)value : throw key.Error($"{JsonData.ShownText(key.Key)} must be from 0 to 255, not {value}.");
 
         /// <summary>Every event item of the definition: its reset state and sequences.</summary>
         private static IEnumerable<AnimationItem> Events(AnimationItem definition) =>
@@ -162,7 +164,7 @@ public sealed partial class AnimationCompiler
                                 for (int i = 0; i < names.Length; i++) Add(i == names.Length - 1 ? 2 : 3, names[i], required);
                             }
                             break;
-                        default: compiler.Warn($"{definition.File}: ACTIVATION_PREREQUISITE {part.Key} was ignored."); break;
+                        default: compiler.Warn($"{JsonData.ShownText(definition.File)}: ACTIVATION_PREREQUISITE {JsonData.ShownText(part.Key)} was ignored."); break;
                     }
             }
             if (key.Has("OPTIONS") || key.Has("REQUIRED"))
@@ -185,7 +187,7 @@ public sealed partial class AnimationCompiler
                 switch (key.Key)
                 {
                     case "NAME": continue;
-                    case "ACTIVATION": if (key.Text() == "ON_CALL") { header[32] = 3; header[33] = 3; } else compiler.Warn($"{definition.File}: sequence {name}: ACTIVATION {key.Text()} was ignored."); continue;
+                    case "ACTIVATION": if (key.Text() == "ON_CALL") { header[32] = 3; header[33] = 3; } else compiler.Warn($"{JsonData.ShownText(definition.File)}: sequence {name}: ACTIVATION {JsonData.ShownText(key.Text())} was ignored."); continue;
                     // The original compiler ignored a START_TIME given to a whole sequence; every shipped one is unused.
                     case "START_TIME": continue;
                 }
@@ -197,7 +199,7 @@ public sealed partial class AnimationCompiler
         private static (byte Mode, float Threshold) Start(AnimationItem key) => (key.Text() switch
         {
             "ANIMATION_OFFSET" => (byte)1, "SEQUENCE_OFFSET" => (byte)2, "EVENT_OFFSET" => (byte)3,
-            var other => throw key.Error($"unknown START_TIME {other}."),
+            var other => throw key.Error($"unknown START_TIME {JsonData.ShownText(other)}."),
         }, key.Number(1));
 
         private AnimationEvent? Event(AnimationItem key)
@@ -215,7 +217,7 @@ public sealed partial class AnimationCompiler
                 "FBFX_COLOR_FROM_TO" => (36, 64), "FBFX_CSINWAVE_FROM_TO" => (37, 112), "ANIM_VERBOSE" => (39, 16),
                 _ => null,
             };
-            if (spec == null) { compiler.Warn($"{key.Source}: {key.Key} is not an animation event and was ignored."); return null; }
+            if (spec == null) { compiler.Warn($"{JsonData.ShownText(key.Source)}: {JsonData.ShownText(key.Key)} is not an animation event and was ignored."); return null; }
             var (type, size) = spec.Value;
             E e = new(new byte[size]);
             e.Bytes[0] = type; e.Bytes[1] = 1; e.Int(4, size);
@@ -306,7 +308,7 @@ public sealed partial class AnimationCompiler
                     }
                 case 15 or 16:
                     {
-                        var pair = key.Item("PARENT_CHILD") ?? throw key.Error($"{key.Key} needs PARENT_CHILD.");
+                        var pair = key.Item("PARENT_CHILD") ?? throw key.Error($"{JsonData.ShownText(key.Key)} needs PARENT_CHILD.");
                         e.Short(12, Node(pair.Text(0))); e.Short(14, Node(pair.Text(1)));
                         break;
                     }
@@ -440,8 +442,8 @@ public sealed partial class AnimationCompiler
         {
             string target = Req(key, "NAME"); Track(target); e.Int(12, Node(target));
             string file = Bound(Req(key, "SCRIPT_FILENAME")); float rate = key.Item("SCRIPT_FRAME_RATE")?.Number() ?? 30;
-            var script = compiler.ReadScript(file, key.Source) ?? throw key.Error($"keyframe script {file} was not found in the animation path.");
-            if (!script.Moves(Bound(target))) throw key.Error($"keyframe script {file} has no track for {Bound(target)}.");
+            var script = compiler.ReadScript(file, key.Source) ?? throw key.Error($"keyframe script {JsonData.ShownText(file)} was not found in the animation path.");
+            if (!script.Moves(Bound(target))) throw key.Error($"keyframe script {JsonData.ShownText(file)} has no track for {Bound(target)}.");
             var frames = script.Compile(Bound(target), rate, $"{script.Path}, object {Bound(target)}");
             var ev = new AnimationEvent(e.Bytes) { Version = 28 }.WithKeyframes(frames);
             ev.SetInt(16, frames.Count);
@@ -452,7 +454,7 @@ public sealed partial class AnimationCompiler
         {
             string beam = Req(key, "NAME"); Track(beam); e.Short(16, Node(beam));
             uint flags = 0; e.Float(64, 1); e.Float(68, 1);
-            foreach (var part in key.Items)
+            foreach (var part in key.Items.DistinctBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
                 switch (part.Key)
                 {
                     case "NAME" or "START_TIME": break;
@@ -471,7 +473,7 @@ public sealed partial class AnimationCompiler
                     case "TO_T": flags |= 0x1000; e.Float(64, part.Number()); e.Float(68, part.Number()); break;
                     case "RUN_TIME": e.Float(80, part.Number()); break;
                     case "MAX_LENGTH": flags |= 0x8000; e.Float(84, part.Number()); break;
-                    default: compiler.Warn($"{key.Source}: OBJECT_CONNECTOR {part.Key} was ignored."); break;
+                    default: compiler.Warn($"{JsonData.ShownText(key.Source)}: OBJECT_CONNECTOR {JsonData.ShownText(part.Key)} was ignored."); break;
                 }
             float time = e.Get(80);
             if (time > 0) { e.Float(56, Rate(e.Get(48), e.Get(52), time)); e.Float(72, Rate(e.Get(64), e.Get(68), time)); }
@@ -482,7 +484,7 @@ public sealed partial class AnimationCompiler
         {
             string animation = Req(key, "NAME"); e.Text(16, Bound(animation), 32); e.Short(50, -1);
             uint flags = 0;
-            foreach (var part in key.Items)
+            foreach (var part in key.Items.DistinctBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
                 switch (part.Key)
                 {
                     case "NAME" or "START_TIME": break;
@@ -493,7 +495,7 @@ public sealed partial class AnimationCompiler
                     case "TO_NODE": flags |= 0x40; e.Short(54, Node(part.Text())); break;
                     case "TO_INPUT_NODE_POS": flags |= 0x200; break;
                     case "TO_POS": flags |= 0x400; e.Vector(68, Vec(part, 0)); break;
-                    default: compiler.Warn($"{key.Source}: CALL_OBJECT_CONNECTOR {part.Key} was ignored."); break;
+                    default: compiler.Warn($"{JsonData.ShownText(key.Source)}: CALL_OBJECT_CONNECTOR {JsonData.ShownText(part.Key)} was ignored."); break;
                 }
             e.UInt(12, flags);
         }
@@ -547,11 +549,11 @@ public sealed partial class AnimationCompiler
 
         private void Condition(AnimationItem key, E e)
         {
-            if (key.Item("ANIMATION_LOD") is { } lod) { e.UInt(12, 4); e.Int(20, lod.Text() switch { "HIGH" => 2, "MEDIUM" => 1, "LOW" => 0, var other => throw lod.Error($"unknown ANIMATION_LOD {other}.") }); }
+            if (key.Item("ANIMATION_LOD") is { } lod) { e.UInt(12, 4); e.Int(20, lod.Text() switch { "HIGH" => 2, "MEDIUM" => 1, "LOW" => 0, var other => throw lod.Error($"unknown ANIMATION_LOD {JsonData.ShownText(other)}.") }); }
             else if (key.Item("PLAYER_RANGE") is { } range) { e.UInt(12, 2); float r = range.Number(); e.Float(20, (float)((double)r * r)); }
             else if (key.Item("RANDOM_WEIGHT") is { } weight) { e.UInt(12, 1); e.Float(20, weight.Number()); }
             else if (key.Item("NODE_UNDERCOVER") is { } cover) { e.UInt(12, 0x10); e.Int(16, Node(cover.Text(0))); e.Float(20, cover.Number(1)); }
-            else throw key.Error($"{key.Key} needs a condition.");
+            else throw key.Error($"{JsonData.ShownText(key.Key)} needs a condition.");
         }
 
         private void Wave(AnimationItem key, E e)
@@ -575,8 +577,8 @@ public sealed partial class AnimationCompiler
 
         // ------------------------------------------------------------ helpers
 
-        private static short Override(AnimationItem? end) => end == null || end.Scalars.Count < 2 ? (short)-1 : (short)(end.Text(1) switch { "ON" => 1, "OFF" => 0, var other => throw end.Error($"unknown opacity override {other}.") });
-        private string Req(AnimationItem key, string name) => key.TextOf(name) ?? throw key.Error($"{key.Key} needs {name}.");
+        private static short Override(AnimationItem? end) => end == null || end.Scalars.Count < 2 ? (short)-1 : (short)(end.Text(1) switch { "ON" => 1, "OFF" => 0, var other => throw end.Error($"unknown opacity override {JsonData.ShownText(other)}.") });
+        private string Req(AnimationItem key, string name) => key.TextOf(name) ?? throw key.Error($"{JsonData.ShownText(key.Key)} needs {name}.");
         private static float Time(AnimationItem key) => key.Item("RUN_TIME")?.Number() ?? 0;
         /// <summary>A rate as the original compiler computed it: float operands, double arithmetic.</summary>
         private static float Rate(float from, float to, float time) => time == 0 ? 0 : (float)(((double)to - from) / time);
@@ -586,10 +588,11 @@ public sealed partial class AnimationCompiler
         /// <summary>Degrees to radians in double precision, as every shipped angle except the launch yaw.</summary>
         private static float Radians(float degrees) => (float)(degrees * Math.PI / 180);
         private static Vector3 Radians(Vector3 degrees) => new(Radians(degrees.X), Radians(degrees.Y), Radians(degrees.Z));
+        private static float Finite(float value) => float.IsFinite(value) ? value : throw new InvalidDataException("An animation operand exceeds finite game floats; reduce its range or rate.");
 
         private static void Text(byte[] target, int offset, string text, int size, string what)
         {
-            if (text.Length >= size || text.Any(c => c > 255 || c == 0)) throw new InvalidDataException($"{what} '{text}' needs 1–{size - 1} Latin-1 characters.");
+            if (text.Length >= size || text.Any(c => c > 255 || c == 0)) throw new InvalidDataException($"{what} '{JsonData.ShownText(text)}' needs 1–{size - 1} Latin-1 characters.");
             Encoding.Latin1.GetBytes(text, target.AsSpan(offset, text.Length));
         }
 
@@ -599,7 +602,7 @@ public sealed partial class AnimationCompiler
             public void Int(int o, int v) => BinaryPrimitives.WriteInt32LittleEndian(Bytes.AsSpan(o), v);
             public void UInt(int o, uint v) => BinaryPrimitives.WriteUInt32LittleEndian(Bytes.AsSpan(o), v);
             public void Short(int o, short v) => BinaryPrimitives.WriteInt16LittleEndian(Bytes.AsSpan(o), v);
-            public void Float(int o, float v) => BinaryPrimitives.WriteSingleLittleEndian(Bytes.AsSpan(o), v);
+            public void Float(int o, float v) => BinaryPrimitives.WriteSingleLittleEndian(Bytes.AsSpan(o), Finite(v));
             public float Get(int o) => BinaryPrimitives.ReadSingleLittleEndian(Bytes.AsSpan(o));
             public void Vector(int o, Vector3 v) { Float(o, v.X); Float(o + 4, v.Y); Float(o + 8, v.Z); }
             public void Text(int o, string text, int size) => EntryBuilder.Text(Bytes, o, text, size, "name");

@@ -94,7 +94,7 @@ public partial class MainWindow
         Register(r,"properties_state","Read the pinned Properties window identity, content and current editable fields.",false,[],_ =>
             Result(new { open=propertiesWindow != null, document=propertiesWindow?.Document?.SessionId, content=propertiesWindow?.CurrentJson, fields=((FieldEditor?)propertiesWindow?.ScriptFields ?? (FieldEditor?)propertiesWindow?.AnimationFields ?? (FieldEditor?)propertiesWindow?.PickupFields ?? (FieldEditor?)propertiesWindow?.ResourceFields ?? propertiesWindow?.SourceFields)?.DescribeAutomationFields() }));
         Register(r,"scene_properties","Inspect a scene node or open its Properties window, including editable mission pickups. Metadata is bounded to 512 JSON nodes/8192 text characters with inspection_truncated. MW3 actor labels use 128-character prefixes; source data and JSON exports remain intact.",true,
-            [PreviewParameter,P("node","integer","Scene node index.",true),P("open","boolean","Open the pinned Properties window.")],a=>
+            [PreviewParameter,P("node","integer","Scene node index.",true),P("open","boolean","Open the pinned Properties window.")],async (a, token)=>
         {
             var viewport=TargetViewport(a); int node=Int(a,"node"); var data=viewport.PreviewScene;
             if(data == null || !viewport.CanInspectNode(node)) throw new StudioCommandException("stale_record","Scene node unavailable.");
@@ -102,7 +102,7 @@ public partial class MainWindow
             {
                 RequireNoDrafts(); ++propertyRequest;
                 if(shownDocument is { SourceWorld: not null } sourceDoc && viewport.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && sourceDoc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true)
-                { ShowSourceObjectProperties(sourceDoc, sourceNode); return Result(new { data.Nodes[node].Index, data.Nodes[node].Name, Metadata = Core.JsonData.PreviewObject(data.Nodes[node].Metadata), source = DescribeSourceObject(sourceDoc, sourceNode).Json() }); }
+                { if (!await ShowSourceObjectPropertiesAsync(sourceDoc, sourceNode)) throw new StudioCommandException("context_changed", "Properties was superseded while loading."); return Result(new { data.Nodes[node].Index, data.Nodes[node].Name, Metadata = Core.JsonData.PreviewObject(data.Nodes[node].Metadata), source = DescribeSourceObject(sourceDoc, sourceNode).Json() }); }
                 var w=GetPropertiesWindow(); var actor=viewport.PickupAt(node);
                 bool opened=actor?.Pickup is { } pickup && shownDocument!.PickupEdits?.Find(pickup.Source) != null
                     ? w.SetPickup(shownDocument!,pickup.Source,data.Nodes[node].Name,data.Nodes[node].Metadata,SourcePickupMove(shownDocument!))

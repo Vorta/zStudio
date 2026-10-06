@@ -18,6 +18,24 @@ public sealed class TerrainEditTests
     private static TerrainRecipe Basic() => new(1, [new("land", "land.gltf", "land", TerrainAttributes.None), new("rock", "land.gltf", "rock", TerrainAttributes.None)], TerrainAttributes.None, []);
 
     [Fact]
+    public void ClippingRefusesDenseCrossingsBeforeExpansionAndRetainsOrdinaryShapes()
+    {
+        Vector2[] star = Enumerable.Range(0, 3001).Select(i =>
+        {
+            double angle = (i * 1500 % 3001) * Math.Tau / 3001;
+            return new Vector2((float)Math.Cos(angle) * 1000, (float)Math.Sin(angle) * 1000);
+        }).ToArray();
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Contains("complexity", Assert.Throws<InvalidDataException>(() => TerrainShapes.Normalize([new(star, [])])).Message);
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 5_000_000);
+        Assert.Throws<InvalidDataException>(() => TerrainShapes.Stroke(star.Take(1000).ToArray(), 100));
+        var circle = Enumerable.Range(0, 20_000).Select(i => new Vector2(
+            (float)Math.Cos(i * Math.Tau / 20_000) * 1000, (float)Math.Sin(i * Math.Tau / 20_000) * 1000)).ToArray();
+        Assert.InRange(TerrainShapes.SquareUnits(TerrainShapes.Normalize([new(circle, [])])), 3_140_000, 3_143_000);
+        Assert.Equal(100, TerrainShapes.SquareUnits(TerrainShapes.Normalize([Square(0, 0, 10)])));
+    }
+
+    [Fact]
     public void ShapesPaintAndEraseAsCleanAreas()
     {
         // Two overlapping squares merge into one polygon of their union.

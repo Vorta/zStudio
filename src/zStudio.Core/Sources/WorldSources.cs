@@ -62,8 +62,9 @@ internal static partial class WorldSources
     /// <param name="transparency">How a texture source (project path) is transparent, so viewers draw its materials as the game does.</param>
     public static List<Output> Reconstruct(IReadOnlyList<MissionWorld> missions, Func<string, IReadOnlyList<IReadOnlyList<string>>?> scripts,
         Func<int, string, string?> texturePath, IReadOnlySet<string> textureFiles, Func<string, int> addressing, List<string> notes, CancellationToken token,
-        Func<string, TextureTransparency?>? transparency = null)
+        Func<string, TextureTransparency?>? transparency = null, long maximumOutputBytes = ReconstructionBudget.MaximumBytes)
     {
+        ReconstructionBudget outputBudget = new(maximumOutputBytes);
         // The missions that run each script: a model a mission's own script loads belongs to that mission.
         Dictionary<string, SortedSet<int>> scriptMissions = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<WorldNode, string> hashes = new(ReferenceEqualityComparer.Instance);
@@ -95,7 +96,7 @@ internal static partial class WorldSources
                 if (!scriptMissions.TryGetValue(instruction.Script, out var runs)) scriptMissions[instruction.Script] = runs = [];
                 runs.Add(mission.Mission);
             }
-            var decomposition = WorldDecomposer.DecomposeAll(mission.World, trace, notes);
+            var decomposition = WorldDecomposer.DecomposeAll(mission.World, trace, notes, token);
             var decomposed = decomposition.Loads.ToList();
             foreach (var load in decomposed) if (load.Root != null) roots.Add(load.Root);
             // The database in its file's record order, with the groups the build deleted.
@@ -405,6 +406,7 @@ internal static partial class WorldSources
             bool pickup = loads.Any(l => ReferenceEquals(l.Unit, unit) && WorldGltf.IsPickupName(l.Load.NodeName));
             if (WorldGltf.ApplyPresentation(root, uri => transparency?.Invoke(WorldAssembler.Relative(path, uri)), pickup))
                 json = Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            outputBudget.Retain(json.LongLength + bin.LongLength);
             outputs.Add(new(path, json));
             outputs.Add(new($"{folder}/{stem}.bin", bin));
         }

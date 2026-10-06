@@ -30,16 +30,19 @@ public static class WorldDecomposer
     private static readonly HashSet<string> Creators = ["NewWorld", "NewWindow", "NewCamera", "NewDisplay", "LightNew", "NewObject3D"];
 
     /// <summary>Changes <paramref name="world"/>'s links and names; pass a world read for this purpose.</summary>
-    public static List<LoadedModel> Decompose(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes) => [.. DecomposeAll(world, trace, notes).Loads];
+    public static List<LoadedModel> Decompose(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes, CancellationToken token = default) => [.. DecomposeAll(world, trace, notes, token).Loads];
 
     /// <inheritdoc cref="Decompose"/>
-    public static WorldDecomposition DecomposeAll(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes)
+    public static WorldDecomposition DecomposeAll(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         var root = world.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World) ?? throw new InvalidDataException("The world has no world node.");
         // Work on a plain graph: the world's cells hold children the same way its own list does.
         foreach (var cell in root.Areas) { foreach (var n in cell.Nodes) if (!root.Children.Contains(n)) root.Children.Add(n); cell.Nodes.Clear(); }
         Dictionary<WorldNode, int> slot = new(ReferenceEqualityComparer.Instance);
         for (int i = 0; i < world.Nodes.Count; i++) slot[world.Nodes[i]] = i;
+        var namedNodes = world.Nodes.GroupBy(n => n.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal);
+        var available = namedNodes.ToDictionary(g => g.Key, g => new Queue<WorldNode>(g.Value.Where(n => n.Parents.Count == 0 || n.Parents.All(p => p.Class == WorldNodeClass.World))), StringComparer.Ordinal);
 
         // 1. Nodes each instruction created by name: load roots are the world's children or detached nodes; they are
         //    claimed in trace order, lowest slot first among equal names.
@@ -47,19 +50,20 @@ public static class WorldDecomposer
         bool pending = false; int databaseStep = -1;
         for (int i = 0; i < trace.Count; i++)
         {
+            token.ThrowIfCancellationRequested();
             var step = trace[i];
             if (step.Command == "GameGenSetWorld") { pending = true; continue; }
             string? name = step.Command == "LoadGameGen" && !pending ? Arg(step, 1) : Creators.Contains(step.Command) ? Arg(step, 0) : null;
             if (step.Command == "LoadGameGen" && pending) { databaseStep = i; pending = false; continue; }
             if (name == null) continue;
-            var node = world.Nodes.Where(n => n.Name == name && !claimed.Contains(n) && (n.Parents.Count == 0 || n.Parents.All(p => p.Class == WorldNodeClass.World)))
-                .OrderBy(n => slot[n]).FirstOrDefault();
+            var node = available.TryGetValue(name, out var candidates) && candidates.TryDequeue(out var candidate) ? candidate : null;
             if (node != null) { created[i] = node; claimed.Add(node); }
         }
         // 2. When each node came to exist: a load's root subtree at its load, the database's world children at its load.
         Dictionary<WorldNode, int> since = new(ReferenceEqualityComparer.Instance);
         void Mark(WorldNode node, int step)
         {
+            token.ThrowIfCancellationRequested();
             if (!since.TryAdd(node, step)) return;
             foreach (var child in node.Children) if (!claimed.Contains(child)) Mark(child, step);
         }
@@ -69,17 +73,32 @@ public static class WorldDecomposer
             if (created.TryGetValue(i, out var node)) Mark(node, i);
         }
         // Detached nodes belong to the last load before the script first names them.
+        Dictionary<string, int> firstLoad = new(StringComparer.Ordinal);
+        int lastLoad = 0;
+        for (int i = 0; i < trace.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var step = trace[i];
+            if (step.Command == "LoadGameGen") lastLoad = i;
+            foreach (var argument in step.Args)
+                if (namedNodes.ContainsKey(argument)) firstLoad.TryAdd(argument, lastLoad);
+        }
         foreach (var node in world.Nodes.Where(n => !since.ContainsKey(n)))
         {
-            int first = Enumerable.Range(0, trace.Count).FirstOrDefault(i => trace[i].Args.Contains(node.Name), -1);
-            int load = first < 0 ? trace.Count : Enumerable.Range(0, first + 1).Reverse().FirstOrDefault(i => trace[i].Command == "LoadGameGen", 0);
-            Mark(node, load);
+            Mark(node, firstLoad.GetValueOrDefault(node.Name, trace.Count));
         }
+        var byCreation = namedNodes.ToDictionary(g => g.Key, g => g.Value.OrderBy(n => since[n]).ThenBy(n => slot[n]).ToArray(), StringComparer.Ordinal);
+        var detached = byCreation.ToDictionary(g => g.Key, g => g.Value.Where(n => n.Parents.Count == 0).ToArray(), StringComparer.Ordinal);
         WorldNode? Newest(string name, int step, bool preferDetached = false)
         {
-            var matches = world.Nodes.Where(n => n.Name == name && since.GetValueOrDefault(n, int.MaxValue) <= step).ToList();
-            if (preferDetached && matches.Any(n => n.Parents.Count == 0)) matches = matches.Where(n => n.Parents.Count == 0).ToList();
-            return matches.OrderByDescending(n => since[n]).ThenByDescending(n => slot[n]).FirstOrDefault();
+            if (!byCreation.TryGetValue(name, out var matches)) return null;
+            return preferDetached && Last(detached[name]) is { } free ? free : Last(matches);
+            WorldNode? Last(WorldNode[] nodes)
+            {
+                int lo = 0, hi = nodes.Length;
+                while (lo < hi) { int mid = lo + (hi - lo) / 2; if (since[nodes[mid]] <= step) lo = mid + 1; else hi = mid; }
+                return lo == 0 ? null : nodes[lo - 1];
+            }
         }
 
         // 3. The edits, resolved in order.
@@ -87,6 +106,7 @@ public static class WorldDecomposer
         WorldNode? current = null; string? currentName = null;
         for (int i = 0; i < trace.Count; i++)
         {
+            token.ThrowIfCancellationRequested();
             var step = trace[i];
             if (created.TryGetValue(i, out var made)) { current = made; currentName = made.Name; continue; }
             switch (step.Command)

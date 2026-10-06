@@ -81,6 +81,26 @@ public sealed class ExportSealReviewFixTests
     private static (string, JournalDigest)[] Built(params (string Relative, string Text)[] outputs) => [.. outputs.Select(o => (o.Relative, Digest(o.Text)))];
 
     [Fact]
+    public void RollbackRefusesADamagedOriginalEvenWhenItsSizeAndTimestampMatch()
+    {
+        using var folder = new Folder();
+        string destination = Path.Combine(folder.Root, "game"), staging = Path.Combine(destination, ".zstudio-staging-test");
+        folder.Write("game/.zstudio-staging-test/one.zbd", "NEW");
+        folder.Write("game/.zstudio-staging-test/two.zbd", "TWO");
+        string target = folder.Write("game/one.zbd", "OLD");
+        Assert.Throws<IOException>(() => SourceBuilder.Publish(staging, destination, Built(("one.zbd", "NEW"), ("two.zbd", "TWO")), true, Token, (step, index) =>
+        {
+            if (step != "replace" || index != 1) return;
+            string backup = Assert.Single(Directory.GetDirectories(destination, ".zstudio-backup-*"));
+            string held = Path.Combine(backup, "one.zbd"); var stamp = File.GetLastWriteTimeUtc(held);
+            File.WriteAllText(held, "BAD"); File.SetLastWriteTimeUtc(held, stamp);
+            throw new IOException("fail second publication");
+        }));
+        Assert.Equal("NEW", File.ReadAllText(target));
+        Assert.Single(Directory.GetDirectories(destination, ".zstudio-backup-*"));
+    }
+
+    [Fact]
     public void PublicationRefusesAStagedOutputChangedAfterItWasBuiltBeforeReplacingAnything()
     {
         using var folder = new Folder();

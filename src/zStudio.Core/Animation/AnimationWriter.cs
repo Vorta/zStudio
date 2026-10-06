@@ -63,7 +63,7 @@ public static class AnimationWriter
         {
             await using (FileStream stream = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
             { await stream.WriteAsync(bytes, token).ConfigureAwait(false); await stream.FlushAsync(token).ConfigureAwait(false); }
-            byte[] check = await File.ReadAllBytesAsync(temporary, token).ConfigureAwait(false);
+            byte[] check = await Sources.SourceRead.AllAsync(temporary, bytes.Length, token).ConfigureAwait(false);
             if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(bytes), SHA256.HashData(check))) throw new IOException("The written animation did not pass verification.");
             token.ThrowIfCancellationRequested();
             // Held from its check against the verified bytes until it is in place.

@@ -32,6 +32,7 @@ internal static class ExportSafetyMcpChecks
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
             await LateCancelChecks(main, token);
             await RelativePathChecks(main, Job, token);
+            await ExportChoiceContextChecks(main, token);
             await LookupBaselineChecks(main, Call, Job, token);
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
@@ -48,6 +49,24 @@ internal static class ExportSafetyMcpChecks
             }
         }
         finally { foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc); main.Close(); }
+    }
+
+    private static async Task ExportChoiceContextChecks(MainWindow main, CancellationToken token)
+    {
+        using var original = new SourceWorldFixture(); using var replacement = new SourceWorldFixture();
+        await main.ViewModel.OpenRootAsync(original.Project, token);
+        long generation = main.ViewModel.WorkspaceGeneration;
+        // The root changes while the GUI's off-thread output plan/destination confirmation is pending.
+        await main.ViewModel.OpenRootAsync(replacement.Project, token);
+        string destination = Path.Combine(replacement.Project, "..", "unexpected-export");
+        var error = await Assert.ThrowsAsync<Recoil.Zbd.Automation.StudioCommandException>(() =>
+            main.ExportSourceProjectAsync(destination, ["m1/gamez.zbd"], true, token, expectedGeneration: generation));
+        Assert.Equal("context_changed", error.Code);
+        Assert.False(Directory.Exists(destination));
+        // Returning to the same path must not revive the stale confirmation either.
+        await main.ViewModel.OpenRootAsync(original.Project, token);
+        await Assert.ThrowsAsync<Recoil.Zbd.Automation.StudioCommandException>(() =>
+            main.ExportSourceProjectAsync(destination, ["m1/gamez.zbd"], true, token, expectedGeneration: generation));
     }
 
     /// <summary>

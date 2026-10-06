@@ -9,6 +9,24 @@ public sealed class ZrdTextSyntaxTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    [Fact]
+    public void EscapedScalarGrowthIsRefusedBeforeBuildingItsText()
+    {
+        var source = ZrdTextSyntax.Parse("VALUE ( old )\n", Token);
+        var original = source.Root.Children[1].Children[0];
+        var replacement = original with { Text = new string('\0', 1_000_000) };
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Throws<InvalidDataException>(() => source.ReplaceScalars(new Dictionary<Guid, ZrdNode> { [original.Id] = replacement }, Token, 1_000_000));
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 100_000);
+    }
+
+    [Fact]
+    public void MalformedLongTokenHasABoundedDiagnostic()
+    {
+        string text = "123" + new string('x', 1_000_000);
+        Assert.InRange(Assert.Throws<InvalidDataException>(() => ZrdText.Parse(text, Token)).Message.Length, 1, 256);
+    }
+
     /// <summary>A hand-authored pickup placement list: one record per line, comments, a section header and blank lines.</summary>
     private static readonly string Pickups = """
         # Pickup placements, m1 (medium)

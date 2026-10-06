@@ -26,6 +26,27 @@ internal static class SourceTerrainMcpChecks
 
     internal static async Task Run()
     {
+        // Opening a maximum-size recipe must create a bounded set of controls. Paging must expose the final region and
+        // replace its generated actions, not accumulate stale actions or retarget the selected region's draft.
+        var manyRegions = Enumerable.Range(0, TerrainRecipe.MaximumRegions).Select(i => new TerrainRegion("region" + i, [], null, TerrainAttributes.None)).ToArray();
+        string? selectedRegion = null;
+        TerrainEditorActions noEdits = new((_, _) => Task.CompletedTask, (_, _) => Task.CompletedTask, _ => Task.CompletedTask,
+            _ => Task.CompletedTask, (_, _) => Task.CompletedTask, name => selectedRegion = name, _ => { });
+        var largeEditor = new TerrainPropertiesEditor(Recipe, new(1, [], TerrainAttributes.None, manyRegions), null, null, "region4095", null, noEdits);
+        var actions = JsonSerializer.SerializeToNode(largeEditor.DescribeAutomationFields())!["actions"]!.AsArray();
+        Assert.InRange(actions.Count, 1, 140);
+        Assert.InRange(LogicalButtons(largeEditor), 1, 160);
+        var last = actions.Single(a => a!["Label"]!.GetValue<string>().Contains("4096. region4095"))!;
+        await largeEditor.InvokeAutomationActionAsync(last["Id"]!.GetValue<string>());
+        Assert.Equal("region4095", selectedRegion);
+        for (int i = 0; i < 3; i++)
+        {
+            var previous = JsonSerializer.SerializeToNode(largeEditor.DescribeAutomationFields())!["actions"]!.AsArray().Single(a => a!["Label"]!.GetValue<string>() == "Previous regions")!;
+            await largeEditor.InvokeAutomationActionAsync(previous["Id"]!.GetValue<string>());
+            Assert.InRange(JsonSerializer.SerializeToNode(largeEditor.DescribeAutomationFields())!["actions"]!.AsArray().Count, 1, 140);
+        }
+        static int LogicalButtons(System.Windows.DependencyObject root) => (root is System.Windows.Controls.Button ? 1 : 0)
+            + System.Windows.LogicalTreeHelper.GetChildren(root).OfType<System.Windows.DependencyObject>().Sum(LogicalButtons);
         using var fixture = new SourceWorldFixture();
         fixture.WriteTerrainDatabase();
         // A 100 × 100 surface across m1's cell lines, in its own file.
@@ -54,6 +75,7 @@ internal static class SourceTerrainMcpChecks
             Assert.Equal(["data/m1/models/m1.gltf", Recipe], workspace.DirtyFiles);
             var listed = await Call("source_terrain", new() { ["document"] = Id(doc) });
             Assert.Equal(4, listed["recipes"]![0]!["pieces"]!.GetValue<int>());
+            Assert.Empty((await Call("source_terrain", new() { ["document"] = Id(doc), ["offset"] = 1 }))["recipes"]!.AsArray());
 
             // A road: a region painted along a path; its pieces block craters.
             doc = Document((await Job("source_terrain_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["recipe"] = Recipe, ["action"] = "add_region", ["region"] = "road", ["attributes"] = new Dictionary<string, object?> { ["craters"] = "blocked" } }))["document"]!);
@@ -64,6 +86,8 @@ internal static class SourceTerrainMcpChecks
             double area = described["regions"]![0]!["shape"]!["area"]!.GetValue<double>();
             Assert.InRange(area, 60 * 8, 60 * 8 + Math.PI * 16);
             Assert.NotEmpty(described["regionShape"]!["polygons"]!.AsArray());
+            var afterRegion = await Call("source_terrain", new() { ["document"] = Id(doc), ["recipe"] = Recipe, ["offset"] = 1 });
+            Assert.Empty(afterRegion["regions"]!.AsArray()); Assert.Equal(1, afterRegion["regionCount"]!.GetValue<int>());
             // A null attribute removes the override; an unknown one is refused.
             var bad = await Job("source_terrain_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["recipe"] = Recipe, ["action"] = "update_region", ["region"] = "road", ["attributes"] = new Dictionary<string, object?> { ["colour"] = 1 } }, "failed");
             Assert.Equal("invalid_argument", bad["code"]!.GetValue<string>());
@@ -72,6 +96,35 @@ internal static class SourceTerrainMcpChecks
             await Preview();
             int piece = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name.StartsWith("hills_land_", StringComparison.Ordinal)).Index;
             string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+            main.TerrainRecipeReader = (w, path, t) =>
+            {
+                Assert.False(main.Dispatcher.CheckAccess(), "Terrain recipe parsing must leave the UI dispatcher responsive.");
+                return SourceTerrain.Read(w, path, t);
+            };
+            await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
+            // Closing the pinned window while another read is held must prevent the late result from reopening it.
+            var reader = main.TerrainRecipeReader;
+            TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var proceed = new SemaphoreSlim(0))
+            {
+                main.TerrainRecipeReader = (w, path, t) =>
+                {
+                    entered.TrySetResult();
+                    Assert.False(main.Dispatcher.CheckAccess());
+                    Assert.True(proceed.Wait(TimeSpan.FromSeconds(20), t));
+                    return reader(w, path, t);
+                };
+                var pending = (Task<bool>)typeof(MainWindow).GetMethod("ShowTerrainPropertiesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [doc, Recipe, null, null, null])!;
+                try
+                {
+                    await entered.Task.WaitAsync(token);
+                    main.OpenPropertiesWindow!.Dismiss();
+                }
+                finally { proceed.Release(); }
+                Assert.False(await pending);
+                Assert.Null(main.OpenPropertiesWindow);
+                main.TerrainRecipeReader = reader;
+            }
             await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
             await main.Dispatcher.InvokeAsync(() => main.OpenPropertiesWindow!.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
             var typedFields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);

@@ -12,6 +12,28 @@ public sealed class AnimationCompilerTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    [Theory]
+    [InlineData("EXECUTION_BY_RANGE ( 3e38 )")]
+    [InlineData("SEQUENCE_DEFINITION ( NAME ( move ) OBJECT_MOTION_FROM_TO ( NAME ( gate ) TRANSLATE_FROM ( -3e38 0 0 ) TRANSLATE_TO ( 3e38 0 0 ) RUN_TIME ( 1e-30 ) ) )")]
+    public void FiniteSourceValuesCannotProduceInfiniteAnimationOperands(string settings)
+    {
+        var files = new MemoryFiles(new() { ["data/m1/zrdr/anim.zad"] = Encoding.ASCII.GetBytes("ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( gate ) " + settings + " ) ) )") });
+        Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], Token));
+    }
+
+    [Fact]
+    public void AuthoredAnimationDiagnosticsAreBoundedBeforePublication()
+    {
+        string unknown = new('x', 1_000_000);
+        var files = new MemoryFiles(new() { ["data/m1/zrdr/anim.zad"] = Encoding.ASCII.GetBytes("ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( gate ) " + unknown + " ( ) ) ) )") });
+        var result = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", ["gate"], Token);
+        Assert.All(result.Warnings, warning => Assert.InRange(warning.Length, 1, 1024));
+        var item = new AnimationItem(unknown, ZrdText.Parse("not_a_number", Token), "source");
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.InRange(Assert.Throws<InvalidDataException>(() => item.Number()).Message.Length, 1, 1024);
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 20_000);
+    }
+
     private sealed class MemoryFiles(Dictionary<string, byte[]> files) : IProjectFiles
     {
         public Dictionary<string, byte[]> Files { get; } = files;
@@ -380,6 +402,7 @@ public sealed class AnimationCompilerTests
             ("data/m1/zrdr/slide.zan", "OBJECT door\nFRAME 0 POSITION 0 0 0\nFRAME 5\n")));
         string[] world = ["gate", "door"];
         var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token).Package;
+        Assert.Contains("memory limit", Assert.Throws<IOException>(() => AnimationSources.Reconstruct([new(1, package, [], world)], files, [], Token, maximumRetainedBytes: 1)).Message);
         List<string> notes = [];
         var outputs = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
         Assert.Contains(notes, n => n.StartsWith("data/m1/zrdr/slide.zan: the keyframes have no SI Animation Script") && n.EndsWith("written in zStudio's keyframe format."));

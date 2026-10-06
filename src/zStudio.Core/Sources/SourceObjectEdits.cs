@@ -699,8 +699,10 @@ public static class SourceObjectEdits
         // Q = old parent's world × the new parent's inverse, the new local is S·R·T·Q. When Q only moves (the usual case:
         // load roots and the world translate), the rotation and scale stay as stored (the Euler angles and scale
         // animations start from); when Q also turns, the scale stays and only the rotation takes Q's turn.
-        if (node.Class == WorldNodeClass.Object3D && Matrix4x4.Invert(WorldMatrix(parent), out var inverse))
+        if (node.Class == WorldNodeClass.Object3D)
         {
+            if (!Matrix4x4.Invert(WorldMatrix(parent), out var inverse))
+                throw new InvalidDataException($"{parent.Name} has a singular world transform; choose another parent or change its zero scale before reparenting.");
             var anchor = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).OrderBy(w => w.Line).LastOrDefault() ?? created;
             var q = WorldMatrix(current) * inverse;
             var stored = ObjectTransform.Of(node);
@@ -764,7 +766,7 @@ public static class SourceObjectEdits
         {
             yield return group;
             foreach (var child in (nodes[group] as JsonObject)?["children"] as JsonArray ?? [])
-                if (child is JsonValue v && v.TryGetValue(out int c) && c >= 0 && c < nodes.Count && Group(c)) pending.Push(c);
+                if (GltfInteger.OptionalInt32(child, "child") is int c && c >= 0 && c < nodes.Count && Group(c)) pending.Push(c);
         }
     }
     /// <summary>Whether a group can be deleted with the database, its objects keeping their places: no geometry, no level of detail, no transform.</summary>
@@ -972,17 +974,19 @@ public static class SourceObjectEdits
             catch (InvalidDataException) { return true; }
         }
         var was = Nodes(before); var now = Nodes(after);
+        var byName = now.ToLookup(n => n.Name, StringComparer.Ordinal);
+        var originsByNode = provenance.Where(p => string.Equals(p.ModelFile, model, StringComparison.OrdinalIgnoreCase)).ToLookup(p => p.ModelNode);
         List<string> notes = []; int traced = 0, untraced = 0;
         foreach (var group in was.Select((n, i) => (n, i)).GroupBy(p => p.n.Name, StringComparer.Ordinal))
         {
-            var later = now.Where(n => n.Name == group.Key).ToList(); int occurrence = 0;
+            var later = byName[group.Key].ToList(); int occurrence = 0;
             foreach (var (node, index) in group)
             {
                 token.ThrowIfCancellationRequested();
                 if (occurrence >= later.Count || later[occurrence++].Authored == node.Authored || node.Name.Length == 0) continue;
                 if (notes.Count >= 8) return notes;
                 string change = node.Authored ? "loses its transform" : "gains a transform of its own";
-                var origins = provenance.Where(p => p.ModelNode == index && string.Equals(p.ModelFile, model, StringComparison.OrdinalIgnoreCase)).ToList();
+                var origins = originsByNode[index].ToList();
                 var here = origins.SelectMany(o => TurnAndScale.Where(o.Writers.ContainsKey).Select(c => o.Writers[c])).FirstOrDefault();
                 string? reason = here != null ? $"{here.Script} line {here.Line} ({here.Command})" : null;
                 // Other missions' scripts are followed for a bounded number of nodes (each follows every mission's build).
@@ -1011,11 +1015,15 @@ public static class SourceObjectEdits
     {
         if (origin.ModelFile is not { } file) return null;
         Dictionary<string, byte[]?> files = new(StringComparer.OrdinalIgnoreCase);
+        ReconstructionBudget retained = new();
+        Dictionary<string, GameGenScriptSyntax> parsedScripts = new(StringComparer.OrdinalIgnoreCase);
+        long scriptBytes = 0;
         byte[]? Read(string path)
         {
             if (files.TryGetValue(path, out var bytes)) return bytes;
             try { bytes = workspace.Read(path, token); }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { bytes = null; }
+            if (bytes != null) retained.Retain(bytes.LongLength);
             return files[path] = bytes;
         }
         // The names the build gives the node: its engine name in the file, and the one this world shows.
@@ -1026,10 +1034,7 @@ public static class SourceObjectEdits
         if (names.Count == 0) return null;
         HashSet<(string, int)> own = [.. TransformCommands.Where(origin.Writers.ContainsKey).Select(c => (origin.Writers[c].Script.ToLowerInvariant(), origin.Writers[c].Line))];
 
-        // Whether a model file is the edited file or references it (its nodes' refs, followed). Only a file naming the
-        // edited file's name can reference it, which a byte search finds before the file is parsed.
-        string leaf = Path.GetFileName(file);
-        byte[]? needle = leaf.All(ch => ch is > ' ' and < (char)127) ? Encoding.ASCII.GetBytes(leaf.ToLowerInvariant()) : null;
+        // Follow every reference edge: an intermediate file need not name the edited leaf, and JSON may escape names.
         Dictionary<string, bool> holds = new(StringComparer.OrdinalIgnoreCase);
         bool Holds(string path, int depth)
         {
@@ -1037,7 +1042,7 @@ public static class SourceObjectEdits
             if (holds.TryGetValue(path, out bool known)) return known;
             holds[path] = false;
             bool found = false;
-            if (depth < GltfDocument.MaximumDepth && path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) && Read(path) is { } bytes && (needle == null || Mentions(bytes, needle))
+            if (depth < GltfDocument.MaximumDepth && path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) && Read(path) is { } bytes
                 && Parse(bytes)?["nodes"] is JsonArray nodes)
                 foreach (var n in nodes)
                 {
@@ -1092,7 +1097,14 @@ public static class SourceObjectEdits
                 // Scripts the build refuses (sourced this deep, or running this many instructions) build nothing.
                 if (depth > WorldAssembler.MaximumScriptDepth) throw new InvalidDataException($"Scripts source each other more than {WorldAssembler.MaximumScriptDepth} levels deep.");
                 if (Read(relative) is not { } bytes) return;
-                foreach (var line in GameGenScriptSyntax.Parse(bytes).Lines)
+                if (!parsedScripts.TryGetValue(relative, out var syntax))
+                {
+                    scriptBytes += bytes.LongLength;
+                    if (scriptBytes > SourceProject.MaximumSourceTextBytes)
+                        throw new IOException("Checking other missions' transforms exceeds the aggregate script input limit.");
+                    parsedScripts[relative] = syntax = GameGenScriptSyntax.Parse(bytes);
+                }
+                foreach (var line in syntax.Lines)
                 {
                     if (written || hit != null) return;
                     if (!line.IsInstruction) continue;
@@ -1105,6 +1117,7 @@ public static class SourceObjectEdits
                     if (ScriptConditions.IsQuit(command)) return;
                     if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; continue; }
                     if (ScriptConditions.IsSource(command)) { if (args.Length > 0) Run($"{SourceProject.GameGenFolder}/{args[0].Replace('\\', '/')}", depth + 1); continue; }
+                    command = ScriptCommands.Core(command);
                     switch (command)
                     {
                         case "SetModelDirectory":
@@ -1140,16 +1153,6 @@ public static class SourceObjectEdits
             if (bytes == null) return null;
             try { return JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }); }
             catch (JsonException) { return null; }
-        }
-        static bool Mentions(byte[] bytes, byte[] lower)
-        {
-            for (int i = 0; i + lower.Length <= bytes.Length; i++)
-            {
-                int k = 0;
-                while (k < lower.Length && (bytes[i + k] is >= (byte)'A' and <= (byte)'Z' ? bytes[i + k] + 32 : bytes[i + k]) == lower[k]) k++;
-                if (k == lower.Length) return true;
-            }
-            return false;
         }
     }
     /// <summary>
@@ -1252,7 +1255,7 @@ public static class SourceObjectEdits
         if (!(seen ??= []).Add(index)) throw new InvalidDataException($"glTF node {index} is reached twice in the node hierarchy (listed as a child more than once, or as its own descendant); a node may have only one parent.");
         var node = (JsonObject)nodes[index]!;
         var shape = Own(node);
-        shape["children"] = new JsonArray([.. (node["children"] as JsonArray ?? []).Select(c => (JsonNode?)Shape(nodes, c!.GetValue<int>(), depth + 1, seen))]);
+        shape["children"] = new JsonArray([.. (node["children"] as JsonArray ?? []).Select(c => (JsonNode?)Shape(nodes, GltfInteger.Int32(c), depth + 1, seen))]);
         return shape;
     }
     /// <summary>A glTF node's own values: all but its children (indices within its copy) and its name (an editor may suffix a copy's).</summary>
@@ -1484,14 +1487,10 @@ public static class SourceObjectEdits
                 if (!current.IsInstruction) throw new InvalidDataException($"{relative} line {line} changed since the world was built; rebuild it first.");
                 syntax = GameGenScriptSyntax.Parse(syntax.ReplaceTokens(line, values));
             }
-            foreach (int line in comments)
-            {
-                if (!syntax.Line(line).IsInstruction) throw new InvalidDataException($"{relative} line {line} changed since the world was built; rebuild it first.");
-                syntax = GameGenScriptSyntax.Parse(syntax.CommentOut(line));
-            }
+            if (comments.Count > 0) syntax = GameGenScriptSyntax.Parse(syntax.CommentOut(comments));
             if (beforeWrite.Count > 0)
             {
-                int write = writeLine ?? syntax.Lines.FirstOrDefault(l => l.IsInstruction && l.Tokens[0] == "GameZWriteZBDFile")?.Number
+                int write = writeLine ?? syntax.Lines.FirstOrDefault(l => l.IsInstruction && ScriptCommands.Core(l.Tokens[0]) == "GameZWriteZBDFile")?.Number
                     ?? throw new InvalidDataException($"{relative} does not write the world itself (GameZWriteZBDFile); add the lines to the script that does.");
                 if (!insertions.TryGetValue(write, out var list)) insertions[write] = list = [];
                 list.AddRange(beforeWrite);

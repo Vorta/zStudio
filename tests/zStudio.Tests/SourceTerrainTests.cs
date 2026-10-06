@@ -11,6 +11,28 @@ namespace Recoil.Zbd.Tests;
 public sealed class SourceTerrainTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    [Theory]
+    [InlineData("1.0")]
+    [InlineData("1e0")]
+    public void CreatingTerrainUsesTheExactlyIntegralSelectedScene(string index)
+    {
+        using var fixture = Fixture();
+        const string databasePath = "data/m1/models/m1.gltf";
+        var database = JsonNode.Parse(File.ReadAllText(fixture.Path(databasePath)))!.AsObject();
+        var scenes = database["scenes"]!.AsArray();
+        scenes.Add(scenes[0]!.DeepClone());
+        database["scene"] = JsonNode.Parse(index);
+        int before = scenes[0]!["nodes"]!.AsArray().Count;
+        fixture.Write(databasePath, database.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        SourceTerrain.Create(workspace, databasePath, "data/m1/models/coast.gltf", ["land"], "data/m1/models/new.terrain.json", Token);
+        var saved = JsonNode.Parse(workspace.Read(databasePath, Token)!)!;
+        Assert.Equal(before, saved["scenes"]![0]!["nodes"]!.AsArray().Count);
+        Assert.Equal(before + 1, saved["scenes"]![1]!["nodes"]!.AsArray().Count);
+        workspace.Undo();
+        Assert.Equal(database.ToJsonString(), System.Text.Encoding.UTF8.GetString(workspace.Read(databasePath, Token)!));
+    }
     private const string Recipe = """
         { "format": "recoil-terrain", "version": 1, "compiler": 1,
           "surfaces": [ { "id": "land", "model": "coast.gltf", "node": "land", "defaults": { "craters": "allowed" } } ],

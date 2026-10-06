@@ -45,14 +45,14 @@ public static class ZrdText
                 Check(child); text.Append(' ', depth * 2);
                 if (child.Kind == ZrdKind.String && i + 1 < children.Count && children[i + 1].Kind == ZrdKind.Array)
                 {
-                    text.Append(Scalar(child)).Append(' '); child = children[++i];
+                    text.Append(Scalar(child, maximumCharacters - text.Length)).Append(' '); child = children[++i];
                     if (--budget < 0) throw new InvalidDataException("ZRD node limit exceeded.");
                 }
-                if (child.Kind != ZrdKind.Array) { Check(child); text.Append(Scalar(child)).Append('\n'); continue; }
+                if (child.Kind != ZrdKind.Array) { Check(child); text.Append(Scalar(child, maximumCharacters - text.Length)).Append('\n'); continue; }
                 if (IsShort(child))
                 {
                     text.Append('(');
-                    foreach (var item in child.Children) { Check(item); text.Append(' ').Append(Scalar(item)); }
+                    foreach (var item in child.Children) { Check(item); text.Append(' ').Append(Scalar(item, maximumCharacters - text.Length)); }
                     text.Append(child.Children.Count == 0 ? ")\n" : " )\n");
                     continue;
                 }
@@ -68,11 +68,11 @@ public static class ZrdText
     internal static bool IsShort(ZrdNode array) => array.Children.All(c => c.Kind != ZrdKind.Array) &&
         (array.Children.Count <= 1 || array.Children.Count <= 8 && array.Children.Sum(c => c.Kind == ZrdKind.String ? c.Text.Length + 3 : 12) <= 100);
 
-    public static string Scalar(ZrdNode node) => node.Kind switch
+    public static string Scalar(ZrdNode node, int maximumCharacters = int.MaxValue) => node.Kind switch
     {
         ZrdKind.Int => unchecked((int)node.Bits).ToString(CultureInfo.InvariantCulture),
         ZrdKind.Float => Float(node.Bits),
-        ZrdKind.String => String(node.Text),
+        ZrdKind.String => String(node.Text, maximumCharacters),
         _ => throw new InvalidDataException("Arrays are not scalars.")
     };
 
@@ -86,9 +86,19 @@ public static class ZrdText
         return BitConverter.SingleToUInt32Bits(float.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture)) == bits ? text : RawFloatPrefix + bits.ToString("X8", CultureInfo.InvariantCulture);
     }
 
-    private static string String(string value)
+    private static string String(string value, int maximumCharacters)
     {
+        if (value.Length > maximumCharacters) throw new InvalidDataException($"The text form exceeds {maximumCharacters:N0} characters.");
         if (IsBare(value)) return value;
+        // Charge escaped bytes before making any escaped copy (NUL and high Latin-1 bytes use four characters).
+        long length = 2;
+        if (length > maximumCharacters) throw new InvalidDataException($"The text form exceeds {maximumCharacters:N0} characters.");
+        foreach (char c in value)
+        {
+            if (c > 255) throw new InvalidDataException("ZRD strings must be Latin-1.");
+            length += c is '"' or '\\' ? 2 : c is >= ' ' and <= '~' ? 1 : 4;
+            if (length > maximumCharacters) throw new InvalidDataException($"The text form exceeds {maximumCharacters:N0} characters.");
+        }
         StringBuilder text = new("\"");
         foreach (char c in value)
         {
@@ -114,6 +124,7 @@ public static class ZrdText
     /// <summary>The one reader of the text form; <paramref name="spans"/> receives every node with its source span (the root spans the whole text).</summary>
     internal static ZrdNode Parse(string text, CancellationToken token, Action<ZrdNode, TextSpan>? spans)
     {
+        if (text.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException("Source text exceeds the supported limit.");
         int position = 0, line = 1, budget = MaximumNodes;
         List<ZrdNode> children = [];
         while (true)
@@ -156,15 +167,15 @@ public static class ZrdText
             }
             if (char.IsAsciiLetter(word[0]) || word[0] == '_')
             {
-                if (!IsBare(word)) throw Error($"'{word}' must be quoted.");
+                if (!IsBare(word)) throw Error($"'{JsonData.ShownText(word)}' must be quoted.");
                 return Spanned(new(Guid.NewGuid(), ZrdKind.String, 0, word, []), start);
             }
             if (word.Contains('.') || word.Contains('e') || word.Contains('E'))
             {
-                if (!float.TryParse(word, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) || !float.IsFinite(value)) throw Error($"Invalid float '{word}'.");
+                if (!float.TryParse(word, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) || !float.IsFinite(value)) throw Error($"Invalid float '{JsonData.ShownText(word)}'.");
                 return Spanned(new(Guid.NewGuid(), ZrdKind.Float, BitConverter.SingleToUInt32Bits(value), "", []), start);
             }
-            if (!int.TryParse(word, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int integer)) throw Error($"Invalid integer '{word}'.");
+            if (!int.TryParse(word, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int integer)) throw Error($"Invalid integer '{JsonData.ShownText(word)}'.");
             return Spanned(new(Guid.NewGuid(), ZrdKind.Int, unchecked((uint)integer), "", []), start);
         }
         ZrdNode Spanned(ZrdNode node, int start)

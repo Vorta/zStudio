@@ -135,7 +135,7 @@ public partial class MainWindow
 
     private void RegisterSourceRecoveryCommands(StudioCommands r)
     {
-        Register(r, "source_recovery", "List the open source project's interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved.", false, [], async (_, token) =>
+        Register(r, "source_recovery", "List the open source project's interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved.", false, [], async (_, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             IReadOnlyList<SourceRecoveryCase> cases;
@@ -147,12 +147,12 @@ public partial class MainWindow
                 saves = cases.Take(32).Select(c => new
                 {
                     id = c.SaveId, description = Bounded(c.Description, 256), created = c.CreatedUtc, committed = c.Committed,
-                    files = c.Files.Take(64).Select(f => new { file = f.Relative, state = f.State.ToString(), heldOriginal = f.HeldOriginal }).ToArray(), fileCount = c.Files.Count
+                    files = c.Files.Take(64).Select(f => new { file = Bounded(f.Relative, 256), fileTruncated = f.Relative.Length > 256, state = f.State.ToString(), heldOriginal = f.HeldOriginal }).ToArray(), fileCount = c.Files.Count
                 }).ToArray(),
                 saveCount = cases.Count
             });
         });
-        RegisterJob(r, "source_recovery_resolve", "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Refused while a world rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them).",
+        RegisterJob(r, "source_recovery_resolve", "Resolve an interrupted save of the open source project: roll_back restores every file the save had replaced (a file changed by another program since is left alone and reported), complete finishes the save, and abandon keeps the files as they are and moves the journal (with any original it kept) to zstudio/recovery/abandoned. It runs off the UI thread with the workspace disabled as during a save. Cancelling stops it between two files, never during one: the journal records what it did, the save still needs a decision (any action resolves it from there), and a cancellation after files changed says which. Returns at most 64 changed paths and conflicts with total counts. Paths keep 256 characters, with pathsTruncated for changed paths and fileTruncated on conflicts. Refused while a world rebuilds, and while the project has unsaved edits of a file the save involves (undo them, or close the worlds discarding them).",
             [P("save", "string", "Save id from zstudio_source_recovery.", true), P("action", "string", "What to do.", true, "roll_back", "complete", "abandon")], true, async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
@@ -160,7 +160,9 @@ public partial class MainWindow
             var result = await ResolveSourceRecoveryAsync(root, Text(a, "save"), action, token);
             // Resolved (or left with conflicts): the job completes with the result, even when a cancel arrives as it ends.
             CommitRunningJob();
-            return Result(new { resolved = result.Resolved, changed = result.Changed.Take(64).ToArray(), changedCount = result.Changed.Count, conflicts = result.Conflicts.Take(64).Select(c => new { file = c.Relative, reason = Bounded(c.Reason, 256) }).ToArray(), conflictCount = result.Conflicts.Count });
+            return Result(new { resolved = result.Resolved, changed = result.Changed.Take(64).Select(f => Bounded(f, 256)).ToArray(), changedCount = result.Changed.Count,
+                pathsTruncated = result.Changed.Take(64).Any(f => f.Length > 256),
+                conflicts = result.Conflicts.Take(64).Select(c => new { file = Bounded(c.Relative, 256), fileTruncated = c.Relative.Length > 256, reason = Bounded(c.Reason, 256) }).ToArray(), conflictCount = result.Conflicts.Count });
         });
     }
 }

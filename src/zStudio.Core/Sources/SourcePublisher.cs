@@ -116,8 +116,8 @@ public sealed partial class SourcePublisher
         {
             Directory.CreateDirectory(Path.Combine(journal, AfterFolder));
             for (int i = 0; i < changes.Length; i++)
-                if (changes[i].Bytes is { } bytes) { token.ThrowIfCancellationRequested(); Step("after", i); WriteDurable(AfterPath(journal, i), bytes); }
-            Step("manifest", -1); WriteManifest(journal, manifest);
+                if (changes[i].Bytes is { } bytes) { token.ThrowIfCancellationRequested(); Step("after", i); CheckWorkingPath(AfterPath(journal, i)); WriteDurable(AfterPath(journal, i), bytes); }
+            Step("manifest", -1); CheckJournalPaths(manifest.SaveId); WriteManifest(journal, manifest);
             log = EventLog.Open(journal, manifest.Files.Count);
             Step("prepared", -1); log.Append("prepared", -1);
             SourceProject.RejectNestedLinks(root, StagingFolder);
@@ -148,6 +148,7 @@ public sealed partial class SourcePublisher
             {
                 Target file = changes[i]; reached = i;
                 Step("intent", i); log.Append("intent", i);
+                CheckWorkingPath(StagedPath(staging, i));
                 // The staged copy is checked against the journaled content before the original moves aside, and held until it
                 // is in place: no other program can write or rename it meanwhile, so the file installed is the one journaled.
                 using SealedFile? staged = file.Content is { } content ? Seal(StagedPath(staging, i), content, file) : null;
@@ -388,6 +389,8 @@ public sealed partial class SourcePublisher
     /// </summary>
     internal static Moved MoveIfContent(string path, string destination, JournalDigest expected)
     {
+        SourceProject.RejectLinks(Path.GetDirectoryName(path)!);
+        SourceProject.RejectLinks(Path.GetDirectoryName(destination)!);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
         try
         {
@@ -409,8 +412,9 @@ public sealed partial class SourcePublisher
         stream.Write(bytes); stream.Flush(true);
     }
     /// <summary>Writes, flushes and reads a file back before it may be published.</summary>
-    private static void WriteVerified(string path, byte[] bytes)
+    private void WriteVerified(string path, byte[] bytes)
     {
+        CheckWorkingPath(path);
         using (FileStream stream = new(path, FileMode.Create, FileAccess.Write, FileShare.None)) { stream.Write(bytes); stream.Flush(true); }
         if (!SourceProject.FileEquals(path, bytes)) throw new IOException($"{path} did not read back as it was written; nothing was saved.");
     }
@@ -425,6 +429,7 @@ public sealed partial class SourcePublisher
     /// <summary>Removes a journal and its staging folder, renaming the journal first so a partial deletion never leaves a journal that looks interrupted.</summary>
     private void Discard(string id)
     {
+        CheckJournalPaths(id);
         string journal = JournalPath(id);
         TryDelete(StagingPath(id));
         if (!Directory.Exists(journal)) return;
@@ -432,6 +437,15 @@ public sealed partial class SourcePublisher
         try { Directory.Move(journal, removed); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
         TryDelete(removed);
+    }
+
+    private void CheckWorkingPath(string path) => SourceProject.RejectNestedLinks(root, SourceProject.Relative(root, path));
+    private void CheckJournalPaths(string id)
+    {
+        string journal = JournalPath(id);
+        foreach (string name in new[] { AfterFolder, HeldFolder, TakenFolder, ManifestName, EventsName })
+            CheckWorkingPath(Path.Combine(journal, name));
+        CheckWorkingPath(StagingPath(id));
     }
 
     /// <summary>

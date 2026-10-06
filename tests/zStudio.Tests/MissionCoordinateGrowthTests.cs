@@ -105,7 +105,9 @@ public sealed class MissionCoordinateGrowthTests
     public void SoundAliasLookupRetainsNamesAndLoopFlagsWithoutCopyingIgnoredPayload()
     {
         var tree = A(S(new string('x', 2_000_000)), A(S("fire"), S("audio\\fire.WAV"), S("LOOPED")), A(S("hit"), S("hit.wav")));
-        _ = AnimationPreviewContext.ReadSoundAliases(A(), TestContext.Current.CancellationToken).ToArray();
+        // Warm the non-empty iterator, filename and tuple materialization paths too;
+        // the measured call still traverses the entire two-million-character fixture.
+        _ = AnimationPreviewContext.ReadSoundAliases(tree, TestContext.Current.CancellationToken).ToArray();
         long before = GC.GetAllocatedBytesForCurrentThread();
         var aliases = AnimationPreviewContext.ReadSoundAliases(tree, TestContext.Current.CancellationToken).ToArray();
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;

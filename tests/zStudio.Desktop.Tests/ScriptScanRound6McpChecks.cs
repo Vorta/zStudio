@@ -54,6 +54,9 @@ internal static class ScriptScanRound6McpChecks
             Checkout("newer", 20, created: "2026-02-01T00:00:00.0000000Z");
             var listed = await Call("source_blender_checkouts", new());
             Assert.Equal(2, listed["checkoutCount"]!.GetValue<int>());
+            var remaining = await Call("source_blender_checkouts", new() { ["offset"] = 1 });
+            Assert.Equal("older", Assert.Single(remaining["checkouts"]!.AsArray())!["id"]!.GetValue<string>());
+            Assert.Null(remaining["nextOffset"]);
             var newer = listed["checkouts"]![0]!;
             Assert.Equal(("newer", 20, 16), (newer["id"]!.GetValue<string>(), newer["exportCount"]!.GetValue<int>(), newer["exports"]!.AsArray().Count));
             Assert.Equal(["e0.gltf", "nested/e1.gltf"], listed["checkouts"]![1]!["exports"]!.AsArray().Select(e => e!["path"]!.GetValue<string>()).Order(StringComparer.Ordinal));

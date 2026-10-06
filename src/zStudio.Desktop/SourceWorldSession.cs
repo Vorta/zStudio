@@ -75,7 +75,7 @@ internal sealed class SourceWorldSession : IDisposable
     /// <summary>Removes one build's files once no document shows them.</summary>
     public static void DeleteBuild(string buildFolder)
     {
-        try { if (Directory.Exists(buildFolder)) Directory.Delete(buildFolder, true); }
+        try { SourceProject.RejectLinks(buildFolder); if (Directory.Exists(buildFolder)) Directory.Delete(buildFolder, true); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 

@@ -17,6 +17,27 @@ public sealed class SourceProjectSafetyTests
         .ToDictionary(f => Path.GetRelativePath(root, f), File.ReadAllBytes, StringComparer.OrdinalIgnoreCase);
 
     [Fact]
+    public async Task ReconstructionRefusesAParentReplacedByALinkAfterTheInitialCheck()
+    {
+        using var fixture = new SourceFixture();
+        string outside = Path.Combine(fixture.Root, "outside"); Directory.CreateDirectory(outside);
+        string link = Path.Combine(fixture.Project, "data"); bool replaced = false;
+        var progress = new OnReport(_ =>
+        {
+            if (replaced) return;
+            replaced = true;
+            Directory.Delete(link);
+            Directory.CreateSymbolicLink(link, outside);
+        });
+        try
+        {
+            await Assert.ThrowsAsync<IOException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, progress, Token));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(outside));
+        }
+        finally { if (Directory.Exists(link) && File.GetAttributes(link).HasFlag(FileAttributes.ReparsePoint)) Directory.Delete(link); }
+    }
+
+    [Fact]
     public async Task AFailedPublicationRestoresThePreviousFilesExactly()
     {
         using var fixture = new SourceFixture();

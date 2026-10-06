@@ -54,12 +54,14 @@ internal static class SiScriptWriter
         if (tracks.Count == 0) throw new InvalidDataException("no tracks.");
         var keys = tracks.Select(t => Keys(t)).ToList();
         var frames = Sequence(keys);
+        FrameIndex frameIndex = new(frames);
+        var ranges = keys.Select((k, i) => frameIndex.Range(k.Select(key => key.Frame), tracks[i].Object)).ToArray();
         // Before any rotation is searched for: each object is written in the frames from its first key to its last, in at
         // least 133 bytes besides its name, and its keyed positions and scales need six-decimal texts.
         long poses = 0, smallest = 0;
         for (int i = 0; i < tracks.Count; i++)
         {
-            long span = Span(tracks[i], keys[i], frames);
+            long span = ranges[i].Count;
             poses += span; smallest += span * (133 + tracks[i].Object.Length);
             foreach (var key in keys[i])
             {
@@ -69,12 +71,13 @@ internal static class SiScriptWriter
         }
         if (poses > SiAnimationScript.MaximumPoses) throw new InvalidDataException($"the script would hold more than {SiAnimationScript.MaximumPoses} object poses.");
         if (smallest > maximumBytes) throw TooLarge(maximumBytes);
-        List<(string Object, long[]?[] Values)> objects = [];
+        List<(string Object, int Start, long[]?[] Values)> objects = [];
         SiRotationSolver.Budget budget = new(evaluations);
         for (int i = 0; i < tracks.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            objects.Add((tracks[i].Object, Values(tracks[i], keys[i], frames, budget, token)));
+            var (start, count) = ranges[i];
+            objects.Add((tracks[i].Object, start, Values(tracks[i], keys[i], frames.GetRange(start, count), budget, token)));
         }
         string text = Text(objects, frames, layout);
         if (text.Length > maximumBytes) throw TooLarge(maximumBytes);
@@ -84,15 +87,34 @@ internal static class SiScriptWriter
         static InvalidDataException TooLarge(int maximumBytes) => new($"the script would be larger than {maximumBytes:N0} bytes, the most a project reads.");
     }
 
-    /// <summary>How many script frames hold <paramref name="track"/>: those from its first key to its last, matched as
-    /// <see cref="Values"/> matches them.</summary>
-    private static int Span(Track track, List<Key> keys, List<int> frames)
+    /// <summary>Greedy subsequence matching without rescanning every global frame for each sparse object.
+    /// Frame values may repeat or run backwards; positions always advance, just as Values does.</summary>
+    internal sealed class FrameIndex
     {
-        int ki = -1, first = -1, last = -1;
-        for (int pos = 0; pos < frames.Count && ki + 1 < keys.Count; pos++)
-            if (keys[ki + 1].Frame == frames[pos]) { ki++; if (first < 0) first = pos; last = pos; }
-        if (ki != keys.Count - 1) throw new InvalidDataException($"{track.Object}'s keys do not follow the script's frames.");
-        return last - first + 1;
+        private readonly Dictionary<int, List<int>> positions = [];
+        internal FrameIndex(IReadOnlyList<int> frames)
+        {
+            for (int i = 0; i < frames.Count; i++)
+            {
+                int frame = frames[i];
+                if (!positions.TryGetValue(frame, out var list)) positions[frame] = list = [];
+                list.Add(i);
+            }
+        }
+        internal (int Start, int Count) Range(IEnumerable<int> keys, string name)
+        {
+            int first = -1, last = -1;
+            foreach (int key in keys)
+            {
+                if (!positions.TryGetValue(key, out var list)) throw Missing();
+                int at = list.BinarySearch(last + 1); if (at < 0) at = ~at;
+                if (at >= list.Count) throw Missing();
+                last = list[at]; if (first < 0) first = last;
+            }
+            if (first < 0) throw Missing();
+            return (first, last - first + 1);
+            InvalidDataException Missing() => new($"{JsonData.ShownText(name)}'s keys do not follow the script's frames.");
+        }
     }
 
     /// <summary>The keys of a compiled stream: a key at each segment start (with its channels and rates), a bare key
@@ -149,21 +171,28 @@ internal static class SiScriptWriter
         }
         int step = order.Count == 0 ? 1 : order.OrderByDescending(d => counts[d]).First();
         if (keyed.Take(keyed.Count - 1).Any(f => f % step != 0)) return keyed;
-        // Each track's last key at or before the current frame (keys ascend here), walked forward once.
-        int[] last = new int[tracks.Count]; Array.Fill(last, -1);
+        // A change of each track's moving/still state at its keys. Only changes at the current frame matter;
+        // scanning every sparse track at every global frame would take tracks × frames work.
+        Dictionary<int, int> changes = [];
+        foreach (var track in tracks)
+        {
+            bool moving = false;
+            foreach (var key in track)
+            {
+                bool next = !key.Bare;
+                if (next != moving) changes[key.Frame] = changes.GetValueOrDefault(key.Frame) + (next ? 1 : -1);
+                moving = next;
+            }
+        }
+        int active = 0;
         List<int> all = [];
         for (int i = 0; i < keyed.Count; i++)
         {
             all.Add(keyed[i]);
             if (i + 1 == keyed.Count) break;
             int a = keyed[i], b = keyed[i + 1];
-            bool still = true;
-            for (int t = 0; t < tracks.Count; t++)
-            {
-                while (last[t] + 1 < tracks[t].Count && tracks[t][last[t] + 1].Frame <= a) last[t]++;
-                if (last[t] >= 0 && !tracks[t][last[t]].Bare) still = false;
-            }
-            if (!still) continue;
+            active += changes.GetValueOrDefault(a);
+            if (active != 0) continue;
             long between = ((long)b - a - 1) / step;
             if (all.Count + between > SiAnimationScript.MaximumFrames) Bounded(null);
             for (long f = (long)a + step; f < b; f += step) all.Add((int)f);
@@ -366,25 +395,44 @@ internal static class SiScriptWriter
         return (micros < 0 ? "-" : "") + (magnitude / Micro).ToString(CultureInfo.InvariantCulture) + "." + (magnitude % Micro).ToString("D6", CultureInfo.InvariantCulture);
     }
 
-    private static string Text(List<(string Object, long[]?[] Values)> objects, List<int> frames, Layout layout)
+    internal static string Text(IReadOnlyList<(string Object, int Start, long[]?[] Values)> objects, List<int> frames, Layout layout)
     {
         StringBuilder text = new();
         string warning = layout.Version == null ? "" : $"Warning, file version {layout.Version} is later than DKit release version 3\r\nAttempt to read: An error may occur...\r\n";
         text.Append(SiAnimationScript.Header).Append("\r\nFRAMES: ").Append(frames.Count.ToString(CultureInfo.InvariantCulture))
             .Append("\r\nOBJECTS: ").Append(objects.Count.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+        Dictionary<int, List<int>> starts = [], ends = [];
+        for (int i = 0; i < objects.Count; i++)
+        {
+            var (_, start, values) = objects[i];
+            if (values.Length == 0) continue;
+            Add(starts, start, i);
+            Add(ends, checked(start + values.Length / 3), i);
+        }
+        SortedSet<int> active = [];
         for (int pos = 0; pos < frames.Count; pos++)
         {
+            if (ends.TryGetValue(pos, out var ending)) foreach (int i in ending) active.Remove(i);
+            if (starts.TryGetValue(pos, out var starting)) foreach (int i in starting) active.Add(i);
             if (layout.WarningsBeforeFrames) text.Append(warning);
             text.Append("Frame: ").Append((frames[pos] + 1L).ToString(CultureInfo.InvariantCulture)).Append("\r\n");
-            foreach (var (name, values) in objects)
+            foreach (int i in active)
             {
-                if (values[pos * 3] is not { } s || values[pos * 3 + 1] is not { } r || values[pos * 3 + 2] is not { } t) continue;
+                var (name, start, values) = objects[i];
+                int at = (pos - start) * 3;
+                if (at < 0 || at >= values.Length || values[at] is not { } s || values[at + 1] is not { } r || values[at + 2] is not { } t) continue;
                 text.Append("Object: ").Append(name).Append("\r\n");
                 text.Append("Scaling:     ").Append(Triple3(s)).Append("\r\nRotation:    ").Append(Triple3(r)).Append("\r\nTranslation: ").Append(Triple3(t)).Append("\r\n");
             }
             if (!layout.WarningsBeforeFrames) text.Append(warning);
         }
         return text.ToString();
+
+        static void Add(Dictionary<int, List<int>> events, int frame, int index)
+        {
+            if (!events.TryGetValue(frame, out var indices)) events[frame] = indices = [];
+            indices.Add(index);
+        }
 
         static string Triple3(long[] v) => $"{Format(v[0])} {Format(v[1])} {Format(v[2])}";
     }

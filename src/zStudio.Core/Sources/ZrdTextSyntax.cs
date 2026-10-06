@@ -99,7 +99,7 @@ public sealed class ZrdTextSyntax
     public string ReplaceScalars(IReadOnlyDictionary<Guid, ZrdNode> replacements, CancellationToken token = default, int maximumCharacters = SourceProject.MaximumSourceTextBytes)
     {
         ArgumentNullException.ThrowIfNull(replacements);
-        List<(TextSpan Span, string Text)> edits = [];
+        List<(TextSpan Span, string Text)> edits = []; int replacementCharacters = 0;
         foreach (var (id, value) in replacements)
         {
             token.ThrowIfCancellationRequested();
@@ -107,7 +107,10 @@ public sealed class ZrdTextSyntax
             if (value is null || value.Kind is not (ZrdKind.Int or ZrdKind.Float or ZrdKind.String)) throw new ArgumentException($"The replacement for node {id} is not a scalar.", nameof(replacements));
             if (SameScalar(entry.Node, value)) continue;
             if (value.Kind == ZrdKind.String && value.Text.Length > maximumCharacters) throw TooLong(maximumCharacters);
-            edits.Add((entry.Span, ZrdText.Scalar(value)));
+            string scalar = ZrdText.Scalar(value, maximumCharacters - replacementCharacters);
+            if (scalar.Length > maximumCharacters - replacementCharacters) throw TooLong(maximumCharacters);
+            replacementCharacters += scalar.Length;
+            edits.Add((entry.Span, scalar));
         }
         if (edits.Count == 0) return Text.Length <= maximumCharacters ? Text : throw TooLong(maximumCharacters);
         edits.Sort((x, y) => x.Span.Start.CompareTo(y.Span.Start));
@@ -210,7 +213,7 @@ public sealed class ZrdTextSyntax
             }
             if (node.Kind == ZrdKind.Array) { Fresh(node, depth); return; }
             if (node.Kind == ZrdKind.String && node.Text.Length > maximumCharacters - output.Length) throw TooLong(maximumCharacters);
-            Token(ZrdText.Scalar(node));
+            Token(ZrdText.Scalar(node, maximumCharacters - output.Length));
         }
 
         /// <summary>Writes a new array in the <see cref="ZrdText.Write"/> layout, indented from the current line; children that come from the original keep their text.</summary>

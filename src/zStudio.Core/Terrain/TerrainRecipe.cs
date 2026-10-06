@@ -121,7 +121,8 @@ public sealed record TerrainAttributes
             Craters = craters switch
             {
                 null => null,
-                JsonValue v when v.TryGetValue(out string? mode) && Enum.TryParse<TerrainCraters>(mode, true, out var parsed) && mode == mode.ToLowerInvariant() => parsed,
+                JsonValue v when v.TryGetValue(out string? mode) && mode is "allowed" or "blocked" or "ignored" =>
+                    mode == "allowed" ? TerrainCraters.Allowed : mode == "blocked" ? TerrainCraters.Blocked : TerrainCraters.Ignored,
                 _ => throw Error("craters is \"allowed\", \"blocked\" or \"ignored\""),
             }
         };

@@ -55,8 +55,10 @@ public sealed partial class AnimationPreviewContext
     public void ReadTextureScript(string entry, IReadOnlyDictionary<string, ScriptContent> scripts, CancellationToken token = default)
     {
         HashSet<string> active = new(StringComparer.OrdinalIgnoreCase); int node = -1, material = -1, count = 0, instructions = 0;
-        float speed = 15; bool loop = false; List<string> maps = []; string? stopped = null;
-        void Publish() { if (material >= 0 && maps.Count == count && count > 0) MaterialCycles[material] = new(maps.ToArray(), speed, loop); }
+        float speed = 15; bool loop = false; List<string> maps = []; string[]? completedMaps = null; string? stopped = null;
+        // Once complete, maps cannot change until SetOn starts another cycle. Repeated settings must not copy the whole
+        // list for every instruction (65,536 maps times a million settings is otherwise hundreds of GB of allocation).
+        void Publish() { if (material >= 0 && maps.Count == count && count > 0) MaterialCycles[material] = new(completedMaps ??= maps.ToArray(), speed, loop); }
         void Read(string path)
         {
             if (stopped != null) return;
@@ -82,7 +84,7 @@ public sealed partial class AnimationPreviewContext
                     else if (Is("CycleTextureSetMap")) { if (maps.Count < count) maps.Add(arg); Publish(); }
                     else if (Is("CycleTextureSetOn"))
                     {
-                        material = FirstMaterial(node) ?? -1; maps = []; speed = 15; loop = false;
+                        material = FirstMaterial(node) ?? -1; maps = []; completedMaps = null; speed = 15; loop = false;
                         count = int.TryParse(arg, out int n) && n is > 0 and <= 65536 ? n : 0;
                     }
                     else if (Is("CycleTextureSetSpeed")) { if (float.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) && float.IsFinite(value)) speed = value; Publish(); }

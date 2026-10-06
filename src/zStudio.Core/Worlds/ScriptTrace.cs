@@ -115,6 +115,7 @@ public static class ScriptTrace
                 if (ScriptConditions.IsQuit(command)) return;
                 if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; }
                 else if (ScriptConditions.IsSource(command)) { if (args.Length > 0) Run(args[0], depth + 1); continue; }
+                command = ScriptCommands.Core(command);
                 if (command == "SetModelDirectory")
                 {
                     foreach (string part in (args.Length > 0 ? args[0] : "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))

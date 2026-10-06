@@ -139,6 +139,7 @@ public static class SourceExtractor
         /// <summary>Creates <paramref name="folder"/> with the parents it lacks, recording each one created.</summary>
         internal void CreateDirectory(string folder)
         {
+            SourceProject.RejectLinks(folder);
             List<string> missing = [];
             for (string? f = folder; f != null && !Directory.Exists(f); f = Path.GetDirectoryName(f)) missing.Add(f);
             Directory.CreateDirectory(folder);
@@ -151,6 +152,7 @@ public static class SourceExtractor
         /// </summary>
         internal async Task CreateAsync(string path, byte[] bytes, DateTime? modified, CancellationToken token)
         {
+            CheckPath(path);
             FileStream stream;
             // Unbuffered, so nothing reaches the file after a failed write is undone.
             try { stream = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, 1, FileOptions.Asynchronous); }
@@ -169,6 +171,7 @@ public static class SourceExtractor
         /// </summary>
         internal async Task ReplaceAsync(string path, byte[] bytes, CancellationToken token)
         {
+            CheckPath(path);
             if (!files.TryGetValue(path, out var written) || written == null) throw new InvalidOperationException($"{Display(path)} was not written by this reconstruction.");
             FileStream stream;
             try { stream = new(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, 1, FileOptions.Asynchronous); }
@@ -204,6 +207,11 @@ public static class SourceExtractor
         private IOException ChangedDuringRun(string path, Exception? inner = null) =>
             new($"{Display(path)} was changed by another program during the reconstruction; it was not replaced, and the reconstruction stopped.", inner);
         private string Display(string path) => SourceProject.Relative(root, path);
+        private void CheckPath(string path)
+        {
+            SourceProject.RejectLinks(root);
+            SourceProject.RejectNestedLinks(root, SourceProject.Relative(root, path));
+        }
 
         /// <summary>
         /// Deletes the recorded files that still have the content this reconstruction left in them, then the recorded
@@ -231,7 +239,7 @@ public static class SourceExtractor
             }
             // A folder that is not empty holds files reported above or another program's, and stays.
             for (int i = folders.Count - 1; i >= 0; i--)
-                try { if (Directory.Exists(folders[i]) && !Directory.EnumerateFileSystemEntries(folders[i]).Any()) Directory.Delete(folders[i]); }
+                try { SourceProject.RejectLinks(folders[i]); if (Directory.Exists(folders[i]) && !Directory.EnumerateFileSystemEntries(folders[i]).Any()) Directory.Delete(folders[i]); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { failed.Add(folders[i]); }
             return (changed, failed);
         }
@@ -604,7 +612,11 @@ public static class SourceExtractor
         private sealed class DiskFiles(string root) : Worlds.IProjectFiles
         {
             public bool Exists(string relative) => File.Exists(SourceProject.Resolve(root, relative));
-            public byte[] Read(string relative, CancellationToken token) => File.ReadAllBytes(SourceProject.Resolve(root, relative));
+            public byte[] Read(string relative, CancellationToken token)
+            {
+                SourceProject.RejectLinks(root); SourceProject.RejectNestedLinks(root, relative);
+                return SourceRead.All(SourceProject.Resolve(root, relative), FormatRegistry.MaximumDocumentBytes, token);
+            }
         }
         /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle (support\bftmulti.gw).</summary>
         private bool Multiplayer(int mission) =>

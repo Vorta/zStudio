@@ -75,6 +75,7 @@ public sealed partial class AnimationPreviewContext
         package.Diagnostics.AddRange(Package.Diagnostics);
         var copy = new AnimationPreviewContext { Package = package, World = World, Mission = Mission, InspectionNodes = InspectionNodes, LoadedNodeCount = LoadedNodeCount };
         foreach (var pair in Effects) copy.Effects.Add(pair.Key, pair.Value);
+        copy.effectMaps = effectMaps;
         foreach (var pair in Sounds) copy.Sounds.Add(pair.Key, pair.Value);
         foreach (var pair in MaterialCycles) copy.MaterialCycles.Add(pair.Key, pair.Value);
         foreach (var pair in RootOverrides) copy.RootOverrides.Add(pair.Key, pair.Value);
@@ -141,7 +142,7 @@ public sealed partial class AnimationPreviewContext
                 bool effects = asset.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase);
                 if (effects && world.Game == GameVariant.MechWarrior3) continue;
                 var tree = asset.Content as ZrdNode ?? ZrdDecoder.Read(archive.Slice(asset.Offset, asset.Length), token);
-                if (effects) ReadEffects(tree.ToJson(token));
+                if (effects) context.ReadEffects(tree, token);
                 else aliases.AddRange(ReadSoundAliases(tree, token));
             }
         }
@@ -172,21 +173,35 @@ public sealed partial class AnimationPreviewContext
         }
         return context;
 
-        void ReadEffects(JsonNode? tree)
+    }
+    private int effectMaps;
+    /// <summary>Read the shared decoded tree directly; unrelated resource data must never become inspection JSON.</summary>
+    internal void ReadEffects(ZrdNode tree, CancellationToken token)
+    {
+        Dictionary<string, int>? named = null;
+        foreach (var array in Arrays(tree))
         {
-            foreach (var array in Arrays(tree))
-            {
-                if (array.Count < 3 || array[0]?.Text("type") != "string") continue;
-                string model = array[0].Text("value"); string name = Value(array, "NAME").Text("value");
-                if (name.Length == 0 || !array.Any(n => n.Text("value") == "MAPS")) continue;
-                var maps = Value(array, "MAPS", false)?["children"]?.AsArray();
-                string[] textures = maps?.Select(n => n.Text("value")).Where(s => s.Length > 0).ToArray() ?? [];
-                float speed = float.TryParse(Value(array, "SPEED").Text("value"), NumberStyles.Float, CultureInfo.InvariantCulture, out float f) ? f : 15;
-                // zeff_init FindByTypeAndName: the highest slot of the template's name.
-                int root = world.Scene.Nodes.LastOrDefault(n => n.Name == model && n.Class != "none")?.Index ?? -1;
-                context.Effects.TryAdd(name, new(name, model, root, textures, speed, Value(array, "LOOPING").Text("value") == "ON"));
-            }
+            token.ThrowIfCancellationRequested();
+            if (array.Count < 3 || array[0].Kind != ZrdKind.String) continue;
+            string model = array[0].Text, name = Text(Value(array, "NAME"));
+            if (name.Length == 0 || Effects.ContainsKey(name) || !array.Any(n => n.Kind == ZrdKind.String && n.Text == "MAPS")) continue;
+            var maps = Value(array, "MAPS", false)?.Children ?? [];
+            if (Effects.Count >= 4096 || maps.Count > 65536 - effectMaps)
+                throw new InvalidDataException("Animation effect resources exceed 4,096 templates or 65,536 texture maps in one preview.");
+            string[] textures = maps.Select(Text).Where(s => s.Length > 0).ToArray();
+            float speed = float.TryParse(Text(Value(array, "SPEED")), NumberStyles.Float, CultureInfo.InvariantCulture, out float f) && float.IsFinite(f) ? f : 15;
+            // zeff_init FindByTypeAndName: highest live slot, shared by every effect lookup.
+            named ??= World.Scene!.Nodes.Where(n => n.Class != "none").GroupBy(n => n.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Last().Index, StringComparer.Ordinal);
+            Effects.Add(name, new(name, model, named.GetValueOrDefault(model, -1), textures, speed, Text(Value(array, "LOOPING")) == "ON"));
+            effectMaps += textures.Length;
         }
+        static string Text(ZrdNode? node) => node?.Kind switch
+        {
+            ZrdKind.String => node.Text,
+            ZrdKind.Int => unchecked((int)node.Bits).ToString(CultureInfo.InvariantCulture),
+            ZrdKind.Float => BitConverter.UInt32BitsToSingle(node.Bits).ToString("R", CultureInfo.InvariantCulture),
+            _ => ""
+        };
     }
     internal static IEnumerable<(string Name, string File, bool Loop)> ReadSoundAliases(ZrdNode tree, CancellationToken token)
     {
@@ -201,16 +216,16 @@ public sealed partial class AnimationPreviewContext
             if (child.Kind == ZrdKind.Array) foreach (var alias in ReadSoundAliases(child, token)) yield return alias;
         }
     }
-    private static IEnumerable<JsonArray> Arrays(JsonNode? node)
+    private static IEnumerable<IReadOnlyList<ZrdNode>> Arrays(ZrdNode node)
     {
-        if (node?["children"] is not JsonArray children) yield break;
-        yield return children;
-        foreach (var child in children) foreach (var array in Arrays(child)) yield return array;
+        if (node.Kind != ZrdKind.Array) yield break;
+        yield return node.Children;
+        foreach (var child in node.Children) if (child.Kind == ZrdKind.Array) foreach (var array in Arrays(child)) yield return array;
     }
-    private static JsonNode? Value(JsonArray array, string name, bool scalar = true)
+    private static ZrdNode? Value(IReadOnlyList<ZrdNode> array, string name, bool scalar = true)
     {
-        for (int i = 1; i < array.Count - 1; i++) if (array[i].Text("value") == name)
-        { var value = array[i + 1]; return scalar && value?["children"] is JsonArray { Count: > 0 } values ? values[0] : value; }
+        for (int i = 1; i < array.Count - 1; i++) if (array[i].Kind == ZrdKind.String && array[i].Text == name)
+        { var value = array[i + 1]; return scalar && value.Kind == ZrdKind.Array && value.Children.Count > 0 ? value.Children[0] : value; }
         return null;
     }
     /// <summary>The node an entry is bound to: the editor's chosen root, else the one the game binds when it loads (<see cref="LoadedRoot"/>).</summary>

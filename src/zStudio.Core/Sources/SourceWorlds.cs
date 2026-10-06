@@ -133,9 +133,9 @@ public static partial class SourceWorlds
         {
             int end = text.IndexOf('\n', start); if (end < 0) end = text.Length;
             var tokens = GameGenScriptText.TokenizeLine(text[start..end].TrimEnd('\r'));
-            if (tokens.Count > 0 && tokens[0] == "GameZWriteZBDFile")
+            if (tokens.Count > 0 && ScriptCommands.Core(tokens[0]) == "GameZWriteZBDFile")
                 return Encoding.Latin1.GetBytes(text[..start] + string.Concat(lines.Select(l => l + newline)) + text[start..]);
-            if (tokens.Count > 0 && tokens[0].Equals("Quit", StringComparison.OrdinalIgnoreCase)) break;
+            if (tokens.Count > 0 && ScriptConditions.IsQuit(tokens[0])) break;
             start = end + 1;
         }
         throw new InvalidDataException($"{name} does not write the world itself (GameZWriteZBDFile); add the model lines to the script that does.");
@@ -269,7 +269,7 @@ public static partial class SourceWorlds
             SourceProject.RejectNestedLinks(root, relative);
             string path = SourceProject.Resolve(root, relative);
             if (new FileInfo(path).Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} exceeds 512 MiB.");
-            return File.ReadAllBytes(path);
+            return SourceRead.All(path, FormatRegistry.MaximumDocumentBytes, token);
         }
     }
 
@@ -327,6 +327,7 @@ public static partial class SourceWorlds
         var selected = await Task.Run(() => PreviewPlan(root, mission, snapshot.Added, token), token).ConfigureAwait(false);
         if (!selected.Any(p => p.Family == "world")) throw new InvalidDataException($"The project has no world script for {mission} ({SourceBuilder.WorldScript(mission)}) or no glTF models.");
         List<SourceExportResult> results = []; Animation.AnimationPackage? animations = null;
+        SourceProject.RejectLinks(destination);
         Directory.CreateDirectory(destination);
         for (int i = 0; i < selected.Length; i++)
         {
@@ -339,8 +340,13 @@ public static partial class SourceWorlds
                 var check = FormatRegistry.Default.OpenBytes(output.Path, built.Bytes, token: token);
                 if (check.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built file does not reopen: " + error.Message);
                 string path = SourceProject.Resolve(destination, output.Path);
+                SourceProject.RejectLinks(path);
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                await File.WriteAllBytesAsync(path, built.Bytes, token).ConfigureAwait(false);
+                // A private build never replaces a file. Recheck parents at the write boundary; another process may have
+                // replaced a cache directory since planning or progress reporting.
+                SourceProject.RejectLinks(path);
+                await using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
+                    await stream.WriteAsync(built.Bytes, token).ConfigureAwait(false);
                 results.Add(new(output.Path, output.Family, "built", built.Bytes.Length, built.Items, built.Warnings));
             }
             catch (Exception ex) when (SourceBuilder.IsBuildFailure(ex))

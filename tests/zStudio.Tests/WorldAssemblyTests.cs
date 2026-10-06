@@ -129,7 +129,7 @@ public sealed class WorldAssemblyTests
 
         // Decomposition undoes the script's edits: the crate load holds the file's parts under their file names.
         List<string> notes = [];
-        var loads = WorldDecomposer.Decompose(Shipped(), ScriptTrace.Trace(n => scripts.GetValueOrDefault(n), "m1.gs", notes), notes);
+        var loads = WorldDecomposer.Decompose(Shipped(), ScriptTrace.Trace(n => scripts.GetValueOrDefault(n), "m1.gs", notes), notes, TestContext.Current.CancellationToken);
         Assert.Empty(notes);
         var database = loads.Single(l => l.Database); var crate = loads.Single(l => l.NodeName == "crate1");
         Assert.Equal(["ground"], database.Content.Select(n => n.Name));

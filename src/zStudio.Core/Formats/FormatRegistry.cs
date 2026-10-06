@@ -90,7 +90,7 @@ public sealed class FormatRegistry
         path = System.IO.Path.GetFullPath(path);
         FileStamp stamp = FileStamp.Read(path);
         ValidateDocumentSize(stamp.Length);
-        byte[] bytes = await File.ReadAllBytesAsync(path, token).ConfigureAwait(false);
+        byte[] bytes = await Sources.SourceRead.AllAsync(path, MaximumDocumentBytes, token).ConfigureAwait(false);
         if (FileStamp.Read(path) != stamp) throw new IOException("The file changed while opening. Reload it to read a consistent snapshot.");
         return await Task.Run(() => OpenBytes(path, bytes, stamp, token), token).ConfigureAwait(false);
     }

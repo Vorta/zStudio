@@ -54,11 +54,17 @@ public static class TerrainCompiler
     /// <summary>Distance below which a point counts as on a cut line (the model builder merges vertices within 0.001).</summary>
     private const double OnLine = 1e-3;
     public const int MaximumFragments = 4_000_000;
+    // Counts all created corners, including discarded intermediate cuts and junction repairs. A final-output
+    // limit alone leaves the splitter free to retain far more geometry than the world reader can accept.
+    internal const int MaximumCreatedCorners = 4_000_000;
 
     public static TerrainCompilation Compile(string label, TerrainRecipe recipe, IReadOnlyList<TerrainSurfaceGeometry> surfaces, IReadOnlyList<TerrainMaterialInfo> materials, TerrainGrid grid, CancellationToken token = default)
+        => Compile(label, recipe, surfaces, materials, grid, token, MaximumCreatedCorners);
+
+    internal static TerrainCompilation Compile(string label, TerrainRecipe recipe, IReadOnlyList<TerrainSurfaceGeometry> surfaces, IReadOnlyList<TerrainMaterialInfo> materials, TerrainGrid grid, CancellationToken token, int maximumCreatedCorners)
     {
         if (grid.CellX <= 0 || grid.CellZ >= 0 || grid.Columns < 1 || grid.Rows < 1) throw new InvalidDataException("Terrain needs the world's grid: WorldOrigin, WorldExtents and WorldPartition must run before the mission database is loaded.");
-        Compiler compiler = new(token);
+        Compiler compiler = new(token, maximumCreatedCorners);
         List<string> warnings = [];
         // Layers 1 and 2: the recipe's defaults, then each surface's.
         for (int s = 0; s < surfaces.Count; s++)
@@ -254,11 +260,20 @@ public static class TerrainCompiler
         }
     }
 
-    private sealed class Compiler(CancellationToken token)
+    private sealed class Compiler(CancellationToken token, int maximumCreatedCorners)
     {
         private readonly List<Part> parts = [];
         private readonly Dictionary<(Vector3, Vector3), Segment> sourceEdges = [];
         private int work;
+        private int createdCorners;
+
+        private void ChargeCorners(int count)
+        {
+            token.ThrowIfCancellationRequested();
+            if (count < 0 || count > maximumCreatedCorners - createdCorners)
+                throw new InvalidDataException($"Terrain cutting exceeds its {maximumCreatedCorners:N0}-corner intermediate geometry limit; reduce the surfaces or region detail.");
+            createdCorners += count;
+        }
 
         private void Tick() { if ((++work & 4095) == 0) token.ThrowIfCancellationRequested(); }
         private static bool Less(Vector3 a, Vector3 b) => a.X != b.X ? a.X < b.X : a.Y != b.Y ? a.Y < b.Y : a.Z < b.Z;
@@ -276,6 +291,7 @@ public static class TerrainCompiler
             var corners = face.Corners;
             if (corners.Count < 3 || corners.Count > ModelBuilder.MaximumCorners || corners.Any(c => !Finite(c.Position)) || Area([.. corners]) < 1e-6) return;
             if (parts.Count >= MaximumFragments) throw new InvalidDataException($"The terrain has more than {MaximumFragments:N0} polygons.");
+            ChargeCorners(corners.Count);
             // A polygon that is not convex stays as it is unless a line must cut it (see Both).
             parts.Add(new()
             {
@@ -383,6 +399,7 @@ public static class TerrainCompiler
             }
             if (!negative || !positive) return [part];
             if (!part.Convex) return Fan(part).SelectMany(p => Both(p, line)).ToList();
+            ChargeCorners(n + 4); // The two sides together have n original corners and two copies of each cut.
             // The polygon's points in order: its corners, with a cut point on each edge the line crosses.
             List<(TerrainCorner Corner, int Side, int Edge, double T)> points = [];
             for (int i = 0; i < n; i++)
@@ -440,6 +457,7 @@ public static class TerrainCompiler
             Segment? previous = null;
             for (int i = 1; i + 1 < n; i++)
             {
+                ChargeCorners(3);
                 var next = i + 1 < n - 1 ? Diagonal(i + 1) : null;
                 List<EdgeRef> edges =
                 [
@@ -474,7 +492,13 @@ public static class TerrainCompiler
                 {
                     var edge = part.Edges[i];
                     double lo = Math.Min(edge.T0, edge.T1), hi = Math.Max(edge.T0, edge.T1);
-                    var inside = edge.Segment.Points.Keys.Where(t => t > lo + 1e-12 && t < hi - 1e-12).ToList();
+                    // Count before creating the lists: many neighbouring parts may share a densely cut segment.
+                    int count = 0;
+                    foreach (double t in edge.Segment.Points.Keys)
+                        if (t > lo + 1e-12 && t < hi - 1e-12) { ChargeCorners(1); count++; }
+                    var inside = new List<double>(count);
+                    foreach (double t in edge.Segment.Points.Keys)
+                        if (t > lo + 1e-12 && t < hi - 1e-12) inside.Add(t);
                     if (inside.Count == 0) continue;
                     if (edge.T0 > edge.T1) inside.Reverse();
                     var from = part.Corners[i]; var to = part.Corners[(i + 1) % part.Corners.Count];
@@ -541,7 +565,10 @@ public static class TerrainCompiler
             while (pending.TryPop(out var list))
             {
                 token.ThrowIfCancellationRequested();
-                if (list.Count <= 1 || Counts(list) <= VertexBudget) { done.Add(list); continue; }
+                if (Counts(list) <= VertexBudget) { done.Add(list); continue; }
+                // Junction repair may give one polygon more corners than a model can hold. Split its fan before
+                // grouping, rather than treating a single polygon as indivisible and letting ModelBuilder discard it.
+                if (list.Count == 1) { pending.Push(Fan(list[0]).ToList()); continue; }
                 var centres = list.Select(p => p.Centroid()).ToArray();
                 float spanX = centres.Max(c => c.X) - centres.Min(c => c.X), spanZ = centres.Max(c => c.Z) - centres.Min(c => c.Z);
                 var order = Enumerable.Range(0, list.Count).OrderBy(i => spanX >= spanZ ? centres[i].X : centres[i].Z).ThenBy(i => spanX >= spanZ ? centres[i].Z : centres[i].X).ThenBy(i => i).ToArray();

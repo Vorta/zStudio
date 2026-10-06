@@ -643,9 +643,11 @@ public partial class MainWindow
         return new
         {
             revision = workspace.Revision, contentRevision = workspace.ContentRevision, saving = workspace.IsSaving,
-            canUndo = workspace.CanUndo, canRedo = workspace.CanRedo, undo = workspace.UndoLabel, redo = workspace.RedoLabel,
-            dirtyFiles = dirty.Take(64).ToArray(), dirtyFileCount = dirty.Count, dirtyFilesTruncated = dirty.Count > 64,
-            history = workspace.History.Select((t, i) => (Step: t, Index: i)).TakeLast(32).Select(h => new { id = h.Step.Id, label = Bounded(h.Step.Label, 128), files = h.Step.Files.Take(16).Select(f => f.Relative).ToArray(), fileCount = h.Step.Files.Count, undone = h.Index >= workspace.UndoCount }).ToArray(),
+            canUndo = workspace.CanUndo, canRedo = workspace.CanRedo, undo = workspace.UndoLabel is { } undo ? Bounded(undo, 128) : null, redo = workspace.RedoLabel is { } redo ? Bounded(redo, 128) : null,
+            labelsTruncated = workspace.UndoLabel?.Length > 128 || workspace.RedoLabel?.Length > 128,
+            dirtyFiles = dirty.Take(64).Select(p => Bounded(p, 256)).ToArray(), dirtyFileCount = dirty.Count, dirtyFilesTruncated = dirty.Count > 64,
+            pathsTruncated = dirty.Take(64).Any(p => p.Length > 256),
+            history = workspace.History.Select((t, i) => (Step: t, Index: i)).TakeLast(32).Select(h => new { id = h.Step.Id, label = Bounded(h.Step.Label, 128), files = h.Step.Files.Take(16).Select(f => Bounded(f.Relative, 256)).ToArray(), pathsTruncated = h.Step.Files.Take(16).Any(f => f.Relative.Length > 256), fileCount = h.Step.Files.Count, undone = h.Index >= workspace.UndoCount }).ToArray(),
             historyCount = workspace.History.Count
         };
     }
@@ -655,13 +657,14 @@ public partial class MainWindow
         RegisterJob(r, "source_world_open", "Open (or activate) a mission world of the open source project as its build script assembles it from the project's glTF models, textures, resources and animation definitions, including the project's unsaved edits. The world is built privately, as the export builds it, into the project's zstudio/cache/worlds folder (zStudio's derived data, which builds never read and which is removed when the world closes), and shown in Whole world. Edit it with zstudio_source_world_add_model, the placement commands (pickup_lock, pickup_move, scene_card), undo_redo and save_document, which change only the project's sources; every open world of the project shares one edit history and one save. Build problems are listed in problems.",
             [P("mission", "string", "Mission folder, for example m1 (see zstudio_source_status: outputs of family world).", true)], true,
             async (a, token) => { var doc = await OpenSourceWorldAsync(Text(a, "mission"), token); return Result(new { document = DocumentState(doc) }); });
-        Register(r, "source_world_models", "List the glTF models of the open source project that a world script can load (every .gltf/.glb under data with a loadable name), paged and filtered by path.", false, [.. PageParameters], async (a, token) =>
+        Register(r, "source_world_models", "List the glTF models of the open source project that a world script can load (every .gltf/.glb under data with a loadable name), paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset.", false, [.. PageParameters], async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             IReadOnlyList<SourceModelChoice> models;
             try { models = await Task.Run(() => SourceWorlds.Models(root, token), token); }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-            return Page(models, a, m => m.Path, m => new { path = m.Path, folder = m.Folder, name = m.Name });
+            // Keep usable path identities whole; large paths shorten the page, not the paths, before JSON projection.
+            return Page(models, a, m => m.Path, m => new { path = m.Path, folder = m.Folder, name = m.Name }, maximumRowBytes: m => 128 + 6L * (m.Path.Length + m.Folder.Length + m.Name.Length));
         });
         Register(r, "source_world_definitions", "List animation definition files that other missions list with an animation for a root name and this source world does not list yet, such as an enemy's destruction animations.", false,
             [DocumentParameter, P("name", "string", "Root node name, as the model's node would be named.", true)], async (a, token) =>
@@ -705,7 +708,7 @@ public partial class MainWindow
                 var next = await AddSourceModelAsync(d, new(model, files), token);
                 return Result(new { document = DocumentState(next), definitionFiles = files, duplicateName = duplicate });
             });
-        Register(r, "source_changes", "Describe the open source project's unsaved edits: the files save_document would write, the shared edit history (newest last, with undone steps marked) and, for one file, its working text beside the file on disk as a bounded line diff.", false,
+        Register(r, "source_changes", "Describe the open source project's unsaved edits: the files save_document would write, the shared edit history (newest last, with undone steps marked) and, for one file, its working text beside the file on disk as a bounded line diff. Workspace and history path summaries keep 256 characters, with pathsTruncated flags; full source identities are retained internally.", false,
             [P("file", "string", "Optional project path (for example data/m1/zrdr/puppies.zrd) to diff against the disk."), new("maxLines", "integer", "Diff lines to return; default 200.", Minimum: 1, Maximum: 2000)], async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
@@ -718,16 +721,17 @@ public partial class MainWindow
                 catch (Exception ex) when (ex is InvalidDataException or IOException) { throw new StudioCommandException("invalid_argument", ex.Message); }
                 int maximumLines = Int(a, "maxLines", 200);
                 // Reading both versions (up to 16 MiB each) and comparing them stays off the UI thread and observes cancellation.
-                diff = await Task.Run(() => SourceDiff.Describe(file, ReadDiskOrNull(root, file), workspace.Read(file, token), maximumLines, token), token);
+                diff = await Task.Run(() => SourceDiff.Describe(file, ReadDiskOrNull(root, file, token), workspace.Read(file, token), maximumLines, token), token);
             }
             return Result(new { project = root, workspace = SourceWorkspaceState(workspace), diff });
         });
     }
-    private static byte[]? ReadDiskOrNull(string root, string relative)
+    private static byte[]? ReadDiskOrNull(string root, string relative, CancellationToken token)
     {
         string path = SourceProject.Resolve(root, relative);
         if (!File.Exists(path)) return null;
-        return new FileInfo(path).Length > SourceProject.MaximumSourceTextBytes ? throw new StudioCommandException("too_large", $"{relative} is too large to diff.") : File.ReadAllBytes(path);
+        try { return SourceRead.All(path, SourceProject.MaximumSourceTextBytes, token); }
+        catch (InvalidDataException ex) { throw new StudioCommandException("too_large", ex.Message); }
     }
     private static float Coordinate(JsonObject a, string name) => a[name] is JsonValue value && value.TryGetValue<double>(out double number) && double.IsFinite(number) && Math.Abs(number) <= SourceWorlds.MaximumCoordinate
         ? (float)number : throw new StudioCommandException("invalid_argument", $"{name} must be a finite number within ±{SourceWorlds.MaximumCoordinate:N0}.");

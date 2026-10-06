@@ -22,33 +22,36 @@ public sealed class AnimationItem(string key, ZrdNode? values, string source)
     public string Text(int index = 0)
     {
         var values = Scalars;
-        if (index >= values.Count) throw Error($"{Key} needs a value at position {index + 1}.");
+        if (index >= values.Count) throw Error($"{JsonData.ShownText(Key)} needs a value at position {index + 1}.");
         return values[index].Kind == ZrdKind.String ? values[index].Text : values[index].Value;
     }
     public string? TextOf(string key) => Item(key) is { } item && item.Scalars.Count > 0 ? item.Text() : null;
     public float Number(int index = 0)
     {
         var values = Scalars;
-        if (index >= values.Count) throw Error($"{Key} needs a number at position {index + 1}.");
-        return values[index].Kind switch
+        if (index >= values.Count) throw Error($"{JsonData.ShownText(Key)} needs a number at position {index + 1}.");
+        float result = values[index].Kind switch
         {
             ZrdKind.Float => BitConverter.UInt32BitsToSingle(values[index].Bits),
             ZrdKind.Int => unchecked((int)values[index].Bits),
-            _ => throw Error($"{Key} value {index + 1} ('{values[index].Text}') is not a number."),
+            _ => throw Error($"{JsonData.ShownText(Key)} value {index + 1} ('{JsonData.ShownText(values[index].Text)}') is not a number."),
         };
+        return float.IsFinite(result) ? result : throw Error($"{JsonData.ShownText(Key)} needs a finite number.");
     }
     public int Integer(int index = 0)
     {
         var values = Scalars;
-        if (index >= values.Count) throw Error($"{Key} needs a number at position {index + 1}.");
+        if (index >= values.Count) throw Error($"{JsonData.ShownText(Key)} needs a number at position {index + 1}.");
         return values[index].Kind switch
         {
             ZrdKind.Int => unchecked((int)values[index].Bits),
-            ZrdKind.Float => (int)BitConverter.UInt32BitsToSingle(values[index].Bits),
-            _ => throw Error($"{Key} value {index + 1} ('{values[index].Text}') is not a number."),
+            ZrdKind.Float => IntegerFloat(BitConverter.UInt32BitsToSingle(values[index].Bits)),
+            _ => throw Error($"{JsonData.ShownText(Key)} value {index + 1} ('{JsonData.ShownText(values[index].Text)}') is not a number."),
         };
+        int IntegerFloat(float value) => float.IsFinite(value) && value >= int.MinValue && (double)value <= int.MaxValue
+            ? (int)value : throw Error($"{JsonData.ShownText(Key)} needs a number within the signed 32-bit integer range.");
     }
-    public InvalidDataException Error(string message) => new($"{Source}: {message}");
+    public InvalidDataException Error(string message) => new($"{JsonData.ShownText(Source)}: {message}");
 
     /// <summary>The items of a list: each string followed by a list is a keyword with values; a lone string is a bare keyword.</summary>
     public static IEnumerable<AnimationItem> Parse(ZrdNode list, string source)
@@ -78,7 +81,14 @@ public sealed class AnimationDefinitionSet
     /// so the total number of definition file reads is bounded as well as their depth.
     /// </summary>
     public const int MaximumFileDepth = 16, MaximumDefinitions = 20_000, MaximumFileReads = 10_000;
+    /// <summary>Total definition and keyframe input per compilation, including repeated reads, before parsing/retention.</summary>
+    public const long MaximumSourceBytes = 64L * 1024 * 1024;
+    public const int MaximumSourceNodes = ZrdText.MaximumNodes;
     private int reads;
+    private long sourceBytes;
+    private int sourceNodes;
+    private readonly long maximumSourceBytes;
+    private readonly int maximumSourceNodes;
     public float Gravity { get; private set; } = -9.8f;
     /// <summary>Project folders searched for bare definition and keyframe script names, in order.</summary>
     public List<string> SearchPath { get; } = [];
@@ -86,15 +96,20 @@ public sealed class AnimationDefinitionSet
     /// <summary>Every definition and script file read, in the order the compiler read them.</summary>
     public List<string> Files { get; } = [];
     public List<string> Warnings { get; } = [];
+    private void Warn(string message) { if (Warnings.Count < 2000) Warnings.Add(message); }
     private readonly IProjectFiles files;
     private readonly CancellationToken token;
 
-    private AnimationDefinitionSet(IProjectFiles files, CancellationToken token) { this.files = files; this.token = token; }
+    private AnimationDefinitionSet(IProjectFiles files, CancellationToken token, long maximumSourceBytes, int maximumSourceNodes)
+    { this.files = files; this.token = token; this.maximumSourceBytes = maximumSourceBytes; this.maximumSourceNodes = maximumSourceNodes; }
 
     /// <summary>Reads the definitions reachable from <paramref name="root"/> (a project path).</summary>
     public static AnimationDefinitionSet Load(IProjectFiles files, string root, CancellationToken token = default)
+        => Load(files, root, MaximumSourceBytes, MaximumSourceNodes, token);
+
+    internal static AnimationDefinitionSet Load(IProjectFiles files, string root, long maximumSourceBytes, int maximumSourceNodes, CancellationToken token)
     {
-        AnimationDefinitionSet set = new(files, token);
+        AnimationDefinitionSet set = new(files, token, maximumSourceBytes, maximumSourceNodes);
         set.Read(root, 0, true);
         return set;
     }
@@ -114,7 +129,7 @@ public sealed class AnimationDefinitionSet
                     case "ANIMATION_PATH" when root:
                         foreach (string part in item.Text().Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                             if (!part.Contains('\0') && WorldAssembler.ProjectPath(part) is { } folder) { if (!SearchPath.Contains(folder, StringComparer.OrdinalIgnoreCase)) SearchPath.Add(folder); }
-                            else Warnings.Add($"{path}: ANIMATION_PATH folder '{part.Replace('\0', '?')}' is outside the project and is not searched.");
+                            else Warn($"{JsonData.ShownText(path)}: ANIMATION_PATH folder '{JsonData.ShownText(part).Replace('\0', '?')}' is outside the project and is not searched.");
                         break;
                     case "ANIMATION_LIST":
                         foreach (var entry in item.Items)
@@ -123,7 +138,7 @@ public sealed class AnimationDefinitionSet
                             {
                                 // The original compiler skipped files that did not exist (they have no source stamp).
                                 string? file = Resolve(entry.Text(), path);
-                                if (file == null) Warnings.Add($"{path}: definition file {entry.Text()} does not exist; its animations are not compiled.");
+                                if (file == null) Warn($"{JsonData.ShownText(path)}: definition file {JsonData.ShownText(entry.Text())} does not exist; its animations are not compiled.");
                                 else Read(file, depth + 1, false);
                             }
                             else if (entry.Key == "ANIMATION_DEFINITION")
@@ -136,12 +151,34 @@ public sealed class AnimationDefinitionSet
                 }
     }
 
-    private ZrdNode Parse(string path) => Unwrap(Read(files, path, token));
+    private ZrdNode Parse(string path)
+    {
+        var tree = ReadBytes(ReadSource(path), path, token);
+        Count(tree);
+        return Unwrap(tree);
+        void Count(ZrdNode node)
+        {
+            token.ThrowIfCancellationRequested();
+            if (++sourceNodes > maximumSourceNodes) throw new InvalidDataException($"{path}: animation definition files together exceed {maximumSourceNodes:N0} syntax nodes.");
+            foreach (var child in node.Children) Count(child);
+        }
+    }
+
+    private byte[] ReadSource(string path)
+    {
+        byte[] bytes = files.Read(path, token);
+        if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"{path} exceeds {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB.");
+        if ((sourceBytes += bytes.Length) > maximumSourceBytes)
+            throw new InvalidDataException($"{path}: animation definitions and keyframe scripts together exceed {maximumSourceBytes:N0} bytes; split the mission's animation sources.");
+        return bytes;
+    }
 
     /// <summary>A definition file's zReader tree as stored (text or compiled).</summary>
     public static ZrdNode Read(IProjectFiles files, string path, CancellationToken token)
+        => ReadBytes(files.Read(path, token), path, token);
+
+    private static ZrdNode ReadBytes(byte[] bytes, string path, CancellationToken token)
     {
-        byte[] bytes = files.Read(path, token);
         if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"{path} exceeds {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB.");
         try { return ZrdText.LooksLikeText(bytes) ? ZrdText.Parse(bytes, token) : ZrdDecoder.Read(bytes, token); }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
@@ -250,7 +287,7 @@ public sealed class AnimationDefinitionSet
     /// </summary>
     public string? Resolve(string name, string from)
     {
-        if (name.Contains('\0')) throw new InvalidDataException($"{from}: '{name.Replace('\0', '?')}' is not a file name.");
+        if (name.Contains('\0')) throw new InvalidDataException($"{JsonData.ShownText(from)}: '{JsonData.ShownText(name).Replace('\0', '?')}' is not a file name.");
         string normalized = name.Replace('\\', '/');
         if (normalized.Contains('/'))
         {
@@ -260,7 +297,7 @@ public sealed class AnimationDefinitionSet
             if (project != null && files.Exists(project)) return project;
             normalized = normalized[(normalized.LastIndexOf('/') + 1)..];
         }
-        if (normalized.Length == 0 || normalized.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new InvalidDataException($"{from}: '{name}' is not a file name.");
+        if (normalized.Length == 0 || normalized.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new InvalidDataException($"{JsonData.ShownText(from)}: '{JsonData.ShownText(name)}' is not a file name.");
         string beside = Path.GetDirectoryName(from)!.Replace('\\', '/');
         return new[] { beside }.Concat(SearchPath).Select(folder => $"{folder}/{normalized}").FirstOrDefault(files.Exists);
     }
@@ -271,8 +308,7 @@ public sealed class AnimationDefinitionSet
         string? path = Resolve(name, from);
         if (path == null) return null;
         Files.Add(path);
-        byte[] bytes = files.Read(path, token);
-        if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"{path} exceeds {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB.");
+        byte[] bytes = ReadSource(path);
         return (path, bytes);
     }
 }

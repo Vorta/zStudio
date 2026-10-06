@@ -247,4 +247,18 @@ public sealed class ScriptScanRound6Tests
         Assert.ThrowsAny<OperationCanceledException>(() => SourceBlender.Checkouts(fixture.Project, canceled.Token));
         Assert.ThrowsAny<OperationCanceledException>(() => SourceBlender.Exports(listed[0].Checkout, canceled.Token));
     }
+
+    [Fact]
+    public void CheckoutManifestBytesHaveOneSharedListingBudget()
+    {
+        using SourceWorldFixture fixture = new();
+        string a = FakeCheckout(fixture.Project, "a", 0), b = FakeCheckout(fixture.Project, "b", 0);
+        long bytes = new FileInfo(Path.Combine(a, "manifest.json")).Length + new FileInfo(Path.Combine(b, "manifest.json")).Length;
+        Assert.Equal(2, SourceBlender.CheckoutExports(fixture.Project, 100, Token, bytes).Count);
+        Assert.Throws<IOException>(() => SourceBlender.CheckoutExports(fixture.Project, 100, Token, bytes - 1));
+        var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(a, "manifest.json")))!;
+        manifest["id"] = "another-checkout";
+        File.WriteAllText(Path.Combine(a, "manifest.json"), manifest.ToJsonString());
+        Assert.Equal("b", Assert.Single(SourceBlender.Checkouts(fixture.Project, Token)).Id);
+    }
 }

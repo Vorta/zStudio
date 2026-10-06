@@ -68,6 +68,21 @@ public sealed class ScenePreviewTests
         Assert.Same(context.MaterialCycles[0], context.Snapshot().MaterialCycles[0]);
     }
     [Fact]
+    public void RepeatedTextureSettingsReuseTheCompletedMapList()
+    {
+        var scene = LodScene(); scene.Materials.Add(new JsonObject { ["alpha"] = 255 });
+        scene.Models[0] = scene.Models[0] with { Polygons = [new(0, 0, [], [], [], [])] };
+        var context = Context(scene);
+        List<string[]> instructions = [["FindNode", "first"], ["FindSubNode", "highA"], ["CycleTextureSetOn", "4096"]];
+        instructions.AddRange(Enumerable.Repeat(new[] { "CycleTextureSetMap", "a" }, 4096));
+        instructions.AddRange(Enumerable.Repeat(new[] { "CycleTextureSetSpeed", "12" }, 1000));
+        Dictionary<string, ScriptContent> scripts = new() { ["mission"] = new(instructions, "") };
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        context.ReadTextureScript("mission", scripts, TestContext.Current.CancellationToken);
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 2 * 1024 * 1024);
+        Assert.Equal(12, context.MaterialCycles[0].Speed); Assert.Equal("a", context.MaterialCycles[0].At(1));
+    }
+    [Fact]
     public async Task PendingScriptEditsFeedTextureCycleConsumerAndUndoRestoresIt()
     {
         var token = TestContext.Current.CancellationToken;

@@ -79,7 +79,11 @@ public static class PngDecoder
                 if (!imageData) imageStart = offset;
                 imageEnd = offset + length + 12; imageData = true;
             }
-            else if (type.SequenceEqual("IEND"u8)) { ended = true; break; }
+            else if (type.SequenceEqual("IEND"u8))
+            {
+                if (length != 0 || offset + 12 != png.Length) throw new InvalidDataException("PNG IEND must be empty and the final chunk, with no following bytes.");
+                ended = true; break;
+            }
             // Ancillary chunks (lowercase first letter) such as gAMA, pHYs and tEXt carry nothing a texture needs.
             else if ((type[0] & 32) == 0) throw new InvalidDataException($"Unsupported critical PNG chunk {System.Text.Encoding.ASCII.GetString(type)}.");
             offset += length + 12;

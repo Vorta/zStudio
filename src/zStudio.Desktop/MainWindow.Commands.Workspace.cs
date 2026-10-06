@@ -11,7 +11,7 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     private static readonly StudioParameter[] PageParameters = [P("offset", "integer", "Zero-based result offset."), P("limit", "integer", "Page size, 1–200; default 100."), P("query", "string", "Case-insensitive name/path or displayed-text filter, applied before pagination.")];
-    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null, Func<T, object>? project = null, Func<T, string, bool>? matches = null)
+    internal static StudioResult Page<T>(IEnumerable<T> source, JsonObject a, Func<T, string>? search = null, Func<T, object>? project = null, Func<T, string, bool>? matches = null, Func<T, long>? maximumRowBytes = null)
     {
         int offset = Int(a, "offset"), limit = Int(a, "limit", 100);
         if (offset < 0 || limit is < 1 or > 200) throw new StudioCommandException("invalid_argument", "Use offset >= 0 and limit 1–200.");
@@ -20,13 +20,19 @@ public partial class MainWindow
             if (matches != null) source = source.Where(item => matches(item, query));
             else if (search != null) source = source.Where(item => search(item).Contains(query, StringComparison.OrdinalIgnoreCase));
         }
-        int total = 0; List<object?> items = [];
+        int total = 0; List<object?> items = []; long bytes = 0; bool full = false;
         foreach (var item in source)
         {
-            if (total >= offset && items.Count < limit) items.Add(project == null ? item : project(item));
+            if (total >= offset && items.Count < limit && !full)
+            {
+                long cost = maximumRowBytes?.Invoke(item) ?? 0;
+                if (cost > 1024 * 1024) throw new StudioCommandException("too_large", "A result row exceeds the supported page size.");
+                if (bytes + cost > 1024 * 1024 && items.Count > 0) full = true;
+                else { items.Add(project == null ? item : project(item)); bytes += cost; }
+            }
             total++;
         }
-        return Result(new { total, offset, nextOffset = (long)offset + limit < total ? (int?)(offset + limit) : null, items });
+        return Result(new { total, offset, nextOffset = (long)offset + items.Count < total ? (int?)(offset + items.Count) : null, items });
     }
     /// <summary>A positional page of a sequence whose size is known: only the returned rows are constructed.</summary>
     internal static StudioResult PageRange(int total, JsonObject a, Func<int, object> project)

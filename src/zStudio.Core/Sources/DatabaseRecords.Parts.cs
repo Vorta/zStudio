@@ -96,10 +96,11 @@ internal static partial class DatabaseRecords
                 // The older reading: made order as the tree's preorder (a reference's delayed copy then hangs under the
                 // record after it, which the walk still places as a copy).
                 int at = 0;
-                void Build()
+                void Build(int depth = 0)
                 {
+                    CheckDepth(depth);
                     int node = pre[at++]; deletedChildren[node] = []; int end = postIndex[node];
-                    while (at < pre.Count && postIndex[pre[at]] < end) { deletedParent[pre[at]] = node; deletedChildren[node].Add(pre[at]); Build(); }
+                    while (at < pre.Count && postIndex[pre[at]] < end) { deletedParent[pre[at]] = node; deletedChildren[node].Add(pre[at]); Build(depth + 1); }
                 }
                 if (pre.Count > 0) Build();
                 Covered = at == pre.Count && pre.Count > 0 && pre[0] == root;
@@ -121,7 +122,7 @@ internal static partial class DatabaseRecords
             }
             // The tree must free its nodes in the deletion's order (children first, in the order they were made).
             List<int> freedOrder = [];
-            void Post(int node) { foreach (int child in deletedChildren.GetValueOrDefault(node, [])) Post(child); freedOrder.Add(node); }
+            void Post(int node, int depth = 0) { CheckDepth(depth); foreach (int child in deletedChildren.GetValueOrDefault(node, [])) Post(child, depth + 1); freedOrder.Add(node); }
             if (pre.Count > 0 && pre[0] == root) Post(root);
             HashSet<int> inOrder = [.. pre];
             Covered = pre.Count > 0 && pre[0] == root && deletedParent.Count == pre.Count - 1 && (tolerant || freedOrder.SequenceEqual(post.Where(inOrder.Contains)));
@@ -222,10 +223,6 @@ internal static partial class DatabaseRecords
             return best is { tolerant: false } && best.Complete() ? best : null;
             }
 
-            // The caches' high-water mark when the deletion's entries are the list's first `count`: one above the caches'
-            // highest slot, the deepest entry being an end node when it lies above every cache's slot.
-            int High(int count, int[] below) { int last = list.Count - 1; return (list[last] > below[count] ? below[count] : Math.Max(below[count], list[last])) + 1; }
-
             // Where the deletion's entries may end and the caches' begin, with the caches' high-water mark, most likely first.
             // First the boundary where the record slots below that mark are one run right below the last cache's root, which
             // the deletion's last entry before the caches is (one cache's own caches freed them). Then every boundary whose
@@ -233,21 +230,13 @@ internal static partial class DatabaseRecords
             // deep in their frees, so the true mark holds over every boundary from the true one down to it.
             IEnumerable<(int Count, int High)> Boundaries()
             {
-                int last = list.Count - 1;
-                int[] below = new int[list.Count + 1]; below[last] = -1;
-                for (int i = last - 1; i >= 0; i--) below[i] = Math.Max(below[i + 1], list[i]);
                 List<(int Count, int High)> candidates = [];
                 // Each boundary once: those the first rule finds are among the plateaus' too.
                 HashSet<int> found = [];
-                for (int d = 1; d < last; d++)
+                foreach (var (d, high, contiguous) in BoundaryCandidates(list, objectSlots, root, token))
                 {
-                    token.ThrowIfCancellationRequested();
-                    int high = High(d, below);
-                    if (high <= root) continue;
                     if (search) candidates.Add((d, high));
-                    int top = list[d];
-                    var run = objectSlots.Where(s => s < high).Concat(list.Take(d).Where(s => s < high)).ToHashSet();
-                    if (run.Count > 0 && run.Contains(root) && run.Min() == top - run.Count && run.Max() == top - 1 && found.Add(d)) yield return (d, high);
+                    if (contiguous && found.Add(d)) yield return (d, high);
                 }
                 // Each plateau's first boundary, then each one's second, and so on: a plateau's first boundary usually settles on
                 // its true one (1999 m6 settles from 78 on 81), and a long plateau must not take every attempt.
@@ -405,7 +394,7 @@ internal static partial class DatabaseRecords
                 if (InOrder(node).ToList() is var made && !made.SequenceEqual(node.Children)) { node.Children.Clear(); node.Children.AddRange(made); }
         }
 
-        private bool HasReference(WorldNode node) => isModelReference(node) || node.Children.Any(HasReference);
+        private bool HasReference(WorldNode node) => WorldAssembler.Subtree(node).Any(isModelReference);
         private bool DeletedUnder(int x, int ancestor) { while (deletedParent.TryGetValue(x, out int p)) { if (p == ancestor) return true; x = p; } return false; }
 
         /// <summary>Whether a copy of the part <paramref name="reference"/> refers to follows its next record <paramref name="next"/>.</summary>
@@ -510,11 +499,15 @@ internal static partial class DatabaseRecords
         /// <summary>A file's references among <paramref name="records"/> in record order, not looking inside references or parts.</summary>
         private IEnumerable<WorldNode> OwnReferences(IEnumerable<WorldNode> records)
         {
-            foreach (var record in records)
+            HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
+            Stack<WorldNode> pending = new(records.Reverse());
+            while (pending.TryPop(out var record))
             {
+                token.ThrowIfCancellationRequested();
+                if (!seen.Add(record)) continue;
                 if (Content.ContainsKey(record)) continue;
                 if (!Made.ContainsKey(record) && isModelReference(record)) { yield return record; continue; }
-                foreach (var inner in OwnReferences(record.Children)) yield return inner;
+                foreach (var child in Enumerable.Reverse(record.Children)) pending.Push(child);
             }
         }
 
@@ -619,9 +612,15 @@ internal static partial class DatabaseRecords
         /// <summary>A reference and what its copy holds (a part's content, not its own records).</summary>
         private IEnumerable<WorldNode> Below(WorldNode node)
         {
-            yield return node;
-            foreach (var child in Content.TryGetValue(node, out var content) ? content : node.Children)
-                foreach (var n in Below(child)) yield return n;
+            HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
+            Stack<WorldNode> pending = new([node]);
+            while (pending.TryPop(out var next))
+            {
+                token.ThrowIfCancellationRequested();
+                if (!seen.Add(next)) continue;
+                yield return next;
+                foreach (var child in Enumerable.Reverse(Content.TryGetValue(next, out var content) ? content : next.Children)) pending.Push(child);
+            }
         }
         private IReadOnlyList<WorldNode> ContentOf(WorldNode node) => Content.TryGetValue(node, out var content) ? content : isModelReference(node) && !Made.ContainsKey(node) ? node.Children : [];
         /// <summary>
@@ -639,9 +638,18 @@ internal static partial class DatabaseRecords
             // inside another reference's content).
             HashSet<WorldNode>? held = prefixReference == null && tolerant ? new(live.Values.Where(isModelReference).SelectMany(o => o.Children), ReferenceEqualityComparer.Instance) : null;
             List<WorldNode> found = prefixReference != null ? [prefixReference] : held != null ? [.. live.Where(p => !position.ContainsKey(p.Key) && isModelReference(p.Value) && !held.Contains(p.Value)).OrderBy(p => p.Key).Select(p => p.Value)] : [];
+            HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
             void Walk(WorldNode node)
             {
-                if (Content.TryGetValue(node, out var content)) { found.Add(node); foreach (var child in node.Children.Where(c => !content.Contains(c))) Walk(child); return; }
+                token.ThrowIfCancellationRequested();
+                if (!seen.Add(node)) return;
+                if (Content.TryGetValue(node, out var content))
+                {
+                    found.Add(node);
+                    HashSet<WorldNode> inner = new(content, ReferenceEqualityComparer.Instance);
+                    foreach (var child in node.Children.Where(c => !inner.Contains(c))) Walk(child);
+                    return;
+                }
                 if (!Made.ContainsKey(node) && isModelReference(node)) { found.Add(node); return; }
                 foreach (var child in node.Children) Walk(child);
             }
@@ -710,7 +718,7 @@ internal static partial class DatabaseRecords
                     made.Add(post[s]);
                 }
                 var root = nodes[block[^1]];
-                List<WorldNode> freedOrder = []; void Post(WorldNode n) { foreach (var c in n.Children) Post(c); freedOrder.Add(n); }
+                List<WorldNode> freedOrder = []; void Post(WorldNode n, int depth = 0) { CheckDepth(depth); foreach (var c in n.Children) Post(c, depth + 1); freedOrder.Add(n); }
                 Post(root);
                 if (!freedOrder.SequenceEqual(block.Select(s => nodes[s]))) return null;
                 // A reference's content follows the next record, which is made under one of the reference's ancestors.

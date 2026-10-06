@@ -103,6 +103,24 @@ public sealed class GameGenScriptSyntax
         return Text[..line.Start] + "# " + Text[line.Start..];
     }
 
+    /// <summary>Comments out an entire edit's instructions in one pass, retaining their text and line endings.</summary>
+    internal string CommentOut(IReadOnlySet<int> numbers)
+    {
+        if ((long)Text.Length + 2L * numbers.Count > SourceProject.MaximumSourceTextBytes)
+            throw new InvalidDataException("Commenting out these instructions would exceed the source text limit.");
+        foreach (int number in numbers)
+            if (!Line(number).IsInstruction) throw new InvalidDataException($"Line {number} holds no instruction.");
+        StringBuilder result = new(Text.Length + 2 * numbers.Count);
+        int at = 0;
+        foreach (var line in Lines)
+            if (numbers.Contains(line.Number))
+            {
+                result.Append(Text, at, line.Start - at).Append("# ");
+                at = line.Start;
+            }
+        return result.Append(Text, at, Text.Length - at).ToString();
+    }
+
     /// <summary>CZInterp::TokenizeLine (see <see cref="GameGenScriptText.TokenizeLine(string)"/>), with each token's place in the text.</summary>
     private static (IReadOnlyList<string>, IReadOnlyList<TextSpan>) Tokenize(string text, int start, int length)
     {

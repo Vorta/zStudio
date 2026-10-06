@@ -88,7 +88,7 @@ public sealed class ModelEditSession
                 staged.Add((doc,target,temp,replace));
                 await using (FileStream stream = new(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None,65536,FileOptions.Asynchronous | FileOptions.WriteThrough))
                 { await stream.WriteAsync(doc.Bytes,token); await stream.FlushAsync(token); stream.Flush(true); }
-                byte[] readback = await File.ReadAllBytesAsync(temp,token);
+                byte[] readback = await Sources.SourceRead.AllAsync(temp, doc.Bytes.Length, token);
                 if (!doc.Bytes.Span.SequenceEqual(readback)) throw new IOException("Model save byte verification failed.");
                 var parsed = await Task.Run(() => FormatRegistry.Default.OpenBytes(target, readback, token:token), token);
                 if (parsed.Diagnostics.Any(d => d.Severity == "Error") || parsed.Assets.Count != doc.Assets.Count) throw new InvalidDataException("Model save shared-reader verification failed.");
@@ -117,8 +117,8 @@ public sealed class ModelEditSession
             saving = false; Changed?.Invoke();
         }
     }
-    private static async Task CheckExternalAsync(string target, byte[] baseline, CancellationToken token)
-    { byte[] current = await File.ReadAllBytesAsync(target,token); if (!baseline.AsSpan().SequenceEqual(current)) throw new IOException($"File changed outside zStudio: {target}. Reload or use Save As."); }
+    private static Task CheckExternalAsync(string target, byte[] baseline, CancellationToken token) =>
+        VerifiedDocumentSave.CheckBaselineAsync(target, baseline, token);
     private static void ValidateDestination(string path)
     {
         if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException("Save model edits outside zbd_1998 and zbd_1999.");

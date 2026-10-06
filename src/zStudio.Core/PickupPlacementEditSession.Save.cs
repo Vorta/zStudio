@@ -67,7 +67,7 @@ public sealed partial class PickupPlacementEditSession
                 staged.Add(new(source, archive, destination, temporary, bytes, replace));
                 await using (FileStream stream = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
                 { await stream.WriteAsync(bytes, token); await stream.FlushAsync(token); stream.Flush(true); }
-                byte[] reopened = await File.ReadAllBytesAsync(temporary, token);
+                byte[] reopened = await Sources.SourceRead.AllAsync(temporary, bytes.Length, token);
                 if (!EqualBytes(bytes, reopened)) throw new IOException($"Written pickup archive verification failed: {destination}");
                 await Task.Run(() => Verify(source, reopened, token), token);
             }
@@ -135,11 +135,8 @@ public sealed partial class PickupPlacementEditSession
                     throw new InvalidDataException($"Saved transform {entry.Record.Source.ResourceName} #{entry.Record.Source.RecordIndex} has an unexpected component at 0x{expected.Offset:X}.");
             }
     }
-    private static async Task CheckBaselineAsync(ArchiveState archive, CancellationToken token)
-    {
-        byte[] current = await File.ReadAllBytesAsync(archive.Target, token);
-        if (!EqualBytes(current, archive.SavedBytes)) throw new IOException($"File changed outside zStudio: {archive.Target}. Reload or use Save As to preserve both versions.");
-    }
+    private static Task CheckBaselineAsync(ArchiveState archive, CancellationToken token) =>
+        VerifiedDocumentSave.CheckBaselineAsync(archive.Target, archive.SavedBytes, token);
     private static bool EqualBytes(byte[] a, byte[] b) => a.Length == b.Length && CryptographicOperations.FixedTimeEquals(SHA256.HashData(a), SHA256.HashData(b));
     private static void ValidateDestination(string path)
     {

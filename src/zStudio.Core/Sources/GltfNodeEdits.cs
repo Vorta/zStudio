@@ -26,10 +26,10 @@ public static class GltfNodeEdits
                 throw new InvalidDataException($"Node {i} also holds a part of node {indices.First()}; the file shares nodes in a way glTF does not allow.");
         foreach (var animation in root["animations"] as JsonArray ?? [])
             foreach (var channel in animation?["channels"] as JsonArray ?? [])
-                if (channel?["target"]?["node"] is JsonValue target && target.TryGetValue(out int t) && removed.Contains(t))
-                    throw new InvalidDataException($"An animation of the file moves node {t}, which the deletion removes; remove the animation in Blender first.");
+                if (channel?["target"]?["node"] is { } target && removed.Contains(GltfInteger.Int32(target)))
+                    throw new InvalidDataException("An animation of the file moves a node the deletion removes; remove the animation in Blender first.");
         foreach (var skin in root["skins"] as JsonArray ?? [])
-            if ((skin?["joints"] as JsonArray ?? []).Any(j => j is JsonValue v && v.TryGetValue(out int k) && removed.Contains(k)) || skin?["skeleton"] is JsonValue s && s.TryGetValue(out int sk) && removed.Contains(sk))
+            if ((skin?["joints"] as JsonArray ?? []).Any(j => removed.Contains(GltfInteger.Int32(j))) || skin?["skeleton"] is { } s && removed.Contains(GltfInteger.Int32(s)))
                 throw new InvalidDataException($"A skin of the file uses a node the deletion removes; remove it in Blender first.");
         foreach (int index in indices) Detach(root, nodes, index);
         int[] map = new int[nodes.Count]; int next = 0;
@@ -54,7 +54,7 @@ public static class GltfNodeEdits
         foreach (int original in order)
         {
             var copy = (JsonObject)nodes[original]!.DeepClone();
-            if (copy["children"] is JsonArray children) copy["children"] = new JsonArray(children.Select(c => (JsonNode?)JsonValue.Create(copies[c!.GetValue<int>()])).ToArray());
+            if (copy["children"] is JsonArray children) copy["children"] = new JsonArray(children.Select(c => (JsonNode?)JsonValue.Create(copies[GltfInteger.Int32(c)])).ToArray());
             if ((copy["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject marked && Instance(marked["instance"]) is long instance)
             {
                 if (!instances.TryGetValue(instance, out long renumbered)) instances[instance] = renumbered = nextInstance++;
@@ -71,7 +71,7 @@ public static class GltfNodeEdits
         // Beside the original: in its parent's children, or among the scene roots that hold it.
         int copied = copies[index];
         if (Parent(nodes, index) is int parent) InsertAfter((JsonArray)nodes[parent]!["children"]!, index, copied);
-        else foreach (var scene in root["scenes"] as JsonArray ?? []) if (scene?["nodes"] is JsonArray list && list.Any(n => n?.GetValue<int>() == index)) InsertAfter(list, index, copied);
+        else foreach (var scene in root["scenes"] as JsonArray ?? []) if (scene?["nodes"] is JsonArray list && list.Any(n => GltfInteger.OptionalInt32(n, "node") == index)) InsertAfter(list, index, copied);
         return copied;
 
         void Collect(int i)
@@ -101,11 +101,13 @@ public static class GltfNodeEdits
         var moved = (JsonObject)nodes[index]!;
         bool ownZone = OwnZone(moved) != null;
         uint? zoneBefore = ownZone ? null : FileZone(nodes, Parent(nodes, index));
+        uint? inheritedZone = !ownZone && zoneBefore != FileZone(nodes, parent)
+            ? zoneBefore ?? currentZone ?? throw new InvalidDataException("The node takes its zone from what loads the file, which differs between its copies; under the new parent the file's zone would replace it, so move it in Blender or the scripts.")
+            : null;
         Detach(root, nodes, index);
-        if (!ownZone && zoneBefore != FileZone(nodes, parent))
+        if (inheritedZone is uint keep)
         {
             // From outside the file, the zone is the built node's; without one (copies that differ), it cannot be kept.
-            uint keep = zoneBefore ?? currentZone ?? throw new InvalidDataException("The node takes its zone from what loads the file, which differs between its copies; under the new parent the file's zone would replace it, so move it in Blender or the scripts.");
             if (moved["extras"] is not JsonObject extras) moved["extras"] = extras = new JsonObject();
             if (extras[WorldGltf.Key] is not JsonObject engine) extras[WorldGltf.Key] = engine = new JsonObject();
             engine["zone"] = (int)(keep & 0xFF);
@@ -119,7 +121,8 @@ public static class GltfNodeEdits
         else
         {
             var scenes = root["scenes"] as JsonArray ?? throw new InvalidDataException("The file has no scene to hold a root node.");
-            int scene = root["scene"] is JsonValue s && s.TryGetValue(out int si) && si >= 0 && si < scenes.Count ? si : 0;
+            int scene = GltfInteger.OptionalInt32(root["scene"], "scene") ?? 0;
+            if (scene < 0 || scene >= scenes.Count) throw new InvalidDataException("The default scene does not exist.");
             if (scenes.Count == 0 || scenes[scene] is not JsonObject chosen) throw new InvalidDataException("The file has no scene to hold a root node.");
             if (chosen["nodes"] is not JsonArray list) chosen["nodes"] = list = [];
             list.Add(index);
@@ -198,7 +201,7 @@ public static class GltfNodeEdits
         return m;
     }
     /// <summary>An instance marker as the importer reads it: a whole number, written as an integer or a float.</summary>
-    private static long? Instance(JsonNode? node) => node is JsonValue v ? v.TryGetValue(out long i) ? i : v.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 1e15 ? (long)d : null : null;
+    private static long? Instance(JsonNode? node) => GltfInteger.TryInt64(node, out long i) && i is >= 1 and <= int.MaxValue ? i : null;
     /// <summary>
     /// Node <paramref name="index"/> and, when an instance holds it (a node the file places under several parents, written as
     /// copies with one mark, or a node inside one), the nodes standing for it in the instance's other copies: the importer
@@ -281,9 +284,9 @@ public static class GltfNodeEdits
     {
         if (root["scenes"] is JsonArray scenes && scenes.Count > 0)
         {
-            int chosen = root["scene"] is JsonValue s && s.TryGetValue(out int index) ? index : 0;
+            int chosen = GltfInteger.OptionalInt32(root["scene"], "scene") ?? 0;
             return (scenes[Math.Clamp(chosen, 0, scenes.Count - 1)]?["nodes"] as JsonArray ?? [])
-                .Select(n => n is JsonValue v && v.TryGetValue(out int k) ? k : -1).Where(k => k >= 0 && k < nodes.Count).ToList();
+                .Select(n => GltfInteger.Int32(n)).Where(k => k >= 0 && k < nodes.Count).ToList();
         }
         HashSet<int> children = [.. Enumerable.Range(0, nodes.Count).SelectMany(i => Children(nodes, i))];
         return Enumerable.Range(0, nodes.Count).Where(i => !children.Contains(i)).ToList();
@@ -293,14 +296,14 @@ public static class GltfNodeEdits
 
     private static JsonArray Nodes(JsonObject root) =>
         root["nodes"] as JsonArray is { } nodes && nodes.All(n => n is JsonObject) ? nodes : throw new InvalidDataException("The file has no valid node list.");
-    private static IEnumerable<int> Children(JsonArray nodes, int i) => (nodes[i]!["children"] as JsonArray ?? []).Select(c => c is JsonValue v && v.TryGetValue(out int k) && k >= 0 && k < nodes.Count ? k : throw new InvalidDataException($"Node {i} lists an invalid child."));
+    private static IEnumerable<int> Children(JsonArray nodes, int i) => (nodes[i]!["children"] as JsonArray ?? []).Select(c => GltfInteger.Int32(c) is int k && k >= 0 && k < nodes.Count ? k : throw new InvalidDataException($"Node {i} lists an invalid child."));
     private static int? Parent(JsonArray nodes, int index)
     {
         if (index < 0 || index >= nodes.Count) throw new InvalidDataException($"The file has no node {index}.");
         for (int i = 0; i < nodes.Count; i++) if (Children(nodes, i).Contains(index)) return i;
         return null;
     }
-    private static HashSet<int> SceneRoots(JsonObject root) => (root["scenes"] as JsonArray ?? []).SelectMany(s => s?["nodes"] as JsonArray ?? []).Select(n => n!.GetValue<int>()).ToHashSet();
+    private static HashSet<int> SceneRoots(JsonObject root) => (root["scenes"] as JsonArray ?? []).SelectMany(s => s?["nodes"] as JsonArray ?? []).Select(n => GltfInteger.Int32(n)).ToHashSet();
     /// <summary>Node <paramref name="index"/> and every node below it in the file.</summary>
     public static IReadOnlySet<int> Descendants(JsonObject root, int index) => Subtree(Nodes(root), index);
     private static HashSet<int> Subtree(JsonArray nodes, int index)
@@ -317,30 +320,30 @@ public static class GltfNodeEdits
         foreach (var scene in root["scenes"] as JsonArray ?? []) if (scene?["nodes"] is JsonArray list) Remove(list, index, null, null);
         static void Remove(JsonArray list, int value, JsonObject? owner, string? property)
         {
-            for (int k = list.Count - 1; k >= 0; k--) if (list[k]?.GetValue<int>() == value) list.RemoveAt(k);
+            for (int k = list.Count - 1; k >= 0; k--) if (GltfInteger.OptionalInt32(list[k], "node") == value) list.RemoveAt(k);
             // glTF requires a children array, when present, to be non-empty.
             if (owner != null && list.Count == 0) owner.Remove(property!);
         }
     }
     private static void InsertAfter(JsonArray list, int after, int value)
     {
-        int at = list.Select((n, k) => (n, k)).First(p => p.n?.GetValue<int>() == after).k;
+        int at = list.Select((n, k) => (n, k)).First(p => GltfInteger.OptionalInt32(p.n, "node") == after).k;
         list.Insert(at + 1, value);
     }
     /// <summary>Applies a node renumbering (−1: removed) to every node reference of the file.</summary>
     private static void Renumber(JsonObject root, int[] map)
     {
         foreach (var node in Nodes(root))
-            if (node!["children"] is JsonArray children) node["children"] = new JsonArray(children.Select(c => (JsonNode?)JsonValue.Create(map[c!.GetValue<int>()])).ToArray());
+            if (node!["children"] is JsonArray children) node["children"] = new JsonArray(children.Select(c => (JsonNode?)JsonValue.Create(map[GltfInteger.Int32(c)])).ToArray());
         foreach (var scene in root["scenes"] as JsonArray ?? [])
-            if (scene?["nodes"] is JsonArray list) scene["nodes"] = new JsonArray(list.Select(n => map[n!.GetValue<int>()]).Where(n => n >= 0).Select(n => (JsonNode?)JsonValue.Create(n)).ToArray());
+            if (scene?["nodes"] is JsonArray list) scene["nodes"] = new JsonArray(list.Select(n => map[GltfInteger.Int32(n)]).Where(n => n >= 0).Select(n => (JsonNode?)JsonValue.Create(n)).ToArray());
         foreach (var animation in root["animations"] as JsonArray ?? [])
             foreach (var channel in animation?["channels"] as JsonArray ?? [])
-                if (channel?["target"] is JsonObject target && target["node"] is JsonValue v && v.TryGetValue(out int t)) target["node"] = map[t];
+                if (channel?["target"] is JsonObject target && target["node"] is { } v) target["node"] = map[GltfInteger.Int32(v)];
         foreach (var skin in root["skins"] as JsonArray ?? [])
         {
-            if (skin?["joints"] is JsonArray joints) skin["joints"] = new JsonArray(joints.Select(j => (JsonNode?)JsonValue.Create(map[j!.GetValue<int>()])).ToArray());
-            if (skin?["skeleton"] is JsonValue s && s.TryGetValue(out int k)) skin["skeleton"] = map[k];
+            if (skin?["joints"] is JsonArray joints) skin["joints"] = new JsonArray(joints.Select(j => (JsonNode?)JsonValue.Create(map[GltfInteger.Int32(j)])).ToArray());
+            if (skin?["skeleton"] is { } s) skin["skeleton"] = map[GltfInteger.Int32(s)];
         }
     }
 }

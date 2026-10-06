@@ -272,11 +272,11 @@ public static partial class SourceTerrainConversion
         // The database: the pieces leave; the marker stands among the roots where the first of them (or its group) stood.
         var nodes = (JsonArray)root["nodes"]!;
         var scenes = (JsonArray)root["scenes"]!;
-        int sceneIndex = root["scene"] is JsonValue s && s.TryGetValue(out int si) ? si : 0;
+        int sceneIndex = GltfInteger.OptionalInt32(root["scene"], "scene") ?? 0;
         var sceneRoots = (JsonArray)scenes[sceneIndex]!["nodes"]!;
         var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
         bool Holds(GltfNode node) => converted.Contains(node.Index) || node.Children.Any(Holds);
-        int place = sceneRoots.Select(n => n!.GetValue<int>()).TakeWhile(n => !(byIndex.TryGetValue(n, out var node) && Holds(node))).Count();
+        int place = sceneRoots.Select(n => GltfInteger.Int32(n)).TakeWhile(n => !(byIndex.TryGetValue(n, out var node) && Holds(node))).Count();
         foreach (int index in converted.OrderDescending()) GltfNodeEdits.Remove(root, index);
         string stem = Path.GetFileName(plan.Recipe)[..^TerrainRecipe.Extension.Length];
         nodes.Add(new JsonObject { ["name"] = stem, ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = SourceTerrain.RelativePath(plan.Database, plan.Recipe) } } });

@@ -18,6 +18,8 @@ public sealed record TerrainProbeReport(int Samples, int Hits, int Mismatches, i
     public int Revealed { get; init; }
     /// <summary>The spacing the samples took (wider than requested over an area that would exceed <see cref="TerrainProbe.MaximumSamples"/>).</summary>
     public float Spacing { get; init; }
+    public bool Complete { get; init; } = true;
+    public string? Limitation { get; init; }
 }
 
 /// <summary>
@@ -32,18 +34,23 @@ public static class TerrainProbe
     /// <summary>The probe line starts at y = 500 (0x43FA0000); a polygon whose plane is higher there is passed over.</summary>
     public const float Top = 500;
 
-    public static List<TerrainHit> At(IEnumerable<WorldNode> nodes, float x, float z)
+    public static List<TerrainHit> At(IEnumerable<WorldNode> nodes, float x, float z) => At(nodes, x, z, null);
+    private static List<TerrainHit> At(IEnumerable<WorldNode> nodes, float x, float z, ProbeBudget? budget)
     {
         List<TerrainHit> hits = [];
         foreach (var node in nodes)
         {
+            budget?.Take(1);
             if (node.Model is not { } model) continue;
             foreach (var polygon in model.Polygons)
+            {
+                budget?.Take(1L + polygon.Vertices.Length);
                 if (Height(model, polygon, x, z) is float y && y <= Top)
                 {
                     hits.Add(new(MathF.Round(y, 2), polygon.Zone, polygon.Material?.Soil ?? 0, node.Flags & WorldGltf.CarriedFlags, (byte)node.Zone, node.Name));
                     break;
                 }
+            }
         }
         hits.Sort((a, b) => a.Height != b.Height ? a.Height.CompareTo(b.Height) : a.ZoneWord != b.ZoneWord ? a.ZoneWord.CompareTo(b.ZoneWord) : a.Flags.CompareTo(b.Flags));
         return hits;
@@ -89,18 +96,43 @@ public static class TerrainProbe
     /// <summary>The most sample points a comparison takes; a larger area samples more sparsely.</summary>
     public const double MaximumSamples = 4_000_000;
     public static TerrainProbeReport Compare(IReadOnlyList<WorldNode> before, IReadOnlyList<WorldNode> after, float spacing, CancellationToken token = default, WorldNode? grid = null)
+        => Compare(before, after, spacing, token, grid, 1_000_000, 200_000_000);
+    internal static TerrainProbeReport Compare(IReadOnlyList<WorldNode> before, IReadOnlyList<WorldNode> after, float spacing, CancellationToken token, WorldNode? grid, long maximumIndexEntries, long maximumWork)
     {
-        if (!(spacing > 0)) throw new ArgumentOutOfRangeException(nameof(spacing));
+        if (!float.IsFinite(spacing) || spacing <= 0) throw new ArgumentOutOfRangeException(nameof(spacing));
+        try { return CompareCore(before, after, spacing, token, grid, new(maximumWork, token), new(maximumIndexEntries, token)); }
+        catch (ProbeLimitException ex) { return new(0, 0, 0, 0, 0, []) { Complete = false, Limitation = ex.Message, Spacing = spacing }; }
+    }
+    private sealed class ProbeLimitException() : Exception("The altitude comparison exceeded its bounded index or polygon-work budget; no comparison result is available.");
+    private sealed class ProbeBudget(long remaining, CancellationToken token)
+    {
+        public void Take(long count)
+        {
+            token.ThrowIfCancellationRequested();
+            if (count < 0 || count > remaining) throw new ProbeLimitException();
+            remaining -= count;
+        }
+    }
+    private static TerrainProbeReport CompareCore(IReadOnlyList<WorldNode> before, IReadOnlyList<WorldNode> after, float spacing, CancellationToken token, WorldNode? grid, ProbeBudget work, ProbeBudget index)
+    {
+        token.ThrowIfCancellationRequested();
         var all = before.Concat(after).Where(n => n.Model is { Vertices.Count: > 0 }).ToArray();
         if (all.Length == 0) return new(0, 0, 0, 0, 0, []);
         float minX = all.Min(n => n.Model!.Vertices.Min(p => p.X)), maxX = all.Max(n => n.Model!.Vertices.Max(p => p.X));
         float minZ = all.Min(n => n.Model!.Vertices.Min(p => p.Z)), maxZ = all.Max(n => n.Model!.Vertices.Max(p => p.Z));
         // At most MaximumSamples points: a wider spacing over a large area (and integer steps, which never stall).
         const float offsetX = 0.37f, offsetZ = 0.29f;
-        double columns = Math.Max(0, Math.Floor((maxX - minX - offsetX) / spacing) + 1), rows = Math.Max(0, Math.Floor((maxZ - minZ - offsetZ) / spacing) + 1);
-        if (columns * rows > MaximumSamples) spacing *= (float)Math.Sqrt(columns * rows / MaximumSamples);
-        long countX = Math.Max(0, (long)Math.Floor((maxX - minX - offsetX) / spacing) + 1), countZ = Math.Max(0, (long)Math.Floor((maxZ - minZ - offsetZ) / spacing) + 1);
-        var indexA = Index(before, spacing * 8); var indexB = Index(after, spacing * 8);
+        double width = (double)maxX - minX - offsetX, depth = (double)maxZ - minZ - offsetZ;
+        if (!double.IsFinite(width) || !double.IsFinite(depth)) throw new ProbeLimitException();
+        long countX, countZ;
+        while (true)
+        {
+            double columns = Math.Max(0, Math.Floor(width / spacing) + 1), rows = Math.Max(0, Math.Floor(depth / spacing) + 1);
+            if (columns * rows <= MaximumSamples) { countX = (long)columns; countZ = (long)rows; break; }
+            spacing *= (float)Math.Max(1.01, Math.Sqrt(columns * rows / MaximumSamples));
+            if (!float.IsFinite(spacing)) throw new ProbeLimitException();
+        }
+        var indexA = Index(before, spacing * 8, index, work); var indexB = Index(after, spacing * 8, index, work);
         var cellsA = Cells(before, grid); var cellsB = Cells(after, grid);
         int samples = 0, hits = 0, mismatches = 0, heightOnly = 0, revealed = 0; float maximum = 0; List<string> examples = [];
         for (long i = 0; i < countX; i++)
@@ -109,12 +141,13 @@ public static class TerrainProbe
             float x = minX + offsetX + i * spacing;
             for (long j = 0; j < countZ; j++)
             {
+                work.Take(1);
                 float z = minZ + offsetZ + j * spacing;
                 samples++;
                 var cell = grid == null ? (-1, -1) : PointCell(grid, x, z);
-                var a = At(Visible(indexA(x, z), cellsA, cell), x, z); var b = At(Visible(indexB(x, z), cellsB, cell), x, z);
+                var a = At(Visible(indexA(x, z), cellsA, cell), x, z, work); var b = At(Visible(indexB(x, z), cellsB, cell), x, z, work);
                 // Ground the engine never found at this point in the first set, because its node sits in another cell.
-                if (grid != null && !Same(a, b) && Same(At(indexA(x, z), x, z), b)) { revealed++; continue; }
+                if (grid != null && !Same(a, b) && Same(At(indexA(x, z), x, z, work), b)) { revealed++; continue; }
                 hits += a.Count;
                 if (a.Count == b.Count && a.Zip(b).All(p => p.First.ZoneWord == p.Second.ZoneWord && p.First.Soil == p.Second.Soil && p.First.Flags == p.Second.Flags && p.First.NodeZone == p.Second.NodeZone))
                 {
@@ -130,7 +163,7 @@ public static class TerrainProbe
         return new(samples, hits, mismatches, heightOnly, maximum, examples) { Revealed = revealed, Spacing = spacing };
         static bool Same(List<TerrainHit> a, List<TerrainHit> b) => a.Count == b.Count && a.Zip(b).All(p => Math.Abs(p.First.Height - p.Second.Height) <= 0.02f && p.First.ZoneWord == p.Second.ZoneWord
             && p.First.Soil == p.Second.Soil && p.First.Flags == p.Second.Flags && p.First.NodeZone == p.Second.NodeZone);
-        static string Describe(List<TerrainHit> hits) => hits.Count == 0 ? "nothing" : string.Join(", ", hits.Select(h => $"{h.Node} y {h.Height} zones 0x{h.ZoneWord:X8} soil {h.Soil} flags 0x{h.Flags:X8} zone {h.NodeZone}"));
+        static string Describe(List<TerrainHit> hits) => hits.Count == 0 ? "nothing" : string.Join(", ", hits.Take(8).Select(h => $"{JsonData.ShownText(h.Node, 128)} y {h.Height} zones 0x{h.ZoneWord:X8} soil {h.Soil} flags 0x{h.Flags:X8} zone {h.NodeZone}")) + (hits.Count > 8 ? $" … ({hits.Count} hits)" : "");
     }
     /// <summary>
     /// Each node's grid cell: the cell the world placed it (or its top-level ancestor) in, (−1, −1) for the world's own list.
@@ -152,13 +185,18 @@ public static class TerrainProbe
     private static IEnumerable<WorldNode> Visible(IEnumerable<WorldNode> nodes, Dictionary<WorldNode, (int, int)>? cells, (int, int) cell) =>
         cells == null ? nodes : nodes.Where(n => cells[n] is var c && (c == (-1, -1) || c == cell));
     /// <summary>The nodes whose plan-view bounds hold a point, through a coarse grid.</summary>
-    private static Func<float, float, IEnumerable<WorldNode>> Index(IReadOnlyList<WorldNode> nodes, float cell)
+    private static Func<float, float, IEnumerable<WorldNode>> Index(IReadOnlyList<WorldNode> nodes, float cell, ProbeBudget budget, ProbeBudget work)
     {
         Dictionary<(int, int), List<(WorldNode Node, Vector4 Box)>> grid = [];
         foreach (var node in nodes)
         {
             if (node.Model is not { Vertices.Count: > 0 } model) continue;
             Vector4 box = new(model.Vertices.Min(p => p.X), model.Vertices.Min(p => p.Z), model.Vertices.Max(p => p.X), model.Vertices.Max(p => p.Z));
+            double width = Math.Floor(box.Z / (double)cell) - Math.Floor(box.X / (double)cell) + 1;
+            double height = Math.Floor(box.W / (double)cell) - Math.Floor(box.Y / (double)cell) + 1;
+            double entries = width * height;
+            if (!double.IsFinite(entries) || entries > long.MaxValue || new[] { box.X, box.Y, box.Z, box.W }.Any(v => Math.Abs(v / (double)cell) >= int.MaxValue - 1)) throw new ProbeLimitException();
+            budget.Take((long)entries);
             for (int i = (int)MathF.Floor(box.X / cell); i <= (int)MathF.Floor(box.Z / cell); i++)
                 for (int j = (int)MathF.Floor(box.Y / cell); j <= (int)MathF.Floor(box.W / cell); j++)
                 {
@@ -167,6 +205,6 @@ public static class TerrainProbe
                 }
         }
         return (x, z) => grid.TryGetValue(((int)MathF.Floor(x / cell), (int)MathF.Floor(z / cell)), out var list)
-            ? list.Where(e => x >= e.Box.X - 0.01f && x <= e.Box.Z + 0.01f && z >= e.Box.Y - 0.01f && z <= e.Box.W + 0.01f).Select(e => e.Node) : [];
+            ? list.Where(e => { work.Take(1); return x >= e.Box.X - 0.01f && x <= e.Box.Z + 0.01f && z >= e.Box.Y - 0.01f && z <= e.Box.W + 0.01f; }).Select(e => e.Node) : [];
     }
 }

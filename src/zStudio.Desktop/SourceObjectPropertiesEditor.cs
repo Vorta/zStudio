@@ -89,8 +89,13 @@ internal sealed class SourceObjectPropertiesEditor : SourcePropertiesEditor
         if (command != null)
             foreach (var (name, writer) in state.Origin.Writers.Where(w => SourceObjectEdits.PropertyCommands.ContainsKey(w.Key)).OrderBy(w => w.Key, StringComparer.Ordinal))
             {
+                if (writer.Tokens.Count > 17 || writer.Tokens.Skip(1).Sum(t => (long)t.Length + 1) > 4096)
+                {
+                    ReadOnlyText(form, name + ": arguments exceed the Properties display limit; edit the source script directly.");
+                    continue;
+                }
                 string written = string.Join(" ", writer.Tokens.Skip(1));
-                Input(form, name, written, _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: SourceObjectEdits.PropertyCommands[name] + $" · {writer.Script} line {writer.Line}",
+                Input(form, name, written, _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: SourceObjectEdits.PropertyCommands[name] + $" · {JsonData.ShownText(writer.Script, 256)} line {writer.Line}",
                     asyncCommit: async text =>
                     {
                         string[] args = text.Split([' ', ',', '\t'], StringSplitOptions.RemoveEmptyEntries);

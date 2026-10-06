@@ -113,8 +113,9 @@ public partial class MainWindow
     }
 
     /// <summary>Build game files of the open source project from its files on disk into <paramref name="destination"/>, or only check them without one.</summary>
-    private async Task<SourceExportReport> ExportSourceProjectAsync(string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, CancellationToken token, string? profile = null)
+    internal async Task<SourceExportReport> ExportSourceProjectAsync(string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, CancellationToken token, string? profile = null, long? expectedGeneration = null)
     {
+        RequireExportGeneration(expectedGeneration);
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         // A relative folder would resolve against zStudio's own folder, which a new build replaces.
@@ -161,7 +162,7 @@ public partial class MainWindow
         finally { operation = null; CancelOperationItem.IsEnabled = false; }
     }
     private static object Lookup(SourceLookup l) => new { mission = l.Mission, kind = l.Kind, name = Bounded(l.Name, 64), source = Bounded(l.Source, 256), candidates = l.Candidates, slot = l.Slot, found = l.Found == null ? null : Bounded(l.Found, 512) };
-    private static object ExportResult(string root, SourceExportReport report)
+    internal static object ExportResult(string root, SourceExportReport report)
     {
         const int shown = 256;
         return new
@@ -173,7 +174,9 @@ public partial class MainWindow
             outputs = report.Outputs.Take(shown).Select(o => new
             {
                 path = o.Path, family = o.Family, status = o.Status, bytes = o.Bytes, items = o.Items,
-                warnings = o.Warnings.Take(16).Select(w => Bounded(w, 512)).ToArray(), warningCount = o.Warnings.Count, error = o.Error == null ? null : Bounded(o.Error)
+                warnings = o.Warnings.Take(4).Select(w => Bounded(w, 128)).ToArray(), warningCount = o.Warnings.Count,
+                warningsTruncated = o.Warnings.Count > 4 || o.Warnings.Take(4).Any(w => w.Length > 128),
+                error = o.Error == null ? null : Bounded(o.Error, 256), errorTruncated = o.Error?.Length > 256
             }).ToArray(),
             outputCount = report.Outputs.Count, outputsTruncated = report.Outputs.Count > shown
         };
@@ -205,13 +208,14 @@ public partial class MainWindow
                 texturePacks = p.TexturePacks.Select(t => new { file = t.File, automatic = t.Automatic, budgetMiB = t.BudgetBytes / (1024.0 * 1024), maximumDimension = t.MaximumDimension, missions = t.Missions }).ToArray()
             }).ToArray(),
             families = plan.GroupBy(o => o.Family).ToDictionary(g => g.Key, g => g.Count()),
-            outputs = Page(plan, a, o => o.Path, o => new
-            {
-                path = o.Path, family = o.Family, inputCount = o.Inputs.Count,
-                inputs = o.Inputs.Take(16).Select(i => Bounded(i, 512)).ToArray(), inputsTruncated = o.Inputs.Count > 16
-            }).Data
+            outputs = SourceOutputPage(plan, a).Data
         };
     }
+    internal static StudioResult SourceOutputPage(IEnumerable<SourceOutputPlan> plan, JsonObject a) => Page(plan, a, o => o.Path, o => new
+            {
+                path = o.Path, family = o.Family, inputCount = o.Inputs.Count,
+                inputs = o.Inputs.Take(16).Select(i => Bounded(i, 512)).ToArray(), inputsTruncated = o.Inputs.Count > 16 || o.Inputs.Take(16).Any(i => i.Length > 512)
+            }, maximumRowBytes: o => 512 + 6L * (o.Path.Length + o.Family.Length + o.Inputs.Take(16).Sum(i => Math.Min(i.Length, 512) + 1)));
     private static IReadOnlyCollection<string>? OutputArguments(JsonObject a) => a["outputs"] switch
     {
         null => null,
@@ -245,7 +249,7 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
-        RegisterJob(r, "source_status", "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed), paged and filtered by path.", [.. PageParameters, P("profile", "string", "Build profile whose texture packs are listed; default: the profile chosen in Tools → Build profile, else the project's default.")], false,
+        RegisterJob(r, "source_status", "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters, P("profile", "string", "Build profile whose texture packs are listed; default: the profile chosen in Tools → Build profile, else the project's default.")], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
 
@@ -281,11 +285,14 @@ public partial class MainWindow
     private async Task ExportSourceInteractiveAsync(IReadOnlyCollection<string>? outputs)
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
+        long generation = ViewModel.WorkspaceGeneration;
         OpenFolderDialog folder = new() { Title = outputs == null ? "Choose a folder for the game files" : $"Choose a folder for {string.Join(", ", outputs)}" };
         if (folder.ShowDialog(this) != true) return;
+        RequireExportGeneration(generation);
         // Existing game files are replaced only after an explicit confirmation.
         string? profileName = SourceProfileFor(root); var profile = ResolveProfile(root, profileName);
         var plan = await Task.Run(() => SourceBuilder.Plan(root, null, profile));
+        RequireExportGeneration(generation);
         var existing = plan.Where(p => outputs == null || outputs.Contains(p.Path, StringComparer.OrdinalIgnoreCase)).Select(p => p.Path)
             .Where(p => File.Exists(Path.Combine(folder.FolderName, p))).ToArray();
         bool overwrite = false;
@@ -295,7 +302,12 @@ public partial class MainWindow
             if (MessageBox.Show(this, $"{folder.FolderName} already has these game files:\n{list}\n\nReplace them?", "Export ZBD files", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             overwrite = true;
         }
-        ShowExportResult(await ExportSourceProjectAsync(folder.FolderName, outputs, overwrite, CancellationToken.None, profileName));
+        ShowExportResult(await ExportSourceProjectAsync(folder.FolderName, outputs, overwrite, CancellationToken.None, profileName, generation));
+    }
+    private void RequireExportGeneration(long? expected)
+    {
+        if (expected is { } generation && generation != ViewModel.WorkspaceGeneration)
+            throw new StudioCommandException("context_changed", "The source project changed while the export destination was being prepared; choose the export again.");
     }
     private async void CheckSourceClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
         ShowExportResult(await ExportSourceProjectAsync(null, null, false, CancellationToken.None, SourceProjectRoot is { } root ? SourceProfileFor(root) : null)));

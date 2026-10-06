@@ -371,7 +371,7 @@ public sealed class SourceWorkspace
         SourceProject.RejectNestedLinks(Root, relative);
         var stamp = FileStamp.Read(path);
         if (stamp.Length > Formats.FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} exceeds 512 MiB.");
-        byte[] bytes = File.ReadAllBytes(path);
+        byte[] bytes = SourceRead.All(path, Formats.FormatRegistry.MaximumDocumentBytes);
         if (FileStamp.Read(path) != stamp) throw new IOException($"{relative} changed while it was read; try again.");
         return new(bytes, stamp);
     }

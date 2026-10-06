@@ -126,7 +126,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         }
         int created = 0;
         foreach (var group in packet.View.Placements.GroupBy(p => (Model: p.ModelIndex, Horizon: IsHorizon(p.NodeIndex),
-            Kind: asset.Kind == AssetKind.World ? WorldSurfaceHighlights.NodeKind(scene, p.NodeIndex) : WorldSurfaceKind.Default)).OrderByDescending(g => g.Key.Horizon))
+            Kind: asset.Kind == AssetKind.World ? WorldSurfaceHighlights.NodeKind(scene, p.NodeIndex) : WorldSurfaceKind.Default,
+            Zone: WorldSurfaceHighlights.NodeZone(scene, p.NodeIndex))).OrderByDescending(g => g.Key.Horizon))
         {
             var instances = group.ToArray();
             foreach (var part in packet.Geometry[group.Key.Model])

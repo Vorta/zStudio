@@ -29,12 +29,17 @@ public sealed class ModelBuilder(WorldModel model)
     {
         int n = polygon.Points.Length;
         if (n < 3) { Warnings.Add($"A polygon with {n} corners was discarded."); return false; }
-        if (n > MaximumCorners) { Warnings.Add($"A polygon with {n} corners exceeds the engine limit and was fanned."); return Fan(polygon); }
         bool textured = polygon.Material.Texture != null;
         if (textured && polygon.Uvs.Length != n) throw new InvalidDataException("A textured polygon needs a UV for every corner.");
         // A non-finite coordinate would reach the world's bounds and grid cells.
         if (!polygon.Points.All(Finite) || !polygon.Targets.All(Finite) || !polygon.Normals.All(Finite) || !polygon.Uvs.All(uv => float.IsFinite(uv.X) && float.IsFinite(uv.Y)))
         { Warnings.Add("A polygon with a non-finite coordinate was discarded."); return false; }
+        if (polygon.Targets.Length == n && Enumerable.Range(0, n).Any(i => !Finite(polygon.Targets[i] - polygon.Points[i])))
+            throw new InvalidDataException("A polygon's morph delta exceeds the finite coordinate range.");
+        // Validate derived UVs before adding any vertices or fanning the polygon: finite authored values can overflow
+        // the tile shift or integer quantization. Rejection must leave the builder usable for the next polygon.
+        Vector2[] uvs = textured ? Uvs(polygon.Uvs) : [];
+        if (n > MaximumCorners) { Warnings.Add($"A polygon with {n} corners exceeds the engine limit and was fanned."); return Fan(polygon); }
         if (!HasArea(polygon.Points)) { Warnings.Add("A polygon without area (all corners on one line) was discarded."); return false; }
         if (polygon.Points.Length > SplitCorners) return Split(polygon);
 
@@ -54,7 +59,6 @@ public sealed class ModelBuilder(WorldModel model)
             }
         }
         int[] normals = polygon.Normals.Length == count ? AddNormals(polygon.Normals) : [];
-        Vector2[] uvs = textured ? Uvs(polygon.Uvs) : [];
         Model.Polygons.Add(new() { Material = polygon.Material, Priority = polygon.Priority, Flags = polygon.ShowBackFace ? 0x100u : 0, Zone = polygon.Zone, Vertices = vertices, Normals = normals, Uvs = uvs });
         return true;
     }
@@ -212,7 +216,13 @@ public sealed class ModelBuilder(WorldModel model)
         for (int i = 0; i < uv.Length; i++) uv[i] = new(Quantize(uv[i].X), Quantize(uv[i].Y));
         Shift(uv);
         return uv;
-        static float Quantize(float value) => (int)((value + 0.001953125f) * 256f) * (1f / 256f);
+        static float Quantize(float value)
+        {
+            float scaled = (value + 0.001953125f) * 256f;
+            if (!float.IsFinite(scaled) || (double)scaled < int.MinValue || (double)scaled > int.MaxValue)
+                throw new InvalidDataException("A polygon's texture coordinates exceed the game's integer quantization range after tile shifting.");
+            return (int)scaled * (1f / 256f);
+        }
         static void Shift(Vector2[] uv)
         {
             float minU = uv.Min(u => u.X), minV = uv.Min(u => u.Y), baseU = MathF.Floor(minU), baseV = MathF.Floor(minV);

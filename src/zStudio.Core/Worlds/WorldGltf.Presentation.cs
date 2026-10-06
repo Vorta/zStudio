@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Gltf;
 
 namespace Recoil.Zbd.Core.Worlds;
 
@@ -165,5 +166,5 @@ public static partial class WorldGltf
     internal static string EngineName(JsonObject node) =>
         Text(((node["extras"] as JsonObject)?[Key] as JsonObject)?["name"]) ?? BlenderSuffix().Replace(Text(node["name"]) ?? "", "");
     private static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue(out string? text) ? text : null;
-    private static int? Index(JsonNode? node, int count) => node is JsonValue value && value.TryGetValue(out int index) && index >= 0 && index < count ? index : null;
+    private static int? Index(JsonNode? node, int count) => GltfInteger.TryInt64(node, out long index) && index >= 0 && index < count ? (int)index : null;
 }

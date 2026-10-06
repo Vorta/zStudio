@@ -159,7 +159,7 @@ public static class GameGenScriptText
             string[] copy = [.. tokens];
             if (copy.Length > 1 && copy[0] == "LoadGameGen" && !copy[1].Contains('%')) copy[1] = Model(copy[1]);
             else if (copy.Length > 2 && Worlds.ScriptConditions.IsSet(copy[0]) && modelMacros.Contains(copy[1])) copy[2] = Model(copy[2]);
-            else if (TextureCommands.Contains(copy[0])) for (int i = 1; i < copy.Length; i++) copy[i] = Image(copy[i]);
+            else if (TextureCommands.Contains(Worlds.ScriptCommands.Core(copy[0]))) for (int i = 1; i < copy.Length; i++) copy[i] = Image(copy[i]);
             result.Add(copy);
         }
         return result;

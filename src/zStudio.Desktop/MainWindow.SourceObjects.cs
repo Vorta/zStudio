@@ -62,15 +62,15 @@ public partial class MainWindow
         string source;
         if (origin.ModelFile != null)
         {
-            source = $"{origin.ModelFile} node {origin.ModelNode}" + (origin.Load is { } load ? $", loaded by {load.Script} line {load.Line}" : "");
-            if (!origin.Database) notes.Add($"A node of the model file {origin.ModelFile}: transform and flag edits apply wherever that file is loaded.");
-            else if (origin.Part) notes.Add($"A node of {origin.ModelFile}, a part of the mission database: edits apply to every copy of it the database references.");
+            source = $"{Bounded(origin.ModelFile, 256)} node {origin.ModelNode}" + (origin.Load is { } load ? $", loaded by {Bounded(load.Script, 256)} line {load.Line}" : "");
+            if (!origin.Database) notes.Add($"A node of the model file {Bounded(origin.ModelFile, 256)}: transform and flag edits apply wherever that file is loaded.");
+            else if (origin.Part) notes.Add($"A node of {Bounded(origin.ModelFile, 256)}, a part of the mission database: edits apply to every copy of it the database references.");
         }
-        else source = origin.Created is { } created ? $"{created.Script} line {created.Line} ({created.Command})" : "the scripts";
+        else source = origin.Created is { } created ? $"{Bounded(created.Script, 256)} line {created.Line} ({Bounded(created.Command, 128)})" : "the scripts";
         foreach (var (command, writer) in origin.Writers.OrderBy(w => w.Value.Script).ThenBy(w => w.Value.Line).Take(16))
         {
             int runs = doc.SourceBuild.Executions.GetValueOrDefault((writer.Script, writer.Line));
-            notes.Add($"{command}: {writer.Script} line {writer.Line}" + (runs > 1 ? $" (runs {runs} times; edit the script directly)" : ""));
+            notes.Add($"{Bounded(command, 128)}: {Bounded(writer.Script, 256)} line {writer.Line}" + (runs > 1 ? $" (runs {runs} times; edit the script directly)" : ""));
         }
         var whole = SourceObjectEdits.ObjectOf(built, SourceWorldProvenance(doc));
         return new(node, built.Name, built.Class.ToString(), transform, built.Flags, origin, source, notes)
@@ -222,12 +222,12 @@ public partial class MainWindow
     }
 
     /// <summary>Opens Properties for a source world's object; after an edit it follows the object into the rebuilt world.</summary>
-    private bool ShowSourceObjectProperties(DocumentModel doc, int node)
+    private async Task<bool> ShowSourceObjectPropertiesAsync(DocumentModel doc, int node)
     {
         var state = DescribeSourceObject(doc, node);
         // A terrain piece is compiled from its recipe; Properties edits the recipe.
         if (state.Origin.Terrain is { } recipe)
-            return ShowTerrainProperties(doc, recipe, state.Origin.TerrainSurface, $"Piece {state.Name}: surface {state.Origin.TerrainSurface}, cell {state.Origin.TerrainCell.Column}, {state.Origin.TerrainCell.Row}", null);
+            return await ShowTerrainPropertiesAsync(doc, recipe, state.Origin.TerrainSurface, $"Piece {state.Name}: surface {state.Origin.TerrainSurface}, cell {state.Origin.TerrainCell.Column}, {state.Origin.TerrainCell.Row}", null);
         var window = GetPropertiesWindow();
         SourceObjectPropertiesEditor fields = new(state,
             transform => FollowSourceObjectAsync(doc, node, state, () => MoveSourceObjectAsync(doc, node, transform, CancellationToken.None)),
@@ -241,7 +241,7 @@ public partial class MainWindow
                     var next = await DuplicateSourceObjectAsync(doc, node, name, null, CancellationToken.None);
                     // A part's copy is made in every copy of the part: follow the one beside the object edited.
                     if (!next.IsDisposed && SourceCopiesNamed(next, name, copyKey) is [int copy, ..] && FollowsProperties(shownWindow, next))
-                        try { ShowSourceObjectProperties(next, copy); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+                        try { await ShowSourceObjectPropertiesAsync(next, copy); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
                 },
                 async () =>
                 {
@@ -264,7 +264,7 @@ public partial class MainWindow
         var next = await edit();
         var copies = Copies(next.SourceBuild);
         if (copies.Count > 0 && !next.IsDisposed && FollowsProperties(window, next))
-            try { ShowSourceObjectProperties(next, copies[Math.Min(occurrence, copies.Count - 1)]); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
+            try { await ShowSourceObjectPropertiesAsync(next, copies[Math.Min(occurrence, copies.Count - 1)]); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
         List<int> Copies(SourceWorldBuild? build) => build == null ? [] :
             [.. build.Provenance.Where(p => new SourceObjectState(p.Key, "", "", null, 0, p.Value, "", []).Identity == state.Identity).Select(p => p.Key).Order()];
     }
@@ -277,7 +277,7 @@ public partial class MainWindow
         window is { ClosedByUser: false } && (propertiesWindow == null || propertiesWindow == window && (window.Document == null || window.Document == next));
     private void RegisterSourceObjectCommands(StudioCommands r)
     {
-        Register(r, "source_world_object", "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from — the glTF file and node it was imported from (origin.part marks a part of the mission database, a file it references and copies wherever it does), or the script instruction that created it — with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world.", false,
+        Register(r, "source_world_object", "Describe a world object of a source world: its name, class, local transform (position, rotation in degrees about Y then X then Z, scale), node flags, and where it came from — the glTF file and node it was imported from (origin.part marks a part of the mission database, a file it references and copies wherever it does), or the script instruction that created it — with the instruction that last set each property and how often it ran. Node indices are those of zstudio_scene_nodes for the shown world. Inspection previews bound script/model paths to 256 characters and tokens to 128, with truncation flags; edits still target document and node identities.", false,
             [DocumentParameter, new("node", "integer", "Scene node index.", true, Minimum: 0, Maximum: int.MaxValue)], a =>
         {
             var d = TargetDocument(a); var state = DescribeSourceObject(d, Int(a, "node"));
@@ -287,16 +287,16 @@ public partial class MainWindow
                 document = d.SessionId, revision = d.Revision, @object = state.Json(),
                 origin = new
                 {
-                    modelFile = origin.ModelFile, modelNode = origin.ModelFile == null ? (int?)null : origin.ModelNode, database = origin.Database, part = origin.Part,
+                    modelFile = origin.ModelFile == null ? null : Bounded(origin.ModelFile, 256), modelFileTruncated = origin.ModelFile?.Length > 256, modelNode = origin.ModelFile == null ? (int?)null : origin.ModelNode, database = origin.Database, part = origin.Part,
                     load = Instruction(origin.Load), created = Instruction(origin.Created), attached = Instruction(origin.Attached),
                     writers = origin.Writers.Take(32).ToDictionary(w => w.Key, w => Instruction(w.Value))
                 },
                 // Those its source can set: a script has no command for every flag (ClipTo).
                 editableFlags = SourceObjectPropertiesEditor.EditableFlags.Where(f => SourceObjectEdits.FlagSettable(origin, f.Bit)).Select(f => new { bit = $"0x{f.Bit:X}", label = f.Label, on = (state.Flags & f.Bit) != 0 }).ToArray(),
                 applied = origin.Applied.Take(32).Select(Instruction).ToArray(), appliedCount = origin.Applied.Count,
-                propertyCommands = SourceObjectEdits.PropertyCommands.Select(p => new { command = p.Key, arguments = p.Value, set = origin.Writers.TryGetValue(p.Key, out var w) ? w.Tokens.Skip(1).Take(16).ToArray() : null }).Where(p => p.set != null || CommandFits(state.Class, p.command)).ToArray()
+                propertyCommands = SourceObjectEdits.PropertyCommands.Select(p => new { command = p.Key, arguments = p.Value, set = origin.Writers.TryGetValue(p.Key, out var w) ? SourceInstructionTokens(w, 1) : null, truncated = w != null && (w.Tokens.Count > 17 || w.Tokens.Skip(1).Take(16).Any(t => t.Length > 128)) }).Where(p => p.set != null || CommandFits(state.Class, p.command)).ToArray()
             });
-            object? Instruction(SourceInstruction? i) => i == null ? null : new { script = i.Script, line = i.Line, command = i.Command, tokens = i.Tokens.Take(16).Select(t => Bounded(t, 128)).ToArray(), runs = d.SourceBuild!.Executions.GetValueOrDefault((i.Script, i.Line)) };
+            object? Instruction(SourceInstruction? i) => SourceInstructionProjection(i, i == null ? 0 : d.SourceBuild!.Executions.GetValueOrDefault((i.Script, i.Line)));
         });
         RegisterJob(r, "source_world_command", "Set a property a script command makes on a node of a source world (fog of the world, a light's color, ranges or orientation, a camera's clip or field of view) as one undoable change of the project's workspace: the instruction that last set it changes, or a new one follows the instruction that created the node. zstudio_source_world_object lists the commands that fit the node and the arguments each set one has. The world rebuilds and the result is the replacement document.",
             [DocumentParameter, RevisionParameter, new("node", "integer", "Scene node index.", true, Minimum: 0, Maximum: int.MaxValue),
@@ -368,6 +368,12 @@ public partial class MainWindow
                 return Result(new { document = DocumentState(next) });
             });
     }
+    internal static string[] SourceInstructionTokens(SourceInstruction instruction, int skip = 0) => instruction.Tokens.Skip(skip).Take(16).Select(t => Bounded(t, 128)).ToArray();
+    internal static object? SourceInstructionProjection(SourceInstruction? i, int runs) => i == null ? null : new
+    {
+        script = Bounded(i.Script, 256), line = i.Line, command = Bounded(i.Command, 128), tokens = SourceInstructionTokens(i), runs,
+        truncated = i.Script.Length > 256 || i.Command.Length > 128 || i.Tokens.Count > 16 || i.Tokens.Take(16).Any(t => t.Length > 128)
+    };
     /// <summary>Whether a property command applies to a node class (the interpreter applies World… to worlds, Light… to lights, and so on).</summary>
     private static bool CommandFits(string nodeClass, string command) => command.StartsWith(nodeClass switch { "World" => "World", "Light" => "Light", "Camera" => "Camera", "Display" => "Display", _ => "\0" }, StringComparison.Ordinal);
     private static Vector3? Vector(JsonObject a, string name) => a[name] is JsonObject v ? new Vector3(Coordinate(v, "x"), Coordinate(v, "y"), Coordinate(v, "z")) : null;

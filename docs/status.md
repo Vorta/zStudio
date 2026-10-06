@@ -1,5 +1,15 @@
 # Desktop implementation status
 
+## PR18 review fixes (2026-10-06)
+
+The nine latest PR findings are fixed: source files are read through bounded opened handles; glTF accepts exact whole-number decimal/exponent forms and validates GLB framing, complete triangles and unit quaternions; unsupported morph targets and textured colour factors are refused; GLB binary chunks remain slices; PNG requires an empty final IEND. The full PR diff and affected shared services were reviewed against the actual base, followed by a separate challenge pass before committing.
+
+Additional confirmed findings were fixed in source recovery and linked paths, source identity and edit atomicity, geometry/metadata/output growth, retail command-prefix handling, terrain preservation and clipping, zone-aware rendering batches, polygon-order comparison, sparse SI export, bounded diagnostics and stale asynchronous GUI publication. GUI and MCP share these services; inspection pages and generated terrain Properties actions are bounded, and the discovery catalog is current.
+
+Validation: Release build with zero warnings/errors; 1,423 Core tests with the 1999 and MW3 datasets; 110 Desktop/MCP tests; 70 PR-watch tests; and eight 1998 reconstruction/terrain checks. The tests cover synthetic counterexamples and corpus behavior, not a claim of complete original-game compatibility. One earlier isolated partial-text Desktop failure did not recur in subsequent serial runs; its cause remains unproven. An allocation fixture now warms its nonempty traversal before measurement, retaining the original threshold.
+
+One P2 remains explicitly unresolved by user choice: direct compiled-file saves keep atomic replacement, so a destination change by another program between the final baseline check and replacement can be overwritten. The source-project publisher uses its separate recoverable protocol. The review is complete in scope, but is not a no-open-findings result. Terrain clipping also conservatively refuses geometry exceeding its documented complexity budget. Portable packaging accompanies the validated fixes; this work does not authorize a merge, public release or version bump.
+
 ## Review of the world-reconstruction work (2026-10-05, branch feat/world-editor)
 
 - **Scope:** adversarial review of every uncommitted change since `2fa5074`: reconstruction inference, the original loader, model sharing, GameZ version 13, lookups, Compare worlds, the welcome screen, preview builds, texture profiles and source-world structure edits.

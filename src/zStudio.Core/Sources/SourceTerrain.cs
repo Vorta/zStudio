@@ -80,7 +80,8 @@ public static class SourceTerrain
         catch (JsonException ex) { throw new InvalidDataException($"{database} is not valid JSON: {ex.Message}", ex); }
         var nodeList = root["nodes"] as JsonArray ?? (JsonArray)(root["nodes"] = new JsonArray());
         var scenes = root["scenes"] as JsonArray ?? throw new InvalidDataException($"{database} has no scene.");
-        int sceneIndex = root["scene"] is JsonValue s && s.TryGetValue(out int si) && si >= 0 && si < scenes.Count ? si : 0;
+        int sceneIndex = root["scene"] == null ? 0 : GltfInteger.Int32(root["scene"], "scene");
+        if (sceneIndex < 0 || sceneIndex >= scenes.Count) throw new InvalidDataException($"{database} has no scene {sceneIndex}.");
         if (scenes.Count == 0 || scenes[sceneIndex] is not JsonObject scene) throw new InvalidDataException($"{database} has no scene.");
         string stem = Path.GetFileName(recipePath)[..^TerrainRecipe.Extension.Length];
         nodeList.Add(new JsonObject { ["name"] = $"{stem}_terrain", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = RelativePath(database, recipePath) } } });

@@ -21,6 +21,9 @@ public interface IProjectFiles
 public sealed partial class WorldAssembler(IProjectFiles files, CancellationToken token = default)
 {
     public const int MaximumScriptDepth = 32, MaximumInstructions = 1_000_000;
+    public const long MaximumScriptSourceBytes = 64 * 1024 * 1024;
+    internal long ScriptSourceByteLimit { get; init; } = MaximumScriptSourceBytes;
+    private long scriptSourceBytes, scriptSourceTokens;
     public GameZWorld World { get; } = new();
     public List<string> Warnings => [.. warnings];
     private readonly List<string> warnings = []; private readonly HashSet<string> seenWarnings = new(StringComparer.Ordinal);
@@ -102,7 +105,16 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         ScriptFiles.Add(relative);
         // Each script is read once per assembly: one sourced many times (or holding only comments) costs its instructions, not its text again.
         if (!parsedScripts.TryGetValue(relative, out var lines))
-            parsedScripts[relative] = lines = [.. Sources.GameGenScriptSyntax.Parse(files.Read(relative, token)).Lines.Where(l => l.IsInstruction)];
+        {
+            byte[] source = files.Read(relative, token);
+            if (source.LongLength > ScriptSourceByteLimit - scriptSourceBytes)
+                throw new InvalidDataException("The world's script sources together exceed 64 MiB; split or simplify the sources.");
+            scriptSourceBytes += source.Length;
+            var syntax = Sources.GameGenScriptSyntax.Parse(source);
+            if ((scriptSourceTokens += syntax.Lines.Sum(l => (long)l.Tokens.Count)) > GameGenScriptText.MaximumTokens)
+                throw new InvalidDataException("The world's script sources together exceed four million tokens.");
+            parsedScripts[relative] = lines = [.. syntax.Lines.Where(l => l.IsInstruction)];
+        }
         foreach (var line in lines)
         {
             token.ThrowIfCancellationRequested();
@@ -117,6 +129,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             // Macros are set before and after the world is written (tex_fx scripts may use them).
             if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; continue; }
             if (ScriptConditions.IsSource(command)) { if (args.Length > 0) Source(args[0], depth + 1); continue; }
+            command = ScriptCommands.Core(command);
             if (written) { Late(command, args); continue; }
             instruction = new(relative, line.Number, command, raw, args);
             Executions[(relative, line.Number)] = Executions.GetValueOrDefault((relative, line.Number)) + 1;

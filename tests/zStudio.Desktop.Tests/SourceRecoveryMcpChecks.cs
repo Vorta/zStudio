@@ -90,6 +90,37 @@ internal static class SourceRecoveryMcpChecks
             Assert.False(File.Exists(a));
             Assert.Equal(0, (await Call("source_recovery", new()))["saveCount"]!.GetValue<int>());
 
+            // Maximum returned page with long, JSON-escaped paths. Journals are local fixtures; no source paths are created.
+            var budgetFolders = new List<string>();
+            try
+            {
+                string prefix = "data/" + string.Join('/', Enumerable.Repeat(new string('\u0401', 100), 20));
+                for (int j = 0; j < 32; j++)
+                {
+                    string id = $"20260101T000000000Z-{j:x8}";
+                    string folder = fixture.Path($"zstudio/recovery/{id}"); Directory.CreateDirectory(folder); budgetFolders.Add(folder);
+                    var files = new JsonArray(Enumerable.Range(0, 64).Select(i => (JsonNode)new JsonObject
+                    {
+                        ["relative"] = $"{prefix}/{j}-{i}.zrd", ["expected"] = null,
+                        ["content"] = new JsonObject { ["length"] = 1, ["sha256"] = new string('a', 64) },
+                    }).ToArray());
+                    File.WriteAllText(Path.Combine(folder, "manifest.json"), new JsonObject
+                    {
+                        ["format"] = 1, ["saveId"] = id, ["description"] = "budget", ["createdUtc"] = "2026-01-01T00:00:00Z",
+                        ["files"] = files, ["folders"] = new JsonArray(),
+                    }.ToJsonString());
+                }
+                var page = await Call("source_recovery", new());
+                Assert.Equal(32, page["saveCount"]!.GetValue<int>());
+                foreach (var save in page["saves"]!.AsArray())
+                {
+                    Assert.Equal(64, save!["fileCount"]!.GetValue<int>());
+                    Assert.All(save["files"]!.AsArray(), row => { Assert.True(row!["fileTruncated"]!.GetValue<bool>()); Assert.InRange(row["file"]!.GetValue<string>().Length, 1, 257); });
+                }
+                Assert.InRange(Encoding.UTF8.GetByteCount(page.ToJsonString()), 1, 4 * 1024 * 1024);
+            }
+            finally { foreach (string folder in budgetFolders) Directory.Delete(folder, true); }
+
             // Closing while the GUI's path resolves another save waits until it has stopped between two files.
             string second = Interrupt(fixture.Project, "gamegen/c.gs", "gamegen/d.gs");
             onUiThread = null;

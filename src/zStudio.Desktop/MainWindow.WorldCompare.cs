@@ -40,7 +40,7 @@ public partial class MainWindow
     private static GameZWorld ReadCompareWorld(string path, string which, CancellationToken token)
     {
         var file = RequireCompareFile(path, which);
-        try { return GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes(file.Name, File.ReadAllBytes(path), token: token), token); }
+        try { return GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes(file.Name, Recoil.Zbd.Core.Sources.SourceRead.All(path, MaximumCompareFileBytes, token), token: token), token); }
         catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException)
         { throw new StudioCommandException("invalid_data", $"The {which} world {file.Name} cannot be read as a GameZ world: {ex.Message}"); }
     }

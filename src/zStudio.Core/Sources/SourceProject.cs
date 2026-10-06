@@ -193,8 +193,15 @@ public static partial class SourceProject
         for (int i = 0; i < parts.Length; i++)
         {
             current = System.IO.Path.Combine(current, parts[i]);
-            FileSystemInfo info = i < parts.Length - 1 ? new DirectoryInfo(current) : new FileInfo(current);
-            if (info.Exists && info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{info.FullName} is a link; nothing was written through it.");
+            // FileInfo.Exists is false for directory links, including the last component (recovery/staging).
+            // Attributes inspect either kind and also reject dangling links rather than following them later.
+            try
+            {
+                if (File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint))
+                    throw new IOException($"{current} is a link; nothing was written through it.");
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
         }
     }
 }

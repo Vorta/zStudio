@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Sources;
 using Xunit;
 
 namespace Recoil.Zbd.Tests;
@@ -10,9 +11,30 @@ namespace Recoil.Zbd.Tests;
 public sealed class AnimationWorldDiscoveryTests
 {
     [Fact]
-    public async Task Mw3AnimationSetupDoesNotExpandUnusedEffects()
+    public void TypedEffectInspectionKeepsFirstAttributesAndSharesNestedMapLimit()
     {
-        using var fixture = new Fixture(39, 27, 15);
+        using var fixture = new Fixture(28, 15, 27);
+        var context = new AnimationPreviewContext { Package = fixture.Package, World = fixture.MatchingWorld };
+        context.ReadEffects(ZrdText.Parse("( model NAME ( first ) NAME ( later ) MAPS ( tex1 tex2 ) SPEED ( 3.5 ) LOOPING ( ON ) )", TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        var effect = Assert.Single(context.Effects).Value;
+        Assert.Equal("first", effect.Name); Assert.Equal("model", effect.ModelName);
+        Assert.Equal(["tex1", "tex2"], effect.Textures); Assert.Equal(3.5f, effect.Speed); Assert.True(effect.Loop);
+        Assert.Equal(-1, effect.RootNode);
+        var huge = ZrdText.Parse("( model NAME ( second ) MAPS ( tex ) )", TestContext.Current.CancellationToken).Children.Single();
+        var children = huge.Children.ToArray();
+        children[^1] = children[^1] with { Children = Enumerable.Repeat(ZrdNode.Create(ZrdKind.String) with { Text = "tex" }, 65535).ToArray() };
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Throws<InvalidDataException>(() => context.ReadEffects(huge with { Children = children }, TestContext.Current.CancellationToken));
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 65536);
+        Assert.Single(context.Effects);
+    }
+
+    [Theory]
+    [InlineData(39, 27, 15)]
+    [InlineData(28, 15, 27)]
+    public async Task AnimationSetupDoesNotExpandUnusedEffects(int animationVersion, int worldVersion, int otherVersion)
+    {
+        using var fixture = new Fixture(animationVersion, worldVersion, otherVersion);
         var token = TestContext.Current.CancellationToken;
         await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
         // A long text and many small entries: expanding the tree would wrap the text without copying it, but would make

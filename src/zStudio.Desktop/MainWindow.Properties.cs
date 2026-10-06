@@ -145,7 +145,7 @@ public partial class MainWindow
             string name = (motion?.Viewport.PreviewScene ?? scene?.PreviewScene ?? doc.Document.Scene)?.Nodes.ElementAtOrDefault(node)?.Name ?? "Scene object";
             // A source world's own objects (not placed copies) edit their sources.
             if (doc.SourceWorld != null && scene?.PickupAt(node) == null && SourceObjectNode(node) is int sourceNode && doc.SourceBuild?.Provenance.ContainsKey(sourceNode) == true)
-            { ShowSourceObjectProperties(doc, sourceNode); return; }
+            { await ShowSourceObjectPropertiesAsync(doc, sourceNode); return; }
             bool opened = scene?.PickupAt(node)?.Pickup is { } pickup && doc.PickupEdits?.Find(pickup.Source) != null
                 ? window.SetPickup(doc, pickup.Source, $"{name} · node #{node}", properties, SourcePickupMove(doc))
                 : window.SetReadOnly(doc, $"{name} · node #{node}", properties);
@@ -154,17 +154,17 @@ public partial class MainWindow
         else if (doc.SelectedAsset is { } selected) await OpenAssetPropertiesAsync(doc, selected.Record);
         else PresentProperties(window, window.SetReadOnly(doc, "Archive", doc.Document.Metadata));
     }
-    private Task<PropertiesWindow?> OpenScenePropertiesAsync(DocumentModel doc, SceneTreeItem item, CancellationToken token = default, bool automation = false)
+    private async Task<PropertiesWindow?> OpenScenePropertiesAsync(DocumentModel doc, SceneTreeItem item, CancellationToken token = default, bool automation = false)
     {
         if (doc.IsDisposed || doc != sceneTreeDocument || item.Owner != sceneTree || item.Node is not { } node || item.Problem != null)
-            return Task.FromResult<PropertiesWindow?>(null);
+            return null;
         if (!item.Owner.IsPreview && doc.PreviewDocument.Assets.FirstOrDefault(a => a.Kind == AssetKind.Node && a.Index == node.Index) is { } asset)
-            return OpenAssetPropertiesAsync(doc, asset, token, automation);
+            return await OpenAssetPropertiesAsync(doc, asset, token, automation);
         ++propertyRequest;
         if (doc.SourceWorld != null && doc.SourceBuild?.Provenance.ContainsKey(node.Index) == true)
-            return Task.FromResult<PropertiesWindow?>(ShowSourceObjectProperties(doc, node.Index) ? propertiesWindow : null);
+            return await ShowSourceObjectPropertiesAsync(doc, node.Index) ? propertiesWindow : null;
         var window = GetPropertiesWindow(); bool opened = window.SetReadOnly(doc, $"{node.Name} · node #{node.Index}", SceneTreeProperties(item));
-        PresentProperties(window, opened); return Task.FromResult<PropertiesWindow?>(opened ? window : null);
+        PresentProperties(window, opened); return opened ? window : null;
     }
     private void AssetContextTarget(object sender, MouseButtonEventArgs e)
     {

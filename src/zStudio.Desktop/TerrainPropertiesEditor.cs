@@ -77,20 +77,34 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
         }
 
         Label(form, "Regions, in the order they apply", true);
-        for (int i = 0; i < recipe.Regions.Count; i++)
+        StackPanel regions = new(); form.Children.Add(regions);
+        int page = Math.Max(0, recipe.Regions.ToList().FindIndex(r => r.Name == selected)) / 32;
+        void ShowRegions()
         {
+            regions.Children.Clear(); ClearAutomationFields("terrain-regions");
+            string previousScope = inputScope; inputScope = "terrain-regions";
+            Label(regions, $"Regions {Math.Min(page * 32 + 1, recipe.Regions.Count)}–{Math.Min((page + 1) * 32, recipe.Regions.Count)} of {recipe.Regions.Count}");
+            StackPanel navigation = new() { Orientation = Orientation.Horizontal };
+            if (page > 0) AsyncButton(navigation, "Previous regions", () => { page--; ShowRegions(); return Task.CompletedTask; });
+            if ((page + 1) * 32 < recipe.Regions.Count) AsyncButton(navigation, "Next regions", () => { page++; ShowRegions(); return Task.CompletedTask; });
+            regions.Children.Add(navigation);
+            for (int i = page * 32; i < Math.Min((page + 1) * 32, recipe.Regions.Count); i++)
+            {
             var region = recipe.Regions[i]; int index = i;
             string reach = region.Shape == null ? "everywhere on its surfaces" : region.Shape.Polygons.Count == 0 ? "nothing painted yet"
-                : $"{TerrainShapes.SquareUnits(region.Shape.Polygons):N0} square units in {region.Shape.Polygons.Count} parts";
+                : $"{region.Shape.Polygons.Count} parts · {TerrainShapes.PointCount(region.Shape.Polygons):N0} outline points";
             string sets = region.Set.ToJson().ToJsonString();
             StackPanel row = new() { Orientation = Orientation.Horizontal };
             AsyncButton(row, $"{index + 1}. {region.Name}" + (region.Name == selected ? " (selected)" : ""), () => { actions.SelectRegion(region.Name); return Task.CompletedTask; });
             if (index > 0) AsyncButton(row, $"Move {region.Name} up", () => actions.MoveRegion(region.Name, index - 1));
             if (index + 1 < recipe.Regions.Count) AsyncButton(row, $"Move {region.Name} down", () => actions.MoveRegion(region.Name, index + 1));
             AsyncButton(row, $"Delete {region.Name}", () => actions.RemoveRegion(region.Name));
-            form.Children.Add(row);
-            ReadOnlyText(form, $"{(region.Surfaces.Count == 0 ? "All surfaces" : string.Join(", ", region.Surfaces))} · {reach} · sets {sets}");
+            regions.Children.Add(row);
+            ReadOnlyText(regions, $"{(region.Surfaces.Count == 0 ? "All surfaces" : string.Join(", ", region.Surfaces.Take(8)) + (region.Surfaces.Count > 8 ? $" … ({region.Surfaces.Count} surfaces)" : ""))} · {reach} · sets {sets}");
+            }
+            inputScope = previousScope;
         }
+        ShowRegions();
         Input(form, "New region", "", _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "a name; the region starts empty and is painted with the brush",
             asyncCommit: async text => { text = text.Trim(); if (text.Length > 0) await actions.AddRegion(text); });
 

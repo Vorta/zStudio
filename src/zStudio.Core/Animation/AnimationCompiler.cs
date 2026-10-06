@@ -33,7 +33,7 @@ public sealed partial class AnimationCompiler
     private long bytes;
     /// <summary>Keyframe scripts by name and naming file: each is read and parsed once per compilation.</summary>
     private readonly Dictionary<(string Name, string From), Script?> scripts = [];
-    private void Warn(string message) { if (seen.Add(message) && warnings.Count < 2000) warnings.Add(message); }
+    private void Warn(string message) { if (warnings.Count < 2000 && seen.Add(message)) warnings.Add(message); }
 
     private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token)
     {
@@ -136,7 +136,7 @@ public sealed partial class AnimationCompiler
                 if (!NodeExists(root)) continue;
                 if (entries.Count >= MaximumEntries) throw definition.Item.Error($"more than {MaximumEntries - 1} animations; the game reads at most {MaximumEntries} entries, including the blank first one.");
                 try { entries.Add(new EntryBuilder(this, definition, root, bindings, entries.Count).Build()); }
-                catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{Name(definition.Item)}: {ex.Message}"); }
+                catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{JsonData.ShownText(Name(definition.Item))}: {ex.Message}"); }
             }
         }
         // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity).
@@ -183,7 +183,8 @@ public sealed partial class AnimationCompiler
         {
             string pattern = value.Kind == ZrdKind.String ? value.Text : value.Value;
             if (!pattern.Contains('*')) { yield return (pattern, ""); continue; }
-            if (worldNodes == null) { Warn($"{definition.Source}: {pattern} names world nodes by pattern; without the world it binds to nothing."); continue; }
+            if (worldNodes == null) { Warn($"{JsonData.ShownText(definition.Source)}: {JsonData.ShownText(pattern)} names world nodes by pattern; without the world it binds to nothing."); continue; }
+            if (worldNodes.Count == 0 || pattern.Length > worldNodes.Max(n => n.Length)) continue;
             Regex match = new("^" + Star().Replace(Regex.Escape(pattern).Replace("\\*", "*"), "([0-9])") + "$", RegexOptions.CultureInvariant);
             // A pattern that matches nothing has no animation in this mission, as a missing root has none.
             var found = worldNodes.Distinct(StringComparer.Ordinal).Where(n => match.IsMatch(n)).Order(StringComparer.Ordinal).ToList();

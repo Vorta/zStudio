@@ -41,7 +41,15 @@ internal static class OriginalLoader
     internal sealed class MirrorBudget(int limit, Func<int, string> refusal, MirrorBudget? total = null)
     {
         private int count;
+        private long replayed;
         public void Take() { total?.Take(); if (++count > limit) throw new InvalidDataException(refusal(limit)); }
+        // Original records also cost work on every inference attempt, even when the file has no external caches.
+        public void Replay()
+        {
+            total?.Replay();
+            if (++replayed > (long)limit * 8)
+                throw new InvalidDataException($"Replaying model loads exceeds the {(long)limit * 8:N0}-node work limit.");
+        }
         /// <summary>One load's budget, also counted against this one.</summary>
         public MirrorBudget Load() => new(MaximumCachedNodes, Refusal, this);
         /// <summary>One load's budget, as the build has it.</summary>
@@ -98,17 +106,18 @@ internal static class OriginalLoader
         HashSet<string> files = new(StringComparer.OrdinalIgnoreCase);
         // One count for the outermost load and every cache inside it.
         var mirrored = hooks.Mirrored ?? MirrorBudget.PerLoad();
+        void Allocate(WorldNode node) { mirrored.Replay(); hooks.Allocate(node); }
         foreach (var reference in References(cached, hooks))
             if (files.Add(hooks.File(reference))) caches.Add(Cache(reference, hooks, mirrored));
         HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
         foreach (var definition in Definitions(cached, hooks)) Define(definition);
-        hooks.Allocate(root);
+        Allocate(root);
         WorldNode? pending = null;
         foreach (var record in records) Record(record);
         if (pending != null)
         {
             WorldNode end = new("", WorldNodeClass.Object3D);
-            hooks.Allocate(end); Flush(); hooks.Free(end);
+            Allocate(end); Flush(); hooks.Free(end);
         }
         foreach (var cache in caches) Destroy(cache, hooks);
 
@@ -117,7 +126,7 @@ internal static class OriginalLoader
             // An instance reference attaches its definition, made before the root; it makes no node.
             if (!seen.Add(node)) return;
             hooks.Token.ThrowIfCancellationRequested();
-            hooks.Allocate(node); hooks.Read?.Invoke(node);
+            Allocate(node); hooks.Read?.Invoke(node);
             Flush();
             var content = hooks.Content(node); var inner = Within(content);
             if (Referenced(node, content, hooks))
@@ -139,7 +148,7 @@ internal static class OriginalLoader
         {
             if (!seen.Add(node)) return;
             hooks.Token.ThrowIfCancellationRequested();
-            hooks.Allocate(node);
+            Allocate(node);
             foreach (var child in node.Children) Copy(child);
         }
         // A shared node of the file with its subtree, made like a copy but read from the file (a reference's content copied).
@@ -147,7 +156,7 @@ internal static class OriginalLoader
         {
             if (!seen.Add(node)) return;
             hooks.Token.ThrowIfCancellationRequested();
-            hooks.Allocate(node); hooks.Read?.Invoke(node);
+            Allocate(node); hooks.Read?.Invoke(node);
             var inner = Within(hooks.Content(node));
             foreach (var child in node.Children) if (inner(child)) Copy(child); else Define(child);
         }

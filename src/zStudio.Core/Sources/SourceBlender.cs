@@ -49,6 +49,7 @@ public static partial class SourceBlender
     public const string ExportFolder = "zstudio/export";
     private const string ManifestName = "manifest.json";
     private const long MaximumExportBytes = 512L * 1024 * 1024;
+    private const long MaximumManifestBytes = 64L * 1024 * 1024;
 
     private static string Folder(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), "zstudio", "export");
 
@@ -214,14 +215,14 @@ public static partial class SourceBlender
     public static IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)> CheckoutExports(string root, CancellationToken token = default) =>
         CheckoutExports(root, SourceProject.MaximumScannedEntries, token);
     /// <param name="maximumEntries">The files and folders the listing may visit (<see cref="SourceProject.MaximumScannedEntries"/>; smaller in tests).</param>
-    internal static IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)> CheckoutExports(string root, int maximumEntries, CancellationToken token)
+    internal static IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)> CheckoutExports(string root, int maximumEntries, CancellationToken token, long maximumManifestBytes = MaximumManifestBytes)
     {
         var budget = ScanBudget(maximumEntries, token);
         List<(BlenderCheckout, IReadOnlyList<BlenderExport>)> result = [];
-        foreach (var checkout in Checkouts(root, budget)) result.Add((checkout, Exports(checkout, budget)));
+        foreach (var checkout in Checkouts(root, budget, maximumManifestBytes)) result.Add((checkout, Exports(checkout, budget)));
         return result;
     }
-    private static IReadOnlyList<BlenderCheckout> Checkouts(string root, SourceProject.ScanBudget budget)
+    private static IReadOnlyList<BlenderCheckout> Checkouts(string root, SourceProject.ScanBudget budget, long maximumManifestBytes = MaximumManifestBytes)
     {
         string folder = Folder(root);
         if (!Directory.Exists(folder)) return [];
@@ -230,7 +231,10 @@ public static partial class SourceBlender
         foreach (var entry in SourceProject.Entries(folder, budget))
         {
             if (entry is not DirectoryInfo directory || directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
-            if (Read(directory.FullName, budget) is { } checkout) result.Add(checkout);
+            if (Read(directory.FullName, budget, bytes =>
+            {
+                if ((maximumManifestBytes -= bytes) < 0) throw new IOException("Blender checkout manifests together exceed 64 MiB; remove checkouts no longer needed and try again.");
+            }) is { } checkout) result.Add(checkout);
         }
         return result.OrderByDescending(c => c.CreatedUtc).ToArray();
     }
@@ -242,18 +246,25 @@ public static partial class SourceBlender
         return Read(folder) ?? throw new InvalidDataException($"The project has no Blender checkout {id}.");
     }
     /// <param name="budget">When the manifest is one of a listing's: the files it lists count towards that listing's entries.</param>
-    private static BlenderCheckout? Read(string folder, SourceProject.ScanBudget? budget = null)
+    private static BlenderCheckout? Read(string folder, SourceProject.ScanBudget? budget = null, Action<int>? charge = null)
     {
         string path = Path.Combine(folder, ManifestName);
         if (!File.Exists(path) || new FileInfo(path).Length > 4 * 1024 * 1024) return null;
         try
         {
-            var manifest = JsonNode.Parse(File.ReadAllBytes(path)) as JsonObject;
+            byte[] bytes = SourceRead.All(path, 4 * 1024 * 1024);
+            charge?.Invoke(bytes.Length);
+            var manifest = JsonNode.Parse(bytes) as JsonObject;
             if (manifest?["format"]?.GetValue<string>() != "zstudio-blender-checkout") return null;
+            string id = manifest["id"]!.GetValue<string>();
+            if (id != Path.GetFileName(folder) || id.Length is 0 or > 128 || id.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.'))) return null;
             budget?.Visit((long)((manifest["files"] as JsonArray)?.Count ?? 0) + ((manifest["applied"] as JsonArray)?.Count ?? 0));
             var files = (manifest["files"] as JsonArray ?? []).Select(f => new BlenderCheckoutFile(f!["project"]!.GetValue<string>(), f["checkout"]!.GetValue<string>(), f["sha256"]!.GetValue<string>())).ToArray();
             var applied = (manifest["applied"] as JsonArray ?? []).Select(f => new BlenderCheckoutFile(f!["project"]!.GetValue<string>(), "", f["sha256"]!.GetValue<string>())).ToArray();
-            return new(manifest["id"]!.GetValue<string>(), folder, manifest["model"]!.GetValue<string>(), DateTime.Parse(manifest["created"]!.GetValue<string>(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), files) { Applied = applied };
+            string model = manifest["model"]!.GetValue<string>();
+            // These fields identify Windows paths, not arbitrary text. Bound them before path composition or presentation.
+            if (model.Length > 32767 || Path.GetFileName(model).Length > 255 || files.Concat(applied).Any(f => f.Project.Length > 32767 || f.Checkout.Length > 32767 || f.Sha256.Length > 64)) return null;
+            return new(id, folder, model, DateTime.Parse(manifest["created"]!.GetValue<string>(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), files) { Applied = applied };
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or NullReferenceException) { return null; }
     }
@@ -283,15 +294,34 @@ public static partial class SourceBlender
     /// </summary>
     public static void RecordApplied(BlenderCheckout checkout, BlenderUpdatePlan plan)
     {
+        SourceProject.RejectLinks(checkout.Folder);
+        SourceProject.RejectNestedLinks(checkout.Folder, ManifestName);
         string path = Path.Combine(checkout.Folder, ManifestName);
         if (new FileInfo(path).Length > 4 * 1024 * 1024) return;
-        var manifest = JsonNode.Parse(File.ReadAllBytes(path)) as JsonObject ?? throw new InvalidDataException($"{path} is not a checkout manifest.");
+        byte[] previous = SourceRead.All(path, 4 * 1024 * 1024);
+        var manifest = JsonNode.Parse(previous) as JsonObject ?? throw new InvalidDataException($"{path} is not a checkout manifest.");
         var applied = manifest["applied"] as JsonArray ?? (JsonArray)(manifest["applied"] = new JsonArray());
+        long estimatedBytes = previous.Length;
         foreach (var (relative, content) in plan.Changes)
-            if (applied.Count < 4096) applied.Add(new JsonObject { ["project"] = relative, ["sha256"] = SourceProject.Sha256(content) });
-        string temporary = path + ".tmp";
-        File.WriteAllText(temporary, manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
-        File.Move(temporary, path, true);
+            if (applied.Count < 4096)
+            {
+                // Charge escaped paths before appending or serializing thousands of records.
+                if ((estimatedBytes += 6L * relative.Length + 128) > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
+                applied.Add(new JsonObject { ["project"] = relative, ["sha256"] = SourceProject.Sha256(content) });
+            }
+        byte[] writtenManifest = JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions { WriteIndented = true });
+        if (writtenManifest.Length > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
+        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            SourceProject.RejectLinks(checkout.Folder);
+            using (FileStream output = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) output.Write(writtenManifest);
+            using var sealedFile = SealedFile.Open(temporary, JournalDigest.OfContent(writtenManifest));
+            SourceProject.RejectLinks(checkout.Folder);
+            SourceProject.RejectNestedLinks(checkout.Folder, ManifestName);
+            sealedFile.MoveTo(path, replace: true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
     /// <summary>
@@ -361,6 +391,7 @@ public static partial class SourceBlender
         try { document = GltfDocument.Read(json, Use, token); }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{chosen.Relative}: {ex.Message}", ex); }
         if (!document.AllNodes().Any()) throw new InvalidDataException($"{chosen.Relative} has no nodes.");
+        Worlds.WorldGltf.ValidateSupported(document, chosen.Relative);
         // What Blender cannot keep by itself: copies of a shared node must agree, and a group moved as an empty passes its
         // transform to its objects (each node keeps the zone the checkout stated for it, below).
         Worlds.WorldGltf.CheckInstances(document, chosen.Relative);
@@ -427,7 +458,7 @@ public static partial class SourceBlender
         bool attributesDropped = EngineAttributes(checkedOut) > 0 && EngineAttributes(root) == 0;
         if (attributesDropped) notes.Add("The export had no engine attributes (Custom Properties off); the model's flags, zones, references and material attributes were dropped.");
         var removed = before.Except(after, StringComparer.Ordinal).Take(16).ToArray();
-        if (removed.Length > 0) notes.Add("Nodes no longer present (animations and placements find nodes by name): " + string.Join(", ", removed) + ".");
+        if (removed.Length > 0) notes.Add("Nodes no longer present (animations and placements find nodes by name): " + string.Join(", ", removed.Take(32).Select(n => JsonData.ShownText(n))) + (removed.Length > 32 ? $" and {removed.Length - 32:N0} more." : "."));
         // After counting the engine attributes the export carries: the zones the checkout stated go back to what the
         // file's hierarchy gives, which can leave a node without any.
         Worlds.WorldGltf.ImplicitZones(root, chosen.Relative);
@@ -462,7 +493,7 @@ public static partial class SourceBlender
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new InvalidDataException($"{path} is a link.");
             if (info.Length > MaximumExportBytes) throw new InvalidDataException($"{path} is larger than 512 MiB.");
             var stamp = FileStamp.Read(path);
-            byte[] first = File.ReadAllBytes(path);
+            byte[] first = SourceRead.All(path, MaximumExportBytes, token);
             if (FileStamp.Read(path) != stamp || !SourceProject.FileEquals(path, first, token)) throw new IOException($"{path} is still changing; wait for Blender to finish exporting.");
             return first;
         }

@@ -686,7 +686,7 @@ public static class WorldComparer
             hash = Mix(Mix(Mix(Mix(hash, Bits(model.MorphFactor)), Bits(model.ScrollU)), Bits(model.ScrollV)), model.ScrollFrame);
             foreach (var point in model.Points) hash = Mix(hash, PointHash(point));
             ulong all = 0;
-            foreach (var polygon in Polygons(model)) all += Mix(0, polygon.Hash);
+            foreach (var polygon in Polygons(model)) all = Mix(all, polygon.Hash);
             return models[model] = Mix(Mix(hash, all), (ulong)model.Polygons.Count);
         }
 
@@ -725,6 +725,13 @@ public static class WorldComparer
             var onlyA = Polygon.Unmatched(pa, pb); var onlyB = Polygon.Unmatched(pb, pa);
             if (onlyA.Count > 0 || onlyB.Count > 0)
                 list.Add(("model.polygons", $"{pa.Length}: {Polygon.Describe(onlyA.First)}", $"{pb.Length} ({pa.Length - onlyA.Count} identical): {Polygon.Describe(onlyB.First)}"));
+            else
+                for (int i = 0; i < pa.Length; i++)
+                    if (!pa[i].Matches(pb[i]))
+                    {
+                        list.Add(("model.polygonOrder", $"polygon {i}: {Polygon.Describe(pa[i])}", $"polygon {i}: {Polygon.Describe(pb[i])}"));
+                        break;
+                    }
             return modelDifferences[(a, b)] = [.. list];
         }
 

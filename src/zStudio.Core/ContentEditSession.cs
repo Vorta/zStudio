@@ -161,7 +161,7 @@ internal static class VerifiedDocumentSave
         Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
         await using (FileStream output = new(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
         { await output.WriteAsync(document.Bytes, token); await output.FlushAsync(token); output.Flush(true); }
-        byte[] bytes = await File.ReadAllBytesAsync(temp, token);
+        byte[] bytes = await Sources.SourceRead.AllAsync(temp, document.Bytes.Length, token);
         await Task.Run(() =>
         {
             if (!document.Bytes.Span.SequenceEqual(bytes)) throw new IOException("Saved file byte verification failed.");
