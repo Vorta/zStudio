@@ -136,7 +136,7 @@ internal sealed class WorldCompareView
         Add("Zone", a == null ? null : (a.Zone & 0xFF).ToString(CultureInfo.InvariantCulture), b == null ? null : (b.Zone & 0xFF).ToString(CultureInfo.InvariantCulture), "zone");
         Add("Grid cell", a == null ? null : $"{a.GridColumn}, {a.GridRow}", b == null ? null : $"{b.GridColumn}, {b.GridRow}", "cell");
         Add("Position", a == null ? null : Position(a), b == null ? null : Position(b), "matrix", "object.trs");
-        Add("Model", a == null ? null : Model(a), b == null ? null : Model(b), "model", "model.mode", "model.points", "model.morphs", "model.sphere", "model.polygons");
+        Add("Model", a == null ? null : Model(a), b == null ? null : Model(b), "model", "model.mode", "model.scroll", "model.morphFactor", "model.points", "model.morphs", "model.sphere", "model.polygons");
         foreach (var difference in node.Differences)
             if (difference.Field is not ("class" or "children" or "flags.carried" or "flags.derived" or "zone" or "cell"))
                 details.Add(new(difference.Field, Short(difference.Expected, 512), Short(difference.Actual, 512), true));

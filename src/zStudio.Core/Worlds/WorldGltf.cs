@@ -209,11 +209,13 @@ public static partial class WorldGltf
         if (copy.Length >= 48) Array.Clear(copy, 44, 4);
         return copy;
     }
-    /// <summary>A point entry without its runtime fields: elapsed time and packed state (+16..+27), packed colour and list pointer (+40..+47) and the flare's runtime values (+60..+75).</summary>
+    /// <summary>A point entry's runtime fields: elapsed time and packed state (+16..+27), packed colour and list pointer (+40..+47) and the flare's runtime values (+60..+75).</summary>
+    internal static readonly (int Start, int Length)[] RuntimePointFields = [(16, 12), (40, 8), (60, 16)];
+    /// <summary>A point entry without its <see cref="RuntimePointFields"/>.</summary>
     private static byte[] CanonicalPoint(byte[] record)
     {
         byte[] copy = (byte[])record.Clone();
-        Array.Clear(copy, 16, 12); Array.Clear(copy, 40, 8); Array.Clear(copy, 60, 16);
+        foreach (var (start, length) in RuntimePointFields) Array.Clear(copy, start, length);
         return copy;
     }
 
