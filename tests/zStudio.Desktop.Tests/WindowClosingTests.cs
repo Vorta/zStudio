@@ -195,7 +195,8 @@ public sealed class WindowClosingTests
         // All workspace fixtures share one STA/Application and run serially.
         // Allow the expanded suite (including large-input/race checks) to finish
         // alongside corpus tests; individual operations retain their own deadlines.
-        await completion.Task.WaitAsync(TimeSpan.FromMinutes(3), TestContext.Current.CancellationToken);
+        // A hang guard, not a speed check: the chain takes about 1.5 minutes alone and over 3 on a loaded machine.
+        await completion.Task.WaitAsync(TimeSpan.FromMinutes(6), TestContext.Current.CancellationToken);
     }
 
     private static DocumentModel DirtyDocument(int index)
