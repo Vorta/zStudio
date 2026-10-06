@@ -378,6 +378,10 @@ public static partial class WorldGltf
 
     private static void ValidateMaterial(GltfMaterial? source, string path)
     {
+        if (source is { AlphaMode: "MASK" } && (source.ImageUri != null || source.EmbeddedImage || source.Extras?[Key]?["texture"] != null)
+            && !(source.Extras?[Key]?["texture"] != null && source.AlphaCutoff == 0.5f &&
+                (source.BaseColor.W == 1 || source.BaseColor.W == 0 && source.Extras?[Key]?["opacity"] != null)))
+            throw new InvalidDataException($"{path}: textured MASK material {JsonData.ShownText(source.Name)} needs a cutoff that RECOIL cannot preserve. Bake the mask into a binary-alpha PNG and use BLEND. Reconstructed keyed-texture presentation keeps its recorded engine material.");
         if (source != null && (source.ImageUri != null || source.EmbeddedImage || source.Extras?[Key]?["texture"] != null) &&
             (source.BaseColor.X != 1 || source.BaseColor.Y != 1 || source.BaseColor.Z != 1))
             throw new InvalidDataException($"{path}: textured material {JsonData.ShownText(source.Name)} has a base-colour tint that RECOIL cannot preserve. Bake the colour into its PNG and export with a white RGB base colour.");
@@ -687,6 +691,7 @@ public static partial class WorldGltf
         else if (source?.EmbeddedImage == true)
             context.Warnings.Add($"{path}: material {JsonData.ShownText(source.Name)} has an embedded image; texture packs are built from PNG files, so save the image as a PNG beside the model (for example with Blender's glTF Separate format). The surface is untextured.");
         uint opacity = extras?["opacity"] is { } o ? (uint)Integer(o, "opacity", path, 0, 255)
+            : source is { AlphaMode: "MASK" } && source.ImageUri == null && !source.EmbeddedImage && namedTexture == null ? (source.BaseColor.W < source.AlphaCutoff ? 0u : 255u)
             : source != null && source.AlphaMode == "BLEND" && source.BaseColor.W < 1 ? (uint)Math.Clamp(MathF.Round(source.BaseColor.W * 255), 0, 255) : 0xFF;
         uint extraFlags = extras?["flags"] is { } f ? Hex(f, "flags", path) & ~0x1FFu : 0;
         material.Flags = (ushort)(opacity & 0xFF | extraFlags);

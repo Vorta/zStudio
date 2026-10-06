@@ -83,7 +83,7 @@ public static class WorldUpdate
     public static (Vector3 Centre, float Radius) Sphere(WorldBox box)
     {
         double hx = ((double)box.Max.X - box.Min.X) * 0.5, hy = ((double)box.Max.Y - box.Min.Y) * 0.5, hz = ((double)box.Max.Z - box.Min.Z) * 0.5;
-        float squared = (float)(hx * hx + hy * hy + hz * hz);
+        float squared = WorldNumbers.Finite((float)(hx * hx + hy * hy + hz * hz));
         int bits = (BitConverter.SingleToInt32Bits(squared) >> 1) + 0x1FC00000;
         return (new((float)(hx + box.Min.X), (float)(hy + box.Min.Y), (float)(hz + box.Min.Z)), BitConverter.Int32BitsToSingle(bits));
     }
@@ -175,6 +175,9 @@ public static class WorldUpdate
         double cellsX = world.PayloadFloat(0x3C) / (double)cellX, cellsZ = world.PayloadFloat(0x40) / (double)cellZ;
         if (!(cellsX <= 0 || cellsZ <= 0 || Math.Ceiling(cellsX) * Math.Ceiling(cellsZ) <= Formats.FormatRegistry.MaximumDirectoryEntries))
             throw new InvalidDataException($"Cells of {cellX} × {cellZ} divide the world into more than {Formats.FormatRegistry.MaximumDirectoryEntries:N0} cells.");
+        WorldNumbers.Finite(1.0f / cellX); WorldNumbers.Finite(1.0f / cellZ);
+        WorldNumbers.Finite(cellX * cellX + cellZ * cellZ);
+        WorldNumbers.Finite(world.PayloadFloat(0x34) + world.PayloadFloat(0x3C)); WorldNumbers.Finite(world.PayloadFloat(0x38) + world.PayloadFloat(0x40));
         world.SetPayloadFloat(0x54, cellX); world.SetPayloadFloat(0x58, cellZ);
         world.SetPayloadFloat(0x70, cellX * 0.125f); world.SetPayloadFloat(0x74, cellZ * -0.125f);
         world.SetPayloadFloat(0x5C, cellX * 0.5f); world.SetPayloadFloat(0x60, cellZ * 0.5f);

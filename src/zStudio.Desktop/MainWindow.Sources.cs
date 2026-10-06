@@ -95,6 +95,15 @@ public partial class MainWindow
 
     /// <summary>The build profile Tools → Build profile chose for a project (null: the project's default).</summary>
     private (string Root, string Name)? sourceProfileChoice;
+    private object SelectSourceProfile(string root, string? name)
+    {
+        if (SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its profile again.");
+        var profile = ResolveProfile(root, name);
+        sourceProfileChoice = profile.IsDefault ? null : (root, profile.Name);
+        FillSourceProfileMenu(root);
+        ViewModel.Status = $"Exports build the {profile.Name} profile.";
+        return new { project = root, profile = profile.Name, usesDefault = profile.IsDefault };
+    }
     private string? SourceProfileFor(string root)
     {
         if (sourceProfileChoice is not { } choice || !choice.Root.Equals(root, StringComparison.OrdinalIgnoreCase)) return null;
@@ -249,6 +258,14 @@ public partial class MainWindow
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
+        RegisterJob(r, "source_profile", "Choose the open source project's shared Tools > Build profile selection for subsequent GUI and MCP checks/exports. Omit profile to restore the project default. source_status lists valid profiles. Invalid choices leave the selection unchanged.",
+            [P("profile", "string", "Profile name; omit to restore the project's default.")], true,
+            (a, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
+                return Task.FromResult(Result(SelectSourceProfile(root, a["profile"] == null ? null : Text(a, "profile"))));
+            });
         RegisterJob(r, "source_status", "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters, P("profile", "string", "Build profile whose texture packs are listed; default: the profile chosen in Tools → Build profile, else the project's default.")], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
     }
@@ -358,8 +375,8 @@ public partial class MainWindow
                 ToolTip = $"{profile.Description}\n{string.Join(", ", profile.TexturePacks.Select(p => p.File + (p.Automatic ? $" (automatic, up to {p.BudgetBytes / (1024 * 1024)} MB)" : "") + (p.Missions is { } missions ? $" ({string.Join(", ", missions)})" : "")))}" + (profile.Source is { } source ? $"\n{source}" : "\nBuilt in"),
             };
             System.Windows.Automation.AutomationProperties.SetName(item, profile.Name);
-            string name = profile.Name; bool isDefault = profile.IsDefault;
-            item.Click += (_, _) => { sourceProfileChoice = isDefault ? null : (root, name); ViewModel.Status = $"Exports build the {name} profile."; };
+            string name = profile.Name;
+            item.Click += (_, _) => _ = RunUi(() => { SelectSourceProfile(root, name); return Task.CompletedTask; });
             SourceProfileMenu.Items.Add(item);
         }
     }

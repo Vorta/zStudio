@@ -56,6 +56,7 @@ public sealed class GltfMaterial
     public bool ClampT { get; set; }
     public bool DoubleSided { get; set; }
     public string AlphaMode { get; set; } = "OPAQUE";
+    public float AlphaCutoff { get; set; } = 0.5f;
     public JsonObject? Extras { get; set; }
 }
 
@@ -162,6 +163,7 @@ public sealed class GltfDocument
             JsonObject material = new() { ["name"] = m.Name, ["pbrMetallicRoughness"] = pbr };
             if (m.DoubleSided) material["doubleSided"] = true;
             if (m.AlphaMode != "OPAQUE") material["alphaMode"] = m.AlphaMode;
+            if (m.AlphaMode == "MASK" && m.AlphaCutoff != 0.5f) material["alphaCutoff"] = m.AlphaCutoff;
             if (m.Extras != null) material["extras"] = m.Extras.DeepClone();
             materials.Add(material); materialIndex[m] = materials.Count - 1; return materials.Count - 1;
         }
@@ -460,7 +462,7 @@ public sealed class GltfDocument
                     throw new InvalidDataException($"glTF buffer view {viewIndex} states no byte stride, so {elements}, would lie {element} bytes apart; glTF starts each element of a vertex attribute on a 4-byte boundary, so pad each element to {padded} bytes and state a byteStride of {padded}.");
                 var (data, start) = View(reference, GltfInteger.OptionalInt64(a["byteOffset"], "byteOffset") ?? 0, (long)(count - 1) * stride + element, $"{count:N0} {what} of glTF accessor {index}", size, attribute: attribute);
                 for (int i = 0; i < count; i++)
-                    for (int c = 0; c < components; c++) values[i * components + c] = Component((data == null ? binary : data.AsSpan())[(int)(start + (long)i * stride + c * size)..], componentType, normalized);
+                    for (int c = 0; c < components; c++) values[i * components + c] = ReadComponent((data == null ? binary : data.AsSpan())[(int)(start + (long)i * stride + c * size)..], componentType, normalized);
             }
             // Sparse accessors replace some elements (Blender writes morph targets this way, often without a buffer view).
             if (a["sparse"] is { } sparse)
@@ -483,10 +485,16 @@ public sealed class GltfDocument
                     if (target <= previous)
                         throw new InvalidDataException($"The sparse indices of glTF accessor {index} do not increase: index {k:N0} names element {target:N0} after element {previous:N0}; glTF needs each greater than the one before.");
                     previous = target;
-                    for (int c = 0; c < components; c++) values[target * components + c] = Component((valueData == null ? binary : valueData.AsSpan())[(int)(valueStart + ((long)k * components + c) * size)..], componentType, normalized);
+                    for (int c = 0; c < components; c++) values[target * components + c] = ReadComponent((valueData == null ? binary : valueData.AsSpan())[(int)(valueStart + ((long)k * components + c) * size)..], componentType, normalized);
                 }
             }
             return values;
+            float ReadComponent(ReadOnlySpan<byte> span, int type, bool normalize)
+            {
+                float value = Component(span, type, normalize);
+                if (!float.IsFinite(value)) throw new InvalidDataException($"glTF accessor {index} contains a non-finite component.");
+                return value;
+            }
         }
         List<Vector3> Vectors(JsonNode reference, AccessorUse use, ReadOnlySpan<byte> binary)
         {
@@ -506,6 +514,9 @@ public sealed class GltfDocument
         foreach (var m in root["materials"] as JsonArray ?? [])
         {
             GltfMaterial material = new() { Name = m?["name"]?.GetValue<string>() ?? "", DoubleSided = m?["doubleSided"]?.GetValue<bool>() ?? false, AlphaMode = m?["alphaMode"]?.GetValue<string>() ?? "OPAQUE", Extras = Extras(m) };
+            if (material.AlphaMode is not ("OPAQUE" or "BLEND" or "MASK")) throw new InvalidDataException($"glTF material {materials.Count} has an unsupported alpha mode.");
+            if (m?["alphaCutoff"] is { } cutoff) material.AlphaCutoff = cutoff.GetValue<float>();
+            if (!float.IsFinite(material.AlphaCutoff) || material.AlphaCutoff < 0) throw new InvalidDataException($"glTF material {materials.Count} has an invalid alpha cutoff.");
             var pbr = m?["pbrMetallicRoughness"];
             if (pbr?["baseColorFactor"] is { } factor)
             {
@@ -545,7 +556,8 @@ public sealed class GltfDocument
             {
                 number++;
                 int mode = GltfInteger.OptionalInt32(p?["mode"], "mode") ?? 4;
-                if (mode is not (4 or 5 or 6) || p?["attributes"]?["POSITION"] is null) continue;
+                if (mode is not (4 or 5 or 6)) throw new InvalidDataException($"glTF mesh {meshes.Count} primitive {number} uses mode {mode}, which RECOIL cannot store. Convert it to triangles before exporting.");
+                if (p?["attributes"]?["POSITION"] is null) throw new InvalidDataException($"glTF mesh {meshes.Count} primitive {number} has no POSITION attribute.");
                 GltfPrimitive primitive = new() { Extras = Extras(p) };
                 (int Set, Matrix3x2? Transform) sampled = (0, null);
                 if (p["material"] is { } material)

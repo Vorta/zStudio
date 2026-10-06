@@ -33,7 +33,7 @@ public sealed class ModelBuilder(WorldModel model)
         if (textured && polygon.Uvs.Length != n) throw new InvalidDataException("A textured polygon needs a UV for every corner.");
         // A non-finite coordinate would reach the world's bounds and grid cells.
         if (!polygon.Points.All(Finite) || !polygon.Targets.All(Finite) || !polygon.Normals.All(Finite) || !polygon.Uvs.All(uv => float.IsFinite(uv.X) && float.IsFinite(uv.Y)))
-        { Warnings.Add("A polygon with a non-finite coordinate was discarded."); return false; }
+            throw new InvalidDataException("A polygon has a non-finite coordinate; no geometry was accepted.");
         if (polygon.Targets.Length == n && Enumerable.Range(0, n).Any(i => !Finite(polygon.Targets[i] - polygon.Points[i])))
             throw new InvalidDataException("A polygon's morph delta exceeds the finite coordinate range.");
         // Validate derived UVs before adding any vertices or fanning the polygon: finite authored values can overflow

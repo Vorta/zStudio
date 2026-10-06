@@ -74,6 +74,15 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(["m6"], shippedPacks.Single(t => t!["file"]!.GetValue<string>() == "texture8.zbd")!["missions"]!.AsArray().Select(m => m!.GetValue<string>()));
             Assert.Null(shippedPacks.Single(t => t!["file"]!.GetValue<string>() == "rtexture4.zbd")!["missions"]);
             Assert.Equal("modern", status["profile"]!.GetValue<string>());
+            var chosen = await Job("source_profile", new() { ["profile"] = "original" });
+            Assert.Equal("original", chosen["profile"]!.GetValue<string>());
+            Assert.True(((MenuItem)profiles.Items[1]).IsChecked);
+            Assert.False(((MenuItem)profiles.Items[0]).IsChecked);
+            var badChoice = await Job("source_profile", new() { ["profile"] = "missing" }, "failed");
+            Assert.Equal("invalid_argument", badChoice["code"]!.GetValue<string>());
+            Assert.Equal("original", (await Job("source_status", new()))["profile"]!.GetValue<string>());
+            await Job("source_profile", new());
+            Assert.True(((MenuItem)profiles.Items[0]).IsChecked);
             ((MenuItem)profiles.Items[1]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             Assert.Equal("original", ((ValueTuple<string, string>?)typeof(MainWindow).GetField("sourceProfileChoice", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main))!.Value.Item2);
             var badProfile = await Job("source_export", new() { ["profile"] = "missing" }, "failed");
@@ -94,7 +103,7 @@ internal static class SourceProjectMcpChecks
             await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
             Assert.Contains("GRAVITY ( -1.5 )", await File.ReadAllTextAsync(source, token));
 
-            var check = await Job("source_export", new() { ["profile"] = "original" });
+            var check = await Job("source_export", new());
             Assert.False(check["written"]!.GetValue<bool>()); Assert.Equal(6, check["built"]!.GetValue<int>()); Assert.Equal(0, check["failed"]!.GetValue<int>());
             Assert.Equal("original", check["profile"]!.GetValue<string>());
             string exported = Path.Combine(fixture.Root, "zbd");

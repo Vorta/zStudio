@@ -222,7 +222,7 @@ public static class GameZWriter
             + 12 + ModelSlotSize * (long)world.ModelCapacity + NodeSlotSize * (long)world.NodeCapacity;
         foreach (var model in world.Models)
         {
-            token.ThrowIfCancellationRequested(); geometry.Add(model);
+            token.ThrowIfCancellationRequested(); geometry.Add(model); WorldNumbers.Model(model);
             bytes += 12L * ((long)model.Vertices.Count + model.Normals.Count + model.Morphs.Count) + 76L * model.Points.Count + 28L * model.Polygons.Count;
             foreach (var point in model.Points) bytes += 12L * point.Vertices.Length;
             foreach (var polygon in model.Polygons) bytes += 4L * ((long)polygon.Vertices.Length + polygon.Normals.Length) + 8L * polygon.Uvs.Length;
@@ -231,7 +231,7 @@ public static class GameZWriter
         GameZReader.RecordBudget references = new("node reference");
         foreach (var node in world.Nodes)
         {
-            token.ThrowIfCancellationRequested();
+            token.ThrowIfCancellationRequested(); WorldNumbers.Node(node);
             long links = (long)node.Parents.Count + node.Children.Count + node.WorldLights.Count + node.WorldSounds.Count + node.AttachedWorlds.Count;
             GameZLayouts.CheckEntries("world partition cell", node.Areas.Count);
             foreach (var area in node.Areas) links += area.Nodes.Count;

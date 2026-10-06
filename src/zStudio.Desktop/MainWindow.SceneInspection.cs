@@ -160,7 +160,7 @@ public partial class MainWindow
         if (ApplyInspectionEditCore(card) is { } rebuilding) sourceWorldWork = RunUi(() => rebuilding);
     }
     /// <summary>Accepts the card's draft as one edit; in a source world the edit changes the sources and returns the rebuild that shows it.</summary>
-    private Task<DocumentModel>? ApplyInspectionEditCore(SceneInspectionCard card)
+    private Task<DocumentModel>? ApplyInspectionEditCore(SceneInspectionCard card, CancellationToken token = default)
     {
         if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "Finish or cancel the active transform drag before confirming.");
         var doc = card.DraftDocument;
@@ -174,14 +174,8 @@ public partial class MainWindow
         {
             if (doc.SourceWorld.IsRebuilding || sourceWorkspaceBusy) throw new StudioCommandException("busy", "The world is rebuilding after another edit; apply when it is shown.");
             var source = card.DraftSource!; var transform = card.DraftTransform();
-            // Checks that can refuse run while the draft is kept, so refused input stays to be corrected.
-            var plan = PlanSourcePlacement(doc, source, transform, CancellationToken.None);
-            if (doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before editing it.");
-            if (propertiesWindow?.Document == doc && propertiesWindow.HasUncommittedDrafts || doc == shownDocument && animation?.HasAutomationDrafts == true)
-                throw new StudioCommandException("pending_drafts", "Properties has unfinished input for this world; apply or restore it first.");
-            // The rebuilt world shows the accepted transform; the draft's preview ends with it.
-            card.CancelDraft(); UpdateDocumentCommands();
-            return ApplySourcePlacementAsync(doc, plan, CancellationToken.None);
+            // Keep this exact draft until worker preparation and its source/ownership checks succeed.
+            return MoveSourcePlacementAsync(doc, source, transform, token, card);
         }
         edits.TransformTo(card.DraftSource!, card.DraftTransform());
         card.CancelDraft(); UpdateDocumentCommands();
@@ -251,7 +245,7 @@ public partial class MainWindow
                         (a["rotationDegrees"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(), a["headingDegrees"]?.GetValue<string>(), a["transformMode"]?.GetValue<string>());
                     else if (action == "apply")
                     {
-                        if (ApplyInspectionEditCore(card) is { } rebuilding)
+                        if (ApplyInspectionEditCore(card, token) is { } rebuilding)
                         {
                             var next = await rebuilding;
                             return Result(new { selected = (string?)null, draft = (object?)null, revision = (long?)next.Revision, document = DocumentState(next) });

@@ -12,6 +12,21 @@ public sealed class SourceTerrainTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    [Fact]
+    public void TerrainMarkerRefusesOversizedJsonBeforeReadingOrBuildingItsDom()
+    {
+        using var fixture = Fixture(); const string database = "data/m1/models/m1.gltf";
+        byte[] original = File.ReadAllBytes(fixture.Path(database));
+        var root = JsonNode.Parse(original)!; root["ignored"] = new string('x', 16 * 1024 * 1024);
+        fixture.Write(database, root.ToJsonString()); SourceWorkspace workspace = new(fixture.Project);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.Throws<InvalidDataException>(() => SourceTerrain.Create(workspace, database, "data/m1/models/coast.gltf", ["land"], "data/m1/models/new.terrain.json", Token));
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 1_000_000);
+        Assert.False(workspace.IsDirty); Assert.False(workspace.CanUndo);
+        fixture.Write(database, original);
+        Assert.NotNull(SourceTerrain.Create(workspace, database, "data/m1/models/coast.gltf", ["land"], "data/m1/models/new.terrain.json", Token));
+    }
+
     [Theory]
     [InlineData("1.0")]
     [InlineData("1e0")]

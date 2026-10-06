@@ -27,6 +27,7 @@ internal static class SourceEditingMcpChecks
     {
         using var fixture = new SourceWorldFixture();
         fixture.Write("data/m1/zrdr/puppies.zrd", Default); fixture.Write("data/m1/zrdr/puppies_easy.zrd", Easy);
+        fixture.Write("data/m1/zrdr/net_01.zrd", "node_00 ( 12 ( 1.0 2.0 3.0 ) ( -7 -1 0 ) )\n");
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120)); var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -46,10 +47,39 @@ internal static class SourceEditingMcpChecks
             var doc = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
             await Preview();
 
+            main.SourceEditPreparing = ct => Assert.False(main.Dispatcher.CheckAccess());
+
             // Pickups of a source world are the built archive's; moving one changes the text sources it came from.
             var pickups = await Job("pickups", new() { ["document"] = Id(doc) });
             var ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;
             await Call("pickup_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = false });
+            // Hold actual scene-card source preparation, then type newer GUI input: stale work must retain that draft.
+            var scene = (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            scene.SetAiOptions(true, true, null);
+            string cardPreview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
+            string target = "ai:" + scene.AiNetworks.Id + ":" + scene.AiNetworks.Networks[0].Nodes[0].Id;
+            await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "select", ["target"] = target });
+            await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "begin", ["document"] = Id(doc), ["revision"] = doc.Revision });
+            var card = (SceneInspectionCard)scene.InspectionContent!;
+            TaskCompletionSource preparing = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var proceed = new SemaphoreSlim(0))
+            {
+                main.SourceEditPreparing = ct => { Assert.False(main.Dispatcher.CheckAccess()); preparing.TrySetResult(); Assert.True(proceed.Wait(TimeSpan.FromSeconds(20), ct)); };
+                var apply = Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "apply", ["document"] = Id(doc), ["revision"] = doc.Revision, ["token"] = card.DraftToken }, error: true);
+                try
+                {
+                    await preparing.Task.WaitAsync(token);
+                    card.SetDraft(card.DraftToken, ["2", "3", "4"], null, null, null);
+                    proceed.Release();
+                    Assert.Contains("draft_conflict", (await apply).GetValue<string>());
+                    Assert.True(card.HasDraft); Assert.False(doc.SourceWorld!.Workspace.IsDirty); Assert.Empty(doc.SourceWorld.Workspace.History);
+                }
+                finally { proceed.Release(); }
+            }
+            main.SourceEditPreparing = ct => Assert.False(main.Dispatcher.CheckAccess());
+            await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "cancel", ["document"] = Id(doc), ["revision"] = doc.Revision, ["token"] = card.DraftToken });
+            await Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "clear" });
+
             var moved = Document(await Call("pickup_move", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["source"] = ammo["source"]!.DeepClone(), ["x"] = 20.25, ["y"] = 8, ["z"] = -5 }));
             Assert.True(doc.IsDisposed); Assert.False(moved.PickupsLocked);
             var workspace = moved.SourceWorld!.Workspace;

@@ -1,5 +1,11 @@
 # Desktop implementation status
 
+## PR18 follow-up review fixes (2026-10-06)
+
+The next nine findings have fixes for unsupported glTF primitives, non-finite accessors and compiled numbers, MASK semantics, terrain JSON allocation, reconstruction reservations, same-bank sound ambiguity, background source-edit preparation and shared build-profile MCP selection. The sibling pass also covers generated geometry, writer model bounds, archive preflight, recipe reads, object/placement edits and Blender acceptance. Retail banks' byte-identical duplicate sounds remain supported; differing duplicates are refused.
+
+The full actual-base review and a separate challenge pass are complete. Release builds with zero warnings/errors; all 1,642 solution tests pass (1,462 Core with the 1999 and MW3 datasets, 110 Desktop/MCP, 70 PR-watch), as do eight 1998 reconstruction/terrain checks. A held scene-card edit with newer GUI input retains the newer draft and leaves history unchanged; canceled preparation and deleted dependencies are covered. The previously reported atomic direct-save destination race remains unresolved by user choice. No merge, release or version bump is part of this work.
+
 ## PR18 review fixes (2026-10-06)
 
 The nine latest PR findings are fixed: source files are read through bounded opened handles; glTF accepts exact whole-number decimal/exponent forms and validates GLB framing, complete triangles and unit quaternions; unsupported morph targets and textured colour factors are refused; GLB binary chunks remain slices; PNG requires an empty final IEND. The full PR diff and affected shared services were reviewed against the actual base, followed by a separate challenge pass before committing.

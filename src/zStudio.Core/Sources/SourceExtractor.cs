@@ -51,7 +51,7 @@ public static class SourceExtractor
         // reconstructed and must still be that file (see ReadInputAsync), and an archive the definitions check read whole
         // must still hold what it read.
         Dictionary<string, string> checkedContent = new(StringComparer.Ordinal);
-        if (!await CarriesDefinitionsAsync(files, checkedContent, token)) throw new InvalidDataException(NotOriginal);
+        if (!await CarriesDefinitionsAsync(files, checkedContent, retainedBudget, token)) throw new InvalidDataException(NotOriginal);
         Writes writes = new(projectRoot);
         writes.CreateDirectory(projectRoot);
         try { return await ExtractFilesAsync(projectRoot, files, checkedContent, [.. all.Where(f => !GameFile(f.Relative)).Select(f => f.Relative)], writes, retainedBudget, progress, token); }
@@ -80,13 +80,15 @@ public static class SourceExtractor
     /// the definitions in the project (<c>.zad</c>), so the tree only ever goes on to be exported, not unpacked again.
     /// </summary>
     /// <param name="read">Receives the digest of each archive read (by path), which it must still have when it is reconstructed.</param>
-    private static async Task<bool> CarriesDefinitionsAsync(List<Input> files, Dictionary<string, string> read, CancellationToken token)
+    private static async Task<bool> CarriesDefinitionsAsync(List<Input> files, Dictionary<string, string> read, long budget, CancellationToken token)
     {
         HashSet<string> carrying = new(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files.Where(f => Path.GetFileName(f.Relative).Equals("zrdr.zbd", StringComparison.OrdinalIgnoreCase)))
         {
             token.ThrowIfCancellationRequested();
+            RequireReconstructionCapacity(file.Relative, 0, file.Length, budget);
             byte[] bytes = await ReadInputAsync(file, null, token);
+            ReserveArchive(file.Relative, bytes, 0, budget);
             read[file.Path] = SourceProject.Sha256(bytes);
             try
             {
@@ -275,6 +277,7 @@ public static class SourceExtractor
         for (int i = 0; i < files.Count; i++)
         {
             token.ThrowIfCancellationRequested(); var file = files[i]; string path = file.Path, relative = file.Relative; progress?.Report(new(i, files.Count, relative));
+            RequireReconstructionCapacity(relative, retained, file.Length, budget);
             byte[] bytes = await ReadInputAsync(file, checkedContent.GetValueOrDefault(path), token);
             var probe = FormatRegistry.Probe(bytes.AsSpan(0, Math.Min(36, bytes.Length)), bytes.AsSpan(Math.Max(0, bytes.Length - 8)), bytes.Length, Path.GetExtension(path));
             string? family = null;
@@ -282,6 +285,7 @@ public static class SourceExtractor
             {
                 if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Archive })
                 {
+                    ReserveArchive(relative, bytes, retained, budget);
                     var members = ArchiveSources.Read(bytes);
                     bool waves = members.Count > 0 && members.All(m => IsWave(m.Payload.Span));
                     if (waves && SourceBuilder.Banks.Contains(relative, StringComparer.OrdinalIgnoreCase)) { Retain(relative, bytes.LongLength + MemberCost * members.Count); soundBanks.Add((relative, members)); family = "sounds"; }
@@ -296,6 +300,7 @@ public static class SourceExtractor
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Scripts, Version: 7 }) { Retain(relative, 8L * bytes.LongLength); await context.ExtractScriptsAsync(relative, bytes); family = "scripts"; }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.GameZ, Version: 15 } && MissionWorld(relative))
                 {
+                    RequireReconstructionCapacity(relative, retained, WorldDecodeReservation(bytes.LongLength), budget);
                     var doc = FormatRegistry.Default.OpenBytes(relative, bytes, token: token);
                     if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
                     // A world whose nodes the builder cannot hold (a cycle, an unsupported class) is reported when the worlds are reconstructed.
@@ -306,6 +311,7 @@ public static class SourceExtractor
                 }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Animation, Version: 28 } && TextureSources.MissionNumber(relative) > 0 && Path.GetFileName(relative).Equals("anim.zbd", StringComparison.OrdinalIgnoreCase))
                 {
+                    RequireReconstructionCapacity(relative, retained, 4L * bytes.LongLength, budget);
                     _ = Animation.AnimationPackage.Read(bytes, token);
                     // The packages are decoded again together when the keyframe scripts are reconstructed (about three times the bytes).
                     Retain(relative, 4L * bytes.LongLength);
@@ -313,6 +319,8 @@ public static class SourceExtractor
                 }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.TexturePack } && IsTexturePack(relative))
                 {
+                    long textureReservation = bytes.LongLength + 2048L * System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(12));
+                    RequireReconstructionCapacity(relative, retained, textureReservation, budget);
                     var doc = FormatRegistry.Default.OpenBytes(relative, bytes, token: token);
                     if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
                     Retain(relative, bytes.LongLength + 2048L * doc.Assets.Count);
@@ -334,11 +342,44 @@ public static class SourceExtractor
         // Counted as each file is kept, so nothing more is read once the budget is exceeded; a refusal, not a file left out.
         void Retain(string relative, long bytes)
         {
+            RequireReconstructionCapacity(relative, retained, bytes, budget);
             retained += bytes;
-            if (retained > budget)
-                throw new IOException($"The game data folder needs more memory than reconstruction holds at once ({budget / (1024 * 1024):N0} MiB, about three times what the RECOIL releases need): the sound banks, texture packs, worlds, animations, resources and scripts read up to {relative} are kept together until their sources are written. Reconstruct from the original game files.");
         }
     }
+    private static void ReserveArchive(string relative, byte[] bytes, long retained, long budget)
+    {
+        long members = bytes.Length < 8 ? 0 : System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(bytes.Length - 4));
+        RequireReconstructionCapacity(relative, retained, bytes.LongLength + MemberCost * members, budget);
+    }
+    // Includes source bytes, decoded document metadata/geometry and the simultaneously created world.
+    // Only Footprint(world) is retained after decoding; temporary decoder allocations are no longer rooted.
+    internal static long WorldDecodeReservation(long inputBytes) => checked(64L * inputBytes + 64 * 1024);
+    internal static void RequireReconstructionCapacity(string relative, long retained, long additional, long budget)
+    {
+        if (additional < 0 || retained > budget || additional > budget - retained)
+            throw new IOException($"The game data folder needs more memory than reconstruction holds at once ({budget / (1024 * 1024):N0} MiB): decoding or retaining {JsonData.ShownText(relative)} would exceed the remaining budget. Reconstruct from the original game files.");
+    }
+
+    /// <summary>Duplicate identities within one bank must hold identical payloads; bound overlapping-payload comparisons.</summary>
+    internal static void ValidateSoundNames(string relative, IReadOnlyList<ArchiveSources.Member> members, CancellationToken token, long maximumComparedBytes = 512L * 1024 * 1024)
+    {
+        Dictionary<string, ReadOnlyMemory<byte>> names = new(StringComparer.OrdinalIgnoreCase);
+        long compared = 0;
+        foreach (var member in members)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!names.TryGetValue(member.Name, out var first)) { names.Add(member.Name, member.Payload); continue; }
+            // Exact aliases need no scan. Different overlapping slices can otherwise require bytes × members work.
+            if (first.Equals(member.Payload)) continue;
+            if (first.Length != member.Payload.Length) throw Ambiguous(member.Name);
+            if (first.Length > maximumComparedBytes - compared)
+                throw new InvalidDataException($"{relative}: duplicate sound payload comparisons exceed 512 MiB; simplify the repeated members.");
+            compared += first.Length;
+            if (!first.Span.SequenceEqual(member.Payload.Span)) throw Ambiguous(member.Name);
+        }
+        InvalidDataException Ambiguous(string name) => new($"{relative}: duplicate sound member {JsonData.ShownText(name)} has different payloads; reconstruct from a bank with unambiguous member names.");
+    }
+
     /// <summary>What an archive member keeps besides its data: the record of its written source, or a note about it.</summary>
     private const long MemberCost = 512;
     /// <summary>
@@ -501,7 +542,9 @@ public static class SourceExtractor
         {
             Dictionary<string, (ReadOnlyMemory<byte> Bytes, long Quality)> best = new(StringComparer.OrdinalIgnoreCase);
             foreach (var (relative, members) in banks)
-                foreach (var m in members)
+            {
+                ValidateSoundNames(relative, members, token);
+                foreach (var m in members.DistinctBy(m => m.Name, StringComparer.OrdinalIgnoreCase))
                 {
                     token.ThrowIfCancellationRequested();
                     if (m.Name.Length == 0 || m.Name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) { Notes.Add($"{relative}: sound {m.Index} has an unusable name and was skipped."); continue; }
@@ -510,6 +553,7 @@ public static class SourceExtractor
                     catch (InvalidDataException ex) { Notes.Add($"{relative}: {m.Name} is not a readable WAV ({ex.Message}) and was skipped."); continue; }
                     if (!best.TryGetValue(m.Name, out var current) || quality > current.Quality) best[m.Name] = (m.Payload, quality);
                 }
+            }
             foreach (var (name, sound) in best.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)) await WriteAsync($"{SourceBuilder.SoundsFolder}/{name}", sound.Bytes.ToArray());
         }
 

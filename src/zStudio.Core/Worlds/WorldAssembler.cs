@@ -211,7 +211,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "CameraSetWorld": if (current?.Class == WorldNodeClass.Camera) current.CameraWorld = Name(Find(A(0), WorldNodeClass.World)); break;
             case "CameraSetWindow": if (current?.Class == WorldNodeClass.Camera) current.CameraWindow = Name(Find(A(0), WorldNodeClass.Window)); break;
             case "CameraSetHorizon": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizon = Name(Find(A(0), null)); break;
-            case "CameraSetLODMultiplier": if (current?.Class == WorldNodeClass.Camera) { float m = F(0); current.SetPayloadFloat(208, m); current.SetPayloadFloat(212, m == 0 ? 0 : 1 / (m * m)); } break;
+            case "CameraSetLODMultiplier": if (current?.Class == WorldNodeClass.Camera) { float m = F(0), squared = WorldNumbers.Finite(m * m), inverse = WorldNumbers.Finite(m == 0 ? 0 : 1 / squared); current.SetPayloadFloat(208, m); current.SetPayloadFloat(212, inverse); } break;
             case "CameraSetNearFarClip": if (current?.Class == WorldNodeClass.Camera) { current.SetPayloadFloat(176, F(0)); current.SetPayloadFloat(180, F(1)); current.SetPayloadInt(248, 1); } break;
             case "CameraSetFOV": if (current?.Class == WorldNodeClass.Camera) CameraFov(current, F(0), F(1)); break;
 
@@ -223,7 +223,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                 if (current?.Class == WorldNodeClass.Light)
                 {
                     float near = Math.Min(F(0), F(1)), far = Math.Max(F(0), F(1));
-                    current.SetPayloadFloat(204, near); current.SetPayloadFloat(208, far); current.SetPayloadFloat(212, far * far); current.SetPayloadFloat(216, far > near ? 1 / (far - near) : 0);
+                    float squared = WorldNumbers.Finite(far * far), difference = WorldNumbers.Finite(far - near), inverse = WorldNumbers.Finite(far > near ? 1 / difference : 0);
+                    current.SetPayloadFloat(204, near); current.SetPayloadFloat(208, far); current.SetPayloadFloat(212, squared); current.SetPayloadFloat(216, inverse);
                 }
                 break;
             case "LightSetOrientation": if (current?.Class == WorldNodeClass.Light) { current.SetPayloadFloat(8, Radians(F(0))); current.SetPayloadFloat(12, Radians(F(1))); current.SetPayloadFloat(16, Radians(F(2))); current.SetPayloadInt(0, 1); } break;
@@ -291,7 +292,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     internal static float Number(string text)
     {
         var match = LeadingNumber().Match(text);
-        return match.Success && double.TryParse(match.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? (float)value : 0;
+        return match.Success && double.TryParse(match.ValueSpan, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? WorldNumbers.Finite((float)value) : 0;
     }
     [System.Text.RegularExpressions.GeneratedRegex(@"\A[ \t\n\v\f\r]*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")] private static partial System.Text.RegularExpressions.Regex LeadingNumber();
     private static string TextureStem(string path) => Path.GetFileNameWithoutExtension(path.Replace('\\', '/')).ToLowerInvariant();
@@ -360,9 +361,10 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private static void CameraFov(WorldNode camera, float horizontal, float vertical)
     {
         float h = Radians(horizontal), v = Radians(vertical);
+        float cotH = WorldNumbers.Finite((float)(1 / Math.Tan(h / 2.0))), cotV = WorldNumbers.Finite((float)(1 / Math.Tan(v / 2.0)));
         camera.SetPayloadFloat(224, h); camera.SetPayloadFloat(228, v); camera.SetPayloadFloat(232, h); camera.SetPayloadFloat(236, v);
         camera.SetPayloadFloat(240, h / 2); camera.SetPayloadFloat(244, v / 2);
-        camera.SetPayloadFloat(468, (float)(1 / Math.Tan(h / 2.0))); camera.SetPayloadFloat(472, (float)(1 / Math.Tan(v / 2.0))); camera.SetPayloadInt(312, 1);
+        camera.SetPayloadFloat(468, cotH); camera.SetPayloadFloat(472, cotV); camera.SetPayloadInt(312, 1);
     }
     private void NewLight(string name)
     {

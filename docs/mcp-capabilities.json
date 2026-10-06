@@ -210,9 +210,10 @@
       "gui": "MainWindow.Sources:SourceProfileMenu",
       "tools": [
         "zstudio_source_status",
-        "zstudio_source_export"
+        "zstudio_source_export",
+        "zstudio_source_profile"
       ],
-      "note": "Tools > Build profile lists the project's build profiles (source_status profiles: built-in original and modern plus gamegen/build-profiles/*.json, the default marked; a file that cannot be used is shown disabled with its reason, source_status profiles error); the checked one is passed as source_export profile by Export all ZBD files, Export ZBD file and Check source project."
+      "note": "Tools > Build profile lists the project's build profiles (source_status profiles: built-in original and modern plus gamegen/build-profiles/*.json, the default marked; a file that cannot be used is shown disabled with its reason, source_status profiles error); the checked one is passed as source_export profile by Export all ZBD files, Export ZBD file and Check source project. source_profile changes this shared checked selection; omitting profile restores the default, and invalid choices leave it unchanged."
     },
     {
       "gui": "MainWindow.SourceWorlds:SourceWorldMenu",

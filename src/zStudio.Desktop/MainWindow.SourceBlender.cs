@@ -75,15 +75,15 @@ public partial class MainWindow
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         IReadOnlyList<string> written = [];
-        var next = await EditSourceWorldAsync(doc, $"Updating {Path.GetFileName(checkout.Model)} from Blender", workspace =>
+        var next = await PrepareSourceWorldEditAsync(doc, $"Updating {Path.GetFileName(checkout.Model)} from Blender", (workspace, ct) =>
         {
             // The plan was made off the UI thread; nothing may have changed those files since.
             foreach (var (relative, sha) in plan.Expected)
-                if ((workspace.Read(relative, token) is { } bytes ? SourceProject.Sha256(bytes) : null) != sha)
+                if ((workspace.Read(relative, ct) is { } bytes ? SourceProject.Sha256(bytes) : null) != sha)
                     throw new InvalidDataException($"{relative} changed while the update was prepared; update again.");
-            if (workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is not { } t) return null;
+            if (workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct) is not { } t) return null;
             written = [.. t.Files.Select(f => f.Relative)];
-            return () => workspace.Retract(t);
+            return t;
         }, token, fromBuild: false);
         try { if (written.Count > 0) SourceBlender.RecordApplied(checkout, plan); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) { ViewModel.Status = $"The update was applied, but the checkout could not record it: {ex.Message}"; }

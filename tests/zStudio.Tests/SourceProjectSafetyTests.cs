@@ -17,6 +17,52 @@ public sealed class SourceProjectSafetyTests
         .ToDictionary(f => Path.GetRelativePath(root, f), File.ReadAllBytes, StringComparer.OrdinalIgnoreCase);
 
     [Fact]
+    public void IdenticalOverlappingSoundPayloadsHaveABoundedComparisonBudget()
+    {
+        byte[] payload = new byte[1024];
+        ArchiveSources.Member M(int offset) => new(offset, "same.wav", 0, null, 0, payload.AsMemory(offset, 512));
+        Assert.Throws<InvalidDataException>(() => SourceExtractor.ValidateSoundNames("bank", [M(0), M(1), M(2)], Token, 512));
+        SourceExtractor.ValidateSoundNames("bank", [M(0), M(0), M(0)], Token, 0);
+    }
+
+    [Fact]
+    public async Task IdenticalRetailStyleSoundDuplicatesRemainUnambiguous()
+    {
+        using var fixture = new SourceFixture();
+        File.WriteAllBytes(Path.Combine(fixture.Corpus, "soundsh.zbd"), SourceFixture.Archive(
+            ("hit.wav", fixture.WaveB, new byte[64]), ("HIT.WAV", fixture.WaveB, new byte[64])));
+        var report = await SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token);
+        Assert.True(report.SourceFiles > 0);
+        Assert.Equal(fixture.WaveB, File.ReadAllBytes(Path.Combine(fixture.Project, SourceBuilder.SoundsFolder, "hit.wav")));
+    }
+
+    [Fact]
+    public async Task ReconstructionReservesWorldDecodingBeforeParsingEvenAnInvalidBody()
+    {
+        using var fixture = new SourceFixture();
+        var bytes = Recoil.Zbd.Core.Worlds.GameZWriter.Write(GameZVersion13Tests.SampleWorld(), Token);
+        // A supported header but an invalid body: parsing would reject/skip it, whereas the reservation must stop first.
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(12), uint.MaxValue);
+        Array.Resize(ref bytes, 1024 * 1024);
+        File.WriteAllBytes(Path.Combine(fixture.Corpus, "m1", "gamez.zbd"), bytes);
+        var error = await Assert.ThrowsAsync<IOException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, 8L * 1024 * 1024, token: Token));
+        Assert.Contains("gamez.zbd", error.Message);
+        Assert.Contains("remaining budget", error.Message);
+        Assert.False(Directory.Exists(fixture.Project) && Directory.EnumerateFiles(fixture.Project, "*", SearchOption.AllDirectories).Any());
+    }
+
+    [Fact]
+    public async Task DuplicateSoundNamesWithinOneBankAreNotQualityVariants()
+    {
+        using var fixture = new SourceFixture();
+        File.WriteAllBytes(Path.Combine(fixture.Corpus, "soundsh.zbd"), SourceFixture.Archive(
+            ("hit.wav", fixture.WaveB, new byte[64]), ("HIT.WAV", fixture.WaveA, new byte[64])));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceExtractor.ExtractAsync(fixture.Corpus, fixture.Project, token: Token));
+        Assert.Contains("duplicate", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Directory.Exists(fixture.Project) && Directory.EnumerateFiles(fixture.Project, "*", SearchOption.AllDirectories).Any());
+    }
+
+    [Fact]
     public async Task ReconstructionRefusesAParentReplacedByALinkAfterTheInitialCheck()
     {
         using var fixture = new SourceFixture();

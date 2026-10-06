@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Core.Gltf;
@@ -13,6 +12,8 @@ namespace Recoil.Zbd.Core.Sources;
 /// </summary>
 public static class SourceTerrain
 {
+    // Bound the input before DOM construction; compact UTF-8 output avoids a second full UTF-16 copy.
+    public const int MaximumDatabaseJsonBytes = 16 * 1024 * 1024;
     /// <summary>Every recipe of the project (data/**/*.terrain.json), including new ones the workspace holds.</summary>
     public static IReadOnlyList<string> Recipes(SourceWorkspace workspace)
     {
@@ -24,7 +25,7 @@ public static class SourceTerrain
     public static TerrainRecipe Read(SourceWorkspace workspace, string path, CancellationToken token = default)
     {
         path = Checked(path);
-        var bytes = workspace.Read(path, token) ?? throw new InvalidDataException($"The project has no terrain recipe {path}.");
+        var bytes = workspace.Read(path, token, TerrainRecipe.MaximumBytes) ?? throw new InvalidDataException($"The project has no terrain recipe {path}.");
         return TerrainRecipe.Parse(bytes, path);
     }
 
@@ -74,7 +75,7 @@ public static class SourceTerrain
         }
         var recipe = TerrainRecipe.Parse(new TerrainRecipe(TerrainRecipe.CurrentCompiler, surfaces, TerrainAttributes.None, []).Write(), recipePath);
         // The marker: a root of the database's scene that names the recipe.
-        byte[] databaseBytes = workspace.Read(database, token) ?? throw new InvalidDataException($"The project has no {database}.");
+        byte[] databaseBytes = workspace.Read(database, token, MaximumDatabaseJsonBytes) ?? throw new InvalidDataException($"The project has no {database}.");
         JsonObject root;
         try { root = JsonNode.Parse(databaseBytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject ?? throw new InvalidDataException($"{database} is not a JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{database} is not valid JSON: {ex.Message}", ex); }
@@ -86,8 +87,7 @@ public static class SourceTerrain
         string stem = Path.GetFileName(recipePath)[..^TerrainRecipe.Extension.Length];
         nodeList.Add(new JsonObject { ["name"] = $"{stem}_terrain", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = RelativePath(database, recipePath) } } });
         (scene["nodes"] as JsonArray ?? (JsonArray)(scene["nodes"] = new JsonArray())).Add(nodeList.Count - 1);
-        bool indented = databaseBytes.AsSpan(0, Math.Min(databaseBytes.Length, 4096)).Contains((byte)'\n');
-        byte[] marked = Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = indented }));
+        byte[] marked = JsonSerializer.SerializeToUtf8Bytes(root);
         return workspace.Apply($"Create terrain {stem}", [(recipePath, recipe.Write()), (database, marked)], token) ?? throw new InvalidDataException("Creating the terrain changed nothing.");
     }
 
@@ -109,7 +109,7 @@ public static class SourceTerrain
         while (pending.TryDequeue(out var current) && found.Count < SourceProject.MaximumFiles)
         {
             token.ThrowIfCancellationRequested();
-            if (workspace.Read(current, token) is not { } bytes) continue;
+            if (workspace.Read(current, token, MaximumDatabaseJsonBytes) is not { } bytes) continue;
             JsonObject? root;
             try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject; }
             catch (JsonException) { continue; }

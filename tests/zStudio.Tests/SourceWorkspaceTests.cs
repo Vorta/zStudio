@@ -22,6 +22,51 @@ public sealed class SourceWorkspaceTests : IDisposable
     private static byte[] Bytes(string text) => Encoding.Latin1.GetBytes(text);
     private static string Text(byte[]? bytes) => Encoding.Latin1.GetString(bytes!);
 
+    [Theory]
+    [InlineData("dependency")][InlineData("target")][InlineData("deleted_dependency")][InlineData("workspace")][InlineData("guard")][InlineData("cancel")]
+    public void PreparedEditConflictsNeverPublishAndRetryKeepsUndo(string conflict)
+    {
+        SourceWorkspace w = new(root); int events = 0; w.Changed += _ => events++;
+        const string target = "gamegen/m1.gs", input = "data/m2/zrdr/puppies.zrd";
+        byte[] original = w.Read(target, Token)!;
+        var prepared = w.BeginPreparedEdit();
+        prepared.Workspace.Read(input, Token);
+        prepared.Workspace.Apply("Prepared", [(target, Bytes("Quit 99\n"))], Token);
+        Assert.False(w.IsDirty); Assert.Empty(w.History); Assert.Equal(0, events);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        switch (conflict)
+        {
+            case "dependency": Write(input, "changed dependency\n"); break;
+            case "deleted_dependency": File.Delete(At(input)); break;
+            case "target": Write(target, "changed target\n"); break;
+            case "workspace": w.Apply("Other", [(input, Bytes("other\n"))], Token); break;
+            case "guard": w.EditGuard = _ => "draft"; break;
+            case "cancel": cancel.Cancel(); break;
+        }
+        long revision = w.Revision;
+        Assert.ThrowsAny<Exception>(() => w.AcceptPreparedEdit(prepared, cancel.Token));
+        Assert.Equal(revision, w.Revision);
+        Assert.Equal(conflict == "workspace" ? 1 : 0, w.History.Count);
+        w.EditGuard = null;
+        var retry = w.BeginPreparedEdit();
+        retry.Workspace.Apply("Retry", [(target, Bytes("Quit 100\n"))], Token);
+        var accepted = w.AcceptPreparedEdit(retry, Token)!;
+        Assert.Equal("Quit 100\n", Text(w.Read(target, Token)));
+        w.Retract(accepted);
+        Assert.Equal(conflict == "target" ? "changed target\n" : Text(original), Text(w.Read(target, Token)));
+    }
+
+    [Fact]
+    public void PreparedEditFreezesTheBytesItReadAndCannotRefreshOverAnExternalChange()
+    {
+        SourceWorkspace w = new(root);
+        var edit = w.BeginPreparedEdit();
+        edit.Workspace.Read("gamegen/m1.gs", Token);
+        Write("gamegen/m1.gs", "external newer script\n");
+        Assert.Throws<SourceFileChangedException>(() => edit.Workspace.Apply("Edit", [("gamegen/m1.gs", Bytes("Quit\n"))], Token));
+        Assert.False(w.IsDirty); Assert.Empty(w.History);
+    }
+
     [Fact]
     public void OneHistoryCoversEveryFileAndSaveWritesThemTogether()
     {

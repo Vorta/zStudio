@@ -47,7 +47,7 @@ public partial class MainWindow
 
     /// <summary>Changes a recipe as one undoable change and rebuilds the world; recipe edits read the current recipe, not the build, so they work in a world built before another's edit.</summary>
     private Task<DocumentModel> EditTerrainAsync(DocumentModel doc, string recipe, string label, Func<TerrainRecipe, TerrainRecipe> change, CancellationToken token) =>
-        EditSourceWorldAsync(doc, label, w => SourceTerrain.Edit(w, recipe, label, change, token) is { } t ? () => w.Retract(t) : null, token, fromBuild: false);
+        PrepareSourceWorldEditAsync(doc, label, (w, ct) => SourceTerrain.Edit(w, recipe, label, change, ct), token, fromBuild: false);
     private Task<DocumentModel> CreateTerrainAsync(DocumentModel doc, string model, IReadOnlyList<string> nodes, string? recipe, CancellationToken token)
     {
         string database = MissionDatabase(doc);
@@ -57,19 +57,18 @@ public partial class MainWindow
             && doc.SourceBuild?.Provenance.Values.Any(p => string.Equals(p.ModelFile, file, StringComparison.OrdinalIgnoreCase) || string.Equals(p.LoadedFile, file, StringComparison.OrdinalIgnoreCase)) == true)
             throw new StudioCommandException("unsupported", $"{file} is already loaded into this world as an object; terrain from it would add its geometry a second time. Use a file the world does not load.");
         var existingRecipes = UsedTerrainRecipes(doc);
-        return EditSourceWorldAsync(doc, $"Creating terrain from {Path.GetFileName(model)}", w =>
+        return PrepareSourceWorldEditAsync(doc, $"Creating terrain from {Path.GetFileName(model)}", (w, ct) =>
         {
             foreach (string existing in existingRecipes)
             {
                 bool uses;
-                try { uses = ReadRecipe(w, existing, token).Surfaces.Any(s => string.Equals(SourceTerrain.SurfaceFile(existing, s), file, StringComparison.OrdinalIgnoreCase)); }
+                try { uses = ReadRecipe(w, existing, ct).Surfaces.Any(s => string.Equals(SourceTerrain.SurfaceFile(existing, s), file, StringComparison.OrdinalIgnoreCase)); }
                 catch (Exception ex) when (ex is StudioCommandException or InvalidDataException) { continue; }
                 // A read that may succeed on retry is not a reason to skip the check.
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", $"{existing} could not be read ({ex.Message}); try again."); }
                 if (uses) throw new StudioCommandException("unsupported", $"{file} is already a surface file of {existing}; another terrain from it would add its geometry a second time.");
             }
-            var t = SourceTerrain.Create(w, database, model, nodes, recipe, token);
-            return () => w.Retract(t);
+            return SourceTerrain.Create(w, database, model, nodes, recipe, ct);
         }, token, fromBuild: false);
     }
     private Task<DocumentModel> PaintTerrainAsync(DocumentModel doc, string recipe, string region, IReadOnlyList<Vector2> path, float radius, bool add, CancellationToken token)
@@ -140,7 +139,7 @@ public partial class MainWindow
         var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
         var before = SourceWorldNodes(doc, p => p.Database && string.Equals(p.ModelFile, plan.Database, StringComparison.OrdinalIgnoreCase) && converted.Contains(p.ModelNode));
         var grid = SourceWorldModel(doc).World.Nodes.FirstOrDefault(n => n.Class == Recoil.Zbd.Core.Worlds.WorldNodeClass.World);
-        var next = await EditSourceWorldAsync(doc, "Converting to editable terrain", w => SourceTerrainConversion.Apply(w, plan, token) is var t ? () => w.Retract(t) : null, token);
+        var next = await PrepareSourceWorldEditAsync(doc, "Converting to editable terrain", (w, ct) => SourceTerrainConversion.Apply(w, plan, ct), token);
         var after = SourceWorldNodes(next, p => string.Equals(p.Terrain, plan.Recipe, StringComparison.OrdinalIgnoreCase));
         // The conversion is applied and shown; comparing it is a report. Cancelling the request stops the comparison
         // (no report) without turning the applied conversion into a failure.
@@ -436,30 +435,33 @@ public partial class MainWindow
                         {
                             string name = Region();
                             bool add = (a["mode"] is null ? "paint" : Text(a, "mode")) == "paint";
-                            IReadOnlyList<TerrainOutline> stroke;
-                            try
+                            next = await EditTerrainAsync(d, recipe, $"{(add ? "Paint" : "Erase")} {name}", r =>
                             {
-                                if (a["polygons"] is JsonArray polygons)
+                                IReadOnlyList<TerrainOutline> stroke;
+                                try
                                 {
-                                    var parsed = TerrainRecipe.Parse(System.Text.Encoding.UTF8.GetBytes(new JsonObject
+                                    if (a["polygons"] is JsonArray polygons)
                                     {
-                                        ["format"] = TerrainRecipe.Format, ["version"] = TerrainRecipe.Version, ["compiler"] = TerrainRecipe.CurrentCompiler,
-                                        ["surfaces"] = new JsonArray(new JsonObject { ["id"] = "s", ["model"] = "s.gltf", ["node"] = "s" }),
-                                        ["regions"] = new JsonArray(new JsonObject { ["name"] = "stroke", ["shape"] = new JsonObject { ["polygons"] = polygons.DeepClone() }, ["set"] = new JsonObject() }),
-                                    }.ToJsonString()), "polygons");
-                                    stroke = parsed.Regions[0].Shape!.Polygons;
+                                        var parsed = TerrainRecipe.Parse(System.Text.Encoding.UTF8.GetBytes(new JsonObject
+                                        {
+                                            ["format"] = TerrainRecipe.Format, ["version"] = TerrainRecipe.Version, ["compiler"] = TerrainRecipe.CurrentCompiler,
+                                            ["surfaces"] = new JsonArray(new JsonObject { ["id"] = "s", ["model"] = "s.gltf", ["node"] = "s" }),
+                                            ["regions"] = new JsonArray(new JsonObject { ["name"] = "stroke", ["shape"] = new JsonObject { ["polygons"] = polygons.DeepClone() }, ["set"] = new JsonObject() }),
+                                        }.ToJsonString()), "polygons");
+                                        stroke = parsed.Regions[0].Shape!.Polygons;
+                                    }
+                                    else
+                                    {
+                                        var path = (a["path"] as JsonArray ?? throw new StudioCommandException("invalid_argument", "Give a path with a radius, or polygons.")).Select(p => p is JsonArray { Count: 2 } xz
+                                            && xz[0] is JsonValue x && x.TryGetValue(out double px) && xz[1] is JsonValue z && z.TryGetValue(out double pz)
+                                            ? new Vector2((float)px, (float)pz) : throw new StudioCommandException("invalid_argument", "Path points are [x, z] numbers.")).ToArray();
+                                        float radius = a["radius"] is JsonValue rv && rv.TryGetValue(out double rd) ? (float)rd : throw new StudioCommandException("invalid_argument", "Give the brush radius.");
+                                        stroke = TerrainShapes.Stroke(path, radius);
+                                    }
                                 }
-                                else
-                                {
-                                    var path = (a["path"] as JsonArray ?? throw new StudioCommandException("invalid_argument", "Give a path with a radius, or polygons.")).Select(p => p is JsonArray { Count: 2 } xz
-                                        && xz[0] is JsonValue x && x.TryGetValue(out double px) && xz[1] is JsonValue z && z.TryGetValue(out double pz)
-                                        ? new Vector2((float)px, (float)pz) : throw new StudioCommandException("invalid_argument", "Path points are [x, z] numbers.")).ToArray();
-                                    float radius = a["radius"] is JsonValue rv && rv.TryGetValue(out double rd) ? (float)rd : throw new StudioCommandException("invalid_argument", "Give the brush radius.");
-                                    stroke = TerrainShapes.Stroke(path, radius);
-                                }
-                            }
-                            catch (Exception ex) when (ex is InvalidDataException or FormatException or InvalidOperationException) { throw new StudioCommandException("invalid_argument", ex.Message); }
-                            next = await EditTerrainAsync(d, recipe, $"{(add ? "Paint" : "Erase")} {name}", r => TerrainEdits.Paint(r, name, stroke, add), token);
+                                catch (Exception ex) when (ex is InvalidDataException or FormatException or InvalidOperationException) { throw new StudioCommandException("invalid_argument", ex.Message); }
+                                return TerrainEdits.Paint(r, name, stroke, add);
+                            }, token);
                             break;
                         }
                     default: throw new StudioCommandException("invalid_argument", $"Unknown action {action}.");

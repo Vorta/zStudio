@@ -129,18 +129,18 @@ public partial class MainWindow
     /// <summary>Plans a delete, copy or re-parenting of the object a node belongs to and rebuilds the world with it.</summary>
     /// <param name="keepsNodes">Whether the plan keeps every node of the files it changes (a copy or a move, not a deletion):
     /// then a change of glTF files alone is checked to leave every script instruction on the same nodes.</param>
-    private Task<DocumentModel> EditSourceStructureAsync(DocumentModel doc, int node, Func<SourceObjectTarget, SourceEditPlan> plan, CancellationToken token, bool keepsNodes = false)
+    private Task<DocumentModel> EditSourceStructureAsync(DocumentModel doc, int node, Func<SourceObjectTarget, CancellationToken, SourceEditPlan> plan, CancellationToken token, bool keepsNodes = false)
     {
         var state = DescribeSourceObject(doc, node);
         List<SourceModelAddition> additions = [];
         List<string> notes = [];
         bool gltfOnly = false;
-        return EditSourceWorldAsync(doc, $"Editing {state.Object ?? state.Name}", workspace =>
+        return PrepareSourceWorldEditAsync(doc, $"Editing {state.Object ?? state.Name}", (workspace, ct) =>
         {
-            var planned = plan(SourceObjectTargetFor(doc, node, workspace));
+            var planned = plan(SourceObjectTargetFor(doc, node, workspace), ct);
             additions.AddRange(planned.Additions); notes.AddRange(planned.Notes);
             gltfOnly = planned.Changes.Count > 0 && planned.Changes.All(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase));
-            return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is { } t ? () => workspace.Retract(t) : null;
+            return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct);
         }, token, additions, verifyTargets: () => keepsNodes && gltfOnly, notes: notes);
     }
     /// <summary>
@@ -153,9 +153,9 @@ public partial class MainWindow
         return new(R(v.X), R(v.Y), R(v.Z));
     }
     private Task<DocumentModel> DeleteSourceObjectAsync(DocumentModel doc, int node, CancellationToken token) =>
-        EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanDelete(target, token), token);
+        EditSourceStructureAsync(doc, node, (target, ct) => SourceObjectEdits.PlanDelete(target, ct), token);
     private Task<DocumentModel> DuplicateSourceObjectAsync(DocumentModel doc, int node, string name, ObjectTransform? transform, CancellationToken token, bool keepBasis = false) =>
-        EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanDuplicate(target, name, transform, token, keepBasis), token, keepsNodes: true);
+        EditSourceStructureAsync(doc, node, (target, ct) => SourceObjectEdits.PlanDuplicate(target, name, transform, ct, keepBasis), token, keepsNodes: true);
     /// <summary>Moves the object under <paramref name="parent"/> (a scene node index; null for the world).</summary>
     private Task<DocumentModel> ReparentSourceObjectAsync(DocumentModel doc, int node, int? parent, CancellationToken token)
     {
@@ -165,7 +165,7 @@ public partial class MainWindow
             into = SourceWorldModel(doc).Slots.GetValueOrDefault(p) ?? throw new StudioCommandException("stale_record", $"Scene node {p} is not in the built world.");
             if (into.Class == WorldNodeClass.World) into = null;
         }
-        return EditSourceStructureAsync(doc, node, target => SourceObjectEdits.PlanReparent(target, into, token), token, keepsNodes: true);
+        return EditSourceStructureAsync(doc, node, (target, ct) => SourceObjectEdits.PlanReparent(target, into, ct), token, keepsNodes: true);
     }
     /// <summary>
     /// The scene node indices of the nodes named <paramref name="name"/> in a rebuilt world, for following a copy: one per copy
@@ -192,24 +192,24 @@ public partial class MainWindow
     }
 
     /// <summary>Plans one edit of a source world's object against the workspace and rebuilds the world with it.</summary>
-    private Task<DocumentModel> EditSourceObjectAsync(DocumentModel doc, int node, Func<SourceWorkspace, SourceObjectState, IReadOnlyDictionary<(string Script, int Line), int>, SourceEditPlan> plan, CancellationToken token)
+    private Task<DocumentModel> EditSourceObjectAsync(DocumentModel doc, int node, Func<SourceWorkspace, SourceObjectState, IReadOnlyDictionary<(string Script, int Line), int>, CancellationToken, SourceEditPlan> plan, CancellationToken token)
     {
         var state = DescribeSourceObject(doc, node);
         var executions = doc.SourceBuild!.Executions;
         string label = $"Editing {state.Name}";
         List<string> notes = [];
-        return EditSourceWorldAsync(doc, label, workspace =>
+        return PrepareSourceWorldEditAsync(doc, label, (workspace, ct) =>
         {
-            var planned = plan(workspace, state, executions);
+            var planned = plan(workspace, state, executions, ct);
             notes.AddRange(planned.Notes);
-            return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), token) is { } t ? () => workspace.Retract(t) : null;
+            return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct);
         }, token, notes: notes);
     }
     private Task<DocumentModel> MoveSourceObjectAsync(DocumentModel doc, int node, ObjectTransform transform, CancellationToken token) =>
-        EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanTransform(w, s.Name, s.Origin, e, transform, token, doc.SourceWorld?.Mission, s.Transform,
+        EditSourceObjectAsync(doc, node, (w, s, e, ct) => SourceObjectEdits.PlanTransform(w, s.Name, s.Origin, e, transform, ct, doc.SourceWorld?.Mission, s.Transform,
             SourceObjectEdits.CopiesOf(s.Origin, SourceWorldProvenance(doc).Values), SourceWorldModel(doc).World, doc.SourceBuild?.WriteInstruction), token);
     private Task<DocumentModel> FlagSourceObjectAsync(DocumentModel doc, int node, uint bit, bool on, CancellationToken token) =>
-        EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanFlag(w, s.Name, s.Origin, e, bit, on, token, doc.SourceWorld?.Mission,
+        EditSourceObjectAsync(doc, node, (w, s, e, ct) => SourceObjectEdits.PlanFlag(w, s.Name, s.Origin, e, bit, on, ct, doc.SourceWorld?.Mission,
             SourceObjectEdits.CopiesOf(s.Origin, SourceWorldProvenance(doc).Values), SourceWorldModel(doc).World, doc.SourceBuild?.WriteInstruction), token);
     private Task<DocumentModel> CommandSourceObjectAsync(DocumentModel doc, int node, string command, IReadOnlyList<string> args, CancellationToken token)
     {
@@ -217,7 +217,7 @@ public partial class MainWindow
         if (args.Count is 0 or > 8 || args.Any(a => a.Length is 0 or > 64)) throw new StudioCommandException("invalid_argument", "Give 1–8 arguments of up to 64 characters.");
         // The interpreter applies World… commands to worlds, Light… to lights and so on; others would do nothing.
         if (!CommandFits(DescribeSourceObject(doc, node).Class, command)) throw new StudioCommandException("invalid_argument", $"{command} does not apply to a {DescribeSourceObject(doc, node).Class} node.");
-        return EditSourceObjectAsync(doc, node, (w, s, e) => SourceObjectEdits.PlanCommand(w, s.Name, s.Origin, e, command, args, token, doc.SourceWorld?.Mission,
+        return EditSourceObjectAsync(doc, node, (w, s, e, ct) => SourceObjectEdits.PlanCommand(w, s.Name, s.Origin, e, command, args, ct, doc.SourceWorld?.Mission,
             SourceWorldModel(doc).World, doc.SourceBuild?.WriteInstruction), token);
     }
 

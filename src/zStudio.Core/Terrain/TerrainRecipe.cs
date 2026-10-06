@@ -196,6 +196,7 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
 {
     public const string Format = "recoil-terrain", Extension = ".terrain.json";
     public const int Version = 1, CurrentCompiler = 1;
+    public const int MaximumBytes = 64 * 1024 * 1024;
     public const int MaximumSurfaces = 256, MaximumRegions = 4096, MaximumPolygons = 1024, MaximumRingPoints = 200_000, MaximumPoints = 1_000_000;
     public const float MaximumCoordinate = 1_000_000;
     /// <summary>
@@ -214,7 +215,7 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
     /// </summary>
     public static TerrainRecipe Parse(ReadOnlySpan<byte> json, string source)
     {
-        if (json.Length > 64 * 1024 * 1024) throw new InvalidDataException($"{source} is larger than 64 MB.");
+        if (json.Length > MaximumBytes) throw new InvalidDataException($"{source} is larger than 64 MB.");
         Measure(json, source);
         JsonDocument document;
         try { document = JsonDocument.Parse(json.ToArray(), new JsonDocumentOptions { MaxDepth = MaximumDepth }); }

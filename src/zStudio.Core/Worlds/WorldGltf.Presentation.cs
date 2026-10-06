@@ -18,7 +18,7 @@ public static partial class WorldGltf
     /// <list type="bullet">
     /// <item>a material whose texture is transparent is marked so: alpha only 0 or 255 as MASK at the default 0.5 cutoff
     /// (the packs key texels below 128), any other alpha as BLEND. The game takes transparency from the texture; import
-    /// reads opacity only from a BLEND material whose base alpha is below 1, which these are not.</item>
+    /// retains these recorded engine materials while generic MASK imports are handled or refused explicitly.</item>
     /// <item>in a <paramref name="pickup"/>, the mesh that only its collision volume shows gets fully transparent materials
     /// of its own (MASK with base alpha 0), recording their engine opacity so neither the look nor how an editor writes it
     /// back becomes it. A material other meshes also use is copied first. The game switches off the one node named

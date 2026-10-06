@@ -85,6 +85,18 @@ public sealed class WorldAssemblyTests
         return new(files);
     }
 
+    [Theory]
+    [InlineData("NewObject3D item\nObject3DTranslate 1e100 0 0")]
+    [InlineData("LightNew light\nLightSetRanges 0 1e30")]
+    [InlineData("NewCamera camera\nCameraSetLODMultiplier 1e-30")]
+    [InlineData("NewCamera camera\nCameraSetFOV 0 45")]
+    [InlineData("NewWorld world\nWorldOrigin 3e38 0\nWorldExtents 3e38 0")]
+    [InlineData("NewWorld world\nWorldPartition 1e-40 -1e-40")]
+    public void ScriptFloatAndDerivedOverflowCannotBeSerialized(string script)
+    {
+        Assert.Throws<InvalidDataException>(() => GameZWriter.Write(AssembleScript(script + "\nGameZWriteZBDFile world.zbd\n", out _), Token));
+    }
+
     [Fact]
     public void ScriptsAssembleWorldsLikeTheOriginalBuild()
     {

@@ -15,7 +15,7 @@ public readonly record struct WorldBox(Vector3 Min, Vector3 Max)
     public static WorldBox Of(IEnumerable<Vector3> points)
     {
         Vector3 min = new(float.MaxValue), max = new(float.MinValue); bool any = false;
-        foreach (var p in points) { min = Vector3.Min(min, p); max = Vector3.Max(max, p); any = true; }
+        foreach (var p in points) { WorldNumbers.Vector(p); min = Vector3.Min(min, p); max = Vector3.Max(max, p); any = true; }
         return any ? new(min, max) : Empty;
     }
     public IEnumerable<Vector3> Corners()
@@ -173,7 +173,7 @@ public sealed class WorldNode
 
     // Typed views of class data used by the builder.
     public float PayloadFloat(int offset) => BinaryPrimitives.ReadSingleLittleEndian(Payload.AsSpan(offset));
-    public void SetPayloadFloat(int offset, float value) => BinaryPrimitives.WriteSingleLittleEndian(Payload.AsSpan(offset), value);
+    public void SetPayloadFloat(int offset, float value) => BinaryPrimitives.WriteSingleLittleEndian(Payload.AsSpan(offset), WorldNumbers.Finite(value));
     public int PayloadInt(int offset) => BinaryPrimitives.ReadInt32LittleEndian(Payload.AsSpan(offset));
     public void SetPayloadInt(int offset, int value) => BinaryPrimitives.WriteInt32LittleEndian(Payload.AsSpan(offset), value);
     public override string ToString() => $"{Name} ({Class})";

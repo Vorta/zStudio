@@ -400,6 +400,59 @@ public partial class MainWindow
         }
         finally { SetSourceRebuilding(session, false); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
     }
+    internal Action<CancellationToken>? SourceEditPreparing { get; set; }
+    /// <summary>Read, decode and serialize on an isolated worker workspace; publish one checked transaction on the dispatcher.</summary>
+    private async Task<DocumentModel> PrepareSourceWorldEditAsync(DocumentModel doc, string action, Func<SourceWorkspace, CancellationToken, SourceTransaction?> prepare,
+        CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<bool>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null)
+    {
+        var session = SourceWorldOf(doc);
+        if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed.");
+        RequireSourceWorldIdle(session);
+        RequireNoDrafts(doc, committing: true, committingCard);
+        string? draftToken = committingCard?.DraftToken;
+        long revision = session.Workspace.Revision;
+        if (fromBuild && doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources changed; reload the world before editing it.");
+        if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
+        var prepared = session.Workspace.BeginPreparedEdit();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
+        session.Building = cancellation;
+        operation = cancellation; CancelOperationItem.IsEnabled = true;
+        SetSourceRebuilding(session, true);
+        ViewModel.Status = $"Preparing {action}…";
+        try
+        {
+            await Task.Run(() => { SourceEditPreparing?.Invoke(cancellation.Token); prepare(prepared.Workspace, cancellation.Token); cancellation.Token.ThrowIfCancellationRequested(); }, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the edit was prepared.");
+        }
+        catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
+        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        catch (NotSupportedException ex) { throw new StudioCommandException("unsupported", ex.Message); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        finally
+        {
+            if (session.Building == cancellation) session.Building = null;
+            SetSourceRebuilding(session, false);
+            if (operation == cancellation) { operation = null; CancelOperationItem.IsEnabled = false; }
+            ReleaseUnusedSourceWorkspace();
+        }
+        if (session.Workspace.Revision != revision) throw new StudioCommandException("context_changed", "The source workspace changed while the edit was prepared; try again.");
+        if (committingCard != null)
+        {
+            committingCard.RequireDraft(draftToken!);
+            if (committingCard != CurrentInspectionCard || committingCard.DraftDocument != doc || shownDocument != doc)
+                throw new StudioCommandException("context_changed", "The scene draft changed while the edit was prepared.");
+            RequireNoDrafts(doc, committing: true, committingCard);
+            try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token); }
+            catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+            committingCard.CancelDraft(); UpdateDocumentCommands();
+        }
+        // No dispatcher yield between releasing the preparation guard and accepting the checked edit.
+        return await EditSourceWorldAsync(doc, action, w => w.AcceptPreparedEdit(prepared, cancellation.Token) is { } t ? () => w.Retract(t) : null,
+            cancellation.Token, additions, fromBuild, verifyTargets, notes);
+    }
+
     private Task<DocumentModel> AddSourceModelAsync(DocumentModel doc, SourceWorldAddition addition, CancellationToken token)
     {
         var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
@@ -408,7 +461,7 @@ public partial class MainWindow
         RequireSourceWorldIdle(session);
         // The rebuild is checked against the shown build; a stale one would blame the addition for others' changes.
         if (doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before adding a model.");
-        return EditSourceWorldAsync(doc, $"Adding {addition.Model.Name}", workspace => SourceWorlds.AddModel(workspace, mission, addition, token) is var t ? () => workspace.Retract(t) : null, token, [addition.Model], fromBuild: false);
+        return PrepareSourceWorldEditAsync(doc, $"Adding {addition.Model.Name}", (workspace, ct) => SourceWorlds.AddModel(workspace, mission, addition, ct), token, [addition.Model], fromBuild: false);
     }
     private Task<DocumentModel> UndoSourceWorldAsync(DocumentModel doc, bool redo, CancellationToken token)
     {
@@ -428,39 +481,24 @@ public partial class MainWindow
     /// A placement edit of a source world (a pickup, AI vehicle or AI node, with its linked difficulty counterparts) becomes
     /// one change of the resource sources the world's archives were built from; only the edited coordinate tokens change.
     /// </summary>
-    private Task<DocumentModel> MoveSourcePlacementAsync(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token) =>
-        ApplySourcePlacementAsync(doc, PlanSourcePlacement(doc, source, transform, token), token);
-    /// <summary>
-    /// The source changes a placement move makes, checked against other editors (a resource editor holding a file
-    /// unsaved); a refusal comes before anything changes, so the scene card can keep its draft.
-    /// </summary>
-    private (string Label, List<(string, byte[]?)> Changes) PlanSourcePlacement(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token)
+    private Task<DocumentModel> MoveSourcePlacementAsync(DocumentModel doc, MissionPickupSource source, PlacementTransform transform, CancellationToken token, SceneInspectionCard? committingCard = null) =>
+        PrepareSourceWorldEditAsync(doc, "Moving placement", (workspace, ct) =>
+        {
+            var plan = PlanSourcePlacement(doc, workspace, source, transform, ct);
+            return workspace.Apply(plan.Label, plan.Changes, ct);
+        }, token, committingCard: committingCard);
+    /// <summary>Prepare scalar replacements from immutable archive data and an isolated source workspace on the worker.</summary>
+    private static (string Label, List<(string, byte[]?)> Changes) PlanSourcePlacement(DocumentModel doc, SourceWorkspace workspace, MissionPickupSource source, PlacementTransform transform, CancellationToken token)
     {
         var edits = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "Load the world's placements first.");
-        var session = SourceWorldOf(doc);
-        var workspace = session.Workspace;
-        // The same refusals, in the same order, as the edit itself: the plan reads sources a stale or rebuilding world no longer matches.
-        if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
-        RequireSourceWorldIdle(session);
-        if (doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources this world was built from changed since (an edit in another world, an undo, or another program); reload the world before editing it.");
         string label = edits.Find(source) is { } pickup ? $"Move {pickup.Type}" : edits.Coordinate(source) is { } record ? $"Move {record.Name}" : "Move placement";
-        try
-        {
-            var after = edits.PreviewTransform(source, transform);
-            List<(string, byte[]?)> changes = [];
-            foreach (var archive in edits.ScalarWrites(after).GroupBy(w => w.ArchivePath, StringComparer.OrdinalIgnoreCase))
-                changes.AddRange(SourceResourceEdits.SourceChanges(edits.ArchiveBytes(archive.Key), archive.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))),
-                    relative => workspace.Read(relative, token), token).Select(c => (c.Relative, (byte[]?)c.Content)));
-            foreach (var (relative, _) in changes)
-                if (workspace.EditGuard?.Invoke(relative) is { } refusal) throw new StudioCommandException("unsaved_changes", refusal);
-            return (label, changes);
-        }
-        catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
-        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        var after = edits.PreviewTransform(source, transform);
+        List<(string, byte[]?)> changes = [];
+        foreach (var archive in edits.ScalarWrites(after).GroupBy(w => w.ArchivePath, StringComparer.OrdinalIgnoreCase))
+            changes.AddRange(SourceResourceEdits.SourceChanges(edits.ArchiveBytes(archive.Key), archive.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))),
+                relative => workspace.Read(relative, token), token).Select(c => (c.Relative, (byte[]?)c.Content)));
+        return (label, changes);
     }
-    private Task<DocumentModel> ApplySourcePlacementAsync(DocumentModel doc, (string Label, List<(string, byte[]?)> Changes) plan, CancellationToken token) =>
-        EditSourceWorldAsync(doc, plan.Label, workspace => workspace.Apply(plan.Label, plan.Changes, token) is { } t ? () => workspace.Retract(t) : null, token);
 
     /// <summary>For a source world, how Properties moves a placement: through its sources, like the scene card; null otherwise.</summary>
     private Func<MissionPickupSource, System.Numerics.Vector3, Task>? SourcePickupMove(DocumentModel doc) => doc.SourceWorld == null ? null : async (source, position) =>

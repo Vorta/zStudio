@@ -135,7 +135,7 @@ public partial class MainWindow
                 inspectionDraft.RequireDraft(Text(a, "token"));
                 if (Text(a, "action") == "apply")
                 {
-                    if (ApplyInspectionEditCore(inspectionDraft) is { } rebuilding) return Result(DocumentState(await rebuilding));
+                    if (ApplyInspectionEditCore(inspectionDraft, token) is { } rebuilding) return Result(DocumentState(await rebuilding));
                 }
                 else inspectionDraft.CancelDraft();
                 return Result(DocumentState(d));

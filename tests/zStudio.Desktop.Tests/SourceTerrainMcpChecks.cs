@@ -77,6 +77,24 @@ internal static class SourceTerrainMcpChecks
             Assert.Equal(4, listed["recipes"]![0]!["pieces"]!.GetValue<int>());
             Assert.Empty((await Call("source_terrain", new() { ["document"] = Id(doc), ["offset"] = 1 }))["recipes"]!.AsArray());
 
+            // The expensive edit callback runs on a worker. While held, protocol reads and Tools Cancel remain responsive.
+            TaskCompletionSource editEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            main.SourceEditPreparing = ct =>
+            {
+                Assert.False(main.Dispatcher.CheckAccess());
+                editEntered.TrySetResult();
+                Assert.True(ct.WaitHandle.WaitOne(TimeSpan.FromSeconds(20)), "The source preparation was not canceled."); ct.ThrowIfCancellationRequested();
+            };
+            int historyBefore = workspace.History.Count;
+            var canceledEdit = Job("source_terrain_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["recipe"] = Recipe, ["action"] = "add_region", ["region"] = "canceled" }, "canceled");
+            await editEntered.Task.WaitAsync(token);
+            await Call("state", new());
+            ((System.Windows.Controls.MenuItem)main.FindName("CancelOperationItem")).RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.MenuItem.ClickEvent));
+            await canceledEdit;
+            Assert.Equal(historyBefore, workspace.History.Count);
+            Assert.DoesNotContain(SourceTerrain.Read(workspace, Recipe, token).Regions, r => r.Name == "canceled");
+            main.SourceEditPreparing = ct => Assert.False(main.Dispatcher.CheckAccess());
+
             // A road: a region painted along a path; its pieces block craters.
             doc = Document((await Job("source_terrain_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["recipe"] = Recipe, ["action"] = "add_region", ["region"] = "road", ["attributes"] = new Dictionary<string, object?> { ["craters"] = "blocked" } }))["document"]!);
             doc = Document((await Job("source_terrain_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["recipe"] = Recipe, ["action"] = "paint", ["region"] = "road", ["path"] = new[] { new[] { 220.0, 250.0 }, new[] { 280.0, 250.0 } }, ["radius"] = 4 }))["document"]!);
