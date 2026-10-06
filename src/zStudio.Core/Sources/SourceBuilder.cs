@@ -736,7 +736,7 @@ public static partial class SourceBuilder
             // The header was read on its own: the file may have changed before it was read whole.
             if (image.Width != width || image.Height != height) throw new InvalidDataException($"{input} changed while exporting; export again.");
             return image;
-        }, addressing, direct) { Transparency = known?.Transparency };
+        }, addressing, direct) { Transparency = known?.Transparency, File = input };
     }
     /// <summary>Decodes a project PNG through the run's snapshot, remembering its size and transparency.</summary>
     private static DecodedImage Decode(string input, Snapshot snapshot, CancellationToken token)

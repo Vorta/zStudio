@@ -148,18 +148,27 @@ public sealed class PublicationSafetyTests
         var error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, pack, new(folder.Root), DateTime.UtcNow, Token));
         Assert.StartsWith("texturemax.zbd would take at least 514 MiB with its textures at the sizes it stores, more than the 512 MiB a pack file can hold.", error.Message);
         Assert.Contains("Give the pack a budget or a smaller largest side", error.Message);
-        Assert.Contains("big000 (1024 × 1024)", error.Message);
+        Assert.Contains("big000 (1024 × 1024, data/m1/textures/big000.png)", error.Message);
         // Interface images are stored at their authored size, two bytes a pixel: seventeen take 544 MiB.
         var images = new SourceOutputPlan("image.zbd", "images", inputs[..17]);
         error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, images, new(folder.Root), DateTime.UtcNow, Token));
         Assert.StartsWith("image.zbd would take at least 545 MiB", error.Message);
         Assert.Contains("Use fewer or smaller images", error.Message);
-        Assert.Contains("big000 (4096 × 4096)", error.Message);
+        Assert.Contains("big000 (4096 × 4096, data/m1/textures/big000.png)", error.Message);
         // What a pack file holds is decoded (and these headers fail there).
         var fits = new SourceOutputPlan("m1/texturemax.zbd", "textures", inputs[..511]) { Pack = pack.Pack };
         error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, fits, new(folder.Root), DateTime.UtcNow, Token));
         Assert.StartsWith("data/m1/textures/big000.png:", error.Message);
         Assert.DoesNotContain("MiB", error.Message);
+        // Within the palette pages' 8 KiB of the limit (16 pages of 512 bytes) the pack cannot be written either.
+        long Estimate(int small) => TexturePackBuilder.OutputBytes([.. Enumerable.Repeat((1024, 1024), 511), .. Enumerable.Repeat((64, 64), small)], _ => true, _ => false);
+        int fillers = 0; while (Estimate(fillers + 1) <= FormatRegistry.MaximumDocumentBytes) fillers++;
+        Assert.InRange(FormatRegistry.MaximumDocumentBytes - Estimate(fillers), 0, 16 * 512 - 1);
+        string[] small = [.. Enumerable.Range(0, fillers).Select(i => $"data/m1/textures/small{i:000}.png")];
+        foreach (string input in small) folder.Write(input, PngHeader(64, 64));
+        var edge = new SourceOutputPlan("m1/texturemax.zbd", "textures", [.. inputs[..511], .. small]) { Pack = pack.Pack };
+        error = Assert.Throws<InvalidDataException>(() => SourceBuilder.Build(folder.Root, edge, new(folder.Root), DateTime.UtcNow, Token));
+        Assert.StartsWith("texturemax.zbd would take at least 513 MiB", error.Message);
     }
 
     [Fact]

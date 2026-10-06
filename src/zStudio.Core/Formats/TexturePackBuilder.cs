@@ -53,6 +53,8 @@ public sealed record PackTexture(string Name, string SortKey, DecodedImage Maste
 public sealed record PackSource(string Name, string SortKey, int Width, int Height, Func<CancellationToken, DecodedImage> Decode, int Addressing = 0, bool Direct = false)
 {
     public TextureTransparency? Transparency { get; init; }
+    /// <summary>The file the texture comes from, named in refusals (a texture can be stored under another name).</summary>
+    public string? File { get; init; }
 }
 
 /// <summary>Result of building a pack: its bytes and, per texture, the stored size.</summary>
@@ -197,13 +199,14 @@ public static class TexturePackBuilder
     /// </summary>
     private static void CheckOutput(TexturePackVariant variant, PackSource[] ordered, (int Width, int Height)[] sizes, Func<int, bool> paletted, Func<int, bool> alpha, bool texelsOnly)
     {
-        long total = OutputBytes(sizes, paletted, alpha);
+        // With the palette pages paletted textures share (at most 16 of 512 bytes).
+        long total = OutputBytes(sizes, paletted, alpha) + (Enumerable.Range(0, sizes.Length).Any(paletted) ? 16 * 512 : 0);
         if (total <= FormatRegistry.MaximumDocumentBytes) return;
         string advice = variant.Kind == TexturePackKind.Interface ? "Use fewer or smaller images"
             : variant.BudgetBytes is { } budget ? $"Give the pack a budget below {FormatRegistry.MaximumDocumentBytes >> 20} MiB (it has {budget >> 20} MiB) in its build profile"
             : "Give the pack a budget or a smaller largest side in a build profile, or use fewer or smaller textures";
         var largest = Enumerable.Range(0, sizes.Length).OrderByDescending(i => (long)sizes[i].Width * sizes[i].Height).ThenBy(i => i).Take(8)
-            .Select(i => $"{ordered[i].Name} ({sizes[i].Width} × {sizes[i].Height})");
+            .Select(i => $"{ordered[i].Name} ({sizes[i].Width} × {sizes[i].Height}{(ordered[i].File is { } file ? $", {file}" : "")})");
         throw new InvalidDataException($"{variant.FileName} would take {(texelsOnly ? "at least " : "")}{(total + (1 << 20) - 1) >> 20} MiB with its textures at the sizes it stores, "
             + $"more than the {FormatRegistry.MaximumDocumentBytes >> 20} MiB a pack file can hold. {advice}. The largest it stores: {string.Join(", ", largest)}.");
     }

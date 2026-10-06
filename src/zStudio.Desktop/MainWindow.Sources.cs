@@ -235,6 +235,8 @@ public partial class MainWindow
                 string? profile = a["profile"] == null ? SourceProjectRoot is { } chosenRoot ? SourceProfileFor(chosenRoot) : null : Text(a, "profile");
                 if (profile != null && SourceProjectRoot is { } root) ResolveProfile(root, profile);
                 var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, profile);
+                // Written (or checked): the job completes with the report, even when a cancel arrives as publication ends.
+                CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
         RegisterJob(r, "source_status", "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed), paged and filtered by path.", [.. PageParameters, P("profile", "string", "Build profile whose texture packs are listed; default: the profile chosen in Tools → Build profile, else the project's default.")], false,
