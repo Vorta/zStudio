@@ -162,7 +162,10 @@ public partial class MainWindow
                 if (d.SourceWorld != null)
                 {
                     if (a.ContainsKey("destination") || a.ContainsKey("destinations") || a.ContainsKey("modelDirectory")) throw new StudioCommandException("invalid_argument", "A source world saves to its project's sources; it has no Save As.");
-                    var written = await SaveSourceWorldAsync(d, token); return Result(new { document = DocumentState(d), written });
+                    var written = await SaveSourceWorldAsync(d, token);
+                    // The files were replaced: the job completes with them, even when MCP stops (and cancels it) meanwhile.
+                    CommitRunningJob();
+                    return Result(new { document = DocumentState(d), written });
                 }
                 if (d.ContentEdits != null)
                 {

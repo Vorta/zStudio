@@ -305,7 +305,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         List<Task> pending = [];
         foreach (var doc in Documents)
         {
-            if (doc.SourceWorld != null) { pending.Add(CheckSourceWorldAsync(doc)); continue; }
+            // While a save replaces the project's files they differ from what the workspace last read; the save's end is the next state.
+            if (doc.SourceWorld != null) { if (!doc.SourceWorld.Workspace.IsSaving) pending.Add(CheckSourceWorldAsync(doc)); continue; }
             try { doc.IsStale = (doc.ContentEdits is { } content ? content.HasExternalChanges() : doc.ResourceEdits is { } resources ? FileStamp.Read(resources.TargetPath) != resources.TargetStamp : doc.ModelEdits?.HasExternalChanges() ?? FileStamp.Read(doc.Path) != doc.Document.Stamp) || doc.PickupEdits?.HasExternalChanges() == true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { doc.IsStale = true; }
         }
@@ -327,7 +328,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 try { stale = await Task.Run(doc.SourceInputsChanged); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { stale = true; }
                 // An edit, save or rebuild during the check makes its result obsolete; the next check reads the new state.
-                if (!doc.IsDisposed && doc.Revision == revision) doc.IsStale = stale;
+                if (!doc.IsDisposed && doc.Revision == revision && doc.SourceWorld?.Workspace.IsSaving != true) doc.IsStale = stale;
             }
             finally { sourceWorldChecks.Remove(doc); done.SetResult(); }
         }

@@ -50,6 +50,11 @@ public static partial class SourceWorlds
 {
     public const int MaximumNameLength = 31;
     public const float MaximumCoordinate = 1_000_000;
+    /// <summary>
+    /// The most definition files an addition lists, and that the Add model dialog and zstudio_source_world_definitions show
+    /// for a name (in path order, with the total); a longer list is chosen from explicitly, never added whole.
+    /// </summary>
+    public const int MaximumDefinitionChoices = 64;
     /// <summary>Game files a preview builds: the world, what the Whole world view reads beside it, and one full-quality texture pack.</summary>
     private static readonly string[] PreviewOutputs = ["{0}/gamez.zbd", "{0}/anim.zbd", "{0}/zrdr.zbd", "{0}/rtexture16.zbd", "zrdr.zbd", "interp.zbd", "image.zbd"];
     [GeneratedRegex(@"\A[A-Za-z0-9_.\-]{1,31}\z", RegexOptions.CultureInvariant)] private static partial Regex NodeName();

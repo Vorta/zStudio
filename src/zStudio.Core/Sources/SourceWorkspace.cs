@@ -45,7 +45,9 @@ public sealed class SourceWorkspace
     public long Revision { get; private set; }
     /// <summary>Increases whenever the accepted content of any file changes (not on save), so a build made at one value is current while it holds.</summary>
     public long ContentRevision { get; private set; }
-    public bool IsSaving { get; private set; }
+    /// <summary>A save is writing the files (see <see cref="SaveAsync"/>, which may end on another thread than it began).</summary>
+    public bool IsSaving { get => saving; private set => saving = value; }
+    private volatile bool saving;
     public event Action<SourceWorkspaceChange>? Changed;
     /// <summary>Asked for each file an edit would change; a returned reason refuses the edit (another editor holds unsaved changes of the file).</summary>
     public Func<string, string?>? EditGuard { get; set; }
@@ -247,21 +249,54 @@ public sealed class SourceWorkspace
     /// </summary>
     public IReadOnlyList<string> Save(CancellationToken token = default)
     {
+        if (BeginSave() is not { } pending) return [];
+        (IReadOnlyList<string> Written, Baseline[] Saved) published;
+        try { published = Write(pending, token); }
+        finally { IsSaving = false; }
+        return EndSave(pending, published);
+    }
+    /// <summary>
+    /// <see cref="Save"/> with the files published off the calling thread. The dirty files are taken on the calling thread
+    /// (the one edits are applied on), published and read back on the thread pool, and the saved state is applied when the
+    /// calling thread's synchronization context resumes this method (the UI dispatcher in the application), where
+    /// <see cref="Changed"/> is raised. <see cref="IsSaving"/> holds until then, so edits, undo, redo, reload and discard are
+    /// refused while the files are written. Cancellation is honoured until publication starts; from then on the save
+    /// finishes or is undone (see <see cref="SourcePublisher.Publish"/>).
+    /// </summary>
+    public async Task<IReadOnlyList<string>> SaveAsync(CancellationToken token = default)
+    {
+        if (BeginSave() is not { } pending) return [];
+        (IReadOnlyList<string> Written, Baseline[] Saved) published;
+        try { published = await Task.Run(() => Write(pending, token), token); }
+        finally { IsSaving = false; }
+        return EndSave(pending, published);
+    }
+    private sealed record PendingSave(IReadOnlyList<string> Dirty, (string Relative, byte[]? Expected, byte[]? Content)[] Writes);
+    /// <summary>Takes the dirty files and marks the workspace saving; null when nothing is dirty.</summary>
+    private PendingSave? BeginSave()
+    {
         if (IsSaving) throw new InvalidOperationException("A save is already running.");
         var dirty = DirtyFiles;
-        if (dirty.Count == 0) return [];
+        if (dirty.Count == 0) return null;
         (string Relative, byte[]? Expected, byte[]? Content)[] writes;
         lock (gate) writes = dirty.Select(f => (f, baselines[f].Bytes, working[f])).ToArray();
-        IReadOnlyList<string> written;
         IsSaving = true;
-        try { written = save(writes, $"Save {dirty.Count} source file{(dirty.Count == 1 ? "" : "s")}", token); }
-        finally { IsSaving = false; }
+        return new(dirty, writes);
+    }
+    /// <summary>Publishes a save's files and reads them back; touches no workspace state, so it may run on any thread.</summary>
+    private (IReadOnlyList<string> Written, Baseline[] Saved) Write(PendingSave pending, CancellationToken token)
+    {
+        var written = save(pending.Writes, $"Save {pending.Dirty.Count} source file{(pending.Dirty.Count == 1 ? "" : "s")}", token);
         // The files are on disk now; another program may already have replaced one, so each is read back with its stamp.
-        Baseline[] saved = [.. writes.Select(w => Saved(w.Relative, w.Content))];
+        Baseline[] saved = [.. pending.Writes.Select(w => Saved(w.Relative, w.Content))];
+        return (written, saved);
+    }
+    private IReadOnlyList<string> EndSave(PendingSave pending, (IReadOnlyList<string> Written, Baseline[] Saved) published)
+    {
         lock (gate)
-            for (int i = 0; i < writes.Length; i++) baselines[writes[i].Relative] = saved[i];
-        Publish("save", "Save", dirty);
-        return written;
+            for (int i = 0; i < pending.Writes.Length; i++) baselines[pending.Writes[i].Relative] = published.Saved[i];
+        Publish("save", "Save", pending.Dirty);
+        return published.Written;
     }
     /// <summary>
     /// The baseline of a file just saved with <paramref name="bytes"/>: its stamp, taken while the file still has exactly those

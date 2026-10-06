@@ -676,6 +676,8 @@ public partial class MainWindow : Window
                 await Dispatcher.Yield(DispatcherPriority.Normal);
                 if (animation?.ResolvePendingDrafts() == false || !await ResolvePropertiesDraftsAsync() || !ResolveInspectionDrafts()) return;
                 if (sourceWorkspaceBusy) ViewModel.Status = "Waiting for the source world to finish rebuilding before closing…";
+                // A save replacing the project's files finishes (or is undone) first; its documents are then decided as saved or not.
+                else if (!sourceSaveWork.IsCompleted) ViewModel.Status = "Waiting for the source project's save to finish before closing…";
                 await SourceWorldsIdleAsync();
                 ForgetStaleDiscardApproval();
                 closingAllDocuments = true;
@@ -694,12 +696,13 @@ public partial class MainWindow : Window
         // A canceled close never reaches this irreversible lifetime boundary.
         allowClose = true; automationCloseRequested = false; IsEnabled = false;
         shutdown.Cancel(); operation?.Cancel();
-        // An interrupted save being resolved stops between two files, so the files and its journal agree when the process ends.
-        if (!sourceRecoveryWork.IsCompleted)
+        // An interrupted save being resolved stops between two files, so the files and its journal agree when the process ends;
+        // a source project save stops before it replaces a file, or finishes (or is undone).
+        if (!sourceRecoveryWork.IsCompleted || !sourceSaveWork.IsCompleted)
         {
             e.Cancel = true; resolvingClose = true;
             await Dispatcher.Yield(DispatcherPriority.Normal);
-            try { await sourceRecoveryWork.ContinueWith(static _ => { }, TaskScheduler.Default); }
+            try { await Task.WhenAll(sourceRecoveryWork, sourceSaveWork).ContinueWith(static _ => { }, TaskScheduler.Default); }
             finally { resolvingClose = false; }
             Close(); return;
         }

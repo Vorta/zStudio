@@ -243,7 +243,7 @@
         "zstudio_source_world_definitions",
         "zstudio_source_world_add_model"
       ],
-      "note": "The Add model dialog lists project models (source_world_models) with a filter, suggests the model's name as node name, offers unplaced or placed (position and heading, defaulting to the orbit pivot), and lists other missions' definition files for the name (source_world_definitions), all checked by default; Add maps to source_world_add_model with the checked files."
+      "note": "The Add model dialog lists project models (source_world_models) with a filter (a virtualized list of at most 2000 matches, with a note when the filter matches more), suggests the model's name as node name, offers unplaced or placed (position and heading, defaulting to the orbit pivot), and lists other missions' definition files for the name (source_world_definitions: the first 64 in path order with the total), all checked by default unless more than 64 match, when the listed ones start unchecked (source_world_add_model refuses to add such a list whole); Add maps to source_world_add_model with the checked files."
     },
     {
       "gui": "SourceInitializeDialog:Controls",

@@ -19,10 +19,12 @@ internal sealed class SourceModelDialog : Window
     private readonly string mission;
     private readonly Func<string, CancellationToken, Task<IReadOnlyList<SourceDefinitionFile>>> definitions;
     private readonly Func<SourceModelAddition, string?> validate;
+    /// <summary>The most models the list shows for a filter (it is virtualized); the filter narrows a longer list, which a note discloses.</summary>
+    internal const int MaximumListedModels = 2000;
     private readonly TextBox filter = new() { Margin = new(0, 0, 0, 6) }, name = new(), x = new(), y = new(), z = new(), heading = new();
     private readonly ListBox list = new() { Height = 220 };
     private readonly RadioButton unplaced = new() { IsChecked = true, Margin = new(0, 2, 0, 2) }, placed = new() { Margin = new(0, 2, 0, 2) };
-    private readonly TextBlock nameNote = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8, Margin = new(0, 2, 0, 0) }, animationNote = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8 }, error = new() { TextWrapping = TextWrapping.Wrap, Foreground = System.Windows.Media.Brushes.IndianRed };
+    private readonly TextBlock listNote = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8, Margin = new(0, 2, 0, 0) }, nameNote = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8, Margin = new(0, 2, 0, 0) }, animationNote = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8 }, error = new() { TextWrapping = TextWrapping.Wrap, Foreground = System.Windows.Media.Brushes.IndianRed };
     private readonly StackPanel animations = new();
     private readonly Button add = new() { Content = "Add", IsDefault = true, MinWidth = 80, Margin = new(0, 0, 8, 0), IsEnabled = false };
     private readonly DispatcherTimer lookup = new() { Interval = TimeSpan.FromMilliseconds(300) };
@@ -49,7 +51,17 @@ internal sealed class SourceModelDialog : Window
         StackPanel panel = new() { Margin = new(14) };
         panel.Children.Add(new TextBlock { Text = $"Load a model from any folder of the project into the {mission} world. Exports of {mission} then include its geometry, materials and textures.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 10) });
         panel.Children.Add(filter);
+        // Rows are data, so only the visible ones get controls; paths are literal text, not access-key labels.
+        FrameworkElementFactory row = new(typeof(TextBlock));
+        row.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding(nameof(ModelRow.Label)));
+        list.ItemTemplate = new DataTemplate { VisualTree = row };
+        Style rowStyle = new(typeof(ListBoxItem));
+        rowStyle.Setters.Add(new Setter(ToolTipProperty, new System.Windows.Data.Binding(nameof(ModelRow.Path))));
+        rowStyle.Setters.Add(new Setter(System.Windows.Automation.AutomationProperties.NameProperty, new System.Windows.Data.Binding(nameof(ModelRow.Path))));
+        list.ItemContainerStyle = rowStyle;
+        VirtualizingPanel.SetIsVirtualizing(list, true); VirtualizingPanel.SetVirtualizationMode(list, VirtualizationMode.Recycling);
         panel.Children.Add(list);
+        panel.Children.Add(listNote);
         panel.Children.Add(Label("Node name", 10)); panel.Children.Add(name); panel.Children.Add(nameNote);
         panel.Children.Add(Label("Placement", 10)); panel.Children.Add(unplaced); panel.Children.Add(placed);
         WrapPanel coordinates = new() { Margin = new(22, 2, 0, 0) };
@@ -81,21 +93,28 @@ internal sealed class SourceModelDialog : Window
     private static TextBlock Label(string text, double top) => new() { Text = text, FontWeight = FontWeights.SemiBold, Margin = new(0, top, 0, 4) };
     private static string Coordinate(float value) => MathF.Round(value, 1).ToString("0.0", CultureInfo.InvariantCulture);
 
+    /// <summary>A model's row in the list.</summary>
+    private sealed record ModelRow(SourceModelChoice Model)
+    {
+        public string Label => $"{Model.Name}   ({Model.Folder})";
+        public string Path => Model.Path;
+    }
     private void Fill()
     {
-        var selected = (list.SelectedItem as ListBoxItem)?.Tag as SourceModelChoice;
+        var selected = Model;
         string text = filter.Text.Trim();
-        list.Items.Clear();
-        foreach (var model in models.Where(m => text.Length == 0 || m.Path.Contains(text, StringComparison.OrdinalIgnoreCase)).Take(2000))
+        int matching = 0; List<ModelRow> rows = [];
+        foreach (var model in models)
         {
-            // Paths are literal text, not access-key labels.
-            ListBoxItem item = new() { Tag = model, Content = new TextBlock { Text = $"{model.Name}   ({model.Folder})" }, ToolTip = model.Path };
-            System.Windows.Automation.AutomationProperties.SetName(item, model.Path);
-            list.Items.Add(item);
-            if (model == selected) item.IsSelected = true;
+            if (text.Length != 0 && !model.Path.Contains(text, StringComparison.OrdinalIgnoreCase)) continue;
+            if (++matching <= MaximumListedModels) rows.Add(new(model));
         }
+        list.ItemsSource = rows;
+        if (selected != null && rows.FirstOrDefault(r => r.Model == selected) is { } kept) list.SelectedItem = kept;
+        listNote.Text = matching > rows.Count ? $"Showing {rows.Count:N0} of {matching:N0} models; type part of a path to find the others." : "";
+        listNote.Visibility = listNote.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
-    private SourceModelChoice? Model => (list.SelectedItem as ListBoxItem)?.Tag as SourceModelChoice;
+    private SourceModelChoice? Model => (list.SelectedItem as ModelRow)?.Model;
     private void ModelChanged()
     {
         if (Model is not { } model) { add.IsEnabled = false; return; }
@@ -125,12 +144,18 @@ internal sealed class SourceModelDialog : Window
             var files = await definitions(root, cancellation.Token);
             if (cancellation.IsCancellationRequested || !IsLoaded) return;
             animationsFor = root;
-            animationNote.Text = files.Count == 0 ? $"No other mission lists animation definitions for {root}." : $"Other missions list these animation definitions for {root}. Checked files are added to {mission}'s animation list:";
-            foreach (var file in files)
+            // As zstudio_source_world_definitions returns them: the first files in path order, with the total. A longer list is
+            // chosen from explicitly (zstudio_source_world_add_model refuses to add it whole), so its files start unchecked.
+            int shown = Math.Min(files.Count, SourceWorlds.MaximumDefinitionChoices);
+            bool truncated = files.Count > shown;
+            animationNote.Text = files.Count == 0 ? $"No other mission lists animation definitions for {root}."
+                : truncated ? $"{files.Count:N0} definition files of other missions list animations for {root}; the first {shown} in path order are listed, unchecked. Checked files are added to {mission}'s animation list; files not listed are not added."
+                : $"Other missions list these animation definitions for {root}. Checked files are added to {mission}'s animation list:";
+            foreach (var file in files.Take(shown))
                 animations.Children.Add(new CheckBox
                 {
-                    IsChecked = true, Tag = file.Path, Margin = new(0, 2, 0, 2),
-                    Content = new TextBlock { Text = $"{file.Path}  —  {string.Join(", ", file.Animations.Take(6).Select(n => n.Length > 64 ? n[..64] + "…" : n))}{(file.Animations.Count > 6 ? ", …" : "")} (used by {string.Join(", ", file.Missions)})", TextWrapping = TextWrapping.Wrap }
+                    IsChecked = !truncated, Tag = file.Path, Margin = new(0, 2, 0, 2),
+                    Content = new TextBlock { Text = $"{file.Path}  —  {string.Join(", ", file.Animations.Take(6).Select(n => n.Length > 64 ? n[..64] + "…" : n))}{(file.Animations.Count > 6 ? ", …" : "")} (used by {string.Join(", ", file.Missions.Take(8))}{(file.Missions.Count > 8 ? $" and {file.Missions.Count - 8} more" : "")})", TextWrapping = TextWrapping.Wrap }
                 });
         }
         catch (OperationCanceledException) { }
