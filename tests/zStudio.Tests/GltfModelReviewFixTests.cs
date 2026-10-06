@@ -124,6 +124,8 @@ public sealed class GltfModelReviewFixTests
         JsonObject json = new()
         {
             ["asset"] = new JsonObject { ["version"] = "2.0" },
+            // The integer attributes read here are KHR_mesh_quantization's, which a file declares.
+            ["extensionsUsed"] = new JsonArray("KHR_mesh_quantization"),
             ["nodes"] = new JsonArray(new JsonObject { ["mesh"] = 0 }),
             ["meshes"] = new JsonArray(new JsonObject { ["primitives"] = new JsonArray(primitive) }),
             ["accessors"] = new JsonArray(new JsonObject { ["bufferView"] = 0, ["componentType"] = 5126, ["count"] = 3, ["type"] = "VEC3" }, accessor),
@@ -148,7 +150,7 @@ public sealed class GltfModelReviewFixTests
     [InlineData("POSITION", 5126, "SCALAR", 9, false, "000000000000000000000000000000000000000000000000000000000000000000000000", "holds SCALAR values, but it is used for positions")]
     [InlineData("NORMAL", 5122, "VEC3", 3, false, "000000000000000000000000000000000000", "signed short values, but it is used for normals")]
     [InlineData("TEXCOORD_0", 5126, "VEC3", 3, false, "000000000000000000000000000000000000000000000000000000000000000000000000", "used for texture coordinates, which need VEC2")]
-    [InlineData("target", 5125, "VEC3", 3, false, "000000000000000000000000000000000000000000000000000000000000000000000000", "unsigned integer values, but it is used for positions")]
+    [InlineData("target", 5125, "VEC3", 3, false, "000000000000000000000000000000000000000000000000000000000000000000000000", "unsigned integer values, but it is used for morph target positions")]
     // Every attribute holds one value per position: two would pair the third corner with nothing (or the wrong value).
     [InlineData("NORMAL", 5126, "VEC3", 2, false, "000000000000000000000000000000000000000000000000", "2 normals for 3 positions")]
     [InlineData("TEXCOORD_0", 5126, "VEC2", 2, false, "00000000000000000000000000000000", "2 texture coordinates for 3 positions")]

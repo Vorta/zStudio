@@ -23,8 +23,10 @@ public static class PngDecoder
         int width = 0, height = 0, depth = 0, colorType = 0, offset = 8; bool interlaced = false, header = false, ended = false;
         // The image data has begun (IDAT), and has ended (another chunk after it): its chunks must be consecutive.
         bool imageData = false, imageEnded = false;
+        // Where the image data's chunks start and end in the file: they are inflated in place, never copied, so compressed
+        // data of any length (deflate allows any number of empty blocks) costs no memory beyond the image it decodes to.
+        int imageStart = 0, imageEnd = 0;
         byte[]? palette = null, transparency = null;
-        using MemoryStream compressed = new();
         while (offset < png.Length)
         {
             token.ThrowIfCancellationRequested();
@@ -74,8 +76,8 @@ public static class PngDecoder
             {
                 if (!header) throw new InvalidDataException("Missing PNG header.");
                 if (imageEnded) throw new InvalidDataException("The PNG's image data (IDAT chunks) is split by other chunks; its chunks must be consecutive.");
-                if (compressed.Length + length > int.MaxValue / 2) throw new InvalidDataException("PNG data is too large.");
-                compressed.Write(data); imageData = true;
+                if (!imageData) imageStart = offset;
+                imageEnd = offset + length + 12; imageData = true;
             }
             else if (type.SequenceEqual("IEND"u8)) { ended = true; break; }
             // Ancillary chunks (lowercase first letter) such as gAMA, pHYs and tEXt carry nothing a texture needs.
@@ -89,15 +91,20 @@ public static class PngDecoder
         var passes = interlaced ? Adam7(width, height) : [(0, 0, 1, 1, width, height)];
         long expected = passes.Sum(p => p.W == 0 || p.H == 0 ? 0 : (long)p.H * (1 + ((long)p.W * bitsPerPixel + 7) / 8));
         if (expected > 1L << 30) throw new InvalidDataException("PNG image is too large.");
-        byte[] raw = new byte[expected]; compressed.Position = 0;
-        using (ZLibStream z = new(compressed, CompressionMode.Decompress))
+        byte[] raw = new byte[expected];
+        unsafe
         {
-            int excess;
-            // The rows, and then the end of the data: pixels beyond the image make it malformed (decoders differ on them).
-            try { z.ReadExactly(raw); excess = z.ReadByte(); }
-            catch (EndOfStreamException ex) { throw new InvalidDataException("Truncated PNG pixels.", ex); }
-            catch (InvalidDataException ex) { throw new InvalidDataException("Corrupt PNG pixel data.", ex); }
-            if (excess != -1) throw new InvalidDataException("Excess PNG pixels: the image data holds more than its rows.");
+            // The chunks' lengths and checksums were checked above; the file stays pinned while they are inflated.
+            fixed (byte* file = png)
+            {
+                using ZLibStream z = new(new ImageData(file, imageStart, imageEnd, token), CompressionMode.Decompress);
+                int excess;
+                // The rows, and then the end of the data: pixels beyond the image make it malformed (decoders differ on them).
+                try { z.ReadExactly(raw); excess = z.ReadByte(); }
+                catch (EndOfStreamException ex) { throw new InvalidDataException("Truncated PNG pixels.", ex); }
+                catch (InvalidDataException ex) { throw new InvalidDataException("Corrupt PNG pixel data.", ex); }
+                if (excess != -1) throw new InvalidDataException("Excess PNG pixels: the image data holds more than its rows.");
+            }
         }
         byte[] rgba = new byte[checked(width * height * 4)]; int position = 0;
         // The transparent grey or RGB value: below 16 bits a sample uses the value's low bits, and the PNG specification has
@@ -123,6 +130,46 @@ public static class PngDecoder
             }
         }
         return new(width, height, rgba);
+    }
+
+    /// <summary>
+    /// The image data as one stream: the data of the consecutive IDAT chunks from byte <paramref name="next"/> to byte
+    /// <paramref name="end"/> of the pinned file, read in place. Their lengths were checked to lie in the file, and are
+    /// checked again as they are read. Each read observes <paramref name="token"/>, so inflating a long stream can be cancelled.
+    /// </summary>
+    private sealed unsafe class ImageData(byte* file, int next, int end, CancellationToken token) : Stream
+    {
+        // The next byte of the current chunk's data and how many of its bytes are left.
+        private int position, remaining;
+
+        public override int Read(Span<byte> buffer)
+        {
+            token.ThrowIfCancellationRequested();
+            while (remaining == 0)
+            {
+                if (next >= end) return 0;
+                token.ThrowIfCancellationRequested();
+                remaining = BinaryPrimitives.ReadInt32BigEndian(new ReadOnlySpan<byte>(file + next, 4));
+                // Checked again, so bytes changed since (by whoever holds the array) can never lead a read out of the image data.
+                if (remaining < 0 || remaining > end - next - 12) throw new InvalidDataException("The PNG changed while it was read.");
+                position = next + 8; next = position + remaining + 4;
+            }
+            int count = Math.Min(buffer.Length, remaining);
+            new ReadOnlySpan<byte>(file + position, count).CopyTo(buffer);
+            position += count; remaining -= count;
+            return count;
+        }
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+        public override int ReadByte() { byte one = 0; return Read(new Span<byte>(ref one)) == 1 ? one : -1; }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>How to read a row: <paramref name="Transparency"/> holds a palette image's alpha values, <paramref name="Key"/> a grey or RGB image's transparent sample values.</summary>

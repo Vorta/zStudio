@@ -241,7 +241,17 @@ public sealed class GltfDocument
     }
 
     /// <summary>What each use of an accessor reads.</summary>
-    private enum AccessorUse { Positions, Normals, TextureCoordinates, Indices }
+    private enum AccessorUse { Positions, Normals, TextureCoordinates, Indices, TargetPositions }
+
+    private const string MeshQuantization = "KHR_mesh_quantization", TextureTransform = "KHR_texture_transform";
+
+    /// <summary>Whether the file's list of extensions (extensionsUsed or extensionsRequired) names KHR_mesh_quantization.</summary>
+    private static bool Declares(JsonElement root, string list)
+    {
+        if (!root.TryGetProperty(list, out var names) || names.ValueKind != JsonValueKind.Array) return false;
+        foreach (var name in names.EnumerateArray()) if (name.ValueKind == JsonValueKind.String && name.ValueEquals(MeshQuantization)) return true;
+        return false;
+    }
 
     private static GltfDocument ReadDocument(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, ReadLimits limits, CancellationToken token)
     {
@@ -265,8 +275,16 @@ public sealed class GltfDocument
         if (parsed.ValueKind != JsonValueKind.Object) throw new InvalidDataException("glTF JSON must be an object.");
         JsonObject root = JsonObject.Create(parsed)!;
         if (root["asset"]?["version"]?.GetValue<string>() is not { } version || !version.StartsWith('2')) throw new InvalidDataException("Only glTF 2.0 is supported.");
-        if (parsed.TryGetProperty("extensionsRequired", out var required) && required.ValueKind == JsonValueKind.Array && required.GetArrayLength() > 0)
-            throw new InvalidDataException($"The glTF file requires extension {Shown(required[0])}, which zStudio does not support.");
+        // A required extension changes what the file means, so one the reader does not implement refuses the file (glTF has
+        // readers do so). It implements KHR_mesh_quantization (integer vertex attributes, below) and KHR_texture_transform
+        // on the base-colour texture, the only texture it reads.
+        if (parsed.TryGetProperty("extensionsRequired", out var required) && required.ValueKind == JsonValueKind.Array)
+            foreach (var extension in required.EnumerateArray())
+                if (extension.ValueKind != JsonValueKind.String || !extension.ValueEquals(MeshQuantization) && !extension.ValueEquals(TextureTransform))
+                    throw new InvalidDataException($"The glTF file requires extension {Shown(extension)}, which zStudio does not support.");
+        // The vertex attributes KHR_mesh_quantization adds (8- and 16-bit integer positions, normals and texture
+        // coordinates) are glTF only in a file that declares it, as glTF has a file declare every extension it uses.
+        bool quantized = Declares(parsed, "extensionsUsed") || Declares(parsed, "extensionsRequired");
         Bound(parsed, limits.MetadataBytes);
         // Every buffer is held until the views are read, so together they are bounded like one file: a URI listed again is the
         // bytes already read, a buffer's declared length is checked against what is left before its file is read, and what
@@ -343,11 +361,12 @@ public sealed class GltfDocument
                 throw new InvalidDataException($"The {what} need {byteCount:N0} bytes from byte {offset:N0} of glTF buffer view {index}, which holds {length:N0}; an accessor reads only its own view.");
             return (buffers[buffer], start + offset);
         }
-        // An accessor holds what its use reads (glTF 2.0, with the integer vertex attributes of KHR_mesh_quantization): positions
-        // and texture coordinates are vectors of floats or of 8- or 16-bit integers, normals of floats or normalized signed 8- or
-        // 16-bit integers, and indices are single unsigned integers that are not normalized. Anything else would be read as
-        // values other than the file states (fractions truncated, normalized indices scaled, vector components taken for
-        // indices), so it is refused before anything is decoded.
+        // An accessor holds what its use reads (glTF 2.0): positions, normals and morph target positions are vectors of floats,
+        // texture coordinates of floats or normalized unsigned 8- or 16-bit integers, and indices are single unsigned integers
+        // that are not normalized. A file that declares KHR_mesh_quantization may also store positions and texture coordinates
+        // as any 8- or 16-bit integers, normals as normalized signed ones and morph target positions as signed ones. Anything
+        // else would be read as values other than the file states (fractions truncated, normalized indices scaled, vector
+        // components taken for indices), so it is refused before anything is decoded.
         float[] Accessor(JsonNode which, AccessorUse use)
         {
             int index = Reference(which, accessors.Count, "accessor");
@@ -357,15 +376,21 @@ public sealed class GltfDocument
             var (shape, components, what) = use switch
             {
                 AccessorUse.Positions => ("VEC3", 3, "positions"), AccessorUse.Normals => ("VEC3", 3, "normals"),
+                AccessorUse.TargetPositions => ("VEC3", 3, "morph target positions"),
                 AccessorUse.TextureCoordinates => ("VEC2", 2, "texture coordinates"), _ => ("SCALAR", 1, "indices"),
             };
             if (type != shape) throw new InvalidDataException($"glTF accessor {index} holds {(type.Length > 16 ? type[..16] + "…" : type)} values, but it is used for {what}, which need {shape}.");
-            bool small = componentType is 5120 or 5121 or 5122 or 5123;
+            bool small = componentType is 5120 or 5121 or 5122 or 5123, floats = componentType == 5126 && !normalized;
+            // What a file needs to declare KHR_mesh_quantization for, said when it does not.
+            string Quantized(string core, string extension) => quantized ? $"{core}, or {extension}" : $"{core} ({extension} need the {MeshQuantization} extension, which the file does not declare)";
             var (valid, needed) = use switch
             {
                 AccessorUse.Indices => (componentType is 5121 or 5123 or 5125 && !normalized, "unsigned bytes, shorts or integers that are not normalized"),
-                AccessorUse.Normals => (componentType == 5126 && !normalized || componentType is 5120 or 5122 && normalized, "floats, or normalized signed bytes or shorts"),
-                _ => (componentType == 5126 && !normalized || small, "floats that are not normalized, or bytes or shorts"),
+                AccessorUse.Normals => (floats || quantized && componentType is 5120 or 5122 && normalized, Quantized("floats that are not normalized", "normalized signed bytes or shorts")),
+                AccessorUse.TargetPositions => (floats || quantized && componentType is 5120 or 5122, Quantized("floats that are not normalized", "signed bytes or shorts")),
+                AccessorUse.TextureCoordinates => (floats || componentType is 5121 or 5123 && normalized || quantized && small,
+                    Quantized("floats that are not normalized, or normalized unsigned bytes or shorts", "other bytes or shorts")),
+                _ => (floats || quantized && small, Quantized("floats that are not normalized", "bytes or shorts")),
             };
             if (!valid) throw new InvalidDataException($"glTF accessor {index} holds {(normalized ? "normalized " : "")}{ComponentName(componentType)} values, but it is used for {what}, which need {needed}.");
             int count = a["count"]!.GetValue<int>();
@@ -393,11 +418,17 @@ public sealed class GltfDocument
                 int indexSize = Size(indexType);
                 var (indexData, indexStart) = View(indices["bufferView"], indices["byteOffset"]?.GetValue<long>() ?? 0, (long)n * indexSize, $"sparse indices of glTF accessor {index}", packed: true);
                 var (valueData, valueStart) = View(sparse["values"]!["bufferView"], sparse["values"]!["byteOffset"]?.GetValue<long>() ?? 0, (long)n * element, $"sparse values of glTF accessor {index}", packed: true);
+                // glTF has the indices strictly increase, so each element is replaced once: a repeated one would be replaced
+                // by whichever value a reader applies last, which readers do not agree on.
+                long previous = -1;
                 for (int k = 0; k < n; k++)
                 {
                     var at = indexData.AsSpan((int)(indexStart + (long)k * indexSize));
                     long target = indexType switch { 5121 => at[0], 5123 => BinaryPrimitives.ReadUInt16LittleEndian(at), _ => BinaryPrimitives.ReadUInt32LittleEndian(at) };
                     if (target >= count) throw new InvalidDataException("A sparse glTF index is out of range.");
+                    if (target <= previous)
+                        throw new InvalidDataException($"The sparse indices of glTF accessor {index} do not increase: index {k:N0} names element {target:N0} after element {previous:N0}; glTF needs each greater than the one before.");
+                    previous = target;
                     for (int c = 0; c < components; c++) values[target * components + c] = Component(valueData.AsSpan((int)(valueStart + ((long)k * components + c) * size)), componentType, normalized);
                 }
             }
@@ -414,6 +445,10 @@ public sealed class GltfDocument
         // An image's path is read once and shared by every material that shows it, however long it is and however many do.
         var imagePaths = new (string? Uri, bool Embedded)?[jsonImages.Count];
         List<GltfMaterial> materials = [];
+        // Where each material's base-colour texture is sampled: the texture coordinate set it names and the transform
+        // KHR_texture_transform applies to those coordinates (null for none). A primitive showing the material reads that set
+        // and keeps the coordinates transformed, so the texture lies where the file places it.
+        List<(int Set, Matrix3x2? Transform)> sampling = [];
         foreach (var m in root["materials"] as JsonArray ?? [])
         {
             GltfMaterial material = new() { Name = m?["name"]?.GetValue<string>() ?? "", DoubleSided = m?["doubleSided"]?.GetValue<bool>() ?? false, AlphaMode = m?["alphaMode"]?.GetValue<string>() ?? "OPAQUE", Extras = Extras(m) };
@@ -423,8 +458,10 @@ public sealed class GltfDocument
                 if (!TryNumbers(factor, 4, out var c)) throw new InvalidDataException($"glTF material {materials.Count} has a base colour that is not 4 finite numbers.");
                 material.BaseColor = new(c[0], c[1], c[2], c[3]);
             }
-            if (pbr?["baseColorTexture"]?["index"] is { } textureIndex)
+            (int Set, Matrix3x2? Transform) sampled = (0, null);
+            if (pbr?["baseColorTexture"] is { } textureInfo && textureInfo["index"] is { } textureIndex)
             {
+                sampled = Sampling(textureInfo, materials.Count);
                 var texture = jsonTextures[Reference(textureIndex, jsonTextures.Count, "texture")]!;
                 if (texture["source"] is { } source)
                 {
@@ -438,7 +475,7 @@ public sealed class GltfDocument
                     material.ClampS = jsonSamplers[s]?["wrapS"]?.GetValue<int>() == 33071; material.ClampT = jsonSamplers[s]?["wrapT"]?.GetValue<int>() == 33071;
                 }
             }
-            materials.Add(material);
+            materials.Add(material); sampling.Add(sampled);
         }
         List<GltfMesh> meshes = [];
         foreach (var m in root["meshes"] as JsonArray ?? [])
@@ -453,7 +490,12 @@ public sealed class GltfDocument
                 int mode = p?["mode"]?.GetValue<int>() ?? 4;
                 if (mode is not (4 or 5 or 6) || p?["attributes"]?["POSITION"] is null) continue;
                 GltfPrimitive primitive = new() { Extras = Extras(p) };
-                if (p["material"] is { } material) primitive.Material = materials[Reference(material, materials.Count, "material")];
+                (int Set, Matrix3x2? Transform) sampled = (0, null);
+                if (p["material"] is { } material)
+                {
+                    int shown = Reference(material, materials.Count, "material");
+                    primitive.Material = materials[shown]; sampled = sampling[shown];
+                }
                 var attributes = p["attributes"]!;
                 primitive.Positions.AddRange(Vectors(attributes["POSITION"]!, AccessorUse.Positions));
                 int vertices = primitive.Positions.Count;
@@ -462,17 +504,24 @@ public sealed class GltfDocument
                     primitive.Normals.AddRange(Vectors(normal, AccessorUse.Normals));
                     OnePerPosition(primitive.Normals.Count, "normals", vertices, meshes.Count, number);
                 }
-                if (attributes["TEXCOORD_0"] is { } uv)
+                // The set the material's texture is sampled with (TEXCOORD_0 when it names none).
+                if (attributes[$"TEXCOORD_{sampled.Set}"] is { } uv)
                 {
                     var values = Accessor(uv, AccessorUse.TextureCoordinates);
-                    OnePerPosition(values.Length / 2, "texture coordinates", vertices, meshes.Count, number);
-                    for (int i = 0; i < values.Length / 2; i++) primitive.TexCoords.Add(new(values[i * 2], values[i * 2 + 1]));
+                    OnePerPosition(values.Length / 2, sampled.Set == 0 ? "texture coordinates" : $"texture coordinates (TEXCOORD_{sampled.Set}, which its material's texture uses)", vertices, meshes.Count, number);
+                    for (int i = 0; i < values.Length / 2; i++)
+                    {
+                        Vector2 coordinates = new(values[i * 2], values[i * 2 + 1]);
+                        if (sampled.Transform is { } transform && (coordinates = Vector2.Transform(coordinates, transform)) is { X: var u, Y: var v } && !(float.IsFinite(u) && float.IsFinite(v)))
+                            throw new InvalidDataException($"Primitive {number} of glTF mesh {meshes.Count} has texture coordinates that are not finite numbers once its material's texture transform (KHR_texture_transform) is applied.");
+                        primitive.TexCoords.Add(coordinates);
+                    }
                 }
                 foreach (var target in p["targets"] as JsonArray ?? [])
                 {
                     if (target?["POSITION"] is { } delta)
                     {
-                        var moved = Vectors(delta, AccessorUse.Positions);
+                        var moved = Vectors(delta, AccessorUse.TargetPositions);
                         OnePerPosition(moved.Count, "morph target positions", vertices, meshes.Count, number);
                         primitive.Targets.Add(moved);
                     }
@@ -619,6 +668,43 @@ public sealed class GltfDocument
 
     /// <summary>An entry's extras when they are an object (anything else is not extras), copied so the parsed text is not held.</summary>
     private static JsonObject? Extras(JsonNode? entry) => entry?["extras"] is JsonObject extras ? (JsonObject)extras.DeepClone() : null;
+
+    /// <summary>
+    /// Where a material's base-colour texture (its texture info) is sampled: the texture coordinate set it names (texCoord,
+    /// 0 when absent) and the transform its KHR_texture_transform extension applies, as glTF states it: the coordinates are
+    /// scaled, rotated by <c>rotation</c> radians (u gains v·sin, v loses u·sin) and offset, and the extension's own texCoord
+    /// replaces the set. Another extension on it may change where the texture lies as well, so it is refused rather than read
+    /// without it, as is a set or transform that is not a valid number.
+    /// </summary>
+    private static (int Set, Matrix3x2? Transform) Sampling(JsonNode info, int material)
+    {
+        int set = info["texCoord"] is { } named ? Set(named) : 0;
+        Matrix3x2? transform = null;
+        if (info["extensions"] is { } extensions)
+        {
+            if (extensions is not JsonObject list) throw Malformed("extensions that are not an object");
+            foreach (var (name, value) in list)
+            {
+                if (name != TextureTransform)
+                    throw new InvalidDataException($"glTF material {material}'s base-colour texture uses extension {(name.Length > 64 ? name[..64] + "…" : name)}, which zStudio does not support; it may change where the texture lies, so the file is refused rather than read without it. Remove the extension (or apply what it does to the texture coordinates) and export again.");
+                if (value is not JsonObject t) throw Malformed($"a {TextureTransform} that is not an object");
+                float[] offset = [0, 0], scale = [1, 1];
+                if (t["offset"] is { } o && !TryNumbers(o, 2, out offset)) throw Malformed($"a {TextureTransform} offset that is not 2 finite numbers");
+                if (t["scale"] is { } s && !TryNumbers(s, 2, out scale)) throw Malformed($"a {TextureTransform} scale that is not 2 finite numbers");
+                float rotation = 0;
+                if (t["rotation"] is { } r && !(TryNumber(r, out rotation) && float.IsFinite(rotation))) throw Malformed($"a {TextureTransform} rotation that is not a finite number");
+                if (t["texCoord"] is { } replaced) set = Set(replaced);
+                // u' = offset.u + cos·scale.u·u + sin·scale.v·v, v' = offset.v − sin·scale.u·u + cos·scale.v·v (translation ·
+                // rotation · scale), as Vector2.Transform applies a Matrix3x2.
+                float cos = (float)Math.Cos(rotation), sin = (float)Math.Sin(rotation);
+                transform = new(cos * scale[0], -sin * scale[0], sin * scale[1], cos * scale[1], offset[0], offset[1]);
+            }
+        }
+        return (set, transform);
+
+        int Set(JsonNode value) => value is JsonValue v && v.TryGetValue(out int i) && i >= 0 ? i : throw Malformed("a texture coordinate set (texCoord) that is not a whole number of zero or more");
+        InvalidDataException Malformed(string problem) => new($"glTF material {material}'s base-colour texture has {problem}.");
+    }
 
     /// <summary>Refuses an attribute that does not hold one value for each position, as glTF requires: the rest would pair values with the wrong corners.</summary>
     private static void OnePerPosition(int count, string what, int positions, int mesh, int primitive)
