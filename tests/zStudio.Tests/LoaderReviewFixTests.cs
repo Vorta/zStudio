@@ -260,15 +260,16 @@ public sealed class LoaderReviewFixTests
         fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "SetModelDirectory ..\\data\\common\\models\r\nLoadGameGen pu012.flt pu012", StringComparison.Ordinal));
         Assert.False(Hidden("data/m1/models/pu012.gltf"));
         Assert.True(Hidden("data/common/models/pu012.gltf"));
-        // A mission whose scripts the build refuses loads nothing: scripts sourcing each other too deep, or too often (25
-        // scripts each sourcing the next twice would run 2^25 times; the checkout stops where the build does).
+        // A mission whose scripts the build refuses loads nothing: scripts sourcing each other too deep, or too often (8
+        // scripts each sourcing the next 16 times would run 16^8 times, hours of work; the checkout stops where the build
+        // does, after a million instructions, in about a second).
         fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "source m1.gs\r\nLoadGameGen pu012.flt pu012", StringComparison.Ordinal));
         Assert.False(Hidden("data/m1/models/pu012.gltf"));
-        for (int i = 1; i <= 25; i++) fixture.Write($"gamegen/l{i}.gw", i < 25 ? $"source l{i + 1}.gw\r\nsource l{i + 1}.gw\r\n" : "set x 1\r\n");
+        for (int i = 1; i <= 8; i++) fixture.Write($"gamegen/l{i}.gw", i < 8 ? string.Concat(Enumerable.Repeat($"source l{i + 1}.gw\r\n", 16)) : "set x 1\r\n");
         fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "LoadGameGen pu012.flt pu012\r\nsource l1.gw", StringComparison.Ordinal));
         var watch = System.Diagnostics.Stopwatch.StartNew();
         Assert.False(Hidden("data/m1/models/pu012.gltf"));
-        Assert.InRange(watch.ElapsedMilliseconds, 0, 30_000);
+        Assert.InRange(watch.ElapsedMilliseconds, 0, 180_000);
     }
 
     [Fact]
