@@ -53,6 +53,29 @@ public sealed class PreviewBuildRound6Tests
     }
 
     [Fact]
+    public async Task AModelRemovedAfterPlanningFailsThePreviewAsAChangeNotABrokenWorld()
+    {
+        using SourceWorldFixture fixture = new();
+        const string Buffer = "data/m1/models/m1.bin";
+        string buffer = fixture.Path(Buffer), moved = buffer + ".moved", model = fixture.Path(Model);
+        // Another program renames the buffer the model names after planning listed it and before the world reads it, so the world
+        // fails to read the model.
+        bool changed = false;
+        OnReport progress = new(p => { if (p.Completed == 0 && !changed) { changed = true; File.Move(buffer, moved); } });
+
+        var refused = await Assert.ThrowsAsync<SourceFileChangedException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Folder(fixture), progress: progress, token: Token));
+        Assert.True(changed);
+        Assert.Contains(Buffer, refused.Message, StringComparison.Ordinal);
+        Assert.StartsWith("Files of the project were added, removed or renamed while the m1 world was building", refused.Message, StringComparison.Ordinal);
+
+        // A world that fails with the project as planned is still a world that does not build.
+        File.Move(moved, buffer);
+        File.WriteAllText(model, "{");
+        var broken = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Folder(fixture), token: Token));
+        Assert.StartsWith("The m1 world does not build: ", broken.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AScriptThatChangesWhileItIsReadAgainFailsThePreviewRatherThanOneOutput()
     {
         using SourceWorldFixture fixture = new();

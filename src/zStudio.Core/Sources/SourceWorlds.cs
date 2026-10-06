@@ -325,7 +325,14 @@ public static partial class SourceWorlds
             {
                 // A source another program changed while it was read fails the build, not only the output reading it.
                 ThrowIfChanged(ex);
-                if (output.Family == "world") throw new InvalidDataException($"The {mission} world does not build: {ex.Message}", ex);
+                if (output.Family == "world")
+                {
+                    // A world that fails because a source was removed or renamed after planning, or changed after it was read, fails
+                    // as that change, not as a world that does not build.
+                    CheckPreviewPlanUnchanged(root, mission, snapshot.Added, selected, token);
+                    snapshot.CheckUnchanged(token);
+                    throw new InvalidDataException($"The {mission} world does not build: {ex.Message}", ex);
+                }
                 results.Add(new(output.Path, output.Family, "failed", 0, 0, [], ex.Message));
             }
         }
