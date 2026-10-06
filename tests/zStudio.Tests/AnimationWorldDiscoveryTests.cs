@@ -15,10 +15,13 @@ public sealed class AnimationWorldDiscoveryTests
         using var fixture = new Fixture(39, 27, 15);
         var token = TestContext.Current.CancellationToken;
         await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
-        var root = ZrdNode.Create(ZrdKind.Array) with { Children = [ZrdNode.Create(ZrdKind.String) with { Text = new string('x', 2_000_000) }] };
+        // A long text and many small entries: expanding the tree would wrap the text without copying it, but would make
+        // an object for every entry.
+        var root = ZrdNode.Create(ZrdKind.Array) with { Children = [ZrdNode.Create(ZrdKind.String) with { Text = new string('x', 2_000_000) },
+            .. Enumerable.Range(0, 20_000).Select(i => ZrdNode.Create(ZrdKind.Int) with { Bits = (uint)i })] };
         var resource = fixture.AddResource("effects.zrd", ZrdWriter.Write(root, token));
         // The count is the whole process's: other work (the runner reporting results, finalizers) can only add to it, so
-        // the least of a few loads is the setup's own (about 90 KB; expanding the unused string alone takes 4 MB).
+        // the least of a few loads is the setup's own (about 90 KB; expanding the unused entries takes several MB).
         long allocated = long.MaxValue;
         for (int attempt = 0; attempt < 3; attempt++)
         {
@@ -29,6 +32,7 @@ public sealed class AnimationWorldDiscoveryTests
         }
         Assert.True(allocated < 1_000_000, $"Animation setup allocated {allocated:N0} bytes for unused effects.");
         Assert.Equal(2_000_000, ((ZrdNode)resource.Assets[0].Content!).Children[0].Text.Length);
+        Assert.Equal(20_001, ((ZrdNode)resource.Assets[0].Content!).Children.Count);
     }
 
     [Theory]
