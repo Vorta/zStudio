@@ -44,7 +44,7 @@ public sealed class BlenderConflictException(IReadOnlyList<string> files, string
 /// changes: the model's glTF and buffer, and each texture that is new or changed. Nothing reaches the project until the
 /// plan is applied to the workspace, and nothing is applied without the user asking (Update from export).
 /// </summary>
-public static class SourceBlender
+public static partial class SourceBlender
 {
     public const string ExportFolder = "zstudio/export";
     private const string ManifestName = "manifest.json";
@@ -390,23 +390,41 @@ public static class SourceBlender
     }
 
     /// <summary>
-    /// Whether a script loads the model as a pickup (LoadGameGen file puNNN), whose collision volume the game hides. Scripts
-    /// name a model by its file name and find it through their model folders; for what a viewer shows, the name decides.
+    /// Whether a mission's build loads the model as a pickup (LoadGameGen file puNNN), whose collision volume the game hides:
+    /// the load resolves its file as the build does, through the model folders the scripts set up to that point, so a
+    /// model of the same name in another folder is not the pickup (reconstruction decides the same per written file).
     /// </summary>
     private static bool LoadedAsPickup(SourceWorkspace workspace, string model, CancellationToken token)
     {
         string stem = Path.GetFileNameWithoutExtension(model);
         var added = workspace.Overlay().Keys.Where(k => !File.Exists(SourceProject.Resolve(workspace.Root, k))).ToArray();
-        foreach (string script in SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), added))
+        // Each script once, as the build reads it (instruction lines); null when it does not exist.
+        Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<IReadOnlyList<string>>? Script(string name)
         {
+            string relative = $"{SourceProject.GameGenFolder}/{name.Replace('\\', '/')}";
+            if (scripts.TryGetValue(relative, out var lines)) return lines;
             token.ThrowIfCancellationRequested();
-            if (workspace.Read(script, token) is not { } bytes) continue;
-            foreach (var line in GameGenScriptSyntax.Parse(bytes).Lines)
-                if (line.Tokens is ["LoadGameGen", var file, var name, ..] && Worlds.WorldGltf.IsPickupName(name)
-                    && Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).Equals(stem, StringComparison.OrdinalIgnoreCase)) return true;
+            return scripts[relative] = workspace.Read(relative, token) is { } bytes ? [.. GameGenScriptSyntax.Parse(bytes).Lines.Where(l => l.IsInstruction).Select(l => l.Tokens)] : null;
+        }
+        // The missions the project builds: a data/mN folder with its gamegen/mN.gs.
+        foreach (string entry in SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), added))
+        {
+            string name = Path.GetFileNameWithoutExtension(entry);
+            if (!MissionScript().IsMatch(entry) || !Directory.Exists(SourceProject.Resolve(workspace.Root, $"{SourceProject.DataFolder}/{name}"))) continue;
+            List<Worlds.TracedInstruction> trace;
+            // A mission whose scripts the build cannot run loads nothing.
+            try { trace = Worlds.ScriptTrace.Trace(Script, name + ".gs", []); }
+            catch (InvalidDataException) { continue; }
+            foreach (var step in trace)
+                if (step is { Command: "LoadGameGen", Args: [var file, var node, ..] } && Worlds.WorldGltf.IsPickupName(node)
+                    && Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).Equals(stem, StringComparison.OrdinalIgnoreCase)
+                    && Worlds.WorldAssembler.ResolveModel(file, step.ModelDirectories, workspace.Exists) is { } loaded && loaded.Equals(model, StringComparison.OrdinalIgnoreCase)) return true;
         }
         return false;
     }
+    [System.Text.RegularExpressions.GeneratedRegex(@"\Agamegen/m\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex MissionScript();
 
     /// <summary>How a texture is transparent, or null when it is not a PNG the packs could read (the build reports those).</summary>
     private static Formats.TextureTransparency? Transparency(byte[] png, CancellationToken token)

@@ -78,7 +78,9 @@ internal sealed class ScriptConditions
 /// <summary>
 /// The instructions a mission's build script runs, in order, with <c>source</c> followed and macros expanded, up to
 /// the point where it writes the world. Model directory changes are tracked, including the most recent one made by
-/// the running script itself (the folder its models came from).
+/// the running script itself (the folder its models came from). Scripts the build refuses (sourcing each other more than
+/// <see cref="WorldAssembler.MaximumScriptDepth"/> levels deep, or running more than
+/// <see cref="WorldAssembler.MaximumInstructions"/> instructions) are refused with <see cref="InvalidDataException"/>.
 /// </summary>
 public static class ScriptTrace
 {
@@ -86,6 +88,8 @@ public static class ScriptTrace
     {
         List<TracedInstruction> result = []; Dictionary<string, string> variables = new(StringComparer.Ordinal);
         List<string> directories = [], textures = []; bool written = false; ScriptConditions conditions = new();
+        // As many instructions as the build runs: scripts sourcing each other repeatedly would otherwise multiply.
+        int instructions = 0;
         // Instructions share a directory list until it changes.
         IReadOnlyList<string> modelView = [], textureView = [];
         Run(entry, 0);
@@ -93,13 +97,16 @@ public static class ScriptTrace
 
         void Run(string name, int depth)
         {
-            if (depth > WorldAssembler.MaximumScriptDepth || written) return;
+            // The build refuses scripts that source each other this deep.
+            if (depth > WorldAssembler.MaximumScriptDepth) throw new InvalidDataException($"Scripts source each other more than {WorldAssembler.MaximumScriptDepth} levels deep.");
+            if (written) return;
             var lines = script(name.Replace('/', '\\'));
             if (lines == null) { notes.Add($"Script {name} is missing."); return; }
             string? ownDirectory = null;
             foreach (var line in lines)
             {
                 if (written) return;
+                if (++instructions > WorldAssembler.MaximumInstructions) throw new InvalidDataException("The scripts run too many instructions.");
                 string command = line[0];
                 if (!conditions.Runs(line, variables)) continue;
                 string[] args = line.Skip(1).Select(Expand).ToArray();

@@ -39,7 +39,12 @@ internal static partial class WorldSources
         public string? Path { get; set; }
     }
 
-    public static bool IsReference(WorldNode node) => node.Class == WorldNodeClass.Object3D && node.Model == null && node.Children.Count > 0 && node.Name.EndsWith(".flt", StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// An OpenFlight external reference as the shipped world shows it: an object3d without geometry named for its file. A
+    /// reference to a file without nodes has no children, but the loader cached and copied it like any other (see
+    /// <see cref="OriginalLoader"/>), so the inference replays it and the reconstruction writes it, as the build reads it.
+    /// </summary>
+    public static bool IsReference(WorldNode node) => node.Class == WorldNodeClass.Object3D && node.Model == null && node.Name.EndsWith(".flt", StringComparison.OrdinalIgnoreCase);
     private static string Stem(string file) => System.IO.Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).ToLowerInvariant();
 
     /// <param name="textureFiles">Every texture source written (project paths).</param>
@@ -172,11 +177,18 @@ internal static partial class WorldSources
         {
             // A node under several parents is visited once per mission; the hierarchy is bounded by the reader.
             if (!visited.Add((node, mission))) return;
-            foreach (var child in node.Children) Visit(child, mission, textureDirectories);
+            // The references the inference found copying one part's cache (one name: the same names in the same shape) are
+            // one file, written from the copy visited first, which is the earliest made (records in order; a copy is never
+            // inside another copy of its own file). Another copy differs only where a script changed it after the load, and
+            // the scripts' lookups (FindNode, FindSubNode) reach the newest node of a name first: a lookup reaches an
+            // earlier copy only once the later ones have lost the name, and then the copies' names or shapes differ and
+            // they are not one part. The other copies' content is not the file's, so it is not visited (its references
+            // would otherwise become files no file uses); their own records are the referencing file's.
+            bool laterCopy = parts.TryGetValue(node, out var copied) && Reference(node) && partUnits.ContainsKey(node.Name);
+            HashSet<WorldNode>? notFile = laterCopy ? new(copied!, ReferenceEqualityComparer.Instance) : null;
+            foreach (var child in node.Children) if (notFile == null || !notFile.Contains(child)) Visit(child, mission, textureDirectories);
             if (!Reference(node) || referenceOf.ContainsKey(node)) return;
-            // The references the inference found copying one part's cache (one name) are one file, written from the first
-            // copy: another copy's records may differ where a script changed them after the load, which it does again.
-            if (parts.ContainsKey(node) && partUnits.TryGetValue(node.Name, out var part)) { part.Missions.Add(mission); referenceOf[node] = (part, mission); return; }
+            if (laterCopy) { var part = partUnits[node.Name]; part.Missions.Add(mission); referenceOf[node] = (part, mission); return; }
             var content = ContentOf(node);
             string hash = Hash(content, node.Zone & 0xFF);
             var key = (Stem(node.Name), hash);

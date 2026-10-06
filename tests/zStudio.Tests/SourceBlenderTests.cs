@@ -136,8 +136,9 @@ public sealed class SourceBlenderTests
             new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("ammo.bin");
         Assert.DoesNotContain("alphaMode", Encoding.UTF8.GetString(json));
         fixture.Write("data/m1/models/ammo.gltf", json); fixture.Write("data/m1/models/ammo.bin", bin);
-        // A script loads it as a pickup, whose collision volume the game switches off.
+        // m1's build loads it as a pickup (from the model folder its script set), whose collision volume the game switches off.
         fixture.Write("gamegen/support/pickup.gw", "LoadGameGen ammo.gltf pu012\r\n");
+        fixture.Write("gamegen/m1.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs")).Replace("# no vehicles", "source support\\pickup.gw", StringComparison.Ordinal));
 
         var checkout = SourceBlender.Checkout(new SourceWorkspace(fixture.Project), "data/m1/models/ammo.gltf", Token);
         var materials = JsonNode.Parse(File.ReadAllText(checkout.Input))!["materials"]!.AsArray();

@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace Recoil.Zbd.Core.Worlds;
@@ -33,6 +32,23 @@ internal static class OriginalLoader
     /// </summary>
     public const int MaximumCachedNodes = 1 << 20;
 
+    /// <summary>
+    /// How many nodes caches may mirror before the work is refused. Each outermost load (its nested caches included) may
+    /// mirror <see cref="MaximumCachedNodes"/>, as the build has it; the database inference also counts every load it
+    /// simulates, in every reading it tries, against one budget for the whole inference (<see cref="Load"/>), so that a
+    /// refusal stops the inference once rather than one reading at a time.
+    /// </summary>
+    internal sealed class MirrorBudget(int limit, Func<int, string> refusal, MirrorBudget? total = null)
+    {
+        private int count;
+        public void Take() { total?.Take(); if (++count > limit) throw new InvalidDataException(refusal(limit)); }
+        /// <summary>One load's budget, also counted against this one.</summary>
+        public MirrorBudget Load() => new(MaximumCachedNodes, Refusal, this);
+        /// <summary>One load's budget, as the build has it.</summary>
+        public static MirrorBudget PerLoad() => new(MaximumCachedNodes, Refusal);
+        private static string Refusal(int limit) => $"The files a model references, nested in each other, make the loader cache more than {limit:N0} nodes.";
+    }
+
     public sealed class Hooks
     {
         /// <summary>The engine took a slot for the node.</summary>
@@ -57,8 +73,8 @@ internal static class OriginalLoader
         /// </summary>
         public Func<WorldNode, bool>? IsReference { get; init; }
         public CancellationToken Token { get; init; }
-        /// <summary>The nodes the caches of the outermost load mirrored so far (see <see cref="MaximumCachedNodes"/>).</summary>
-        internal StrongBox<int>? Mirrored { get; init; }
+        /// <summary>The budget the caches' mirrors count against (see <see cref="MirrorBudget"/>); by default one of the outermost load's own.</summary>
+        internal MirrorBudget? Mirrored { get; init; }
     }
 
     private static bool Referenced(WorldNode node, IReadOnlyList<WorldNode> content, Hooks hooks) => hooks.IsReference?.Invoke(node) ?? content.Count > 0;
@@ -81,7 +97,7 @@ internal static class OriginalLoader
         List<WorldNode> caches = [];
         HashSet<string> files = new(StringComparer.OrdinalIgnoreCase);
         // One count for the outermost load and every cache inside it.
-        var mirrored = hooks.Mirrored ?? new StrongBox<int>();
+        var mirrored = hooks.Mirrored ?? MirrorBudget.PerLoad();
         foreach (var reference in References(cached, hooks))
             if (files.Add(hooks.File(reference))) caches.Add(Cache(reference, hooks, mirrored));
         HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
@@ -178,7 +194,7 @@ internal static class OriginalLoader
     }
 
     /// <summary>A file's cache: its own nodes (copies of a reference's content), loaded as a load of their own under a root named for the file.</summary>
-    private static WorldNode Cache(WorldNode reference, Hooks hooks, StrongBox<int> mirrored)
+    private static WorldNode Cache(WorldNode reference, Hooks hooks, MirrorBudget mirrored)
     {
         Dictionary<WorldNode, WorldNode> original = new(ReferenceEqualityComparer.Instance);
         // Each node's content once per cache: asked per child and per nested cache level, it would multiply with every level.
@@ -208,9 +224,9 @@ internal static class OriginalLoader
     /// instance definition has no name of its own, but its copies keep its children, models and transforms.
     /// </summary>
     internal static WorldNode Mirror(string name, IReadOnlyList<WorldNode> content, Dictionary<WorldNode, WorldNode> original, Func<WorldNode, IReadOnlyList<WorldNode>> contentOf,
-        CancellationToken token = default, StrongBox<int>? mirrored = null)
+        CancellationToken token = default, MirrorBudget? mirrored = null)
     {
-        mirrored ??= new();
+        mirrored ??= MirrorBudget.PerLoad();
         Dictionary<WorldNode, WorldNode> mirror = new(ReferenceEqualityComparer.Instance);
         Dictionary<int, WorldNode> definitions = [];
         Shapes shapes = new();
@@ -220,7 +236,7 @@ internal static class OriginalLoader
             token.ThrowIfCancellationRequested();
             int? key = !copied && node.Name.Length == 0 ? shapes.Of(node) : null;
             if (key is { } shape && definitions.TryGetValue(shape, out var shared)) return shared;
-            if (++mirrored.Value > MaximumCachedNodes) throw new InvalidDataException($"The files a model references, nested in each other, make the loader cache more than {MaximumCachedNodes:N0} nodes.");
+            mirrored.Take();
             made = new(node.Name, node.Class); mirror[node] = made; original[made] = node;
             if (key is { } first) definitions[first] = made;
             var inner = Within(contentOf(node));

@@ -21,7 +21,20 @@ public static partial class WorldGltf
     public static void ExplicitZones(JsonObject root)
     {
         if (root["nodes"] is not JsonArray nodes) return;
-        var zones = FileZones(nodes, Parents(nodes));
+        var parents = Parents(nodes);
+        var zones = FileZones(nodes, parents);
+        // A shared node is one node, which import takes, with its zone, from its first copy in the file. A later copy
+        // without a zone of its own under a parent of another zone states the first copy's, as the build reads it, so the
+        // copies agree when the editor writes them back (CheckInstances refuses copies that differ).
+        Dictionary<long, uint?> shared = [];
+        bool stated = false;
+        foreach (int i in ImportOrder(root, nodes))
+        {
+            if (nodes[i] is not JsonObject node || Mark(((node["extras"] as JsonObject)?[Key] as JsonObject)?["instance"]) is not { } mark) continue;
+            if (!shared.TryGetValue(mark, out var first)) { shared[mark] = zones[i].Zone; continue; }
+            if (first is { } zone && zones[i].Zone != zone && StatedZone((node["extras"] as JsonObject)?[Key]) == null && Engine(node) is { } copy) { copy["zone"] = (int)zone; stated = true; }
+        }
+        if (stated) zones = FileZones(nodes, parents);
         for (int i = 0; i < nodes.Count; i++)
         {
             if (nodes[i] is not JsonObject node || StatedZone((node["extras"] as JsonObject)?[Key]) != null || Engine(node) is not { } engine) continue;
@@ -54,6 +67,33 @@ public static partial class WorldGltf
             // A node that had no engine values gets none.
             if (engine.Count == 0 && node["extras"] is JsonObject extras) { extras.Remove(Key); if (extras.Count == 0) node.Remove("extras"); }
         }
+    }
+
+    /// <summary>The nodes in the order import reaches them: the scene's roots in order, each node before its children.</summary>
+    private static List<int> ImportOrder(JsonObject root, JsonArray nodes)
+    {
+        List<int> roots = [];
+        if (root["scenes"] is JsonArray { Count: > 0 } scenes)
+        {
+            int scene = root["scene"] is JsonValue value && value.TryGetValue(out int chosen) ? Math.Clamp(chosen, 0, scenes.Count - 1) : 0;
+            foreach (var r in (scenes[scene] as JsonObject)?["nodes"] as JsonArray ?? []) if (Index(r, nodes.Count) is { } index) roots.Add(index);
+        }
+        else
+        {
+            // Without scenes, every node that is nobody's child is a root.
+            var parents = Parents(nodes);
+            for (int i = 0; i < nodes.Count; i++) if (parents[i] < 0) roots.Add(i);
+        }
+        List<int> order = []; bool[] seen = new bool[nodes.Count];
+        Stack<int> pending = new(Enumerable.Reverse(roots));
+        while (pending.TryPop(out int i))
+        {
+            if (seen[i]) continue;
+            seen[i] = true; order.Add(i);
+            if ((nodes[i] as JsonObject)?["children"] is JsonArray children)
+                for (int k = children.Count - 1; k >= 0; k--) if (Index(children[k], nodes.Count) is { } child && !seen[child]) pending.Push(child);
+        }
+        return order;
     }
 
     /// <summary>Each node's parent in a glTF node list (the first that lists it), or −1.</summary>
@@ -148,9 +188,10 @@ public static partial class WorldGltf
     }
 
     /// <summary>A node's instance number, as import reads it (a whole number from 1); null for none or an invalid one.</summary>
-    private static long? Mark(GltfNode node)
+    private static long? Mark(GltfNode node) => Mark((node.Extras?[Key] as JsonObject)?["instance"]);
+    private static long? Mark(JsonNode? instance)
     {
-        if ((node.Extras?[Key] as JsonObject)?["instance"] is not JsonValue v) return null;
+        if (instance is not JsonValue v) return null;
         long n = v.TryGetValue(out long whole) ? whole : v.TryGetValue(out int small) ? small : v.TryGetValue(out double d) && d == Math.Floor(d) && Math.Abs(d) < 9e15 ? (long)d : 0;
         return n is >= 1 and <= int.MaxValue ? n : null;
     }

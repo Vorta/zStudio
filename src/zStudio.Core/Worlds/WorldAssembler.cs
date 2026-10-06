@@ -562,15 +562,17 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// The first model directory (most recently added first) holding the file the script names: a .gltf or .glb file as
     /// named, or for another name (the original OpenFlight .flt of older projects) its .gltf or .glb.
     /// </summary>
-    public string? ResolveModel(string file)
+    public string? ResolveModel(string file) => ResolveModel(file, modelDirectories, files.Exists);
+    /// <summary>The model a <c>LoadGameGen</c> of <paramref name="file"/> loads from <paramref name="directories"/> (searched in order), or null.</summary>
+    internal static string? ResolveModel(string file, IReadOnlyList<string> directories, Func<string, bool> exists)
     {
         string name = Path.GetFileName(file.Replace('\\', '/')), stem = Path.GetFileNameWithoutExtension(name), named = Path.GetExtension(name).ToLowerInvariant();
         string[] extensions = named is ".gltf" or ".glb" ? [named] : [".gltf", ".glb"];
-        foreach (string directory in modelDirectories)
+        foreach (string directory in directories)
             foreach (string extension in extensions)
             {
                 string candidate = $"{directory}/{stem}{extension}";
-                if (files.Exists(candidate)) return candidate;
+                if (exists(candidate)) return candidate;
             }
         return null;
     }

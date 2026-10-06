@@ -46,13 +46,46 @@ internal static partial class DatabaseRecords
         public void Release(WorldNode node) => Free.Push(Slots[node]);
     }
 
-    /// <param name="isReference">Whether a node of the shipped world is an external reference (its children a referenced file's content).</param>
-    public static Records? Infer(GameZWorld world, WorldDecomposition build, Func<WorldNode, bool> isReference, string mission, List<string> notes, CancellationToken token)
+    /// <summary>
+    /// The most nodes the caches the inference simulates may mirror in all: every load it replays, in every reading it tries
+    /// (the build's own limit, <see cref="OriginalLoader.MaximumCachedNodes"/>, holds for one load). The shipped databases
+    /// need at most 2.7 million (1999 and 1998 m2; m6 1.9 million, the others far fewer).
+    /// </summary>
+    public const int MaximumMirroredNodes = 1 << 24;
+
+    /// <summary>
+    /// The children of the database's nodes as the world lists them. Each reading of the database puts them in the order
+    /// they were made (<see cref="Parts.OrderChildren"/>); it starts from the world's order, and only the reading that is kept
+    /// leaves its order behind, so a refused or abandoned reading never changes the order a fallback keeps.
+    /// </summary>
+    private sealed class ChildOrder(IEnumerable<WorldNode> nodes)
     {
-        var slot = GameZWriter.NodeSlots(world);
-        Records? Fail(string reason) { notes.Add($"{mission}: the mission database keeps the world's object order without its groups: {reason}"); return null; }
+        private readonly List<(WorldNode Node, WorldNode[] Children)> shipped = [.. nodes.Select(n => (n, n.Children.ToArray()))];
+        public void Restore()
+        {
+            foreach (var (node, children) in shipped)
+                if (!node.Children.SequenceEqual(children)) { node.Children.Clear(); node.Children.AddRange(children); }
+        }
+    }
+
+    /// <param name="isReference">Whether a node of the shipped world is an external reference (its children a referenced file's content).</param>
+    /// <param name="mirrorLimit">The most nodes the simulated caches may mirror in all (see <see cref="MaximumMirroredNodes"/>); beyond it the inference stops.</param>
+    /// <exception cref="InvalidDataException">The inference would mirror more cached nodes than <paramref name="mirrorLimit"/>; the database's nodes keep the world's child order.</exception>
+    public static Records? Infer(GameZWorld world, WorldDecomposition build, Func<WorldNode, bool> isReference, string mission, List<string> notes, CancellationToken token, int mirrorLimit = MaximumMirroredNodes)
+    {
         var database = build.Loads.FirstOrDefault(l => l.Database);
         if (database == null || database.Content.Count == 0) return null;
+        ChildOrder shipped = new(WorldAssembler.Subtree(database.Content));
+        OriginalLoader.MirrorBudget budget = new(mirrorLimit, limit => $"reading its files from the slots would make the loader's caches mirror more than {limit:N0} nodes in all.");
+        try { return Read(world, build, database, isReference, mission, notes, shipped, budget, token); }
+        catch { shipped.Restore(); throw; }
+    }
+
+    private static Records? Read(GameZWorld world, WorldDecomposition build, LoadedModel database, Func<WorldNode, bool> isReference, string mission, List<string> notes,
+        ChildOrder shipped, OriginalLoader.MirrorBudget budget, CancellationToken token)
+    {
+        var slot = GameZWriter.NodeSlots(world);
+        Records? Fail(string reason) { shipped.Restore(); notes.Add($"{mission}: the mission database keeps the world's object order without its groups: {reason}"); return null; }
         // The steps that made nodes, in order: script loads (root and file) and the other creating commands.
         List<(int Step, LoadedModel? Load, WorldNode? Node)> Steps(IEnumerable<LoadedModel> loads) => [.. loads.Where(l => !l.Database && l.Root != null).Select(l => (l.Step, Load: (LoadedModel?)l, Node: (WorldNode?)null))
             .Concat(build.Created.Select(c => (Step: c.Key, Load: (LoadedModel?)null, Node: (WorldNode?)c.Value))).OrderBy(s => s.Step)];
@@ -67,7 +100,7 @@ internal static partial class DatabaseRecords
         foreach (var (_, load, node) in steps.Where(s => s.Step < database.Step))
         {
             token.ThrowIfCancellationRequested();
-            if (load != null) OriginalLoader.Load(load.Root!, load.Content, load.Content, new() { Allocate = n => Check(n, before.Take(n)), Free = before.Release, Content = Content, File = File, Token = token });
+            if (load != null) OriginalLoader.Load(load.Root!, load.Content, load.Content, new() { Allocate = n => Check(n, before.Take(n)), Free = before.Release, Content = Content, File = File, IsReference = isReference, Token = token, Mirrored = budget.Load() });
             else Check(node!, before.Take(node!));
         }
         if (mismatch != null) return Fail($"before it, {mismatch}.");
@@ -119,7 +152,7 @@ internal static partial class DatabaseRecords
         {
             foreach (var (variant, path) in Variants())
             {
-                if (Parts.Infer(slot, isReference, database, variant, before, mission, token, search, kept) is { } tried && (parts == null || tried.Inexact == null || tried.Matched > parts.Matched))
+                if (Parts.Infer(slot, isReference, database, variant, before, mission, shipped.Restore, budget, token, search, kept) is { } tried && (parts == null || tried.Inexact == null || tried.Matched > parts.Matched))
                 { parts = tried; list = variant; laterPaths = path is { } chosen ? [chosen] : []; }
                 if (parts is { Inexact: null }) break;
             }
@@ -128,11 +161,7 @@ internal static partial class DatabaseRecords
         // The second path a later load's free list needs also serves the file's later references that copy its cache,
         // whichever reading of the database below is kept: they all build on that free list.
         var followed = Follow(laterPaths);
-        if (parts != null && parts.Inexact == null)
-        {
-            parts.FollowModels();
-            return FromParts(parts, world, mission) with { LaterPaths = [.. followed, .. parts.FilePaths] };
-        }
+        if (parts != null && parts.Inexact == null) return Accept(parts);
         // 4. Otherwise the database as one file, when its order gives every node its shipped slot; else the parts as far
         //    as they go, or the world's object order.
         var single = Single(out string? reason);
@@ -140,16 +169,24 @@ internal static partial class DatabaseRecords
         if (parts != null)
         {
             notes.Add($"{mission}: the mission database is reconstructed with {parts.Content.Count} parts in files of their own, but not every node takes its shipped slot when built: {parts.Inexact}.");
-            parts.FollowModels();
-            return FromParts(parts, world, mission) with { LaterPaths = [.. followed, .. parts.FilePaths] };
+            return Accept(parts);
         }
         return SlotOrder(reason!);
+
+        // The reading kept: the children in the order it found them made, whatever order readings tried after it left.
+        Records Accept(Parts reading)
+        {
+            shipped.Restore(); reading.OrderChildren();
+            reading.FollowModels();
+            return FromParts(reading, world, mission) with { LaterPaths = [.. followed, .. reading.FilePaths] };
+        }
 
         // 5. Otherwise the slots alone: the objects and a group at every slot the deletion freed, in slot order. An object
         //    made later took a later slot, so of objects that share a name the shipped one is still made last and found
         //    first by name; the later loads reuse the groups' slots below the database's objects, as they did in the game.
         Records SlotOrder(string why)
         {
+            shipped.Restore();
             notes.Add($"{mission}: the mission database keeps its objects in the order of their shipped slots, with a group at each slot the build freed, since its exact order is not known: {why}");
             int groupCount = 0;
             List<(int Slot, WorldNode Node)> sequence = [.. database.Content.Select(o => (slot[o], o))];
@@ -238,7 +275,11 @@ internal static partial class DatabaseRecords
         foreach (var (_, load, node) in steps.Where(s => s.Step > database.Step))
         {
             token.ThrowIfCancellationRequested();
-            if (load != null) OriginalLoader.Load(load.Root!, load.Content, load.Content, new() { Allocate = Take, Free = n => pushed.Push(marks[n]), Content = Content, File = n => otherPaths != null && otherPaths.Contains(n) ? File(n) + "#2" : File(n), Token = token });
+            if (load != null) OriginalLoader.Load(load.Root!, load.Content, load.Content, new()
+            {
+                Allocate = Take, Free = n => pushed.Push(marks[n]), Content = Content, File = n => otherPaths != null && otherPaths.Contains(n) ? File(n) + "#2" : File(n),
+                IsReference = isReference, Token = token, Mirrored = budget.Load(),
+            });
             else Take(node!);
         }
         if (mismatch != null) { failure = $"after it, {mismatch}."; return null; }
@@ -260,6 +301,8 @@ internal static partial class DatabaseRecords
         Records? Single(out string? reason)
         {
         reason = null;
+        // The database as one file reads the world's own child order, not what another reading left.
+        shipped.Restore();
         // The database load replayed: its records are the objects in the order the table hands out their slots, with a
         //    group wherever the next slot is no object's. Which references are inline copies, and so which files are
         //    cached, is refined in rounds.
@@ -290,7 +333,11 @@ internal static partial class DatabaseRecords
                     else { WorldNode group = Group(); groups.Add(group); records.Add(group); yield return group; }
                 }
             }
-            OriginalLoader.Load(root, Records(), order, new() { Allocate = n => Check(n, table.Take(n)), Free = table.Release, Content = DatabaseContent, File = File, Token = token });
+            OriginalLoader.Load(root, Records(), order, new()
+            {
+                Allocate = n => Check(n, table.Take(n)), Free = table.Release, Content = DatabaseContent, File = File,
+                IsReference = n => isReference(n) && !inline.Contains(n), Token = token, Mirrored = budget.Load(),
+            });
             List<WorldNode> recorded = [.. records.Where(r => !groups.Contains(r))];
             bool settled = inline.Count == inlineBefore && recorded.SequenceEqual(order);
             order = [.. recorded, .. order.Where(o => !placed.Contains(o))];

@@ -35,6 +35,8 @@ internal static partial class DatabaseRecords
         private readonly Dictionary<int, List<int>> deletedChildren = [];
         private readonly string mission;
         private readonly CancellationToken token;
+        /// <summary>The inference's budget for mirrored cache nodes, shared by every reading it tries.</summary>
+        private readonly OriginalLoader.MirrorBudget budget;
 
         /// <summary>The database's root: its records are its children.</summary>
         public WorldNode Root { get; }
@@ -72,9 +74,9 @@ internal static partial class DatabaseRecords
         /// <param name="deletion">The deletion's part of the free list, from its top.</param>
         /// <param name="tolerant">Whether nodes the order leaves out (records made from slots it does not know yet) are passed over.</param>
         /// <param name="nested">Whether the deletion's tree nests by the order nodes were freed in (else by the order they were made in).</param>
-        private Parts(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, IReadOnlyList<int> order, List<int> deletion, string mission, CancellationToken token, bool tolerant = false, bool nested = true, Retained? prefix = null)
+        private Parts(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, IReadOnlyList<int> order, List<int> deletion, string mission, OriginalLoader.MirrorBudget budget, CancellationToken token, bool tolerant = false, bool nested = true, Retained? prefix = null)
         {
-            this.slot = slot; this.isModelReference = isModelReference; this.mission = mission; this.token = token; this.tolerant = tolerant; this.prefix = prefix;
+            this.slot = slot; this.isModelReference = isModelReference; this.mission = mission; this.budget = budget; this.token = token; this.tolerant = tolerant; this.prefix = prefix;
             deletedSlots = [.. deletion];
             foreach (var o in database.Content) top[slot[o]] = o;
             foreach (var n in WorldAssembler.Subtree(database.Content)) live[slot[n]] = n;
@@ -143,7 +145,10 @@ internal static partial class DatabaseRecords
         /// <param name="search">Whether to search every plausible boundary between the deletion's and the caches' entries, not
         /// only the one where the records start on one run of slots.</param>
         /// <param name="kept">Names the world's free slots kept (a world that left slots free), by slot.</param>
-        public static Parts? Infer(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, List<int> list, Table before, string mission, CancellationToken token, bool search = false, IReadOnlyDictionary<int, string>? kept = null)
+        /// <param name="restore">Puts the database's nodes' children back in the world's order: each reading starts from it.</param>
+        /// <param name="mirrors">The inference's budget for mirrored cache nodes; exhausting it stops the inference, not just one reading.</param>
+        public static Parts? Infer(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, List<int> list, Table before, string mission,
+            Action restore, OriginalLoader.MirrorBudget mirrors, CancellationToken token, bool search = false, IReadOnlyDictionary<int, string>? kept = null)
         {
             if (list.Count == 0 || database.Content.Count == 0) return null;
             int root = list[0];
@@ -276,7 +281,8 @@ internal static partial class DatabaseRecords
                 Try(order, deletion, tolerant, nested: true, prefix) ?? Try(order, deletion, tolerant, nested: false, prefix);
             Parts? Try(List<int> order, List<int> deletion, bool tolerant, bool nested, Retained? prefix)
             {
-                Parts parts = new(slot, isModelReference, database, order, deletion, mission, token, tolerant, nested, prefix);
+                restore();
+                Parts parts = new(slot, isModelReference, database, order, deletion, mission, mirrors, token, tolerant, nested, prefix);
                 if (!parts.Covered || !parts.Walk()) return null;
                 // One child order for everything after the walk: the order the records were made in.
                 if (!tolerant) parts.OrderChildren();
@@ -618,6 +624,11 @@ internal static partial class DatabaseRecords
                 foreach (var n in Below(child)) yield return n;
         }
         private IReadOnlyList<WorldNode> ContentOf(WorldNode node) => Content.TryGetValue(node, out var content) ? content : isModelReference(node) && !Made.ContainsKey(node) ? node.Children : [];
+        /// <summary>
+        /// Whether the loader caches what the node references: a part, or a model reference, also one to a file without nodes
+        /// (no content, but a cache and a copy all the same, as the build has it).
+        /// </summary>
+        private bool Cached(WorldNode node) => Content.ContainsKey(node) || isModelReference(node) && !Made.ContainsKey(node);
 
         /// <summary>The database's references in record order, not looking inside parts' content.</summary>
         public List<WorldNode> References() => ReferencesInOrder();
@@ -772,15 +783,16 @@ internal static partial class DatabaseRecords
             // Each node's content once, as a set: asked per child, a wide part would cost its width for every child.
             Dictionary<WorldNode, HashSet<WorldNode>> contents = new(ReferenceEqualityComparer.Instance);
             HashSet<WorldNode> ContentSet(WorldNode node) => contents.TryGetValue(node, out var found) ? found : contents[node] = new(ContentOf(node), ReferenceEqualityComparer.Instance);
-            System.Runtime.CompilerServices.StrongBox<int> mirrored = new();
-            var root = OriginalLoader.Mirror(name, content, original, ContentOf, token, mirrored);
+            var load = budget.Load();
+            var root = OriginalLoader.Mirror(name, content, original, ContentOf, token, load);
             OriginalLoader.Load(root, root.Children.ToList(), root.Children.ToList(), new()
             {
                 Allocate = n => taken[n] = table.Take(),
                 Free = n => table.Push(taken[n]),
                 Content = m => original.TryGetValue(m, out var o) ? [.. m.Children.Where(c => original.TryGetValue(c, out var oc) && ContentSet(o).Contains(oc))] : [],
                 File = m => original.TryGetValue(m, out var o) ? Key(o) : m.Name,
-                Token = token, Mirrored = mirrored,
+                IsReference = m => original.TryGetValue(m, out var o) && Cached(o),
+                Token = token, Mirrored = load,
             });
             List<int> freedOrder = [];
             OriginalLoader.Destroy(root, x => freedOrder.Add(taken[x]));
@@ -1154,7 +1166,8 @@ internal static partial class DatabaseRecords
                 Free = n => t.Push(taken[n]),
                 Content = ContentOf,
                 File = Key,
-                Token = token,
+                IsReference = Cached,
+                Token = token, Mirrored = budget.Load(),
             });
             Matched = matched;
             if (mismatch != null) { Inexact ??= $"{mismatch} ({matched} nodes took their slots first)"; return; }

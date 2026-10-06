@@ -235,9 +235,12 @@ public static class ZoneProbe
                     case WorldNodeClass.Camera or WorldNodeClass.Light:
                         // A light keeps the bounds it was created with, tested like any node's; a camera's are not tested.
                         if (node.Class == WorldNodeClass.Light && count > 1 && Outside(node, parent)) continue;
-                        // Translation (+0x14) and Euler angles (+0x20), turned Y, X, Z as the engine's matrix stack applies them.
+                        // Translation (+0x14) and local Euler angles, turned Y, X, Z as the engine's matrix stack applies them:
+                        // a camera's at +0x20 (MatApplyLocalTRS, 0x4441c1), a light's orientation at +0x08 (0x4443e0, 0x444d10;
+                        // its +0x20 holds the world angles the update derives, which already include the parents' turns).
+                        int angles = node.Class == WorldNodeClass.Light ? 0x08 : 0x20;
                         var at = new Vector3(node.PayloadFloat(0x14), node.PayloadFloat(0x18), node.PayloadFloat(0x1C));
-                        var turn = new Vector3(node.PayloadFloat(0x20), node.PayloadFloat(0x24), node.PayloadFloat(0x28));
+                        var turn = new Vector3(node.PayloadFloat(angles), node.PayloadFloat(angles + 4), node.PayloadFloat(angles + 8));
                         matrix = Matrix4x4.CreateFromYawPitchRoll(turn.Y, turn.X, turn.Z) * Matrix4x4.CreateTranslation(at) * parent;
                         break;
                     default: continue;

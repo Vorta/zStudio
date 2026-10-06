@@ -211,7 +211,10 @@ public sealed class BlenderRoundTripTests
         // A placed pickup's name counts as well as a template's, a number past the 40 types does not.
         Assert.True(WorldGltf.IsPickupName("pu012")); Assert.True(WorldGltf.IsPickupName("pu01203")); Assert.False(WorldGltf.IsPickupName("pu040"));
         Assert.False(WorldGltf.IsPickupName("pu4101")); Assert.False(WorldGltf.IsPickupName("pump01")); Assert.True(WorldGltf.IsPickupName("pu4099x"));
+        // A script m1's build does not run loads nothing; once m1 sources it, the crate is a pickup.
         fixture.Write("gamegen/support/pickup.gw", "LoadGameGen crate.gltf pu01203\r\n");
+        Assert.DoesNotContain("~hidden", File.ReadAllText(SourceBlender.Checkout(workspace, "data/m1/models/crate.gltf", Token).Input));
+        fixture.Write("gamegen/m1.gs", File.ReadAllText(fixture.Path("gamegen/m1.gs")).Replace("# no vehicles", "source support\\pickup.gw", StringComparison.Ordinal));
         Assert.Contains("~hidden", File.ReadAllText(SourceBlender.Checkout(workspace, "data/m1/models/crate.gltf", Token).Input));
     }
 

@@ -113,10 +113,10 @@ public sealed class ZoneProbeBoundsTests
     {
         foreach (var kind in new[] { WorldNodeClass.Camera, WorldNodeClass.Light })
         {
-            // The holder stands at (300, 0, 300) turned half around y (translation +0x14, angles +0x20), so its child's
-            // quad, x and z 0..200 under it, lies at x 100..300 and z 100..300.
+            // The holder stands at (300, 0, 300) turned half around y (translation +0x14; a camera's angles at +0x20, a
+            // light's orientation at +0x08), so its child's quad, x and z 0..200 under it, lies at x 100..300 and z 100..300.
             var holder = Node("holder", kind);
-            holder.SetPayloadFloat(0x14, 300); holder.SetPayloadFloat(0x1C, 300); holder.SetPayloadFloat(0x24, MathF.PI);
+            holder.SetPayloadFloat(0x14, 300); holder.SetPayloadFloat(0x1C, 300); holder.SetPayloadFloat(kind == WorldNodeClass.Light ? 0x0C : 0x24, MathF.PI);
             Boxed(holder);
             Link(holder, Node("deck", quads: (0, 7, 0, 200)));
             var world = World([Node("ground", quads: (0, 0, 0, 50))], holder);
