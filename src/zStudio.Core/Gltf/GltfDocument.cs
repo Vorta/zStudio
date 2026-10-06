@@ -685,8 +685,9 @@ public sealed class GltfDocument
             if (extensions is not JsonObject list) throw Malformed("extensions that are not an object");
             foreach (var (name, value) in list)
             {
-                if (name != TextureTransform)
-                    throw new InvalidDataException($"glTF material {material}'s base-colour texture uses extension {(name.Length > 64 ? name[..64] + "…" : name)}, which zStudio does not support; it may change where the texture lies, so the file is refused rather than read without it. Remove the extension (or apply what it does to the texture coordinates) and export again.");
+                // Another extension here is optional (a required one the reader lacks refuses the whole file), so it is ignored,
+                // as glTF lets readers ignore optional extensions.
+                if (name != TextureTransform) continue;
                 if (value is not JsonObject t) throw Malformed($"a {TextureTransform} that is not an object");
                 float[] offset = [0, 0], scale = [1, 1];
                 if (t["offset"] is { } o && !TryNumbers(o, 2, out offset)) throw Malformed($"a {TextureTransform} offset that is not 2 finite numbers");
@@ -702,7 +703,8 @@ public sealed class GltfDocument
         }
         return (set, transform);
 
-        int Set(JsonNode value) => value is JsonValue v && v.TryGetValue(out int i) && i >= 0 ? i : throw Malformed("a texture coordinate set (texCoord) that is not a whole number of zero or more");
+        // A whole number, also when written with a zero fraction (1.0).
+        int Set(JsonNode value) => value is JsonValue v && v.TryGetValue(out double d) && d >= 0 && d <= 255 && d == Math.Floor(d) ? (int)d : throw Malformed("a texture coordinate set (texCoord) that is not a whole number of zero or more");
         InvalidDataException Malformed(string problem) => new($"glTF material {material}'s base-colour texture has {problem}.");
     }
 

@@ -232,6 +232,14 @@ public sealed class GltfPngRound4Tests
         few.Attributes["TEXCOORD_1"] = few.TexCoords(0, 0, 1, 1);
         few.Textured(new JsonObject { ["texCoord"] = 1 });
         Assert.Contains("2 texture coordinates (TEXCOORD_1, which its material's texture uses) for 3 positions", few.Refused().Message);
+
+        // An optional extension the reader lacks is ignored (a required one refuses the whole file), and a set written
+        // with a zero fraction is the same whole number.
+        Triangle optional = new();
+        optional.Attributes["TEXCOORD_0"] = optional.TexCoords(0, 0, 0, 0, 0, 0);
+        optional.Attributes["TEXCOORD_1"] = optional.TexCoords(0.25f, 0.5f, 0.75f, 0.5f, 0.25f, 1);
+        optional.Textured(JsonNode.Parse("""{"texCoord":1.0,"extensions":{"EXT_vendor_mapping":{}}}""")!.AsObject());
+        Assert.Equal([new(0.25f, 0.5f), new(0.75f, 0.5f), new(0.25f, 1)], optional.Read().TexCoords);
     }
 
     [Fact]
@@ -267,7 +275,6 @@ public sealed class GltfPngRound4Tests
     [Theory]
     [InlineData("""{"texCoord":-1}""", "texture coordinate set (texCoord) that is not a whole number")]
     [InlineData("""{"texCoord":1.5}""", "texture coordinate set (texCoord) that is not a whole number")]
-    [InlineData("""{"extensions":{"EXT_vendor_mapping":{}}}""", "uses extension EXT_vendor_mapping, which zStudio does not support")]
     [InlineData("""{"extensions":[]}""", "extensions that are not an object")]
     [InlineData("""{"extensions":{"KHR_texture_transform":{"scale":[1]}}}""", "scale that is not 2 finite numbers")]
     [InlineData("""{"extensions":{"KHR_texture_transform":{"offset":[0,"a"]}}}""", "offset that is not 2 finite numbers")]

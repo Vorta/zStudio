@@ -249,6 +249,22 @@ public sealed class ScriptRecoveryRound4Tests
     }
 
     [Fact]
+    public void ACancellationNamesTheFilesItCouldNotResolve()
+    {
+        // Another program changes the first file as the completion reaches it, and the cancellation comes then too: the
+        // conflict is reported with the cancellation rather than lost behind "nothing changed".
+        using Interrupted project = new("intent", 0);
+        using CancellationTokenSource cancellation = new();
+        SourcePublisher publisher = new(project.Root)
+        {
+            Fault = (step, index) => { if (step == "complete" && index == 0) { File.WriteAllText(project.Full(Ai), "GRAVITY ( 1 )\n"); cancellation.Cancel(); } },
+        };
+        var stopped = Assert.ThrowsAny<OperationCanceledException>(() => publisher.Resolve(project.SaveId, SourceRecoveryAction.Complete, cancellation.Token));
+        Assert.Contains("1 file could not be resolved (data/m1/ai.zrd changed while the save was being completed", stopped.Message);
+        Assert.DoesNotContain("after it changed", stopped.Message);
+    }
+
+    [Fact]
     public void ACompletionCanceledThenCompletedFinishesTheSave()
     {
         using Interrupted project = new("intent", 0);
