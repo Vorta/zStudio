@@ -146,6 +146,31 @@ public sealed class SealDiffWaveReviewFixTests
     }
 
     [Fact]
+    public void ChangesKeepTheContextAfterThem()
+    {
+        // Repeated lines let a change align in several places: it must not be moved into the context after it, which would
+        // leave it with fewer than three lines of context where the file has them.
+        Random random = new(7);
+        string[] words = ["a", "b", "dd", "", "é"];
+        string Text() => string.Concat(Enumerable.Range(0, random.Next(0, 12)).Select(_ => words[random.Next(words.Length)] + (random.Next(4) == 0 ? "\r\n" : "\n")));
+        static int Lines(string text) => text.Length == 0 ? 0 : text.Count(c => c == '\n') + 1;
+        int checkedCases = 0;
+        for (int run = 0; run < 3000; run++)
+        {
+            string disk = Text(), working = Text();
+            var report = SourceDiff.Describe("t.txt", Encoding.Latin1.GetBytes(disk), Encoding.Latin1.GetBytes(working), 10_000, Token);
+            if (report.ChangedLines <= 0) continue;
+            int last = report.Lines.ToList().FindLastIndex(l => l.Kind != ' ');
+            var change = report.Lines[last];
+            int remaining = change.Kind == '+' ? Lines(working) - change.WorkingLine : Lines(disk) - change.DiskLine;
+            Assert.True(Math.Min(SourceDiff.ContextLines, remaining) == report.Lines.Count - 1 - last, $"run {run}: {JsonValueOf(disk)} → {JsonValueOf(working)}");
+            checkedCases++;
+        }
+        Assert.True(checkedCases > 1000);
+        static string JsonValueOf(string text) => System.Text.Json.JsonSerializer.Serialize(text);
+    }
+
+    [Fact]
     public void DiffsAreMinimalAndConsistentWithTheLinesOfBothVersions()
     {
         Random random = new(11);

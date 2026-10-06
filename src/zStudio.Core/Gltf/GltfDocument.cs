@@ -77,12 +77,18 @@ public sealed class GltfDocument
     /// </summary>
     public const long MaximumBufferBytes = Formats.FormatRegistry.MaximumDocumentBytes;
     /// <summary>
-    /// The entries a file's accessors and buffer views may hold, and its primitives (all meshes together), morph targets (all
-    /// primitives together) and weights (all meshes together). Its meshes, materials, images, textures, samplers and scenes may
+    /// The entries a file's accessors and buffer views may hold (its primitives, morph targets and weights: see
+    /// <see cref="MaximumPrimitives"/>). Its meshes, materials, images, textures, samplers and scenes may
     /// each hold as many as <see cref="MaximumNodes"/>. The reader makes an object of every entry of a list it reads or
     /// indexes, used or not, so the lists are bounded before any entry is read.
     /// </summary>
     public const int MaximumEntries = 1_000_000;
+    /// <summary>
+    /// The primitives (all meshes together), morph targets (all primitives together) and weights (all meshes together) a file
+    /// may hold: each primitive becomes an object with its attributes, so they are bounded like nodes (the 1999 release's
+    /// files hold about 20,000 primitives in all).
+    /// </summary>
+    public const int MaximumPrimitives = 200_000;
     /// <summary>
     /// The bytes (as the JSON writes them) of the names, extras and image paths a file may hold together: the reader keeps a
     /// copy of each, also of entries nothing uses, and its callers read the extras again.
@@ -565,12 +571,12 @@ public sealed class GltfDocument
         foreach (var mesh in Objects(root, "meshes"))
         {
             metadata += Named(mesh);
-            if ((weights += Length(mesh, "weights")) > MaximumEntries) throw new InvalidDataException($"The glTF file's meshes list more than {MaximumEntries:N0} morph target weights; a model may hold at most {MaximumEntries:N0}.");
-            if ((primitives += Length(mesh, "primitives")) > MaximumEntries) throw new InvalidDataException($"The glTF file's meshes hold more than {MaximumEntries:N0} primitives; a model may hold at most {MaximumEntries:N0}.");
+            if ((weights += Length(mesh, "weights")) > MaximumPrimitives) throw new InvalidDataException($"The glTF file's meshes list more than {MaximumPrimitives:N0} morph target weights; a model may hold at most {MaximumPrimitives:N0}.");
+            if ((primitives += Length(mesh, "primitives")) > MaximumPrimitives) throw new InvalidDataException($"The glTF file's meshes hold more than {MaximumPrimitives:N0} primitives; a model may hold at most {MaximumPrimitives:N0}.");
             foreach (var primitive in Objects(mesh, "primitives"))
             {
                 metadata += Bytes(primitive, "extras", JsonValueKind.Object);
-                if ((targets += Length(primitive, "targets")) > MaximumEntries) throw new InvalidDataException($"The glTF file's primitives hold more than {MaximumEntries:N0} morph targets; a model may hold at most {MaximumEntries:N0}.");
+                if ((targets += Length(primitive, "targets")) > MaximumPrimitives) throw new InvalidDataException($"The glTF file's primitives hold more than {MaximumPrimitives:N0} morph targets; a model may hold at most {MaximumPrimitives:N0}.");
             }
         }
         // An embedded image (a data URI) is only recognized, never kept.

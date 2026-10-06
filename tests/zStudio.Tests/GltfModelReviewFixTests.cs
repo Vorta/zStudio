@@ -38,6 +38,9 @@ public sealed class GltfModelReviewFixTests
         Assert.Contains("1,000,001 accessors", Refused(Asset($"\"accessors\":[{Repeat("{}", entries)}]")).Message);
         // Primitives and morph targets count across meshes and primitives, weights across meshes.
         Assert.Contains("primitives", Refused(Asset($"\"meshes\":[{{\"primitives\":[{Repeat("{}", entries / 2)}]}},{{\"primitives\":[{Repeat("{}", entries / 2 + 1)}]}}]")).Message);
+        // Each primitive becomes an object with its attributes: they are bounded like nodes.
+        int primitives = GltfDocument.MaximumPrimitives / 2;
+        Assert.Contains("more than 200,000 primitives", Refused(Asset($"\"meshes\":[{{\"primitives\":[{Repeat("{}", primitives)}]}},{{\"primitives\":[{Repeat("{}", primitives + 1)}]}}]")).Message);
         string empty = "\"accessors\":[{\"componentType\":5126,\"count\":0,\"type\":\"VEC3\"}]";
         Assert.Contains("morph targets", Refused(Asset($"{empty},\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}},\"targets\":[{Repeat("{}", entries)}]}}]}}]")).Message);
         Assert.Contains("weights", Refused(Asset($"\"meshes\":[{{\"weights\":[{Repeat("0", entries)}]}}]")).Message);

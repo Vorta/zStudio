@@ -41,17 +41,25 @@ public static class SourceDiff
         int suffix = 0, limit = Math.Min(a.Length, b.Length) - prefix;
         while (suffix < limit && a[a.Length - 1 - suffix] == b[b.Length - 1 - suffix]) suffix++;
         // int.MaxValue: every line to the end, including the last (unterminated, or empty after a final line feed).
-        int start = prefix, end = a.AsSpan(a.Length - suffix).IndexOf((byte)'\n') is var feed and >= 0 ? a.Length - suffix + feed + 1 : int.MaxValue;
+        int inner = a.AsSpan(a.Length - suffix).IndexOf((byte)'\n') is var feed and >= 0 ? a.Length - suffix + feed + 1 : int.MaxValue;
+        int start = prefix, end = inner;
         for (int i = 0; i < ContextLines && start > 0; i++) start = a.AsSpan(0, start - 1).LastIndexOf((byte)'\n') + 1;
         for (int i = 0; i < ContextLines && end != int.MaxValue; i++)
             end = end < a.Length && a.AsSpan(end).IndexOf((byte)'\n') is var next and >= 0 ? end + next + 1 : int.MaxValue;
         int skipped = a.AsSpan(0, start).Count((byte)'\n');
+        // The context lines around the lines between the shared start and end, the same on both sides (counted as Index does).
+        int before = a.AsSpan(start, prefix - start).Count((byte)'\n');
+        int after = inner == int.MaxValue ? 0 : a.AsSpan(inner, Math.Min(end, a.Length) - inner).Count((byte)'\n') + (end == int.MaxValue ? 1 : 0);
         token.ThrowIfCancellationRequested();
         if (Index(a, start, end, MaximumComparedLines, token) is not { } left
             || Index(b, start, end == int.MaxValue ? int.MaxValue : end - a.Length + b.Length, MaximumComparedLines - left.Count, token) is not { } right)
             return Report(-1, [], true);
         var (x, y) = Identify(a, left, b, right, token);
-        if (Edits(x, y, token) is not { } script) return Report(-1, [], true);
+        // Only the lines between the shared start and end are compared, so a change cannot be aligned into the context
+        // around it (repeated lines could otherwise move it there and leave it with less context after it).
+        if (Edits(x[before..^after], y[before..^after], token) is not { } between) return Report(-1, [], true);
+        List<(char Kind, int A, int B)> script = [.. Enumerable.Range(0, before).Select(i => (' ', i, i)), .. between.Select(e => (e.Kind, e.A + before, e.B + before)),
+            .. Enumerable.Range(0, after).Select(i => (' ', x.Length - after + i, y.Length - after + i))];
 
         // Keep three lines of context around every change; collapse the rest.
         List<SourceDiffLine> shown = []; bool truncated = false; int changed = 0, last = -1;
