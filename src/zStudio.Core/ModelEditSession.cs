@@ -103,7 +103,7 @@ public sealed class ModelEditSession
                     string previousTarget = saved[item.Doc.Path].Target;
                     saved[item.Doc.Path] = (item.Target,item.Doc.Bytes.ToArray());
                     observedStamps.Remove(previousTarget);
-                    observedStamps[item.Target] = FileStamp.Read(item.Target); completed.Add(item.Target);
+                    observedStamps[item.Target] = FileStamp.ReadHolding(item.Target, item.Doc.Bytes.Span); completed.Add(item.Target);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { errors.Add(item.Target + ": " + ex.Message); break; }
             }

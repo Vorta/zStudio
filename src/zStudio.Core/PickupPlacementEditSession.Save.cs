@@ -86,7 +86,7 @@ public sealed partial class PickupPlacementEditSession
                     else PublishFile(output.Temporary, output.Destination, false, null);
                     output.Archive.Target = output.Destination; output.Archive.SavedBytes = output.Bytes;
                     output.Archive.PendingCopy = false;
-                    output.Archive.Stamp = FileStamp.Read(output.Destination);
+                    output.Archive.Stamp = FileStamp.ReadHolding(output.Destination, output.Bytes);
                     if (output.Destination.Equals(output.Archive.Original.Path, StringComparison.OrdinalIgnoreCase)) output.Archive.SourceStamp = output.Archive.Stamp;
                     foreach (var source in positions.Keys.Where(s => s.ArchivePath == output.Source))
                     { savedPositions[source] = positions[source]; savedRotations[source] = rotations[source]; }

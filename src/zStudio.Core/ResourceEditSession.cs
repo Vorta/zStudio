@@ -231,7 +231,7 @@ public sealed class ResourceEditSession
             await VerifiedDocumentSave.StageAsync(Current.Document, temp, token, target);
             token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(target);
             if (destination == null) { await CheckBaseline(token); File.Replace(temp, target, null); } else File.Move(temp, target, false);
-            TargetPath = target; TargetStamp = FileStamp.Read(target); saved = Current; return target;
+            TargetPath = target; TargetStamp = FileStamp.ReadHolding(target, Current.Document.Bytes.Span); saved = Current; return target;
         }
         finally { try { if (File.Exists(temp)) File.Delete(temp); } finally { saving = false; Changed?.Invoke(); } }
     }

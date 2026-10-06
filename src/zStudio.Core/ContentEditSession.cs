@@ -114,7 +114,7 @@ public abstract class ContentEditSession
                     token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(item.Target);
                     if (!item.CreateNew) await VerifiedDocumentSave.CheckBaselineAsync(item.Target, saved[item.Doc.Path].Bytes, token);
                     PublishFile(item.Temp, item.Target, item.CreateNew);
-                    saved[item.Doc.Path] = (item.Target, item.Doc.Bytes, FileStamp.Read(item.Target), false); completed.Add(item.Target);
+                    saved[item.Doc.Path] = (item.Target, item.Doc.Bytes, FileStamp.ReadHolding(item.Target, item.Doc.Bytes.Span), false); completed.Add(item.Target);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { errors.Add(item.Target + ": " + ex.Message); break; }
             }
