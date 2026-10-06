@@ -13,8 +13,9 @@ namespace Recoil.Zbd.Core;
 /// bytes it validated and never what another program wrote to the staged copy after they were checked. On Windows the file
 /// is opened for reading and renaming while sharing only reading: as long as it is held no other program can open it for
 /// writing, rename it or delete it (only read it, sharing its deletion), and it is renamed through that handle. A program
-/// that already has it open for writing, renaming or deleting makes <see cref="Open"/> fail. The file keeps its own
-/// file-system metadata where it is put, also when it replaces another file.
+/// that already has it open for writing, renaming or deleting makes <see cref="Open"/> fail. Replacing a file, it takes the
+/// replaced file's attributes, creation time and explicit access rules, as File.Replace keeps them, and it replaces a file
+/// other programs merely have open (an indexer, an antivirus or sync client reading it) where the file system allows.
 /// </summary>
 internal sealed partial class SealedFile : IDisposable
 {
@@ -35,7 +36,8 @@ internal sealed partial class SealedFile : IDisposable
         if (OperatingSystem.IsWindows())
         {
             // OPEN_REPARSE_POINT: a link put at the name is held itself (and differs), never the file it leads to.
-            SafeFileHandle opened = CreateFile(Extended(path), GenericRead | Delete, FileShare.Read, 0, OpenExisting, OpenReparsePoint, 0);
+            // FILE_WRITE_ATTRIBUTES is not shared access: it only lets the replaced file's attributes be given to this one.
+            SafeFileHandle opened = CreateFile(Extended(path), GenericRead | Delete | WriteAttributes, FileShare.Read, 0, OpenExisting, OpenReparsePoint, 0);
             if (opened.IsInvalid)
             {
                 int error = Marshal.GetLastPInvokeError(); opened.Dispose();
@@ -62,18 +64,66 @@ internal sealed partial class SealedFile : IDisposable
     {
         destination = Path.GetFullPath(destination);
         if (handle == null) { File.Move(path, destination, replace); return; }
+        // What the replaced file keeps under File.Replace: its attributes, creation time and explicit access rules.
+        var kept = replace && OperatingSystem.IsWindows() && File.Exists(destination) ? Kept.Of(destination) : null;
         string name = NtName(destination);
         int nameOffset = (int)Marshal.OffsetOf<RenameInformation>(nameof(RenameInformation.FileName)), lengthOffset = (int)Marshal.OffsetOf<RenameInformation>(nameof(RenameInformation.FileNameLength));
         byte[] information = new byte[Math.Max(nameOffset + (name.Length + 1) * sizeof(char), Marshal.SizeOf<RenameInformation>())];
-        // ReplaceIfExists is a BOOLEAN in a union with a DWORD of flags; the root directory stays null, as the name is absolute.
-        information[0] = replace ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteUInt32LittleEndian(information.AsSpan(lengthOffset), checked((uint)(name.Length * sizeof(char))));
         MemoryMarshal.AsBytes(name.AsSpan()).CopyTo(information.AsSpan(nameOffset));
-        if (!SetFileInformationByHandle(handle, FileRenameInfo, information, (uint)information.Length))
+        // FILE_RENAME_INFO_EX with POSIX semantics replaces a file others have open with delete sharing (readers such as
+        // indexers, antivirus or sync clients), which the plain rename refuses; file systems without it (FAT, older SMB)
+        // take the plain rename. Its flags share the first DWORD with the plain form's ReplaceIfExists BOOLEAN; the root
+        // directory stays null, as the name is absolute.
+        BinaryPrimitives.WriteUInt32LittleEndian(information, replace ? RenameReplaceIfExists | RenamePosixSemantics : 0);
+        bool renamed = SetFileInformationByHandle(handle, FileRenameInfoEx, information, (uint)information.Length);
+        int error = renamed ? 0 : Marshal.GetLastPInvokeError();
+        if (!renamed && error is InvalidParameter or InvalidFunction or NotSupported)
         {
-            int error = Marshal.GetLastPInvokeError();
+            BinaryPrimitives.WriteUInt32LittleEndian(information, replace ? 1u : 0u);
+            renamed = SetFileInformationByHandle(handle, FileRenameInfo, information, (uint)information.Length);
+            error = renamed ? 0 : Marshal.GetLastPInvokeError();
+        }
+        if (!renamed)
             throw new IOException(error is AlreadyExists or FileExists ? $"{destination} already exists."
                 : $"{path} could not be moved to {destination}: {new Win32Exception(error).Message}", new Win32Exception(error));
+        if (kept != null && OperatingSystem.IsWindows()) kept.Apply(handle, destination);
+    }
+
+    /// <summary>The replaced file's attributes, creation time and explicit access rules, given to the file that takes its place.</summary>
+    private sealed record Kept(FileAttributes Attributes, DateTime CreationUtc, System.Security.AccessControl.FileSecurity? Security)
+    {
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+        public static Kept Of(string file)
+        {
+            FileInfo info = new(file);
+            System.Security.AccessControl.FileSecurity? security = null;
+            try
+            {
+                var read = info.GetAccessControl(System.Security.AccessControl.AccessControlSections.Access);
+                // Only rules set on the file itself; inherited ones the new file has from its folder already.
+                if (read.AreAccessRulesProtected || read.GetAccessRules(true, false, typeof(System.Security.Principal.SecurityIdentifier)).Count > 0)
+                {
+                    // A descriptor read is written back only where it was changed: copied in, its access rules count as changed.
+                    security = new();
+                    security.SetSecurityDescriptorBinaryForm(read.GetSecurityDescriptorBinaryForm(), System.Security.AccessControl.AccessControlSections.Access);
+                }
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidOperationException) { }
+            return new(info.Attributes & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive | FileAttributes.NotContentIndexed), info.CreationTimeUtc, security);
+        }
+
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+        public void Apply(SafeFileHandle handle, string file)
+        {
+            // FILE_BASIC_INFO: zero times stay as they are; the creation time and attributes are the replaced file's.
+            byte[] basic = new byte[40];
+            BinaryPrimitives.WriteInt64LittleEndian(basic, CreationUtc.ToFileTimeUtc());
+            BinaryPrimitives.WriteUInt32LittleEndian(basic.AsSpan(32), Attributes == 0 ? (uint)FileAttributes.Normal : (uint)Attributes);
+            SetFileInformationByHandle(handle, FileBasicInfo, basic, (uint)basic.Length);
+            if (Security == null) return;
+            try { new FileInfo(file).SetAccessControl(Security); }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidOperationException) { }
         }
     }
 
@@ -119,8 +169,10 @@ internal sealed partial class SealedFile : IDisposable
         return extended.StartsWith(@"\\?\UNC\", StringComparison.Ordinal) ? @"\??\UNC\" + extended[8..] : @"\??\" + extended[4..];
     }
 
-    private const uint GenericRead = 0x80000000, Delete = 0x00010000, OpenExisting = 3, OpenReparsePoint = 0x00200000;
-    private const int FileRenameInfo = 3, SharingViolation = 32, FileExists = 80, AlreadyExists = 183;
+    private const uint GenericRead = 0x80000000, Delete = 0x00010000, WriteAttributes = 0x100, OpenExisting = 3, OpenReparsePoint = 0x00200000;
+    private const uint RenameReplaceIfExists = 0x1, RenamePosixSemantics = 0x2;
+    private const int FileBasicInfo = 0, FileRenameInfo = 3, FileRenameInfoEx = 22;
+    private const int InvalidFunction = 1, SharingViolation = 32, NotSupported = 50, FileExists = 80, InvalidParameter = 87, AlreadyExists = 183;
 
     /// <summary>FILE_RENAME_INFO, whose file name follows the header.</summary>
     [StructLayout(LayoutKind.Sequential)]
