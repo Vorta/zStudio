@@ -964,7 +964,13 @@ public static class SourceObjectEdits
         // By engine name: Blender renames repeated names (wheel.001), which the import reads back.
         static List<(string Name, bool Authored)> Nodes(byte[] bytes) =>
             JsonNode.Parse(bytes) is JsonObject { } root && root["nodes"] is JsonArray nodes
-                ? [.. nodes.OfType<JsonObject>().Select(n => (WorldGltf.EngineName(n), !GltfNodeEdits.Local(n).IsIdentity))] : [];
+                ? [.. nodes.OfType<JsonObject>().Select(n => (WorldGltf.EngineName(n), Authored(n)))] : [];
+        // A malformed transform (which no build reads, so the update replacing it is not refused here) still states one.
+        static bool Authored(JsonObject node)
+        {
+            try { return !GltfNodeEdits.Local(node).IsIdentity; }
+            catch (InvalidDataException) { return true; }
+        }
         var was = Nodes(before); var now = Nodes(after);
         List<string> notes = []; int traced = 0, untraced = 0;
         foreach (var group in was.Select((n, i) => (n, i)).GroupBy(p => p.n.Name, StringComparer.Ordinal))

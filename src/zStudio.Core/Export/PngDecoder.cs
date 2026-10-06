@@ -69,9 +69,12 @@ public static class PngDecoder
         byte[] raw = new byte[expected]; compressed.Position = 0;
         using (ZLibStream z = new(compressed, CompressionMode.Decompress))
         {
-            try { z.ReadExactly(raw); }
+            int excess;
+            // The rows, and then the end of the data: pixels beyond the image make it malformed (decoders differ on them).
+            try { z.ReadExactly(raw); excess = z.ReadByte(); }
             catch (EndOfStreamException ex) { throw new InvalidDataException("Truncated PNG pixels.", ex); }
             catch (InvalidDataException ex) { throw new InvalidDataException("Corrupt PNG pixel data.", ex); }
+            if (excess != -1) throw new InvalidDataException("Excess PNG pixels: the image data holds more than its rows.");
         }
         byte[] rgba = new byte[checked(width * height * 4)]; int position = 0;
         PixelFormat format = new(colorType, depth, channels, palette, transparency);

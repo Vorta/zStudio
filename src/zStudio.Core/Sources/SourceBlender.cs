@@ -85,17 +85,31 @@ public static partial class SourceBlender
         created = folder;
         Directory.CreateDirectory(Path.Combine(input, "textures")); Directory.CreateDirectory(Path.Combine(folder, "outbox"));
         List<BlenderCheckoutFile> files = [new(model, "input/" + Path.GetFileName(model), SourceProject.Sha256(json))];
-        // Buffers sit next to the model in the checkout; textures in its textures folder, under their engine names.
+        // Buffers sit next to the model in the checkout, each project file once under a name no other copy has (Windows
+        // compares names without case): a buffer of the same name from another folder gets a numbered name, so no copy
+        // replaces another. The update names the model's buffers itself, so these names never go back to the project.
+        Dictionary<string, string> taken = new(StringComparer.OrdinalIgnoreCase) { [Path.GetFileName(model)] = model, ["textures"] = "" };
+        Dictionary<string, string> bufferCopies = new(StringComparer.OrdinalIgnoreCase);
         foreach (var buffer in root["buffers"] as JsonArray ?? [])
         {
             if (Text(buffer?["uri"]) is not { } uri || uri.StartsWith("data:", StringComparison.Ordinal)) continue;
             string project = Worlds.WorldAssembler.Relative(model, Uri.UnescapeDataString(uri));
-            byte[] bytes = workspace.Read(project, token) ?? throw new InvalidDataException($"{model} uses {project}, which does not exist.");
-            string name = Path.GetFileName(project);
-            File.WriteAllBytes(Path.Combine(input, name), bytes); buffer!["uri"] = Uri.EscapeDataString(name);
-            files.Add(new(project, "input/" + name, SourceProject.Sha256(bytes)));
+            if (!bufferCopies.TryGetValue(project, out string? name))
+            {
+                byte[] bytes = workspace.Read(project, token) ?? throw new InvalidDataException($"{model} uses {project}, which does not exist.");
+                name = Path.GetFileName(project);
+                for (int k = 1; !taken.TryAdd(name, project); k++) name = $"{Path.GetFileNameWithoutExtension(project)}.{k}{Path.GetExtension(project)}";
+                File.WriteAllBytes(Path.Combine(input, name), bytes);
+                files.Add(new(project, "input/" + name, SourceProject.Sha256(bytes)));
+                bufferCopies[project] = name;
+            }
+            buffer!["uri"] = Uri.EscapeDataString(name);
         }
-        HashSet<string> copied = new(StringComparer.OrdinalIgnoreCase);
+        // Textures in its textures folder, under their file names: the engine's names for them, which the update maps back by.
+        // Images of one file share its copy; two different files of one name cannot both be shown (nor packed: the build finds
+        // a texture by name), so the checkout refuses them rather than show one file's pixels for the other.
+        Dictionary<string, (string Project, string Sha256)> textures = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> alike = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, Formats.TextureTransparency> transparency = new(StringComparer.OrdinalIgnoreCase);
         foreach (var image in root["images"] as JsonArray ?? [])
         {
@@ -103,10 +117,19 @@ public static partial class SourceBlender
             string project = Worlds.WorldAssembler.Relative(model, Uri.UnescapeDataString(uri));
             string name = Path.GetFileName(project);
             image!["uri"] = "textures/" + Uri.EscapeDataString(name);
-            if (!copied.Add(name)) continue;
+            if (textures.TryGetValue(name, out var copied))
+            {
+                // Each other file of the name is read once, however many images use it.
+                if (copied.Project.Equals(project, StringComparison.OrdinalIgnoreCase) || !alike.Add(project)) continue;
+                if (workspace.Read(project, token) is { } other && SourceProject.Sha256(other) != copied.Sha256)
+                    throw new InvalidDataException($"{model} uses two different textures named {name}: {copied.Project} and {project}. The game finds textures by name, so a build packs only one of them; rename one, or let both images use one file, before checking the model out.");
+                continue;
+            }
             if (workspace.Read(project, token) is not { } bytes) continue;
             File.WriteAllBytes(Path.Combine(input, "textures", name), bytes);
-            files.Add(new(project, "input/textures/" + name, SourceProject.Sha256(bytes)));
+            string sha = SourceProject.Sha256(bytes);
+            files.Add(new(project, "input/textures/" + name, sha));
+            textures[name] = (project, sha);
             if (Transparency(bytes, token) is { } kind) transparency[name] = kind;
         }
         Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null, LoadedAsPickup(workspace, model, token));
@@ -271,9 +294,14 @@ public static partial class SourceBlender
             changes.Add(($"{modelFolder}/{name}", Use(Uri.UnescapeDataString(uri)))); buffers[i]!["uri"] = Uri.EscapeDataString(name);
         }
         // Textures: by engine name (the file name), found where the model's textures were or, for a new one, beside them.
-        var original = checkout.Files.Where(f => f.Checkout.StartsWith("input/textures/", StringComparison.OrdinalIgnoreCase)).ToDictionary(f => Path.GetFileName(f.Project), f => f.Project, StringComparer.OrdinalIgnoreCase);
+        // (A checkout holds one file per name; the first of any repeated name in an older manifest counts.)
+        Dictionary<string, string> original = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in checkout.Files.Where(f => f.Checkout.StartsWith("input/textures/", StringComparison.OrdinalIgnoreCase))) original.TryAdd(Path.GetFileName(file.Project), file.Project);
         string textureFolder = original.Values.Select(p => Path.GetDirectoryName(p)!.Replace('\\', '/')).GroupBy(f => f, StringComparer.OrdinalIgnoreCase).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault()
             ?? DefaultTextureFolder(model);
+        // A name is one project texture, so images of one name must be one picture: two different PNGs of one name (in
+        // different folders of the export) would both land in the same project file, the later replacing the earlier.
+        Dictionary<string, (string Uri, byte[] Png)> exported = new(StringComparer.OrdinalIgnoreCase);
         foreach (var image in root["images"] as JsonArray ?? [])
         {
             if (Text(image?["uri"]) is not { } uri)
@@ -289,6 +317,13 @@ public static partial class SourceBlender
             catch (Exception ex) when (ex is InvalidDataException or ArgumentException or OverflowException or IndexOutOfRangeException) { throw new InvalidDataException($"Texture {name} is not a readable PNG: {ex.Message}", ex); }
             string project = original.TryGetValue(name, out var known) ? known : $"{textureFolder}/{name}";
             image!["uri"] = RelativeUri(modelFolder, project);
+            if (exported.TryGetValue(name, out var first))
+            {
+                if (!first.Png.AsSpan().SequenceEqual(png))
+                    throw new InvalidDataException($"The export has two different textures named {name}: {first.Uri} and {unescaped}. A name is one project texture ({project}; the game finds textures by name), so rename one in Blender and export again.");
+                continue;
+            }
+            exported[name] = (unescaped, png);
             // Only what Blender changed: a checked-out texture it wrote back as it was stays as the project has it now.
             string inputCopy = Path.Combine(checkout.Folder, "input", "textures", name);
             if (original.ContainsKey(name) && File.Exists(inputCopy) && File.ReadAllBytes(inputCopy).AsSpan().SequenceEqual(png)) continue;

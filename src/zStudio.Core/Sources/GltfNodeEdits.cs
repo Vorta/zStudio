@@ -157,19 +157,11 @@ public static class GltfNodeEdits
             if (nodes[i] is JsonObject node && OwnZone(node) is uint zone) return zone;
         return null;
     }
-    /// <summary>A node's local transform as the reader composes it (matrix, or scale · rotation · translation).</summary>
-    public static Matrix4x4 Local(JsonObject node)
-    {
-        if (node["matrix"] is JsonArray m && m.Count == 16)
-        {
-            float M(int k) => m[k]!.GetValue<float>();
-            return new(M(0), M(1), M(2), M(3), M(4), M(5), M(6), M(7), M(8), M(9), M(10), M(11), M(12), M(13), M(14), M(15));
-        }
-        Vector3 t = node["translation"] is JsonArray tr ? new(tr[0]!.GetValue<float>(), tr[1]!.GetValue<float>(), tr[2]!.GetValue<float>()) : Vector3.Zero;
-        Quaternion r = node["rotation"] is JsonArray ro ? new(ro[0]!.GetValue<float>(), ro[1]!.GetValue<float>(), ro[2]!.GetValue<float>(), ro[3]!.GetValue<float>()) : Quaternion.Identity;
-        Vector3 s = node["scale"] is JsonArray sc ? new(sc[0]!.GetValue<float>(), sc[1]!.GetValue<float>(), sc[2]!.GetValue<float>()) : Vector3.One;
-        return Matrix4x4.CreateScale(s) * Matrix4x4.CreateFromQuaternion(r) * Matrix4x4.CreateTranslation(t);
-    }
+    /// <summary>
+    /// A node's local transform as the reader composes it (matrix, or scale · rotation · translation; identity when it states
+    /// none). A malformed transform is refused as the reader refuses it (<see cref="GltfDocument.LocalTransform"/>).
+    /// </summary>
+    public static Matrix4x4 Local(JsonObject node) => GltfDocument.LocalTransform(node) ?? Matrix4x4.Identity;
     /// <summary>Sets a node's local transform, as translation, rotation and scale when it decomposes, otherwise as a matrix.</summary>
     public static void SetLocal(JsonObject node, Matrix4x4 m)
     {
@@ -200,7 +192,7 @@ public static class GltfNodeEdits
         for (int depth = 0; at is int i; depth++)
         {
             if (depth > GltfDocument.MaximumDepth) throw new InvalidDataException("The node hierarchy is cyclic or too deep.");
-            m *= Local((JsonObject)nodes[i]!);
+            m *= GltfDocument.LocalTransform((JsonObject)nodes[i]!, i) ?? Matrix4x4.Identity;
             at = Parent(nodes, i);
         }
         return m;
