@@ -20,11 +20,15 @@ public partial class MainWindow
 
     private static SourceWorldSession SourceWorldOf(DocumentModel doc) => doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
     /// <summary>The project's recipes, those this world's pieces came from first.</summary>
-    private static IReadOnlyList<string> TerrainRecipesOf(DocumentModel doc)
+    private static IReadOnlyList<string> TerrainRecipesOf(DocumentModel doc) => TerrainRecipes(SourceWorldOf(doc).Workspace, UsedTerrainRecipes(doc));
+    /// <summary>The recipes this world's pieces came from.</summary>
+    private static string[] UsedTerrainRecipes(DocumentModel doc) =>
+        doc.SourceBuild?.Provenance.Values.Select(p => p.Terrain).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
+    /// <summary>The project's recipes, <paramref name="used"/> first; it lists the project's files, so it may run off the UI thread.</summary>
+    private static IReadOnlyList<string> TerrainRecipes(SourceWorkspace workspace, string[] used)
     {
-        var used = doc.SourceBuild?.Provenance.Values.Select(p => p.Terrain).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
         IReadOnlyList<string> all;
-        try { all = SourceTerrain.Recipes(SourceWorldOf(doc).Workspace); }
+        try { all = SourceTerrain.Recipes(workspace); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         return [.. used, .. all.Where(r => !used.Contains(r, StringComparer.OrdinalIgnoreCase))];
     }
@@ -70,17 +74,45 @@ public partial class MainWindow
         return EditTerrainAsync(doc, recipe, $"{(add ? "Paint" : "Erase")} {region}", r => TerrainEdits.Paint(r, region, stroke, add), token);
     }
 
-    /// <summary>What converting this world's mission database to editable terrain would do (references come from the files its build read).</summary>
-    private static TerrainConversionPlan PlanTerrainConversion(DocumentModel doc, CancellationToken token)
+    private const string TerrainPlanChanged = "The project's sources changed since the conversion was planned; convert again.";
+    /// <summary>Plans a conversion from the files a build read; runs off the UI thread (tests hold it to check where it runs and to change the project meanwhile).</summary>
+    internal Func<SourceWorkspace, string, IReadOnlyCollection<string>, CancellationToken, TerrainConversionPlan> PlanSourceTerrainConversion { get; set; } =
+        static (workspace, database, dependencies, token) => SourceTerrainConversion.Plan(workspace, database, SourceTerrainConversion.References(workspace, dependencies, token), token);
+
+    /// <summary>
+    /// What converting this world's mission database to editable terrain would do (references come from the files its build
+    /// read), with the workspace's content revision it holds for. The sources are read, decoded and matched off the UI thread,
+    /// as a source operation Tools → Cancel (Escape) stops, like closing the world or zStudio; a plan whose world was replaced
+    /// or whose project changed meanwhile is never returned.
+    /// </summary>
+    private async Task<(TerrainConversionPlan Plan, long Revision)> PlanTerrainConversionAsync(DocumentModel doc, CancellationToken token)
     {
         var session = SourceWorldOf(doc);
+        if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
         var build = doc.SourceBuild ?? throw new StudioCommandException("not_ready", "The world has not been built.");
         // Names that keep pieces as objects come from the files the build read; an output that failed read only some of them.
         if (build.Outputs.FirstOrDefault(o => o.Error != null) is { } failed)
             throw new StudioCommandException("unsupported", Bounded($"{failed.Path} did not build ({failed.Error}), so the names its sources use are unknown; fix it before converting."));
         string database = MissionDatabase(doc);
-        try { return SourceTerrainConversion.Plan(session.Workspace, database, SourceTerrainConversion.References(session.Workspace, build.Dependencies, token), token); }
+        if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
+        var workspace = session.Workspace; var dependencies = build.Dependencies; var plan = PlanSourceTerrainConversion;
+        long revision = workspace.ContentRevision;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
+        operation = cancellation; CancelOperationItem.IsEnabled = true;
+        ViewModel.Status = $"Planning the conversion of {database} to editable terrain…";
+        TerrainConversionPlan planned;
+        try { planned = await Task.Run(() => plan(workspace, database, dependencies, cancellation.Token), cancellation.Token); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        // The world was replaced or closed while the plan was made: the plan was for a world no longer shown.
+        catch (OperationCanceledException) when (!token.IsCancellationRequested && !shutdownToken.IsCancellationRequested && (doc.IsDisposed || session.Owner != doc))
+        { throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the conversion was planned; read zstudio_state for its current document."); }
+        finally { if (operation == cancellation) { operation = null; CancelOperationItem.IsEnabled = false; } }
+        if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the conversion was planned; read zstudio_state for its current document.");
+        // The workspace changes on this thread: an edit, undo or reload made while the sources were read could mix two states.
+        if (workspace.ContentRevision != revision) { ViewModel.Status = TerrainPlanChanged; throw new StudioCommandException("context_changed", TerrainPlanChanged); }
+        ViewModel.Status = $"Planned the conversion of {database}: {planned.Converted} pieces into {planned.Groups.Count} surfaces.";
+        return (planned, revision);
     }
     /// <summary>The shown world's nodes whose provenance matches, read from its world file.</summary>
     private List<Recoil.Zbd.Core.Worlds.WorldNode> SourceWorldNodes(DocumentModel doc, Func<Recoil.Zbd.Core.Worlds.WorldNodeProvenance, bool> select)
@@ -91,11 +123,17 @@ public partial class MainWindow
     /// <summary>
     /// Converts the mission database's pieces to editable terrain as one undoable change, then compares the altitude probe
     /// over the converted area in the world before and after: heights, polygon zones, soils and node attributes.
+    /// <paramref name="planned"/> is a plan already shown (with the content revision it holds for); without it, the
+    /// conversion is planned first.
     /// </summary>
-    private async Task<(DocumentModel Next, TerrainConversionPlan Plan, TerrainProbeReport? Report)> ConvertTerrainAsync(DocumentModel doc, float spacing, CancellationToken token)
+    private async Task<(DocumentModel Next, TerrainConversionPlan Plan, TerrainProbeReport? Report)> ConvertTerrainAsync(DocumentModel doc, float spacing, CancellationToken token, (TerrainConversionPlan Plan, long Revision)? planned = null)
     {
-        var plan = PlanTerrainConversion(doc, token);
+        var (plan, revision) = planned ?? await PlanTerrainConversionAsync(doc, token);
         if (plan.Converted == 0) throw new StudioCommandException("unsupported", "No piece of the mission database can become terrain.");
+        // The plan holds only for the world and sources it was made from (Properties and other windows stay usable while it is confirmed).
+        var session = SourceWorldOf(doc);
+        if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed since the conversion was planned; read zstudio_state for its current document.");
+        if (session.Workspace.ContentRevision != revision) throw new StudioCommandException("context_changed", TerrainPlanChanged);
         var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
         var before = SourceWorldNodes(doc, p => p.Database && string.Equals(p.ModelFile, plan.Database, StringComparison.OrdinalIgnoreCase) && converted.Contains(p.ModelNode));
         var grid = SourceWorldModel(doc).World.Nodes.FirstOrDefault(n => n.Class == Recoil.Zbd.Core.Worlds.WorldNodeClass.World);
@@ -120,12 +158,17 @@ public partial class MainWindow
     private void ConvertTerrainClick(object sender, System.Windows.RoutedEventArgs e) => _ = RunUi(async () =>
     {
         if (ViewModel.SelectedDocument is not { SourceWorld: not null } doc) throw new StudioCommandException("unsupported", "Open a mission world of a source project first.");
-        var plan = PlanTerrainConversion(doc, CancellationToken.None);
+        // Planned off the UI thread; Tools → Cancel (Escape) stops it, and a plan the project changed under is not shown.
+        (TerrainConversionPlan Plan, long Revision) planned;
+        try { planned = await PlanTerrainConversionAsync(doc, CancellationToken.None); }
+        catch (StudioCommandException ex) when (ex.Code == "context_changed") { ViewModel.Status = ex.Message; return; }
+        var plan = planned.Plan;
         string kept = string.Join("\n", plan.Kept.GroupBy(k => k.Reason).OrderByDescending(g => g.Count()).Select(g => $"  {g.Count()} {g.Key}"));
         if (plan.Converted == 0) { System.Windows.MessageBox.Show(this, $"No piece of {plan.Database} can become terrain:\n{kept}", "Convert to editable terrain"); return; }
         if (System.Windows.MessageBox.Show(this, $"{plan.Converted} pieces of {plan.Database} become {plan.Groups.Count} terrain surfaces in {plan.Surfaces}, painted by {plan.Recipe}.\n\nKept as objects:\n{kept}\n\nThe pieces are rebuilt along the grid's cell lines; their polygons, materials, zones, soils and flags stay. Convert?",
             "Convert to editable terrain", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.Yes) return;
-        var (next, _, compared) = await ConvertTerrainAsync(doc, 8, CancellationToken.None);
+        if (!doc.IsDisposed && doc.SourceWorld?.Workspace.ContentRevision != planned.Revision) { ViewModel.Status = TerrainPlanChanged; return; }
+        var (next, _, compared) = await ConvertTerrainAsync(doc, 8, CancellationToken.None, planned);
         var report = compared!;
         System.Windows.MessageBox.Show(this, report.Samples == 0 ? "Converted. The converted area is too small for the altitude probe comparison." : report.Mismatches == 0
             ? $"Converted. The altitude probe finds the same heights, zones, soils and flags at all {report.Samples:N0} sample points ({report.Hits:N0} hits)" + (report.HeightOnly > 0 ? $"; {report.HeightOnly:N0} differ in height by at most {report.MaximumHeightDifference:0.###}." : ".")
@@ -216,8 +259,16 @@ public partial class MainWindow
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new StudioCommandException("invalid_argument", "Choose a file inside the source project.");
         string model = SourceProject.Relative(session.Root, full);
         IReadOnlyList<string> meshes;
-        try { meshes = [.. SourceTerrain.MeshNodes(session.Workspace, model).Take(TerrainRecipe.MaximumSurfaces)]; }
-        catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        // The file and its buffers are read and decoded off the UI thread; closing the world or zStudio stops it.
+        var workspace = session.Workspace;
+        if (doc.IsDisposed) return;
+        using (var reading = CancellationTokenSource.CreateLinkedTokenSource(doc.Lifetime.Token, shutdownToken))
+        {
+            try { meshes = await Task.Run(() => (IReadOnlyList<string>)[.. SourceTerrain.MeshNodes(workspace, model, reading.Token).Take(TerrainRecipe.MaximumSurfaces)], reading.Token); }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        }
+        if (doc.IsDisposed) return;
         if (meshes.Count == 0) throw new StudioCommandException("invalid_argument", $"{model} has no meshes.");
         TerrainCreateDialog dialog = new(model, meshes) { Owner = this };
         if (dialog.ShowDialog() != true) return;
@@ -231,25 +282,34 @@ public partial class MainWindow
     private void RegisterSourceTerrainCommands(StudioCommands r)
     {
         Register(r, "source_terrain", "Describe the terrain recipes of the open source world's project (data/**/*.terrain.json): without recipe, each recipe with its surface and region counts and the pieces it compiled to in this world; with recipe, its surfaces, defaults and regions in the order they apply (name, surfaces, the attributes each sets, and its shape's parts, area and bounds); with region too, that region's shape coordinates (up to 4,096 points). Recipe attributes: zones, nodeZone, nodeGate, collision, standable, craters (allowed, blocked, ignored), soil, priority, flags.", false,
-            [DocumentParameter, P("recipe", "string", "A recipe's project path, as listed."), P("region", "string", "A region of the recipe, for its shape's coordinates.")], a =>
+            [DocumentParameter, P("recipe", "string", "A recipe's project path, as listed."), P("region", "string", "A region of the recipe, for its shape's coordinates.")], async (a, token) =>
         {
             var d = TargetDocument(a);
-            var recipes = TerrainRecipesOf(d);
+            var workspace = SourceWorldOf(d).Workspace; var used = UsedTerrainRecipes(d);
             var pieces = d.SourceBuild?.Provenance.Values.Where(p => p.Terrain != null).GroupBy(p => p.Terrain!, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase) ?? [];
+            // The project's files are listed and its recipes (up to 64 MB each) read off the UI thread.
             if (a["recipe"] is null)
+            {
+                var (recipes, read) = await Task.Run(() =>
+                {
+                    var listed = TerrainRecipes(workspace, used);
+                    return (listed, listed.Take(64).Select<string, (TerrainRecipe? Recipe, string? Error)>(path =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        try { return (SourceTerrain.Read(workspace, path, token), null); } catch (InvalidDataException ex) { return (null, Bounded(ex.Message, 512)); }
+                    }).ToArray());
+                }, token);
                 return Result(new
                 {
                     document = d.SessionId, revision = d.Revision,
-                    recipes = recipes.Take(64).Select(path =>
-                    {
-                        TerrainRecipe? recipe = null; string? error = null;
-                        try { recipe = SourceTerrain.Read(SourceWorldOf(d).Workspace, path); } catch (InvalidDataException ex) { error = Bounded(ex.Message, 512); }
-                        return new { path, surfaces = recipe?.Surfaces.Count, regions = recipe?.Regions.Count, pieces = pieces.GetValueOrDefault(path)?.Count ?? 0, error };
-                    }).ToArray(),
+                    recipes = recipes.Take(64).Select((path, i) => new { path, surfaces = read[i].Recipe?.Surfaces.Count, regions = read[i].Recipe?.Regions.Count, pieces = pieces.GetValueOrDefault(path)?.Count ?? 0, error = read[i].Error }).ToArray(),
                     recipeCount = recipes.Count
                 });
+            }
             string path = Text(a, "recipe");
-            var parsed = ReadRecipe(d, path);
+            TerrainRecipe parsed;
+            try { parsed = await Task.Run(() => SourceTerrain.Read(workspace, path, token), token); }
+            catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             object? shape = null;
             if (a["region"] is not null)
             {
@@ -394,7 +454,7 @@ public partial class MainWindow
                     surfaces = plan.Groups.Take(256).Select(g => new { id = g.Id, flags = $"0x{g.Flags:X8}", zone = g.Zone, pieces = g.Nodes.Count }).ToArray(), surfaceCount = plan.Groups.Count,
                     kept = plan.Kept.Take(256).Select(k => new { node = Bounded(k.Node, 128), reason = k.Reason }).ToArray(), keptCount = plan.Kept.Count
                 };
-                if (!Flag(a, "apply")) return Result(new { plan = Plan(PlanTerrainConversion(d, token)) });
+                if (!Flag(a, "apply")) return Result(new { plan = Plan((await PlanTerrainConversionAsync(d, token)).Plan) });
                 double spacing = a["spacing"] is JsonValue sv && sv.TryGetValue(out double sd) ? sd : 8;
                 if (!(spacing >= 1 && spacing <= 256)) throw new StudioCommandException("invalid_argument", "spacing is 1–256.");
                 var (next, done, report) = await ConvertTerrainAsync(d, (float)spacing, token);

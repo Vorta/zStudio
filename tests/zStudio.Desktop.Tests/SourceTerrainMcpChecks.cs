@@ -118,6 +118,74 @@ internal static class SourceTerrainMcpChecks
             for (int i = 0; i < 4; i++) doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
             Assert.False(workspace.IsDirty);
 
+            // Convert to editable terrain plans off the UI thread, which keeps answering: Tools → Cancel (Escape) stops the plan,
+            // and a plan the project changed under, or made for a world that was replaced meanwhile, is never shown.
+            var planner = main.PlanSourceTerrainConversion;
+            bool? planOnUi = null; SemaphoreSlim planEntered = new(0), planProceed = new(0);
+            main.PlanSourceTerrainConversion = (w, database, dependencies, t) =>
+            {
+                planOnUi = main.Dispatcher.CheckAccess();
+                // Planned on the UI thread, the click would not return before the plan, so nothing could stop or change it.
+                if (planOnUi == true) throw new InvalidDataException("The conversion was planned on the UI thread.");
+                planEntered.Release();
+                Assert.True(planProceed.Wait(TimeSpan.FromSeconds(30)));
+                return planner(w, database, dependencies, t);
+            };
+            try
+            {
+                var convertClick = typeof(MainWindow).GetMethod("ConvertTerrainClick", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var cancelClick = typeof(MainWindow).GetMethod("CancelClick", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                async Task ClickConvert()
+                {
+                    convertClick.Invoke(main, [main, new System.Windows.RoutedEventArgs()]);
+                    Assert.True(await planEntered.WaitAsync(TimeSpan.FromSeconds(10), token), "The conversion was not planned off the UI thread: " + main.ViewModel.Status);
+                    Assert.False(planOnUi);
+                    Assert.True(main.CancelOperationItem.IsEnabled);
+                    Assert.NotNull(await Call("state", new()));
+                }
+                async Task Shown(string status)
+                {
+                    for (int wait = 0; wait < 1000 && (main.CancelOperationItem.IsEnabled || !main.ViewModel.Status.Contains(status, StringComparison.Ordinal)); wait++) await Task.Delay(10, token);
+                    Assert.Contains(status, main.ViewModel.Status);
+                    Assert.False(main.CancelOperationItem.IsEnabled);
+                }
+                await ClickConvert();
+                cancelClick.Invoke(main, [main, new System.Windows.RoutedEventArgs()]);
+                planProceed.Release();
+                await Shown("Operation canceled");
+                Assert.False(workspace.IsDirty);
+
+                await ClickConvert();
+                var note = workspace.Apply("Note", [("gamegen/note.gs", "# note\r\n"u8.ToArray())], token)!;
+                planProceed.Release();
+                await Shown("The project's sources changed since the conversion was planned");
+                Assert.Equal(["gamegen/note.gs"], workspace.DirtyFiles);
+                workspace.Retract(note);
+                Assert.False(workspace.IsDirty);
+
+                // A redo rebuilds the world (MCP edits still run while the GUI plans); the undo returns it.
+                await ClickConvert();
+                var replaced = doc;
+                doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "redo" }));
+                Assert.True(replaced.IsDisposed);
+                planProceed.Release();
+                await Shown("while the conversion was planned");
+                doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
+                Assert.False(workspace.IsDirty);
+
+                // MCP plans the same way, and its job can be cancelled while it plans.
+                var operation = await Call("source_terrain_convert", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["apply"] = true });
+                Assert.True(await planEntered.WaitAsync(TimeSpan.FromSeconds(10), token));
+                Assert.False(planOnUi);
+                await Call("operation", new() { ["id"] = operation["id"]!.GetValue<string>(), ["cancel"] = true });
+                planProceed.Release();
+                JsonNode stopped = operation;
+                while (stopped["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); stopped = await Call("operation", new() { ["id"] = operation["id"]!.GetValue<string>() }); }
+                Assert.Equal("canceled", stopped["State"]!.GetValue<string>());
+                Assert.False(workspace.IsDirty);
+            }
+            finally { main.PlanSourceTerrainConversion = planner; planProceed.Release(4); }
+
             // Convert to editable terrain: the plan first, then the conversion with its probe comparison.
             var plan = await Job("source_terrain_convert", new() { ["document"] = Id(doc), ["revision"] = doc.Revision });
             Assert.Equal(3, plan["plan"]!["converted"]!.GetValue<int>());

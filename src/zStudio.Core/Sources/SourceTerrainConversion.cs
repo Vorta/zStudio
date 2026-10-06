@@ -43,18 +43,32 @@ public static partial class SourceTerrainConversion
     /// planning matches every piece against each one.
     /// </summary>
     internal const int MaximumPatterns = 4096;
+    /// <summary>
+    /// The most distinct names, and characters of them, the sources may hold, all of which planning keeps: all the sources
+    /// of the 1998 or 1999 release together name under 76,000 in under 700,000 characters.
+    /// </summary>
+    internal const int MaximumNames = 262_144, MaximumNameCharacters = 4 * 1024 * 1024;
+    /// <summary>The most characters the distinct wildcard patterns may hold together; each becomes a regular expression.</summary>
+    internal const int MaximumPatternCharacters = 256 * 1024;
 
     /// <summary>
     /// Names and wildcard patterns (each * one digit) the given sources mention. A text source larger than the text-source
     /// limit (<see cref="SourceProject.MaximumSourceTextBytes"/>) is refused before it is decoded; a compiled resource is read
-    /// as its decoded strings, never as text.
+    /// as its decoded strings, never as text. Sources naming more than <see cref="MaximumNames"/> distinct words (or
+    /// <see cref="MaximumNameCharacters"/> characters of them) are refused before the name past the limit is kept.
     /// </summary>
     public static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) References(SourceWorkspace workspace, IEnumerable<string> files, CancellationToken token = default)
     {
         HashSet<string> names = new(StringComparer.Ordinal), wildcards = new(StringComparer.Ordinal); List<Regex> patterns = [];
+        // Looked up by span, so a word already kept (most of them) is not copied again.
+        var knownNames = names.GetAlternateLookup<ReadOnlySpan<char>>();
+        var knownWildcards = wildcards.GetAlternateLookup<ReadOnlySpan<char>>();
+        long nameCharacters = 0, patternCharacters = 0;
+        string reading = "";
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
+            reading = file;
             bool resource = file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase);
             bool keyframes = file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase);
             if (!(resource || keyframes || file.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gw", StringComparison.OrdinalIgnoreCase))) continue;
@@ -91,15 +105,26 @@ public static partial class SourceTerrainConversion
         }
         return (names, patterns);
 
-        void Words(string text) { foreach (Match m in Word().Matches(text)) Add(m.Value); }
-        // Each distinct pattern once.
-        void Add(string t)
+        void Words(string text) { foreach (var m in Word().EnumerateMatches(text)) Add(text.AsSpan(m.Index, m.Length)); }
+        // Each distinct name and pattern once, within the limits.
+        void Add(ReadOnlySpan<char> t)
         {
-            if (!t.Contains('*')) { names.Add(t); return; }
-            if (!wildcards.Add(t)) return;
-            if (wildcards.Count > MaximumPatterns)
+            if (!t.Contains('*'))
+            {
+                if (knownNames.Contains(t)) return;
+                if (names.Count >= MaximumNames || (nameCharacters += t.Length) > MaximumNameCharacters)
+                    throw new InvalidDataException($"The sources this world reads name more than {MaximumNames:N0} different words, or more than {MaximumNameCharacters:N0} characters of them (the limit was passed in {reading}); terrain conversion keeps each to leave the pieces they name as objects, so it is refused.");
+                names.Add(t.ToString());
+                return;
+            }
+            if (knownWildcards.Contains(t)) return;
+            if (wildcards.Count >= MaximumPatterns)
                 throw new InvalidDataException($"The sources hold more than {MaximumPatterns:N0} wildcard patterns, and every piece would be matched against each; terrain conversion is refused.");
-            patterns.Add(new Regex("^" + Regex.Escape(t).Replace("\\*", "[0-9]") + "$", RegexOptions.CultureInvariant));
+            if ((patternCharacters += t.Length) > MaximumPatternCharacters)
+                throw new InvalidDataException($"The sources' wildcard patterns hold more than {MaximumPatternCharacters:N0} characters (the limit was passed in {reading}), and each becomes an expression every piece is matched against; terrain conversion is refused.");
+            string pattern = t.ToString();
+            wildcards.Add(pattern);
+            patterns.Add(new Regex("^" + Regex.Escape(pattern).Replace("\\*", "[0-9]") + "$", RegexOptions.CultureInvariant));
         }
         static IEnumerable<string> Strings(ZrdNode node)
         {
