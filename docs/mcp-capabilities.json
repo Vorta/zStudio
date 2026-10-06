@@ -1181,7 +1181,7 @@
       "tools": [
         "zstudio_open_root"
       ],
-      "note": "Welcome screen, Work with source project → Open: open_root with project true, which refuses a folder without data and gamegen (not_project)."
+      "note": "Welcome screen, Work with source project → Open: open_root with project true, which refuses a folder without data and gamegen, or one that is or lies below a link (not_project)."
     },
     {
       "gui": "MainWindow.xaml:ExportSourceClick",

@@ -51,6 +51,8 @@ public sealed class SourceWorkspace
     {
         Root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         if (!SourceProject.IsProject(Root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
+        // Every later check of a file starts below Root; a linked root or ancestor would let edits and saves leave the folder.
+        SourceProject.RejectLinkedProject(Root);
         save = saver ?? new Saver((writes, description, token) => new SourcePublisher(Root).Publish(writes.Select(w => new SourceFileWrite(w.Relative, w.Expected, w.Content)).ToArray(), description, token).Written);
     }
 
@@ -251,14 +253,29 @@ public sealed class SourceWorkspace
         IsSaving = true;
         try { written = save(writes, $"Save {dirty.Count} source file{(dirty.Count == 1 ? "" : "s")}", token); }
         finally { IsSaving = false; }
+        // The files are on disk now; another program may already have replaced one, so each is read back with its stamp.
+        Baseline[] saved = [.. writes.Select(w => Saved(w.Relative, w.Content))];
         lock (gate)
-            foreach (var (relative, _, bytes) in writes)
-            {
-                string path = SourceProject.Resolve(Root, relative);
-                baselines[relative] = new(bytes, bytes != null && File.Exists(path) ? FileStamp.Read(path) : null);
-            }
+            for (int i = 0; i < writes.Length; i++) baselines[writes[i].Relative] = saved[i];
         Publish("save", "Save", dirty);
         return written;
+    }
+    /// <summary>
+    /// The baseline of a file just saved with <paramref name="bytes"/>: its stamp, taken while the file still has exactly those
+    /// bytes. A file another program changed or removed since gets no stamp, so <see cref="ExternalChanges"/> reports it and
+    /// <see cref="Read"/> serves the disk's content instead of the bytes saved.
+    /// </summary>
+    private Baseline Saved(string relative, byte[]? bytes)
+    {
+        if (bytes == null) return new(null, null);
+        try
+        {
+            string path = SourceProject.Resolve(Root, relative);
+            if (!File.Exists(path)) return new(bytes, null);
+            var stamp = FileStamp.Read(path);
+            return SourceProject.FileEquals(path, bytes) && FileStamp.Read(path) == stamp ? new(bytes, stamp) : new(bytes, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return new(bytes, null); }
     }
 
     /// <summary>Drops every unsaved edit and the history; files on disk are what the workspace serves afterwards.</summary>

@@ -46,6 +46,8 @@ public partial class MainWindow
             throw new StudioCommandException("busy", "Close the other source project's worlds first.");
         try { sourceWorkspace = new SourceWorkspace(full); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+        // A project opened as a plain folder that is a link or below one: its edits would be written through the link.
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         var workspace = sourceWorkspace;
         // A file an open resource or content editor holds unsaved changes of cannot also change in the workspace.
         workspace.EditGuard = relative =>

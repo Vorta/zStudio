@@ -57,6 +57,7 @@ public sealed class WindowClosingTests
                     await MissionSelectionChecks.RunDeletedReaderAtStartup();
                     await MissionOwnershipChecks.Run();
                     await SourceProjectMcpChecks.Run();
+                    await LinkedSourceProjectChecks.Run();
                     await ExportSafetyMcpChecks.Run();
                     await SourceWorldMcpChecks.Run();
                     await SourceEditingMcpChecks.Run();

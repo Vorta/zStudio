@@ -188,7 +188,9 @@ Nothing Blender writes reaches the project until the update is applied, and noth
 3. Each original is moved aside and its replacement put in place, unless another program changed or created the file meanwhile.
 4. The journal is removed.
 
-If anything fails, the files already replaced are put back. A file changed by another program since the workspace read it is never overwritten: the save stops and says which file.
+If anything fails, the files already replaced are put back. A file changed by another program since the workspace read it is never overwritten: the save stops and says which file. Each saved file is read back once the save is done; one another program replaced in the meantime is reported as changed on disk, and its new content is what the project shows.
+
+A project that is a link (a junction or symbolic link) or lies below one is never edited or saved, since its files would be written into the folder the link leads to: **Open** (and `open_root` with `project`) refuses it, and opened as a plain folder its worlds, edits, saves and recovery are refused.
 
 If zStudio or the computer stops in the middle of a save, opening the project reports the interrupted save (in Problems, and in a dialog); **Tools → Resolve interrupted save…** checks again at any time. It offers:
 - **Roll back**, which restores the files as they were before the save;

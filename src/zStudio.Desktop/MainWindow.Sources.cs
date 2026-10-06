@@ -67,12 +67,18 @@ public partial class MainWindow
         return report;
     }
 
-    /// <summary>Refuses a folder that is not an initialized source project (one with data and gamegen folders).</summary>
+    /// <summary>Refuses a folder that is not an initialized source project (one with data and gamegen folders), or that is a link or below one.</summary>
     private static async Task RequireSourceProjectAsync(string path, CancellationToken token)
     {
         // Folder checks can block on unavailable network shares; keep them off the dispatcher.
-        if (!await Task.Run(() => SourceProject.IsProject(path), token).WaitAsync(token))
-            throw new StudioCommandException("not_project", $"{path} is not a source project: it has no data and gamegen folders. Initialize one from the retail ZBD files first.");
+        string? refusal = await Task.Run(() =>
+        {
+            if (!SourceProject.IsProject(path)) return $"{path} is not a source project: it has no data and gamegen folders. Initialize one from the retail ZBD files first.";
+            // As the workspace would refuse to edit it (and Initialize to write it): nothing may be written through a link.
+            try { SourceProject.RejectLinkedProject(path); return null; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ex.Message; }
+        }, token).WaitAsync(token);
+        if (refusal != null) throw new StudioCommandException("not_project", refusal);
     }
     private void ShowReconstructionSummary(SourceReconstructionReport report)
     {

@@ -354,10 +354,17 @@ public sealed partial class SourcePublisher
             if (file.Expected == file.Content || !Valid(file.Expected) || !Valid(file.Content)) throw new InvalidDataException($"its entry for {file.Relative} is not a change.");
         }
         if (manifest.Folders.Count > manifest.Files.Count * 64) throw new InvalidDataException("it lists too many folders.");
+        // Each folder must hold one of the new files. Sorted once, the new files that start with a folder's path are
+        // adjacent, and the first path at or after it is one of them if any is: a binary search per folder instead of a
+        // scan of every file (a journal may list 50,000 files and 64 folders for each).
+        string[] created = [.. manifest.Files.Where(f => f.Content != null).Select(f => f.Relative).Order(StringComparer.OrdinalIgnoreCase)];
         foreach (string folder in manifest.Folders)
         {
             CheckSyntax(folder);
-            if (!manifest.Files.Any(f => f.Content != null && f.Relative.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase))) throw new InvalidDataException($"it lists the folder {folder}, which holds none of its new files.");
+            string prefix = folder + "/";
+            int at = Array.BinarySearch(created, prefix, StringComparer.OrdinalIgnoreCase);
+            if (at < 0) at = ~at;
+            if (at == created.Length || !created[at].StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"it lists the folder {folder}, which holds none of its new files.");
         }
         return manifest;
         static bool Valid(JournalDigest? digest) => digest == null || digest.Length >= 0 && digest.Sha256 is { Length: 64 } hash && hash.All(char.IsAsciiHexDigitLower);

@@ -112,6 +112,16 @@ public static class SourceProject
         for (var directory = new DirectoryInfo(System.IO.Path.GetFullPath(path)); directory != null; directory = directory.Parent)
             if (directory.Exists && directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{directory.FullName} is a link; choose a folder of regular directories.");
     }
+    /// <summary>
+    /// Refuse a source project that is a link or lies below one: its edits, saves and recovery would be written into the
+    /// folder the link leads to, and the checks of the files inside it (<see cref="RejectNestedLinks"/>) start below the root.
+    /// </summary>
+    public static void RejectLinkedProject(string root)
+    {
+        for (var directory = new DirectoryInfo(System.IO.Path.GetFullPath(root)); directory != null; directory = directory.Parent)
+            if (directory.Exists && directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                throw new IOException($"{directory.FullName} is a link; source projects are opened only from regular folders, so that nothing is written through a link into another folder.");
+    }
     /// <summary>Refuse links on the way from <paramref name="root"/> to a relative file, including the file itself; nothing is followed.</summary>
     public static void RejectNestedLinks(string root, string relative)
     {

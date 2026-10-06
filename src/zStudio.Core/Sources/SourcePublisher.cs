@@ -58,6 +58,7 @@ public sealed partial class SourcePublisher
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectRoot));
         if (!SourceProject.IsProject(root)) throw new DirectoryNotFoundException($"{root} is not a source project; it needs both a data and a gamegen folder.");
+        SourceProject.RejectLinkedProject(root);
     }
 
     public string Root => root;
@@ -292,7 +293,9 @@ public sealed partial class SourcePublisher
     /// <summary>The project-wide publication lock; saves and recoveries in every process take it for their whole duration.</summary>
     private FileStream Lock()
     {
-        // Working data is deleted recursively, so neither folder may lead elsewhere.
+        // Working data is deleted recursively, so neither folder may lead elsewhere; nor may the project itself, which can
+        // have become a link since this publisher was made.
+        SourceProject.RejectLinkedProject(root);
         SourceProject.RejectNestedLinks(root, RecoveryFolder); SourceProject.RejectNestedLinks(root, StagingFolder);
         string folder = SourceProject.Resolve(root, RecoveryFolder);
         if (PickupPlacementEditSession.IsProtectedPath(folder)) throw new IOException("Source projects inside the protected zbd_1998/zbd_1999 folders cannot be saved.");
