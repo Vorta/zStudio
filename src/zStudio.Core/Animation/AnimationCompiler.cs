@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
-using System.Text.RegularExpressions;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Worlds;
 
@@ -24,7 +23,7 @@ public sealed partial class AnimationCompiler
     public sealed record Result(byte[] Bytes, AnimationPackage Package, IReadOnlyList<string> Warnings, IReadOnlyList<string> Inputs);
 
     private readonly AnimationDefinitionSet definitions;
-    private readonly IReadOnlyCollection<string>? worldNodes;
+    private readonly AnimationRoots roots;
     private readonly HashSet<string>? nodeSet, effectSet;
     private readonly List<string> warnings = [];
     private readonly HashSet<string> seen = new(StringComparer.Ordinal);
@@ -37,7 +36,7 @@ public sealed partial class AnimationCompiler
 
     private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token)
     {
-        this.definitions = definitions; this.worldNodes = worldNodes; this.token = token; this.maximumBytes = maximumBytes;
+        this.definitions = definitions; roots = new(worldNodes, token); this.token = token; this.maximumBytes = maximumBytes;
         nodeSet = worldNodes == null ? null : new(worldNodes, StringComparer.Ordinal);
         effectSet = effects == null ? null : new(effects, StringComparer.Ordinal);
     }
@@ -160,7 +159,6 @@ public sealed partial class AnimationCompiler
 
     // ---------------------------------------------------------------- names
 
-    [GeneratedRegex(@"\*")] private static partial Regex Star();
 
     /// <summary>
     /// The roots a definition binds to. A NAME listing several nodes is one animation bound to the first the world has
@@ -168,29 +166,9 @@ public sealed partial class AnimationCompiler
     /// every matching world node in name order, and the digits a root matched replace the stars in the definition's
     /// other names.
     /// </summary>
-    private IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition) => Roots(definition, worldNodes, Warn);
-    internal static IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition, IReadOnlyCollection<string>? worldNodes, Action<string> Warn)
-    {
-        var name = definition.Item("NAME") ?? throw definition.Error("an animation definition needs a NAME.");
-        var names = name.Scalars.Select(v => v.Kind == ZrdKind.String ? v.Text : v.Value).ToList();
-        if (names.Count > 1)
-        {
-            HashSet<string>? present = worldNodes == null ? null : new(worldNodes, StringComparer.Ordinal);
-            if (names.FirstOrDefault(n => present == null || present.Contains(n)) is { } first) yield return (first, "");
-            yield break;
-        }
-        foreach (var value in name.Scalars)
-        {
-            string pattern = value.Kind == ZrdKind.String ? value.Text : value.Value;
-            if (!pattern.Contains('*')) { yield return (pattern, ""); continue; }
-            if (worldNodes == null) { Warn($"{JsonData.ShownText(definition.Source)}: {JsonData.ShownText(pattern)} names world nodes by pattern; without the world it binds to nothing."); continue; }
-            if (worldNodes.Count == 0 || pattern.Length > worldNodes.Max(n => n.Length)) continue;
-            Regex match = new("^" + Star().Replace(Regex.Escape(pattern).Replace("\\*", "*"), "([0-9])") + "$", RegexOptions.CultureInvariant);
-            // A pattern that matches nothing has no animation in this mission, as a missing root has none.
-            var found = worldNodes.Distinct(StringComparer.Ordinal).Where(n => match.IsMatch(n)).Order(StringComparer.Ordinal).ToList();
-            foreach (string node in found) yield return (node, string.Concat(match.Match(node).Groups.Values.Skip(1).Select(g => g.Value)));
-        }
-    }
+    private IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition) => roots.Resolve(definition, Warn);
+    internal static IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition, IReadOnlyCollection<string>? worldNodes, Action<string> warn, CancellationToken token = default)
+        => new AnimationRoots(worldNodes, token).Resolve(definition, warn);
 
     /// <summary>A pattern's stars replaced, in order, by the digits its root matched.</summary>
     internal static string Bind(string text, string digits)

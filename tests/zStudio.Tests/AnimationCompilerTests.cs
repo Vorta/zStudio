@@ -12,6 +12,15 @@ public sealed class AnimationCompilerTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    [Fact]
+    public void CompilationBoundsAggregateNonmatchingWildcardWork()
+    {
+        string definitions = "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( " + string.Concat(Enumerable.Repeat("ANIMATION_DEFINITION ( NAME ( \"a******\" ) ) ", 2100)) + " ) )";
+        var files = new MemoryFiles(new() { ["data/m1/zrdr/anim.zad"] = Encoding.ASCII.GetBytes(definitions) });
+        string[] nodes = Enumerable.Range(0, 1000).Select(i => "b" + i.ToString("D6", System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        Assert.Contains("wildcard matching exceeds", Assert.Throws<InvalidDataException>(() => AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", nodes, Token)).Message);
+    }
+
     [Theory]
     [InlineData("EXECUTION_BY_RANGE ( 3e38 )")]
     [InlineData("SEQUENCE_DEFINITION ( NAME ( move ) OBJECT_MOTION_FROM_TO ( NAME ( gate ) TRANSLATE_FROM ( -3e38 0 0 ) TRANSLATE_TO ( 3e38 0 0 ) RUN_TIME ( 1e-30 ) ) )")]

@@ -157,7 +157,7 @@ public sealed class ScanTerrainRound7Tests
     /// <summary>
     /// A mission database of <paramref name="pieces"/> root nodes that all use one mesh with <paramref name="values"/> as its
     /// model values: a triangle lying flat (it covers ground, so every piece stacks on the others), one standing upright (it
-    /// covers none, so all fit one surface), or <paramref name="splinters"/> triangles too small to cover anything.
+    /// covers none, so all fit one surface), or <paramref name="splinters"/> tiny triangles that still have positive area.
     /// </summary>
     private static SourceWorkspace Database(Project project, int pieces, JsonObject values, bool flat = false, int splinters = 0)
     {
@@ -254,10 +254,11 @@ public sealed class ScanTerrainRound7Tests
     public void AMeshsAreaIsWorkedOutOnce()
     {
         using Project project = new();
-        // A thousand pieces use a mesh of ten thousand splinters: its area is worked out once, not once per piece.
-        var (plan, allocated) = Measured(Database(project, 1000, new() { ["flags"] = 2 }, splinters: 10_000));
+        // Two hundred pieces share ten thousand tiny triangles. Project once; positive overlap still needs separate sheets.
+        // More than 256 copies would correctly exceed the surface limit, however small their triangles are.
+        var (plan, allocated) = Measured(Database(project, 200, new() { ["flags"] = 2 }, splinters: 10_000));
         Assert.True(allocated < Bound, $"Planning allocated {allocated:N0} bytes.");
-        Assert.Equal(1000, Assert.Single(plan.Groups).Nodes.Count);
+        Assert.Equal(200, plan.Groups.Count); Assert.All(plan.Groups, group => Assert.Single(group.Nodes));
     }
 
     /// <summary>An instance's copies (roots marked as one instance) with the given engine values and meshes.</summary>

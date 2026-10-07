@@ -918,7 +918,7 @@ public static partial class SourceBuilder
         void Visit(ZrdNode node, int depth)
         {
             token.ThrowIfCancellationRequested();
-            if (node.Kind != ZrdKind.Array || depth > 64) return;
+            if (node.Kind != ZrdKind.Array) return;
             var c = node.Children;
             string? file = c.FirstOrDefault(n => n.Kind == ZrdKind.String && n.Text.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))?.Text;
             if (file != null)

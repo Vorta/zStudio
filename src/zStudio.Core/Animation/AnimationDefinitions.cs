@@ -229,7 +229,7 @@ public sealed class AnimationDefinitionSet
         // ANIMATION_DEFINITION_FILE ( name ): a listed .zrd becomes .zad, whatever its folder.
         static ZrdNode Renamed(ZrdNode node, int depth)
         {
-            if (node.Kind != ZrdKind.Array || depth > 64) return node;
+            if (node.Kind != ZrdKind.Array) return node;
             var children = node.Children.ToList(); bool changed = false;
             for (int i = 0; i < children.Count; i++)
             {

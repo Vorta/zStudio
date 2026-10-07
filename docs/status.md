@@ -1,3 +1,13 @@
+## PR18 workspace consistency and bounded conversion review fixes (2026-10-07)
+
+Six findings are addressed: source workspace reads/reloads now detect same-length, same-timestamp changes; terrain conversion bounds projected geometry and aggregate wildcard work; small positive overlaps remain separate surfaces; sound declarations preserve their ceilings throughout the parser's accepted nesting depth; and animation wildcard roots share an index and cumulative work budget across definitions. Related texture paths and animation-list traversal now also retain deeply nested accepted data.
+
+The challenge pass moved new content verification off the UI thread. Prepared edits retain verified read handles through acceptance, validate their owning workspace and fork revisions, and refuse more than 4,096 dependencies before opening handles. Reload checks run off-thread with revision and document lifetime checks. GUI and MCP continue to use the same services; command arguments and the discovery registry are unchanged.
+
+Validation: final Release build with zero warnings/errors; final full solution 1,743/1,743 with 1999/MW3, including all 110 Desktop and 76 watcher tests; a separate 71-case focused Core run includes the 1998 reconstruction/terrain corpus. Actual GUI/MCP checks cover same-stamp source reload. The first full run exposed an allocation test that assumed tiny terrain triangles vanished; it now requires 200 distinct overlapping surfaces and retains the original allocation threshold. Full actual-base coverage and the separate challenge were completed before commit. The notification reached this conversation automatically; the unchanged watch is re-armed against the verified remote head immediately after each fix push.
+
+The user-retained atomic direct compiled-save race and historical partial-minus/theme GUI intermittency remain unresolved; the latter has not appeared in this round. No merge, release or version bump.
+
 ## PR18 terrain, reconstruction and Blender review fixes (2026-10-07)
 
 Four new PR findings are fixed: terrain recipe serialization now streams bounded UTF-8 instead of creating a JSON node per coordinate; parser-valid large terrain regions remain inspectable with an explicit unavailable-area reason; original-data reconstruction checks decoded animation definitions rather than a filename; and Blender deletion warnings retain duplicate-name counts. The challenge pass also added decode-memory reservation before the original-data check, moved inspection clipping off the UI thread, and rejected results from changed or closed workspaces.

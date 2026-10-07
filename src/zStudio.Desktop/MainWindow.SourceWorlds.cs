@@ -400,6 +400,11 @@ public partial class MainWindow
         }
         finally { SetSourceRebuilding(session, false); MarkStaleSourceWorlds(); ReleaseUnusedSourceWorkspace(); }
     }
+    private sealed class PreparedSourceVerification : IDisposable
+    {
+        public SourceWorkspace.PreparedValidation? Value { get; set; }
+        public void Dispose() => Value?.Dispose();
+    }
     internal Action<CancellationToken>? SourceEditPreparing { get; set; }
     /// <summary>Read, decode and serialize on an isolated worker workspace; publish one checked transaction on the dispatcher.</summary>
     private async Task<DocumentModel> PrepareSourceWorldEditAsync(DocumentModel doc, string action, Func<SourceWorkspace, CancellationToken, SourceTransaction?> prepare,
@@ -414,6 +419,7 @@ public partial class MainWindow
         if (fromBuild && doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources changed; reload the world before editing it.");
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         var prepared = session.Workspace.BeginPreparedEdit();
+        using var verification = new PreparedSourceVerification();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         session.Building = cancellation;
         operation = cancellation; CancelOperationItem.IsEnabled = true;
@@ -430,6 +436,7 @@ public partial class MainWindow
                 }
                 CheckSources(); SourceEditPreparing?.Invoke(cancellation.Token); prepare(prepared.Workspace, cancellation.Token);
                 CheckSources(); cancellation.Token.ThrowIfCancellationRequested();
+                verification.Value = session.Workspace.VerifyPreparedEdit(prepared, cancellation.Token);
             }, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the edit was prepared.");
@@ -452,13 +459,13 @@ public partial class MainWindow
             if (committingCard != CurrentInspectionCard || committingCard.DraftDocument != doc || shownDocument != doc)
                 throw new StudioCommandException("context_changed", "The scene draft changed while the edit was prepared.");
             RequireNoDrafts(doc, committing: true, committingCard);
-            try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token); }
+            try { session.Workspace.ValidatePreparedEdit(prepared, cancellation.Token, verification.Value); }
             catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             committingCard.CancelDraft(); UpdateDocumentCommands();
         }
         // No dispatcher yield between releasing the preparation guard and accepting the checked edit.
-        return await EditSourceWorldAsync(doc, action, w => w.AcceptPreparedEdit(prepared, cancellation.Token) is { } t ? () => w.Retract(t) : null,
+        return await EditSourceWorldAsync(doc, action, w => w.AcceptPreparedEdit(prepared, cancellation.Token, verification.Value) is { } t ? () => w.Retract(t) : null,
             cancellation.Token, additions, fromBuild, verifyTargets, notes);
     }
 
@@ -524,20 +531,29 @@ public partial class MainWindow
         RequireSourceWorldIdle(session);
         RequireNoDrafts(doc);
         var workspace = session.Workspace;
-        var changed = workspace.ExternalChanges();
-        if (changed.Any(workspace.IsFileDirty))
-        {
-            if (!discardAccepted) throw new StudioCommandException("unsaved_changes", $"{string.Join(", ", changed.Where(workspace.IsFileDirty))} changed on disk, so the project's unsaved edits cannot be kept. Close the project's worlds with discard, or undo the edits, then reload.");
-            if (OtherSourceWorldOpen(doc)) throw new StudioCommandException("unsaved_changes", "Other worlds of this source project are open with its unsaved edits; close them before discarding.");
-            workspace.Discard();
-        }
-        else
-            try { workspace.Reload(); }
-            catch (SourceFileChangedException ex) { throw new StudioCommandException("unsaved_changes", ex.Message); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
+        token = cancellation.Token;
+        long revision = workspace.Revision;
+        SetSourceRebuilding(session, true);
         try
         {
-            SetSourceRebuilding(session, true);
+            var changed = await Task.Run(() => workspace.ExternalChanges(token), token);
+            token.ThrowIfCancellationRequested();
+            if (doc.IsDisposed || session.Owner != doc || workspace.Revision != revision)
+                throw new StudioCommandException("context_changed", "The source world changed during reload.");
+            RequireNoDrafts(doc);
+            if (changed.Any(workspace.IsFileDirty))
+            {
+                if (!discardAccepted) throw new StudioCommandException("unsaved_changes", $"{string.Join(", ", changed.Where(workspace.IsFileDirty))} changed on disk, so the project's unsaved edits cannot be kept. Close the project's worlds with discard, or undo the edits, then reload.");
+                if (OtherSourceWorldOpen(doc)) throw new StudioCommandException("unsaved_changes", "Other worlds of this source project are open with its unsaved edits; close them before discarding.");
+                workspace.Discard();
+            }
+            else
+                try { await workspace.ReloadAsync(token); }
+                catch (SourceFileChangedException ex) { throw new StudioCommandException("unsaved_changes", ex.Message); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+            token.ThrowIfCancellationRequested();
+            if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("context_changed", "The source world changed during reload.");
             var reloaded = await RebuildSourceWorldAsync(session, token);
             // With nothing unsaved, the reloaded world is the saved one: lookups are compared with it from now on, as after a save.
             if (!workspace.IsDirty && reloaded.SourceBuild is { } build)

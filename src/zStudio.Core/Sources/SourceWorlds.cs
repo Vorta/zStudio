@@ -173,7 +173,7 @@ public static partial class SourceWorlds
         // last top-level ANIMATION_DEFINITIONS, so they compile after everything the file already lists.
         ZrdNode Walk(ZrdNode node, int depth)
         {
-            if (node.Kind != ZrdKind.Array || depth > 64) return node;
+            if (node.Kind != ZrdKind.Array) return node;
             if (node.Children is [{ Kind: ZrdKind.Array } wrapped]) return node with { Children = [Walk(wrapped, depth + 1)] };
             var children = node.Children.ToList();
             int at = -1;
@@ -204,7 +204,7 @@ public static partial class SourceWorlds
         }
         void Listed(ZrdNode node, int depth)
         {
-            if (node.Kind != ZrdKind.Array || depth > 64) return;
+            if (node.Kind != ZrdKind.Array) return;
             for (int i = 0; i < node.Children.Count; i++)
             {
                 if (node.Children[i] is { Kind: ZrdKind.String, Text: "ANIMATION_DEFINITION_FILE" } && i + 1 < node.Children.Count && node.Children[i + 1].Children is [{ Kind: ZrdKind.String } path, ..])
@@ -245,7 +245,7 @@ public static partial class SourceWorlds
             {
                 if (own.Contains(definition.File)) continue;
                 bool binds;
-                try { binds = AnimationCompiler.Roots(definition.Item, [root], _ => { }).Any(r => r.Root == root); }
+                try { binds = AnimationCompiler.Roots(definition.Item, [root], _ => { }, token).Any(r => r.Root == root); }
                 catch (InvalidDataException) { continue; }
                 if (!binds) continue;
                 if (!found.TryGetValue(definition.File, out var entry)) found[definition.File] = entry = (new(StringComparer.Ordinal), new(StringComparer.OrdinalIgnoreCase));

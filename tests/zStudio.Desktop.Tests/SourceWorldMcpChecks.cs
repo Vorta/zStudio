@@ -157,6 +157,17 @@ internal static class SourceWorldMcpChecks
             await main.ViewModel.CheckExternalChangesAsync(); Assert.True(redone.IsStale);
             var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(redone), ["revision"] = redone.Revision }));
             Assert.False(reloaded.IsStale); Assert.Contains(reloaded.PreviewDocument.Scene!.Nodes, n => n.Name == "tank_wreck");
+            // A touched, saved source can change without changing its file stamp. Reload must see its new authoritative bytes.
+            var sourceStamp = File.GetLastWriteTimeUtc(script);
+            string beforeSameStamp = await File.ReadAllTextAsync(script, token);
+            string afterSameStamp = beforeSameStamp.Replace("set worldName world", "set worldName other", StringComparison.Ordinal);
+            Assert.NotEqual(beforeSameStamp, afterSameStamp);
+            await File.WriteAllTextAsync(script, afterSameStamp, token); File.SetLastWriteTimeUtc(script, sourceStamp);
+            Assert.Contains("gamegen/m1.gs", reloaded.SourceWorld!.Workspace.ExternalChanges());
+            reloaded = Document(await Job("reload_document", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision }));
+            Assert.Contains(reloaded.PreviewDocument.Scene!.Nodes, n => n.Name == "other");
+            Assert.False(reloaded.IsStale);
+
             // After the script changes on disk, the pending edits cannot be kept and reloading starts from the file.
             var pending = Document((await Job("source_world_add_model", new() { ["document"] = Id(reloaded), ["revision"] = reloaded.Revision, ["model"] = "data/m1/models/m1.gltf", ["name"] = "extra", ["definitionFiles"] = Array.Empty<string>() }))["document"]!);
             await File.AppendAllTextAsync(script, "# elsewhere\r\n", token); File.SetLastWriteTimeUtc(script, DateTime.UtcNow.AddMinutes(3));

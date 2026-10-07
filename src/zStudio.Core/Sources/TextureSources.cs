@@ -134,7 +134,7 @@ public static class TextureSources
             Walk(tree, null, 0);
             void Walk(ZrdNode node, string? imagePath, int depth)
             {
-                if (depth > 64) return;
+
                 var children = node.Children;
                 for (int i = 0; i < children.Count; i++)
                 {

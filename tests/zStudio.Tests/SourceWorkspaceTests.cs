@@ -22,6 +22,80 @@ public sealed class SourceWorkspaceTests : IDisposable
     private static byte[] Bytes(string text) => Encoding.Latin1.GetBytes(text);
     private static string Text(byte[]? bytes) => Encoding.Latin1.GetString(bytes!);
 
+    [Fact]
+    public void PreparedVerificationBoundsHeldDependenciesBeforeOpeningFiles()
+    {
+        SourceWorkspace workspace = new(root);
+        var edit = workspace.BeginPreparedEdit();
+        for (int i = 0; i < 4097; i++) Assert.Null(edit.Workspace.Read($"data/m1/missing{i}.zrd", Token));
+        Assert.Contains("4,096", Assert.Throws<InvalidDataException>(() => workspace.VerifyPreparedEdit(edit, Token)).Message);
+    }
+
+    [Fact]
+    public async Task PreparedVerificationHoldsContentAndCannotOutliveItsEvidence()
+    {
+        SourceWorkspace workspace = new(root);
+        var edit = workspace.BeginPreparedEdit();
+        edit.Workspace.Apply("Prepared", [("gamegen/m1.gs", Bytes("Quit 99\n"))], Token);
+        using var verified = await Task.Run(() => workspace.VerifyPreparedEdit(edit, Token), Token);
+        Assert.ThrowsAny<IOException>(() => File.WriteAllText(At("gamegen/m1.gs"), "changed"));
+        Assert.ThrowsAny<IOException>(() => File.Delete(At("gamegen/m1.gs")));
+        var accepted = workspace.AcceptPreparedEdit(edit, Token, verified);
+        Assert.NotNull(accepted);
+        verified.Dispose();
+        File.WriteAllText(At("gamegen/m1.gs"), "changed");
+        Assert.Throws<InvalidOperationException>(() => workspace.ValidatePreparedEdit(edit, Token, verified));
+    }
+
+    [Fact]
+    public async Task PreparedVerificationRejectsLaterReadsAndMissingFilesAppearing()
+    {
+        SourceWorkspace workspace = new(root);
+        var edit = workspace.BeginPreparedEdit();
+        Assert.Null(edit.Workspace.Read("data/m1/new.zrd", Token));
+        using var verified = await Task.Run(() => workspace.VerifyPreparedEdit(edit, Token), Token);
+        Write("data/m1/new.zrd", "( )");
+        Assert.Throws<SourceFileChangedException>(() => workspace.ValidatePreparedEdit(edit, Token, verified));
+        File.Delete(At("data/m1/new.zrd"));
+        edit.Workspace.Read("gamegen/m1.gs", Token);
+        Assert.Throws<InvalidOperationException>(() => workspace.ValidatePreparedEdit(edit, Token, verified));
+    }
+
+    [Fact]
+    public async Task AsyncReloadFindsSameStampChangesAndKeepsDirtyConflicts()
+    {
+        SourceWorkspace workspace = new(root);
+        workspace.Apply("Saved", [("gamegen/m1.gs", Bytes("Quit 1\n"))], Token);
+        workspace.Save(Token);
+        var stamp = File.GetLastWriteTimeUtc(At("gamegen/m1.gs"));
+        Write("gamegen/m1.gs", "Quit 2\n"); File.SetLastWriteTimeUtc(At("gamegen/m1.gs"), stamp);
+        Assert.Equal(["gamegen/m1.gs"], await workspace.ReloadAsync(Token));
+        Assert.False(workspace.CanUndo);
+        workspace.Apply("Dirty", [("gamegen/m1.gs", Bytes("Quit 3\n"))], Token);
+        Write("gamegen/m1.gs", "Quit 4\n"); File.SetLastWriteTimeUtc(At("gamegen/m1.gs"), stamp);
+        await Assert.ThrowsAsync<SourceFileChangedException>(() => workspace.ReloadAsync(Token));
+        Assert.True(workspace.IsDirty);
+    }
+
+    [Fact]
+    public void SameStampExternalChangesAreVisibleToReadReloadAndPreparedEdits()
+    {
+        const string file = "gamegen/m1.gs";
+        SourceWorkspace workspace = new(root);
+        workspace.Apply("first", [(file, Bytes("Quit 1\n"))], Token); workspace.Save(Token);
+        var stamp = File.GetLastWriteTimeUtc(At(file));
+        Write(file, "Quit 2\n"); File.SetLastWriteTimeUtc(At(file), stamp);
+        Assert.Contains(file, workspace.ExternalChanges());
+        Assert.Equal("Quit 2\n", Text(workspace.Read(file, Token)));
+        Assert.Contains(file, workspace.Reload()); Assert.Empty(workspace.History);
+        var prepared = workspace.BeginPreparedEdit();
+        prepared.Workspace.Read(file, Token);
+        prepared.Workspace.Apply("prepared", [(file, Bytes("Quit 3\n"))], Token);
+        Write(file, "Quit 4\n"); File.SetLastWriteTimeUtc(At(file), stamp);
+        Assert.Throws<SourceFileChangedException>(() => workspace.AcceptPreparedEdit(prepared, Token));
+        Assert.False(workspace.IsDirty); Assert.Empty(workspace.History);
+    }
+
     [Theory]
     [InlineData("dependency")][InlineData("target")][InlineData("deleted_dependency")][InlineData("workspace")][InlineData("guard")][InlineData("cancel")]
     public void PreparedEditConflictsNeverPublishAndRetryKeepsUndo(string conflict)

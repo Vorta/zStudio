@@ -54,7 +54,7 @@ internal static class AnimationSources
             AnimationDefinitionSet set;
             try { set = AnimationDefinitionSet.Load(files, root, token); }
             catch (InvalidDataException ex) { notes.Add($"m{mission.Mission}: the animation definitions do not load ({ex.Message}); animation sources were not reconstructed."); continue; }
-            var bindings = Bindings(set, mission);
+            var bindings = Bindings(set, mission, token);
             if (bindings == null) { notes.Add($"m{mission.Mission}: the definitions do not list anim.zbd's animations in order; animation sources were not reconstructed."); continue; }
 
             // Keyframe scripts: the track each script event plays.
@@ -169,13 +169,15 @@ internal static class AnimationSources
         time == 895_642_826 && Path.GetFileName(path).Equals("m5doexit.zan", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Each shipped entry with the definition (and pattern digits) it was compiled from, or null when they do not line up.</summary>
-    private static List<(AnimationDefinition Definition, string Digits, AnimationEntry Entry)>? Bindings(AnimationDefinitionSet set, MissionAnimation mission)
+    private static List<(AnimationDefinition Definition, string Digits, AnimationEntry Entry)>? Bindings(AnimationDefinitionSet set, MissionAnimation mission, CancellationToken token)
     {
         List<(AnimationDefinition, string, AnimationEntry)> result = []; int index = 1;
+        AnimationRoots roots = new(mission.WorldNodes, token);
+        HashSet<string> nodeNames = new(mission.WorldNodes, StringComparer.Ordinal);
         foreach (var definition in set.Definitions)
-            foreach (var (root, digits) in AnimationCompiler.Roots(definition.Item, mission.WorldNodes, _ => { }))
+            foreach (var (root, digits) in roots.Resolve(definition.Item, _ => { }))
             {
-                if (!mission.WorldNodes.Contains(root)) continue;
+                if (!nodeNames.Contains(root)) continue;
                 if (index >= mission.Package.Entries.Count) return null;
                 var entry = mission.Package.Entries[index++];
                 if (entry.Name != AnimationCompiler.Bind(definition.Item.TextOf("ANIMATION_NAME") ?? root, digits) || entry.RootName != root) return null;

@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using Clipper2Lib;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core.Terrain;
@@ -151,6 +150,20 @@ public static partial class SourceTerrainConversion
     public static TerrainConversionPlan Plan(SourceWorkspace workspace, string database, (HashSet<string> Names, IReadOnlyList<Regex> Patterns) references, CancellationToken token = default)
     {
         var (root, doc) = Read(workspace, database, token);
+        TerrainConversionGeometry geometry = new(token);
+        long patternWork = 0;
+        Regex? MatchingPattern(string name)
+        {
+            foreach (var pattern in references.Patterns)
+            {
+                token.ThrowIfCancellationRequested();
+                // Charge text length too; even fixed-form patterns can be long.
+                if ((patternWork += 1L + name.Length + pattern.ToString().Length) > 16_000_000)
+                    throw new InvalidDataException("Terrain conversion exceeds its wildcard matching budget; reduce the nodes or wildcard references.");
+                if (pattern.IsMatch(name)) return pattern;
+            }
+            return null;
+        }
         string stem = database[(database.LastIndexOf('/') + 1)..database.LastIndexOf('.')];
         string folder = database[..database.LastIndexOf('/')];
         string surfaces = $"{folder}/{stem}_terrain.gltf", recipe = $"{folder}/{stem}_terrain{TerrainRecipe.Extension}", buffer = $"{folder}/{stem}_terrain.bin";
@@ -183,7 +196,7 @@ public static partial class SourceTerrainConversion
                 : (Flags(extras) & 0x60) != 0 ? "collides by its bounding box or is a proximity node (both depend on the node's own bounds)"
                 : mesh.ValuesReason is { } byValues ? byValues
                 : references.Names.Contains(name) ? "named by a script, resource or animation"
-                : references.Patterns.FirstOrDefault(p => p.IsMatch(name)) is { } pattern ? $"matched by the wildcard {pattern}"
+                : MatchingPattern(name) is { } pattern ? $"matched by the wildcard {pattern}"
                 : extras?["zoneWord"] is JsonValue word && word.ToString() is var w && zone is var z && !w.Equals($"0x{(uint)z:X}", StringComparison.OrdinalIgnoreCase) && !w.Equals($"0x{(uint)z:X8}", StringComparison.OrdinalIgnoreCase) ? "has a zone word beyond its zone"
                 : null;
             if (reason != null) { kept.Add(new(name, reason)); continue; }
@@ -203,18 +216,18 @@ public static partial class SourceTerrainConversion
         foreach (var ((flags, zone, number), nodes) in groups.OrderBy(g => g.Key.Zone).ThenBy(g => g.Key.Flags).ThenBy(g => valueTexts[g.Key.Values], StringComparer.Ordinal))
         {
             string values = valueTexts[number];
-            List<(List<GltfNode> Members, PathsD Area)> layers = [];
+            List<(List<GltfNode> Members, HashSet<TerrainConversionGeometry.Sheet> Areas)> layers = [];
             foreach (var node in nodes)
             {
                 token.ThrowIfCancellationRequested();
                 // A mesh's plan-view area is the same for every piece using it (pieces are untransformed).
                 var mesh = facts[node.Mesh!];
-                var area = mesh.Area ??= PlanArea(node.Mesh!);
-                var layer = layers.FirstOrDefault(l => Math.Abs(Clipper.Area(Clipper.Intersect(l.Area, area, FillRule.NonZero, 3))) <= 0.01);
+                var area = mesh.Area ??= geometry.Read(node.Mesh!);
+                var layer = layers.FirstOrDefault(l => !l.Areas.Any(other => geometry.Overlaps(other, area)));
                 if (layer.Members == null && result.Count + layers.Count >= TerrainRecipe.MaximumSurfaces)
                     throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, model values, or stacked sheets).");
-                if (layer.Members == null) layers.Add(([node], area));
-                else { layer.Members.Add(node); int at = layers.IndexOf(layer); layers[at] = (layer.Members, Clipper.Union(layer.Area, area, FillRule.NonZero, 3)); }
+                if (layer.Members == null) layers.Add(([node], new(ReferenceEqualityComparer.Instance) { area }));
+                else { layer.Members.Add(node); layer.Areas.Add(area); }
             }
             if (result.Count + layers.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, model values, or stacked sheets).");
             // Pieces with model values of their own (an unlit or scrolling surface) are a surface of their own, named by a short hash of the values.
@@ -326,26 +339,11 @@ public static partial class SourceTerrainConversion
         public bool Morphs { get; } = mesh.Weights.Count > 0 || mesh.Primitives.Any(p => p.Targets.Count > 0);
         public string? ValuesReason { get; } = Reason(mesh.Extras?[WorldGltf.Key] as JsonObject);
         public int? ValuesNumber { get; set; }
-        public PathsD? Area { get; set; }
+        public TerrainConversionGeometry.Sheet? Area { get; set; }
         private static string? Reason(JsonObject? values) =>
             values?["points"] is JsonArray { Count: > 0 } ? "holds point entries (lens flares)"
             : values?["mode"] is JsonValue mode && mode.ToString() != "0" ? "a facade or point model"
             : null;
     }
 
-    /// <summary>The plan-view area a mesh's triangles cover.</summary>
-    private static PathsD PlanArea(GltfMesh mesh)
-    {
-        PathsD triangles = [];
-        foreach (var p in mesh.Primitives)
-            for (int t = 0; t + 2 < p.Indices.Count; t += 3)
-            {
-                Vector3 a = p.Positions[p.Indices[t]], b = p.Positions[p.Indices[t + 1]], c = p.Positions[p.Indices[t + 2]];
-                // One orientation for all, so the nonzero union never cancels opposite windings.
-                double cross = (b.X - (double)a.X) * (c.Z - (double)a.Z) - (b.Z - (double)a.Z) * (c.X - (double)a.X);
-                if (Math.Abs(cross) < 1e-9) continue;
-                triangles.Add(cross > 0 ? [new PointD(a.X, a.Z), new PointD(b.X, b.Z), new PointD(c.X, c.Z)] : [new PointD(a.X, a.Z), new PointD(c.X, c.Z), new PointD(b.X, b.Z)]);
-            }
-        return Clipper.Union(triangles, FillRule.NonZero);
-    }
 }

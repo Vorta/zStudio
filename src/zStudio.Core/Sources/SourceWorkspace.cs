@@ -26,7 +26,11 @@ public sealed class SourceWorkspace
 {
     /// <summary>Saves several files together: each write names the bytes the file must have now (null: absent) and its new bytes (null: delete). Returns the files written.</summary>
     public delegate IReadOnlyList<string> Saver(IReadOnlyList<(string Relative, byte[]? Expected, byte[]? Content)> writes, string description, CancellationToken token);
-    private sealed record Baseline(byte[]? Bytes, FileStamp? Stamp);
+    private sealed record Baseline(byte[]? Bytes, FileStamp? Stamp)
+    {
+        // Prepared reads retain this digest when dropping the content buffer.
+        public string? Sha256 { get; init; } = Bytes == null ? null : SourceProject.Sha256(Bytes);
+    }
     private Dictionary<string, Baseline>? preparedReads;
     /// <summary>Each touched file as it was on disk when first read or last saved.</summary>
     private readonly Dictionary<string, Baseline> baselines = new(StringComparer.OrdinalIgnoreCase);
@@ -64,6 +68,56 @@ public sealed class SourceWorkspace
         { Owner = owner; Revision = owner.Revision; Workspace = workspace; FirstId = workspace.nextId; }
     }
 
+    /// <summary>Content verified on a worker, with existing files held read-only until publication. Dispose after acceptance.</summary>
+    public sealed class PreparedValidation : IDisposable
+    {
+        internal PreparedEdit Edit { get; }
+        internal long Revision { get; }
+        internal int ReadCount { get; }
+        private readonly List<FileStream> files = [];
+        internal bool IsDisposed { get; private set; }
+        internal PreparedValidation(PreparedEdit edit)
+        { Edit = edit; Revision = edit.Workspace.Revision; ReadCount = edit.Workspace.preparedReads!.Count; }
+        internal void Hold(FileStream file) => files.Add(file);
+        public void Dispose()
+        {
+            if (IsDisposed) return;
+            IsDisposed = true;
+            foreach (var file in files) file.Dispose();
+        }
+    }
+
+    /// <summary>Verify every prepared dependency off-thread, holding existing files against writes/replacement until accepted.</summary>
+    public PreparedValidation VerifyPreparedEdit(PreparedEdit prepared, CancellationToken token = default)
+    {
+        if (prepared.Owner != this) throw new InvalidOperationException("The prepared edit belongs to another workspace.");
+        if (prepared.Workspace.preparedReads!.Count > 4096)
+            throw new InvalidDataException("A prepared edit reads more than 4,096 source files; split the edit before verification.");
+        PreparedValidation verified = new(prepared);
+        try
+        {
+            foreach (var (relative, baseline) in prepared.Workspace.preparedReads!)
+            {
+                token.ThrowIfCancellationRequested();
+                SourceProject.RejectNestedLinks(Root, relative);
+                string path = SourceProject.Resolve(Root, relative);
+                if (baseline.Stamp == null)
+                {
+                    if (File.Exists(path)) Changed();
+                    continue;
+                }
+                if (FileStamp.Read(path) != baseline.Stamp) Changed();
+                var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                verified.Hold(stream);
+                if (baseline.Sha256 == null || !new JournalDigest(baseline.Stamp.Length, baseline.Sha256).Matches(stream, token)
+                    || FileStamp.Read(path) != baseline.Stamp) Changed();
+                void Changed() => throw new SourceFileChangedException($"{relative} changed while the edit was prepared; try again.", [relative]);
+            }
+            return verified;
+        }
+        catch { verified.Dispose(); throw; }
+    }
+
     /// <summary>Capture on the owning thread. Immutable content arrays are shared; history and dictionaries are isolated.</summary>
     public PreparedEdit BeginPreparedEdit()
     {
@@ -79,27 +133,29 @@ public sealed class SourceWorkspace
         return new(this, fork);
     }
 
-    /// <summary>Accept exactly one prepared transaction. Only metadata checks and publication run on the owning thread.</summary>
-    public SourceTransaction? AcceptPreparedEdit(PreparedEdit prepared, CancellationToken token = default)
+    /// <summary>Accept exactly one prepared transaction. Use held worker verification for metadata-only publication; otherwise verify content here.</summary>
+    public SourceTransaction? AcceptPreparedEdit(PreparedEdit prepared, CancellationToken token = default, PreparedValidation? verified = null)
     {
-        var transaction = ValidatePreparedEdit(prepared, token);
+        var transaction = ValidatePreparedEdit(prepared, token, verified);
         if (transaction == null) return null;
         lock (gate)
             foreach (var file in transaction.Files) baselines[file.Relative] = prepared.Workspace.baselines[file.Relative];
         return Commit(transaction.Label, transaction.Files);
     }
     /// <summary>Check a prepared edit before resolving its owning GUI draft; this does not publish it.</summary>
-    public SourceTransaction? ValidatePreparedEdit(PreparedEdit prepared, CancellationToken token = default)
+    public SourceTransaction? ValidatePreparedEdit(PreparedEdit prepared, CancellationToken token = default, PreparedValidation? verified = null)
     {
         token.ThrowIfCancellationRequested();
         if (prepared.Owner != this || prepared.Revision != Revision || IsSaving)
             throw new InvalidOperationException("The source workspace changed while the edit was prepared; try again.");
+        if (verified != null && (verified.Edit != prepared || verified.IsDisposed || verified.Revision != prepared.Workspace.Revision || verified.ReadCount != prepared.Workspace.preparedReads!.Count))
+            throw new InvalidOperationException("The prepared content verification is no longer valid.");
         var fork = prepared.Workspace;
         foreach (var (relative, baseline) in fork.preparedReads!)
         {
             token.ThrowIfCancellationRequested();
             SourceProject.RejectNestedLinks(Root, relative);
-            if (!Matches(relative, baseline)) throw new SourceFileChangedException($"{relative} changed while the edit was prepared; try again.", [relative]);
+            if (!Matches(relative, baseline, token, verifyContent: verified == null)) throw new SourceFileChangedException($"{relative} changed while the edit was prepared; try again.", [relative]);
         }
         if (fork.nextId == prepared.FirstId) return null;
         if (fork.nextId != prepared.FirstId + 1 || fork.position != fork.history.Count)
@@ -148,10 +204,10 @@ public sealed class SourceWorkspace
             if (working.TryGetValue(relative, out var bytes))
             {
                 baseline = baselines[relative];
-                if (!Same(bytes, baseline.Bytes)) { preparedReads?.TryAdd(relative, new(null, baseline.Stamp)); return BoundedRead(bytes); }
+                if (!Same(bytes, baseline.Bytes)) { preparedReads?.TryAdd(relative, baseline with { Bytes = null }); return BoundedRead(bytes); }
             }
         token.ThrowIfCancellationRequested();
-        if (baseline != null && Matches(relative, baseline)) { preparedReads?.TryAdd(relative, new(null, baseline.Stamp)); return BoundedRead(baseline.Bytes); }
+        if (baseline != null && Matches(relative, baseline, token)) { preparedReads?.TryAdd(relative, baseline with { Bytes = null }); return BoundedRead(baseline.Bytes); }
         return ReadDisk(relative, maximumBytes, token).Bytes;
         byte[]? BoundedRead(byte[]? value) => value == null || value.LongLength <= maximumBytes ? value
             : throw new InvalidDataException($"{relative} exceeds this operation's {maximumBytes:N0}-byte source limit; move inline buffers out and simplify metadata.");
@@ -301,12 +357,14 @@ public sealed class SourceWorkspace
     }
 
     /// <summary>Touched files changed on disk by another program since the workspace read or saved them, in path order.</summary>
-    public IReadOnlyList<string> ExternalChanges()
+    public IReadOnlyList<string> ExternalChanges() => ExternalChanges(CancellationToken.None);
+    /// <summary>Content checking is the default; metadata-only checks are preliminary UI guards, never publication evidence.</summary>
+    public IReadOnlyList<string> ExternalChanges(CancellationToken token, bool verifyContent = true)
     {
         List<string> changed = []; KeyValuePair<string, Baseline>[] entries;
         lock (gate) entries = [.. baselines];
         foreach (var (relative, baseline) in entries)
-            if (!Matches(relative, baseline)) changed.Add(relative);
+            if (!Matches(relative, baseline, token, verifyContent)) changed.Add(relative);
         return changed.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
@@ -397,10 +455,18 @@ public sealed class SourceWorkspace
     /// with unsaved edits that changed on disk is a conflict. History is cleared when any file is re-read, since its steps
     /// no longer describe the files. Returns the re-read files.
     /// </summary>
-    public IReadOnlyList<string> Reload()
+    public async Task<IReadOnlyList<string>> ReloadAsync(CancellationToken token = default)
+    {
+        long revision = Revision;
+        var changed = await Task.Run(() => ExternalChanges(token), token);
+        token.ThrowIfCancellationRequested();
+        if (Revision != revision) throw new InvalidOperationException("The source workspace changed during reload; try again.");
+        return ReloadChanged(changed);
+    }
+    public IReadOnlyList<string> Reload() => ReloadChanged(ExternalChanges());
+    private IReadOnlyList<string> ReloadChanged(IReadOnlyList<string> changed)
     {
         if (IsSaving) throw new InvalidOperationException("Wait for the save to finish.");
-        var changed = ExternalChanges();
         var conflicts = changed.Where(IsFileDirty).ToArray();
         if (conflicts.Length > 0) throw new SourceFileChangedException($"{string.Join(", ", conflicts)} changed on disk while the workspace holds unsaved edits for {(conflicts.Length == 1 ? "it" : "them")}; save elsewhere or discard the edits first.", conflicts);
         if (changed.Count == 0) return [];
@@ -414,7 +480,7 @@ public sealed class SourceWorkspace
     {
         Baseline? baseline; lock (gate) baselines.TryGetValue(relative, out baseline);
         if (baseline == null) { var read = ReadDisk(relative, token: token); lock (gate) baselines[relative] = read; return; }
-        if (Matches(relative, baseline)) { preparedReads?.TryAdd(relative, new(null, baseline.Stamp)); return; }
+        if (Matches(relative, baseline, token)) { preparedReads?.TryAdd(relative, baseline with { Bytes = null }); return; }
         if (IsFileDirty(relative)) throw new SourceFileChangedException($"{relative} changed on disk while the workspace holds unsaved edits for it; save elsewhere or discard the edits first.", [relative]);
         // History steps of this file no longer describe it; keeping them would undo another program's edit.
         if (history.Any(t => t.Files.Any(f => f.Relative.Equals(relative, StringComparison.OrdinalIgnoreCase))))
@@ -423,20 +489,27 @@ public sealed class SourceWorkspace
         lock (gate) { baselines[relative] = fresh; working.Remove(relative); }
     }
     private Baseline BaselineOf(string relative) { lock (gate) return baselines[relative]; }
-    private bool Matches(string relative, Baseline baseline)
+    private bool Matches(string relative, Baseline baseline, CancellationToken token = default, bool verifyContent = true)
     {
+        token.ThrowIfCancellationRequested();
         string path = SourceProject.Resolve(Root, relative);
         bool exists = File.Exists(path);
-        if (!exists) return baseline.Stamp == null && baseline.Bytes == null;
+        if (!exists) return baseline.Stamp == null && baseline.Sha256 == null;
         if (baseline.Stamp == null) return false;
-        try { return FileStamp.Read(path) == baseline.Stamp; }
+        try
+        {
+            SourceProject.RejectNestedLinks(Root, relative);
+            return FileStamp.Read(path) == baseline.Stamp && baseline.Sha256 != null
+                && (!verifyContent || SourceRead.Matches(path, baseline.Stamp.Length, baseline.Sha256, token))
+                && FileStamp.Read(path) == baseline.Stamp;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
     private Baseline ReadDisk(string relative, long maximumBytes = Formats.FormatRegistry.MaximumDocumentBytes, CancellationToken token = default)
     {
         if (preparedReads?.TryGetValue(relative, out var frozen) == true)
         {
-            if (!Matches(relative, frozen)) throw new SourceFileChangedException($"{relative} changed while the edit was prepared; try again.", [relative]);
+            if (!Matches(relative, frozen, token)) throw new SourceFileChangedException($"{relative} changed while the edit was prepared; try again.", [relative]);
         }
         string path = SourceProject.Resolve(Root, relative);
         if (!File.Exists(path)) { Baseline absent = new(null, null); preparedReads?.TryAdd(relative, absent); return absent; }
@@ -445,7 +518,7 @@ public sealed class SourceWorkspace
         if (stamp.Length > maximumBytes) throw new InvalidDataException($"{relative} exceeds this operation's {maximumBytes:N0}-byte source limit; move inline buffers out and simplify metadata.");
         byte[] bytes = SourceRead.All(path, maximumBytes, token);
         if (FileStamp.Read(path) != stamp) throw new IOException($"{relative} changed while it was read; try again.");
-        Baseline read = new(bytes, stamp); preparedReads?.TryAdd(relative, new(null, stamp)); return read;
+        Baseline read = new(bytes, stamp); preparedReads?.TryAdd(relative, read with { Bytes = null }); return read;
     }
     private SourceWorkspaceChange Publish(string kind, string label, IEnumerable<string> files)
     {
