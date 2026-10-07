@@ -195,7 +195,7 @@ public static partial class SourceBuilder
             token.ThrowIfCancellationRequested();
             Depend(relative);
             if (overlay?.TryGetValue(relative, out var pending) == true) return TextureSources.PngSize((ReadOnlySpan<byte>)pending);
-            return TextureSources.PngSize(SourceProject.Resolve(root, relative), cache: false);
+            return TextureSources.PngSize(SourceProject.Resolve(root, relative), recordPlanningRead: false);
         }
         private readonly Dictionary<string, (int Width, int Height, TextureTransparency Transparency)> textures = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>

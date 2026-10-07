@@ -57,7 +57,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private static readonly HashSet<string> NodeCommands = new([
         "WorldOrigin", "WorldExtents", "WorldPartition", "WorldPartitionInclusionTolerance", "WorldPartitionMaxDECFeatureCount", "WorldSetFogState", "WorldSetFogColor",
         "WorldSetFogRange", "WorldSetFogAltitude", "WorldSetFogDensity", "WorldAddLight", "WindowOrigin", "WindowResolution", "DisplayOrigin", "DisplayResolution",
-        "DisplaySetClearColor", "CameraSetWorld", "CameraSetWindow", "CameraSetHorizon", "CameraSetLODMultiplier", "CameraSetNearFarClip", "CameraSetFOV",
+        "DisplaySetClearColor", "CameraSetWorld", "CameraSetWindow", "CameraSetHorizon", "CameraSetHorizonXZ", "CameraSetLODMultiplier", "CameraSetNearFarClip", "CameraSetFOV",
         "LightSetColor", "LightSetDiffuse", "LightSetAmbient", "LightSetRanges", "LightSetOrientation", "LightSetTranslate", "LightSetDirectedSource",
         "LightSetPointSource", "LightSetDirectional", "LightSetSaturated", "LightSetActive", "NodeSetDescription", "Object3DTranslate", "Object3DRotate",
         "Object3DScale", "SetAltitudeSurface", "SetIntersectSurface", "SetIntersectBBOX", "SetProximity", "SetLandmark", "NodeSetCanModify", "NodeSetOverwrite",
@@ -207,10 +207,10 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "DisplayResolution": if (current?.Class == WorldNodeClass.Display) { current.SetPayloadInt(8, (int)F(0)); current.SetPayloadInt(12, (int)F(1)); } break;
             case "DisplaySetClearColor": if (current?.Class == WorldNodeClass.Display) { current.SetPayloadFloat(16, F(0)); current.SetPayloadFloat(20, F(1)); current.SetPayloadFloat(24, F(2)); } break;
             case "NewCamera": NewCamera(A(0)); break;
-            case "CameraSetActive": break;
             case "CameraSetWorld": if (current?.Class == WorldNodeClass.Camera) current.CameraWorld = Name(Find(A(0), WorldNodeClass.World)); break;
             case "CameraSetWindow": if (current?.Class == WorldNodeClass.Camera) current.CameraWindow = Name(Find(A(0), WorldNodeClass.Window)); break;
-            case "CameraSetHorizon": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizon = Name(Find(A(0), null)); break;
+            case "CameraSetHorizon": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizon = Name(Find(A(0), WorldNodeClass.Object3D)); break;
+            case "CameraSetHorizonXZ": if (current?.Class == WorldNodeClass.Camera) current.CameraHorizonXZ = Name(Find(A(0), WorldNodeClass.Object3D)); break;
             case "CameraSetLODMultiplier": if (current?.Class == WorldNodeClass.Camera) { float m = F(0), squared = WorldNumbers.Finite(m * m), inverse = WorldNumbers.Finite(m == 0 ? 0 : 1 / squared); current.SetPayloadFloat(208, m); current.SetPayloadFloat(212, inverse); } break;
             case "CameraSetNearFarClip": if (current?.Class == WorldNodeClass.Camera) { current.SetPayloadFloat(176, F(0)); current.SetPayloadFloat(180, F(1)); current.SetPayloadInt(248, 1); } break;
             case "CameraSetFOV": if (current?.Class == WorldNodeClass.Camera) CameraFov(current, F(0), F(1)); break;
@@ -286,7 +286,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     }
 
     /// <summary>Retail interpreter commands (zinterp_parse) that create, free, attach or change nodes and models, which the build does not implement.</summary>
-    private static readonly HashSet<string> Unsupported = new(["NewNode", "NewSEQ", "FreeNode", "NodeSetActive", "Object3DAddChild", "Object3DSetShowBackFace", "Object3DSetMorphVertex"], StringComparer.Ordinal);
+    private static readonly HashSet<string> Unsupported = new(["NewNode", "NewSEQ", "FreeNode", "NodeSetActive", "Object3DAddChild", "Object3DSetShowBackFace", "Object3DSetMorphVertex",
+        "CameraSetActive", "CameraTranslate", "CameraRotate", "CameraSetNearClip", "CameraSetFarClip"], StringComparer.Ordinal);
     private static float Radians(float degrees) => degrees * (MathF.PI / 180f);
     /// <summary>ParseFloatToken's atof: the longest leading decimal number (after spaces), 0 when there is none.</summary>
     internal static float Number(string text)
@@ -672,6 +673,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         {
             node.Parents.RemoveAll(p => !live.Contains(p)); node.Children.RemoveAll(c => !live.Contains(c));
             if (node.CameraHorizon != null && !live.Contains(node.CameraHorizon)) node.CameraHorizon = null;
+            if (node.CameraHorizonXZ != null && !live.Contains(node.CameraHorizonXZ)) node.CameraHorizonXZ = null;
+            if (node.CameraWorld != null && !live.Contains(node.CameraWorld)) node.CameraWorld = null;
+            if (node.CameraWindow != null && !live.Contains(node.CameraWindow)) node.CameraWindow = null;
         }
         foreach (var model in World.Models) WorldUpdate.RebuildModel(model);
         // Models no node uses are not written.

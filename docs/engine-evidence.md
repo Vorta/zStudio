@@ -442,3 +442,7 @@ Run on a disposable copy of the game (for example `D:\RecoilTest`), exporting in
 **Zones** (see the plan)
 
 - **T19.** Walk M1 across zone transitions with the camera low and high: drawn geometry follows the camera's zones, not the vehicle's.
+
+### Camera horizon source commands
+
+The external GameZRecoil reconstruction's zInterp/zinterp_parse.cpp resolves both CameraSetHorizon and CameraSetHorizonXZ with FindByTypeAndName(6, name), the Object3D runtime type. zClass/Camera.c setters at retail 0x44A910 and 0x44A980 assign separate horizonNode and horizonXZNode references; the latter follows camera X/Z. The source assembler applies both commands and keeps their separate provenance. CameraRotate and CameraTranslate dispatch to Euler-angle and position setters; CameraSetActive changes node activation, and exact CameraSetNearClip/CameraSetFarClip retain the other plane. Those five commands are currently unimplemented in source assembly and are explicitly reported as such; no successful parse is claimed as their execution support.

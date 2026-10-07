@@ -3,7 +3,7 @@ namespace Recoil.Zbd.Core.Worlds;
 /// <summary>Directory multiplicity and links, pairing repeated names by their directory occurrence, never as one identity.</summary>
 internal static class WorldTextureComparison
 {
-    private sealed class Directory
+    internal sealed class Directory
     {
         internal readonly Dictionary<string, List<WorldTexture>> Names = new(StringComparer.OrdinalIgnoreCase);
         internal readonly Dictionary<WorldTexture, (string Name, int Occurrence)> Identities = new(ReferenceEqualityComparer.Instance);

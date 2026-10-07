@@ -175,6 +175,15 @@ internal static class WorldCompareMcpChecks
             var row = window.View!.Roots.Single(r => r.Source.Status == WorldComparisonStatus.Changed);
             Assert.Contains(window.View.Details(row), d => d.Differs && d.Field.Contains("nextVariant", StringComparison.Ordinal));
 
+            // The primary root is paired even when renamed; both consumers must report its changed identity.
+            changed.Nodes.First(n => n.Class == WorldNodeClass.World).Name = "renamed-world";
+            string renamed = fixture.Path("renamed.zbd");
+            await File.WriteAllBytesAsync(renamed, GameZWriter.Write(changed, token), token);
+            var names = await Job("world_compare", new() { ["retail"] = unlinked, ["rebuilt"] = renamed });
+            var nameRoots = await Call("world_compare_tree", new() { ["context"] = names["context"]!.GetValue<string>() });
+            Assert.Contains(nameRoots["children"]!["items"]!.AsArray(), r => r!["differences"]!.AsArray().Any(d => d!["field"]!.GetValue<string>() == "name"));
+            Assert.Contains(window.View!.Roots, r => window.View.Details(r).Any(d => d.Differs && d.Field == "name"));
+
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);

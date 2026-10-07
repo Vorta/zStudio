@@ -97,6 +97,6 @@ public sealed class WorldNodeProvenance
     /// (FindNode) and creations are not included: they change the current node without using it.
     /// </summary>
     public List<SourceInstruction> Applied { get; } = [];
-    /// <summary>Instructions that found the node by name to act on it as something other than the current node: AddChild, DeleteTree, DeleteChild, WorldAddLight, CameraSetWorld, CameraSetWindow, CameraSetHorizon.</summary>
+    /// <summary>Instructions that found the node by name to act on it as something other than the current node: AddChild, DeleteTree, DeleteChild, WorldAddLight, CameraSetWorld, CameraSetWindow, CameraSetHorizon and CameraSetHorizonXZ.</summary>
     public List<SourceInstruction> Named { get; } = [];
 }

@@ -170,7 +170,7 @@ public static class WorldComparer
 
     public static WorldComparison CompareTree(GameZWorld expected, GameZWorld actual, int limit = 10_000, CancellationToken token = default)
     {
-        Memo memo = new(token);
+        Memo memo = new(token) { ExpectedTextures = new(expected.Textures, token), ActualTextures = new(actual.Textures, token) };
         List<WorldDifference> differences = [];
         List<WorldComparisonNode> roots = [];
         Dictionary<WorldNode, WorldNode> counterpart = new(ReferenceEqualityComparer.Instance);
@@ -529,6 +529,8 @@ public static class WorldComparer
     /// </summary>
     private sealed class Memo(CancellationToken token)
     {
+        public WorldTextureComparison.Directory? ExpectedTextures { get; init; }
+        public WorldTextureComparison.Directory? ActualTextures { get; init; }
         public IReadOnlyDictionary<WorldNode, WorldNode>? Counterparts { get; set; }
         public IReadOnlyDictionary<WorldNode, int>? ExpectedSlots { get; set; }
         public IReadOnlyDictionary<WorldNode, int>? ActualSlots { get; set; }
@@ -536,9 +538,10 @@ public static class WorldComparer
         public CancellationToken Token => token;
         private readonly Dictionary<(WorldNode, int), ulong> signatures = [];
         private readonly Dictionary<WorldNode, ulong> structures = new(ReferenceEqualityComparer.Instance), identities = new(ReferenceEqualityComparer.Instance);
-        private readonly Dictionary<WorldModel, Polygon[]> polygons = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<(WorldModel, WorldTextureComparison.Directory?, bool), Polygon[]> polygons = [];
+        private readonly Dictionary<WorldModel, Shape> shapes = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<WorldModel, ulong> models = new(ReferenceEqualityComparer.Instance);
-        private readonly Dictionary<(WorldModel, WorldModel), (string Field, string Expected, string Actual)[]> modelDifferences = [];
+        private readonly Dictionary<(WorldModel, WorldModel, bool), (string Field, string Expected, string Actual)[]> modelDifferences = [];
         private readonly Dictionary<(WorldNode, WorldNode, int), bool> interchangeable = [];
         /// <summary>
         /// Copies sharing copies could ask about the same nodes at very many places: past this many checks, copies count as
@@ -562,11 +565,12 @@ public static class WorldComparer
         /// Whether two nodes themselves are the same as a comparison sees them, in the order it lists what differs: class;
         /// flags, zone and grid cell (a world member's); the transform, or the class data with the nodes it names (stored
         /// pointers, slots and runtime counters skipped); the model's retained values; the number of children. A world root's:
-        /// its class data only. With <paramref name="found"/>, every difference is added to it; without, the first ends the check.
+        /// its name and class data. With <paramref name="found"/>, every difference is added to it; without, the first ends the check.
         /// </summary>
         public bool OwnSame(WorldNode a, WorldNode b, bool worldChild, bool root, Found? found)
         {
             bool same = true;
+            if (a.Name != b.Name && Differs("name", a.Name, b.Name)) return false;
             if (root) return ClassDataSame() && same;
             if (a.Class != b.Class) { Differs("class", a.Class, b.Class); return false; }
             uint carried = WorldGltf.CarriedFlags;
@@ -586,7 +590,7 @@ public static class WorldComparer
             if ((a.Model == null) != (b.Model == null)) { if (Differs("model", a.Model != null, b.Model != null)) return false; }
             // A model shared by many nodes is compared once.
             else if (a.Model != null && b.Model != null)
-                foreach (var (field, x, y) in ModelDifferences(a.Model, b.Model)) if (Differs(field, x, y)) return false;
+                foreach (var (field, x, y) in ModelDifferences(a.Model, b.Model, found == null)) if (Differs(field, x, y)) return false;
             if (a.Children.Count != b.Children.Count && Differs("children", new Listed(a.Children), new Listed(b.Children))) return false;
             // Class data last: a world's many cells must not crowd out the fields above.
             return (a.Class == WorldNodeClass.Object3D || ClassDataSame()) && same;
@@ -749,22 +753,33 @@ public static class WorldComparer
             hash = Mix(Mix(Mix(Mix(hash, Bits(model.MorphFactor)), Bits(model.ScrollU)), Bits(model.ScrollV)), model.ScrollFrame);
             foreach (var point in model.Points) hash = Mix(hash, PointHash(point));
             ulong all = 0;
-            foreach (var polygon in Polygons(model)) all = Mix(all, polygon.Hash);
+            var shape = Geometry(model);
+            foreach (var polygon in model.Polygons) all = Mix(all, Polygon.HashOf(shape, polygon, TextureIdentity.Of(polygon.Material?.Texture, null, false)));
             return models[model] = Mix(Mix(hash, all), (ulong)model.Polygons.Count);
         }
 
-        private Polygon[] Polygons(WorldModel model)
+        private Shape Geometry(WorldModel model)
         {
-            if (polygons.TryGetValue(model, out var known)) return known;
-            Shape shape = new(model);
-            return polygons[model] = [.. model.Polygons.Select(p => new Polygon(shape, p, Polygon.HashOf(shape, p)))];
+            if (!shapes.TryGetValue(model, out var shape)) shapes[model] = shape = new(model);
+            return shape;
+        }
+
+        private Polygon[] Polygons(WorldModel model, WorldTextureComparison.Directory? directory = null, bool exact = false)
+        {
+            if (polygons.TryGetValue((model, directory, exact), out var known)) return known;
+            var shape = Geometry(model);
+            return polygons[(model, directory, exact)] = [.. model.Polygons.Select(p =>
+            {
+                var texture = TextureIdentity.Of(p.Material?.Texture, directory, exact);
+                return new Polygon(shape, p, texture, Polygon.HashOf(shape, p, texture));
+            })];
         }
 
         /// <summary>The differences of two models (each pair of models is compared once).</summary>
-        public (string Field, string Expected, string Actual)[] ModelDifferences(WorldModel a, WorldModel b)
+        public (string Field, string Expected, string Actual)[] ModelDifferences(WorldModel a, WorldModel b, bool sameWorld)
         {
-            if (ReferenceEquals(a, b)) return [];
-            if (modelDifferences.TryGetValue((a, b), out var known)) return known;
+            if (ReferenceEquals(a, b) && (sameWorld || ReferenceEquals(ExpectedTextures, ActualTextures))) return [];
+            if (modelDifferences.TryGetValue((a, b, sameWorld), out var known)) return known;
             token.ThrowIfCancellationRequested();
             List<(string, string, string)> list = [];
             if (a.Mode != b.Mode || a.Flags != b.Flags) list.Add(("model.mode", $"{a.Mode}:{a.Flags:X}", $"{b.Mode}:{b.Flags:X}"));
@@ -784,7 +799,8 @@ public static class WorldComparer
             if (!a.BoundsCentre.Equals(b.BoundsCentre) || Bits(a.BoundsRadius) != Bits(b.BoundsRadius)) list.Add(("model.sphere", $"{a.BoundsCentre} {a.BoundsRadius}", $"{b.BoundsCentre} {b.BoundsRadius}"));
             // Polygons carry the rest (their corners' normals and morph deltas, their materials' values) and compare as
             // multisets: a model may hold the same polygon twice.
-            var pa = Polygons(a); var pb = Polygons(b);
+            var pa = Polygons(a, sameWorld ? ActualTextures : ExpectedTextures, sameWorld && ActualTextures == null);
+            var pb = Polygons(b, ActualTextures, sameWorld && ActualTextures == null);
             var onlyA = Polygon.Unmatched(pa, pb); var onlyB = Polygon.Unmatched(pb, pa);
             if (onlyA.Count > 0 || onlyB.Count > 0)
                 list.Add(("model.polygons", $"{pa.Length}: {Polygon.Describe(onlyA.First)}", $"{pb.Length} ({pa.Length - onlyA.Count} identical): {Polygon.Describe(onlyB.First)}"));
@@ -795,7 +811,7 @@ public static class WorldComparer
                         list.Add(("model.polygonOrder", $"polygon {i}: {Polygon.Describe(pa[i])}", $"polygon {i}: {Polygon.Describe(pb[i])}"));
                         break;
                     }
-            return modelDifferences[(a, b)] = [.. list];
+            return modelDifferences[(a, b, sameWorld)] = [.. list];
         }
 
         public bool Interchangeable(WorldNode x, WorldNode y, int depth)
@@ -911,7 +927,21 @@ public static class WorldComparer
     /// A polygon as models compare it: its corners at rounded positions with their UVs, normals and morph deltas, its
     /// material's values and its draw attributes.
     /// </summary>
-    private readonly record struct Polygon(Shape Shape, WorldPolygon Source, ulong Hash)
+    private readonly record struct TextureIdentity(string Name, int Occurrence, WorldTexture? Exact)
+    {
+        public static TextureIdentity Of(WorldTexture? texture, WorldTextureComparison.Directory? directory, bool exact)
+        {
+            if (texture == null) return new("", 0, null);
+            var id = directory?.Target(texture);
+            return new(id?.Name ?? texture.Name, id?.Occurrence ?? -1, exact ? texture : null);
+        }
+        public bool Equals(TextureIdentity other) => Occurrence == other.Occurrence && ReferenceEquals(Exact, other.Exact) && string.Equals(Name, other.Name, StringComparison.OrdinalIgnoreCase);
+        public override int GetHashCode() => HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(Name), Occurrence, Exact);
+        public ulong Hash { get { ulong hash = 0xCBF29CE484222325; foreach (char c in Name) hash = (hash ^ char.ToUpperInvariant(c)) * 0x100000001B3; return Mix(hash, unchecked((ulong)Occurrence)); } }
+        public string Describe(WorldTexture? texture) => texture == null ? "" : JsonData.ShownText(texture.Name) + (Occurrence > 0 ? $" [{Occurrence}]" : "");
+    }
+
+    private readonly record struct Polygon(Shape Shape, WorldPolygon Source, TextureIdentity Texture, ulong Hash)
     {
         private Vector3 Corner(int i) => Source.Vertices[i] is int v && v >= 0 && v < Shape.Vertices.Length ? Shape.Vertices[v] : new(float.NaN);
         private (bool, Vector2) Uv(int i) => Source.Uvs.Length == 0 ? (false, default) : (true, i < Source.Uvs.Length ? Source.Uvs[i] : new(float.NaN));
@@ -924,12 +954,12 @@ public static class WorldComparer
         private static uint Stored(WorldMaterial m) => m.Texture != null ? m.Flags | 0x100u : m.Flags & ~0x500u;
         /// <summary>The polygon flags a world stores besides those its corners and normals give (the count, 0x200).</summary>
         private static uint Flags(WorldPolygon p) => p.Flags & ~0x2FFu;
-        public static ulong HashOf(Shape shape, WorldPolygon source)
+        public static ulong HashOf(Shape shape, WorldPolygon source, TextureIdentity texture)
         {
-            Polygon p = new(shape, source, 0);
+            Polygon p = new(shape, source, texture, 0);
             var m = source.Material;
             ulong hash = Mix(Mix(Mix(Mix((ulong)source.Vertices.Length, (ulong)source.Priority), Flags(source)), source.Zone), source.Normals.Length > 0 ? 1UL : 0);
-            hash = m == null ? Mix(hash, ulong.MaxValue) : Mix(Mix(Mix(Mix(Mix(Mix(hash, Text(m.Texture?.Name ?? "")), Bits(m.Color.X)), Bits(m.Color.Y)), Bits(m.Color.Z)), Stored(m)), m.Soil);
+            hash = m == null ? Mix(hash, ulong.MaxValue) : Mix(Mix(Mix(Mix(Mix(Mix(hash, texture.Hash), Bits(m.Color.X)), Bits(m.Color.Y)), Bits(m.Color.Z)), Stored(m)), m.Soil);
             if (m != null) hash = Mix(Mix(Mix(Mix(hash, m.PackedColor), Bits(m.Field14)), Bits(m.Field18)), Bits(m.Field1C));
             for (int i = 0; i < source.Vertices.Length; i++)
             {
@@ -945,7 +975,7 @@ public static class WorldComparer
             WorldPolygon a = Source, b = other.Source;
             if (Hash != other.Hash || a.Vertices.Length != b.Vertices.Length || a.Priority != b.Priority || Flags(a) != Flags(b) || a.Zone != b.Zone
                 || (a.Normals.Length > 0) != (b.Normals.Length > 0)) return false;
-            if (a.Material is { } x ? b.Material is not { } y || (x.Texture?.Name ?? "") != (y.Texture?.Name ?? "") || !x.Color.Equals(y.Color) || Stored(x) != Stored(y) || x.Soil != y.Soil
+            if (a.Material is { } x ? b.Material is not { } y || Texture != other.Texture || !x.Color.Equals(y.Color) || Stored(x) != Stored(y) || x.Soil != y.Soil
                 || x.PackedColor != y.PackedColor || !x.Field14.Equals(y.Field14) || !x.Field18.Equals(y.Field18) || !x.Field1C.Equals(y.Field1C) : b.Material != null) return false;
             for (int i = 0; i < a.Vertices.Length; i++)
                 if (!Corner(i).Equals(other.Corner(i)) || !Uv(i).Equals(other.Uv(i)) || !Normal(i).Equals(other.Normal(i)) || !Morph(i).Equals(other.Morph(i))) return false;
@@ -975,7 +1005,7 @@ public static class WorldComparer
                 if (p.Morph(i) is var delta && delta != Vector3.Zero) text.Append($"|m{delta}");
             }
             var m = p.Source.Material;
-            text.Append($"#{m?.Texture?.Name}{m?.Color}{(m == null ? null : Stored(m)):X}");
+            text.Append($"#{p.Texture.Describe(m?.Texture)}{m?.Color}{(m == null ? null : Stored(m)):X}");
             if (m != null && (m.PackedColor != (m.Texture != null ? 0x7FFF : 0) || m.Field14 != 0 || m.Field18 != 0.5f || m.Field1C != 0.5f)) text.Append($"c{m.PackedColor:X}/{m.Field14}/{m.Field18}/{m.Field1C}");
             text.Append($"s{m?.Soil}p{p.Source.Priority}f{Flags(p.Source):X}z{p.Source.Zone:X}n{p.Source.Normals.Length > 0}");
             return text.Length > 400 ? text.ToString(0, 400) + "…" : text.ToString();
