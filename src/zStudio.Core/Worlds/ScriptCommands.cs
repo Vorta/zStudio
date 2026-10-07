@@ -42,6 +42,8 @@ internal static class ScriptCommands
         "WorldSetFogAltitude", "WorldSetFogColor", "WorldSetFogDensity", "WorldSetFogState",
         "WorldSetVirtualPartition", "WriteTextureSetType", "WriteTextureSetMap",
     ];
+    private static readonly HashSet<string> Recognized = new([.. Prefixes, "CameraSetNearClip", "CameraSetFarClip"], StringComparer.Ordinal);
+    internal static bool IsRecognized(string command) => Recognized.Contains(command);
     internal static string Core(string token)
     {
         foreach (string command in Prefixes)

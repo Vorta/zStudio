@@ -83,8 +83,17 @@ public static partial class SourceProject
         if (added == null || added.Count == 0) return files;
         string prefix = folder.TrimEnd('/') + "/";
         HashSet<string> listed = new(files, StringComparer.OrdinalIgnoreCase);
-        var extra = added.Where(a => a.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && include(System.IO.Path.GetFileName(a)) && !listed.Contains(a));
-        return files.Concat(extra).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (added.Count > maximumEntries) throw TooManyEntries(folder, maximumEntries);
+        foreach (string entry in added)
+        {
+            token.ThrowIfCancellationRequested();
+            if (entry.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && include(System.IO.Path.GetFileName(entry)))
+            {
+                listed.Add(entry);
+                if (listed.Count > MaximumFiles) throw new IOException($"{folder} has more than {MaximumFiles:N0} files including pending sources.");
+            }
+        }
+        return listed.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
     private static IReadOnlyList<string> DiskFiles(string root, string folder, Func<string, bool> include, int maximumEntries, CancellationToken token)
     {

@@ -167,6 +167,19 @@ internal static class SourceProjectMcpChecks
             main.SourceExportFinishing = null;
             Assert.Equal("context_changed", written2["code"]!.GetValue<string>()); Assert.Contains("wrote 1 game file", written2["message"]!.GetValue<string>());
             Assert.True(File.Exists(Path.Combine(late, "m1", "zrdr.zbd")));
+            // An unsupported world mutation is visible in both the protocol report and the shared GUI Problems list.
+            using (var worldFixture = new SourceWorldFixture())
+            {
+                string script = Path.Combine(worldFixture.Project, "gamegen", "m1.gs");
+                string original = await File.ReadAllTextAsync(script, token);
+                await File.WriteAllTextAsync(script, original.Replace("# no vehicles", "Object3DSetPriority 2", StringComparison.Ordinal), token);
+                await Job("open_root", new() { ["path"] = worldFixture.Project, ["project"] = true });
+                var warning = await Job("source_export", new() { ["outputs"] = new[] { "m1/gamez.zbd" } });
+                Assert.Equal(0, warning["failed"]!.GetValue<int>());
+                Assert.Contains(warning["outputs"]![0]!["warnings"]!.AsArray(), w => w!.GetValue<string>().Contains("Object3DSetPriority", StringComparison.Ordinal));
+                Assert.Contains(main.ViewModel.Problems, p => p.Message.Contains("Object3DSetPriority", StringComparison.Ordinal));
+                await Job("open_root", new() { ["path"] = elsewhere });
+            }
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);

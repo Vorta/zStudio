@@ -134,9 +134,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             instruction = new(relative, line.Number, command, raw, args);
             Executions[(relative, line.Number)] = Executions.GetValueOrDefault((relative, line.Number)) + 1;
             var target = current;
-            Run(command, args, relative);
+            bool unapplied = Run(command, args, relative);
             if (CreateCommands.Contains(command) && current != null && current != target) Origin(current).Created = instruction;
-            else if (target != null && (NodeCommands.Contains(command) || CurrentCommands.Contains(command) || Unsupported.Contains(command)))
+            else if (target != null && (NodeCommands.Contains(command) || CurrentCommands.Contains(command) || unapplied))
             {
                 var origin = Origin(target); origin.Applied.Add(instruction);
                 if (NodeCommands.Contains(command)) origin.Writers[command] = instruction;
@@ -153,12 +153,13 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         if (command is "CycleTextureSetMap" or "WriteTextureSetMap" or "TextureAdd" or "LensFlareTexture" && args.Length > 0) ScriptTextures.Add(TextureStem(args[^1]));
     }
 
-    private void Run(string command, string[] args, string script)
+    private bool Run(string command, string[] args, string script)
     {
         float F(int i) => i < args.Length ? Number(args[i]) : 0;
         // ParseBoolToken (retail 0x4C19C0): only "on" and "true" (any case) are on; a missing argument is off.
         bool On(int i) => i < args.Length && (args[i].Equals("on", StringComparison.OrdinalIgnoreCase) || args[i].Equals("true", StringComparison.OrdinalIgnoreCase));
         string A(int i) => i < args.Length ? args[i] : "";
+        bool unapplied = false;
         switch (command)
         {
             case "SetModelDirectory": AddDirectories(modelDirectories, A(0)); break;
@@ -264,8 +265,13 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "GameZWriteZBDFile": WorldFile = A(0); WriteInstruction = instruction; Finish(); break;
             // Rendering and runtime settings are not part of the world file; gamegen-only commands had no retail effect.
             // Commands that change nodes or models in the retail interpreter but are not built here are reported.
-            default: if (Unsupported.Contains(command)) Warn($"{script}: {command} changes the world in the game's interpreter, but the source build does not apply it."); break;
+            default:
+                unapplied = ScriptCommands.IsRecognized(command) && !NonWorldCommands.Contains(command);
+                if (unapplied) Warn($"{script}: {command} is recognized by the game's interpreter, but the source build does not apply it.");
+                break;
         }
+
+        return unapplied;
 
         // A node an instruction found by name to act on.
         WorldNode? Name(WorldNode? node) { if (node != null && instruction != null) Origin(node).Named.Add(instruction); return node; }
@@ -285,9 +291,13 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         }
     }
 
-    /// <summary>Retail interpreter commands (zinterp_parse) that create, free, attach or change nodes and models, which the build does not implement.</summary>
-    private static readonly HashSet<string> Unsupported = new(["NewNode", "NewSEQ", "FreeNode", "NodeSetActive", "Object3DAddChild", "Object3DSetShowBackFace", "Object3DSetMorphVertex",
-        "CameraSetActive", "CameraTranslate", "CameraRotate", "CameraSetNearClip", "CameraSetFarClip"], StringComparer.Ordinal);
+    /// <summary>Recognized commands whose only effects are diagnostics or renderer/runtime global settings, not stored world data.
+    /// Every other recognized command reaching the default dispatch is reported, so new commands cannot silently disappear.</summary>
+    private static readonly HashSet<string> NonWorldCommands = new([
+        "AnimSetDebugFrame", "CameraSetDynamicLOD", "CameraSetObjectHSETest", "CountUsedNodes", "ClearScreenBuffer",
+        "echo", "Echo", "GetBFETolerance", "PerspectiveTexture", "PrintNodeCount", "PrintUsedNodes", "SetPaletteName",
+        "SetPaletteShading", "SetPerspectiveAdaptiveCorrection", "SetPerspectiveTextureDeltaX", "SetInverseZTolerance",
+        "SetPerspectiveTextureFarZ", "SetVertexShading", "Verbose"], StringComparer.Ordinal);
     private static float Radians(float degrees) => degrees * (MathF.PI / 180f);
     /// <summary>ParseFloatToken's atof: the longest leading decimal number (after spaces), 0 when there is none.</summary>
     internal static float Number(string text)

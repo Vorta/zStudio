@@ -302,6 +302,11 @@ public sealed class GltfDocument
         if (parsed.ValueKind != JsonValueKind.Object) throw new InvalidDataException("glTF JSON must be an object.");
         Bound(parsed, limits.MetadataBytes);
         JsonObject root = JsonObject.Create(parsed)!;
+        var scenes = root["scenes"] as JsonArray ?? [];
+        bool selectedScene = root.TryGetPropertyValue("scene", out var chosenScene);
+        if (!selectedScene && scenes.Count > 1)
+            throw new InvalidDataException("The glTF has multiple scenes but no default scene; select an explicit default scene before importing.");
+        int sceneIndex = selectedScene ? Reference(chosenScene, scenes.Count, "scene") : 0;
         if (!parsed.TryGetProperty("asset", out var asset) || asset.ValueKind != JsonValueKind.Object
             || !asset.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.String || !version.ValueEquals("2.0"))
             throw new InvalidDataException("The glTF asset.version must be '2.0'; other or malformed versions are not supported.");
@@ -688,8 +693,6 @@ public sealed class GltfDocument
             node.Matrix = LocalTransform(n, i);
         }
         GltfDocument doc = new() { Generator = root["asset"]?["generator"]?.GetValue<string>() ?? "" };
-        var scenes = root["scenes"] as JsonArray ?? [];
-        int sceneIndex = root["scene"] is { } chosen ? Reference(chosen, scenes.Count, "scene") : 0;
         if (scenes.Count > 0)
         {
             var scene = scenes[sceneIndex]!;

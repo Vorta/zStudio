@@ -87,10 +87,13 @@ public sealed class MissionCoordinateGrowthTests
         var record = new AiValveRecord(Guid.NewGuid(), Guid.NewGuid(), 0, S(new string('x', 2_000_000) + "tail"), A(), "definition", 123);
         _ = MissionAiValves.MatchesSearch(record, "warm");
         long before = GC.GetAllocatedBytesForCurrentThread();
-        Assert.True(MissionAiValves.MatchesSearch(record, "TAIL"));
-        Assert.True(MissionAiValves.MatchesSearch(record, "123"));
-        Assert.False(MissionAiValves.MatchesSearch(record, "absent"));
-        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 4096);
+        bool tail = MissionAiValves.MatchesSearch(record, "TAIL");
+        bool index = MissionAiValves.MatchesSearch(record, "123");
+        bool absent = MissionAiValves.MatchesSearch(record, "absent");
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // Measure the search, not the test framework's first-use assertion allocations.
+        Assert.True(tail); Assert.True(index); Assert.False(absent);
+        Assert.True(allocated < 4096, $"Search allocated {allocated:N0} bytes.");
     }
 
     [Fact]

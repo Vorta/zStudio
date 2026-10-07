@@ -1196,7 +1196,7 @@
       "tools": [
         "zstudio_source_export"
       ],
-      "note": "Omit destination to build every output in memory and report failures and warnings without writing."
+      "note": "Omit destination to build every output in memory and report failures and warnings without writing. Recognized but unimplemented world mutations report warnings in both this result and GUI Problems. Shared planning caps aggregate output inputs at 1,000,000 and pending/disk inventories at 50,000 files; imports refuse ambiguous glTF scene selection and malformed active world references."
     },
     {
       "gui": "MainWindow.xaml:AddSourceModelClick",

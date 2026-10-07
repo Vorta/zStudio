@@ -44,10 +44,13 @@ public static class GameZWorldReader
         {
             var m = bytes.Slice(layout.MaterialOffset + 16 + i * 44, 44);
             int texture = BinaryPrimitives.ReadInt32LittleEndian(m[16..]); ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(m);
+            token.ThrowIfCancellationRequested();
+            if ((flags & 0x100) != 0 && (texture < 0 || texture >= world.Textures.Count))
+                throw new InvalidDataException($"Material {i} has texture index {texture} outside its directory; it cannot be reconstructed or compared as untextured.");
             world.Materials.Add(new()
             {
                 Flags = flags, PackedColor = BinaryPrimitives.ReadUInt16LittleEndian(m[2..]), Color = Vec(m[4..]),
-                Texture = (flags & 0x100) != 0 && texture >= 0 && texture < world.Textures.Count ? world.Textures[texture] : null,
+                Texture = (flags & 0x100) != 0 ? world.Textures[texture] : null,
                 Field14 = F(m[20..]), Field18 = F(m[24..]), Field1C = F(m[28..]), Soil = BinaryPrimitives.ReadUInt32LittleEndian(m[32..]),
             });
         }
@@ -76,13 +79,15 @@ public static class GameZWorldReader
             {
                 var source = model.Polygons[p]; var record = bytes.Slice((int)(polygons + 28L * p), 28);
                 int material = source.MaterialIndex;
+                if (material < -1 || material >= world.Materials.Count)
+                    throw new InvalidDataException($"Model {model.Index} has polygon {p} with material index {material} outside its directory.");
                 // The reader only warns about these; everything that builds on the world indexes the model's lists.
                 if (source.Vertices.Any(v => v < 0 || v >= m.Vertices.Count) || source.Normals.Any(n => n < 0 || n >= m.Normals.Count))
                     throw new InvalidDataException($"Model {model.Index} has a polygon that references a missing vertex or normal.");
                 m.Polygons.Add(new()
                 {
                     Flags = source.Flags & ~0xFFu, Priority = BinaryPrimitives.ReadInt32LittleEndian(record[4..]), Zone = U(record[24..]),
-                    Material = material >= 0 && material < world.Materials.Count ? world.Materials[material] : null,
+                    Material = material >= 0 ? world.Materials[material] : null,
                     Vertices = source.Vertices, Normals = source.Normals, Uvs = source.Uvs,
                 });
             }
@@ -102,13 +107,15 @@ public static class GameZWorldReader
                 "object3d" => WorldNodeClass.Object3D, "lod" => WorldNodeClass.Lod, "light" => WorldNodeClass.Light,
                 _ => throw new InvalidDataException($"Node {i} has unsupported class {source.Class}.")
             };
+            if (source.ModelIndex is int modelIndex && (modelIndex < 0 || modelIndex >= world.Models.Count))
+                throw new InvalidDataException($"Node {i} has model index {modelIndex} outside its directory.");
             WorldNode node = new("", kind)
             {
                 NameField = slot[..36].ToArray(), Flags = U(slot[36..]), AuxFlags = U(slot[40..]), BoundsFlags = U(slot[44..]), Zone = U(slot[48..]),
                 Priority = U(slot[68..]), GridColumn = BinaryPrimitives.ReadInt32LittleEndian(slot[76..]), GridRow = BinaryPrimitives.ReadInt32LittleEndian(slot[80..]),
                 SphereCache = slot.Slice(100, 16).ToArray(),
                 CachedBounds = demo ? WorldBox.Empty : Box(slot[116..]), PrimaryBounds = Box(slot[(demo ? DemoModelBox : 140)..]), SecondaryBounds = Box(slot[(demo ? DemoChildBox : 164)..]),
-                Model = source.ModelIndex is int model && model >= 0 && model < world.Models.Count ? world.Models[model] : null,
+                Model = source.ModelIndex is int model ? world.Models[model] : null,
             };
             var data = bytes[(int)layout.NodeDataOffsets[i]..];
             if (demo && kind == WorldNodeClass.Object3D)

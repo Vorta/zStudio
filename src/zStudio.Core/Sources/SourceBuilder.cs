@@ -49,6 +49,17 @@ public static partial class SourceBuilder
     /// <summary>The mission texture packs the default (modern) profile builds; see <see cref="BuildProfiles"/>.</summary>
     public static IReadOnlyList<string> TexturePacks => BuildProfiles.Modern.TexturePacks.Select(p => p.File).ToArray();
 
+    /// <summary>Bounds aggregate enumeration and publication work across all planned outputs.</summary>
+    internal const int MaximumPlanInputs = 1_000_000;
+    /// <summary>A mission-specific first input followed by one immutable inventory shared by all mission plans.</summary>
+    private sealed class PrefixedInputs(string first, IReadOnlyList<string> shared) : IReadOnlyList<string>
+    {
+        public int Count => checked(1 + shared.Count);
+        public string this[int index] => index == 0 ? first : index > 0 && index <= shared.Count ? shared[index - 1] : throw new ArgumentOutOfRangeException(nameof(index));
+        public IEnumerator<string> GetEnumerator() { yield return first; foreach (var item in shared) yield return item; }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     /// <summary>
     /// Every game file this tree can build, in a stable order; <paramref name="added"/> are pending new files (see
     /// <see cref="SourceWorkspace"/>). Texture packs follow <paramref name="profile"/> (the built-in modern one when null).
@@ -61,22 +72,40 @@ public static partial class SourceBuilder
         profile ??= BuildProfiles.Modern;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         List<SourceOutputPlan> plans = [];
+        long plannedInputs = 0;
+        void AddPlan(SourceOutputPlan plan)
+        {
+            token.ThrowIfCancellationRequested();
+            if (plan.Inputs.Count > MaximumPlanInputs - plannedInputs)
+                throw new InvalidDataException($"The source plan exceeds {MaximumPlanInputs:N0} aggregate inputs; split the project into smaller source projects.");
+            plannedInputs += plan.Inputs.Count;
+            plans.Add(plan);
+        }
         static bool Zrd(string name) => name.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase);
         // Common resources come from every zrdr folder under data/common (including multi_bft/zrdr).
         var common = SourceProject.Files(root, "data/common", Zrd, added, token).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase)).ToArray();
-        if (common.Length > 0) plans.Add(new("zrdr.zbd", "archive", common));
+        if (common.Length > 0) AddPlan(new("zrdr.zbd", "archive", common));
         var scripts = SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), added, token);
-        if (scripts.Count > 0) plans.Add(new("interp.zbd", "scripts", scripts));
+        if (scripts.Count > 0) AddPlan(new("interp.zbd", "scripts", scripts));
         var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase), added, token);
-        if (sounds.Count > 0) plans.AddRange(Banks.Select(bank => new SourceOutputPlan(bank, "sounds", sounds)));
+        if (sounds.Count > 0) foreach (string bank in Banks) AddPlan(new(bank, "sounds", sounds));
         // Listing data for its mission folders is a scan too: every entry counts, and the token is observed at each.
         var missions = SourceProject.MissionFolders(root, token);
         // A world may load any model in the project, and animations any keyframe script; which depends on the sources.
         IReadOnlyList<string>? models = null, scriptsFound = null;
+        bool hasModels = false;
         // Interface images: fonts, the images tree and each mission's objective images.
-        var images = SourceProject.Files(root, TextureSources.Fonts, Png, added, token).Concat(SourceProject.Files(root, TextureSources.Images, Png, added, token))
-            .Concat(missions.SelectMany(m => SourceProject.Files(root, $"data/{m}/images", Png, added, token))).ToArray();
-        if (images.Length > 0) plans.Add(new("image.zbd", "images", images));
+        List<string> images = [];
+        void Images(IReadOnlyList<string> entries)
+        {
+            if (entries.Count > MaximumPlanInputs - images.Count)
+                throw new InvalidDataException($"The source plan exceeds {MaximumPlanInputs:N0} image inputs; split the project into smaller source projects.");
+            images.AddRange(entries);
+        }
+        Images(SourceProject.Files(root, TextureSources.Fonts, Png, added, token));
+        Images(SourceProject.Files(root, TextureSources.Images, Png, added, token));
+        foreach (var mission in missions) Images(SourceProject.Files(root, $"data/{mission}/images", Png, added, token));
+        if (images.Count > 0) AddPlan(new("image.zbd", "images", images));
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
@@ -84,28 +113,32 @@ public static partial class SourceBuilder
             string entry = WorldScript(name);
             if (File.Exists(SourceProject.Resolve(root, entry)) || added?.Contains(entry, StringComparer.OrdinalIgnoreCase) == true)
             {
-                models ??= SourceProject.Files(root, SourceProject.DataFolder, IsModelSource, added, token);
+                if (models == null)
+                {
+                    models = SourceProject.Files(root, SourceProject.DataFolder, IsModelSource, added, token);
+                    hasModels = models.Any(m => !m.EndsWith(".bin", StringComparison.OrdinalIgnoreCase));
+                }
                 // A project without glTF models has no world to build (buffers alone are not models).
-                if (models.Any(m => !m.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))) plans.Add(new($"{name}/gamez.zbd", "world", [entry, .. models]));
+                if (hasModels) AddPlan(new($"{name}/gamez.zbd", "world", new PrefixedInputs(entry, models)));
             }
             var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd, added, token);
-            if (resources.Count > 0) plans.Add(new($"{name}/zrdr.zbd", "archive", resources));
+            if (resources.Count > 0) AddPlan(new($"{name}/zrdr.zbd", "archive", resources));
             string definitions = AnimationRoot(name);
             if (File.Exists(SourceProject.Resolve(root, definitions)) || added?.Contains(definitions, StringComparer.OrdinalIgnoreCase) == true)
             {
                 scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase), added, token);
-                plans.Add(new($"{name}/anim.zbd", "animations", [definitions, .. scriptsFound]));
+                AddPlan(new($"{name}/anim.zbd", "animations", new PrefixedInputs(definitions, scriptsFound)));
             }
             var textures = MissionTextures(root, name, added, token);
             if (textures.Count > 0)
                 foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
                 {
-                    if (!pack.Automatic) { plans.Add(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant }); continue; }
+                    if (!pack.Automatic) { AddPlan(new($"{name}/{pack.File}", "textures", textures) { Pack = pack.Variant }); continue; }
                     if (!automaticPacks) continue;
                     // The automatic pack is named for the texture memory the mission's textures need at full size.
                     long memory = TextureMemory(root, textures, pack.Variant, token);
                     if (BuildProfiles.AutomaticPack(profile, name, memory) is not { BudgetBytes: long budget } automatic) continue;
-                    plans.Add(new($"{name}/{automatic.FileName}", "textures", textures)
+                    AddPlan(new($"{name}/{automatic.FileName}", "textures", textures)
                     {
                         Pack = automatic, Automatic = true,
                         Notes = memory > budget

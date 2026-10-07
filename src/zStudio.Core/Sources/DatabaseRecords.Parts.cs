@@ -77,9 +77,10 @@ internal static partial class DatabaseRecords
         private Parts(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, IReadOnlyList<int> order, List<int> deletion, string mission, OriginalLoader.MirrorBudget budget, CancellationToken token, bool tolerant = false, bool nested = true, Retained? prefix = null)
         {
             this.slot = slot; this.isModelReference = isModelReference; this.mission = mission; this.budget = budget; this.token = token; this.tolerant = tolerant; this.prefix = prefix;
+            token.ThrowIfCancellationRequested();
             deletedSlots = [.. deletion];
             foreach (var o in database.Content) top[slot[o]] = o;
-            foreach (var n in WorldAssembler.Subtree(database.Content)) live[slot[n]] = n;
+            foreach (var n in WorldAssembler.Subtree(database.Content)) { token.ThrowIfCancellationRequested(); live[slot[n]] = n; }
             int root = order[0];
             this.order = [.. order];
             for (int i = 0; i < order.Count; i++) position[order[i]] = i;
@@ -98,6 +99,7 @@ internal static partial class DatabaseRecords
                 int at = 0;
                 void Build(int depth = 0)
                 {
+                    token.ThrowIfCancellationRequested();
                     CheckDepth(depth);
                     int node = pre[at++]; deletedChildren[node] = []; int end = postIndex[node];
                     while (at < pre.Count && postIndex[pre[at]] < end) { deletedParent[pre[at]] = node; deletedChildren[node].Add(pre[at]); Build(depth + 1); }
@@ -110,19 +112,21 @@ internal static partial class DatabaseRecords
             }
             foreach (int node in pre)
             {
+                token.ThrowIfCancellationRequested();
                 deletedChildren[node] = [];
                 if (node != root)
                 {
-                    var after = made.GetViewBetween(postIndex[node] + 1, int.MaxValue);
-                    if (after.Count == 0) break;
-                    int parent = post[after.Min];
+                    // Counting a range walks its entire contents; only its first entry is needed.
+                    using var after = made.GetViewBetween(postIndex[node] + 1, int.MaxValue).GetEnumerator();
+                    if (!after.MoveNext()) break;
+                    int parent = post[after.Current];
                     deletedParent[node] = parent; deletedChildren[parent].Add(node);
                 }
                 made.Add(postIndex[node]);
             }
             // The tree must free its nodes in the deletion's order (children first, in the order they were made).
             List<int> freedOrder = [];
-            void Post(int node, int depth = 0) { CheckDepth(depth); foreach (int child in deletedChildren.GetValueOrDefault(node, [])) Post(child, depth + 1); freedOrder.Add(node); }
+            void Post(int node, int depth = 0) { token.ThrowIfCancellationRequested(); CheckDepth(depth); foreach (int child in deletedChildren.GetValueOrDefault(node, [])) Post(child, depth + 1); freedOrder.Add(node); }
             if (pre.Count > 0 && pre[0] == root) Post(root);
             HashSet<int> inOrder = [.. pre];
             Covered = pre.Count > 0 && pre[0] == root && deletedParent.Count == pre.Count - 1 && (tolerant || freedOrder.SequenceEqual(post.Where(inOrder.Contains)));
@@ -182,7 +186,7 @@ internal static partial class DatabaseRecords
                 // fresh 1804). Where the world kept that cache's slots free, the shipped free list holds it whole: the cache
                 // read from there is the first, its copy's end is passed over, and the caches' simulation gives the slots
                 // the records start on.
-                if (search && results.All(r => r.Inexact != null) && kept is { Count: > 0 } && Retained.Read(list, kept, slot.Keys.Where(isModelReference)) is { } retained)
+                if (search && results.All(r => r.Inexact != null) && kept is { Count: > 0 } && Retained.Read(list, kept, slot.Keys.Where(isModelReference), token) is { } retained)
                 {
                     visited.Clear(); budget = MaximumRetainedAttempts;
                     Dictionary<int, WorldNode> live = [];
@@ -270,6 +274,7 @@ internal static partial class DatabaseRecords
                 Try(order, deletion, tolerant, nested: true, prefix) ?? Try(order, deletion, tolerant, nested: false, prefix);
             Parts? Try(List<int> order, List<int> deletion, bool tolerant, bool nested, Retained? prefix)
             {
+                token.ThrowIfCancellationRequested();
                 restore();
                 Parts parts = new(slot, isModelReference, database, order, deletion, mission, mirrors, token, tolerant, nested, prefix);
                 if (!parts.Covered || !parts.Walk()) return null;
@@ -687,7 +692,7 @@ internal static partial class DatabaseRecords
             private int Shape(WorldNode n) => outlines.Of(n, outlined);
 
             /// <param name="references">The world's references, which name references whose names were lost.</param>
-            public static Retained? Read(List<int> list, IReadOnlyDictionary<int, string> kept, IEnumerable<WorldNode> references)
+            public static Retained? Read(List<int> list, IReadOnlyDictionary<int, string> kept, IEnumerable<WorldNode> references, CancellationToken token)
             {
                 var deep = Enumerable.Reverse(list).ToList();
                 int start = -1, count = 0;
@@ -697,6 +702,7 @@ internal static partial class DatabaseRecords
                     int low = int.MaxValue, high = int.MinValue;
                     for (int k = 1; from + k <= deep.Count; k++)
                     {
+                        token.ThrowIfCancellationRequested();
                         int s = deep[from + k - 1]; low = Math.Min(low, s); high = Math.Max(high, s);
                         if (high - low + 1 == k && s == low && k > count) { start = from; count = k; }
                     }
@@ -713,12 +719,13 @@ internal static partial class DatabaseRecords
                 SortedSet<int> made = [];
                 foreach (int s in block.Order())
                 {
-                    var after = made.GetViewBetween(post[s] + 1, int.MaxValue);
-                    if (after.Count > 0) { var p = nodes[block[after.Min]]; p.Children.Add(nodes[s]); parent[nodes[s]] = p; }
+                    token.ThrowIfCancellationRequested();
+                    using var after = made.GetViewBetween(post[s] + 1, int.MaxValue).GetEnumerator();
+                    if (after.MoveNext()) { var p = nodes[block[after.Current]]; p.Children.Add(nodes[s]); parent[nodes[s]] = p; }
                     made.Add(post[s]);
                 }
                 var root = nodes[block[^1]];
-                List<WorldNode> freedOrder = []; void Post(WorldNode n, int depth = 0) { CheckDepth(depth); foreach (var c in n.Children) Post(c, depth + 1); freedOrder.Add(n); }
+                List<WorldNode> freedOrder = []; void Post(WorldNode n, int depth = 0) { token.ThrowIfCancellationRequested(); CheckDepth(depth); foreach (var c in n.Children) Post(c, depth + 1); freedOrder.Add(n); }
                 Post(root);
                 if (!freedOrder.SequenceEqual(block.Select(s => nodes[s]))) return null;
                 // A reference's content follows the next record, which is made under one of the reference's ancestors.
