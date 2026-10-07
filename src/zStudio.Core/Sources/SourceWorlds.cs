@@ -25,6 +25,8 @@ public sealed record SourceWorldBuild(string Mission, string Folder, string Worl
 {
     /// <summary>Every project file the build read or looked for, from the pending content or the disk.</summary>
     public IReadOnlyCollection<string> Dependencies { get; init; } = [];
+    /// <summary>Disk files absent when the build searched for them; their appearance makes the preview stale.</summary>
+    public IReadOnlyList<string> MissingInputs { get; init; } = [];
     /// <summary>Every lookup by name the mission makes as the game loads it, with the node it finds in this build.</summary>
     public IReadOnlyList<SourceLookup> Lookups { get; init; } = [];
     /// <summary>Where each node of the built world came from, by its slot in the world file (the scene's node index).</summary>
@@ -392,7 +394,7 @@ public static partial class SourceWorlds
             CheckPreviewPlanUnchanged(root, mission, snapshot.Added, selected, token);
             snapshot.CheckUnchanged(token);
         }, token).ConfigureAwait(false);
-        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
+        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), MissingInputs = snapshot.Missing(), Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
     }
 
     /// <summary>

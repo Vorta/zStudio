@@ -254,8 +254,11 @@ public static class TexturePackBuilder
         // Nearest power of two, at most 2^30 (shifting further would overflow and never end).
         static int Pow2(int v) { int p = 1; while (p < v && p < 1 << 30) p <<= 1; return p > v && p - v > v - p / 2 ? p / 2 : p; }
         int w = Math.Clamp(Pow2(width), MinimumDimension, variant.MaximumDimension), h = Math.Clamp(Pow2(height), MinimumDimension, variant.MaximumDimension);
-        while (w > h * 8) w /= 2;
-        while (h > w * 8) h /= 2;
+        if (variant.Kind == TexturePackKind.Hardware)
+        {
+            while (w > h * 8) w /= 2;
+            while (h > w * 8) h /= 2;
+        }
         return (w, h);
     }
 
@@ -411,6 +414,9 @@ public static class TexturePackBuilder
                 for (int p = 0; p < image.Width * image.Height; p++)
                     if (image.Rgba[p * 4 + 3] >= (modes[i] == TextureTransparency.Keyed ? 128 : 1)) histogram[Rgb565(image.Rgba, p)]++;
             }
+            // Zero is the transparency key, but opaque black still needs a palette representative. Match the direct
+            // keyed encoder's nearest nonzero RGB565 black instead of dropping its entire histogram population.
+            histogram[0x0020] += histogram[0];
             histogram[0] = 0;
             var colors = TexturePackWriter.Quantize(histogram, 255, token);
             ushort[] palette = [0, .. colors.Where(color => color != 0)];

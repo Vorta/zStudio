@@ -235,13 +235,13 @@ public sealed class SourceProjectTests
         using var fixture = new SourceWorldFixture();
         fixture.Write("data/m1/models/m1.gltf", "{ not json");
         var check = await SourceBuilder.CheckAsync(fixture.Project, token: Token);
-        // The world and its animations fail with the reason; the packs keep the mission folders; m2 is unaffected.
+        // The world, animations and texture packs depend on this model; m2 is unaffected.
         var world = check.Outputs.Single(o => o.Path == "m1/gamez.zbd");
         Assert.Equal("failed", world.Status); Assert.Contains("m1 world does not assemble", world.Error);
         Assert.Equal("failed", check.Outputs.Single(o => o.Path == "m1/anim.zbd").Status);
         Assert.All(check.Outputs.Where(o => o.Path.StartsWith("m1/", StringComparison.Ordinal) && o.Family == "textures"), o =>
         {
-            Assert.Equal("built", o.Status); Assert.Contains(o.Warnings, w => w.Contains("m1 world does not assemble", StringComparison.Ordinal));
+            Assert.Equal("failed", o.Status); Assert.Contains("m1 world does not assemble", o.Error);
         });
         Assert.All(check.Outputs.Where(o => o.Path.StartsWith("m2/", StringComparison.Ordinal)), o => Assert.Equal("built", o.Status));
         string exported = Path.Combine(fixture.Root, "zbd");

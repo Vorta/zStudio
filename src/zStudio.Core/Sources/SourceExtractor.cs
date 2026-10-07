@@ -380,6 +380,42 @@ public static class SourceExtractor
         InvalidDataException Ambiguous(string name) => new($"{relative}: duplicate sound member {JsonData.ShownText(name)} has different payloads; reconstruct from a bank with unambiguous member names.");
     }
 
+    /// <summary>Rank variants across packs only after identities inside each pack are unambiguous.</summary>
+    internal static void ValidateTextureNames(string relative, ZbdDocument doc, CancellationToken token, long maximumComparedBytes = 512L * 1024 * 1024,
+        Func<AssetRecord, string>? identity = null)
+    {
+        Dictionary<string, AssetRecord> names = new(StringComparer.OrdinalIgnoreCase);
+        long compared = 0;
+        foreach (var asset in doc.Assets.Where(a => a.Kind == AssetKind.Texture))
+        {
+            token.ThrowIfCancellationRequested();
+            string key = identity?.Invoke(asset) ?? asset.Name;
+            if (!names.TryGetValue(key, out var first)) { names.Add(key, asset); continue; }
+            // The image record includes size, format, addressing, texels, alpha and inline palette. External palette
+            // pages live outside it and must also match. Comparing slices avoids decoding/cloning either image.
+            if (first.Content is not TextureInfo a || asset.Content is not TextureInfo b ||
+                !Equal(doc.Slice(first.Offset, first.Length), doc.Slice(asset.Offset, asset.Length)) ||
+                !Equal(a.PaletteOffset < 0 ? ReadOnlyMemory<byte>.Empty : doc.Bytes.Slice(a.PaletteOffset, a.PaletteLength),
+                    b.PaletteOffset < 0 ? ReadOnlyMemory<byte>.Empty : doc.Bytes.Slice(b.PaletteOffset, b.PaletteLength)))
+                throw new InvalidDataException($"{relative}: duplicate texture {JsonData.ShownText(asset.Name)} has different payloads; reconstruct from a pack with unambiguous texture names.");
+        }
+        bool Equal(ReadOnlyMemory<byte> a, ReadOnlyMemory<byte> b)
+        {
+            if (a.Equals(b)) return true;
+            if (a.Length != b.Length) return false;
+            if (a.Length > maximumComparedBytes - compared)
+                throw new InvalidDataException($"{relative}: duplicate texture payload comparisons exceed {maximumComparedBytes:N0} bytes; simplify the repeated records.");
+            compared += a.Length;
+            // Allow cancellation during large payload comparisons, as well as between records.
+            for (int offset = 0; offset < a.Length; offset += 65536)
+            {
+                token.ThrowIfCancellationRequested(); int length = Math.Min(65536, a.Length - offset);
+                if (!a.Span.Slice(offset, length).SequenceEqual(b.Span.Slice(offset, length))) return false;
+            }
+            return true;
+        }
+    }
+
     /// <summary>What an archive member keeps besides its data: the record of its written source, or a note about it.</summary>
     private const long MemberCost = 512;
     /// <summary>
@@ -563,6 +599,7 @@ public static class SourceExtractor
         /// </summary>
         internal async Task ExtractTexturesAsync(IReadOnlyList<(string Relative, ZbdDocument Document)> packs)
         {
+            foreach (var (relative, doc) in packs.Where(p => TextureSources.MissionNumber(p.Relative) > 0)) ValidateTextureNames(relative, doc, token);
             Dictionary<(string Folder, string Name), List<(int Mission, ZbdDocument Doc, AssetRecord Asset)>> candidates = [];
             foreach (var mission in packs.Where(p => TextureSources.MissionNumber(p.Relative) > 0).GroupBy(p => TextureSources.MissionNumber(p.Relative)).OrderBy(g => g.Key))
             {
@@ -583,6 +620,10 @@ public static class SourceExtractor
             {
                 var assets = doc.Assets.Where(a => a.Kind == AssetKind.Texture && a.Content is TextureInfo).ToArray();
                 var folders = TextureSources.PlaceImages(assets.Select(a => a.Name).ToArray(), Resources);
+                // Interface packs record distinct source folders in ordered runs, not quality variants. Preserve each
+                // recorded folder's image (including differing retail placeholders); never rank two copies in one folder.
+                var identities = assets.Select((a, i) => (a, Key: $"{folders[i]}/{a.Name}")).ToDictionary(p => p.a, p => p.Key);
+                ValidateTextureNames(relative, doc, token, identity: a => identities[a]);
                 for (int i = 0; i < assets.Length; i++)
                 {
                     string name = assets[i].Name.ToLowerInvariant();

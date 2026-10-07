@@ -33,6 +33,7 @@ internal static class ExportSafetyMcpChecks
             await LateCancelChecks(main, token);
             await RelativePathChecks(main, Job, token);
             await ExportChoiceContextChecks(main, token);
+            await TextureFailureAndMissingInputChecks(main, Job, token);
             await LookupBaselineChecks(main, Call, Job, token);
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
@@ -49,6 +50,29 @@ internal static class ExportSafetyMcpChecks
             }
         }
         finally { foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc); main.Close(); }
+    }
+
+    private static async Task TextureFailureAndMissingInputChecks(MainWindow main, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)
+    {
+        using SourceWorldFixture fixture = new();
+        const string model = "data/m1/models/m1.gltf", definition = "data/m1/zrdr/gates.zad";
+        byte[] original = File.ReadAllBytes(fixture.Path(model)); fixture.Write(model, "invalid JSON");
+        await main.ViewModel.OpenRootAsync(fixture.Project, token);
+        var check = await job("source_export", new() { ["outputs"] = new[] { "m1/rtexture16.zbd" } }, "completed");
+        Assert.Equal(1, check["failed"]!.GetValue<int>());
+        var gui = await main.ExportSourceProjectAsync(null, ["m1/rtexture16.zbd"], false, token);
+        Assert.Equal(1, gui.Failed);
+        Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Error" && p.Message.Contains("world does not assemble", StringComparison.Ordinal));
+        string destination = Path.Combine(fixture.Root, "export");
+        await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rtexture16.zbd" } }, "failed");
+        Assert.Empty(Directory.GetFileSystemEntries(destination));
+        fixture.Write(model, original);
+        byte[] definitions = File.ReadAllBytes(fixture.Path(definition)); File.Delete(fixture.Path(definition));
+        await job("source_world_open", new() { ["mission"] = "m1" }, "completed");
+        var doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+        Assert.Contains(definition, doc.SourceBuild!.MissingInputs); Assert.False(doc.SourceInputsChanged());
+        fixture.Write(definition, definitions); Assert.True(doc.SourceInputsChanged());
+        main.ViewModel.CloseResolved(doc);
     }
 
     private static async Task ExportChoiceContextChecks(MainWindow main, CancellationToken token)

@@ -362,11 +362,23 @@ public static partial class WorldGltf
     internal static void ValidateSupported(GltfDocument doc, string path)
     {
         HashSet<GltfMesh> meshes = [];
+        HashSet<GltfMaterial> materials = [];
+        Dictionary<string, int> addressing = new(StringComparer.OrdinalIgnoreCase);
         foreach (var node in doc.AllNodes())
             if (node.Mesh is { } mesh && meshes.Add(mesh))
             {
                 ValidateMesh(mesh, path);
-                foreach (var primitive in mesh.Primitives) ValidateMaterial(primitive.Material, path);
+                foreach (var primitive in mesh.Primitives)
+                {
+                    var material = primitive.Material;
+                    if (material == null || !materials.Add(material)) continue;
+                    ValidateMaterial(material, path);
+                    if (material.ImageUri == null) continue;
+                    string name = material.Extras?[Key]?["texture"] is { } named ? Text(named, "texture", path) : Path.GetFileNameWithoutExtension(material.ImageUri);
+                    int mode = (material.ClampS ? 1 : 0) | (material.ClampT ? 2 : 0);
+                    if (!addressing.TryAdd(name, mode) && addressing[name] != mode)
+                        throw new InvalidDataException($"{path}: texture {JsonData.ShownText(name)} is sampled with different edge modes; use one mode per texture or give the images distinct names.");
+                }
             }
     }
 
@@ -378,6 +390,8 @@ public static partial class WorldGltf
 
     private static void ValidateMaterial(GltfMaterial? source, string path)
     {
+        if (source?.EmbeddedImage == true)
+            throw new InvalidDataException($"{path}: material {JsonData.ShownText(source.Name)} has an embedded image; save it as an external PNG beside the model (for example with Blender's glTF Separate format).");
         if (source is { AlphaMode: "MASK" } && (source.ImageUri != null || source.EmbeddedImage || source.Extras?[Key]?["texture"] != null)
             && !(source.Extras?[Key]?["texture"] != null && source.AlphaCutoff == 0.5f &&
                 (source.BaseColor.W == 1 || source.BaseColor.W == 0 && source.Extras?[Key]?["opacity"] != null)))
@@ -686,10 +700,8 @@ public static partial class WorldGltf
             textureName = context.TextureName(source?.ImageUri ?? "", namedTexture, path);
             int addressing = (source?.ClampS == true ? 1 : 0) | (source?.ClampT == true ? 2 : 0);
             if (source?.ImageUri != null && context.TextureAddressing.TryAdd(textureName, addressing) is false && context.TextureAddressing[textureName] != addressing)
-                context.Warnings.Add($"{path}: texture {textureName} is sampled with different edge modes; the pack keeps the first.");
+                throw new InvalidDataException($"{path}: texture {JsonData.ShownText(textureName)} is sampled with different edge modes; use one mode per texture or give the images distinct names.");
         }
-        else if (source?.EmbeddedImage == true)
-            context.Warnings.Add($"{path}: material {JsonData.ShownText(source.Name)} has an embedded image; texture packs are built from PNG files, so save the image as a PNG beside the model (for example with Blender's glTF Separate format). The surface is untextured.");
         uint opacity = extras?["opacity"] is { } o ? (uint)Integer(o, "opacity", path, 0, 255)
             : source is { AlphaMode: "MASK" } && source.ImageUri == null && !source.EmbeddedImage && namedTexture == null ? (source.BaseColor.W < source.AlphaCutoff ? 0u : 255u)
             : source != null && source.AlphaMode == "BLEND" && source.BaseColor.W < 1 ? (uint)Math.Clamp(MathF.Round(source.BaseColor.W * 255), 0, 255) : 0xFF;

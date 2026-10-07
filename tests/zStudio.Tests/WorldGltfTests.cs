@@ -395,10 +395,9 @@ public sealed class WorldGltfTests
     }
 
     [Fact]
-    public void EmbeddedImagesAreReported()
+    public void EmbeddedImagesAreRefused()
     {
-        // Blender's .glb export embeds images; the packs are built from PNG files, so an embedded image is reported
-        // rather than silently dropped.
+        // Blender's .glb export embeds images; accepting it must not publish plain surfaces.
         string json = $$"""
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"box","mesh":0}],
          "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
@@ -408,8 +407,7 @@ public sealed class WorldGltfTests
          "bufferViews":[{"buffer":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":4}],
          "buffers":[{"byteLength":40,"uri":"{{DataUri([0, 0, 0, 1, 0, 0, 0, 0, -1], [1, 2, 3, 4])}}"}]}
         """;
-        Import(json, new(), out var context);
-        Assert.Contains(context.Warnings, w => w.Contains("embedded", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("embedded image", Assert.Throws<InvalidDataException>(() => Import(json, new(), out _)).Message);
     }
 
     [Fact]

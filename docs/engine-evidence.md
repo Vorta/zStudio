@@ -374,7 +374,8 @@ These are the keys the game reads. Anything else in a file is ignored. Types are
   - The option does nothing under Direct3D. The choice is made again for every mission.
   - So `texture8` and `texturemax` serve only the software renderer: under Direct3D the game reaches `texturemax` only when no `rtexture` pack exists, and then refuses its paletted textures.
 - **Software texture size:** spans are drawn for textures 8–1024 texels wide; the span routines switch on 20 − log2(width) with cases 10–17 and skip anything else without drawing (0x49bbf0 and its siblings [BN]; `CalcPow2ScratchFields` 0x4902b0 [B]). No shipped pack holds a texture above 256 [D].
-- **Creating textures** (`CreateTextureRecord` 0x4aa0f0 [BN]).
+- **Texture name lookup:** `zVidTexturePackLoadImageByName` 0x46d940 and `zVidTexturePackLoadBuiltinImageByName` 0x46dd30 [BN] scan records in order and stop at the first case-insensitive name match. Reconstruction must not rank differing duplicates inside one mission pack as quality variants. Interface records in different evidenced source folders remain distinct source files, preserving the original path ordering on export.
+- **Creating Direct3D textures** (`CreateTextureRecord` 0x4aa0f0 [BN]). Its 8:1 aspect restriction does not apply to software packs.
   - **Default texture instead:** a side above the device's reported maximum (0 counts as 256), a non-power-of-two size where the device requires powers of two, an aspect ratio above 8, or a palette.
   - **No size limit of its own.**
   - **Formats:** opaque textures as the display format (565), alpha planes as ARGB4444, colour keys as 1555.

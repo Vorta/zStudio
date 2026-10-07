@@ -140,6 +140,8 @@ public static partial class SourceBuilder
             RetainedBytes += bytes;
         }
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
+        // Negative lookups affect compilation too (optional definitions, search paths and fallback resources).
+        private readonly Dictionary<string, FileStamp?> probes = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Every project file the run read or asked about, from the overlay or the disk: what its outputs depend on.</summary>
         private readonly HashSet<string> dependencies = new(StringComparer.OrdinalIgnoreCase);
         private readonly Lock dependencyGate = new();
@@ -147,8 +149,22 @@ public static partial class SourceBuilder
         /// <summary>Pending files the disk does not hold yet (new files of a workspace), which count as present.</summary>
         internal IReadOnlyCollection<string> Added { get; } = overlay?.Keys.Where(k => !File.Exists(SourceProject.Resolve(root, k))).ToArray() ?? [];
         internal void Depend(string relative) { lock (dependencyGate) dependencies.Add(relative); }
-        /// <summary>The project files read from disk and their stamps (pending content that replaced files is not included).</summary>
-        internal IReadOnlyDictionary<string, FileStamp> Stamps() => files.ToDictionary(f => f.Key, f => f.Value.Stamp, StringComparer.OrdinalIgnoreCase);
+        /// <summary>The disk files read or found by a search and their stamps (pending content is not included).</summary>
+        internal IReadOnlyDictionary<string, FileStamp> Stamps() => probes.Where(p => p.Value != null).ToDictionary(p => p.Key, p => p.Value!, StringComparer.OrdinalIgnoreCase);
+        internal IReadOnlyList<string> Missing() => probes.Where(p => p.Value == null).Select(p => p.Key).ToArray();
+        internal bool Exists(string relative)
+        {
+            SourceProject.RequireSource(relative);
+            Depend(relative);
+            if (overlay?.ContainsKey(relative) == true) return true;
+            string path = SourceProject.Resolve(root, relative);
+            SourceProject.RejectNestedLinks(root, relative);
+            FileStamp? observed = File.Exists(path) ? FileStamp.Read(path) : null;
+            if (probes.TryGetValue(relative, out var first) && first != observed)
+                throw Changed(relative, $"{relative} changed while exporting; export again.");
+            probes[relative] = observed;
+            return observed != null;
+        }
         internal byte[] Read(string relative, CancellationToken token, long maximum = FormatRegistry.MaximumDocumentBytes)
         {
             token.ThrowIfCancellationRequested();
@@ -158,6 +174,7 @@ public static partial class SourceBuilder
                 if (pending.LongLength > maximum) throw new InvalidDataException($"{JsonData.ShownText(relative)} exceeds {maximum:N0} bytes.");
                 return pending;
             }
+            if (!Exists(relative)) throw new FileNotFoundException($"{relative} does not exist.");
             string path = SourceProject.Resolve(root, relative);
             var stamp = FileStamp.Read(path);
             if (stamp.Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} exceeds 512 MiB.");
@@ -205,7 +222,7 @@ public static partial class SourceBuilder
             public SourceInstruction? WriteInstruction { get; init; }
         }
         private readonly Dictionary<string, (AssembledWorld? World, Exception? Failure)> worlds = new(StringComparer.OrdinalIgnoreCase);
-        internal bool HasWorld(string mission) => overlay?.ContainsKey(WorldScript(mission)) == true || File.Exists(SourceProject.Resolve(root, WorldScript(mission)));
+        internal bool HasWorld(string mission) => Exists(WorldScript(mission));
         internal AssembledWorld World(string mission, CancellationToken token)
         {
             if (!worlds.TryGetValue(mission, out var cached))
@@ -231,20 +248,20 @@ public static partial class SourceBuilder
         /// <summary>The assembler's view of the project: reads go through the snapshot, and links are refused.</summary>
         private sealed class ProjectFiles(Snapshot snapshot, string root, IReadOnlyDictionary<string, byte[]>? overlay) : IProjectFiles
         {
-            public bool Exists(string relative)
-            {
-                SourceProject.RequireSource(relative);
-                snapshot.Depend(relative);
-                if (overlay?.ContainsKey(relative) == true) return true;
-                if (!File.Exists(SourceProject.Resolve(root, relative))) return false;
-                SourceProject.RejectNestedLinks(root, relative);
-                return true;
-            }
+            public bool Exists(string relative) => snapshot.Exists(relative);
             public byte[] Read(string relative, CancellationToken token) { SourceProject.RequireSource(relative); if (overlay?.ContainsKey(relative) != true) SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token); }
         }
 
         internal void CheckUnchanged(CancellationToken token)
         {
+            foreach (var (relative, stamp) in probes)
+            {
+                token.ThrowIfCancellationRequested();
+                string path = SourceProject.Resolve(root, relative);
+                SourceProject.RejectNestedLinks(root, relative);
+                if (stamp == null ? Path.Exists(path) : !File.Exists(path) || FileStamp.Read(path) != stamp)
+                    throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
+            }
             foreach (var (relative, entry) in files)
             {
                 token.ThrowIfCancellationRequested();
@@ -755,16 +772,11 @@ public static partial class SourceBuilder
         List<string> warnings = [];
         string mission = plan.Path.Split('/')[0];
         if (!snapshot.HasWorld(mission)) return (inputs, new Dictionary<string, int>(), warnings);
-        try
-        {
-            var world = snapshot.World(mission, token);
-            HashSet<string> names = new(inputs.Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
-            foreach (var (name, file) in world.TextureFiles.OrderBy(t => t.Key, StringComparer.Ordinal))
-                if (names.Add(name)) inputs.Add((file, name.ToLowerInvariant()));
-            return (inputs, world.TextureAddressing, warnings);
-        }
-        catch (InvalidDataException ex) { warnings.Add($"{ex.Message} The pack holds only the mission's texture folders, without edge modes."); }
-        return (inputs, new Dictionary<string, int>(), warnings);
+        var world = snapshot.World(mission, token);
+        HashSet<string> names = new(inputs.Select(i => i.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, file) in world.TextureFiles.OrderBy(t => t.Key, StringComparer.Ordinal))
+            if (names.Add(name)) inputs.Add((file, name.ToLowerInvariant()));
+        return (inputs, world.TextureAddressing, warnings);
     }
 
     /// <summary>
@@ -863,7 +875,7 @@ public static partial class SourceBuilder
         long retained = 8L + plan.Inputs.Count * ArchiveSources.RecordSize;
         FormatRegistry.ValidateDocumentSize(retained);
         int bank = Array.IndexOf(Banks, plan.Path.ToLowerInvariant());
-        var declared = File.Exists(SourceProject.Resolve(root, SoundDefinitions)) ? DeclaredFormats(snapshot.Read(SoundDefinitions, token), token) : new();
+        var declared = snapshot.Exists(SoundDefinitions) ? DeclaredFormats(snapshot.Read(SoundDefinitions, token), token) : new();
         List<string> warnings = []; List<ArchiveSources.Entry> entries = []; Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase);
         foreach (string input in plan.Inputs)
         {

@@ -106,12 +106,13 @@ public static partial class SourceBlender
         Dictionary<string, byte[]> bufferBytes = new(StringComparer.OrdinalIgnoreCase);
         try
         {
-            GltfDocument.Read(json, uri =>
+            var document = GltfDocument.Read(json, uri =>
             {
                 string relative = Worlds.WorldAssembler.Relative(checkedOut, uri);
                 if (!bufferBytes.TryGetValue(relative, out var bytes)) bufferBytes[relative] = bytes = Load(relative) ?? throw new InvalidDataException($"It uses {JsonData.ShownText(relative)}, which does not exist.");
                 return bytes;
             }, token);
+            Worlds.WorldGltf.ValidateSupported(document, model);
         }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{model}: {ex.Message}", ex); }
         List<BlenderCheckoutFile> files = [new(model, "input/" + Path.GetFileName(model), SourceProject.Sha256(json))];

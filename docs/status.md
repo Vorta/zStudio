@@ -1,8 +1,15 @@
 # Desktop implementation status
 
+## PR18 source and texture review fixes (2026-10-07)
+
+Seven further findings are fixed through the shared source services: absent dependency observations are checked before publication and retained for preview staleness; all glTF components are checked for cycles and depth; software packs keep their supported aspect ratios; reconstruction validates duplicate texture identities before ranking variants; embedded images and conflicting addressing modes are refused; and texture-only exports fail when their world dependency fails. Blender checkout and update use the same material preflight. A separate challenge also fixed opaque black disappearing from a shared software palette.
+
+The native PR watcher delivered a real queued notice into the idle conversation, confirming the repaired route beyond the earlier transport probe. The complete 280-file PR coverage record was reconciled and affected sibling paths were challenged before commit. Release builds have zero warnings/errors. Final Core validation passes 1,495 tests with the 1999 and MechWarrior 3 corpora, watcher tests pass all 72, and the 1998 reconstruction/terrain subset passes nine. The final normal Desktop suite passes all 110 tests. Its actual GUI/MCP harness verifies failure results, no partial texture-only publication and stale previews when absent inputs appear.
+
+One Desktop run reproduced the previously recorded intermittent transform-field test failure: a partial minus became empty after theme replacement. A traced rerun and 160 repeated theme/layout cases did not reproduce it; the trace showed only intentional draft cancellation resets. The cause remains unresolved, and its assertion is unchanged. The direct compiled-save check/replacement race also remains explicitly unresolved by user choice. No public release or version bump is included.
 ## PR18 notification and review fixes (2026-10-07)
 
-PR notifications now use the Codex queue for a Codex conversation. The helper refuses foreground-only Claude delivery in that environment and reports actual listener process liveness; listener cancellation and completion clear its identity. The current-conversation queue add/read/delete probe passed. A real subsequent notification is still needed to establish idle-turn delivery by the host.
+PR notifications now use the Codex queue for a Codex conversation. The helper refuses foreground-only Claude delivery in that environment and reports actual listener process liveness; listener cancellation and completion clear its identity. The current-conversation queue add/read/delete probe passed. A subsequent real notice confirmed idle-turn delivery by the host (see the source and texture review follow-up above).
 
 Six further review findings are fixed: complete glTF JSON is bounded before DOM construction, unsupported authored material channels are refused, KHR texture rotation follows the specification, profile enumeration and selection run off the dispatcher with cancellation and stale-result checks, build/preview references stay within authoritative source folders, and terrain conversion preserves implicit roots in scene-less databases. Sibling guards cover Blender and object-edit JSON parsing, conversion JSON rewriting, nested buffer references and profile acceptance behavior.
 

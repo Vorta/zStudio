@@ -673,19 +673,26 @@ public sealed class GltfDocument
         // Without scenes, every node that is nobody's child is a root.
         else doc.Roots.AddRange(nodes.Where((n, i) => !parented[i]));
         // Reject cycles and hierarchies too deep to follow before anyone walks them; the walk itself keeps its own stack.
-        HashSet<GltfNode> visiting = new(ReferenceEqualityComparer.Instance), done = new(ReferenceEqualityComparer.Instance);
+        HashSet<GltfNode> visiting = new(ReferenceEqualityComparer.Instance);
+        Dictionary<GltfNode, int> heights = new(ReferenceEqualityComparer.Instance);
         Stack<(GltfNode Node, int Next)> path = new();
-        foreach (var r in doc.Roots)
+        foreach (var r in nodes)
         {
-            if (done.Contains(r)) continue;
+            token.ThrowIfCancellationRequested();
+            if (heights.ContainsKey(r)) continue;
             path.Push((r, 0)); visiting.Add(r);
             while (path.Count > 0)
             {
                 var (node, next) = path.Pop();
-                if (next == node.Children.Count) { visiting.Remove(node); done.Add(node); continue; }
+                if (next == node.Children.Count)
+                {
+                    int height = 1 + (node.Children.Count == 0 ? 0 : node.Children.Max(c => heights[c]));
+                    if (height > MaximumDepth) throw new InvalidDataException($"The glTF node hierarchy is deeper than {MaximumDepth} levels.");
+                    visiting.Remove(node); heights.Add(node, height); continue;
+                }
                 path.Push((node, next + 1));
                 var child = node.Children[next];
-                if (done.Contains(child)) continue;
+                if (heights.ContainsKey(child)) continue;
                 if (!visiting.Add(child)) throw new InvalidDataException("The glTF node hierarchy has a cycle.");
                 if (path.Count >= MaximumDepth) throw new InvalidDataException($"The glTF node hierarchy is deeper than {MaximumDepth} levels.");
                 path.Push((child, 0));

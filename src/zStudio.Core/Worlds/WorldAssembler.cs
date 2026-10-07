@@ -518,7 +518,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         foreach (var w in context.Warnings) Warn(w);
         foreach (var (texture, addressing) in context.TextureAddressing)
             if (!TextureAddressing.TryAdd(texture, addressing) && TextureAddressing[texture] != addressing)
-                Warn($"Texture {texture} is sampled with different edge modes in different models; the pack keeps the first.");
+                throw new InvalidDataException($"Texture {JsonData.ShownText(texture)} is sampled with different edge modes in different models; use one mode per texture or give the images distinct names.");
         // Nodes take slots as the original loader made and freed them (caches of referenced files, the root, the records,
         // each reference's content after the next record). A referenced file's nodes are the children from another file.
         string FileOf(WorldNode node) => Provenance.TryGetValue(node, out var p) && p.ModelFile != null ? p.ModelFile : documentPath;
