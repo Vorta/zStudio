@@ -205,9 +205,11 @@ public sealed class PropertiesWindow : Window
         heading.ToolTip = doc.Path + " → " + target;
         notice.Text = doc.IsStale ? "The source file changed on disk. These properties belong to the open document; reload to read the changed source."
             : doc.AnimationEdits != null || PickupFields != null || ResourceFields != null || ScriptFields != null ? "Edits update this document; Ctrl+S saves it to disk." : "Stored properties of the explicitly opened item.";
-        undo.IsEnabled = doc.AnimationEdits?.CanUndo == true || doc.CanUndoScene || doc.ResourceEdits?.CanUndo == true || doc.ContentEdits?.CanUndo == true;
-        redo.IsEnabled = doc.AnimationEdits?.CanRedo == true || doc.CanRedoScene || doc.ResourceEdits?.CanRedo == true || doc.ContentEdits?.CanRedo == true;
-        undo.Visibility = redo.Visibility = doc.AnimationEdits != null || doc.PickupEdits != null || doc.ModelEdits != null || doc.ResourceEdits != null || doc.ContentEdits != null ? Visibility.Visible : Visibility.Collapsed;
+        undo.IsEnabled = doc.SourceWorld is { } undoWorld ? undoWorld.Workspace.CanUndo
+            : doc.AnimationEdits?.CanUndo == true || doc.CanUndoScene || doc.ResourceEdits?.CanUndo == true || doc.ContentEdits?.CanUndo == true;
+        redo.IsEnabled = doc.SourceWorld is { } redoWorld ? redoWorld.Workspace.CanRedo
+            : doc.AnimationEdits?.CanRedo == true || doc.CanRedoScene || doc.ResourceEdits?.CanRedo == true || doc.ContentEdits?.CanRedo == true;
+        undo.Visibility = redo.Visibility = doc.SourceWorld != null || doc.AnimationEdits != null || doc.PickupEdits != null || doc.ModelEdits != null || doc.ResourceEdits != null || doc.ContentEdits != null ? Visibility.Visible : Visibility.Collapsed;
     }
     private async void RunUndo(bool isRedo)
     { if (Document is { } doc && await ResolvePendingDraftsAsync()) UndoRequested?.Invoke(doc, isRedo); }

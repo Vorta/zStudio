@@ -13,6 +13,15 @@ public static class SourceRead
     public static async Task<byte[]> AllAsync(string path, long maximum, CancellationToken token = default)
     {
         await using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await AllAsync(stream, path, maximum, token).ConfigureAwait(false);
+    }
+    internal static async Task<byte[]> AllAsync(string path, long maximum, DirectoryLease directories, CancellationToken token = default)
+    {
+        await using FileStream stream = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await AllAsync(stream, path, maximum, token).ConfigureAwait(false);
+    }
+    private static async Task<byte[]> AllAsync(FileStream stream, string path, long maximum, CancellationToken token)
+    {
         token.ThrowIfCancellationRequested();
         int length = Length(stream, maximum, path);
         byte[] bytes = new byte[length];

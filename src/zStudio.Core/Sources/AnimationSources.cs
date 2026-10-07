@@ -16,10 +16,39 @@ namespace Recoil.Zbd.Core.Sources;
 /// </summary>
 internal static class AnimationSources
 {
+    internal const long MaximumRepairWork = 4L * 1024 * 1024 * 1024;
     internal sealed record MissionAnimation(int Mission, AnimationPackage Package, IReadOnlyList<(string Path, uint Time)> Stamps, IReadOnlyCollection<string> WorldNodes);
 
     /// <summary>An object's track in a script: the compiled keyframes, their frame rate, and the keyframe-format text.</summary>
     private sealed record ScriptTrack(string Object, List<AnimationKeyframe> Frames, float Rate, string Text);
+
+    private sealed class ScriptTracks
+    {
+        public List<ScriptTrack> Ordered { get; } = [];
+        public Dictionary<string, ScriptTrack> ByObject { get; } = new(StringComparer.Ordinal);
+    }
+
+    /// <summary>All repair compilations share an allowance for repeated source decoding and compiled-package work.</summary>
+    private sealed class RepairWork(long maximum)
+    {
+        private long used;
+        public void Charge(long count)
+        {
+            if (count < 0 || count > maximum - used)
+                throw new IOException($"Animation reconstruction exceeds its {maximum:N0}-unit definition-repair work limit; reconstruct from the original game files or split the animation definitions into smaller missions.");
+            used += count;
+        }
+    }
+    private sealed class RepairFiles(IProjectFiles files, RepairWork work) : IProjectFiles
+    {
+        public bool Exists(string relative) => files.Exists(relative);
+        public byte[] Read(string relative, CancellationToken token)
+        {
+            byte[] bytes = files.Read(relative, token);
+            work.Charge(bytes.LongLength); // Before the compiler decodes/clones this source, on every compilation.
+            return bytes;
+        }
+    }
 
     /// <summary>The files written so far over the project on disk.</summary>
     private sealed class Overlay(IProjectFiles project, ReconstructionBudget budget) : IProjectFiles
@@ -36,13 +65,14 @@ internal static class AnimationSources
 
     /// <param name="status">Told what is being done: each keyframe script as it starts being written (from worker threads),
     /// then each mission's check of its rebuilt animations.</param>
-    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token, Action<SourceStage, string>? status = null, long maximumRetainedBytes = ReconstructionBudget.MaximumBytes)
+    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token, Action<SourceStage, string>? status = null, long maximumRetainedBytes = ReconstructionBudget.MaximumBytes, long maximumRepairWork = MaximumRepairWork)
     {
         ReconstructionBudget budget = new(maximumRetainedBytes);
+        RepairWork repairWork = new(maximumRepairWork);
         Overlay files = new(project, budget);
         HashSet<(string, int)> attempted = [];
         // Script path → its object tracks in the order first seen, and the time its stamp records.
-        Dictionary<string, List<ScriptTrack>> scripts = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, ScriptTracks> scripts = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, uint> times = new(StringComparer.OrdinalIgnoreCase);
         // A script that several missions use is written again when one adds to it: only its last note counts.
         Dictionary<string, string?> scriptNotes = new(StringComparer.OrdinalIgnoreCase); List<string> noted = [];
@@ -88,11 +118,15 @@ internal static class AnimationSources
                     string path = stamped.TryGetValue(file, out var stamp) ? stamp.Path : $"{Path.GetDirectoryName(definition.File)!.Replace('\\', '/')}/{file}";
                     // A stamp seen only by a later mission still dates a script written before.
                     if (stamped.ContainsKey(file) && times.TryAdd(path, stamp.Time) && scripts.ContainsKey(path)) Touch(path);
-                    var tracks = scripts.TryGetValue(path, out var list) ? list : scripts[path] = [];
-                    int existing = tracks.FindIndex(t => t.Object == target);
-                    if (existing < 0) { tracks.Add(new(target, frames, rate, track)); Touch(path); }
-                    else if (tracks[existing].Rate != rate) notes.Add($"{path}: {entry.Name} plays {target} at {rate} frames per second, an earlier animation at {tracks[existing].Rate}; the script was written from the earlier one.");
-                    else if (tracks[existing].Text != track) notes.Add($"{path}: {entry.Name} moves {target} differently from an earlier animation using the same script; the first track was kept.");
+                    var tracks = scripts.TryGetValue(path, out var list) ? list : scripts[path] = new();
+                    if (!tracks.ByObject.TryGetValue(target, out var existing))
+                    {
+                        budget.Retain(128L + 2L * target.Length); // Ordered identity record and dictionary entry.
+                        ScriptTrack added = new(target, frames, rate, track);
+                        tracks.ByObject.Add(target, added); tracks.Ordered.Add(added); Touch(path);
+                    }
+                    else if (existing.Rate != rate) notes.Add($"{path}: {entry.Name} plays {target} at {rate} frames per second, an earlier animation at {existing.Rate}; the script was written from the earlier one.");
+                    else if (existing.Text != track) notes.Add($"{path}: {entry.Name} moves {target} differently from an earlier animation using the same script; the first track was kept.");
                 }
             // Scripts are independent and their rotation searches are the longest work of a reconstruction, so they are
             // written in parallel; outputs and notes keep the order the scripts were first seen. Scripts are read as
@@ -120,7 +154,7 @@ internal static class AnimationSources
             }
 
             status?.Invoke(SourceStage.Validating, $"the m{mission.Mission} animations");
-            RepairDefinitions(mission, bindings, files, attempted, notes, token);
+            RepairDefinitions(mission, bindings, files, attempted, notes, repairWork, token);
         }
         notes.AddRange(noted.Select(path => scriptNotes[path]).OfType<string>());
         return files.Written.OrderBy(w => w.Key, StringComparer.Ordinal).Select(w => new WorldSources.Output(w.Key, w.Value)).ToList();
@@ -132,15 +166,15 @@ internal static class AnimationSources
     /// original's exporter wrote it, with the Softimage DKit messages of its date; scripts of other files (zStudio's
     /// exports carry no stamps) hold only their frames.
     /// </summary>
-    private static (string Text, string? Note) WriteScript(string path, List<ScriptTrack> tracks, uint? time, CancellationToken token)
+    private static (string Text, string? Note) WriteScript(string path, ScriptTracks tracks, uint? time, CancellationToken token)
     {
-        var objects = tracks.Select(t => t.Object).ToList();
-        var ordered = SourceOrder(objects).Select(name => tracks.First(t => t.Object == name)).ToList();
+        var objects = tracks.Ordered.Select(t => t.Object).ToList();
+        var ordered = SourceOrder(objects).Select(name => tracks.ByObject[name]).ToList();
         SiScriptWriter.Layout layout = new(Version(time), !MessagesFollowFrames(path, time));
         try { return (SiScriptWriter.Write([.. ordered.Select(t => new SiScriptWriter.Track(t.Object, t.Frames, t.Rate))], layout, token), null); }
         catch (InvalidDataException ex)
         {
-            return (AnimationScript.Write(tracks.Select(t => (t.Object, t.Text))),
+            return (AnimationScript.Write(tracks.Ordered.Select(t => (t.Object, t.Text))),
                 $"{path}: the keyframes have no SI Animation Script ({ex.Message}); it was written in zStudio's keyframe format.");
         }
     }
@@ -204,15 +238,27 @@ internal static class AnimationSources
     /// A replacement is kept only when every entry it produces then compiles exactly.
     /// </summary>
     private static void RepairDefinitions(MissionAnimation mission, List<(AnimationDefinition Definition, string Digits, AnimationEntry Entry)> bindings,
-        Overlay files, HashSet<(string, int)> attempted, List<string> notes, CancellationToken token)
+        Overlay files, HashSet<(string, int)> attempted, List<string> notes, RepairWork work, CancellationToken token)
     {
         string root = SourceBuilder.AnimationRoot($"m{mission.Mission}");
-        AnimationPackage Compile() => AnimationCompiler.Compile(files, root, mission.WorldNodes, token).Package;
+        long packageWork = mission.Package.Prefix.LongLength + mission.Package.Tail.LongLength
+            + mission.Package.Entries.Sum(e => (long)e.SourceLength) + 32L * mission.WorldNodes.Count + 1;
+        RepairFiles compileFiles = new(files, work);
+        AnimationPackage Compile()
+        {
+            token.ThrowIfCancellationRequested();
+            work.Charge(packageWork); // Charge a whole mission again before every repair attempt, including no-op entries.
+            var result = AnimationCompiler.Compile(compileFiles, root, mission.WorldNodes, token);
+            if (result.Bytes.LongLength > packageWork) work.Charge(result.Bytes.LongLength - packageWork);
+            return result.Package;
+        }
         AnimationPackage built;
         try { built = Compile(); }
         catch (InvalidDataException ex) { notes.Add($"m{mission.Mission}: the reconstructed animations do not compile ({ex.Message})."); return; }
         if (built.Entries.Count != mission.Package.Entries.Count) { notes.Add($"m{mission.Mission}: the reconstructed animations compile to {built.Entries.Count - 1} entries, not {mission.Package.Entries.Count - 1}."); return; }
         var differing = Enumerable.Range(1, bindings.Count).Where(i => AnimationComparer.Difference(mission.Package.Entries[i], built.Entries[i]) != null).ToList();
+        var definitionMembers = Enumerable.Range(1, bindings.Count).GroupBy(i => bindings[i - 1].Definition)
+            .ToDictionary(g => g.Key, g => g.ToList());
         foreach (var group in differing.GroupBy(i => (bindings[i - 1].Definition.File, bindings[i - 1].Definition.Ordinal)))
         {
             token.ThrowIfCancellationRequested();
@@ -220,7 +266,7 @@ internal static class AnimationSources
             // A definition shared by several missions is rebuilt once; a failed attempt is not repeated.
             if (!attempted.Add((definition.File, definition.Ordinal))) continue;
             // Every entry of the definition must agree on one decompiled definition.
-            var members = Enumerable.Range(1, bindings.Count).Where(i => bindings[i - 1].Definition == definition).ToList();
+            var members = definitionMembers[definition];
             string? text = null; ZrdNode? items = null;
             try
             {

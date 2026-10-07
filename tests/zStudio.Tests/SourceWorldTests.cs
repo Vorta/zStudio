@@ -20,7 +20,7 @@ public sealed class SourceWorldTests
     private sealed class OnReport(Action<SourceProgress> action) : IProgress<SourceProgress> { public void Report(SourceProgress value) => action(value); }
 
     [Fact]
-    public async Task PreviewBuildRefusesALinkInstalledAfterPlanning()
+    public async Task PreviewBuildProtectsItsDestinationAfterPlanning()
     {
         using var fixture = new SourceWorldFixture();
         string destination = Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "test"), outside = Path.Combine(fixture.Root, "outside");
@@ -28,11 +28,23 @@ public sealed class SourceWorldTests
         var progress = new OnReport(_ =>
         {
             if (replaced) return; replaced = true;
-            Directory.Delete(destination); Directory.CreateSymbolicLink(destination, outside);
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.ThrowsAny<IOException>(() => Directory.Delete(destination));
+                Assert.ThrowsAny<IOException>(() => Directory.Move(destination, destination + "-moved"));
+            }
+            else { Directory.Delete(destination); Directory.CreateSymbolicLink(destination, outside); }
         });
         try
         {
-            Assert.Contains("is a link", (await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", destination, progress: progress, token: Token))).Message);
+            if (OperatingSystem.IsWindows())
+            {
+                var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", destination, progress: progress, token: Token);
+                Assert.All(build.Outputs, output => Assert.Equal("built", output.Status));
+                Assert.True(File.Exists(build.WorldPath));
+            }
+            else Assert.Contains("not an ordinary folder", (await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", destination, progress: progress, token: Token))).Message);
+            Assert.True(replaced);
             Assert.Empty(Directory.EnumerateFileSystemEntries(outside));
         }
         finally { if (Directory.Exists(destination) && File.GetAttributes(destination).HasFlag(FileAttributes.ReparsePoint)) Directory.Delete(destination); }

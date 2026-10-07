@@ -39,6 +39,7 @@ public sealed partial class PickupPlacementEditSession
             if (destinations.Keys.Any(p => !archives.ContainsKey(p))) throw new ArgumentException("Save destination references an unknown pickup archive.", nameof(destinations));
         }
         saving = true; List<StagedArchive> staged = []; List<string> saved = [], errors = [];
+        using DirectoryLease directories = new();
         try
         {
             HashSet<string> targets = new(StringComparer.OrdinalIgnoreCase);
@@ -48,11 +49,13 @@ public sealed partial class PickupPlacementEditSession
                 if (!explicitDestination && !IsArchiveDirty(source)) continue;
                 string destination = Path.GetFullPath(explicitDestination ? destinations![source] : archive.Target);
                 ValidateDestination(destination);
+                ValidateDestination(directories.CapturedPath(destination));
+                directories.Parent(destination, create: true);
                 if (!targets.Add(destination)) throw new IOException("Two pickup archives cannot be saved to the same file.");
                 // Explicit destinations are Save As, including copies requested by protected-source Save.
                 // Only ordinary Save may replace the active target.
                 bool replace = !explicitDestination && !archive.PendingCopy;
-                if (replace) await CheckBaselineAsync(archive, token);
+                if (replace) await CheckBaselineAsync(archive, token, directories);
                 else if (explicitDestination && destination.Equals(Path.GetFullPath(archive.Target), StringComparison.OrdinalIgnoreCase) || File.Exists(destination) || Directory.Exists(destination))
                     throw new IOException($"Save As requires a new file: {destination}");
                 if (!replace && archives.Any(a => destination.Equals(a.Value.Original.Path, StringComparison.OrdinalIgnoreCase) ||
@@ -61,13 +64,12 @@ public sealed partial class PickupPlacementEditSession
                 byte[] bytes = await Task.Run(() => EncodeArchive(source), token);
                 await Task.Run(() => Verify(source, bytes, token), token);
                 string directory = Path.GetDirectoryName(destination)!;
-                Directory.CreateDirectory(directory);
                 string temporary = Path.Combine(directory, ".zstudio-pickups-" + Guid.NewGuid().ToString("N") + ".tmp");
                 // Register before writing so failed/canceled writes are cleaned up too.
                 staged.Add(new(source, archive, destination, temporary, bytes, replace));
-                await using (FileStream stream = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
+                await using (FileStream stream = directories.OpenFile(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
                 { await stream.WriteAsync(bytes, token); await stream.FlushAsync(token); stream.Flush(true); }
-                byte[] reopened = await Sources.SourceRead.AllAsync(temporary, bytes.Length, token);
+                byte[] reopened = await Sources.SourceRead.AllAsync(temporary, bytes.Length, directories, token);
                 if (!EqualBytes(bytes, reopened)) throw new IOException($"Written pickup archive verification failed: {destination}");
                 await Task.Run(() => Verify(source, reopened, token), token);
             }
@@ -81,17 +83,17 @@ public sealed partial class PickupPlacementEditSession
                 {
                     token.ThrowIfCancellationRequested();
                     ValidateDestination(output.Destination);
-                    using SealedFile file = VerifiedDocumentSave.Seal(output.Temporary, output.Bytes);
+                    using SealedFile file = VerifiedDocumentSave.Seal(output.Temporary, output.Bytes, directories);
                     if (output.Replace)
                     {
-                        await CheckBaselineAsync(output.Archive, token);
+                        await CheckBaselineAsync(output.Archive, token, directories);
                         string? backup = createBackup ? output.Destination + "." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8] + ".bak" : null;
                         PublishFile(file, output.Destination, true, backup);
                     }
                     else PublishFile(file, output.Destination, false, null);
                     output.Archive.Target = output.Destination; output.Archive.SavedBytes = output.Bytes;
                     output.Archive.PendingCopy = false;
-                    output.Archive.Stamp = FileStamp.ReadHolding(output.Destination, output.Bytes);
+                    output.Archive.Stamp = FileStamp.ReadHolding(output.Destination, output.Bytes, directories);
                     if (output.Destination.Equals(output.Archive.Original.Path, StringComparison.OrdinalIgnoreCase)) output.Archive.SourceStamp = output.Archive.Stamp;
                     foreach (var source in positions.Keys.Where(s => s.ArchivePath == output.Source))
                     { savedPositions[source] = positions[source]; savedRotations[source] = rotations[source]; }
@@ -108,7 +110,7 @@ public sealed partial class PickupPlacementEditSession
         finally
         {
             foreach (var output in staged)
-                try { if (File.Exists(output.Temporary)) File.Delete(output.Temporary); }
+                try { directories.DeleteFile(output.Temporary); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { diagnostics.Add($"Could not remove save temporary {output.Temporary}: {ex.Message}"); }
             saving = false; Changed?.Invoke();
         }
@@ -135,8 +137,8 @@ public sealed partial class PickupPlacementEditSession
                     throw new InvalidDataException($"Saved transform {entry.Record.Source.ResourceName} #{entry.Record.Source.RecordIndex} has an unexpected component at 0x{expected.Offset:X}.");
             }
     }
-    private static Task CheckBaselineAsync(ArchiveState archive, CancellationToken token) =>
-        VerifiedDocumentSave.CheckBaselineAsync(archive.Target, archive.SavedBytes, token);
+    private static Task CheckBaselineAsync(ArchiveState archive, CancellationToken token, DirectoryLease directories) =>
+        VerifiedDocumentSave.CheckBaselineAsync(archive.Target, archive.SavedBytes, token, directories);
     private static bool EqualBytes(byte[] a, byte[] b) => a.Length == b.Length && CryptographicOperations.FixedTimeEquals(SHA256.HashData(a), SHA256.HashData(b));
     private static void ValidateDestination(string path)
     {

@@ -68,7 +68,13 @@ public partial class MainWindow
         Register(r, "files", "List recognized files in the current root.", false, PageParameters, a => Page(ViewModel.Files.Where(f => f.RelativePath.Contains(Text(a, "query"), StringComparison.OrdinalIgnoreCase)), a));
         Register(r, "search", "Search indexed assets without altering GUI selection; names are not identities.", false, PageParameters, a => Page(ViewModel.SearchIndex(Text(a, "query")), a));
         Register(r, "related", "List related indexed assets for an explicit asset, retaining source identities.", false, [.. AssetParameters, .. PageParameters], a =>
-        { var d = TargetDocument(a); return Page(FindRelated(TargetAsset(d, a), d), a, x => x.Name + " " + x.File); });
+        {
+            var d = TargetDocument(a); var related = FindRelated(TargetAsset(d, a), d);
+            var page = Page(related.Items, a, matches: (x, query) => x.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || x.File.Contains(query, StringComparison.OrdinalIgnoreCase),
+                maximumRowBytes: x => 256 + 6L * (x.Name.Length + 2L * x.File.Length));
+            page.Data.AsObject()["truncated"] = related.Truncated;
+            return page;
+        });
         Register(r, "asset_filter", "Set the Assets list query and kind filter without changing the selected record.", true,
             [DocumentParameter, P("query", "string", "Name filter."), P("kind", "string", "Asset kind or All types.")], a =>
         {
@@ -99,7 +105,7 @@ public partial class MainWindow
         {
             RequireNoDrafts(); var doc = TargetDocument(a); var asset = TargetAsset(doc, a); ViewModel.SelectedDocument = doc;
             doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.Single(x => x.Record.Kind == asset.Kind && x.Index == asset.Index); SelectNavigatorSection(1);
-            await previewWork;
+            await EnsureAssetPreviewAsync(doc, asset);
             if (shownDocument != doc || shownAsset?.Id != asset.Id) throw new StudioCommandException("context_changed", "The user selected another preview.");
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);
             return Result(new { document = DocumentState(doc), asset = asset.Id, ViewModel.Status });

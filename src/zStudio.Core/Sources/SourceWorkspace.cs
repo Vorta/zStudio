@@ -75,15 +75,33 @@ public sealed class SourceWorkspace
         internal long Revision { get; }
         internal int ReadCount { get; }
         private readonly List<FileStream> files = [];
+        private readonly DirectoryLease directories = new();
+        private readonly string capturedRoot;
         internal bool IsDisposed { get; private set; }
         internal PreparedValidation(PreparedEdit edit)
-        { Edit = edit; Revision = edit.Workspace.Revision; ReadCount = edit.Workspace.preparedReads!.Count; }
+        {
+            Edit = edit; Revision = edit.Workspace.Revision; ReadCount = edit.Workspace.preparedReads!.Count;
+            try { capturedRoot = directories.CapturedPath(Path.Combine(edit.Owner.Root, "_prepared-root")); }
+            catch { directories.Dispose(); throw; }
+        }
         internal void Hold(FileStream file) => files.Add(file);
+        internal FileStream Open(string file) => directories.OpenFile(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+        internal bool Exists(string file) => directories.Exists(file);
+        internal void CheckRoot()
+        {
+            // DOS aliases such as SUBST can change while the physical directory/file handles remain held.
+            // Resolve with a fresh lease; consulting this lease would only return the captured old root.
+            using DirectoryLease current = new();
+            string now = current.CapturedPath(Path.Combine(Edit.Owner.Root, "_prepared-root"));
+            if (!string.Equals(now, capturedRoot, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new SourceFileChangedException("The source project folder changed while the edit was prepared; reopen the project and try again.", [.. Edit.Workspace.preparedReads!.Keys]);
+        }
         public void Dispose()
         {
             if (IsDisposed) return;
             IsDisposed = true;
             foreach (var file in files) file.Dispose();
+            directories.Dispose();
         }
     }
 
@@ -103,16 +121,18 @@ public sealed class SourceWorkspace
                 string path = SourceProject.Resolve(Root, relative);
                 if (baseline.Stamp == null)
                 {
-                    if (File.Exists(path)) Changed();
+                    if (verified.Exists(path)) Changed();
                     continue;
                 }
-                if (FileStamp.Read(path) != baseline.Stamp) Changed();
-                var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var stream = verified.Open(path);
                 verified.Hold(stream);
+                FileStamp Stamp() => new(stream.Length, File.GetLastWriteTimeUtc(stream.SafeFileHandle));
+                if (Stamp() != baseline.Stamp) Changed();
                 if (baseline.Sha256 == null || !new JournalDigest(baseline.Stamp.Length, baseline.Sha256).Matches(stream, token)
-                    || FileStamp.Read(path) != baseline.Stamp) Changed();
+                    || Stamp() != baseline.Stamp) Changed();
                 void Changed() => throw new SourceFileChangedException($"{relative} changed while the edit was prepared; try again.", [relative]);
             }
+            verified.CheckRoot();
             return verified;
         }
         catch { verified.Dispose(); throw; }
@@ -150,6 +170,7 @@ public sealed class SourceWorkspace
             throw new InvalidOperationException("The source workspace changed while the edit was prepared; try again.");
         if (verified != null && (verified.Edit != prepared || verified.IsDisposed || verified.Revision != prepared.Workspace.Revision || verified.ReadCount != prepared.Workspace.preparedReads!.Count))
             throw new InvalidOperationException("The prepared content verification is no longer valid.");
+        verified?.CheckRoot();
         var fork = prepared.Workspace;
         foreach (var (relative, baseline) in fork.preparedReads!)
         {
@@ -166,6 +187,7 @@ public sealed class SourceWorkspace
             CheckEditable(file.Relative);
             if (EditGuard?.Invoke(file.Relative) is { } reason) throw new InvalidDataException(reason);
         }
+        verified?.CheckRoot();
         return transaction;
     }
 

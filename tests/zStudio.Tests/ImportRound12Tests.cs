@@ -43,7 +43,7 @@ public sealed class ImportRound12Tests
             """u8, _ => [], Token);
         Assert.Contains("metallicFactor", Assert.Throws<InvalidDataException>(() => WorldGltf.ValidateSupported(doc, "bare.gltf")).Message);
         // Writing a parsed default does not silently turn it nonmetallic either.
-        var json = System.Text.Json.Nodes.JsonNode.Parse(doc.Write("bare.bin").Json)!;
+        var json = System.Text.Json.Nodes.JsonNode.Parse(doc.Write("bare.bin", TestContext.Current.CancellationToken).Json)!;
         Assert.Equal(1, json["materials"]![0]!["pbrMetallicRoughness"]!["metallicFactor"]!.GetValue<float>());
     }
 

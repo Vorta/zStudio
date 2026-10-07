@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.IO;
 using Recoil.Zbd.Core.Worlds;
 using Recoil.Zbd.Core.Sources;
@@ -44,9 +43,7 @@ internal sealed class SourceWorldSession : IDisposable
     /// and reloads wait for it, so the world shown always matches the workspace and only edits it was built with are saved.
     /// </summary>
     internal bool IsRebuilding { get; set; }
-    private readonly string folder;
-    private readonly FileStream lockFile;
-    private int generation;
+    private readonly SourcePreviewCache cache;
     public bool IsDisposed { get; private set; }
 
     /// <param name="token">Observed while the folders of ended sessions are looked for (see <see cref="SourceWorlds.AbandonedBuilds"/>).</param>
@@ -54,48 +51,28 @@ internal sealed class SourceWorldSession : IDisposable
     {
         Workspace = workspace; Mission = mission.ToLowerInvariant();
         if (workspace.Read(ScriptPath) == null) throw new InvalidDataException($"The project has no world script {ScriptPath}.");
-        string previews = SourceWorlds.PreviewRoot(Root);
-        // Never delete or write through a link out of the project: checked before abandoned sessions are removed.
-        SourceProject.RejectLinks(previews);
-        RemoveAbandoned(previews, token);
-        folder = Path.Combine(previews, Guid.NewGuid().ToString("N"));
-        SourceProject.RejectLinks(folder);
-        Directory.CreateDirectory(folder);
-        // Held for the session's lifetime; the system deletes it when the process ends, so an unlocked folder is abandoned.
-        lockFile = new FileStream(Path.Combine(folder, ".lock"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        cache = new(Root, token);
     }
 
     /// <summary>A new, empty folder for the next build.</summary>
     public string NextFolder()
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
-        return Path.Combine(folder, (++generation).ToString(CultureInfo.InvariantCulture));
+        return cache.NextFolder();
     }
+
+    internal Task<SourceWorldBuild> BuildAsync(string destination, IReadOnlyDictionary<string, byte[]>? overlay,
+        IProgress<SourceProgress>? progress, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions)
+        => cache.BuildAsync(Mission, destination, overlay, progress, token, additions);
 
     /// <summary>Removes one build's files once no document shows them.</summary>
-    public static void DeleteBuild(string buildFolder)
-    {
-        try { SourceProject.RejectLinks(buildFolder); if (Directory.Exists(buildFolder)) Directory.Delete(buildFolder, true); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-    }
-
-    /// <summary>
-    /// Folders of sessions whose process ended without removing them (no lock file, older than a minute). A session of
-    /// another zStudio on the same project holds its lock file, so its folder stays.
-    /// </summary>
-    private static void RemoveAbandoned(string previews, CancellationToken token)
-    {
-        // A folder too full to list is left as it is, like one that cannot be read; a cancellation ends the opening.
-        try { foreach (string build in SourceWorlds.AbandonedBuilds(previews, token)) DeleteBuild(build); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-    }
+    public void DeleteBuild(string buildFolder) => cache.DeleteBuild(buildFolder);
 
     public void Dispose()
     {
         if (IsDisposed) return;
         IsDisposed = true; Owner = null;
         Building?.Cancel();
-        lockFile.Dispose();
-        DeleteBuild(folder);
+        cache.Dispose();
     }
 }

@@ -178,8 +178,12 @@ internal static class SceneInspectionInputChecks
                     Assert.Equal("-", input.Text); Assert.Equal(0, input.SelectionStart); Assert.Equal(1, input.SelectionLength);
                     Application.Current.ThemeMode = theme == ThemeMode.Dark ? ThemeMode.Light : ThemeMode.Dark;
                     await Idle();
+                    Assert.True(input.SelectionStart == 0 && input.SelectionLength == 1,
+                        $"Theme replacement lost draft selection: theme={theme}, width={width}, scale={scale}, controlSize={controlSize}, selection={input.SelectionStart}/{input.SelectionLength}, focused={input.IsKeyboardFocused}.");
                     Assert.All(authored.Inputs, c => Assert.True(c.Template.FindName("DeleteButton", c) is not UIElement clear || clear.Visibility == Visibility.Collapsed));
                     Application.Current.ThemeMode = theme; await Idle();
+                    Assert.True(input.SelectionStart == 0 && input.SelectionLength == 1,
+                        $"Restored theme lost draft selection: theme={theme}, width={width}, scale={scale}, controlSize={controlSize}, selection={input.SelectionStart}/{input.SelectionLength}, focused={input.IsKeyboardFocused}.");
                     extraDetail = true; card.Refresh(); await Idle();
                     Assert.Equal("-", input.Text); Assert.Equal(0, input.SelectionStart); Assert.Equal(1, input.SelectionLength);
                     Assert.Equal(scrollOffset, scroll.VerticalOffset);

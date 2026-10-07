@@ -57,14 +57,15 @@ public static class TerrainCompiler
     // Counts all created corners, including discarded intermediate cuts and junction repairs. A final-output
     // limit alone leaves the splitter free to retain far more geometry than the world reader can accept.
     internal const int MaximumCreatedCorners = 4_000_000;
+    internal const long MaximumWork = 100_000_000;
 
     public static TerrainCompilation Compile(string label, TerrainRecipe recipe, IReadOnlyList<TerrainSurfaceGeometry> surfaces, IReadOnlyList<TerrainMaterialInfo> materials, TerrainGrid grid, CancellationToken token = default)
         => Compile(label, recipe, surfaces, materials, grid, token, MaximumCreatedCorners);
 
-    internal static TerrainCompilation Compile(string label, TerrainRecipe recipe, IReadOnlyList<TerrainSurfaceGeometry> surfaces, IReadOnlyList<TerrainMaterialInfo> materials, TerrainGrid grid, CancellationToken token, int maximumCreatedCorners)
+    internal static TerrainCompilation Compile(string label, TerrainRecipe recipe, IReadOnlyList<TerrainSurfaceGeometry> surfaces, IReadOnlyList<TerrainMaterialInfo> materials, TerrainGrid grid, CancellationToken token, int maximumCreatedCorners, long maximumWork = MaximumWork)
     {
         if (grid.CellX <= 0 || grid.CellZ >= 0 || grid.Columns < 1 || grid.Rows < 1) throw new InvalidDataException("Terrain needs the world's grid: WorldOrigin, WorldExtents and WorldPartition must run before the mission database is loaded.");
-        Compiler compiler = new(token, maximumCreatedCorners);
+        Compiler compiler = new(token, maximumCreatedCorners, maximumWork);
         List<string> warnings = [];
         // Layers 1 and 2: the recipe's defaults, then each surface's.
         for (int s = 0; s < surfaces.Count; s++)
@@ -79,9 +80,10 @@ public static class TerrainCompiler
         // Cell lines first, so region cuts work on small parts and every part lies in one cell.
         compiler.CutAtGrid(grid);
         // Layer 3: the regions, in order.
+        var surfaceIndices = compiler.IndexSurfaces(surfaces);
         foreach (var region in recipe.Regions)
         {
-            HashSet<int> on = region.Surfaces.Count == 0 ? [.. Enumerable.Range(0, surfaces.Count)] : [.. region.Surfaces.Select(id => surfaces.ToList().FindIndex(s => s.Surface.Id == id)).Where(i => i >= 0)];
+            HashSet<int> on = compiler.RegionSurfaces(region, surfaceIndices, surfaces.Count);
             compiler.ApplyRegion(region, on);
         }
         compiler.RepairJunctions();
@@ -160,7 +162,9 @@ public static class TerrainCompiler
                 float area = Vector3.Cross(Corners[i].Position - origin, Corners[i + 1].Position - origin).Length();
                 sum += (origin + Corners[i].Position + Corners[i + 1].Position) / 3 * area; total += area;
             }
-            return total > 0 ? sum / total : Corners.Aggregate(Vector3.Zero, (s, c) => s + c.Position) / Corners.Count;
+            var centre = total > 0 ? sum / total : Corners.Aggregate(Vector3.Zero, (s, c) => s + c.Position) / Corners.Count;
+            WorldNumbers.Vector(centre);
+            return centre;
         }
     }
 
@@ -182,8 +186,10 @@ public static class TerrainCompiler
         private readonly bool[] parity;
         private int pass;
 
-        public Outline(TerrainShape shape)
+        private readonly Action<long>? charge;
+        public Outline(TerrainShape shape, Action<long>? charge = null)
         {
+            this.charge = charge;
             this.shape = shape;
             List<(Vector2 A, Vector2 B, Vector2 Min, Vector2 Max, int Ring)> list = [];
             List<(int, int[])> rings = [];
@@ -193,6 +199,7 @@ public static class TerrainCompiler
                 int outer = ring;
                 foreach (var points in polygon.Holes.Prepend(polygon.Outer))
                 {
+                    charge?.Invoke(points.Count);
                     for (int i = 0; i < points.Count; i++)
                     {
                         var a = points[i]; var b = points[(i + 1) % points.Count];
@@ -202,6 +209,7 @@ public static class TerrainCompiler
                 }
                 rings.Add((outer, [.. Enumerable.Range(outer + 1, polygon.Holes.Count)]));
             }
+            charge?.Invoke(list.Count);
             edges = [.. list]; polygons = [.. rings]; parity = new bool[ring]; seen = new int[edges.Length];
             min = edges.Length == 0 ? default : edges.Aggregate(new Vector2(float.MaxValue), (m, e) => Vector2.Min(m, e.Min));
             max = edges.Length == 0 ? default : edges.Aggregate(new Vector2(float.MinValue), (m, e) => Vector2.Max(m, e.Max));
@@ -209,6 +217,7 @@ public static class TerrainCompiler
             (columns, rows, size) = Layout(side);
             long entries = edges.Sum(e => (long)(Column(e.Max.X) - Column(e.Min.X) + 1) * (Row(e.Max.Y) - Row(e.Min.Y) + 1));
             if (entries > MaximumEntries) (columns, rows, size) = Layout(1);
+            charge?.Invoke(entries > MaximumEntries ? edges.Length : entries);
             var lists = new List<int>[columns * rows];
             for (int i = 0; i < edges.Length; i++)
                 for (int r = Row(edges[i].Min.Y); r <= Row(edges[i].Max.Y); r++)
@@ -230,8 +239,14 @@ public static class TerrainCompiler
             List<int> found = [];
             for (int r = Row(lo.Z); r <= Row(hi.Z); r++)
                 for (int c = Column(lo.X); c <= Column(hi.X); c++)
+                {
+                    charge?.Invoke(1);
                     foreach (int i in buckets[r * columns + c])
+                    {
+                        charge?.Invoke(1);
                         if (seen[i] != pass && edges[i].Max.X >= lo.X && edges[i].Min.X <= hi.X && edges[i].Max.Y >= lo.Z && edges[i].Min.Y <= hi.Z) { seen[i] = pass; found.Add(i); }
+                    }
+                }
             found.Sort();
             return found.Select(i => (edges[i].A, edges[i].B));
         }
@@ -243,28 +258,36 @@ public static class TerrainCompiler
             Vector2 p = new(point.X, point.Z);
             if (edges.Length == 0 || p.X < min.X || p.X > max.X || p.Y < min.Y || p.Y > max.Y) return false;
             pass++;
+            charge?.Invoke(parity.Length);
             Array.Clear(parity);
             // A ray towards +x crosses each ring an odd number of times when the point is inside it.
             int row = Row(p.Y);
             for (int c = Column(p.X); c < columns; c++)
+            {
+                charge?.Invoke(1);
                 foreach (int i in buckets[row * columns + c])
                 {
+                    charge?.Invoke(1);
                     if (seen[i] == pass) continue;
                     seen[i] = pass;
                     var (a, b, _, _, ring) = edges[i];
                     if (a.Y > p.Y != b.Y > p.Y && p.X < (b.X - a.X) * (p.Y - (double)a.Y) / (b.Y - (double)a.Y) + a.X) parity[ring] = !parity[ring];
                 }
+            }
             foreach (var (outer, holes) in polygons)
+            {
+                charge?.Invoke(1L + holes.Length);
                 if (parity[outer] && !holes.Any(h => parity[h])) return true;
+            }
             return false;
         }
     }
 
-    private sealed class Compiler(CancellationToken token, int maximumCreatedCorners)
+    private sealed class Compiler(CancellationToken token, int maximumCreatedCorners, long maximumWork)
     {
         private readonly List<Part> parts = [];
         private readonly Dictionary<(Vector3, Vector3), Segment> sourceEdges = [];
-        private int work;
+        private long work;
         private int createdCorners;
 
         private void ChargeCorners(int count)
@@ -275,7 +298,13 @@ public static class TerrainCompiler
             createdCorners += count;
         }
 
-        private void Tick() { if ((++work & 4095) == 0) token.ThrowIfCancellationRequested(); }
+        private void Tick(long count = 1)
+        {
+            token.ThrowIfCancellationRequested();
+            if (count < 0 || count > maximumWork - work)
+                throw new InvalidDataException($"Terrain cutting exceeds its {maximumWork:N0}-step work limit; reduce the surfaces or regions.");
+            work += count;
+        }
         private static bool Less(Vector3 a, Vector3 b) => a.X != b.X ? a.X < b.X : a.Y != b.Y ? a.Y < b.Y : a.Z < b.Z;
         private EdgeRef SourceEdge(Vector3 p, Vector3 q)
         {
@@ -289,7 +318,12 @@ public static class TerrainCompiler
         {
             Tick();
             var corners = face.Corners;
-            if (corners.Count < 3 || corners.Count > ModelBuilder.MaximumCorners || corners.Any(c => !Finite(c.Position)) || Area([.. corners]) < 1e-6) return;
+            Tick(corners.Count);
+            if (corners.Any(c => !Finite(c.Position) || !Finite(c.Normal) || !float.IsFinite(c.Uv.X) || !float.IsFinite(c.Uv.Y)))
+                throw new InvalidDataException("A terrain polygon has a non-finite derived coordinate; no geometry was accepted.");
+            // Recorded glTF fans can exceed one engine polygon. Keep them through cutting;
+            // the output model builder splits/fans them without discarding their geometry.
+            if (corners.Count < 3 || Area(corners) < 1e-6) return;
             if (parts.Count >= MaximumFragments) throw new InvalidDataException($"The terrain has more than {MaximumFragments:N0} polygons.");
             ChargeCorners(corners.Count);
             // A polygon that is not convex stays as it is unless a line must cut it (see Both).
@@ -301,19 +335,25 @@ public static class TerrainCompiler
             });
             static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
         }
-        /// <summary>Whether a polygon turns the same way at every corner (a straight corner allowed), about its own normal.</summary>
+        /// <summary>Whether the authored fan is planar and turns the same way at every corner (straight corners allowed).</summary>
         private static bool Convex(IReadOnlyList<TerrainCorner> corners)
         {
             Vector3 normal = Vector3.Zero;
-            for (int i = 0; i < corners.Count; i++)
+            Vector3 origin = corners[0].Position;
+            for (int i = 1; i + 1 < corners.Count; i++)
             {
-                var a = corners[i].Position; var b = corners[(i + 1) % corners.Count].Position;
-                normal += new Vector3((a.Y - b.Y) * (a.Z + b.Z), (a.Z - b.Z) * (a.X + b.X), (a.X - b.X) * (a.Y + b.Y));
+                normal = Vector3.Cross(corners[i].Position - origin, corners[i + 1].Position - origin);
+                if (normal.LengthSquared() > 1e-12f) break;
             }
+            float length = WorldNumbers.Finite(normal.Length());
+            if (length == 0) return false;
+            normal /= length;
             for (int i = 0; i < corners.Count; i++)
             {
                 var a = corners[i].Position; var b = corners[(i + 1) % corners.Count].Position; var c = corners[(i + 2) % corners.Count].Position;
-                if (Vector3.Dot(Vector3.Cross(b - a, c - b), normal) < -1e-6f * normal.Length()) return false;
+                // A cancelling or warped fan still contains real triangles. Clip those triangles separately instead
+                // of treating its zero summed normal as proof that the whole polygon is convex.
+                if (MathF.Abs(Vector3.Dot(a - origin, normal)) > 1e-4f || Vector3.Dot(Vector3.Cross(b - a, c - b), normal) < -1e-6f) return false;
             }
             return true;
         }
@@ -321,6 +361,7 @@ public static class TerrainCompiler
         public void CutAtGrid(TerrainGrid grid)
         {
             // Every cell line, and the world's own edges, so parts inside the world fit its cells.
+            Tick((long)grid.Columns + grid.Rows + 4);
             SortedSet<double> xs = [grid.OriginX + (double)grid.SizeX], zs = [grid.OriginZ + (double)grid.SizeZ];
             for (int i = 0; i <= grid.Columns; i++) xs.Add(grid.OriginX + i * (double)grid.CellX);
             for (int j = 0; j <= grid.Rows; j++) zs.Add(grid.OriginZ + j * (double)grid.CellZ);
@@ -328,6 +369,7 @@ public static class TerrainCompiler
             List<Part> result = [];
             foreach (var part in parts)
             {
+                Tick((long)xLines.Length + zLines.Length + part.Corners.Count);
                 List<Part> pending = [part];
                 var (min, max) = part.Bounds();
                 foreach (double x in Between(xLines, min.X, max.X)) pending = [.. pending.SelectMany(p => Both(p, Line.X(x)))];
@@ -339,16 +381,40 @@ public static class TerrainCompiler
             static IEnumerable<double> Between(double[] lines, float lo, float hi) => lines.Where(v => v > lo + OnLine && v < hi - OnLine);
         }
 
+        public Dictionary<string, int> IndexSurfaces(IReadOnlyList<TerrainSurfaceGeometry> surfaces)
+        {
+            Tick(surfaces.Count);
+            Dictionary<string, int> indices = new(StringComparer.Ordinal);
+            for (int i = 0; i < surfaces.Count; i++) indices.TryAdd(surfaces[i].Surface.Id, i);
+            return indices;
+        }
+
+        public HashSet<int> RegionSurfaces(TerrainRegion region, IReadOnlyDictionary<string, int> indices, int surfaceCount)
+        {
+            // Selection itself spends work even when none of the surfaces has any geometry. Charge before
+            // allocating and use the shared index rather than rebuilding/searching the surface list for each ID.
+            Tick(1L + (region.Surfaces.Count == 0 ? surfaceCount : region.Surfaces.Count));
+            HashSet<int> selected = [];
+            if (region.Surfaces.Count == 0)
+                for (int i = 0; i < surfaceCount; i++) selected.Add(i);
+            else
+                foreach (string id in region.Surfaces)
+                    if (indices.TryGetValue(id, out int index)) selected.Add(index);
+            return selected;
+        }
+
         public void ApplyRegion(TerrainRegion region, HashSet<int> surfaces)
         {
+            Tick(parts.Count); // Refuse before allocating the region's whole-part copy.
             List<Part> result = new(parts.Count);
             var shape = region.Shape;
-            var outline = shape == null ? null : new Outline(shape);
+            var outline = shape == null ? null : new Outline(shape, count => Tick(count));
             foreach (var part in parts)
             {
                 Tick();
                 if (!surfaces.Contains(part.Surface)) { result.Add(part); continue; }
                 if (outline == null) { part.State = part.State.Apply(region.Set); result.Add(part); continue; }
+                Tick(part.Corners.Count);
                 var (min, max) = part.Bounds();
                 if (!outline.Overlaps(min, max)) { result.Add(part); continue; }
                 // Cut along the outline edges that cross this part; each resulting part is then wholly inside or outside. A
@@ -373,8 +439,9 @@ public static class TerrainCompiler
         }
 
         /// <summary>Whether an outline edge meets a part's polygon in plan view.</summary>
-        private static bool Crosses(Part part, Vector2 a, Vector2 b)
+        private bool Crosses(Part part, Vector2 a, Vector2 b)
         {
+            Tick(2L * part.Corners.Count);
             var line = Line.Through(a, b);
             bool below = false, above = false;
             foreach (var c in part.Corners) { double d = line.Distance(c.Position); below |= d < -OnLine; above |= d > OnLine; }
@@ -390,6 +457,7 @@ public static class TerrainCompiler
         {
             Tick();
             int n = part.Corners.Count;
+            Tick(n);
             int[] side = new int[n]; bool negative = false, positive = false;
             for (int i = 0; i < n; i++)
             {
@@ -471,9 +539,10 @@ public static class TerrainCompiler
         }
         private static float Area(IReadOnlyList<TerrainCorner> corners)
         {
-            Vector3 sum = Vector3.Zero;
-            for (int i = 1; i + 1 < corners.Count; i++) sum += Vector3.Cross(corners[i].Position - corners[0].Position, corners[i + 1].Position - corners[0].Position);
-            return sum.Length() / 2;
+            float sum = 0;
+            for (int i = 1; i + 1 < corners.Count; i++)
+                sum += Vector3.Cross(corners[i].Position - corners[0].Position, corners[i + 1].Position - corners[0].Position).Length();
+            return WorldNumbers.Finite(sum / 2);
         }
         private static TerrainCorner Mix(TerrainCorner a, TerrainCorner b, double s, Vector3 position)
         {
@@ -494,6 +563,7 @@ public static class TerrainCompiler
                     double lo = Math.Min(edge.T0, edge.T1), hi = Math.Max(edge.T0, edge.T1);
                     // Count before creating the lists: many neighbouring parts may share a densely cut segment.
                     int count = 0;
+                    Tick(2L * edge.Segment.Points.Count);
                     foreach (double t in edge.Segment.Points.Keys)
                         if (t > lo + 1e-12 && t < hi - 1e-12) { ChargeCorners(1); count++; }
                     var inside = new List<double>(count);
@@ -523,6 +593,7 @@ public static class TerrainCompiler
             var groups = new SortedDictionary<(int Surface, int Row, int Column, uint Carried, int NodeZone, uint ZoneKey), List<Part>>();
             foreach (var part in parts)
             {
+                Tick(part.Corners.Count);
                 var centre = part.Centroid();
                 var (column, row) = grid.Cell(centre.X, centre.Z);
                 uint zones = part.State.Zones?.Word ?? materials[part.Material].ZoneWord;
@@ -580,12 +651,13 @@ public static class TerrainCompiler
             return done;
         }
         /// <summary>The larger of the distinct vertex and normal counts a group would store.</summary>
-        private static int Counts(List<Part> list)
+        private int Counts(List<Part> list)
         {
             HashSet<(long, long, long)> vertices = [], normals = [];
             foreach (var part in list)
                 foreach (var c in part.Corners)
                 {
+                    Tick();
                     vertices.Add(((long)Math.Round(c.Position.X * 1000.0), (long)Math.Round(c.Position.Y * 1000.0), (long)Math.Round(c.Position.Z * 1000.0)));
                     normals.Add(((long)Math.Round(c.Normal.X * 10000.0), (long)Math.Round(c.Normal.Y * 10000.0), (long)Math.Round(c.Normal.Z * 10000.0)));
                 }

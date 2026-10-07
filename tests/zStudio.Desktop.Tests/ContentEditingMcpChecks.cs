@@ -36,6 +36,22 @@ internal static class ContentEditingMcpChecks
             Assert.NotNull(Assert.IsType<Recoil.Zbd.Rendering.SceneViewport>(((ContentControl)main.FindName("SceneHost")).Content).PreviewScene);
             await Call("close_document",new() { ["document"]=world.SessionId.ToString(),["revision"]=world.Revision });
             await Job("open_document",new() { ["path"]=source });var doc=main.ViewModel.Documents.Single();var edits=doc.ScriptEdits!;
+            // Related inspection shares the bounded GUI lookup and discloses its per-name result cap through the protocol.
+            var indexField = typeof(MainViewModel).GetField("index", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            var searchIndex = (List<SearchHit>)indexField.GetValue(main.ViewModel)!;
+            var savedIndex = searchIndex.ToArray();
+            try
+            {
+                searchIndex.Clear();
+                var relatedAsset = doc.SelectedAsset!.Record;
+                searchIndex.AddRange(Enumerable.Range(0, 101).Select(i => new SearchHit(Path.Combine(root, "related.zbd"), AssetKind.Texture, i, relatedAsset.Name)));
+                var related = await Call("related", new() { ["document"] = doc.SessionId.ToString(), ["kind"] = relatedAsset.Kind.ToString(), ["index"] = relatedAsset.Index });
+                Assert.True(related["truncated"]!.GetValue<bool>()); Assert.Equal(100, related["total"]!.GetValue<int>());
+                Assert.Equal(100, related["items"]!.AsArray().Count);
+                await (Task)typeof(MainWindow).GetMethod("ShowAsset", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [doc, relatedAsset])!;
+                Assert.Equal(Visibility.Visible, ((TextBlock)main.FindName("RelatedLimit")).Visibility);
+            }
+            finally { searchIndex.Clear(); searchIndex.AddRange(savedIndex); }
             string resourcePath=Path.Combine(root,"background.zrd");await File.WriteAllBytesAsync(resourcePath,ZrdWriter.Write(ZrdNode.Create(ZrdKind.Int,"7"),token),token);
             await Job("open_document",new() { ["path"]=resourcePath });var resourceDoc=main.ViewModel.Documents.Single(d=>d.Path==resourcePath);var resourceEdits=resourceDoc.ResourceEdits!;
             await Job("open_document",new() { ["path"]=source });var resourceMember=resourceEdits.Current.Members[0];

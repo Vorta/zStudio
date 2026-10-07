@@ -169,7 +169,7 @@ public partial class MainWindow : Window
     private Task OpenBrowserFile(string path) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(path); if (doc != null && ViewModel.SelectedDocument == doc) SelectNavigatorSection(1); });
     private async void SearchDoubleClick(object sender, MouseButtonEventArgs e) { if (SearchList.SelectedItem is SearchHit hit) await Navigate(hit); }
     private async void RelatedDoubleClick(object sender, MouseButtonEventArgs e) { if (RelatedList.SelectedItem is SearchHit hit) await Navigate(hit); }
-    private Task Navigate(SearchHit hit) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(hit.File); if (doc == null) return; doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Kind == hit.Kind && a.Index == hit.Index); AssetGrid.ScrollIntoView(doc.SelectedAsset); });
+    private Task Navigate(SearchHit hit) => RunUi(async () => { var doc = await ViewModel.OpenFileAsync(hit.File); if (doc == null) return; doc.Query = ""; doc.KindFilter = "All types"; doc.SelectedAsset = doc.Assets.FirstOrDefault(a => a.Record.Kind == hit.Kind && a.Index == hit.Index); if (doc.SelectedAsset is { } selected) await EnsureAssetPreviewAsync(doc, selected.Record); AssetGrid.ScrollIntoView(doc.SelectedAsset); });
     private async void DocumentChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (!ready || e.PropertyName != nameof(MainViewModel.SelectedDocument)) return;
@@ -184,7 +184,18 @@ public partial class MainWindow : Window
     }
     private async void AssetSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (ready && ViewModel.SelectedDocument is { } doc && AssetGrid.SelectedItem is AssetItem item && doc.Assets.Contains(item) && !(doc == shownDocument && shownAsset?.Id == item.Record.Id && animation != null)) await ShowAsset(doc, item.Record);
+        // A binding can realize a programmatic selection after its preview has already started. That is presentation
+        // of the same snapshot, not another navigation request; do not cancel/reload the preview it is catching up with.
+        if (ready && ViewModel.SelectedDocument is { } doc && AssetGrid.SelectedItem is AssetItem item && doc.Assets.Contains(item) &&
+            !IsShownAssetSnapshot(doc, item.Record)) await ShowAsset(doc, item.Record);
+    }
+    private bool IsShownAssetSnapshot(DocumentModel doc, AssetRecord asset) => doc == shownDocument &&
+        (ReferenceEquals(shownAsset, asset) || shownAsset?.Id == asset.Id && animation != null);
+    private Task EnsureAssetPreviewAsync(DocumentModel doc, AssetRecord asset)
+    {
+        // SelectedItem's binding may be deferred while the Assets page is unrealized/reparented. Navigation owns its
+        // preview task directly instead of accidentally awaiting the previously selected asset's completed task.
+        return IsShownAssetSnapshot(doc, asset) ? previewWork : ShowAsset(doc, asset);
     }
     private void CancelPreview()
     {
@@ -351,28 +362,47 @@ public partial class MainWindow : Window
             if (retained is Guid id) SelectResourceNode(item, id);
         }
         else CentralTree.ItemsSource = asset?.Kind == AssetKind.Zrd && json["tree"] is JsonNode hierarchy ? ZrdTree(doc, asset, hierarchy) : json.Select(p => new InspectorNode(p.Key, p.Value)).ToArray();
-        ContentText.Text = asset?.Content is ScriptContent script ? script.Text.Length > 65536 ? script.Text[..65536] + "\n… first 65,536 characters; export for full text." : script.Text : LimitedJson(json);
+        ContentText.Text = asset?.Content is ScriptContent script ? script.PreviewText + (script.TextTruncated ? "\n… first 65,536 characters; export for full text." : "") : LimitedJson(json);
         RefreshScriptGrid(doc, asset);
         var original = asset == null ? null : doc.OriginalAsset(asset);
         var sourceBytes = asset == null ? doc.Document.Bytes : original == null ? ReadOnlyMemory<byte>.Empty : doc.Document.Slice(original.Offset, original.Length);
         RawText.Text = original == null && asset != null ? "New record: no original source bytes." : Hex(sourceBytes.Span[..Math.Min(sourceBytes.Length, 4096)], original?.Offset ?? 0) + (sourceBytes.Length > 4096 ? "\n… first 4,096 original source bytes shown." : "");
         PreviewSubtitle.Text = asset == null ? doc.Description : $"{asset.Kind} #{asset.Index} · {asset.Length:N0} edited bytes" + (original == null ? " · new record" : $" · source 0x{original.Offset:X}");
-        RelatedList.ItemsSource = asset == null ? null : FindRelated(asset, doc).ToArray();
+        var related = asset == null ? null : FindRelated(asset, doc);
+        RelatedList.ItemsSource = related?.Items;
+        RelatedLimit.Visibility = related?.Truncated == true ? Visibility.Visible : Visibility.Collapsed;
     }
-    private IEnumerable<SearchHit> FindRelated(AssetRecord asset, DocumentModel doc)
+    private MainViewModel.RelatedMatches FindRelated(AssetRecord asset, DocumentModel doc)
     {
-        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase) { asset.Name };
-        foreach (string name in Strings(asset.Metadata)) names.Add(name);
-        if (asset.Content is ScriptContent script) foreach (string argument in script.Instructions.SelectMany(i => i)) names.Add(argument);
-        if (asset.Content is GameModel model && doc.PreviewDocument.Scene is { } sceneData)
-            foreach (int mat in model.Polygons.Select(p => p.MaterialIndex).Distinct()) if (mat >= 0 && mat < sceneData.Materials.Count) { int tex = sceneData.Materials[mat].Int("texture_index", -1); if (tex >= 0 && tex < sceneData.Textures.Count) names.Add(sceneData.Textures[tex].Text("name")); }
-        return names.Where(n => n.Length > 1).SelectMany(n => ViewModel.Related(n, doc.Path)).Distinct().Take(300);
+        bool deep = false;
+        var result = ViewModel.Related(Names(), doc.Path);
+        return deep ? result with { Truncated = true } : result;
+        IEnumerable<string> Names()
+        {
+            yield return asset.Name;
+            foreach (string name in Strings(asset.Metadata, 0, () => deep = true)) yield return name;
+            if (asset.Content is ScriptContent script) foreach (var instruction in script.Instructions)
+            {
+                yield return ""; // Empty instructions still consume the passive inspection work budget.
+                foreach (string argument in instruction) yield return argument;
+            }
+            if (asset.Content is GameModel model && doc.PreviewDocument.Scene is { } sceneData)
+                foreach (var polygon in model.Polygons)
+                {
+                    int mat = polygon.MaterialIndex;
+                    int tex = mat >= 0 && mat < sceneData.Materials.Count ? sceneData.Materials[mat].Int("texture_index", -1) : -1;
+                    yield return tex >= 0 && tex < sceneData.Textures.Count ? sceneData.Textures[tex].Text("name") : "";
+                }
+        }
     }
-    private static IEnumerable<string> Strings(JsonNode? node)
+    private static IEnumerable<string> Strings(JsonNode? node, int depth, Action truncated)
     {
-        if (node is JsonValue value && value.TryGetValue<string>(out string? text)) { if (text.Length is > 1 and < 128) yield return text; }
-        else if (node is JsonObject obj) { foreach (var p in obj) foreach (string s in Strings(p.Value)) yield return s; }
-        else if (node is JsonArray array) { foreach (var p in array) foreach (string s in Strings(p)) yield return s; }
+        // Count containers and non-text leaves too: a large metadata tree with no names must not bypass the work bound.
+        yield return node is JsonValue value && value.TryGetValue<string>(out string? text) && text.Length is > 1 and < 128 ? text : "";
+        if (node is not (JsonObject or JsonArray)) yield break;
+        if (depth >= 32) { truncated(); yield break; }
+        if (node is JsonObject obj) { foreach (var p in obj) foreach (string s in Strings(p.Value, depth + 1, truncated)) yield return s; }
+        else if (node is JsonArray array) { foreach (var p in array) foreach (string s in Strings(p, depth + 1, truncated)) yield return s; }
     }
     private void SetProperties(JsonObject value) { properties = value; }
     private static string LimitedJson(JsonObject value) { string text = value.ToJsonString(JsonData.Options); return text.Length > 500_000 ? text[..500_000] + "\n… export JSON for the complete document." : text; }

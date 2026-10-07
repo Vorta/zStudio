@@ -154,7 +154,7 @@ public sealed class WorldReviewRegressionTests
         const int depth = 512;
         var database = new LoadedModel("database", "database", new("m1.gs", "LoadGameGen", [], [], null, []), true, null, [leaf], false);
         object?[] args = [new Dictionary<WorldNode, int> { [leaf] = depth + 1 }, (Func<WorldNode, bool>)(_ => false), database,
-            Enumerable.Range(0, depth + 2).ToArray(), Enumerable.Range(0, depth + 1).ToList(), "m1", OriginalLoader.MirrorBudget.PerLoad(), TestContext.Current.CancellationToken, false, true, null];
+            Enumerable.Range(0, depth + 2).ToArray(), Enumerable.Range(0, depth + 1).ToList(), "m1", OriginalLoader.MirrorBudget.PerLoad(), new DatabaseRecords.RetainedMatchBudget(), TestContext.Current.CancellationToken, false, true, null];
         var thrown = Assert.Throws<System.Reflection.TargetInvocationException>(() => ctor.Invoke(args));
         Assert.Contains("nested", Assert.IsType<InvalidDataException>(thrown.InnerException).Message);
     }

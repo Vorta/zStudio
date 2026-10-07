@@ -7,7 +7,7 @@ using Recoil.Zbd.Core.Export;
 
 namespace Recoil.Zbd.Core;
 
-public sealed record ResourceMember(Guid Id, int? SourceIndex, string Name, ReadOnlyMemory<byte> Data, ReadOnlyMemory<byte> DirectoryRecord, ZrdNode? Tree = null);
+public sealed record ResourceMember(Guid Id, int? SourceIndex, string Name, ReadOnlyMemory<byte> Data, ReadOnlyMemory<byte> DirectoryRecord, ZrdNode? Tree = null, bool TypedDecodeLimited = false);
 public sealed record ResourceSnapshot(IReadOnlyList<ResourceMember> Members, ZbdDocument Document, string Hash);
 public sealed record PreparedResourceEdit(ResourceSnapshot Before, ResourceSnapshot After);
 
@@ -43,7 +43,7 @@ public sealed class ResourceEditSession
         // A text source keeps the nodes of its syntax, so edits can be written back as changes of the text.
         if (IsSourceText) syntax = Sources.ZrdTextSyntax.Parse(document.Bytes.Span);
         var standalone = IsArchive ? null : syntax?.Root ?? (document.Assets.SingleOrDefault()?.Content as ZrdNode ?? ZrdDecoder.Read(document.Bytes));
-        var members = document.Assets.Select(a => new ResourceMember(Guid.NewGuid(), a.Index, a.Name, IsSourceText ? ZrdWriter.Write(standalone!) : document.Slice(a.Offset, a.Length), IsArchive ? document.Slice(document.ArchiveDirectoryOffset!.Value + a.Index * 148L, 148) : ReadOnlyMemory<byte>.Empty, standalone ?? a.Content as ZrdNode)).ToArray();
+        var members = document.Assets.Select(a => new ResourceMember(Guid.NewGuid(), a.Index, a.Name, IsSourceText ? ZrdWriter.Write(standalone!) : document.Slice(a.Offset, a.Length), IsArchive ? document.Slice(document.ArchiveDirectoryOffset!.Value + a.Index * 148L, 148) : ReadOnlyMemory<byte>.Empty, standalone ?? a.Content as ZrdNode, a.Metadata["typed_decode_limited"]?.GetValue<bool>() == true)).ToArray();
         Current = saved = new(members, document, Hash(document.Bytes));
     }
     public ResourceMember Member(Guid id) => Current.Members.SingleOrDefault(m => m.Id == id) ?? throw new InvalidDataException("The archive member no longer exists.");
@@ -84,7 +84,12 @@ public sealed class ResourceEditSession
             return new PreparedResourceEdit(before, after);
         }, token);
     }
-    public ZrdNode Tree(ResourceMember member, CancellationToken token = default) => member.Tree ?? trees.GetOrAdd((member.Id, member.Data), _ => ZrdDecoder.Read(member.Data, token));
+    public ZrdNode Tree(ResourceMember member, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        if (member.TypedDecodeLimited) throw new InvalidDataException("This archive member exceeds the shared typed-decoding budget; use raw inspection, exact member export or replacement.");
+        return member.Tree ?? trees.GetOrAdd((member.Id, member.Data), _ => ZrdDecoder.Read(member.Data, token));
+    }
     public AssetRecord? OriginalAsset(ResourceMember member) => member.SourceIndex is int i ? source.Assets.Single(a => a.Index == i) : null;
     public async Task<PreparedResourceEdit> PrepareArchiveAsync(string action, Guid member, string name = "", string? path = null, int position = -1, CancellationToken token = default)
     {
@@ -108,7 +113,7 @@ public sealed class ResourceEditSession
                 case "add_zrd":
                     if (!Path.GetExtension(name).Equals(".zrd", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("A ZRD resource name must end in .zrd.");
                     var tree = ZrdNode.Create(ZrdKind.Array); list.Add(new(Guid.NewGuid(), null, name, ZrdWriter.Write(tree, token), new byte[148], tree)); break;
-                case "replace": list[index] = list[index] with { Data = imported!, Tree = null }; break;
+                case "replace": list[index] = list[index] with { Data = imported!, Tree = null, TypedDecodeLimited = false }; break;
                 case "rename": list[index] = list[index] with { Name = name }; break;
                 case "delete": list.RemoveAt(index); break;
                 case "duplicate":
@@ -129,8 +134,26 @@ public sealed class ResourceEditSession
                     item = item with { Data = ZrdWriter.Write(compiled, token) }; list[action == "add" ? list.Count - 1 : index] = item;
                     probe = FormatRegistry.Probe(item.Data.Span[..Math.Min(36, item.Data.Length)], item.Data.Span[Math.Max(0, item.Data.Length - 8)..], item.Data.Length, ".zrd");
                 }
-                var tree = probe.Family == FormatFamily.Zrd || Path.GetExtension(item.Name).Equals(".zrd", StringComparison.OrdinalIgnoreCase)
-                    ? ZrdDecoder.Read(item.Data, token) : ZrdDecoder.TryRead(item.Data, token);
+                // Respect the same aggregate allowance before an imported tree is materialized. Build reparses and
+                // carries the resulting limit flags, so replacement cannot bypass the ordinary-open budget.
+                ArchiveZrdBudget budget = new(); Dictionary<ReadOnlyMemory<byte>, ZrdNode?> attempted = [];
+                ZrdNode? tree = null;
+                foreach (var candidate in list)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!attempted.TryGetValue(candidate.Data, out var decoded))
+                    {
+                        try
+                        {
+                            if (candidate.Tree is { } retained) { budget.Tree(retained, token); decoded = retained; }
+                            else decoded = candidate.Id == item.Id && (probe.Family == FormatFamily.Zrd || Path.GetExtension(item.Name).Equals(".zrd", StringComparison.OrdinalIgnoreCase))
+                                ? ZrdDecoder.Read(candidate.Data, token, budget) : ZrdDecoder.TryRead(candidate.Data, token, budget);
+                        }
+                        catch (ZrdBudgetExceededException) { decoded = null; }
+                        attempted[candidate.Data] = decoded;
+                    }
+                    if (candidate.Id == item.Id) { tree = decoded; break; }
+                }
                 if (tree != null)
                     list[action == "add" ? list.Count - 1 : index] = item with { Tree = tree.Duplicate() }; // Imported offsets are not original archive ranges.
                 if (probe.Family == FormatFamily.Wave || Path.GetExtension(item.Name).Equals(".wav", StringComparison.OrdinalIgnoreCase)) _ = WaveDecoder.Read(item.Data, token);
@@ -195,7 +218,13 @@ public sealed class ResourceEditSession
             : IsSourceText ? Sources.ZrdTextSyntax.Encode(LosslessText(members.Single().Tree ?? ZrdDecoder.Read(members.Single().Data, token), token)) : members.Single().Data.ToArray();
         var document = FormatRegistry.Default.OpenBytes(source.Path, bytes, source.Stamp, token);
         if (document.Probe.Family != source.Probe.Family || document.Diagnostics.Any(d => d.Severity == "Error") || document.Assets.Count != members.Count) throw new InvalidDataException("Resource edit failed shared-reader verification. Its contents must remain an unambiguous ZAR/ZRD file.");
-        return new(members.ToArray(), document, Hash(bytes));
+        var checkedMembers = members.Select((member, index) =>
+        {
+            bool limited = document.Assets[index].Metadata["typed_decode_limited"]?.GetValue<bool>() == true;
+            var retained = member.Tree ?? (trees.TryGetValue((member.Id, member.Data), out var cached) ? cached : document.Assets[index].Content as ZrdNode);
+            return member with { TypedDecodeLimited = limited, Tree = limited ? null : retained };
+        }).ToArray();
+        return new(checkedMembers, document, Hash(bytes));
     }
     public void Accept(PreparedResourceEdit edit)
     {
@@ -224,19 +253,23 @@ public sealed class ResourceEditSession
     {
         if (saving) throw new InvalidOperationException("A resource save is in progress.");
         string target = Path.GetFullPath(destination ?? TargetPath), temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp"; saving = true;
+        using DirectoryLease directories = new(); bool staging = false;
         try
         {
             VerifiedDocumentSave.ValidateDestination(target);
-            if (destination == null) await CheckBaseline(token); else if (File.Exists(target)) throw new IOException("Save As requires a new file.");
-            await VerifiedDocumentSave.StageAsync(Current.Document, temp, token, target);
+            VerifiedDocumentSave.ValidateDestination(directories.CapturedPath(target));
+            directories.Parent(target, create: true);
+            if (destination == null) await CheckBaseline(token, directories); else if (File.Exists(target)) throw new IOException("Save As requires a new file.");
+            staging = true;
+            await VerifiedDocumentSave.StageAsync(Current.Document, temp, token, target, directories);
             token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(target);
-            using (SealedFile staged = VerifiedDocumentSave.Seal(temp, Current.Document.Bytes))
-                if (destination == null) { await CheckBaseline(token); staged.MoveTo(target, replace: true); } else staged.MoveTo(target);
-            TargetPath = target; TargetStamp = FileStamp.ReadHolding(target, Current.Document.Bytes.Span); saved = Current; return target;
+            using (SealedFile staged = VerifiedDocumentSave.Seal(temp, Current.Document.Bytes, directories))
+                if (destination == null) { await CheckBaseline(token, directories); staged.MoveTo(target, replace: true); } else staged.MoveTo(target);
+            TargetPath = target; TargetStamp = FileStamp.ReadHolding(target, Current.Document.Bytes.Span, directories); saved = Current; return target;
         }
-        finally { try { if (File.Exists(temp)) File.Delete(temp); } finally { saving = false; Changed?.Invoke(); } }
+        finally { try { if (staging) directories.DeleteFile(temp); } finally { saving = false; Changed?.Invoke(); } }
     }
-    private Task CheckBaseline(CancellationToken token) => VerifiedDocumentSave.CheckBaselineAsync(TargetPath, saved.Document.Bytes, token);
+    private Task CheckBaseline(CancellationToken token, DirectoryLease directories) => VerifiedDocumentSave.CheckBaselineAsync(TargetPath, saved.Document.Bytes, token, directories);
     private static string Hash(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(SHA256.HashData(bytes.Span));
     private static void ValidateName(string name)
     { if (name.Length is < 1 or > 63 || name.Any(c => c == 0 || c > 255)) throw new InvalidDataException("Member names require 1–63 Latin-1 characters without NUL."); }

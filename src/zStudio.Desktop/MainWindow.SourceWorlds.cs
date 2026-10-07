@@ -121,7 +121,7 @@ public partial class MainWindow
         {
             var built = await BuildSourceWorldAsync(session, token);
             if (ViewModel.WorkspaceGeneration != workspace || SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The workspace changed while the world was building.");
-            if (OpenSourceWorld(root, mission) is { } other) { session.Dispose(); SourceWorldSession.DeleteBuild(built.Build.Folder); ViewModel.SelectedDocument = other; return other; }
+            if (OpenSourceWorld(root, mission) is { } other) { session.Dispose(); session.DeleteBuild(built.Build.Folder); ViewModel.SelectedDocument = other; return other; }
             doc = new DocumentModel(built.World, session, built.Build, built.Revision);
             session.SetLookupBaseline(built.Build, built.World.Bytes);
             ReportSourceBuild(session, built.Build);
@@ -212,7 +212,9 @@ public partial class MainWindow
             var overlay = session.Workspace.Overlay();
             IProgress<SourceProgress> progress = new Progress<SourceProgress>(p => { if (session.Building == cancellation && !cancellation.IsCancellationRequested) ViewModel.Status = $"Building the {session.Mission} world {p.Completed}/{p.Total}: {p.Item}"; });
             if (SourceBuildStep is { } step) progress = new StepProgress(step, progress);
-            var build = await Task.Run(() => SourceWorlds.BuildPreviewAsync(session.Root, session.Mission, folder, overlay, progress, cancellation.Token, additions), cancellation.Token);
+            var build = await Task.Run(() => session.BuildAsync(folder, overlay, progress, cancellation.Token, additions), cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (session.IsDisposed || session.Building != cancellation) throw new OperationCanceledException(cancellation.Token);
             var world = await Task.Run(() => FormatRegistry.Default.OpenAsync(build.WorldPath, cancellation.Token), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (session.IsDisposed || session.Building != cancellation) throw new OperationCanceledException(cancellation.Token);
@@ -235,7 +237,7 @@ public partial class MainWindow
         finally
         {
             if (session.Building == cancellation) session.Building = null;
-            if (!built) SourceWorldSession.DeleteBuild(folder);
+            if (!built) session.DeleteBuild(folder);
         }
     }
 
@@ -305,7 +307,7 @@ public partial class MainWindow
         var built = await BuildSourceWorldAsync(session, token, additions);
         var current = session.Owner;
         if (session.IsDisposed || current == null || current.IsDisposed || !ViewModel.Documents.Contains(current))
-        { SourceWorldSession.DeleteBuild(built.Build.Folder); throw new StudioCommandException("context_changed", "The world was closed while it was building."); }
+        { session.DeleteBuild(built.Build.Folder); throw new StudioCommandException("context_changed", "The world was closed while it was building."); }
         try
         {
             RequireNoDrafts(current, committing: true);
@@ -314,7 +316,7 @@ public partial class MainWindow
             if (verifyTargets && current.SourceBuild is { } shown && SourceObjectEdits.TargetChange(shown, built.Build) is { } retargeted)
                 throw new StudioCommandException("invalid_argument", retargeted);
         }
-        catch { SourceWorldSession.DeleteBuild(built.Build.Folder); throw; }
+        catch { session.DeleteBuild(built.Build.Folder); throw; }
         SceneViewport.ViewPose? view = null;
         if (shownDocument == current && scene != null && HasPublishedStaticScene)
             try { view = scene.CaptureView(); } catch (InvalidOperationException) { }
@@ -520,7 +522,31 @@ public partial class MainWindow
     private Func<MissionPickupSource, System.Numerics.Vector3, Task>? SourcePickupMove(DocumentModel doc) => doc.SourceWorld == null ? null : async (source, position) =>
     {
         var edits = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "Load the world's placements first.");
-        await MoveSourcePlacementAsync(doc, source, edits.Transform(source) with { Position = position }, CancellationToken.None);
+        var window = propertiesWindow;
+        var original = window?.Document == doc ? window.PickupFields?.Json : null;
+        string archive = Path.GetRelativePath(doc.SourceBuild!.Folder, source.ArchivePath);
+        string? type = edits.Find(source)?.Type;
+        var next = await MoveSourcePlacementAsync(doc, source, edits.Transform(source) with { Position = position }, CancellationToken.None);
+        if (original == null || next.IsDisposed || !FollowsProperties(window, next)) return;
+        // Only scalar tokens changed: the archive's build-relative path, member slot/name and record index retain the
+        // placement identity even when another difficulty contains an identical-looking pickup.
+        try
+        {
+            using var reading = CancellationTokenSource.CreateLinkedTokenSource(next.Lifetime.Token, shutdownToken);
+            var current = await next.GetPickupEditsAsync(ViewModel.Resolver!, reading.Token);
+            if (next.IsDisposed || !FollowsProperties(window, next)) return;
+            string targetArchive = Path.GetFullPath(Path.Combine(next.SourceBuild!.Folder, archive));
+            // The placement store canonicalizes archive paths for its record keys. Find the retained identity, then use
+            // its actual key rather than synthesizing one with the build folder's display casing.
+            var matches = current.Records.Where(r => r.Source.ArchivePath.Equals(targetArchive, StringComparison.OrdinalIgnoreCase)
+                && r.Source.AssetIndex == source.AssetIndex && r.Source.ResourceName == source.ResourceName && r.Source.RecordIndex == source.RecordIndex).Take(2).ToArray();
+            if (matches is not [var record] || record.Type != type) return;
+            var following = GetPropertiesWindow();
+            PresentProperties(following, following.SetPickup(next, record.Source, record.Type, original, SourcePickupMove(next)));
+        }
+        // The edit already applied; a superseded/failed Properties read must not report that edit as rejected.
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or UnauthorizedAccessException or InvalidDataException or StudioCommandException)
+        { if (!next.IsDisposed && !shutdownToken.IsCancellationRequested) ViewModel.Status = Bounded($"Placement changed; Properties could not follow it: {ex.Message}"); }
     };
 
     /// <summary>Rebuilds from the project. Workspace edits are kept unless a file they change was changed on disk.</summary>
@@ -729,26 +755,31 @@ public partial class MainWindow
             // Keep usable path identities whole; large paths shorten the page, not the paths, before JSON projection.
             return Page(models, a, m => m.Path, m => new { path = m.Path, folder = m.Folder, name = m.Name }, maximumRowBytes: m => 128 + 6L * (m.Path.Length + m.Folder.Length + m.Name.Length));
         });
-        Register(r, "source_world_definitions", "List animation definition files that other missions list with an animation for a root name and this source world does not list yet, such as an enemy's destruction animations.", false,
-            [DocumentParameter, P("name", "string", "Root node name, as the model's node would be named.", true)], async (a, token) =>
+        Register(r, "source_world_definitions", "List animation definition files that other missions list with an animation for a root name and this source world does not list yet, such as an enemy's destruction animations. Filter by path before paging; pages retain full paths and contain at most 64 files. Follow nextOffset to discover every matching file; an addition selects at most 64 files.", false,
+            [DocumentParameter, P("name", "string", "Root node name, as the model's node would be named.", true),
+             new("offset", "integer", "Zero-based matching file offset; follow nextOffset.", Minimum: 0, Maximum: int.MaxValue),
+             new("limit", "integer", "Page size, 1–64; default 64.", Minimum: 1, Maximum: SourceWorlds.MaximumDefinitionChoices),
+             P("query", "string", "Case-insensitive path filter, applied before pagination.")], async (a, token) =>
         {
             var d = TargetDocument(a); var world = d.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
             string name = Text(a, "name");
             if (name.Length is 0 or > SourceWorlds.MaximumNameLength) throw new StudioCommandException("invalid_argument", $"Names have 1–{SourceWorlds.MaximumNameLength} characters.");
             var overlay = world.Workspace.Overlay();
+            long revision = world.Workspace.ContentRevision;
             IReadOnlyList<SourceDefinitionFile> files;
             try { files = await Task.Run(() => SourceWorlds.DefinitionsFor(world.Root, world.Mission, name, overlay, token), token); }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-            const int shown = SourceWorlds.MaximumDefinitionChoices;
-            return Result(new { name, files = files.Take(shown).Select(f => new { path = f.Path, animations = f.Animations.Take(32).Select(n => Bounded(n, 128)).ToArray(), animationCount = f.Animations.Count, missions = f.Missions }).ToArray(), fileCount = files.Count, truncated = files.Count > shown });
+            if (d.IsDisposed || world.Owner != d) throw new StudioCommandException("stale_document", "The source world was rebuilt or closed during definition discovery.");
+            if (world.Workspace.ContentRevision != revision) throw new StudioCommandException("context_changed", "The source workspace changed during definition discovery; try again.");
+            return SourceDefinitionPage(name, files, a);
         });
         RegisterJob(r, "source_world_add_model", "Add a project model to a source world as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (an animation bound to a node, attachment or effect this world lacks), returns build_failed and is taken back, as is one canceled before the rebuilt world is shown. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document.",
             [DocumentParameter, RevisionParameter, P("model", "string", "Project path of the glTF model, as zstudio_source_world_models lists it (for example data/m2/models/bft/ltank.gltf).", true),
              P("name", "string", "Node name: 1–31 letters, digits, '_', '-' or '.'. Resources and animations find the model by it. A placed model's name must not also name a node inside the model, which AddChild would attach instead (build_failed).", true),
              new("position", "object", "Optional world position; omit for an unplaced root.", Properties: [P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)]),
              P("heading", "number", "Rotation about Y in degrees (−360 to 360) for a placed model; default 0."),
-             new("definitionFiles", "array", "Definition files to list, as zstudio_source_world_definitions returns them; omit to list all it returns (refused above 64), or pass [] to list none.", Items: new("", "string", "Project path of a definition file (.zad)."), MaxItems: SourceWorlds.MaximumDefinitionChoices)], true,
+             new("definitionFiles", "array", "Up to 64 definition files to list, chosen from any page of zstudio_source_world_definitions; omit to list all matching files (refused above 64), or pass [] to list none.", Items: new("", "string", "Project path of a definition file (.zad)."), MaxItems: SourceWorlds.MaximumDefinitionChoices)], true,
             async (a, token) =>
             {
                 var d = TargetDocument(a, true); var world = d.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
@@ -765,7 +796,7 @@ public partial class MainWindow
                     var overlay = world.Workspace.Overlay();
                     try { files = (await Task.Run(() => SourceWorlds.DefinitionsFor(world.Root, world.Mission, model.Name, overlay, token), token)).Select(f => f.Path).ToArray(); }
                     catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { throw new StudioCommandException("invalid_argument", ex.Message); }
-                    if (files.Count > SourceWorlds.MaximumDefinitionChoices) throw new StudioCommandException("invalid_argument", $"{files.Count:N0} definition files name {model.Name}; choose them with definitionFiles (zstudio_source_world_definitions lists the first {SourceWorlds.MaximumDefinitionChoices} in path order).");
+                    if (files.Count > SourceWorlds.MaximumDefinitionChoices) throw new StudioCommandException("invalid_argument", $"{files.Count:N0} definition files name {model.Name}; choose up to {SourceWorlds.MaximumDefinitionChoices} with definitionFiles (page or filter zstudio_source_world_definitions to find them).");
                 }
                 bool duplicate = d.PreviewDocument.Scene?.Nodes.Any(n => n.Name == model.Name) == true;
                 var next = await AddSourceModelAsync(d, new(model, files), token);
@@ -788,6 +819,17 @@ public partial class MainWindow
             }
             return Result(new { project = root, workspace = SourceWorkspaceState(workspace), diff });
         });
+    }
+    internal static StudioResult SourceDefinitionPage(string name, IReadOnlyList<SourceDefinitionFile> files, JsonObject arguments)
+    {
+        var page = Page(files, new JsonObject { ["offset"] = Int(arguments, "offset"), ["limit"] = Int(arguments, "limit", SourceWorlds.MaximumDefinitionChoices), ["query"] = Text(arguments, "query") },
+            f => f.Path, f => new { path = f.Path, animations = f.Animations.Take(32).Select(n => Bounded(n, 128)).ToArray(), animationCount = f.Animations.Count,
+                animationsTruncated = f.Animations.Count > 32 || f.Animations.Take(32).Any(n => n.Length > 128), missions = f.Missions },
+            maximumRowBytes: f => 512 + 6L * (f.Path.Length + f.Animations.Take(32).Sum(n => Math.Min(n.Length, 128) + 1L) + f.Missions.Sum(m => m.Length + 1L)));
+        var data = page.Data.AsObject();
+        var rows = data["items"]!; data.Remove("items"); data["files"] = rows;
+        data["name"] = name; data["fileCount"] = files.Count; data["truncated"] = data["nextOffset"] != null;
+        return page;
     }
     private static byte[]? ReadDiskOrNull(string root, string relative, CancellationToken token)
     {

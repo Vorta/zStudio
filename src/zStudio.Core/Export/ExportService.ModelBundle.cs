@@ -14,10 +14,12 @@ public sealed partial class ExportService
     {
         var scene = world.Scene ?? throw new InvalidDataException("A GameZ scene is required.");
         if (rootIndex < 0 || rootIndex >= scene.Nodes.Count) throw new InvalidDataException("Missing root node index.");
-        destination = ValidateExportDirectory(destination);
+        using DirectoryLease directories = new();
+        destination = ValidateExportDirectory(destination, directories);
+        directories.Hold(destination, create: true);
         string folder = "models_" + rootIndex + "_" + SafeName(scene.Nodes[rootIndex].Name), target = Path.Combine(destination, folder); int suffix = 2;
-        while (Directory.Exists(target) || File.Exists(target)) target = Path.Combine(destination, folder + "_" + suffix++);
-        Directory.CreateDirectory(target);
+        while (directories.Exists(target)) target = Path.Combine(destination, folder + "_" + suffix++);
+        directories.CreateDirectory(target);
         List<ScenePlacement> placements = []; JsonArray nodes = []; HashSet<int> active = [];
         Visit(rootIndex, Matrix4x4.Identity, 0);
         int[] models = placements.Select(p => p.ModelIndex).Distinct().Order().ToArray();
@@ -25,19 +27,19 @@ public sealed partial class ExportService
         if (models.Length > 1024 || placements.Count > 10000) throw new InvalidDataException("Model bundle exceeds its bounded selection limit.");
         var owner = world.Assets.SingleOrDefault(a => a.Content is MechAssembly member && rootIndex >= member.RootNode && rootIndex < member.RootNode + member.NodeCount);
         var rootAsset = owner ?? world.Assets.Single(a => a.Kind == AssetKind.Node && a.Index == rootIndex);
-        await ExportObj(world, rootAsset, target, "assembled", preferredTexturePack, 0, token, new(placements, [])).ConfigureAwait(false);
+        await ExportObj(world, rootAsset, target, "assembled", preferredTexturePack, 0, token, directories, new(placements, [])).ConfigureAwait(false);
         JsonArray modelRows = [];
         foreach (int index in models)
         {
             var asset = owner ?? world.Assets.Single(a => a.Kind == AssetKind.Model && a.Index == index);
-            await ExportObj(world, asset, target, $"local/model_{index}", preferredTexturePack, 0, token, new([new(-1, index, asset.Name, Matrix4x4.Identity)], [])).ConfigureAwait(false);
+            await ExportObj(world, asset, target, $"local/model_{index}", preferredTexturePack, 0, token, directories, new([new(-1, index, asset.Name, Matrix4x4.Identity)], [])).ConfigureAwait(false);
             modelRows.Add(new JsonObject { ["modelIndex"] = index, ["memberIndex"] = owner?.Index, ["localModelIndex"] = owner?.Content is MechAssembly member ? index - member.FirstModel : null,
                 ["obj"] = $"local/model_{index}.obj", ["modelType"] = scene.Models[index].Metadata.Int("model_type"), ["nodes"] = JsonData.Integers(placements.Where(p => p.ModelIndex == index).Select(p => p.NodeIndex)) });
         }
         var manifest = new JsonObject { ["version"] = 1, ["source"] = world.Path, ["sourceSha256"] = Convert.ToHexStringLower(SHA256.HashData(world.Bytes.Span)), ["rootNode"] = rootIndex,
             ["coordinates"] = "Game-local +Y up, -Z forward. OBJ UV origin is bottom-left; zStudio restores game V on import. Local OBJ files have no node transforms baked in.",
             ["memberIndex"] = owner?.Index, ["models"] = modelRows, ["nodes"] = nodes, ["notes"] = "All authored descendants and LOD variants. Collision helpers are labeled, not replacement targets. Names are labels; indices and source SHA-256 identify records." };
-        await WriteJson(target, "manifest.json", manifest, token).ConfigureAwait(false);
+        await WriteJson(target, "manifest.json", manifest, token, directories).ConfigureAwait(false);
         return new(target, Path.Combine(target, "manifest.json"), models.Length, placements.Count);
         void Visit(int index, Matrix4x4 parent, int depth)
         {

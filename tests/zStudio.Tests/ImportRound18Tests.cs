@@ -35,7 +35,7 @@ public sealed class ImportRound18Tests
     public void PositiveBufferAndBufferlessDocumentRemainSupported()
     {
         GltfDocument.Read("""{"asset":{"version":"2.0"},"buffers":[{"uri":"data:application/octet-stream;base64,AQ==","byteLength":1}]}"""u8, _ => [], Token);
-        var (json, bin) = new GltfDocument().Write("empty.bin");
+        var (json, bin) = new GltfDocument().Write("empty.bin", TestContext.Current.CancellationToken);
         Assert.Empty(bin);
         Assert.DoesNotContain("buffers", Encoding.UTF8.GetString(json));
         GltfDocument.Read(json, _ => throw new InvalidOperationException(), Token);

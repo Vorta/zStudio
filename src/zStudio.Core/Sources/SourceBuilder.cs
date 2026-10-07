@@ -68,6 +68,9 @@ public static partial class SourceBuilder
     /// observed while the project's folders are scanned (each scan visits at most <see cref="SourceProject.MaximumScannedEntries"/>).
     /// </summary>
     public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, BuildProfile? profile = null, bool automaticPacks = true, CancellationToken token = default)
+        => Plan(root, added, profile, automaticPacks, token, null);
+
+    internal static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added, BuildProfile? profile, bool automaticPacks, CancellationToken token, Snapshot? snapshot, string? onlyMission = null)
     {
         profile ??= BuildProfiles.Modern;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
@@ -110,6 +113,7 @@ public static partial class SourceBuilder
         {
             token.ThrowIfCancellationRequested();
             string name = mission.ToLowerInvariant();
+            if (onlyMission != null && !name.Equals(onlyMission, StringComparison.OrdinalIgnoreCase)) continue;
             string entry = WorldScript(name);
             if (File.Exists(SourceProject.Resolve(root, entry)) || added?.Contains(entry, StringComparer.OrdinalIgnoreCase) == true)
             {
@@ -129,7 +133,7 @@ public static partial class SourceBuilder
                 scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase), added, token);
                 AddPlan(new($"{name}/anim.zbd", "animations", new PrefixedInputs(definitions, scriptsFound)));
             }
-            var textures = MissionTextures(root, name, added, token);
+            var textures = MissionTextures(root, name, added, token, snapshot);
             if (textures.Count > 0)
                 foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
                 {
@@ -338,20 +342,23 @@ public static partial class SourceBuilder
         // refused like a changed source, and the plan is made again before publishing (see CheckPlanUnchanged).
         Snapshot snapshot = new(root);
         var profile = await Task.Run(() => FindProfile(root, profileName, snapshot, token), token);
-        var all = await Task.Run(() => Plan(root, null, profile, token: token), token);
+        var all = await Task.Run(() => Plan(root, null, profile, true, token, snapshot), token);
         var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException($"This source project cannot build {o}.")).Distinct().ToArray();
         if (selected.Count == 0) throw new InvalidDataException("This source project has nothing to build yet.");
         string? staging = null;
+        using DirectoryLease directories = new();
         if (destination != null)
         {
             destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
             SourceProject.ValidateSeparate(destination, root, "export destination"); SourceProject.RejectLinks(destination);
-            var existing = selected.Where(p => File.Exists(Path.Combine(destination, p.Path))).Select(p => p.Path).ToArray();
+            SourceProject.ValidateSeparate(Path.GetDirectoryName(directories.CapturedPath(Path.Combine(destination, "_")))!,
+                Path.GetDirectoryName(directories.CapturedPath(Path.Combine(root, "_")))!, "export destination");
+            directories.Hold(destination, create: true);
+            var existing = selected.Where(p => directories.Exists(SourceProject.Resolve(destination, p.Path))).Select(p => p.Path).ToArray();
             if (existing.Length > 0 && !overwrite) throw new IOException($"The destination already has {existing.Length} of these game files ({string.Join(", ", existing.Take(8))}). Choose another folder or allow replacing them.");
-            Directory.CreateDirectory(destination);
             staging = Path.Combine(destination, ".zstudio-staging-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(staging);
+            directories.CreateDirectory(staging);
         }
         try
         {
@@ -372,7 +379,9 @@ public static partial class SourceBuilder
                     if (staging != null)
                     {
                         contents[plan.Path] = JournalDigest.OfContent(built.Bytes);
-                        string path = SourceProject.Resolve(staging, plan.Path); Directory.CreateDirectory(Path.GetDirectoryName(path)!); await File.WriteAllBytesAsync(path, built.Bytes, token);
+                        string path = SourceProject.Resolve(staging, plan.Path); directories.Parent(path, create: true);
+                        await using FileStream written = directories.OpenFile(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough);
+                        await written.WriteAsync(built.Bytes, token); await written.FlushAsync(token); written.Flush(true);
                     }
                     results.Add(new(plan.Path, plan.Family, "built", built.Bytes.Length, built.Items, built.Warnings));
                     if (built.Package != null) packages[plan.Path.Split('/')[0]] = built.Package;
@@ -404,14 +413,17 @@ public static partial class SourceBuilder
             if (staging != null && destination != null)
             {
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException("Nothing was written because some outputs failed: " + string.Join("; ", results.Where(r => r.Status == "failed").Select(r => $"{r.Path}: {r.Error}")));
-                Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token);
+                Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token, captured: directories);
             }
             notes.AddRange(notChecked);
             notes.AddRange(changes.Select(c => WorldLookups.Describe(c, " in the files this export replaced")));
             return new(destination, results) { Profile = profile.Name, Notes = notes, Lookups = lookups, LookupChanges = changes };
         }
         // A staging folder another program holds must not replace the export's own result or error.
-        finally { try { if (staging != null && Directory.Exists(staging)) Directory.Delete(staging, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+        finally
+        {
+            try { if (staging != null) directories.DeleteTree(staging); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
     }
 
     /// <summary>The build profile (the project's default when <paramref name="name"/> is null), its files read through the run's snapshot.</summary>
@@ -432,7 +444,7 @@ public static partial class SourceBuilder
     {
         token.ThrowIfCancellationRequested();
         BuildProfile again; IReadOnlyList<SourceOutputPlan> now;
-        try { again = FindProfile(root, profileName, snapshot, token); now = Plan(root, null, again, token: token); }
+        try { again = FindProfile(root, profileName, snapshot, token); now = Plan(root, null, again, true, token, snapshot); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new InvalidDataException($"The project changed while exporting; nothing was written. Export again. ({ex.Message})", ex); }
         bool same = again.Name == profile.Name && again.Source == profile.Source && (selected == null
@@ -529,7 +541,7 @@ public static partial class SourceBuilder
     /// ("check"), before its original is moved aside ("replace") and before it is installed ("install"); it may throw to
     /// simulate a failure.
     /// </summary>
-    internal static void Publish(string staging, string destination, IReadOnlyList<(string Relative, JournalDigest Content)> outputs, bool overwrite, CancellationToken token, Action<string, int>? fault = null)
+    internal static void Publish(string staging, string destination, IReadOnlyList<(string Relative, JournalDigest Content)> outputs, bool overwrite, CancellationToken token, Action<string, int>? fault = null, DirectoryLease? captured = null)
     {
         foreach (var (relative, _) in outputs) { _ = SourceProject.Resolve(destination, relative); SourceProject.RejectNestedLinks(destination, relative); }
         string backup = Path.Combine(destination, ".zstudio-backup-" + Guid.NewGuid().ToString("N"));
@@ -538,14 +550,24 @@ public static partial class SourceBuilder
         List<(string Target, string? Saved, JournalDigest? Original, JournalDigest? Installed)> steps = [];
         // Each staged output from its check until it is in place: what is installed is what was built and reopened.
         var held = new SealedFile?[outputs.Count];
+        using DirectoryLease? owned = captured == null ? new() : null;
+        DirectoryLease directories = captured ?? owned!;
         try
         {
+            // Hold every destination ancestor before checks/hooks, and keep it through rollback. A path that passed a
+            // link check must not be redirected while other outputs are being validated or installed.
+            foreach (var (relative, _) in outputs)
+            {
+                token.ThrowIfCancellationRequested();
+                directories.Parent(SourceProject.Resolve(destination, relative), create: true);
+                directories.Parent(SourceProject.Resolve(staging, relative));
+            }
             for (int i = 0; i < outputs.Count; i++)
             {
                 token.ThrowIfCancellationRequested();
                 var (relative, content) = outputs[i];
                 fault?.Invoke("check", i);
-                try { held[i] = SealedFile.Open(SourceProject.Resolve(staging, relative), content); }
+                try { held[i] = SealedFile.Open(SourceProject.Resolve(staging, relative), content, directories); }
                 catch (IOException ex) { throw new IOException($"The built {relative} was not installed: {ex.Message}", ex); }
             }
             for (int i = 0; i < outputs.Count; i++)
@@ -554,19 +576,18 @@ public static partial class SourceBuilder
                 var (relative, content) = outputs[i];
                 string target = SourceProject.Resolve(destination, relative), saved = SourceProject.Resolve(backup, relative);
                 fault?.Invoke("replace", i);
-                if (File.Exists(target) && !overwrite) throw new IOException($"{relative} appeared in {destination} during the export; nothing was replaced. Export again and allow replacing it.");
-                if (File.Exists(target))
+                if (directories.Exists(target) && !overwrite) throw new IOException($"{relative} appeared in {destination} during the export; nothing was replaced. Export again and allow replacing it.");
+                if (directories.Exists(target))
                 {
                     JournalDigest original;
-                    using (FileStream source = new(target, FileMode.Open, FileAccess.Read, FileShare.Read)) original = JournalDigest.Of(source, token);
+                    using (FileStream source = directories.OpenFile(target, FileMode.Open, FileAccess.Read, FileShare.Read)) original = JournalDigest.Of(source, token);
                     // Verify again through a held handle before moving: the original cannot change between its digest and rename.
-                    using SealedFile originalFile = SealedFile.Open(target, original);
-                    Directory.CreateDirectory(Path.GetDirectoryName(saved)!); originalFile.MoveTo(saved);
+                    using SealedFile originalFile = SealedFile.Open(target, original, directories);
+                    directories.Parent(saved, create: true); originalFile.MoveTo(saved);
                     steps.Add((target, saved, original, null));
                 }
                 else steps.Add((target, null, null, null));
                 fault?.Invoke("install", i);
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 held[i]!.MoveTo(target);
                 held[i]!.Dispose(); held[i] = null;
                 steps[^1] = steps[^1] with { Installed = content };
@@ -587,28 +608,28 @@ public static partial class SourceBuilder
                 try
                 {
                     // Keep the original sealed through removal of the installed output and restoration of its name.
-                    using SealedFile? restore = saved != null ? SealedFile.Open(saved, original!) : null;
+                    using SealedFile? restore = saved != null ? SealedFile.Open(saved, original!, directories) : null;
                     if (installed != null)
                     {
                         // Moved into the backup and deleted there only while it is the file this export installed.
                         string taken = Path.Combine(backup, ".removed", $"{i}-{Guid.NewGuid():N}.bin");
-                        switch (SourcePublisher.MoveIfContent(target, taken, installed))
+                        switch (SourcePublisher.MoveIfContent(target, taken, installed, directories))
                         {
                             case SourcePublisher.Moved.Done:
-                                try { File.Delete(taken); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                                try { directories.DeleteFile(taken); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                                 break;
                             case SourcePublisher.Moved.Stranded:
                                 stranded.Add(taken); if (saved != null) unrestored.Add(target);
                                 continue;
                             default:
-                                if (Path.Exists(target)) { (saved != null ? unrestored : others).Add(target); continue; }
+                                if (Occupied(target)) { (saved != null ? unrestored : others).Add(target); continue; }
                                 break;
                         }
                     }
-                    if (saved != null) { if (Path.Exists(target)) unrestored.Add(target); else restore!.MoveTo(target); }
+                    if (saved != null) { if (Occupied(target)) unrestored.Add(target); else restore!.MoveTo(target); }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                { (saved == null ? leftover : Holds(saved, original) ? unrestored : installed != null && Path.Exists(target) ? kept : lost).Add(target); }
+                { (saved == null ? leftover : Holds(saved, original) ? unrestored : installed != null && Occupied(target) ? kept : lost).Add(target); }
             }
             string notes = (leftover.Count > 0 ? $". New files that could not be removed: {string.Join(", ", leftover.Take(8))}" : "")
                 + (others.Count > 0 ? $". Files another program wrote at the outputs' names during the export were left as they are: {string.Join(", ", others.Take(8))}" : "")
@@ -624,17 +645,25 @@ public static partial class SourceBuilder
                     : $"; {backup} is kept") + notes);
             // A backup another program changed is left to it.
             if (kept.Count == 0 && lost.Count == 0)
-                try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            {
+                try { directories.DeleteTree(backup); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
             if (notes.Length > 0) throw Failure(failed + notes);
             throw;
         }
-        try { if (Directory.Exists(backup)) Directory.Delete(backup, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        try { directories.DeleteTree(backup); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 
         // Whether the backup still holds a replaced file as it was moved there.
-        static bool Holds(string saved, JournalDigest? original)
+        bool Holds(string saved, JournalDigest? original)
         {
-            try { if (original == null) return false; using var file = SealedFile.Open(saved, original); return true; }
+            try { if (original == null) return false; using var file = SealedFile.Open(saved, original, directories); return true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        }
+        // An inaccessible or redirected name is never a vacancy. Its inspection must not stop rollback of other outputs.
+        bool Occupied(string target)
+        {
+            try { return directories.Exists(target); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }
         }
     }
 
@@ -737,10 +766,10 @@ public static partial class SourceBuilder
     /// the other campaign missions' vehicle folders. The first folder holding a name wins, as the engine takes the first
     /// match.
     /// </summary>
-    internal static IReadOnlyList<string> MissionTextures(string root, string mission, IReadOnlyCollection<string>? added = null, CancellationToken token = default)
+    internal static IReadOnlyList<string> MissionTextures(string root, string mission, IReadOnlyCollection<string>? added = null, CancellationToken token = default, Snapshot? snapshot = null)
     {
         List<string> inputs = []; HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string folder in TextureSources.MissionFolders(mission, Multiplayer(root, mission)))
+        foreach (string folder in TextureSources.MissionFolders(mission, Multiplayer(root, mission, snapshot, token)))
             foreach (string file in SourceProject.Files(root, folder, n => n.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase), added, token))
                 // Subfolders of a search folder are separate folders (bft is listed on its own).
                 if (Path.GetDirectoryName(file)!.Replace('\\', '/').Equals(folder, StringComparison.OrdinalIgnoreCase) && names.Add(Path.GetFileNameWithoutExtension(file))) inputs.Add(file);
@@ -768,11 +797,22 @@ public static partial class SourceBuilder
         return total;
     }
     /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle.</summary>
-    internal static bool Multiplayer(string root, string mission)
+    internal static bool Multiplayer(string root, string mission, Snapshot? snapshot = null, CancellationToken token = default)
     {
-        string script = SourceProject.Resolve(root, $"{SourceProject.GameGenFolder}/support/load{mission}.gw");
-        if (!File.Exists(script) || new FileInfo(script).Length > SourceProject.MaximumSourceTextBytes) return false;
-        return GameGenScriptText.Tokenize(GameGenScriptText.Decode(SourceRead.All(script, SourceProject.MaximumSourceTextBytes))).Any(l => l.Any(t => t.Equals("support\\bftmulti.gw", StringComparison.OrdinalIgnoreCase)));
+        string relative = $"{SourceProject.GameGenFolder}/support/load{mission}.gw";
+        byte[] bytes;
+        if (snapshot != null)
+        {
+            if (!snapshot.Exists(relative)) return false;
+            bytes = snapshot.Read(relative, token, SourceProject.MaximumSourceTextBytes);
+        }
+        else
+        {
+            string path = SourceProject.Resolve(root, relative);
+            if (!File.Exists(path)) return false;
+            bytes = SourceRead.All(path, SourceProject.MaximumSourceTextBytes, token);
+        }
+        return GameGenScriptText.Tokenize(GameGenScriptText.Decode(bytes)).Any(l => l.Any(t => t.Equals("support\\bftmulti.gw", StringComparison.OrdinalIgnoreCase)));
     }
 
     /// <summary>

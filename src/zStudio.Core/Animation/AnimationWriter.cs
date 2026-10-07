@@ -50,26 +50,34 @@ public static class AnimationWriter
     public static async Task SaveAsAsync(AnimationPackage package, string path, string source, string protectedRoot, CancellationToken token = default)
     {
         path = Path.GetFullPath(path); source = Path.GetFullPath(source); protectedRoot = Path.GetFullPath(protectedRoot);
-        if (path.Equals(source, StringComparison.OrdinalIgnoreCase) || IsInside(path, protectedRoot) || path.Split(Path.DirectorySeparatorChar).Any(p => p.Equals("zbd_1998", StringComparison.OrdinalIgnoreCase) || p.Equals("zbd_1999", StringComparison.OrdinalIgnoreCase)))
+        if (path.Equals(source, StringComparison.OrdinalIgnoreCase) || IsInside(path, protectedRoot) || PickupPlacementEditSession.IsProtectedPath(path) ||
+            OperatingSystem.IsWindows() && IsInside(WindowsSavePath.ResolveExistingParent(path),
+                Path.GetDirectoryName(WindowsSavePath.ResolveExistingParent(Path.Combine(protectedRoot, ".zstudio-root-probe")))!))
             throw new IOException("Save the edited animation to a new file outside the source dataset.");
         if (File.Exists(path)) throw new IOException("Choose a new filename; Save As does not replace existing files.");
         for (var parent = new DirectoryInfo(Path.GetDirectoryName(path)!); parent != null; parent = parent.Parent)
             if (parent.Exists && parent.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Save As through directory links is not supported; choose a direct destination.");
+        using DirectoryLease directories = new();
+        string captured = directories.CapturedPath(path);
+        string capturedRoot = Path.GetDirectoryName(directories.CapturedPath(Path.Combine(protectedRoot, ".zstudio-root-probe")))!;
+        if (IsInside(captured, capturedRoot) || PickupPlacementEditSession.IsProtectedPath(captured))
+            throw new IOException("Save the edited animation to a new file outside the source dataset.");
+        directories.Parent(path, create: true);
         byte[] bytes = await Task.Run(() => Write(package, token), token).ConfigureAwait(false);
         var reopened = AnimationPackage.Read(bytes, token);
         if (!bytes.AsSpan().SequenceEqual(Write(reopened, token))) throw new InvalidDataException("Animation save failed its round-trip check.");
-        string directory = Path.GetDirectoryName(path)!; Directory.CreateDirectory(directory); string temporary = Path.Combine(directory, ".animation-" + Guid.NewGuid().ToString("N") + ".tmp");
+        string directory = Path.GetDirectoryName(path)!; string temporary = Path.Combine(directory, ".animation-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
-            await using (FileStream stream = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
+            await using (FileStream stream = directories.OpenFile(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
             { await stream.WriteAsync(bytes, token).ConfigureAwait(false); await stream.FlushAsync(token).ConfigureAwait(false); }
-            byte[] check = await Sources.SourceRead.AllAsync(temporary, bytes.Length, token).ConfigureAwait(false);
+            byte[] check = await Sources.SourceRead.AllAsync(temporary, bytes.Length, directories, token).ConfigureAwait(false);
             if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(bytes), SHA256.HashData(check))) throw new IOException("The written animation did not pass verification.");
             token.ThrowIfCancellationRequested();
             // Held from its check against the verified bytes until it is in place.
-            using (SealedFile staged = VerifiedDocumentSave.Seal(temporary, bytes)) staged.MoveTo(path);
+            using (SealedFile staged = VerifiedDocumentSave.Seal(temporary, bytes, directories)) staged.MoveTo(path);
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        finally { directories.DeleteFile(temporary); }
     }
     private static bool IsInside(string path, string root) => path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 }

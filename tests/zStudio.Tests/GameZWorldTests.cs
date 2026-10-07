@@ -188,7 +188,7 @@ public sealed class GameZWorldTests
 
             // Recomputing every derived value reproduces the stored ones (bounds to float rounding, cells exactly).
             var stored = GameZWorldReader.FromDocument(doc, Token);
-            WorldUpdate.RebuildBounds(world);
+            WorldUpdate.RebuildBounds(world, TestContext.Current.CancellationToken);
             for (int i = 0; i < world.Models.Count; i++)
                 Assert.True(world.Models[i].BoundsCentre == stored.Models[i].BoundsCentre && world.Models[i].BoundsRadius == stored.Models[i].BoundsRadius, $"{path}: model {i} sphere");
             for (int i = 0; i < world.Nodes.Count; i++)

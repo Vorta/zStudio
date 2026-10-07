@@ -51,7 +51,7 @@ public sealed class ImportRound8Tests
     public void UnsupportedMorphChannelsCannotSilentlyBecomeZeroPositionDeltas(string channel)
     {
         var source = Triangle(); source.Roots[0].Mesh!.Primitives[0].Normals.AddRange(Enumerable.Repeat(Vector3.UnitY, 3));
-        var (json, bin) = source.Write("mesh.bin"); var root = JsonNode.Parse(json)!;
+        var (json, bin) = source.Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
         var primitive = root["meshes"]![0]!["primitives"]![0]!;
         primitive["targets"] = new JsonArray(new JsonObject { [channel] = primitive["attributes"]!["NORMAL"]!.DeepClone() });
         Assert.Throws<InvalidDataException>(() => GltfDocument.Read(Text(root.ToJsonString()), _ => bin, Token));
@@ -59,7 +59,7 @@ public sealed class ImportRound8Tests
     [Fact]
     public void VertexColoursCannotSilentlyDisappearFromAnImportedModel()
     {
-        var (json, bin) = Triangle().Write("mesh.bin"); var root = JsonNode.Parse(json)!;
+        var (json, bin) = Triangle().Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
         // The triangle's positions (0,0,0), (1,0,0), (0,1,0) are also legal black/red/green VEC3 float colours.
         var attributes = root["meshes"]![0]!["primitives"]![0]!["attributes"]!;
         attributes["COLOR_0"] = attributes["POSITION"]!.DeepClone();
@@ -70,7 +70,7 @@ public sealed class ImportRound8Tests
     [InlineData(true)]
     public void GltfAnimationAndSkinningCannotSilentlyBecomeStaticGeometry(bool skin)
     {
-        var (json, bin) = Triangle().Write("mesh.bin"); var root = JsonNode.Parse(json)!;
+        var (json, bin) = Triangle().Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
         var accessors = root["accessors"]!.AsArray(); var views = root["bufferViews"]!.AsArray();
         var attributes = root["meshes"]![0]!["primitives"]![0]!["attributes"]!;
         int first = accessors.Count;
@@ -153,7 +153,7 @@ public sealed class ImportRound8Tests
     [Fact]
     public void EveryIntegerInAWrittenModelCanUseExponentNotationAndRemainEditable()
     {
-        var (json, bin) = Triangle().Write("mesh.bin"); var root = JsonNode.Parse(json)!.AsObject();
+        var (json, bin) = Triangle().Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!.AsObject();
         void Rewrite(JsonNode node)
         {
             if (node is JsonObject obj) foreach (var (key, child) in obj.ToArray())
@@ -193,7 +193,7 @@ public sealed class ImportRound8Tests
     [Fact]
     public void GlbBinaryIsDecodedInPlaceAndUnusedBinaryIsNotCopied()
     {
-        var (json, bin) = Triangle().Write("mesh.bin"); var root = JsonNode.Parse(json)!.AsObject(); root["buffers"]![0]!.AsObject().Remove("uri");
+        var (json, bin) = Triangle().Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!.AsObject(); root["buffers"]![0]!.AsObject().Remove("uri");
         var glb = Glb((0x4E4F534A, JsonChunk(root.ToJsonString())), (0x004E4942, [.. bin, .. new byte[(4 - bin.Length % 4) % 4]]));
         Assert.Equal(3, GltfDocument.Read(glb, _ => [], Token).Roots[0].Mesh!.Primitives[0].Positions.Count);
         byte[] unused = Glb((0x4E4F534A, JsonChunk()), (0x004E4942, new byte[4 * 1024 * 1024]));
@@ -206,14 +206,14 @@ public sealed class ImportRound8Tests
     [InlineData(1)] [InlineData(2)] [InlineData(4)] [InlineData(5)]
     public void TriangleListsNeverDiscardIndices(int count)
     {
-        var (json, bin) = Triangle(indices: count).Write("mesh.bin");
+        var (json, bin) = Triangle(indices: count).Write("mesh.bin", TestContext.Current.CancellationToken);
         Assert.Throws<InvalidDataException>(() => GltfDocument.Read(json, _ => bin, Token));
     }
     [Theory]
     [InlineData(1)] [InlineData(2)] [InlineData(4)]
     public void ImplicitTriangleListsMustBeComplete(int count)
     {
-        var (json, bin) = Triangle(vertices: count).Write("mesh.bin"); var root = JsonNode.Parse(json)!;
+        var (json, bin) = Triangle(vertices: count).Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
         root["meshes"]![0]!["primitives"]![0]!.AsObject().Remove("indices");
         Assert.Throws<InvalidDataException>(() => GltfDocument.Read(Text(root.ToJsonString()), _ => bin, Token));
     }
@@ -243,7 +243,7 @@ public sealed class ImportRound8Tests
     {
         var original = Triangle(targets: 1); var mesh = original.Roots[0].Mesh!; mesh.Weights.Add(0);
         original.Roots.Add(new() { Name = "two", Mesh = mesh }); original.Roots[0].Weights.Add(1);
-        var (json, bin) = original.Write("mesh.bin");
+        var (json, bin) = original.Write("mesh.bin", TestContext.Current.CancellationToken);
         var nodes = Import(GltfDocument.Read(json, _ => bin, Token));
         Assert.Equal(1, nodes[0].Model!.MorphFactor); Assert.Equal(0, nodes[1].Model!.MorphFactor); Assert.NotSame(nodes[0].Model, nodes[1].Model);
     }

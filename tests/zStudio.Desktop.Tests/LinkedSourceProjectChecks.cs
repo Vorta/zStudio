@@ -31,8 +31,6 @@ internal static class LinkedSourceProjectChecks
             if (!Junction(direct, fixture.Project) || !Junction(above, fixture.Root)) return; // Junctions unavailable on this file system.
             string sentinelFolder = Path.Combine(fixture.Root, "retained-cache"); Directory.CreateDirectory(sentinelFolder);
             string sentinel = Path.Combine(sentinelFolder, "keep.txt"); File.WriteAllText(sentinel, "keep");
-            SourceWorldSession.DeleteBuild(Path.Combine(above, "retained-cache"));
-            Assert.Equal("keep", File.ReadAllText(sentinel));
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
             var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
             try
@@ -69,6 +67,10 @@ internal static class LinkedSourceProjectChecks
                     }
                     Assert.False(Directory.Exists(Path.Combine(fixture.Project, "zstudio")));
                 }
+
+                using (var cache = new Recoil.Zbd.Core.Sources.SourcePreviewCache(fixture.Project))
+                    Assert.Throws<ArgumentException>(() => cache.DeleteBuild(Path.Combine(above, "retained-cache")));
+                Assert.Equal("keep", File.ReadAllText(sentinel));
 
                 // The project's own folder is a project like any other.
                 await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });

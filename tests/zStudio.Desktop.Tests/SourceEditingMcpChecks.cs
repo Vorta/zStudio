@@ -116,8 +116,35 @@ internal static class SourceEditingMcpChecks
             Assert.Equal(Default.Replace("( 12 8 -5 )", "( 21.5 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
             var typed = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             await Preview();
-            moved = Document(await Call("undo_redo", new() { ["document"] = Id(typed), ["revision"] = typed.Revision, ["action"] = "undo" }));
+            for (int wait = 0; wait < 1000 && main.OpenPropertiesWindow?.Document != typed; wait++) await Task.Delay(10, token);
+            Assert.Same(typed, main.OpenPropertiesWindow?.Document);
+            Assert.NotNull(main.OpenPropertiesWindow!.PickupFields);
+            var pinned = main.OpenPropertiesWindow.CurrentJson!;
+            Assert.Equal(ammoSource.ResourceName, pinned["resource"]!.GetValue<string>());
+            Assert.Equal(ammoSource.RecordIndex, pinned["placement_record"]!.GetValue<int>());
+            Assert.Equal(Path.GetRelativePath(moved.SourceBuild!.Folder, ammoSource.ArchivePath),
+                Path.GetRelativePath(typed.SourceBuild!.Folder, pinned["source_archive"]!.GetValue<string>()));
+            Assert.Equal(21.5d, pinned["preview_world_position"]!["x"]!.GetValue<double>());
+            var undoButton = (System.Windows.Controls.Button)typeof(PropertiesWindow).GetField("undo", hidden)!.GetValue(main.OpenPropertiesWindow)!;
+            Assert.Equal(System.Windows.Visibility.Visible, undoButton.Visibility); Assert.True(undoButton.IsEnabled);
+            // The Properties command follows its pinned owner even when there is no active document.
+            main.ViewModel.SelectedDocument = null;
+            undoButton.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+            for (int wait = 0; wait < 1000 && !typed.IsDisposed; wait++) await Task.Delay(10, token);
+            Assert.True(typed.IsDisposed, "Properties Undo did not rebuild its pinned source world.");
+            await ((Task)typeof(MainWindow).GetField("sourceWorldWork", hidden)!.GetValue(main)!).WaitAsync(token);
+            moved = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            main.ViewModel.SelectedDocument = moved; await Preview();
             Assert.Equal(Default.Replace("( 12 8 -5 )", "( 20.25 8 -5 )"), Text(workspace.Read("data/m1/zrdr/puppies.zrd")));
+            string restoredArchive = Path.Combine(moved.SourceBuild!.Folder, Path.GetRelativePath(typed.SourceBuild!.Folder, pinned["source_archive"]!.GetValue<string>()));
+            var undoneSource = moved.PickupEdits!.Records.Single(r => r.Source.ArchivePath.Equals(restoredArchive, StringComparison.OrdinalIgnoreCase)
+                && r.Source.ResourceName == ammoSource.ResourceName && r.Source.AssetIndex == ammoSource.AssetIndex && r.Source.RecordIndex == ammoSource.RecordIndex).Source;
+            window = (PropertiesWindow)typeof(MainWindow).GetMethod("GetPropertiesWindow", hidden)!.Invoke(main, [])!;
+            sourceMove = (Func<Recoil.Zbd.Core.MissionPickupSource, System.Numerics.Vector3, Task>?)typeof(MainWindow).GetMethod("SourcePickupMove", hidden)!.Invoke(main, [moved]);
+            Assert.True(window.SetPickup(moved, undoneSource, "HEMORTAR_AMMO", new JsonObject(), sourceMove));
+            typeof(MainWindow).GetMethod("PresentProperties", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [window, true]);
+            var redoButton = (System.Windows.Controls.Button)typeof(PropertiesWindow).GetField("redo", hidden)!.GetValue(window)!;
+            Assert.Equal(System.Windows.Visibility.Visible, redoButton.Visibility); Assert.True(redoButton.IsEnabled);
             // A Discard approval left from a close that did not happen (the world is still open) is forgotten when the next
             // close decision starts, so it never skips that decision's prompt.
             var approval = typeof(MainWindow).GetField("discardApprovedWorkspace", hidden)!;

@@ -22,12 +22,30 @@ public sealed record FileStamp(long Length, DateTime LastWriteUtc)
     /// between two stamps); <see cref="Unverified"/> when another program changed or removed it meanwhile. The read shares
     /// the file with the seal that may still hold it (<see cref="SealedFile"/>), which lets no other program write it.
     /// </summary>
-    public static FileStamp ReadHolding(string path, ReadOnlySpan<byte> bytes)
+    public static FileStamp ReadHolding(string path, ReadOnlySpan<byte> bytes) => ReadHolding(path, bytes, null);
+    internal static FileStamp ReadHolding(string path, ReadOnlySpan<byte> bytes, DirectoryLease? directories)
     {
         try
         {
-            var stamp = Read(path);
-            return Sources.SourceProject.FileEquals(path, bytes, share: FileShare.ReadWrite | FileShare.Delete) && Read(path) == stamp ? stamp : Unverified;
+            using DirectoryLease? own = directories == null ? new() : null;
+            using FileStream stream = (directories ?? own!).OpenFile(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.SequentialScan);
+            FileStamp stamp = new(stream.Length, File.GetLastWriteTimeUtc(stream.SafeFileHandle));
+            if (stamp.Length != bytes.Length) return Unverified;
+            byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(65536);
+            try
+            {
+                int offset = 0;
+                while (offset < bytes.Length)
+                {
+                    int read = stream.Read(buffer, 0, Math.Min(65536, bytes.Length - offset));
+                    if (read == 0 || !buffer.AsSpan(0, read).SequenceEqual(bytes.Slice(offset, read))) return Unverified;
+                    offset += read;
+                }
+                return stream.Length == stamp.Length && File.GetLastWriteTimeUtc(stream.SafeFileHandle) == stamp.LastWriteUtc
+                    ? stamp : Unverified;
+            }
+            finally { System.Buffers.ArrayPool<byte>.Shared.Return(buffer); }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Unverified; }
     }
@@ -87,7 +105,31 @@ public sealed record GameZSourceLayout(int TextureOffset, int MaterialOffset, in
 public sealed record TextureInfo(int Width, int Height, byte Flags, int PaletteCount, int PalettePage,
     int PixelsOffset, int PixelsLength, int AlphaOffset, int PaletteOffset, int PaletteLength);
 public sealed record DecodedImage(int Width, int Height, byte[] Rgba);
-public sealed record ScriptContent(IReadOnlyList<string[]> Instructions, string Text);
+public sealed record ScriptContent
+{
+    public IReadOnlyList<string[]> Instructions { get; }
+    private readonly string? sourceText;
+    /// <summary>Complete text for explicit export. Prepared scripts format it only when requested.</summary>
+    public string Text => GetText();
+    public string PreviewText { get; }
+    public bool TextTruncated { get; }
+    public ScriptContent(IReadOnlyList<string[]> instructions, string text)
+    {
+        Instructions = instructions; sourceText = text;
+        TextTruncated = text.Length > Formats.PreparedScriptText.PreviewCharacters;
+        PreviewText = TextTruncated ? text[..Formats.PreparedScriptText.PreviewCharacters] : text;
+    }
+    internal ScriptContent(IReadOnlyList<string[]> instructions, CancellationToken token)
+    {
+        Instructions = instructions;
+        (PreviewText, TextTruncated) = Formats.PreparedScriptText.Format(instructions, Formats.PreparedScriptText.PreviewCharacters, token);
+    }
+    public string GetText(CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        return sourceText ?? Formats.PreparedScriptText.Format(Instructions, int.MaxValue, token).Text;
+    }
+}
 public sealed record WaveCue(uint Id, uint SampleOffset);
 public sealed record WaveInfo(ushort Encoding, ushort Channels, uint SampleRate, ushort BitsPerSample,
     ushort BlockAlign, int DataOffset, int DataLength, IReadOnlyList<WaveCue> Cues)

@@ -29,7 +29,8 @@ public static partial class SourceProject
         if (string.IsNullOrWhiteSpace(relative) || System.IO.Path.IsPathRooted(relative) || relative.Contains('\\') || relative.Split('/').Any(p => p is "" or "." or ".."))
             throw new InvalidDataException($"'{relative}' is not a relative path.");
         string full = System.IO.Path.GetFullPath(System.IO.Path.Combine(root, relative));
-        string prefix = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(root)) + System.IO.Path.DirectorySeparatorChar;
+        string prefix = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(root));
+        if (!System.IO.Path.EndsInDirectorySeparator(prefix)) prefix += System.IO.Path.DirectorySeparatorChar;
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"'{relative}' escapes its folder.");
         return full;
     }

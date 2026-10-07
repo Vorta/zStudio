@@ -582,8 +582,13 @@ public static class WorldComparer
             {
                 var ma = WorldUpdate.LocalMatrix(a) ?? Matrix4x4.Identity; var mb = WorldUpdate.LocalMatrix(b) ?? Matrix4x4.Identity;
                 if (!Close(ma, mb) && Differs("matrix", new Shown(ma), new Shown(mb))) return false;
-                if ((a.PayloadInt(0) & 0x3F) != (b.PayloadInt(0) & 0x3F) && !(Close(ma, Matrix4x4.Identity) && Close(mb, Matrix4x4.Identity))
+                if (ObjectFlags(a) != ObjectFlags(b)
                     && Differs("object.flags", $"{a.PayloadInt(0):X}", $"{b.PayloadInt(0):X}")) return false;
+                // Alpha override, software colour and colour alpha are authored class data, even while inactive.
+                // Only the cached world matrix (+0x60) is omitted; an identity local matrix does not disable appearance.
+                for (int o = 4; o <= 0x14; o += 4)
+                    if (Bits(a.PayloadFloat(o)) != Bits(b.PayloadFloat(o))
+                        && Differs(o == 4 ? "object.alphaScale" : o == 0x14 ? "object.colorAlpha" : $"object.color+{o - 8}", a.PayloadFloat(o), b.PayloadFloat(o))) return false;
                 for (int o = 0x18; o < 0x30; o += 4)
                     if (Bits(a.PayloadFloat(o)) != Bits(b.PayloadFloat(o))) { if (Differs("object.trs", o, $"{a.PayloadFloat(o)}/{b.PayloadFloat(o)}")) return false; break; }
             }
@@ -729,7 +734,8 @@ public static class WorldComparer
             {
                 var m = WorldUpdate.LocalMatrix(node) ?? Matrix4x4.Identity;
                 for (int r = 0; r < 4; r++) for (int c = 0; c < 3; c++) hash = Mix(hash, Bits(MathF.Round(m[r, c], 3)));
-                hash = Mix(hash, (ulong)(node.PayloadInt(0) & 0x3F));
+                hash = Mix(hash, ObjectFlags(node));
+                for (int o = 4; o <= 0x14; o += 4) hash = Mix(hash, Bits(node.PayloadFloat(o)));
                 for (int o = 0x18; o < 0x30; o += 4) hash = Mix(hash, Bits(node.PayloadFloat(o)));
             }
             else
@@ -1036,6 +1042,10 @@ public static class WorldComparer
         return z ^ (z >> 31);
     }
     private static Vector3 Round(Vector3 v) => new(MathF.Round(v.X, 3), MathF.Round(v.Y, 3), MathF.Round(v.Z, 3));
+    // At identity the allocator's TRS/identity/authored-matrix/cache bits can differ without changing the transform.
+    // Alpha override (0x02), visibility (0x04) and other retained bits still describe different behavior.
+    private static uint ObjectFlags(WorldNode node) => unchecked((uint)node.PayloadInt(0))
+        & (Close(WorldUpdate.LocalMatrix(node) ?? Matrix4x4.Identity, Matrix4x4.Identity) ? ~0x39u : uint.MaxValue);
     private static bool Close(Matrix4x4 a, Matrix4x4 b)
     {
         for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) if (Math.Abs(a[r, c] - b[r, c]) > 1e-3f * (1 + Math.Abs(a[r, c]))) return false;

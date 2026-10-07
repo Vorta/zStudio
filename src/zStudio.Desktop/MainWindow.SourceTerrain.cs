@@ -286,7 +286,7 @@ public partial class MainWindow
         if (doc.IsDisposed) return;
         using (var reading = CancellationTokenSource.CreateLinkedTokenSource(doc.Lifetime.Token, shutdownToken))
         {
-            try { meshes = await Task.Run(() => (IReadOnlyList<string>)[.. SourceTerrain.MeshNodes(workspace, model, reading.Token).Take(TerrainRecipe.MaximumSurfaces)], reading.Token); }
+            try { meshes = await Task.Run(() => SourceTerrain.MeshNodes(workspace, model, reading.Token), reading.Token); }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         }

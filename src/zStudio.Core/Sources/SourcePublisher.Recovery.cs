@@ -111,16 +111,18 @@ public sealed partial class SourcePublisher
     /// </summary>
     public IReadOnlyList<SourceRecoveryCase> FindInterrupted(CancellationToken token = default)
     {
-        if (!Directory.Exists(SourceProject.Resolve(root, RecoveryFolder))) return [];
-        using FileStream gate = Lock();
+        using DirectoryLease directories = new(); directories.Hold(root);
+        if (!ExistingDirectory(directories, SourceProject.Resolve(root, RecoveryFolder))) return [];
+
+        using FileStream gate = Lock(directories);
         List<SourceRecoveryCase> cases = [];
-        foreach (var journal in Journals(token))
+        foreach (var journal in Journals(directories, token))
         {
             token.ThrowIfCancellationRequested();
             if (journal.RolledBack) continue;
             string folder = JournalPath(journal.Id);
             // A state reads its file whole when its length is the journal's, and a journal may list 50,000 files.
-            var files = journal.Manifest.Files.Select((f, i) => { token.ThrowIfCancellationRequested(); return new SourceRecoveryFile(f.Relative, State(f, token), File.Exists(HeldPath(folder, i))); }).ToArray();
+            var files = journal.Manifest.Files.Select((f, i) => { token.ThrowIfCancellationRequested(); return new SourceRecoveryFile(f.Relative, State(directories, f, token), Exists(directories, HeldPath(folder, i))); }).ToArray();
             DateTime created = journal.Manifest.CreatedUtc.Kind == DateTimeKind.Local ? journal.Manifest.CreatedUtc.ToUniversalTime() : DateTime.SpecifyKind(journal.Manifest.CreatedUtc, DateTimeKind.Utc);
             cases.Add(new(journal.Id, journal.Manifest.Description, created, journal.Committed, files));
         }
@@ -134,16 +136,18 @@ public sealed partial class SourcePublisher
     /// </summary>
     public IReadOnlyList<string> SaveFiles(string saveId)
     {
-        if (!IsSaveId(saveId) || !Directory.Exists(SourceProject.Resolve(root, RecoveryFolder))) return [];
-        using FileStream gate = Lock();
-        if (!File.Exists(Path.Combine(JournalPath(saveId), ManifestName))) return [];
-        Journal journal = Load(saveId);
+        using DirectoryLease directories = new(); directories.Hold(root);
+        if (!IsSaveId(saveId) || !ExistingDirectory(directories, SourceProject.Resolve(root, RecoveryFolder))) return [];
+
+        using FileStream gate = Lock(directories);
+        if (!Exists(directories, Path.Combine(JournalPath(saveId), ManifestName))) return [];
+        Journal journal = Load(directories, saveId);
         return journal.RolledBack ? [] : [.. journal.Manifest.Files.Select(f => f.Relative)];
     }
 
-    private SourceRecoveryFileState State(JournalFile file, CancellationToken token)
+    private SourceRecoveryFileState State(DirectoryLease directories, JournalFile file, CancellationToken token)
     {
-        Probe probe = LookAt(file.Relative, token, file.Expected, file.Content);
+        Probe probe = LookAt(directories, file.Relative, token, file.Expected, file.Content);
         return probe.Is(file.Expected) ? SourceRecoveryFileState.Before : probe.Is(file.Content) ? SourceRecoveryFileState.After
             : probe.Kind == Presence.Absent ? SourceRecoveryFileState.Missing : SourceRecoveryFileState.Other;
     }
@@ -165,47 +169,49 @@ public sealed partial class SourcePublisher
     /// </remarks>
     public SourceRecoveryResult Resolve(string saveId, SourceRecoveryAction action, CancellationToken token = default)
     {
+        using DirectoryLease directories = new(); directories.Hold(root);
         if (!IsSaveId(saveId)) throw new ArgumentException($"'{saveId}' is not a save identity.", nameof(saveId));
         if (!Enum.IsDefined(action)) throw new ArgumentOutOfRangeException(nameof(action));
         token.ThrowIfCancellationRequested();
-        using FileStream gate = Lock();
-        if (!File.Exists(Path.Combine(JournalPath(saveId), ManifestName))) throw new FileNotFoundException($"There is no save journal {saveId} in {RecoveryFolder}.");
-        Journal journal = Load(saveId, token: token);
+
+        using FileStream gate = Lock(directories);
+        if (!Exists(directories, Path.Combine(JournalPath(saveId), ManifestName))) throw new FileNotFoundException($"There is no save journal {saveId} in {RecoveryFolder}.");
+        Journal journal = Load(directories, saveId, token: token);
         token.ThrowIfCancellationRequested();
-        if (journal.RolledBack) return HasFiles(Path.Combine(JournalPath(saveId), HeldFolder)) ? Abandon(journal) : Retire(saveId);
+        if (journal.RolledBack) return HasFiles(directories, Path.Combine(JournalPath(saveId), HeldFolder)) ? Abandon(directories, journal) : Retire(directories, saveId);
         return action switch
         {
             SourceRecoveryAction.RollBack when journal.Committed => throw new InvalidOperationException($"The save {saveId} was committed: its files are final and only its cleanup remains. Complete or abandon it instead."),
-            SourceRecoveryAction.RollBack => RollBack(journal, token),
-            SourceRecoveryAction.Complete when journal.Committed => Retire(saveId),
-            SourceRecoveryAction.Complete => Complete(journal, token),
-            _ => Abandon(journal),
+            SourceRecoveryAction.RollBack => RollBack(directories, journal, token),
+            SourceRecoveryAction.Complete when journal.Committed => Retire(directories, saveId),
+            SourceRecoveryAction.Complete => Complete(directories, journal, token),
+            _ => Abandon(directories, journal),
         };
     }
 
-    private SourceRecoveryResult RollBack(Journal journal, CancellationToken token)
+    private SourceRecoveryResult RollBack(DirectoryLease directories, Journal journal, CancellationToken token)
     {
         string folder = JournalPath(journal.Id); var files = journal.Manifest.Files;
         List<string> changed = []; List<SourceRecoveryConflict> conflicts = [];
-        using (EventLog log = EventLog.Open(folder, files.Count))
+        using (EventLog log = EventLog.Open(directories, folder, files.Count))
         {
             log.Append("rollback", -1);
             for (int i = files.Count - 1; i >= 0; i--)
             {
                 if (token.IsCancellationRequested) throw Canceled(journal.Id, changed, conflicts, token);
                 JournalFile file = files[i];
-                bool moved = File.Exists(HeldPath(folder, i));
+                bool moved = Exists(directories, HeldPath(folder, i));
                 // Files the save never reached (no intent is recorded before a file is touched) keep whatever they have.
                 if (!journal.Intended(i) && !moved) continue;
                 // Reading a large file to compare it gives way to the cancellation, which then counts as coming between files.
                 bool installed;
-                try { installed = file.Content != null && LookAt(file.Relative, token, file.Content).Is(file.Content); }
+                try { installed = file.Content != null && LookAt(directories, file.Relative, token, file.Content).Is(file.Content); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw Canceled(journal.Id, changed, conflicts, token); }
-                var (done, conflict) = Undo(folder, file, i, log, moved, installed);
+                var (done, conflict) = Undo(directories, folder, file, i, log, moved, installed);
                 if (done) changed.Add(file.Relative);
                 try
                 {
-                    conflict ??= State(file, token) switch
+                    conflict ??= State(directories, file, token) switch
                     {
                         SourceRecoveryFileState.Before => null,
                         SourceRecoveryFileState.Missing => new(file.Relative, "is missing and its original is not in the save journal; it was not recreated"),
@@ -217,22 +223,27 @@ public sealed partial class SourcePublisher
             }
             changed.Reverse(); conflicts.Reverse();
             // Only empty folders go, so this is safe beside a conflict.
-            RemoveFolders(journal.Manifest.Folders);
+            RemoveFolders(directories, journal.Manifest.Folders);
             if (conflicts.Count > 0) return new(changed, conflicts, false);
             log.Append("rolled-back", -1);
         }
-        return Retire(journal.Id, changed);
+        return Retire(directories, journal.Id, changed);
     }
 
     /// <summary>
     /// Undoes what a save did to one file: takes back the new content it installed (only while that content is unchanged),
     /// then returns the original it moved aside (only while the name is free).
     /// </summary>
-    private (bool Changed, SourceRecoveryConflict? Conflict) Undo(string journal, JournalFile file, int index, EventLog log, bool moved, bool installed)
+    private (bool Changed, SourceRecoveryConflict? Conflict) Undo(DirectoryLease directories, string journal, JournalFile file, int index, EventLog log, bool moved, bool installed)
     {
         string path = SourceProject.Resolve(root, file.Relative), held = HeldPath(journal, index); bool changed = false;
         try
         {
+            // A previous rollback may already have removed a newly-created file and its now-empty parent. There is
+            // nothing to reopen or recreate in that case; the caller still checks the current state for conflicts.
+            if (!moved && !installed) { Step("undo", index); return (false, null); }
+            directories.Parent(path, create: moved);
+            if (moved) directories.Parent(held); else directories.Hold(journal);
             Step("undo", index);
             SourceProject.RejectNestedLinks(root, file.Relative);
             CheckWorkingPath(held); CheckWorkingPath(Path.Combine(journal, TakenFolder));
@@ -240,27 +251,27 @@ public sealed partial class SourcePublisher
                 return (false, new(file.Relative, "the save journal holds an unexpected original; nothing was replaced"));
             // Validate and hold the original BEFORE taking back the valid installed file. A damaged or replaced
             // recovery copy must not destroy the only good version, and cannot change between verification and rename.
-            using SealedFile? original = moved ? SealedFile.Open(held, file.Expected!) : null;
+            using SealedFile? original = moved ? SealedFile.Open(held, file.Expected!, directories) : null;
             if (installed && file.Content is { } content)
             {
                 if (file.Expected != null && !moved) return (false, new(file.Relative, "has the saved content but its original is no longer in the save journal, so it was left as it is"));
                 string taken = TakenPath(journal, index);
-                switch (MoveIfContent(path, taken, content))
+                switch (MoveIfContent(path, taken, content, directories))
                 {
                     case Moved.Done: changed = true; log.Append("removed", index); break;
                     case Moved.Stranded: return (true, new(file.Relative, $"was replaced by another program while the save was undone; that file was kept as {Display(taken)}"));
                     default:
-                        if (Path.Exists(path)) return (false, new(file.Relative, "was changed by another program after the save wrote it, so it was left as it is" + (moved ? $"; its original remains as {Display(held)}" : "")));
+                        if (Exists(directories, path)) return (false, new(file.Relative, "was changed by another program after the save wrote it, so it was left as it is" + (moved ? $"; its original remains as {Display(held)}" : "")));
                         break;
                 }
             }
             if (moved)
             {
-                if (Path.Exists(path))
+                if (Exists(directories, path))
                 {
                     // Another program already put the original content back: the journal's copy is a duplicate. Not
                     // canceled part-way, as the file may have changed above; only a file of the original's length is read.
-                    if (Look(path, default, file.Expected).Is(file.Expected)) return (changed, null);
+                    if (Look(directories, path, default, file.Expected).Is(file.Expected)) return (changed, null);
                     return (changed, new(file.Relative, $"holds content from another program, so its original was not put back; it remains as {Display(held)}"));
                 }
                 original!.MoveTo(path); changed = true; log.Append("restored", index);
@@ -271,7 +282,7 @@ public sealed partial class SourcePublisher
         { return (changed, new(file.Relative, $"could not be restored: {ex.Message}")); }
     }
 
-    private SourceRecoveryResult Complete(Journal journal, CancellationToken token)
+    private SourceRecoveryResult Complete(DirectoryLease directories, Journal journal, CancellationToken token)
     {
         string folder = JournalPath(journal.Id), staging = StagingPath(journal.Id); var files = journal.Manifest.Files;
         // Decide first: nothing changes unless every file can be finished.
@@ -279,12 +290,12 @@ public sealed partial class SourcePublisher
         for (int i = 0; i < files.Count; i++)
         {
             token.ThrowIfCancellationRequested();
-            if (Blocker(folder, files[i], i, token) is { } blocker) conflicts.Add(blocker);
+            if (Blocker(directories, folder, files[i], i, token) is { } blocker) conflicts.Add(blocker);
         }
         if (conflicts.Count > 0) return new([], conflicts, false);
         token.ThrowIfCancellationRequested();
         List<string> changed = [];
-        using (EventLog log = EventLog.Open(folder, files.Count))
+        using (EventLog log = EventLog.Open(directories, folder, files.Count))
         {
             for (int i = 0; i < files.Count; i++)
             {
@@ -292,36 +303,46 @@ public sealed partial class SourcePublisher
                 JournalFile file = files[i]; string path = SourceProject.Resolve(root, file.Relative), held = HeldPath(folder, i);
                 try
                 {
+
+                    try { directories.Parent(path, create: file.Content != null); }
+                    catch (Exception ex) when (file.Content == null && ex is FileNotFoundException or DirectoryNotFoundException)
+                    {
+                        // A completed deletion can also have lost its now-empty parent. The probe after the fault hook
+                        // still verifies the requested absence; recovery neither recreates the parent nor declares a conflict.
+                    }
+                   directories.Hold(folder);
+                   directories.Parent(held, create: true);
+                   directories.Hold(staging, create: true);
                     Step("complete", i);
                     SourceProject.RejectNestedLinks(root, file.Relative);
                     CheckJournalPaths(journal.Id); CheckWorkingPath(held);
                     // A file whose turn has come is completed, as a cancellation is observed between files; the check above
                     // already read it (giving way to the cancellation), and only a file of a journaled length is read again.
-                    Probe probe = Look(path, default, file.Content, file.Expected);
+                    Probe probe = Look(directories, path, default, file.Content, file.Expected);
                     if (probe.Is(file.Content)) continue;
                     log.Append("intent", i);
                     if (file.Expected is { } expected && probe.Is(expected))
                     {
-                        if (MoveIfContent(path, held, expected) is not Moved.Done and var outcome)
+                        if (MoveIfContent(path, held, expected, directories) is not Moved.Done and var outcome)
                         {
                             conflicts.Add(new(file.Relative, outcome == Moved.Stranded ? $"was replaced by another program while the save was being completed; the replaced file was kept as {Display(held)}" : "changed while the save was being completed; it was left as it is"));
                             continue;
                         }
                         log.Append("held", i);
                     }
-                    else if (!probe.Is(file.Expected) && !(probe.Kind == Presence.Absent && Look(held, default, file.Expected).Is(file.Expected)))
+                    else if (!probe.Is(file.Expected) && !(probe.Kind == Presence.Absent && Look(directories, held, default, file.Expected).Is(file.Expected)))
                     { conflicts.Add(new(file.Relative, "changed while the save was being completed; it was left as it is")); continue; }
                     if (file.Content is { } content)
                     {
                         string temporary = StagedPath(staging, i);
-                        SourceProject.RejectNestedLinks(root, StagingFolder); Directory.CreateDirectory(staging);
-                        WriteVerified(temporary, NewContent(folder, i, content));
-                        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                        SourceProject.RejectNestedLinks(root, StagingFolder); directories.Hold(staging, create: true);
+                        WriteVerified(directories, temporary, NewContent(directories, folder, i, content));
+                       directories.Parent(path, create: true);
                         // Held from its check against the journaled content until it is in place (see SealedFile).
-                        using (SealedFile staged = SealedFile.Open(temporary, content))
+                        using (SealedFile staged = SealedFile.Open(temporary, content, directories))
                         {
                             try { staged.MoveTo(path); }
-                            catch (IOException) when (Path.Exists(path)) { conflicts.Add(new(file.Relative, "was created by another program while the save was being completed; it was not replaced")); continue; }
+                            catch (IOException) when (Exists(directories, path)) { conflicts.Add(new(file.Relative, "was created by another program while the save was being completed; it was not replaced")); continue; }
                         }
                         log.Append("installed", i);
                     }
@@ -333,7 +354,7 @@ public sealed partial class SourcePublisher
             if (conflicts.Count > 0) return new(changed, conflicts, false);
             log.Append("committed", -1);
         }
-        return Retire(journal.Id, changed);
+        return Retire(directories, journal.Id, changed);
     }
 
     /// <summary>
@@ -350,25 +371,26 @@ public sealed partial class SourcePublisher
     }
 
     /// <summary>Why one file of a save cannot be completed, or null when it can.</summary>
-    private SourceRecoveryConflict? Blocker(string journal, JournalFile file, int index, CancellationToken token)
+    private SourceRecoveryConflict? Blocker(DirectoryLease directories, string journal, JournalFile file, int index, CancellationToken token)
     {
-        Probe probe = LookAt(file.Relative, token, file.Content, file.Expected); string held = HeldPath(journal, index);
+        Probe probe = LookAt(directories, file.Relative, token, file.Content, file.Expected); string held = HeldPath(journal, index);
         if (probe.Is(file.Content)) return null;
-        if (file.Content is { } content && !Look(AfterPath(journal, index), token, content).Is(content)) return new(file.Relative, "cannot be completed because the save journal's copy of its new content is missing or damaged");
+        if (file.Content is { } content && !Look(directories, AfterPath(journal, index), token, content).Is(content)) return new(file.Relative, "cannot be completed because the save journal's copy of its new content is missing or damaged");
         if (probe.Is(file.Expected))
-            return file.Expected != null && File.Exists(held) ? new(file.Relative, $"has its original content while the save journal also holds an original ({Display(held)}); it was left as it is") : null;
+            return file.Expected != null && Exists(directories, held) ? new(file.Relative, $"has its original content while the save journal also holds an original ({Display(held)}); it was left as it is") : null;
         if (probe.Kind == Presence.Absent)
-            return !File.Exists(held) ? new(file.Relative, "is missing and its original is not in the save journal; it was not recreated")
-                : Look(held, token, file.Expected).Is(file.Expected) ? null : new(file.Relative, $"cannot be completed because the original the save journal holds ({Display(held)}) differs from the one the save expected");
+            return !Exists(directories, held) ? new(file.Relative, "is missing and its original is not in the save journal; it was not recreated")
+                : Look(directories, held, token, file.Expected).Is(file.Expected) ? null : new(file.Relative, $"cannot be completed because the original the save journal holds ({Display(held)}) differs from the one the save expected");
         return new(file.Relative, "was changed by another program; it was left as it is");
     }
 
     /// <summary>The journal's copy of a new content, read only when it has the journaled length (it may have been replaced since it was checked).</summary>
-    private byte[] NewContent(string journal, int index, JournalDigest content)
+    private byte[] NewContent(DirectoryLease directories, string journal, int index, JournalDigest content)
     {
         const string Damaged = "the save journal's copy of its new content is damaged.";
         CheckWorkingPath(AfterPath(journal, index));
-        using FileStream stream = new(AfterPath(journal, index), FileMode.Open, FileAccess.Read, FileShare.Read);
+        directories.Parent(AfterPath(journal, index));
+        using FileStream stream = directories.OpenFile(AfterPath(journal, index), FileMode.Open, FileAccess.Read, FileShare.Read);
         if (stream.Length != content.Length) throw new InvalidDataException(Damaged);
         if (content.Length > Array.MaxLength) throw new InvalidDataException("its new content is larger than a source file can be.");
         byte[] bytes = new byte[content.Length]; stream.ReadExactly(bytes);
@@ -376,25 +398,29 @@ public sealed partial class SourcePublisher
         return bytes;
     }
 
-    private SourceRecoveryResult Abandon(Journal journal)
+    private SourceRecoveryResult Abandon(DirectoryLease directories, Journal journal)
     {
         string folder = JournalPath(journal.Id);
-        if (!HasFiles(Path.Combine(folder, HeldFolder)) && !HasFiles(Path.Combine(folder, TakenFolder))) return Retire(journal.Id);
+        // Early interrupted saves may have made a target's parent before moving any original. Retire those empty
+        // journal-listed folders too; folders holding saved or external files remain untouched.
+        RemoveFolders(directories, journal.Manifest.Folders);
+        if (!HasFiles(directories, Path.Combine(folder, HeldFolder)) && !HasFiles(directories, Path.Combine(folder, TakenFolder))) return Retire(directories, journal.Id);
         // Originals (and files taken back from other programs) are kept where the user can find them.
         SourceProject.RejectNestedLinks(root, AbandonedFolder);
         string abandoned = SourceProject.Resolve(root, AbandonedFolder), destination = Path.Combine(abandoned, journal.Id);
-        Directory.CreateDirectory(abandoned);
-        for (int n = 2; Path.Exists(destination); n++) destination = Path.Combine(abandoned, $"{journal.Id}-{n}");
-        Directory.Move(folder, destination);
-        TryDelete(StagingPath(journal.Id));
+        directories.Hold(abandoned, create: true); directories.Hold(folder);
+        for (int n = 2; Exists(directories, destination); n++) destination = Path.Combine(abandoned, $"{journal.Id}-{n}");
+       directories.MoveDirectory(folder, destination);
+
+        TryDelete(directories, StagingPath(journal.Id));
         return new([], [], true);
     }
 
     /// <summary>Removes a finished journal; a journal that cannot be removed is reported and retried by the next save.</summary>
-    private SourceRecoveryResult Retire(string id, IReadOnlyList<string>? changed = null)
+    private SourceRecoveryResult Retire(DirectoryLease directories, string id, IReadOnlyList<string>? changed = null)
     {
-        Discard(id);
-        return Directory.Exists(JournalPath(id))
+        Discard(directories, id);
+        return ExistingDirectory(directories, JournalPath(id))
             ? new(changed ?? [], [new(RecoveryFolder + "/" + id, "could not be removed; close programs that use it and resolve the save again")], false)
             : new(changed ?? [], [], true);
     }
@@ -403,14 +429,15 @@ public sealed partial class SourcePublisher
     /// Every readable journal in the recovery folder, oldest first; a journal that cannot be read blocks saving. Every entry of
     /// the folder counts towards <see cref="ScanLimit"/>, a journal or not, and <paramref name="token"/> is observed at each.
     /// </summary>
-    private List<Journal> Journals(CancellationToken token)
+    private List<Journal> Journals(DirectoryLease directories, CancellationToken token)
     {
         string recovery = SourceProject.Resolve(root, RecoveryFolder);
-        if (!Directory.Exists(recovery)) return [];
+        if (!ExistingDirectory(directories, recovery)) return [];
         List<string> ids = [];
-        foreach (var entry in SourceProject.Entries(recovery, WorkingBudget(RecoveryFolder, token)))
+        foreach (var entry in WorkingEntries(directories, recovery, WorkingBudget(RecoveryFolder, token)))
         {
-            if (entry is not DirectoryInfo directory || !IsSaveId(directory.Name) || directory.Attributes.HasFlag(FileAttributes.ReparsePoint) || !File.Exists(Path.Combine(directory.FullName, ManifestName))) continue;
+            if (!entry.IsDirectory || !IsSaveId(entry.Name) || entry.Attributes.HasFlag(FileAttributes.ReparsePoint) || !Exists(directories, Path.Combine(entry.FullName, ManifestName))) continue;
+            var directory = entry;
             if (ids.Count == MaximumJournals) throw new SourceRecoveryRequiredException($"{RecoveryFolder} holds more than {MaximumJournals} save journals; resolve or move them before saving.", directory.Name, []);
             ids.Add(directory.Name);
         }
@@ -418,7 +445,7 @@ public sealed partial class SourcePublisher
         foreach (string id in ids.Order(StringComparer.Ordinal))
         {
             token.ThrowIfCancellationRequested();
-            var journal = Load(id, remaining, token);
+            var journal = Load(directories, id, remaining, token);
             remaining -= journal.WorkingBytes;
             if ((files += journal.Manifest.Files.Count) > RecoveryFilesLimit)
                 throw new SourceRecoveryRequiredException($"The save journals together list more than {RecoveryFilesLimit:N0} files; resolve or move journals before opening recovery again.", id, []);
@@ -427,14 +454,14 @@ public sealed partial class SourcePublisher
         return journals;
     }
 
-    private Journal Load(string id, long maximumBytes = MaximumManifestBytes, CancellationToken token = default)
+    private Journal Load(DirectoryLease directories, string id, long maximumBytes = MaximumManifestBytes, CancellationToken token = default)
     {
         string folder = JournalPath(id);
         try
         {
             CheckJournalPaths(id);
-            JournalManifest manifest = ReadManifest(folder, id, maximumBytes, out long bytes);
-            var events = EventLog.Read(folder, manifest.Files.Count, maximumBytes - bytes, out long eventBytes, token);
+            JournalManifest manifest = ReadManifest(directories, folder, id, maximumBytes, out long bytes);
+            var events = EventLog.Read(directories, folder, manifest.Files.Count, maximumBytes - bytes, out long eventBytes, token);
             return new(manifest, events, bytes + eventBytes);
         }
         catch (Exception ex) when (ex is InvalidDataException or JsonException or IOException or UnauthorizedAccessException)
@@ -443,19 +470,22 @@ public sealed partial class SourcePublisher
         }
     }
 
-    private static void WriteManifest(string journal, JournalManifest manifest)
+    private static void WriteManifest(DirectoryLease directories, string journal, JournalManifest manifest)
     {
         // Written whole under another name first, so a manifest that exists is complete.
         string temporary = Path.Combine(journal, ManifestName + ".tmp");
-        WriteDurable(temporary, JsonSerializer.SerializeToUtf8Bytes(manifest, JournalJson));
-        File.Move(temporary, Path.Combine(journal, ManifestName), false);
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JournalJson);
+        directories.Hold(journal);
+        WriteDurable(directories, temporary, bytes);
+        using SealedFile complete = SealedFile.Open(temporary, JournalDigest.OfContent(bytes), directories);
+        complete.MoveTo(Path.Combine(journal, ManifestName));
     }
 
-    private JournalManifest ReadManifest(string journal, string id, long maximumBytes, out long length)
+    private JournalManifest ReadManifest(DirectoryLease directories, string journal, string id, long maximumBytes, out long length)
     {
-        FileInfo info = new(Path.Combine(journal, ManifestName));
-        if (info.Length > MaximumManifestBytes) throw new InvalidDataException($"its manifest is larger than {MaximumManifestBytes:N0} bytes.");
-        byte[] bytes = SourceRead.All(info.FullName, Math.Min(MaximumManifestBytes, maximumBytes)); length = bytes.LongLength;
+        directories.Hold(journal);
+        using FileStream stream = directories.OpenFile(Path.Combine(journal, ManifestName), FileMode.Open, FileAccess.Read, FileShare.Read);
+        byte[] bytes = SourceRead.All(stream, Math.Min(MaximumManifestBytes, maximumBytes), "its manifest"); length = bytes.LongLength;
         JournalManifest manifest = JsonSerializer.Deserialize<JournalManifest>(bytes, JournalJson) ?? throw new InvalidDataException("its manifest is empty.");
         if (manifest.Format != JournalFormat) throw new InvalidDataException($"its format {manifest.Format} is not supported by this version of zStudio.");
         if (manifest.SaveId != id) throw new InvalidDataException($"its manifest belongs to the save {manifest.SaveId}.");
@@ -499,9 +529,9 @@ public sealed partial class SourcePublisher
         private readonly FileStream stream; private int count; private bool broken;
         private EventLog(FileStream stream, int count) { this.stream = stream; this.count = count; }
 
-        public static EventLog Open(string journal, int files)
+        public static EventLog Open(DirectoryLease directories, string journal, int files)
         {
-            FileStream stream = new(Path.Combine(journal, EventsName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
+            FileStream stream = directories.OpenFile(Path.Combine(journal, EventsName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
             try
             {
                 var (events, valid) = Parse(Contents(stream), files);
@@ -512,12 +542,13 @@ public sealed partial class SourcePublisher
             catch { stream.Dispose(); throw; }
         }
 
-        public static IReadOnlyList<JournalEvent> Read(string journal, int files, long maximumBytes, out long length, CancellationToken token)
+        public static IReadOnlyList<JournalEvent> Read(DirectoryLease directories, string journal, int files, long maximumBytes, out long length, CancellationToken token)
         {
             length = 0;
             string path = Path.Combine(journal, EventsName);
-            if (!File.Exists(path)) return [];
-            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (!Exists(directories, path)) return [];
+
+            using FileStream stream = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             var bytes = Contents(stream, maximumBytes, token); length = bytes.Length;
             return Parse(bytes, files, token).Events;
         }
@@ -540,7 +571,7 @@ public sealed partial class SourcePublisher
             try { Append(step, index); return true; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException) { return false; }
         }
-        public void Dispose() => stream.Dispose();
+        public void Dispose() { stream.Dispose();  }
 
         private static byte[] Contents(FileStream stream, long maximumBytes = MaximumBytes, CancellationToken token = default)
         {

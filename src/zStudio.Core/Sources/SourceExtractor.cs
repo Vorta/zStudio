@@ -31,7 +31,8 @@ public static class SourceExtractor
         if (!Directory.Exists(corpusRoot)) throw new DirectoryNotFoundException("The game data folder does not exist.");
         SourceProject.ValidateSeparate(projectRoot, corpusRoot, "project folder");
         SourceProject.RejectLinks(projectRoot);
-        if (Directory.Exists(projectRoot) && Directory.EnumerateFileSystemEntries(projectRoot).Any()) throw new IOException("Choose a new or empty folder for the source project.");
+        using Writes writes = new(projectRoot, corpusRoot);
+        writes.CheckEmptyRoot();
         var all = Corpus(corpusRoot, token);
         // The game reads its data from the folder itself and its mission folders (mN): only those files are reconstructed
         // and decide whether the folder can be. Files anywhere else, such as a demo copied into a subfolder, are not read.
@@ -60,9 +61,12 @@ public static class SourceExtractor
         // Every probe hashed the same held file it inspected. All later reads, including the original-data check,
         // must match that content, even when another program preserves the file's size and modification time.
         if (!await CarriesDefinitionsAsync(files, checkedContent, retainedBudget, token)) throw new InvalidDataException(NotOriginal);
-        Writes writes = new(projectRoot);
-        writes.CreateDirectory(projectRoot);
-        try { return await ExtractFilesAsync(projectRoot, files, checkedContent, [.. all.Where(f => !GameFile(f.Relative)).Select(f => f.Relative)], writes, retainedBudget, progress, token); }
+        try
+        {
+            writes.CreateDirectory(projectRoot);
+            writes.CheckEmptyRoot();
+            return await ExtractFilesAsync(projectRoot, files, checkedContent, [.. all.Where(f => !GameFile(f.Relative)).Select(f => f.Relative)], writes, retainedBudget, progress, token);
+        }
         catch (Exception stopped)
         {
             // The folder was new or empty: remove everything this reconstruction wrote so it can be retried. Only that: a file
@@ -176,20 +180,41 @@ public static class SourceExtractor
     /// The files and folders a reconstruction created, in order, and the content it left in each file, so that stopping
     /// removes exactly those. Files are created as new files: a name another program took during the run is never replaced.
     /// </summary>
-    private sealed class Writes(string root)
+    private sealed class Writes(string root, string inputRoot) : IDisposable
     {
         /// <summary>The content each created file has (null: unknown, after a write that failed and could not be undone).</summary>
         private readonly Dictionary<string, JournalDigest?> files = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> folders = [];
+        private readonly HashSet<string> knownFolders = new(StringComparer.OrdinalIgnoreCase);
+        private readonly DirectoryLease directories = new();
+        public void Dispose() => directories.Dispose();
         private static readonly JournalDigest Empty = JournalDigest.Of(Array.Empty<byte>())!;
         /// <summary>Creates <paramref name="folder"/> with the parents it lacks, recording each one created.</summary>
         internal void CreateDirectory(string folder)
         {
-            SourceProject.RejectLinks(folder);
-            List<string> missing = [];
-            for (string? f = folder; f != null && !Directory.Exists(f); f = Path.GetDirectoryName(f)) missing.Add(f);
-            Directory.CreateDirectory(folder);
-            folders.AddRange(Enumerable.Reverse(missing));
+            folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+            SourceProject.ValidateSeparate(directories.CapturedPath(root), inputRoot, "project folder");
+            if (knownFolders.Contains(folder)) return;
+            try { directories.Hold(folder); }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                if (Path.GetDirectoryName(folder) is not { } parent) throw;
+                CreateDirectory(parent);
+                if (folder.Equals(root, StringComparison.OrdinalIgnoreCase))
+                    SourceProject.ValidateSeparate(directories.CapturedPath(folder), inputRoot, "project folder");
+                // A name somebody else takes after the failed open is not ours to write or remove.
+                directories.CreateDirectory(folder);
+                folders.Add(folder);
+            }
+            knownFolders.Add(folder);
+        }
+        internal void CheckEmptyRoot()
+        {
+            SourceProject.ValidateSeparate(directories.CapturedPath(root), inputRoot, "project folder");
+            try { directories.Hold(root); }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return; }
+            SourceProject.ValidateSeparate(directories.CapturedPath(root), inputRoot, "project folder");
+            if (directories.Entries(root).Any()) throw new IOException("Choose a new or empty folder for the source project.");
         }
         /// <summary>
         /// Creates <paramref name="path"/> with <paramref name="bytes"/> (and its modification time). No other program can
@@ -198,11 +223,12 @@ public static class SourceExtractor
         /// </summary>
         internal async Task CreateAsync(string path, byte[] bytes, DateTime? modified, CancellationToken token)
         {
+            directories.Parent(path);
             CheckPath(path);
             FileStream stream;
             // Unbuffered, so nothing reaches the file after a failed write is undone.
-            try { stream = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, 1, FileOptions.Asynchronous); }
-            catch (IOException ex) when (Path.Exists(path))
+            try { stream = directories.OpenFile(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, 1, FileOptions.Asynchronous); }
+            catch (IOException ex) when (Exists(path))
             { throw new IOException($"{Display(path)} was created by another program during the reconstruction; it was not replaced, and the reconstruction stopped.", ex); }
             await using (stream)
             {
@@ -217,10 +243,11 @@ public static class SourceExtractor
         /// </summary>
         internal async Task ReplaceAsync(string path, byte[] bytes, CancellationToken token)
         {
+            directories.Parent(path);
             CheckPath(path);
             if (!files.TryGetValue(path, out var written) || written == null) throw new InvalidOperationException($"{Display(path)} was not written by this reconstruction.");
             FileStream stream;
-            try { stream = new(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, 1, FileOptions.Asynchronous); }
+            try { stream = directories.OpenFile(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, 1, FileOptions.Asynchronous); }
             catch (FileNotFoundException ex) { throw ChangedDuringRun(path, ex); }
             catch (DirectoryNotFoundException ex) { throw ChangedDuringRun(path, ex); }
             await using (stream)
@@ -259,6 +286,19 @@ public static class SourceExtractor
             SourceProject.RejectNestedLinks(root, SourceProject.Relative(root, path));
         }
 
+        private bool Exists(string path) => directories.Exists(path);
+
+        internal bool Contains(string path) => files.ContainsKey(path);
+        internal byte[] Read(string path, CancellationToken token)
+        {
+            if (!files.TryGetValue(path, out var expected) || expected == null) throw ChangedDuringRun(path);
+            using var input = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (input.Length != expected.Length) throw ChangedDuringRun(path);
+            byte[] bytes = SourceRead.All(input, FormatRegistry.MaximumDocumentBytes, path, token);
+            if (JournalDigest.OfContent(bytes) != expected) throw ChangedDuringRun(path);
+            return bytes;
+        }
+
         /// <summary>
         /// Deletes the recorded files that still have the content this reconstruction left in them, then the recorded
         /// folders left empty, deepest first. Returns the files left because another program changed them, and those that
@@ -269,23 +309,27 @@ public static class SourceExtractor
             List<string> changed = [], failed = [];
             foreach (var (path, content) in files)
             {
-                if (content == null) { if (Path.Exists(path)) failed.Add(Display(path)); continue; }
                 // Moved to a new name beside it and deleted there, only while it is this run's file.
                 string holding = Path.Combine(Path.GetDirectoryName(path)!, $".zstudio-removing-{Guid.NewGuid():N}");
                 try
                 {
-                    switch (SourcePublisher.MoveIfContent(path, holding, content))
+                    if (content == null) { if (Exists(path)) failed.Add(Display(path)); continue; }
+                    switch (SourcePublisher.MoveIfContent(path, holding, content, directories))
                     {
-                        case SourcePublisher.Moved.Done: File.Delete(holding); break;
+                        case SourcePublisher.Moved.Done: directories.DeleteFile(holding); break;
                         case SourcePublisher.Moved.Stranded: changed.Add(Display(holding)); break;
-                        default: if (Path.Exists(path)) changed.Add(Display(path)); break;
+                        default: if (Exists(path)) changed.Add(Display(path)); break;
                     }
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { failed.Add(Display(Path.Exists(holding) ? holding : path)); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    try { failed.Add(Display(Exists(holding) ? holding : path)); }
+                    catch (Exception inspect) when (inspect is IOException or UnauthorizedAccessException) { failed.Add(Display(path)); }
+                }
             }
             // A folder that is not empty holds files reported above or another program's, and stays.
             for (int i = folders.Count - 1; i >= 0; i--)
-                try { SourceProject.RejectLinks(folders[i]); if (Directory.Exists(folders[i]) && !Directory.EnumerateFileSystemEntries(folders[i]).Any()) Directory.Delete(folders[i]); }
+                try { if (!directories.Entries(folders[i]).Any()) directories.DeleteDirectory(folders[i]); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { failed.Add(folders[i]); }
             return (changed, failed);
         }
@@ -341,7 +385,10 @@ public static class SourceExtractor
                         await context.ExtractResourcesAsync(relative, members); family = "resources";
                     }
                 }
-                else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Scripts, Version: 7 }) { Retain(relative, 8L * bytes.LongLength); await context.ExtractScriptsAsync(relative, bytes); family = "scripts"; }
+                // Tiny/empty stored tokens become string references, instruction objects,
+                // reconstruction copies and text. Eight times the file size did not even
+                // cover the two decoded reference arrays for one-byte empty tokens.
+                else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.Scripts, Version: 7 }) { Retain(relative, ScriptDecodeReservation(bytes.LongLength)); await context.ExtractScriptsAsync(relative, bytes); family = "scripts"; }
                 else if (probe is { Recognition: Recognition.Supported, Family: FormatFamily.GameZ, Version: 15 } && MissionWorld(relative))
                 {
                     RequireReconstructionCapacity(relative, retained, WorldDecodeReservation(bytes.LongLength), budget);
@@ -398,6 +445,7 @@ public static class SourceExtractor
     // Includes source bytes, decoded document metadata/geometry and the simultaneously created world.
     // Only Footprint(world) is retained after decoding; temporary decoder allocations are no longer rooted.
     internal static long WorldDecodeReservation(long inputBytes) => checked(64L * inputBytes + 64 * 1024);
+    internal static long ScriptDecodeReservation(long inputBytes) => checked(96L * inputBytes + 64 * 1024);
     internal static void RequireReconstructionCapacity(string relative, long retained, long additional, long budget)
     {
         if (additional < 0 || retained > budget || additional > budget - retained)
@@ -733,7 +781,7 @@ public static class SourceExtractor
                 if (!WorldNodes.TryGetValue(mission, out var nodes)) { Notes.Add($"{relative}: the mission has no world, so its animations' keyframe scripts were not reconstructed."); continue; }
                 missions.Add(new(mission, Animation.AnimationPackage.Read(bytes, token), Stamps(bytes), nodes));
             }
-            var outputs = await Task.Run(() => AnimationSources.Reconstruct(missions, new DiskFiles(root), Notes, token, status), token);
+            var outputs = await Task.Run(() => AnimationSources.Reconstruct(missions, new DiskFiles(root, writes), Notes, token, status), token);
             // Scripts are new; definitions are the shipped ones rebuilt where they no longer matched anim.zbd.
             foreach (var output in outputs)
                 if (output.Path.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase)) await ReplaceAsync(output.Path, output.Bytes);
@@ -752,13 +800,12 @@ public static class SourceExtractor
             return stamps;
         }
         /// <summary>The project as written so far.</summary>
-        private sealed class DiskFiles(string root) : Worlds.IProjectFiles
+        private sealed class DiskFiles(string root, Writes writes) : Worlds.IProjectFiles
         {
-            public bool Exists(string relative) => File.Exists(SourceProject.Resolve(root, relative));
+            public bool Exists(string relative) => writes.Contains(SourceProject.Resolve(root, relative));
             public byte[] Read(string relative, CancellationToken token)
             {
-                SourceProject.RejectLinks(root); SourceProject.RejectNestedLinks(root, relative);
-                return SourceRead.All(SourceProject.Resolve(root, relative), FormatRegistry.MaximumDocumentBytes, token);
+                return writes.Read(SourceProject.Resolve(root, relative), token);
             }
         }
         /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle (support\bftmulti.gw).</summary>

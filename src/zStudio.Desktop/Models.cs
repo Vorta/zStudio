@@ -360,7 +360,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
             world.Workspace.Changed -= SourceEditsChanged;
             // The document showing the world owns the session; a replaced document only releases its build.
             if (world.Owner == this) world.Dispose();
-            if (SourceBuild != null) SourceWorldSession.DeleteBuild(SourceBuild.Folder);
+            if (SourceBuild != null) world.DeleteBuild(SourceBuild.Folder);
         }
     }
     private void DisposeCore() { IsDisposed = true; if (workspaceResolver != null) workspaceResolver.WorkspaceSnapshotsChanged -= ContentSnapshotsChanged; workspaceResolver?.SetWorkspaceSnapshots(SessionId, []); workspaceResolver?.EditOwnership.Release(SessionId); Disposing?.Invoke(); Lifetime.Cancel(); contextLoading?.Cancel(); contextLoading?.Dispose(); Lifetime.Dispose(); foreach (var a in Assets) a.Thumbnail = null; GC.SuppressFinalize(this); }

@@ -53,6 +53,7 @@ internal static partial class WorldSources
     internal static string ContentHash(GltfDocument canonical)
     {
         var (json, bin) = canonical.Write("content.bin");
+        CheckJsonLength(json);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(json); hash.AppendData(bin);
         return Convert.ToHexStringLower(hash.GetHashAndReset())[..16];
@@ -80,6 +81,14 @@ internal static partial class WorldSources
         // copied from each, and references that named their file by another path (see DatabaseRecords).
         HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
         Dictionary<WorldNode, IReadOnlyList<WorldNode>> parts = new(ReferenceEqualityComparer.Instance);
+        Dictionary<IReadOnlyList<WorldNode>, HashSet<WorldNode>> partMembers = new(ReferenceEqualityComparer.Instance);
+        HashSet<WorldNode>? PartMembers(WorldNode node)
+        {
+            if (!parts.TryGetValue(node, out var content)) return null;
+            if (!partMembers.TryGetValue(content, out var members))
+                partMembers[content] = members = new(content, ReferenceEqualityComparer.Instance);
+            return members;
+        }
         Dictionary<WorldNode, int> secondPaths = new(ReferenceEqualityComparer.Instance);
         IReadOnlyList<WorldNode> ContentOf(WorldNode reference) => parts.TryGetValue(reference, out var content) ? content : reference.Children;
         string? Spelled(WorldNode reference, string? uri) => uri == null ? null : string.Concat(Enumerable.Repeat("./", secondPaths.GetValueOrDefault(reference))) + uri;
@@ -178,7 +187,7 @@ internal static partial class WorldSources
             List<WorldNode> found = [];
             void Walk(WorldNode node)
             {
-                if (parts.TryGetValue(node, out var content)) { foreach (var child in node.Children) if (!content.Contains(child)) Walk(child); return; }
+                if (PartMembers(node) is { } content) { foreach (var child in node.Children) if (!content.Contains(child)) Walk(child); return; }
                 if (Reference(node)) { found.Add(node); return; }
                 foreach (var child in node.Children) Walk(child);
             }
@@ -196,8 +205,8 @@ internal static partial class WorldSources
             // earlier copy only once the later ones have lost the name, and then the copies' names or shapes differ and
             // they are not one part. The other copies' content is not the file's, so it is not visited (its references
             // would otherwise become files no file uses); their own records are the referencing file's.
-            bool laterCopy = parts.TryGetValue(node, out var copied) && Reference(node) && partUnits.ContainsKey(node.Name);
-            HashSet<WorldNode>? notFile = laterCopy ? new(copied!, ReferenceEqualityComparer.Instance) : null;
+            bool laterCopy = parts.ContainsKey(node) && Reference(node) && partUnits.ContainsKey(node.Name);
+            HashSet<WorldNode>? notFile = laterCopy ? PartMembers(node) : null;
             foreach (var child in node.Children) if (notFile == null || !notFile.Contains(child)) Visit(child, mission, textureDirectories);
             if (!Reference(node) || referenceOf.ContainsKey(node)) return;
             if (laterCopy) { var part = partUnits[node.Name]; part.Missions.Add(mission); referenceOf[node] = (part, mission); return; }
@@ -212,9 +221,10 @@ internal static partial class WorldSources
         {
             var doc = WorldGltf.Export(content, zone, new()
             {
+                Token = token,
                 Texture = t => ($"texture:{t.Name}", addressing(t.Name)),
                 Reference = n => referenceOf.TryGetValue(n, out var r) ? Spelled(n, $"ref:{r.Unit.Stem}:{r.Unit.Hash}") : null,
-                Content = n => parts.TryGetValue(n, out var c) ? [.. c] : null,
+                Content = n => parts.TryGetValue(n, out var c) ? c : null,
                 Group = groups.Contains,
                 Canonical = true,
             });
@@ -272,7 +282,7 @@ internal static partial class WorldSources
                 {
                     if (units.Add(r.Unit)) list.Add(r.Unit);
                     // A reference to a part keeps records of its own in the referencing file.
-                    if (parts.TryGetValue(node, out var content)) foreach (var child in node.Children.Where(c => !content.Contains(c))) pending.Push(child);
+                    if (PartMembers(node) is { } content) foreach (var child in node.Children.Where(c => !content.Contains(c))) pending.Push(child);
                     continue;
                 }
                 foreach (var child in node.Children) pending.Push(child);
@@ -388,6 +398,7 @@ internal static partial class WorldSources
             token.ThrowIfCancellationRequested();
             var doc = WorldGltf.Export(unit.Content, unit.Zone, new()
             {
+                Token = token,
                 Texture = t =>
                 {
                     // The image the build finds by name in the folders it searches, else the one the mission's packs held.
@@ -396,21 +407,34 @@ internal static partial class WorldSources
                     return (RelativeUri(folder, target), addressing(t.Name));
                 },
                 Reference = n => referenceOf.TryGetValue(n, out var r) && copyPaths.TryGetValue((r.Unit, folder), out var target) ? Spelled(n, RelativeUri(folder, target)) : null,
-                Content = n => parts.TryGetValue(n, out var c) ? [.. c] : null,
+                Content = n => parts.TryGetValue(n, out var c) ? c : null,
                 Group = groups.Contains,
             }, loadRoot);
             string stem = System.IO.Path.GetFileNameWithoutExtension(path);
-            var (json, bin) = doc.Write(stem + ".bin");
+            var (json, bin) = doc.Write(stem + ".bin", token);
+            CheckJsonLength(json);
             // Viewers show transparent textures and a pickup's collision volume hidden as the game does; builds read the same values.
             var root = (JsonObject)JsonNode.Parse(json)!;
             bool pickup = loads.Any(l => ReferenceEquals(l.Unit, unit) && WorldGltf.IsPickupName(l.Load.NodeName));
             if (WorldGltf.ApplyPresentation(root, uri => transparency?.Invoke(WorldAssembler.Relative(path, uri)), pickup))
-                json = Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                json = GltfJson.Write(root, indented: true, token);
+            CheckJsonLength(json);
+            // Re-open exactly the bytes being published through the source reader, including its aggregate metadata,
+            // accessor, hierarchy and buffer contracts. Only this document's emitted binary can resolve here;
+            // external references and images remain source URIs and the glTF reader does not load those assets.
+            _ = GltfDocument.Read(json, uri => uri == stem + ".bin" ? bin
+                : throw new InvalidDataException($"{path}: reconstructed glTF unexpectedly references buffer {uri}."), token);
             outputBudget.Retain(json.LongLength + bin.LongLength);
             outputs.Add(new(path, json));
             outputs.Add(new($"{folder}/{stem}.bin", bin));
         }
         return outputs;
+    }
+
+    private static void CheckJsonLength(byte[] json)
+    {
+        if (json.Length > GltfDocument.MaximumJsonBytes)
+            throw new InvalidDataException("The reconstructed glTF source exceeds the 32 MiB JSON budget supported by the source reader. Split the model into referenced files before reconstructing it.");
     }
 
     /// <summary>A URI from a folder to a project path, with forward slashes.</summary>

@@ -22,35 +22,45 @@ internal sealed partial class SealedFile : IDisposable
     private readonly string path;
     private readonly SafeFileHandle? handle;
     private readonly FileStream? stream;
+    private readonly DirectoryLease directories;
+    private readonly bool ownsDirectories;
 
-    private SealedFile(string path, SafeFileHandle? handle, FileStream? stream) { this.path = path; this.handle = handle; this.stream = stream; }
+    private SealedFile(string path, SafeFileHandle? handle, FileStream? stream, DirectoryLease directories, bool ownsDirectories) { this.path = path; this.handle = handle; this.stream = stream; this.directories = directories; this.ownsDirectories = ownsDirectories; }
 
     /// <summary>
     /// Holds <paramref name="path"/> and checks that it has <paramref name="expected"/>. Throws <see cref="IOException"/>,
     /// holding nothing, when it differs, is missing or a link, or another program has it open for writing or renaming.
     /// </summary>
-    public static SealedFile Open(string path, JournalDigest expected)
+    public static SealedFile Open(string path, JournalDigest expected, DirectoryLease? directories = null)
     {
         path = Path.GetFullPath(path);
+        bool ownsDirectories = directories == null; directories ??= new();
+        try { directories.Parent(path); }
+        catch { if (ownsDirectories) directories.Dispose(); throw; }
         SealedFile file;
-        if (OperatingSystem.IsWindows())
+        try
         {
-            // OPEN_REPARSE_POINT: a link put at the name is held itself (and differs), never the file it leads to.
-            // FILE_WRITE_ATTRIBUTES is not shared access: it only lets the replaced file's attributes be given to this one.
-            SafeFileHandle opened = CreateFile(Extended(path), GenericRead | Delete | WriteAttributes, FileShare.Read, 0, OpenExisting, OpenReparsePoint, 0);
-            if (opened.IsInvalid)
+            if (OperatingSystem.IsWindows())
             {
-                int error = Marshal.GetLastPInvokeError(); opened.Dispose();
-                throw new IOException(error == SharingViolation
-                    ? $"Another program has {path} open."
-                    : $"{path} cannot be opened: {new Win32Exception(error).Message}", new Win32Exception(error));
+                // OPEN_REPARSE_POINT: a link put at the name is held itself (and differs), never the file it leads to.
+                // FILE_WRITE_ATTRIBUTES is not shared access: it only lets the replaced file's attributes be given to this one.
+                SafeFileHandle opened = directories.FileHandle(path, GenericRead | Delete | WriteAttributes, FileShare.Read);
+                if (opened.IsInvalid)
+                {
+                    int error = Marshal.GetLastPInvokeError(); opened.Dispose();
+                    throw new IOException(error == SharingViolation
+                        ? $"Another program has {path} open."
+                        : $"{path} cannot be opened: {new Win32Exception(error).Message}", new Win32Exception(error));
+                }
+                file = new(path, opened, null, directories, ownsDirectories);
             }
-            file = new(path, opened, null);
+            else file = new(path, null, new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read), directories, ownsDirectories);
         }
-        else file = new(path, null, new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
+        catch { if (ownsDirectories) directories.Dispose(); throw; }
         try
         {
             if (!file.Has(expected)) throw new IOException($"{path} changed after it was checked.");
+            file.RequireRegular();
             return file;
         }
         catch { file.Dispose(); throw; }
@@ -63,44 +73,55 @@ internal sealed partial class SealedFile : IDisposable
     public void MoveTo(string destination, bool replace = false)
     {
         destination = Path.GetFullPath(destination);
+        directories.Parent(destination);
         if (handle == null) { File.Move(path, destination, replace); return; }
         // What the replaced file keeps under File.Replace: its attributes, creation time and explicit access rules.
-        var kept = replace && OperatingSystem.IsWindows() && File.Exists(destination) ? Kept.Of(destination) : null;
-        string name = NtName(destination);
+        var kept = replace && OperatingSystem.IsWindows() && directories.Exists(destination) ? Kept.Of(destination, directories) : null;
+        RequireRegular();
+        int error = RenameRelative(handle, directories.ParentHandle(destination), Path.GetFileName(destination), replace);
+        if (error != 0)
+            throw new IOException(error is AlreadyExists or FileExists ? $"{destination} already exists."
+                : $"{path} could not be moved to {destination}: {new Win32Exception(error).Message}", new Win32Exception(error));
+        if (kept != null && OperatingSystem.IsWindows()) kept.Apply(handle);
+    }
+
+    internal static int RenameRelative(SafeFileHandle handle, SafeFileHandle directory, string name, bool replace)
+    {
         int nameOffset = (int)Marshal.OffsetOf<RenameInformation>(nameof(RenameInformation.FileName)), lengthOffset = (int)Marshal.OffsetOf<RenameInformation>(nameof(RenameInformation.FileNameLength));
         byte[] information = new byte[Math.Max(nameOffset + (name.Length + 1) * sizeof(char), Marshal.SizeOf<RenameInformation>())];
+        nint parent = directory.DangerousGetHandle();
+        int rootOffset = (int)Marshal.OffsetOf<RenameInformation>(nameof(RenameInformation.RootDirectory));
+        if (IntPtr.Size == 8) BinaryPrimitives.WriteInt64LittleEndian(information.AsSpan(rootOffset), parent);
+        else BinaryPrimitives.WriteInt32LittleEndian(information.AsSpan(rootOffset), (int)parent);
         BinaryPrimitives.WriteUInt32LittleEndian(information.AsSpan(lengthOffset), checked((uint)(name.Length * sizeof(char))));
         MemoryMarshal.AsBytes(name.AsSpan()).CopyTo(information.AsSpan(nameOffset));
         // FILE_RENAME_INFO_EX with POSIX semantics replaces a file others have open with delete sharing (readers such as
         // indexers, antivirus or sync clients), which the plain rename refuses; file systems without it (FAT, older SMB)
         // take the plain rename. Its flags share the first DWORD with the plain form's ReplaceIfExists BOOLEAN; the root
-        // directory stays null, as the name is absolute.
+        // directory is the held parent and the name is one relative component, so ancestor path changes cannot redirect it.
         BinaryPrimitives.WriteUInt32LittleEndian(information, replace ? RenameReplaceIfExists | RenamePosixSemantics : 0);
-        bool renamed = SetFileInformationByHandle(handle, FileRenameInfoEx, information, (uint)information.Length);
-        int error = renamed ? 0 : Marshal.GetLastPInvokeError();
+        int error = Rename(handle, information, extended: true);
+        bool renamed = error == 0;
         if (!renamed && error is InvalidParameter or InvalidFunction or NotSupported)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(information, replace ? 1u : 0u);
-            renamed = SetFileInformationByHandle(handle, FileRenameInfo, information, (uint)information.Length);
-            error = renamed ? 0 : Marshal.GetLastPInvokeError();
+            error = Rename(handle, information, extended: false);
+            renamed = error == 0;
         }
-        if (!renamed)
-            throw new IOException(error is AlreadyExists or FileExists ? $"{destination} already exists."
-                : $"{path} could not be moved to {destination}: {new Win32Exception(error).Message}", new Win32Exception(error));
-        if (kept != null && OperatingSystem.IsWindows()) kept.Apply(handle, destination);
+        return error;
     }
 
     /// <summary>The replaced file's attributes, creation time and explicit access rules, given to the file that takes its place.</summary>
     private sealed record Kept(FileAttributes Attributes, DateTime CreationUtc, System.Security.AccessControl.FileSecurity? Security)
     {
         [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-        public static Kept Of(string file)
+        public static Kept Of(string file, DirectoryLease directories)
         {
-            FileInfo info = new(file);
+            using FileStream info = directories.OpenFile(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             System.Security.AccessControl.FileSecurity? security = null;
             try
             {
-                var read = info.GetAccessControl(System.Security.AccessControl.AccessControlSections.Access);
+                var read = info.GetAccessControl();
                 // Only rules set on the file itself; inherited ones the new file has from its folder already.
                 if (read.AreAccessRulesProtected || read.GetAccessRules(true, false, typeof(System.Security.Principal.SecurityIdentifier)).Count > 0)
                 {
@@ -110,11 +131,11 @@ internal sealed partial class SealedFile : IDisposable
                 }
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidOperationException) { }
-            return new(info.Attributes & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive | FileAttributes.NotContentIndexed), info.CreationTimeUtc, security);
+            return new(File.GetAttributes(info.SafeFileHandle) & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive | FileAttributes.NotContentIndexed), File.GetCreationTimeUtc(info.SafeFileHandle), security);
         }
 
         [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-        public void Apply(SafeFileHandle handle, string file)
+        public void Apply(SafeFileHandle handle)
         {
             // FILE_BASIC_INFO: zero times stay as they are; the creation time and attributes are the replaced file's.
             byte[] basic = new byte[40];
@@ -122,7 +143,16 @@ internal sealed partial class SealedFile : IDisposable
             BinaryPrimitives.WriteUInt32LittleEndian(basic.AsSpan(32), Attributes == 0 ? (uint)FileAttributes.Normal : (uint)Attributes);
             SetFileInformationByHandle(handle, FileBasicInfo, basic, (uint)basic.Length);
             if (Security == null) return;
-            try { new FileInfo(file).SetAccessControl(Security); }
+            try
+            {
+                // Reopen the held identity for ACL changes; looking up its path could target another file after a device
+                // alias change. Metadata access does not require changing the held content's sharing protocol.
+                using SafeFileHandle writable = ReOpenFile(handle, 0x40000 /* WRITE_DAC */ | 0x20000 /* READ_CONTROL */ | 0x80 /* READ_ATTRIBUTES */,
+                    FileShare.ReadWrite | FileShare.Delete, 0);
+                if (writable.IsInvalid) return;
+                using FileStream file = new(writable, FileAccess.Read, 1);
+                file.SetAccessControl(Security);
+            }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidOperationException) { }
         }
     }
@@ -133,16 +163,31 @@ internal sealed partial class SealedFile : IDisposable
     /// </summary>
     public void Replace(string destination, string? backup)
     {
-        if (backup != null) File.Copy(destination, backup, overwrite: false);
+        RequireRegular();
+        directories.Parent(destination);
+        if (backup != null) directories.Parent(backup);
+        if (backup != null)
+        {
+            using FileStream source = directories.OpenFile(destination, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using FileStream copy = directories.OpenFile(backup, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            source.CopyTo(copy); copy.Flush(true);
+        }
         try { MoveTo(destination, replace: true); }
         catch when (backup != null)
         {
-            try { File.Delete(backup); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            try { directories.DeleteFile(backup); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             throw;
         }
     }
 
-    public void Dispose() { handle?.Dispose(); stream?.Dispose(); }
+    public void Dispose() { handle?.Dispose(); stream?.Dispose(); if (ownsDirectories) directories.Dispose(); }
+
+    private void RequireRegular()
+    {
+        FileAttributes attributes = handle != null ? File.GetAttributes(handle) : File.GetAttributes(path);
+        if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+            throw new IOException($"{path} became a link or another non-regular entry after it was checked; the verified file was not published.");
+    }
 
     /// <summary>
     /// Whether the held content is <paramref name="expected"/>; a file of another length differs without being read (a
@@ -164,20 +209,23 @@ internal sealed partial class SealedFile : IDisposable
         finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
-    /// <summary>A full path in the extended form CreateFileW takes beyond MAX_PATH.</summary>
-    private static string Extended(string full) => full.StartsWith(@"\\?\", StringComparison.Ordinal) || full.StartsWith(@"\\.\", StringComparison.Ordinal) ? full
-        : full.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + full[2..] : @"\\?\" + full;
-    /// <summary>A full path as the NT name a rename takes (<c>\??\C:\…</c>, <c>\??\UNC\server\…</c>).</summary>
-    private static string NtName(string full)
-    {
-        string extended = Extended(full);
-        return extended.StartsWith(@"\\?\UNC\", StringComparison.Ordinal) ? @"\??\UNC\" + extended[8..] : @"\??\" + extended[4..];
-    }
-
-    private const uint GenericRead = 0x80000000, Delete = 0x00010000, WriteAttributes = 0x100, OpenExisting = 3, OpenReparsePoint = 0x00200000;
+    private const uint GenericRead = 0x80000000, Delete = 0x00010000, WriteAttributes = 0x100;
     private const uint RenameReplaceIfExists = 0x1, RenamePosixSemantics = 0x2;
-    private const int FileBasicInfo = 0, FileRenameInfo = 3, FileRenameInfoEx = 22;
+    private const int FileBasicInfo = 0;
     private const int InvalidFunction = 1, SharingViolation = 32, NotSupported = 50, FileExists = 80, InvalidParameter = 87, AlreadyExists = 183;
+
+    private static int Rename(SafeFileHandle handle, byte[] information, bool extended)
+    {
+        int status = NtSetInformationFile(handle, out _, information, (uint)information.Length,
+            extended ? 65 /* FileRenameInformationEx */ : 10 /* FileRenameInformation */);
+        return status >= 0 ? 0 : unchecked((int)RtlNtStatusToDosError(status));
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatus { public nint Status; public nuint Information; }
+    [LibraryImport("ntdll.dll")]
+    private static partial int NtSetInformationFile(SafeFileHandle handle, out IoStatus status, byte[] information, uint size, int informationClass);
+    [LibraryImport("ntdll.dll")]
+    private static partial uint RtlNtStatusToDosError(int status);
 
     /// <summary>FILE_RENAME_INFO, whose file name follows the header.</summary>
     [StructLayout(LayoutKind.Sequential)]
@@ -189,10 +237,9 @@ internal sealed partial class SealedFile : IDisposable
         public char FileName;
     }
 
-    [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
-    private static partial SafeFileHandle CreateFile(string name, uint access, FileShare share, nint security, uint creation, uint flags, nint template);
-
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetFileInformationByHandle(SafeFileHandle handle, int informationClass, byte[] information, uint size);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial SafeFileHandle ReOpenFile(SafeFileHandle file, uint access, FileShare share, uint flags);
 }

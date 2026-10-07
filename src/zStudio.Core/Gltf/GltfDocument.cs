@@ -111,7 +111,7 @@ public sealed class GltfDocument
     private static IEnumerable<GltfNode> Walk(GltfNode node) { yield return node; foreach (var c in node.Children) foreach (var n in Walk(c)) yield return n; }
 
     /// <summary>Serializes to glTF JSON and a binary buffer; <paramref name="binaryUri"/> is the buffer's file name next to the .gltf.</summary>
-    public (byte[] Json, byte[] Binary) Write(string binaryUri)
+    public (byte[] Json, byte[] Binary) Write(string binaryUri, CancellationToken token = default)
     {
         using MemoryStream bin = new();
         JsonArray nodes = [], meshes = [], materials = [], textures = [], images = [], samplers = [], accessors = [], views = [];
@@ -224,7 +224,7 @@ public sealed class GltfDocument
             root["accessors"] = accessors; root["bufferViews"] = views;
             root["buffers"] = new JsonArray(new JsonObject { ["uri"] = Uri.EscapeDataString(binaryUri), ["byteLength"] = bin.Length });
         }
-        byte[] text = Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        byte[] text = GltfJson.Write(root, indented: true, token);
         return (text, bin.ToArray());
     }
 

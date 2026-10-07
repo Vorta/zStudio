@@ -55,8 +55,8 @@ public static partial class SourceWorlds
     public const int MaximumNameLength = 31;
     public const float MaximumCoordinate = 1_000_000;
     /// <summary>
-    /// The most definition files an addition lists, and that the Add model dialog and zstudio_source_world_definitions show
-    /// for a name (in path order, with the total); a longer list is chosen from explicitly, never added whole.
+    /// The most definition files an addition selects. Discovery pages through all matching files; a longer list is chosen
+    /// from explicitly, never added whole.
     /// </summary>
     public const int MaximumDefinitionChoices = 64;
     /// <summary>Game files a preview builds: the world, what the Whole world view reads beside it, and one full-quality texture pack.</summary>
@@ -157,9 +157,10 @@ public static partial class SourceWorlds
         catch (InvalidDataException ex) { throw new InvalidDataException($"The animation definitions do not parse: {ex.Message}", ex); }
         var list = files.Select(f => "..\\" + f.Replace('/', '\\')).ToList();
         bool added = false;
-        // Files listed anywhere in the file are not listed again.
+        // Only references the compiler actually reads count as already listed. An unrelated resource subtree may
+        // use the same keyword without adding any animation definitions to this mission.
         HashSet<string> listed = new(StringComparer.OrdinalIgnoreCase);
-        Listed(tree, 0);
+        Listed(tree);
         var result = Walk(tree, 0);
         if (!added) throw new InvalidDataException("The animation definitions have no ANIMATION_DEFINITIONS list.");
         if (ZrdTextSyntax.StructurallyEqual(result, tree)) return definitions.ToArray();
@@ -202,15 +203,16 @@ public static partial class SourceWorlds
             items[at + 1] = items[at + 1] with { Children = entries };
             return body with { Children = items };
         }
-        void Listed(ZrdNode node, int depth)
+        void Listed(ZrdNode node)
         {
-            if (node.Kind != ZrdKind.Array) return;
-            for (int i = 0; i < node.Children.Count; i++)
-            {
-                if (node.Children[i] is { Kind: ZrdKind.String, Text: "ANIMATION_DEFINITION_FILE" } && i + 1 < node.Children.Count && node.Children[i + 1].Children is [{ Kind: ZrdKind.String } path, ..])
-                    listed.Add(Normalize(path.Text));
-                Listed(node.Children[i], depth + 1);
-            }
+            while (node.Children is [{ Kind: ZrdKind.Array } wrapped]) node = wrapped;
+            foreach (var top in AnimationItem.Parse(node, "anim.zad").Where(i => i.Key == "ANIMATION_DEFINITIONS"))
+                foreach (var animations in top.All("ANIMATION_LIST"))
+                    foreach (var entry in animations.All("ANIMATION_DEFINITION_FILE"))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (entry.Scalars.FirstOrDefault() is { Kind: ZrdKind.String } path) listed.Add(Normalize(path.Text));
+                    }
         }
         static ZrdNode Text(string text) => new(Guid.NewGuid(), ZrdKind.String, 0, text, []);
         static string Normalize(string path)
@@ -313,7 +315,10 @@ public static partial class SourceWorlds
     /// the overlay's script has just added (see <see cref="AddModel"/>): the world must load each of them where it is written,
     /// and hold each placed one (see <see cref="CheckAdditions"/>).
     /// </summary>
-    public static async Task<SourceWorldBuild> BuildPreviewAsync(string root, string mission, string destination, IReadOnlyDictionary<string, byte[]>? overlay = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, IReadOnlyList<SourceModelAddition>? additions = null)
+    public static Task<SourceWorldBuild> BuildPreviewAsync(string root, string mission, string destination, IReadOnlyDictionary<string, byte[]>? overlay = null, IProgress<SourceProgress>? progress = null, CancellationToken token = default, IReadOnlyList<SourceModelAddition>? additions = null)
+        => BuildPreviewCoreAsync(root, mission, destination, overlay, progress, token, additions, null);
+
+    internal static async Task<SourceWorldBuild> BuildPreviewCoreAsync(string root, string mission, string destination, IReadOnlyDictionary<string, byte[]>? overlay, IProgress<SourceProgress>? progress, CancellationToken token, IReadOnlyList<SourceModelAddition>? additions, DirectoryLease? captured)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
@@ -324,17 +329,34 @@ public static partial class SourceWorlds
         if (!destination.StartsWith(previews + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || PickupPlacementEditSession.IsProtectedPath(destination))
             throw new InvalidDataException($"A mission world is built in the project's {PreviewFolder} folder, not in {destination}.");
         SourceProject.RejectLinks(destination);
-        if (Directory.Exists(destination) && Directory.EnumerateFileSystemEntries(destination).Any()) throw new IOException($"The preview folder {destination} is not empty.");
+        using DirectoryLease? owned = captured == null ? new() : null;
+        DirectoryLease directories = captured ?? owned!;
+        directories.Hold(root);
+        string capturedPreviews = PreviewRoot(directories.CapturedPath(root)), capturedDestination = directories.CapturedPath(destination);
+        if (!capturedDestination.StartsWith(capturedPreviews + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || PickupPlacementEditSession.IsProtectedPath(capturedDestination))
+            throw new InvalidDataException($"A mission world is built in the project's {PreviewFolder} folder, not in {destination}.");
+        bool existingDestination = directories.Exists(destination);
+        if (existingDestination)
+        {
+            directories.Hold(destination);
+            if (directories.Entries(destination, token).Any()) throw new IOException($"The preview folder {destination} is not empty.");
+        }
         // The build's view of the project starts before planning, as an export's does (see SourceBuilder.ExportAsync): each file
         // is read once, and the plan and every file read must be unchanged when the build is returned, so the world shown, and
         // the stamps that later tell it is stale, are one state of the project. A file another program changes meanwhile fails
         // the build rather than show a world assembled partly from the old file and partly from newer ones.
         SourceBuilder.Snapshot snapshot = new(root, overlay, relative => new SourceFileChangedException($"{relative} changed on disk while the {mission} world was building; the build was not shown. Try again.", [relative]));
-        var selected = await Task.Run(() => PreviewPlan(root, mission, snapshot.Added, token), token).ConfigureAwait(false);
+        var selected = await Task.Run(() => PreviewPlan(root, mission, snapshot, token), token).ConfigureAwait(false);
         if (!selected.Any(p => p.Family == "world")) throw new InvalidDataException($"The project has no world script for {mission} ({SourceBuilder.WorldScript(mission)}) or no glTF models.");
         List<SourceExportResult> results = []; Animation.AnimationPackage? animations = null;
-        SourceProject.RejectLinks(destination);
-        Directory.CreateDirectory(destination);
+        // Keep the same captured ancestor chain across planning. A new destination is created exclusively; an existing
+        // empty destination is checked again through its held identity before any output is published.
+        if (existingDestination)
+        {
+            if (directories.Entries(destination, token).Any()) throw new IOException($"The preview folder {destination} is not empty.");
+        }
+        else directories.CreateDirectory(destination);
         for (int i = 0; i < selected.Length; i++)
         {
             token.ThrowIfCancellationRequested(); var output = selected[i]; progress?.Report(new(i, selected.Length, output.Path));
@@ -346,12 +368,9 @@ public static partial class SourceWorlds
                 var check = FormatRegistry.Default.OpenBytes(output.Path, built.Bytes, token: token);
                 if (check.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built file does not reopen: " + error.Message);
                 string path = SourceProject.Resolve(destination, output.Path);
-                SourceProject.RejectLinks(path);
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                // A private build never replaces a file. Recheck parents at the write boundary; another process may have
-                // replaced a cache directory since planning or progress reporting.
-                SourceProject.RejectLinks(path);
-                await using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
+                directories.Parent(path, create: true);
+                // A private build never replaces a file and never resolves mutable ancestor paths again at publication.
+                await using (var stream = directories.OpenFile(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
                     await stream.WriteAsync(built.Bytes, token).ConfigureAwait(false);
                 results.Add(new(output.Path, output.Family, "built", built.Bytes.Length, built.Items, built.Warnings));
             }
@@ -363,7 +382,7 @@ public static partial class SourceWorlds
                 {
                     // A world that fails because a source was removed or renamed after planning, or changed after it was read, fails
                     // as that change, not as a world that does not build.
-                    CheckPreviewPlanUnchanged(root, mission, snapshot.Added, selected, token);
+                    CheckPreviewPlanUnchanged(root, mission, snapshot, selected, token);
                     snapshot.CheckUnchanged(token);
                     throw new InvalidDataException($"The {mission} world does not build: {ex.Message}", ex);
                 }
@@ -393,7 +412,7 @@ public static partial class SourceWorlds
         // those just verified.
         await Task.Run(() =>
         {
-            CheckPreviewPlanUnchanged(root, mission, snapshot.Added, selected, token);
+            CheckPreviewPlanUnchanged(root, mission, snapshot, selected, token);
             snapshot.CheckUnchanged(token);
         }, token).ConfigureAwait(false);
         return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), MissingInputs = snapshot.Missing(), InputHashes = snapshot.Hashes(), Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
@@ -405,10 +424,10 @@ public static partial class SourceWorlds
     /// </summary>
     internal static BuildProfile PreviewProfile { get; } = new("preview", "The fixed texture pack of a world preview.", "experimental", [new("rtexture16.zbd", 16L << 20, 1024)]);
     /// <summary>The outputs a preview of <paramref name="mission"/> builds (<see cref="PreviewOutputs"/>), as the project plans them now.</summary>
-    private static SourceOutputPlan[] PreviewPlan(string root, string mission, IReadOnlyCollection<string> added, CancellationToken token)
+    private static SourceOutputPlan[] PreviewPlan(string root, string mission, SourceBuilder.Snapshot snapshot, CancellationToken token)
     {
         // The preview's pack is a fixed one, so the automatic packs are not sized (each would read every PNG header).
-        var plan = SourceBuilder.Plan(root, added, PreviewProfile, automaticPacks: false, token: token);
+        var plan = SourceBuilder.Plan(root, snapshot.Added, PreviewProfile, false, token, snapshot, mission);
         return PreviewOutputs.Select(o => string.Format(CultureInfo.InvariantCulture, o, mission))
             .Select(o => plan.FirstOrDefault(p => p.Path.Equals(o, StringComparison.OrdinalIgnoreCase))).OfType<SourceOutputPlan>().ToArray();
     }
@@ -417,11 +436,11 @@ public static partial class SourceWorlds
     /// mission's texture folders changed, after planning): the plan is made again and must give the same outputs, each with the
     /// same inputs and pack (see <see cref="SourceBuilder.SamePlan"/>).
     /// </summary>
-    private static void CheckPreviewPlanUnchanged(string root, string mission, IReadOnlyCollection<string> added, IReadOnlyList<SourceOutputPlan> built, CancellationToken token)
+    private static void CheckPreviewPlanUnchanged(string root, string mission, SourceBuilder.Snapshot snapshot, IReadOnlyList<SourceOutputPlan> built, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         SourceOutputPlan[] now;
-        try { now = PreviewPlan(root, mission, added, token); }
+        try { now = PreviewPlan(root, mission, snapshot, token); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new SourceFileChangedException($"The project changed while the {mission} world was building; the build was not shown. Try again. ({ex.Message})", []); }
         if (now.Length == built.Count && built.Zip(now).All(p => SourceBuilder.SamePlan(p.First, p.Second))) return;

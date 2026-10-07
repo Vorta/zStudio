@@ -365,7 +365,41 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SearchIsLimited = matches.Length > 500;
         foreach (var hit in matches.Take(500)) SearchResults.Add(hit);
     }
-    public IEnumerable<SearchHit> Related(string name, string context) => index.Where(h => !h.File.Equals(context, StringComparison.OrdinalIgnoreCase) && Path.GetFileNameWithoutExtension(h.Name).Equals(Path.GetFileNameWithoutExtension(name), StringComparison.OrdinalIgnoreCase)).Take(100);
+    internal sealed record RelatedMatches(IReadOnlyList<SearchHit> Items, bool Truncated);
+    internal RelatedMatches Related(IEnumerable<string> names, string context) => MatchRelated(names, index, context);
+    /// <summary>One index scan, preserving reference order and index order within each name, with bounded input and retained matches.</summary>
+    internal static RelatedMatches MatchRelated(IEnumerable<string> names, IEnumerable<SearchHit> source, string context,
+        int maximumNames = 65_536, int maximumEntries = 1_000_000, long maximumNameCharacters = 4 * 1024 * 1024, long maximumIndexCharacters = 64 * 1024 * 1024)
+    {
+        Dictionary<string, int> ranks = new(StringComparer.OrdinalIgnoreCase);
+        bool truncated = false; int inspected = 0; long characters = 0;
+        foreach (string name in names)
+        {
+            if (++inspected > maximumNames || (characters += name.Length) > maximumNameCharacters) { truncated = true; break; }
+            if (name.Length <= 1) continue;
+            string key = Path.GetFileNameWithoutExtension(name);
+            ranks.TryAdd(key, ranks.Count);
+        }
+        if (ranks.Count == 0) return new([], truncated);
+        var comparer = Comparer<(int Rank, int Position, SearchHit Hit)>.Create((a, b) => a.Rank != b.Rank ? a.Rank.CompareTo(b.Rank) : a.Position.CompareTo(b.Position));
+        SortedSet<(int Rank, int Position, SearchHit Hit)> kept = new(comparer);
+        HashSet<SearchHit> identities = [];
+        Dictionary<int, int> counts = [];
+        inspected = 0; characters = 0;
+        foreach (var hit in source)
+        {
+            if (++inspected > maximumEntries || (characters += (long)hit.Name.Length + hit.File.Length) > maximumIndexCharacters) { truncated = true; break; }
+            if (hit.File.Equals(context, StringComparison.OrdinalIgnoreCase) || !ranks.TryGetValue(Path.GetFileNameWithoutExtension(hit.Name), out int rank) || identities.Contains(hit)) continue;
+            if (counts.GetValueOrDefault(rank) == 100 || kept.Count == 300 && rank >= kept.Max.Rank) { truncated = true; continue; }
+            kept.Add((rank, inspected, hit)); identities.Add(hit); counts[rank] = counts.GetValueOrDefault(rank) + 1;
+            if (kept.Count > 300)
+            {
+                var last = kept.Max; kept.Remove(last); identities.Remove(last.Hit); counts[last.Rank]--;
+                truncated = true;
+            }
+        }
+        return new(kept.Select(p => p.Hit).ToArray(), truncated);
+    }
     internal IEnumerable<SearchHit> SearchIndex(string query) => index.Where(h => h.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || h.Location.Contains(query, StringComparison.OrdinalIgnoreCase));
     internal void CloseResolved(DocumentModel doc) => RemoveDocument(doc);
     public void Dispose()

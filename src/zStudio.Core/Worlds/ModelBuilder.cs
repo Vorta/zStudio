@@ -117,20 +117,33 @@ public sealed class ModelBuilder(WorldModel model)
     /// Whether every corner's UV lies on one affine map, fitted on the corners spanning the largest triangle so that
     /// quantized UVs of close corners do not skew it.
     /// </summary>
-    public static bool Affine(IReadOnlyList<Vector3> points, IReadOnlyList<Vector2> uvs, float tolerance)
+    public static bool Affine(IReadOnlyList<Vector3> points, IReadOnlyList<Vector2> uvs, float tolerance, CancellationToken token = default)
+        => Affine(points, uvs, tolerance, new PolygonWorkBudget(token));
+
+    internal static bool Affine(IReadOnlyList<Vector3> points, IReadOnlyList<Vector2> uvs, float tolerance, PolygonWorkBudget work)
     {
+        work.CheckCancellation();
         if (points.Count <= 3) return true;
+        // Preserve the largest-triangle fit and its deterministic tie order, but account for the entire cubic search
+        // before allocating projected corners or trying any triple. Large arbitrary callers also fail without overflow.
+        long triples = points.Count > 10_000 ? long.MaxValue : (long)points.Count * (points.Count - 1) * (points.Count - 2) / 6;
+        work.Charge(triples);
+        work.Charge(3L * points.Count);
         Vector3 normal = Vector3.Zero;
         for (int i = 0; i < points.Count; i++) normal += Vector3.Cross(points[i], points[(i + 1) % points.Count]);
         float ax = Math.Abs(normal.X), ay = Math.Abs(normal.Y), az = Math.Abs(normal.Z);
         Func<Vector3, Vector2> project = ax >= ay && ax >= az ? p => new(p.Y, p.Z) : ay >= ax && ay >= az ? p => new(p.Z, p.X) : p => new(p.X, p.Y);
         var q = points.Select(project).ToArray();
         (int, int, int) best = (0, 1, 2); float area = -1;
-        for (int i = 0; i < q.Length; i++) for (int j = i + 1; j < q.Length; j++) for (int k = j + 1; k < q.Length; k++)
+        for (int i = 0; i < q.Length; i++)
+        {
+            work.CheckCancellation();
+            for (int j = i + 1; j < q.Length; j++) for (int k = j + 1; k < q.Length; k++)
                 {
                     float a = Math.Abs((q[j].X - q[i].X) * (q[k].Y - q[i].Y) - (q[k].X - q[i].X) * (q[j].Y - q[i].Y));
                     if (a > area) { area = a; best = (i, j, k); }
                 }
+        }
         var (i0, i1, i2) = best;
         if (Gradient(q[i0], q[i1], q[i2], uvs[i0].X, uvs[i1].X, uvs[i2].X) is not { } gu || Gradient(q[i0], q[i1], q[i2], uvs[i0].Y, uvs[i1].Y, uvs[i2].Y) is not { } gv) return false;
         for (int i = 0; i < q.Length; i++)

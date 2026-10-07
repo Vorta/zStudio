@@ -130,7 +130,7 @@ public sealed class ImportRound11Tests
     public void EmbeddedImagesCannotBecomePlainSurfaces(bool bufferView)
     {
         var model = Model(new GltfMaterial { ImageUri = "rock.png" });
-        var (json, bin) = model.Write("mesh.bin"); var root = JsonNode.Parse(json)!;
+        var (json, bin) = model.Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
         root["images"]![0] = bufferView ? new JsonObject { ["bufferView"] = 0, ["mimeType"] = "image/png" }
             : new JsonObject { ["uri"] = "data:image/png;base64,AA==" };
         var doc = GltfDocument.Read(Encoding.UTF8.GetBytes(root.ToJsonString()), _ => bin, Token);
@@ -153,7 +153,7 @@ public sealed class ImportRound11Tests
         const string path = "data/m1/models/m1.gltf";
         var doc = embedded ? Model(new GltfMaterial { ImageUri = "../textures/rock.png" })
             : Model(new() { ImageUri = "../textures/rock.png", ClampS = true }, new() { ImageUri = "../textures/rock.png" });
-        var (json, bin) = doc.Write("m1.bin"); var root = JsonNode.Parse(json)!;
+        var (json, bin) = doc.Write("m1.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
         if (embedded) root["images"]![0]!["uri"] = "data:image/png;base64,AA==";
         fixture.Write(path, root.ToJsonString()); fixture.Write("data/m1/models/m1.bin", bin);
         SourceWorkspace workspace = new(fixture.Project);

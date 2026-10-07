@@ -1,39 +1,81 @@
 using System.Windows;
 using System.Windows.Controls;
+using Recoil.Zbd.Core.Terrain;
 
 namespace Recoil.Zbd.Desktop;
 
 /// <summary>Chooses which mesh nodes of a glTF file become terrain surfaces.</summary>
 internal sealed class TerrainCreateDialog : Window
 {
-    private readonly List<CheckBox> boxes = [];
-    public IReadOnlyList<string> Chosen => boxes.Where(b => b.IsChecked == true).Select(b => (string)b.Tag).ToArray();
+    internal const int PageSize = 64;
+    private readonly IReadOnlyList<string> nodes;
+    private readonly HashSet<string> chosen = new(StringComparer.Ordinal);
+    private readonly TextBox filter = new();
+    private readonly StackPanel list = new();
+    private readonly TextBlock count = new() { Margin = new(0, 6, 0, 6), TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock error = new() { Foreground = System.Windows.Media.Brushes.IndianRed, TextWrapping = TextWrapping.Wrap };
+    private readonly Button previous = new() { Content = "Previous", MinWidth = 80 }, next = new() { Content = "Next", MinWidth = 80, Margin = new(6, 0, 0, 0) };
+    private int page;
+    public IReadOnlyList<string> Chosen => nodes.Where(chosen.Contains).ToArray();
 
     public TerrainCreateDialog(string file, IReadOnlyList<string> nodes)
     {
+        this.nodes = nodes;
+        if (nodes.Count == 1) chosen.Add(nodes[0]);
         Title = "Create terrain"; Width = 460; SizeToContent = SizeToContent.Height; MaxHeight = 640; ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
-        StackPanel panel = new() { Margin = new(16) };
+        Grid layout = new() { Margin = new(16) };
+        layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
+        layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        StackPanel panel = new(), footer = new();
+        layout.Children.Add(panel); Grid.SetRow(footer, 2); layout.Children.Add(footer);
         panel.Children.Add(new TextBlock { Text = $"Surfaces of {file}", FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         panel.Children.Add(new TextBlock
         {
             Text = "The chosen meshes become terrain: a recipe is created beside the file and a marker in the mission database places its pieces. Keep floors, ceilings, walls, water and seafloor as separate meshes.",
             TextWrapping = TextWrapping.Wrap, Opacity = 0.75, Margin = new(0, 6, 0, 10)
         });
-        StackPanel list = new();
-        foreach (string node in nodes)
-        {
-            // Names are literal text, not access-key labels.
-            CheckBox box = new() { Content = new TextBlock { Text = node }, Tag = node, IsChecked = nodes.Count == 1, Margin = new(0, 2, 0, 2) };
-            boxes.Add(box); list.Children.Add(box);
-        }
-        panel.Children.Add(new ScrollViewer { Content = list, MaxHeight = 400, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        System.Windows.Automation.AutomationProperties.SetName(filter, "Filter terrain mesh nodes");
+        panel.Children.Add(filter); panel.Children.Add(count);
+        ScrollViewer choices = new() { Content = list, MaxHeight = 400, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        Grid.SetRow(choices, 1); layout.Children.Add(choices);
+        StackPanel pages = new() { Orientation = Orientation.Horizontal, Margin = new(0, 6, 0, 0) };
+        pages.Children.Add(previous); pages.Children.Add(next); footer.Children.Add(pages); footer.Children.Add(error);
+        filter.TextChanged += (_, _) => { page = 0; Fill(); };
+        previous.Click += (_, _) => { page--; Fill(); };
+        next.Click += (_, _) => { page++; Fill(); };
         StackPanel buttons = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new(0, 12, 0, 0) };
         Button ok = new() { Content = "Create", IsDefault = true, MinWidth = 88, Margin = new(0, 0, 8, 0) };
         ok.Click += (_, _) => { if (Chosen.Count == 0) { MessageBox.Show(this, "Choose at least one surface.", Title); return; } DialogResult = true; };
         Button cancel = new() { Content = "Cancel", IsCancel = true, MinWidth = 88 };
         buttons.Children.Add(ok); buttons.Children.Add(cancel);
-        panel.Children.Add(buttons);
-        Content = panel;
+        footer.Children.Add(buttons);
+        Content = layout;
+        Fill();
+    }
+
+    /// <summary>All mesh identities remain selectable; only this page gets controls, and choices survive filtering.</summary>
+    private void Fill()
+    {
+        string query = filter.Text.Trim();
+        var matches = nodes.Where(n => n.Contains(query, StringComparison.OrdinalIgnoreCase)).ToArray();
+        page = Math.Clamp(page, 0, Math.Max(0, (matches.Length - 1) / PageSize));
+        list.Children.Clear();
+        foreach (string node in matches.Skip(page * PageSize).Take(PageSize))
+        {
+            CheckBox box = new() { Content = new TextBlock { Text = node }, Tag = node, IsChecked = chosen.Contains(node), Margin = new(0, 2, 0, 2) };
+            box.Checked += (_, _) =>
+            {
+                if (chosen.Count >= TerrainRecipe.MaximumSurfaces && !chosen.Contains(node))
+                { box.IsChecked = false; error.Text = $"Choose at most {TerrainRecipe.MaximumSurfaces} surfaces for one recipe."; return; }
+                chosen.Add(node); error.Text = ""; ShowCount();
+            };
+            box.Unchecked += (_, _) => { chosen.Remove(node); error.Text = ""; ShowCount(); };
+            list.Children.Add(box);
+        }
+        previous.IsEnabled = page > 0; next.IsEnabled = (page + 1) * PageSize < matches.Length;
+        ShowCount();
+        void ShowCount() => count.Text = $"Showing {Math.Min(page * PageSize + 1, matches.Length)}–{Math.Min((page + 1) * PageSize, matches.Length)} of {matches.Length:N0} matching meshes ({nodes.Count:N0} total). {chosen.Count} of {TerrainRecipe.MaximumSurfaces} surfaces selected.";
     }
 }

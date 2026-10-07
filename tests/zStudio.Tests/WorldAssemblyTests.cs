@@ -234,7 +234,7 @@ public sealed class WorldAssemblyTests
         var claw = Node("claw", Quad(plain, 1, 0));
         var arm1 = Node("arm1"); var arm2 = Node("arm2");
         foreach (var arm in new[] { arm1, arm2 }) { arm.Children.Add(claw); claw.Parents.Add(arm); }
-        var (json, bin) = WorldGltf.Export([arm1, arm2], 0xFF, new() { Texture = _ => ("", 0) }).Write("arms.bin");
+        var (json, bin) = WorldGltf.Export([arm1, arm2], 0xFF, new() { Texture = _ => ("", 0) }).Write("arms.bin", TestContext.Current.CancellationToken);
         Assert.Equal(2, Encoding.UTF8.GetString(json).Split("\"instance\"").Length - 1);
         var doc = GltfDocument.Read(json, _ => bin, Token);
         WorldGltf.ImportContext context = new() { World = new(), Reference = (_, _) => throw new InvalidOperationException(), TextureName = (_, n, _) => n ?? "x" };

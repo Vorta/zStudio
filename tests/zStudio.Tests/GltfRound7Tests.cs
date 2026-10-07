@@ -235,7 +235,7 @@ public sealed class GltfRound7Tests
             mesh.Primitives.Add(primitive);
         }
         GltfDocument document = new(); document.Roots.Add(new GltfNode { Name = "n", Mesh = mesh });
-        var (json, binary) = document.Write("n.bin");
+        var (json, binary) = document.Write("n.bin", TestContext.Current.CancellationToken);
         var read = GltfDocument.Read(json, uri => uri == "n.bin" ? binary : throw new FileNotFoundException(uri), Token).Roots[0].Mesh!.Primitives;
         Assert.Equal([(true, false), (false, true)], read.Select(p => (p.Material!.ClampS, p.Material.ClampT)));
         Assert.All(read, p => Assert.Equal([0, 1, 2], p.Indices));

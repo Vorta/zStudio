@@ -105,7 +105,7 @@ public sealed class ImportRound15Tests
         using SourceWorldFixture fixture = new();
         GltfDocument doc = new(); var mesh = TriangleMesh();
         for (int i = 0; i < 500; i++) doc.Roots.Add(new() { Name = "terrain" + i, Mesh = mesh });
-        var (json, bin) = doc.Write("m1.bin"); fixture.Write("data/m1/models/m1.gltf", json); fixture.Write("data/m1/models/m1.bin", bin);
+        var (json, bin) = doc.Write("m1.bin", TestContext.Current.CancellationToken); fixture.Write("data/m1/models/m1.gltf", json); fixture.Write("data/m1/models/m1.bin", bin);
         var patterns = Enumerable.Range(0, 4096).Select(i => new System.Text.RegularExpressions.Regex("^missing" + i + "[0-9]$")).ToArray();
         var error = Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Plan(new(fixture.Project), "data/m1/models/m1.gltf", (new(StringComparer.Ordinal), patterns), Token));
         Assert.Contains("wildcard matching budget", error.Message);
@@ -126,7 +126,7 @@ public sealed class ImportRound15Tests
             var mesh = new Recoil.Zbd.Core.Gltf.GltfMesh(); mesh.Primitives.Add(primitive);
             document.Roots.Add(new() { Name = "sheet" + y, Mesh = mesh });
         }
-        var (json, bin) = document.Write("m1.bin");
+        var (json, bin) = document.Write("m1.bin", TestContext.Current.CancellationToken);
         fixture.Write("data/m1/models/m1.gltf", json); fixture.Write("data/m1/models/m1.bin", bin);
         var plan = SourceTerrainConversion.Plan(new(fixture.Project), "data/m1/models/m1.gltf", (new(StringComparer.Ordinal), []), Token);
         Assert.Equal(2, plan.Groups.Count);

@@ -104,9 +104,9 @@ public sealed class ReconstructionTerrainRound3Tests
             doc.Roots.Add(new GltfNode { Name = "big", Mesh = new GltfMesh { Name = "big", Primitives = { primitive } } });
             return doc;
         }
-        _ = WorldSources.ContentHash(Document(3)); _ = Document(3).Write("content.bin");
+        _ = WorldSources.ContentHash(Document(3)); _ = Document(3).Write("content.bin", TestContext.Current.CancellationToken);
         var doc = Document(600_000);
-        var (json, bin) = doc.Write("content.bin");
+        var (json, bin) = doc.Write("content.bin", TestContext.Current.CancellationToken);
         // The hash of the JSON followed by the binary buffer, as the reconstruction has always told files apart by.
         using (MemoryStream joined = new()) { joined.Write(json); joined.Write(bin); Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(joined.ToArray()))[..16], WorldSources.ContentHash(doc)); }
         long written = Allocated(() => doc.Write("content.bin"));

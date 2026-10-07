@@ -89,13 +89,15 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
 
 public static partial class ZrdDecoder
 {
-    internal static ZrdNode? TryRead(ReadOnlyMemory<byte> bytes, CancellationToken token)
+    internal static ZrdNode? TryRead(ReadOnlyMemory<byte> bytes, CancellationToken token, ArchiveZrdBudget? allocation = null)
     {
         if (bytes.Length < 8 || BinaryPrimitives.ReadUInt32LittleEndian(bytes.Span) is < 1 or > 4) return null;
-        try { return Read(bytes, token); }
+        try { return Read(bytes, token, allocation); }
         catch (InvalidDataException) { return null; }
     }
     public static ZrdNode Read(ReadOnlyMemory<byte> bytes, CancellationToken token = default)
+        => Read(bytes, token, null);
+    internal static ZrdNode Read(ReadOnlyMemory<byte> bytes, CancellationToken token, ArchiveZrdBudget? allocation)
     {
         BinaryCursor cursor = new(bytes); int budget = 2_000_000;
         var root = ReadNode(0);
@@ -105,14 +107,18 @@ public static partial class ZrdDecoder
         {
             token.ThrowIfCancellationRequested();
             if (depth > 128 || --budget < 0) throw new InvalidDataException("ZRD nesting or node limit exceeded.");
+            allocation?.Node();
             long offset = cursor.AbsolutePosition; var kind = (ZrdKind)cursor.U32();
             uint bits = 0; string text = ""; List<ZrdNode> children = [];
             switch (kind)
             {
                 case ZrdKind.Int: case ZrdKind.Float: bits = cursor.U32(); break;
-                case ZrdKind.String: text = Encoding.Latin1.GetString(cursor.Take(cursor.Count(cursor.U32())).Span); break;
+                case ZrdKind.String:
+                    int length = cursor.Count(cursor.U32()); allocation?.Text(length);
+                    text = Encoding.Latin1.GetString(cursor.Take(length).Span); break;
                 case ZrdKind.Array:
                     int count = cursor.I32(); if (count < 1) throw new InvalidDataException("Invalid ZRD array count."); cursor.Count((uint)(count - 1), 4);
+                    allocation?.Children(count - 1);
                     for (int i = 1; i < count; i++) children.Add(ReadNode(depth + 1)); break;
                 default: throw new InvalidDataException($"Unknown ZRD type {(uint)kind} at 0x{offset:X}.");
             }

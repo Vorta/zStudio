@@ -248,7 +248,7 @@ public sealed class LoaderReviewFixTests
         // Two models named pu012 with a collision volume: m1's build loads the one its script's model folder holds as the
         // pickup; the one in data/common/models, which m1 does not search, no build loads.
         using SourceWorldFixture fixture = new();
-        var (json, bin) = WorldGltf.Export([Node("box", Quad(1, 0)), Node("bvol", Quad(2, 0))], 0xFF, new() { Texture = _ => ("", 0) }).Write("pu012.bin");
+        var (json, bin) = WorldGltf.Export([Node("box", Quad(1, 0)), Node("bvol", Quad(2, 0))], 0xFF, new() { Texture = _ => ("", 0) }).Write("pu012.bin", TestContext.Current.CancellationToken);
         foreach (string folder in new[] { "data/m1/models", "data/common/models" }) { fixture.Write($"{folder}/pu012.gltf", json); fixture.Write($"{folder}/pu012.bin", bin); }
         string script = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
         fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "LoadGameGen pu012.flt pu012", StringComparison.Ordinal));

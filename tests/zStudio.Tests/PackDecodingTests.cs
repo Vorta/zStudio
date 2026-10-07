@@ -252,13 +252,16 @@ public sealed class PackDecodingTests
         folder.Write("game/.zstudio-staging-test/zrdr.zbd", "NEW ARCHIVE");
         folder.Write("game/.zstudio-staging-test/m1/zrdr.zbd", "NEW MISSION ARCHIVE");
         folder.Write("game/zrdr.zbd", "ORIGINAL ARCHIVE");
-        // Once the original is in the backup (and, when installed, the new archive in its place), another program deletes the
-        // backup or changes the original there; then publication fails.
+        // Once the original is in the backup (and, when installed, the new archive in its place), another program deletes
+        // or changes that original; then publication fails. Publication now holds the backup directory itself in place,
+        // but its unsealed contents remain externally writable, so remove the file to exercise the missing-original case.
         var error = Assert.Throws<IOException>(() => SourceBuilder.Publish(staging, destination, Staged(staging, ["zrdr.zbd", "m1/zrdr.zbd"]), overwrite: true, Token, (step, index) =>
         {
             if (step != "install" || index != (installed ? 1 : 0)) return;
             string backup = Assert.Single(Directory.GetDirectories(destination, ".zstudio-backup-*"));
-            if (deleted) Directory.Delete(backup, true); else File.WriteAllText(Path.Combine(backup, "zrdr.zbd"), "ANOTHER PROGRAM");
+            string original = Path.Combine(backup, "zrdr.zbd");
+            if (deleted) { File.Delete(original); Assert.False(File.Exists(original)); }
+            else File.WriteAllText(original, "ANOTHER PROGRAM");
             throw new IOException("forced failure");
         }));
         Assert.Contains("forced failure", error.Message);

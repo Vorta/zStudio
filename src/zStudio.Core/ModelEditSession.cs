@@ -11,7 +11,7 @@ public sealed record ModelSaveResult(IReadOnlyList<string> SavedPaths, IReadOnly
 public sealed class ModelEditSession
 {
     private readonly Stack<ModelEditSnapshot> undo = [], redo = [];
-    private readonly Dictionary<string, (string Target, byte[] Bytes)> saved = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (string Target, byte[] Bytes, bool PendingCopy)> saved = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ZbdDocument> originalTextures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FileStamp> observedStamps = new(StringComparer.OrdinalIgnoreCase);
     private bool saving;
@@ -19,12 +19,13 @@ public sealed class ModelEditSession
     public bool CanUndo => !saving && undo.Count > 0;
     public bool CanRedo => !saving && redo.Count > 0;
     public bool HasModelImports => originalTextures.Count > 0;
-    public bool IsDirty => Documents.Any(d => !saved.TryGetValue(d.Path, out var s) || !d.Bytes.Span.SequenceEqual(s.Bytes));
+    public bool IsDirty => Documents.Any(d => !saved.TryGetValue(d.Path, out var s) || s.PendingCopy || !d.Bytes.Span.SequenceEqual(s.Bytes));
     public event Action? Changed;
     public event Action? EditAccepted;
     public event Action<IEnumerable<string>>? BeforeEdit;
     public IEnumerable<ZbdDocument> Documents => originalTextures.Keys.Union(Current.Textures.Keys, StringComparer.OrdinalIgnoreCase).Select(p => Current.Textures.TryGetValue(p, out var d) ? d : originalTextures[p]).Append(Current.World);
-    public ModelEditSession(ZbdDocument world) { Current = new(world, new Dictionary<string,ZbdDocument>(StringComparer.OrdinalIgnoreCase)); saved[world.Path] = (world.Path, world.Bytes.ToArray()); observedStamps[world.Path] = world.Stamp; }
+    public ModelEditSession(ZbdDocument world) { Current = new(world, new Dictionary<string,ZbdDocument>(StringComparer.OrdinalIgnoreCase)); saved[world.Path] = (world.Path, world.Bytes.ToArray(), false); observedStamps[world.Path] = world.Stamp; }
+    internal Action<SealedFile, string, bool> PublishFile { get; set; } = static (file, target, replace) => file.MoveTo(target, replace);
     public bool HasExternalChanges() => observedStamps.Any(p => FileStamp.Read(p.Key) != p.Value);
     public async Task<ModelEditSnapshot> PrepareAsync(ModelImportBatch batch, AssetResolver resolver, CancellationToken token = default)
     {
@@ -57,7 +58,7 @@ public sealed class ModelEditSession
             throw new InvalidDataException("Model replacement snapshots require GameZ and texture-pack documents only.");
         BeforeEdit?.Invoke(snapshot.Textures.Keys.Append(snapshot.World.Path).Concat(saved.Values.Select(s => s.Target)));
         foreach (var doc in baselines.Values)
-            if (!saved.ContainsKey(doc.Path)) { saved[doc.Path] = (doc.Path, doc.Bytes.ToArray()); originalTextures[doc.Path] = doc; observedStamps[doc.Path] = doc.Stamp; }
+            if (!saved.ContainsKey(doc.Path)) { saved[doc.Path] = (doc.Path, doc.Bytes.ToArray(), false); originalTextures[doc.Path] = doc; observedStamps[doc.Path] = doc.Stamp; }
         undo.Push(Current); redo.Clear(); Current = snapshot; EditAccepted?.Invoke(); Changed?.Invoke();
     }
     public void Undo() { if (CanUndo) { redo.Push(Current); Current = undo.Pop(); Changed?.Invoke(); } }
@@ -73,6 +74,7 @@ public sealed class ModelEditSession
         var targets = documents.Keys.ToDictionary(path => path, path => destinationDirectory == null ? saved[path].Target : Path.Combine(Path.GetFullPath(destinationDirectory), Path.GetFileName(path)), StringComparer.OrdinalIgnoreCase);
         BeforeEdit?.Invoke(documents.Keys.Concat(saved.Values.Select(s => s.Target)).Concat(targets.Values));
         saving = true; List<(ZbdDocument Doc,string Target,string Temp,bool Replace)> staged = []; List<string> completed = [], errors = [];
+        using DirectoryLease directories = new();
         try
         {
             foreach (var doc in documents.Values.OrderBy(d => d.Probe.Family == FormatFamily.GameZ ? 1 : 0).ThenBy(d => d.Path, StringComparer.OrdinalIgnoreCase))
@@ -80,18 +82,28 @@ public sealed class ModelEditSession
                 token.ThrowIfCancellationRequested();
                 var prior = saved[doc.Path]; string target = targets[doc.Path];
                 ValidateDestination(target);
-                bool replace = destinationDirectory == null;
-                if (replace) await CheckExternalAsync(prior.Target, prior.Bytes, token);
+                ValidateDestination(directories.CapturedPath(target));
+                directories.Parent(target, create: true);
+                bool replace = destinationDirectory == null && !prior.PendingCopy;
+                if (replace) await CheckExternalAsync(prior.Target, prior.Bytes, token, directories);
                 else if (File.Exists(target)) throw new IOException($"Save As requires new files: {target}");
                 if (replace && doc.Bytes.Span.SequenceEqual(prior.Bytes)) continue;
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!); string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 staged.Add((doc,target,temp,replace));
-                await using (FileStream stream = new(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None,65536,FileOptions.Asynchronous | FileOptions.WriteThrough))
+                await using (FileStream stream = directories.OpenFile(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
                 { await stream.WriteAsync(doc.Bytes,token); await stream.FlushAsync(token); stream.Flush(true); }
-                byte[] readback = await Sources.SourceRead.AllAsync(temp, doc.Bytes.Length, token);
+                byte[] readback = await Sources.SourceRead.AllAsync(temp, doc.Bytes.Length, directories, token);
                 if (!doc.Bytes.Span.SequenceEqual(readback)) throw new IOException("Model save byte verification failed.");
                 var parsed = await Task.Run(() => FormatRegistry.Default.OpenBytes(target, readback, token:token), token);
                 if (parsed.Diagnostics.Any(d => d.Severity == "Error") || parsed.Assets.Count != doc.Assets.Count) throw new InvalidDataException("Model save shared-reader verification failed.");
+            }
+            // A partially published Save As still owns every requested copy path.
+            // Retrying must create missing copies, never return to a working source.
+            foreach (var item in staged.Where(s => !s.Replace))
+            {
+                var prior = saved[item.Doc.Path];
+                observedStamps.Remove(prior.Target);
+                saved[item.Doc.Path] = (item.Target, prior.Bytes, true);
             }
             foreach (var item in staged)
             {
@@ -99,13 +111,13 @@ public sealed class ModelEditSession
                 {
                     token.ThrowIfCancellationRequested(); ValidateDestination(item.Target);
                     // Held from its check against the verified bytes until it is in place.
-                    using SealedFile file = VerifiedDocumentSave.Seal(item.Temp, item.Doc.Bytes);
-                    if (item.Replace) { var prior = saved[item.Doc.Path]; await CheckExternalAsync(prior.Target,prior.Bytes,token); file.MoveTo(item.Target, replace: true); }
-                    else file.MoveTo(item.Target);
+                    using SealedFile file = VerifiedDocumentSave.Seal(item.Temp, item.Doc.Bytes, directories);
+                    if (item.Replace) { var prior = saved[item.Doc.Path]; await CheckExternalAsync(prior.Target, prior.Bytes, token, directories); }
+                    PublishFile(file, item.Target, item.Replace);
                     string previousTarget = saved[item.Doc.Path].Target;
-                    saved[item.Doc.Path] = (item.Target,item.Doc.Bytes.ToArray());
+                    saved[item.Doc.Path] = (item.Target,item.Doc.Bytes.ToArray(), false);
                     observedStamps.Remove(previousTarget);
-                    observedStamps[item.Target] = FileStamp.ReadHolding(item.Target, item.Doc.Bytes.Span); completed.Add(item.Target);
+                    observedStamps[item.Target] = FileStamp.ReadHolding(item.Target, item.Doc.Bytes.Span, directories); completed.Add(item.Target);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { errors.Add(item.Target + ": " + ex.Message); break; }
             }
@@ -113,12 +125,12 @@ public sealed class ModelEditSession
         }
         finally
         {
-            foreach (var item in staged) if (File.Exists(item.Temp)) { try { File.Delete(item.Temp); } catch (IOException) { } }
+            foreach (var item in staged) { try { directories.DeleteFile(item.Temp); } catch (IOException) { } }
             saving = false; Changed?.Invoke();
         }
     }
-    private static Task CheckExternalAsync(string target, byte[] baseline, CancellationToken token) =>
-        VerifiedDocumentSave.CheckBaselineAsync(target, baseline, token);
+    private static Task CheckExternalAsync(string target, byte[] baseline, CancellationToken token, DirectoryLease directories) =>
+        VerifiedDocumentSave.CheckBaselineAsync(target, baseline, token, directories);
     private static void ValidateDestination(string path)
     {
         if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException("Save model edits outside zbd_1998 and zbd_1999.");

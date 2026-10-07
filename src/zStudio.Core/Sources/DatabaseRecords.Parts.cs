@@ -23,7 +23,7 @@ internal static partial class DatabaseRecords
     /// records are read again in that order until it holds (see <see cref="Infer"/>).
     /// </para>
     /// </summary>
-    private sealed class Parts
+    internal sealed class Parts
     {
         private readonly IReadOnlyDictionary<WorldNode, int> slot;
         private readonly Func<WorldNode, bool> isModelReference;
@@ -37,6 +37,7 @@ internal static partial class DatabaseRecords
         private readonly CancellationToken token;
         /// <summary>The inference's budget for mirrored cache nodes, shared by every reading it tries.</summary>
         private readonly OriginalLoader.MirrorBudget budget;
+        private readonly RetainedMatchBudget retainedBudget;
 
         /// <summary>The database's root: its records are its children.</summary>
         public WorldNode Root { get; }
@@ -74,9 +75,10 @@ internal static partial class DatabaseRecords
         /// <param name="deletion">The deletion's part of the free list, from its top.</param>
         /// <param name="tolerant">Whether nodes the order leaves out (records made from slots it does not know yet) are passed over.</param>
         /// <param name="nested">Whether the deletion's tree nests by the order nodes were freed in (else by the order they were made in).</param>
-        private Parts(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, IReadOnlyList<int> order, List<int> deletion, string mission, OriginalLoader.MirrorBudget budget, CancellationToken token, bool tolerant = false, bool nested = true, Retained? prefix = null)
+        private Parts(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, IReadOnlyList<int> order, List<int> deletion, string mission, OriginalLoader.MirrorBudget budget, RetainedMatchBudget retainedBudget, CancellationToken token, bool tolerant = false, bool nested = true, Retained? prefix = null)
         {
             this.slot = slot; this.isModelReference = isModelReference; this.mission = mission; this.budget = budget; this.token = token; this.tolerant = tolerant; this.prefix = prefix;
+            this.retainedBudget = retainedBudget;
             token.ThrowIfCancellationRequested();
             deletedSlots = [.. deletion];
             foreach (var o in database.Content) top[slot[o]] = o;
@@ -153,7 +155,7 @@ internal static partial class DatabaseRecords
         /// <param name="restore">Puts the database's nodes' children back in the world's order: each reading starts from it.</param>
         /// <param name="mirrors">The inference's budget for mirrored cache nodes; exhausting it stops the inference, not just one reading.</param>
         public static Parts? Infer(IReadOnlyDictionary<WorldNode, int> slot, Func<WorldNode, bool> isModelReference, LoadedModel database, List<int> list, Table before, string mission,
-            Action restore, OriginalLoader.MirrorBudget mirrors, CancellationToken token, bool search = false, IReadOnlyDictionary<int, string>? kept = null)
+            Action restore, OriginalLoader.MirrorBudget mirrors, RetainedMatchBudget retainedBudget, CancellationToken token, bool search = false, IReadOnlyDictionary<int, string>? kept = null)
         {
             if (list.Count == 0 || database.Content.Count == 0) return null;
             int root = list[0];
@@ -200,7 +202,7 @@ internal static partial class DatabaseRecords
                         token.ThrowIfCancellationRequested();
                         // Only where the fresh slots can end the cache's copy (a quick check before any walk).
                         List<int> fresh = [root, .. Enumerable.Range(high, Math.Max(0, max - high + 2))];
-                        if (retained.Continue(fresh, live, list.Take(deleted).ToHashSet(), token) == null) continue;
+                        if (retained.Continue(fresh, live, list.Take(deleted).ToHashSet(), retainedBudget, token) == null) continue;
                         marks.Add(high);
                         if (Settle(deleted, high, visited, ref budget, retained) is not { } settled) continue;
                         if (Refine(settled) is { } leftover) { results.Add(leftover); if (leftover.Inexact == null) break; }
@@ -276,7 +278,7 @@ internal static partial class DatabaseRecords
             {
                 token.ThrowIfCancellationRequested();
                 restore();
-                Parts parts = new(slot, isModelReference, database, order, deletion, mission, mirrors, token, tolerant, nested, prefix);
+                Parts parts = new(slot, isModelReference, database, order, deletion, mission, mirrors, retainedBudget, token, tolerant, nested, prefix);
                 if (!parts.Covered || !parts.Walk()) return null;
                 // One child order for everything after the walk: the order the records were made in.
                 if (!tolerant) parts.OrderChildren();
@@ -296,7 +298,7 @@ internal static partial class DatabaseRecords
             if (prefix != null)
             {
                 // The fresh slots first continue the first cache's copy: that is passed over, and the cache is the first one.
-                if (prefix.Continue(order, live, deletedSlots, token) is not var (reference, passed)) return false;
+                if (prefix.Continue(order, live, deletedSlots, retainedBudget, token) is not var (reference, passed)) return false;
                 at = 1 + passed;
                 prefixReference = reference;
                 Content[reference] = [.. reference.Children];
@@ -669,7 +671,7 @@ internal static partial class DatabaseRecords
         /// again lost its name; it is a reference when its content was copied right after the next record (made under one
         /// of its ancestors), and the copy of the cache in the database, or the file's references elsewhere, name it.
         /// </summary>
-        private sealed class Retained
+        internal sealed class Retained
         {
             private const string Lost = "\u0001lost";
             private static bool Unknown(WorldNode node) => node.Name.StartsWith(Lost, StringComparison.Ordinal);
@@ -743,17 +745,21 @@ internal static partial class DatabaseRecords
             /// reference to the cache's file (its children the cache's records, named where the copy shows them) and how many
             /// fresh slots the copy takes, or null when the copy's end is not there.
             /// </summary>
-            public (WorldNode Reference, int Passed)? Continue(IReadOnlyList<int> order, IReadOnlyDictionary<int, WorldNode> live, IReadOnlySet<int> deleted, CancellationToken token)
+            public (WorldNode Reference, int Passed)? Continue(IReadOnlyList<int> order, IReadOnlyDictionary<int, WorldNode> live, IReadOnlySet<int> deleted, RetainedMatchBudget budget, CancellationToken token)
             {
+                token.ThrowIfCancellationRequested();
                 liveNames ??= [.. live.Values.Select(n => n.Name)];
                 for (int k = 0; k <= copyOrder.Count; k++)
                 {
+                    budget.Take();
                     int length = copyOrder.Count - k;
                     if (1 + length > order.Count) continue;
                     token.ThrowIfCancellationRequested();
                     bool fits = true;
                     for (int i = 0; i < length && fits; i++)
                     {
+                        // Count before inspecting a slot, including failed suffixes and boundaries that never replay.
+                        budget.Take();
                         var node = copyOrder[k + i]; int x = order[1 + i];
                         // An object of the same name, a reference where the cache had one, or a deleted record for a group (whose name
                         // no object of the database has).
@@ -763,12 +769,16 @@ internal static partial class DatabaseRecords
                     if (!fits) continue;
                     // The copy names what the cache lost; the file's references elsewhere name the rest.
                     Dictionary<WorldNode, WorldNode> clone = new(ReferenceEqualityComparer.Instance);
-                    WorldNode Clone(WorldNode n) { var c = new WorldNode(n.Name, WorldNodeClass.Object3D); clone[n] = c; foreach (var child in n.Children) c.Children.Add(Clone(child)); return c; }
+                    WorldNode Clone(WorldNode n) { token.ThrowIfCancellationRequested(); budget.Take(); var c = new WorldNode(n.Name, WorldNodeClass.Object3D); clone[n] = c; foreach (var child in n.Children) c.Children.Add(Clone(child)); return c; }
                     var reference = new WorldNode("part", WorldNodeClass.Object3D);
                     foreach (var record in root.Children) reference.Children.Add(Clone(record));
                     for (int i = 0; i < length; i++)
                         if (Unknown(copyOrder[k + i]) && live.TryGetValue(order[1 + i], out var o)) clone[copyOrder[k + i]].Name = o.Name;
-                    bool Agrees(WorldNode a, WorldNode b) => (Unknown(a) || Unknown(b) || a.Name == b.Name) && a.Children.Count == b.Children.Count && a.Children.Zip(b.Children).All(p => Agrees(p.First, p.Second));
+                    bool Agrees(WorldNode a, WorldNode b)
+                    {
+                        token.ThrowIfCancellationRequested(); budget.Take();
+                        return (Unknown(a) || Unknown(b) || a.Name == b.Name) && a.Children.Count == b.Children.Count && a.Children.Zip(b.Children).All(p => Agrees(p.First, p.Second));
+                    }
                     foreach (var node in lostReferences.Where(n => Unknown(clone[n])))
                     {
                         var files = references[Shape(node)].Where(r => Agrees(r, clone[node])).Select(r => r.Name.ToLowerInvariant()).Distinct().ToList();

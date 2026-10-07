@@ -449,16 +449,35 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private void DeleteTree(WorldNode node)
     {
         if (node.Parents.Count > 0) { Warn($"DeleteTree {node.Name}: the node still has parents."); return; }
-        Destroy(node);
-        void Destroy(WorldNode n)
+        // Script-built hierarchies have not reached Finish's depth validation yet. Follow child order without using
+        // the process stack; shared children are released only when their last parent edge has been removed.
+        bool ownsRemovals = deferredRemovals == null;
+        deferredRemovals ??= new(ReferenceEqualityComparer.Instance);
+        Stack<(WorldNode Node, int Next)> pending = new([(node, 0)]);
+        try
         {
-            foreach (var child in n.Children.ToList())
+            while (pending.TryPop(out var frame))
             {
-                n.Children.Remove(child); child.Parents.Remove(n);
-                if (child.Parents.Count == 0) Destroy(child);
+                token.ThrowIfCancellationRequested();
+                var (n, next) = frame;
+                if (next < n.Children.Count)
+                {
+                    pending.Push((n, next + 1));
+                    var child = n.Children[next]; child.Parents.Remove(n);
+                    if (child.Parents.Count == 0) pending.Push((child, 0));
+                    continue;
+                }
+                n.Children.Clear(); Free(n);
+                if (current == n) current = null;
             }
-            Free(n);
-            if (current == n) current = null;
+        }
+        finally
+        {
+            if (ownsRemovals)
+            {
+                var removed = deferredRemovals; deferredRemovals = null;
+                World.Nodes.RemoveAll(removed.Contains);
+            }
         }
     }
 
@@ -673,7 +692,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         }
         // AddChild chains can make any hierarchy; the passes below follow it recursively.
         WorldUpdate.CheckHierarchy(World.Nodes);
-        WorldUpdate.RebuildBounds(World);
+        WorldUpdate.RebuildBounds(World, token);
         foreach (var world in World.Nodes.Where(n => n.Class == WorldNodeClass.World))
             WorldUpdate.Partition(world, worldChildren.Where(c => c.Parents.Contains(world)).ToList());
         WorldUpdate.SingleParentFlags(World);

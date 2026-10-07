@@ -74,7 +74,7 @@ public sealed class BlenderRoundTripTests
         // a (zone 3) holds a1, which inherits it; b and b1 take theirs from what loads the file (0xFF).
         WorldNode a = Node("a", 3), a1 = Node("a1", 3), b = Node("b"), b1 = Node("b1");
         a.Children.Add(a1); b.Children.Add(b1);
-        var (json, bin) = WorldGltf.Export([a, b], 0xFF, new() { Texture = _ => ("", 0) }).Write("zones.bin");
+        var (json, bin) = WorldGltf.Export([a, b], 0xFF, new() { Texture = _ => ("", 0) }).Write("zones.bin", TestContext.Current.CancellationToken);
         fixture.Write(Zones, json); fixture.Write("data/m1/models/zones.bin", bin);
         var original = JsonNode.Parse(json)!.AsObject();
         Assert.Null(Engine(original, "a1"));
@@ -166,7 +166,7 @@ public sealed class BlenderRoundTripTests
         // One volume among the roots and one in the crate: FindSubNodeByName from the pickup visits the roots from last to
         // first, so it finds the crate's.
         var crate = Node("crate"); crate.Children.Add(Node("bvol", material: violet));
-        var (json, bin) = WorldGltf.Export([Node("bvol", material: violet), crate], 0xFF, new() { Texture = _ => ("", 0) }).Write("ammo.bin");
+        var (json, bin) = WorldGltf.Export([Node("bvol", material: violet), crate], 0xFF, new() { Texture = _ => ("", 0) }).Write("ammo.bin", TestContext.Current.CancellationToken);
         var pickup = JsonNode.Parse(json)!.AsObject();
         int MaterialOf(JsonObject gltf, int node) => gltf["meshes"]![Nodes(gltf)[node]!["mesh"]!.GetValue<int>()]!["primitives"]![0]!["material"]!.GetValue<int>();
         int[] volumes = [.. Nodes(pickup).Select((n, i) => (n, i)).Where(p => (string?)p.n!["name"] == "bvol").Select(p => p.i)];
@@ -203,7 +203,7 @@ public sealed class BlenderRoundTripTests
     public void CheckoutsHideCollisionVolumesOnlyOfPickups()
     {
         using SourceWorldFixture fixture = new();
-        var (json, bin) = WorldGltf.Export([Node("box"), Node("bvol", material: new() { Color = new(63, 15, 254), Flags = 0xFF })], 0xFF, new() { Texture = _ => ("", 0) }).Write("crate.bin");
+        var (json, bin) = WorldGltf.Export([Node("box"), Node("bvol", material: new() { Color = new(63, 15, 254), Flags = 0xFF })], 0xFF, new() { Texture = _ => ("", 0) }).Write("crate.bin", TestContext.Current.CancellationToken);
         fixture.Write("data/m1/models/crate.gltf", json); fixture.Write("data/m1/models/crate.bin", bin);
         SourceWorkspace workspace = new(fixture.Project);
         // No script loads the crate as a pickup: the game draws its bvol.

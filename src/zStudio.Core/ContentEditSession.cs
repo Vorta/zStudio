@@ -90,6 +90,7 @@ public abstract class ContentEditSession
             throw new InvalidDataException("A save destination cannot use another record's source identity in this batch, even if that source file is missing.");
         BeforeEdit?.Invoke(sources.Keys.Concat(saved.Values.Select(s => s.Path)).Concat(targets.Values));
         saving = true; List<(ZbdDocument Doc, string Target, string Temp, bool CreateNew)> staged = []; List<string> completed = [], errors = [];
+        using DirectoryLease directories = new();
         try
         {
             foreach (var doc in documents)
@@ -97,11 +98,13 @@ public abstract class ContentEditSession
                 token.ThrowIfCancellationRequested(); string target = targets[doc.Path];
                 bool createNew = destinations != null || saved[doc.Path].NeedsCreate;
                 VerifiedDocumentSave.ValidateDestination(target);
-                if (!createNew) await VerifiedDocumentSave.CheckBaselineAsync(target, saved[doc.Path].Bytes, token);
-                else if (File.Exists(target)) throw new IOException("Save As requires new files: " + target);
+                VerifiedDocumentSave.ValidateDestination(directories.CapturedPath(target));
+                directories.Parent(target, create: createNew);
+                if (!createNew) await VerifiedDocumentSave.CheckBaselineAsync(target, saved[doc.Path].Bytes, token, directories);
+                else if (directories.Exists(target)) throw new IOException("Save As requires new files: " + target);
                 if (!createNew && doc.Bytes.Span.SequenceEqual(saved[doc.Path].Bytes.Span)) continue;
                 string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp"; staged.Add((doc, target, temp, createNew));
-                await VerifiedDocumentSave.StageAsync(doc, temp, token, target);
+                await VerifiedDocumentSave.StageAsync(doc, temp, token, target, directories);
             }
             // Once every output is verified, retain the complete Save As intent.
             // A partial publication must never send a later Save back to a source.
@@ -112,10 +115,10 @@ public abstract class ContentEditSession
                 try
                 {
                     token.ThrowIfCancellationRequested(); VerifiedDocumentSave.ValidateDestination(item.Target);
-                    using SealedFile file = VerifiedDocumentSave.Seal(item.Temp, item.Doc.Bytes);
-                    if (!item.CreateNew) await VerifiedDocumentSave.CheckBaselineAsync(item.Target, saved[item.Doc.Path].Bytes, token);
+                    using SealedFile file = VerifiedDocumentSave.Seal(item.Temp, item.Doc.Bytes, directories);
+                    if (!item.CreateNew) await VerifiedDocumentSave.CheckBaselineAsync(item.Target, saved[item.Doc.Path].Bytes, token, directories);
                     PublishFile(file, item.Target, item.CreateNew);
-                    saved[item.Doc.Path] = (item.Target, item.Doc.Bytes, FileStamp.ReadHolding(item.Target, item.Doc.Bytes.Span), false); completed.Add(item.Target);
+                    saved[item.Doc.Path] = (item.Target, item.Doc.Bytes, FileStamp.ReadHolding(item.Target, item.Doc.Bytes.Span, directories), false); completed.Add(item.Target);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException) { errors.Add(item.Target + ": " + ex.Message); break; }
             }
@@ -124,7 +127,7 @@ public abstract class ContentEditSession
         }
         finally
         {
-            foreach (var item in staged) { try { if (File.Exists(item.Temp)) File.Delete(item.Temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
+            foreach (var item in staged) { try { directories.DeleteFile(item.Temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { } }
             saving = false; Changed?.Invoke();
         }
     }
@@ -140,9 +143,10 @@ internal static class VerifiedDocumentSave
         for (var d = new DirectoryInfo(Path.GetDirectoryName(path)!); d != null; d = d.Parent)
             if (d.Exists && d.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException("Cannot save through directory links.");
     }
-    internal static async Task CheckBaselineAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken token)
+    internal static async Task CheckBaselineAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken token, DirectoryLease? directories = null)
     {
-        await using FileStream file = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using DirectoryLease? owned = directories == null ? new() : null; directories ??= owned!;
+        await using FileStream file = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
         if (file.Length != bytes.Length || !CryptographicOperations.FixedTimeEquals(await SHA256.HashDataAsync(file, token), SHA256.HashData(bytes.Span)))
             throw new IOException("The file changed outside zStudio. Reload or choose a new Save As destination.");
     }
@@ -150,18 +154,19 @@ internal static class VerifiedDocumentSave
     /// Holds a staged save, checked against the verified <paramref name="bytes"/>, until it is in place: no other program can
     /// write or rename it after its verification (see <see cref="SealedFile"/>).
     /// </summary>
-    internal static SealedFile Seal(string temp, ReadOnlyMemory<byte> bytes)
+    internal static SealedFile Seal(string temp, ReadOnlyMemory<byte> bytes, DirectoryLease? directories = null)
     {
-        try { return SealedFile.Open(temp, Sources.JournalDigest.OfContent(bytes.Span)); }
+        try { return SealedFile.Open(temp, Sources.JournalDigest.OfContent(bytes.Span), directories); }
         catch (IOException ex) { throw new IOException("The verified save was not put in place: " + ex.Message, ex); }
     }
-    internal static async Task StageAsync(ZbdDocument document, string temp, CancellationToken token, string? destination = null)
+    internal static async Task StageAsync(ZbdDocument document, string temp, CancellationToken token, string? destination = null, DirectoryLease? directories = null)
     {
         FormatRegistry.ValidateDocumentSize(document.Bytes.Length);
-        Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
-        await using (FileStream output = new(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
+        using DirectoryLease? owned = directories == null ? new() : null; directories ??= owned!;
+        directories.Parent(temp, create: true);
+        await using (FileStream output = directories.OpenFile(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
         { await output.WriteAsync(document.Bytes, token); await output.FlushAsync(token); output.Flush(true); }
-        byte[] bytes = await Sources.SourceRead.AllAsync(temp, document.Bytes.Length, token);
+        byte[] bytes = await Sources.SourceRead.AllAsync(temp, document.Bytes.Length, directories, token);
         await Task.Run(() =>
         {
             if (!document.Bytes.Span.SequenceEqual(bytes)) throw new IOException("Saved file byte verification failed.");

@@ -248,7 +248,7 @@ public sealed class SourceBlenderTests
             return node;
         }
         var (json, bin) = WorldGltf.Export([Node("box", new() { Texture = new("glow"), Flags = 0x1FF }), Node("bvol", new() { Color = new(63, 15, 254), Flags = 0xFF })], 0xFF,
-            new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("ammo.bin");
+            new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("ammo.bin", TestContext.Current.CancellationToken);
         Assert.DoesNotContain("alphaMode", Encoding.UTF8.GetString(json));
         fixture.Write("data/m1/models/ammo.gltf", json); fixture.Write("data/m1/models/ammo.bin", bin);
         // m1's build loads it as a pickup (from the model folder its script set), whose collision volume the game switches off.

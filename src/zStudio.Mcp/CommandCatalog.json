@@ -5053,7 +5053,7 @@
   },
   {
     "Name": "zstudio_source_world_definitions",
-    "Description": "List animation definition files that other missions list with an animation for a root name and this source world does not list yet, such as an enemy\u0027s destruction animations.",
+    "Description": "List animation definition files that other missions list with an animation for a root name and this source world does not list yet, such as an enemy\u0027s destruction animations. Filter by path before paging; pages retain full paths and contain at most 64 files. Follow nextOffset to discover every matching file; an addition selects at most 64 files.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5069,6 +5069,34 @@
         "Type": "string",
         "Description": "Root node name, as the model\u0027s node would be named.",
         "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based matching file offset; follow nextOffset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Page size, 1\u201364; default 64.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 64
+      },
+      {
+        "Name": "query",
+        "Type": "string",
+        "Description": "Case-insensitive path filter, applied before pagination.",
+        "Required": false,
         "Choices": null,
         "Properties": null
       }
@@ -5157,7 +5185,7 @@
       {
         "Name": "definitionFiles",
         "Type": "array",
-        "Description": "Definition files to list, as zstudio_source_world_definitions returns them; omit to list all it returns (refused above 64), or pass [] to list none.",
+        "Description": "Up to 64 definition files to list, chosen from any page of zstudio_source_world_definitions; omit to list all matching files (refused above 64), or pass [] to list none.",
         "Required": false,
         "Choices": null,
         "Properties": null,

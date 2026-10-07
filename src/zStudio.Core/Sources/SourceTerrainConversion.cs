@@ -276,7 +276,9 @@ public static partial class SourceTerrainConversion
             surfaces.Roots.Add(new GltfNode { Name = group.Id, Mesh = mesh });
         }
         string binary = plan.Surfaces[(plan.Surfaces.LastIndexOf('/') + 1)..^".gltf".Length] + ".bin";
-        var (json, bin) = surfaces.Write(binary);
+        var (json, bin) = surfaces.Write(binary, token);
+        _ = GltfDocument.Read(json, uri => uri == binary ? bin
+            : throw new InvalidDataException($"{plan.Surfaces}: unexpected buffer {JsonData.ShownText(uri)}."), token);
         string folder = plan.Surfaces[..plan.Surfaces.LastIndexOf('/')];
         // The recipe: each surface keeps its pieces' exact node flags and zone.
         TerrainRecipe recipe = new(TerrainRecipe.CurrentCompiler,
@@ -290,12 +292,14 @@ public static partial class SourceTerrainConversion
         var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
         bool Holds(GltfNode node) => converted.Contains(node.Index) || node.Children.Any(Holds);
         int place = sceneRoots.Select(n => GltfInteger.Int32(n)).TakeWhile(n => !(byIndex.TryGetValue(n, out var node) && Holds(node))).Count();
-        foreach (int index in converted.OrderDescending()) GltfNodeEdits.Remove(root, index);
+        GltfNodeEdits.Remove(root, converted, token);
         string stem = Path.GetFileName(plan.Recipe)[..^TerrainRecipe.Extension.Length];
         nodes.Add(new JsonObject { ["name"] = stem, ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = SourceTerrain.RelativePath(plan.Database, plan.Recipe) } } });
         // Removal renumbers the scene's list into a new array.
         ((JsonArray)((JsonArray)root["scenes"]!)[sceneIndex]!["nodes"]!).Insert(place, nodes.Count - 1);
-        byte[] database = JsonSerializer.SerializeToUtf8Bytes(root);
+        byte[] database = GltfJson.Write(root, indented: false, token);
+        _ = GltfDocument.Read(database, uri => workspace.Read(WorldAssembler.Relative(plan.Database, uri), token)
+            ?? throw new InvalidDataException($"{plan.Database}: buffer {JsonData.ShownText(uri)} is unavailable."), token);
         return workspace.Apply($"Convert {Path.GetFileName(plan.Database)} to editable terrain",
             [(plan.Surfaces, json), ($"{folder}/{binary}", bin), (plan.Recipe, TerrainRecipe.Parse(recipe.Write(), plan.Recipe).Write()), (plan.Database, database)], token)
             ?? throw new InvalidDataException("The conversion changed nothing.");

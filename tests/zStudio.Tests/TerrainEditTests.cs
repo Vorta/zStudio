@@ -95,7 +95,7 @@ public sealed class TerrainEditTests
         builder.Add(new([new(200, 0, 300), new(300, 0, 300), new(300, 0, 200), new(200, 0, 200)], [new(0, 0), new(1, 0), new(1, 1), new(0, 1)], [], [], new() { Texture = new("rock"), Flags = 0x1FF }));
         WorldNode land = new("land", WorldNodeClass.Object3D) { Model = builder.Finish(), Flags = WorldGltf.DefaultCarried };
         land.SetPayloadInt(0, 0x28);
-        var (json, bin) = WorldGltf.Export([land], 0xFF, new() { Texture = t => ($"../../textures/{t.Name}.png", 0) }).Write("hills.bin");
+        var (json, bin) = WorldGltf.Export([land], 0xFF, new() { Texture = t => ($"../../textures/{t.Name}.png", 0) }).Write("hills.bin", TestContext.Current.CancellationToken);
         fixture.Write("data/m1/models/terrain/hills.gltf", json); fixture.Write("data/m1/models/terrain/hills.bin", bin);
         SourceWorkspace workspace = new(fixture.Project);
         Assert.Throws<InvalidDataException>(() => SourceTerrain.Create(workspace, "data/m1/models/m1.gltf", "data/m1/models/m1.gltf", ["ground"], token: Token));

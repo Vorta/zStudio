@@ -50,8 +50,69 @@ public static partial class SourceBlender
     private const string ManifestName = "manifest.json";
     private const long MaximumExportBytes = 512L * 1024 * 1024;
     private const long MaximumManifestBytes = 64L * 1024 * 1024;
+    private const int MaximumCheckoutManifestBytes = 4 * 1024 * 1024;
+    private const long MaximumScriptCacheBytes = 64L * 1024 * 1024;
 
     private static string Folder(string root) => Path.Combine(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), "zstudio", "export");
+
+    /// <summary>Owns one new checkout/sealed generation, including cleanup through the same held directories.</summary>
+    private sealed class CopyFiles : IDisposable
+    {
+        private readonly DirectoryLease directories = new();
+        private readonly List<string> folders = [], files = [];
+        private readonly HashSet<string> knownFolders = new(StringComparer.OrdinalIgnoreCase);
+        private string? root;
+        private bool keep;
+
+        public void Root(string path)
+        {
+            path = Path.GetFullPath(path);
+            if (PickupPlacementEditSession.IsProtectedPath(directories.CapturedPath(path)))
+                throw new InvalidDataException("Blender checkouts cannot be written inside the protected zbd_1998/zbd_1999 folders.");
+            directories.Parent(path, create: true);
+            // A colliding folder belongs to somebody else; neither write into it nor clean it up.
+            directories.CreateDirectory(path);
+            root = path;
+            folders.Add(path); knownFolders.Add(path);
+        }
+
+        public void Folder(string path)
+        {
+            path = Path.GetFullPath(path);
+            if (knownFolders.Contains(path)) return;
+            if (root == null || !path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("A Blender copy folder is outside its new checkout or sealed generation.");
+            Folder(Path.GetDirectoryName(path)!);
+            directories.CreateDirectory(path);
+            folders.Add(path); knownFolders.Add(path);
+        }
+
+        public void Write(string path, byte[] bytes)
+        {
+            path = Path.GetFullPath(path);
+            Folder(Path.GetDirectoryName(path)!);
+            using FileStream output = directories.OpenFile(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            files.Add(path); // Include a partly written file if writing or flushing subsequently fails.
+            output.Write(bytes);
+        }
+
+        public void Keep() => keep = true;
+
+        public void Dispose()
+        {
+            try
+            {
+                if (keep) return;
+                // No recursive path enumeration: remove only our known files and then known empty folders.
+                // A changed/occupied entry may prevent cleanup, but can never redirect it outside the held parent.
+                foreach (string file in files)
+                    try { directories.DeleteFile(file); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                for (int i = folders.Count - 1; i >= 0; i--)
+                    try { directories.DeleteDirectory(folders[i]); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+            finally { directories.Dispose(); }
+        }
+    }
 
     /// <summary>
     /// Copies <paramref name="model"/> (a project .gltf, as the workspace holds it) and the files it uses into a new checkout.
@@ -66,19 +127,19 @@ public static partial class SourceBlender
     /// </summary>
     public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default) => Checkout(workspace, model, token, null);
     /// <summary>As <see cref="Checkout(SourceWorkspace, string, CancellationToken)"/>; <paramref name="read"/> is told each project file the checkout has read (tests change files there).</summary>
-    internal static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read)
+    internal static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read,
+        int maximumManifestBytes = MaximumCheckoutManifestBytes, long maximumScriptCacheBytes = MaximumScriptCacheBytes)
     {
-        string? created = null;
-        try { return Checkout(workspace, model, token, read, ref created); }
-        catch when (created != null)
-        {
-            // A canceled or failed checkout leaves no partial folder behind (listings skip folders without a manifest).
-            try { Directory.Delete(created, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            throw;
-        }
+        using CopyFiles written = new();
+        var checkout = Checkout(workspace, model, token, read, written, maximumManifestBytes, maximumScriptCacheBytes);
+        written.Keep();
+        return checkout;
     }
-    private static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read, ref string? created)
+    private static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read, CopyFiles written,
+        int maximumManifestBytes, long maximumScriptCacheBytes)
     {
+        if (maximumManifestBytes is < 0 or > MaximumCheckoutManifestBytes) throw new ArgumentOutOfRangeException(nameof(maximumManifestBytes));
+        if (maximumScriptCacheBytes is < 0 or > MaximumScriptCacheBytes) throw new ArgumentOutOfRangeException(nameof(maximumScriptCacheBytes));
         model = SourceWorkspace.Normalize(model);
         workspace.CheckEditable(model);
         if (!model.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{model} is not a .gltf model; Blender checkouts work on glTF files with separate buffers and textures.");
@@ -93,7 +154,7 @@ public static partial class SourceBlender
         byte[]? Load(string relative)
         {
             if (!project.Exists(relative)) return null;
-            byte[] bytes = project.Read(relative, token);
+            byte[] bytes = snapshot.Read(relative, token, MaximumExportBytes - total);
             if ((total += bytes.Length) > MaximumExportBytes)
                 throw new InvalidDataException($"{checkedOut} and the buffers and textures it uses hold more than 512 MiB together, more than an update from Blender takes; split the model into several files.");
             read?.Invoke(relative);
@@ -115,7 +176,17 @@ public static partial class SourceBlender
             Worlds.WorldGltf.ValidateSupported(document, model);
         }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{model}: {ex.Message}", ex); }
-        List<BlenderCheckoutFile> files = [new(model, "input/" + Path.GetFileName(model), SourceProject.Sha256(json))];
+        // Worst-case JSON escaping costs six bytes per UTF-16 code unit. Reserve the fixed fields,
+        // indentation, generated id/time and instructions before making any manifest records or copy folders.
+        long manifestBytes = 2048 + 12L * model.Length;
+        List<BlenderCheckoutFile> files = [];
+        void AddFile(string relative, string copy, string sha)
+        {
+            if ((manifestBytes += 6L * (relative.Length + copy.Length) + 256) > maximumManifestBytes)
+                throw new InvalidDataException("The checkout manifest would exceed 4 MiB; split the model into several files before checking it out.");
+            files.Add(new(relative, copy, sha));
+        }
+        AddFile(model, "input/" + Path.GetFileName(model), SourceProject.Sha256(json));
         List<(string Name, byte[] Bytes)> copies = [];
         // Buffers sit next to the model in the checkout, each project file once under a name no other copy has (Windows
         // compares names without case): a buffer of the same name from another folder gets a numbered name, so no copy
@@ -133,7 +204,7 @@ public static partial class SourceBlender
                 name = Path.GetFileName(relative);
                 for (int k = 1; !taken.TryAdd(name, relative); k++) name = $"{Path.GetFileNameWithoutExtension(relative)}.{k}{Path.GetExtension(relative)}";
                 copies.Add((name, bytes));
-                files.Add(new(relative, "input/" + name, SourceProject.Sha256(bytes)));
+                AddFile(relative, "input/" + name, SourceProject.Sha256(bytes));
                 bufferCopies[relative] = name;
             }
             buffer!["uri"] = Uri.EscapeDataString(name);
@@ -165,25 +236,23 @@ public static partial class SourceBlender
             if (Load(relative) is not { } bytes) continue;
             string sha = SourceProject.Sha256(bytes);
             textureCopies.Add((name, bytes));
-            files.Add(new(relative, "input/textures/" + name, sha));
+            AddFile(relative, "input/textures/" + name, sha);
             textures[name] = (relative, sha);
             if (Transparency(bytes, token) is { } kind) transparency[name] = kind;
         }
-        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null, LoadedAsPickup(snapshot, workspace.Root, model, token));
+        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null, LoadedAsPickup(snapshot, workspace.Root, model, Load, maximumScriptCacheBytes, token));
         // Blender moves nodes freely: each keeps the zone it has (PlanUpdate takes the stated zones back out).
         Worlds.WorldGltf.ExplicitZones(root);
+        byte[] checkoutJson = GltfJson.Write(root, indented: true, token);
+        var copiedBuffers = copies.ToDictionary(c => c.Name, c => c.Bytes, StringComparer.OrdinalIgnoreCase);
+        _ = GltfDocument.Read(checkoutJson, uri => copiedBuffers.TryGetValue(uri, out var bytes) ? bytes
+            : throw new InvalidDataException($"{model}: checkout buffer {JsonData.ShownText(uri)} is unavailable."), token);
         // Nothing read changed on disk since: the copies are one state of the project.
         snapshot.CheckUnchanged(token);
         // The id names a folder and is typed back by MCP clients: the model's stem as plain characters, a time and a random tail.
         string stem = new([.. Path.GetFileNameWithoutExtension(model).Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '_').Take(64)]);
         string id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + stem + "-" + Guid.NewGuid().ToString("N")[..6];
         string folder = Path.Combine(Folder(workspace.Root), id), input = Path.Combine(folder, "input");
-        SourceProject.RejectLinks(Folder(workspace.Root));
-        created = folder;
-        Directory.CreateDirectory(Path.Combine(input, "textures")); Directory.CreateDirectory(Path.Combine(folder, "outbox"));
-        foreach (var (name, bytes) in copies) { token.ThrowIfCancellationRequested(); File.WriteAllBytes(Path.Combine(input, name), bytes); }
-        foreach (var (name, bytes) in textureCopies) { token.ThrowIfCancellationRequested(); File.WriteAllBytes(Path.Combine(input, "textures", name), bytes); }
-        File.WriteAllText(Path.Combine(input, Path.GetFileName(model)), root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
         BlenderCheckout checkout = new(id, folder, model, DateTime.UtcNow, files);
         JsonObject manifest = new()
         {
@@ -191,7 +260,15 @@ public static partial class SourceBlender
             ["files"] = new JsonArray(files.Select(f => (JsonNode?)new JsonObject { ["project"] = f.Project, ["checkout"] = f.Checkout, ["sha256"] = f.Sha256 }).ToArray()),
             ["instructions"] = "Import input/" + Path.GetFileName(model) + " in Blender (File > Import > glTF 2.0). Export with File > Export > glTF 2.0, format glTF Separate (.gltf + .bin + textures), with Custom Properties enabled, into the outbox folder. Then choose Update from Blender export in zStudio."
         };
-        File.WriteAllText(Path.Combine(folder, ManifestName), manifest.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        byte[] writtenManifest = JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions { WriteIndented = true });
+        if (writtenManifest.Length > maximumManifestBytes) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; split the model into several files before checking it out.");
+        SourceProject.RejectLinks(Folder(workspace.Root));
+        written.Root(folder);
+        written.Folder(Path.Combine(input, "textures")); written.Folder(Path.Combine(folder, "outbox"));
+        foreach (var (name, bytes) in copies) { token.ThrowIfCancellationRequested(); written.Write(Path.Combine(input, name), bytes); }
+        foreach (var (name, bytes) in textureCopies) { token.ThrowIfCancellationRequested(); written.Write(Path.Combine(input, "textures", name), bytes); }
+        written.Write(Path.Combine(input, Path.GetFileName(model)), checkoutJson);
+        written.Write(Path.Combine(folder, ManifestName), writtenManifest);
         return checkout;
     }
 
@@ -250,10 +327,10 @@ public static partial class SourceBlender
     private static BlenderCheckout? Read(string folder, SourceProject.ScanBudget? budget = null, Action<int>? charge = null)
     {
         string path = Path.Combine(folder, ManifestName);
-        if (!File.Exists(path) || new FileInfo(path).Length > 4 * 1024 * 1024) return null;
+        if (!File.Exists(path) || new FileInfo(path).Length > MaximumCheckoutManifestBytes) return null;
         try
         {
-            byte[] bytes = SourceRead.All(path, 4 * 1024 * 1024);
+            byte[] bytes = SourceRead.All(path, MaximumCheckoutManifestBytes);
             charge?.Invoke(bytes.Length);
             var manifest = JsonNode.Parse(bytes) as JsonObject;
             if (manifest?["format"]?.GetValue<string>() != "zstudio-blender-checkout") return null;
@@ -295,29 +372,39 @@ public static partial class SourceBlender
     /// </summary>
     public static void RecordApplied(BlenderCheckout checkout, BlenderUpdatePlan plan)
     {
-        byte[] writtenManifest = AppliedManifest(checkout, plan.Changes);
         string path = Path.Combine(checkout.Folder, ManifestName);
+        using DirectoryLease directories = new();
+        directories.Parent(path);
+        byte[] writtenManifest = AppliedManifest(checkout, plan.Changes, directories);
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        bool temporaryCreated = false;
         try
         {
             SourceProject.RejectLinks(checkout.Folder);
-            using (FileStream output = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) output.Write(writtenManifest);
-            using var sealedFile = SealedFile.Open(temporary, JournalDigest.OfContent(writtenManifest));
+            using (FileStream output = directories.OpenFile(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                temporaryCreated = true;
+                output.Write(writtenManifest);
+            }
+            using var sealedFile = SealedFile.Open(temporary, JournalDigest.OfContent(writtenManifest), directories);
             SourceProject.RejectLinks(checkout.Folder);
             SourceProject.RejectNestedLinks(checkout.Folder, ManifestName);
             sealedFile.MoveTo(path, replace: true);
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        finally { if (temporaryCreated) directories.DeleteFile(temporary); }
     }
 
     // Also run while planning, before accepting any edit: a manifest limit must refuse the update, never omit states.
-    private static byte[] AppliedManifest(BlenderCheckout checkout, IReadOnlyList<(string Relative, byte[] Content)> changes)
+    private static byte[] AppliedManifest(BlenderCheckout checkout, IReadOnlyList<(string Relative, byte[] Content)> changes, DirectoryLease? directories = null)
     {
+        using DirectoryLease? owned = directories == null ? new() : null;
+        directories ??= owned!;
         SourceProject.RejectLinks(checkout.Folder);
         SourceProject.RejectNestedLinks(checkout.Folder, ManifestName);
         string path = Path.Combine(checkout.Folder, ManifestName);
-        if (new FileInfo(path).Length > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest exceeds 4 MiB; create a new checkout.");
-        byte[] previous = SourceRead.All(path, 4 * 1024 * 1024);
+        using FileStream input = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (input.Length > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest exceeds 4 MiB; create a new checkout.");
+        byte[] previous = SourceRead.All(input, MaximumCheckoutManifestBytes, path);
         var manifest = JsonNode.Parse(previous) as JsonObject ?? throw new InvalidDataException($"{path} is not a checkout manifest.");
         var applied = manifest["applied"] as JsonArray ?? (JsonArray)(manifest["applied"] = new JsonArray());
         var known = applied.Select(f => (f!["project"]!.GetValue<string>().ToUpperInvariant(), f["sha256"]!.GetValue<string>().ToUpperInvariant())).ToHashSet();
@@ -327,11 +414,11 @@ public static partial class SourceBlender
             string sha = SourceProject.Sha256(content);
             if (!known.Add((relative.ToUpperInvariant(), sha.ToUpperInvariant()))) continue;
             // Charge escaped paths before appending or serializing thousands of records.
-            if ((estimatedBytes += 6L * relative.Length + 128) > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
+            if ((estimatedBytes += 6L * relative.Length + 128) > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
             applied.Add(new JsonObject { ["project"] = relative, ["sha256"] = sha });
         }
         byte[] writtenManifest = JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions { WriteIndented = true });
-        if (writtenManifest.Length > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
+        if (writtenManifest.Length > MaximumCheckoutManifestBytes) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
         return writtenManifest;
     }
 
@@ -345,16 +432,12 @@ public static partial class SourceBlender
     /// </summary>
     public static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export = null, bool force = false, CancellationToken token = default)
     {
-        string? sealedFolder = null;
-        try { return PlanUpdate(workspace, checkout, export, force, ref sealedFolder, token); }
-        catch when (sealedFolder != null)
-        {
-            // A refused or failed update leaves no sealed copy behind (each can be hundreds of megabytes).
-            try { Directory.Delete(sealedFolder, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            throw;
-        }
+        using CopyFiles written = new();
+        var plan = PlanUpdate(workspace, checkout, export, force, written, token);
+        written.Keep();
+        return plan;
     }
-    private static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, ref string? sealedFolderCreated, CancellationToken token)
+    private static BlenderUpdatePlan PlanUpdate(SourceWorkspace workspace, BlenderCheckout checkout, string? export, bool force, CopyFiles written, CancellationToken token)
     {
         SourceProject.RejectLinks(checkout.Folder);
         var exports = Exports(checkout, token);
@@ -366,8 +449,7 @@ public static partial class SourceBlender
         string generation = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8];
         string sealedFolder = Path.Combine(checkout.Folder, "sealed", generation);
         SourceProject.RejectNestedLinks(checkout.Folder, $"sealed/{generation}");
-        Directory.CreateDirectory(sealedFolder);
-        sealedFolderCreated = sealedFolder;
+        written.Root(sealedFolder);
         string outbox = Path.GetFullPath(checkout.Outbox), exportFolder = Path.GetDirectoryName(chosen.Gltf)!;
         SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, chosen.Gltf).Replace('\\', '/'));
         byte[] json = Stable(chosen.Gltf, token);
@@ -380,9 +462,7 @@ public static partial class SourceBlender
             string target = Path.GetFullPath(Path.Combine(sealedFolder, Path.GetRelativePath(outbox, full)));
             if (!target.StartsWith(Path.GetFullPath(sealedFolder) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{full} is outside the outbox.");
             SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, target).Replace('\\', '/'));
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, target).Replace('\\', '/'));
-            File.WriteAllBytes(target, bytes);
+            written.Write(target, bytes);
         }
         // A file the export names: its URI already unescaped (as glTF readers resolve them), relative to the export.
         byte[] Use(string relative)
@@ -412,12 +492,14 @@ public static partial class SourceBlender
         string model = checkout.Model, modelFolder = Path.GetDirectoryName(model)!.Replace('\\', '/');
         // Buffers: one per model, named as the project names it (further buffers with a dot, which reconstruction never uses).
         var buffers = root["buffers"] as JsonArray ?? [];
+        Dictionary<string, byte[]> mappedBuffers = new(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < buffers.Count; i++)
         {
             if (Text(buffers[i]?["uri"]) is not { } uri) throw new InvalidDataException("A buffer of the export has no file; export as glTF Separate.");
             if (uri.StartsWith("data:", StringComparison.Ordinal)) continue;
             string name = Path.GetFileNameWithoutExtension(model) + (i == 0 ? "" : $".{i}") + ".bin";
-            changes.Add(($"{modelFolder}/{name}", Use(Uri.UnescapeDataString(uri)))); buffers[i]!["uri"] = Uri.EscapeDataString(name);
+            byte[] bytes = Use(Uri.UnescapeDataString(uri));
+            changes.Add(($"{modelFolder}/{name}", bytes)); mappedBuffers[name] = bytes; buffers[i]!["uri"] = Uri.EscapeDataString(name);
         }
         // Textures: by engine name (the file name), found where the model's textures were or, for a new one, beside them.
         // (A checkout holds one file per name; the first of any repeated name in an older manifest counts.)
@@ -479,7 +561,12 @@ public static partial class SourceBlender
         // After counting the engine attributes the export carries: the zones the checkout stated go back to what the
         // file's hierarchy gives, which can leave a node without any.
         Worlds.WorldGltf.ImplicitZones(root, chosen.Relative);
-        changes.Insert(0, (model,Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }))));
+        byte[] updatedJson = GltfJson.Write(root, indented: true, token);
+        var updated = GltfDocument.Read(updatedJson, uri => mappedBuffers.TryGetValue(uri, out var bytes) ? bytes
+            : throw new InvalidDataException($"{model}: updated buffer {JsonData.ShownText(uri)} is unavailable."), token);
+        Worlds.WorldGltf.ValidateSupported(updated, model);
+        Worlds.WorldGltf.CheckInstances(updated, model);
+        changes.Insert(0, (model, updatedJson));
         // What the update replaces must be as the checkout (or an earlier update from it) left it.
         var accepted = checkout.Files.Concat(checkout.Applied).GroupBy(f => f.Project, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Select(f => f.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
         Dictionary<string, string?> expected = new(StringComparer.OrdinalIgnoreCase);
@@ -566,19 +653,42 @@ public static partial class SourceBlender
     /// the load resolves its file as the build does, through the model folders the scripts set up to that point, so a
     /// model of the same name in another folder is not the pickup (reconstruction decides the same per written file).
     /// </summary>
-    private static bool LoadedAsPickup(SourceBuilder.Snapshot snapshot, string root, string model, CancellationToken token)
+    private static bool LoadedAsPickup(SourceBuilder.Snapshot snapshot, string root, string model, Func<string, byte[]?> load, long maximumScriptCacheBytes, CancellationToken token)
     {
         string stem = Path.GetFileNameWithoutExtension(model);
         // The scripts are read from the checkout's snapshot, like the model's files.
         var project = snapshot.Files();
         // Each script once, as the build reads it (instruction lines); null when it does not exist.
         Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
+        long scriptBytes = 0;
+        bool limitExceeded = false;
         IReadOnlyList<IReadOnlyList<string>>? Script(string name)
         {
             string relative = $"{SourceProject.GameGenFolder}/{name.Replace('\\', '/')}";
             if (scripts.TryGetValue(relative, out var lines)) return lines;
             token.ThrowIfCancellationRequested();
-            return scripts[relative] = project.Exists(relative) ? [.. GameGenScriptSyntax.Parse(project.Read(relative, token)).Lines.Where(l => l.IsInstruction).Select(l => l.Tokens)] : null;
+            byte[]? bytes;
+            // Capacity failures are checkout failures, not a malformed mission that may simply be skipped.
+            try { bytes = load(relative); }
+            catch (InvalidDataException) { limitExceeded = true; throw; }
+            if (bytes == null) return scripts[relative] = null;
+            string text = GameGenScriptText.Decode(bytes);
+            GameGenScriptText.CheckBounds(text);
+            // Count with the shared tokenizer, without allocating token/line objects. Include both token
+            // strings and syntax/list overhead before parsing; every cached script shares this allowance.
+            long estimate = 4L * text.Length + 256;
+            foreach (var (start, length) in GameGenScriptText.Lines(text))
+            {
+                token.ThrowIfCancellationRequested();
+                estimate += 256 + 64L * GameGenScriptText.TokenizeLine(text, start, start + length, null, null);
+            }
+            if (estimate > maximumScriptCacheBytes - scriptBytes)
+            {
+                limitExceeded = true;
+                throw new InvalidDataException("The checkout's mission script cache would exceed 64 MiB; split the source project into fewer missions before checking it out.");
+            }
+            scriptBytes += estimate;
+            return scripts[relative] = [.. GameGenScriptSyntax.Parse(text).Lines.Where(l => l.IsInstruction).Select(l => l.Tokens)];
         }
         // The missions the project builds: a data/mN folder with its gamegen/mN.gs.
         foreach (string entry in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase), snapshot.Added, token))
@@ -588,7 +698,7 @@ public static partial class SourceBlender
             List<Worlds.TracedInstruction> trace;
             // A mission whose scripts the build cannot run loads nothing.
             try { trace = Worlds.ScriptTrace.Trace(Script, name + ".gs", []); }
-            catch (InvalidDataException) { continue; }
+            catch (InvalidDataException) when (!limitExceeded) { continue; }
             foreach (var step in trace)
                 if (step is { Command: "LoadGameGen", Args: [var file, var node, ..] } && Worlds.WorldGltf.IsPickupName(node)
                     && Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).Equals(stem, StringComparison.OrdinalIgnoreCase)

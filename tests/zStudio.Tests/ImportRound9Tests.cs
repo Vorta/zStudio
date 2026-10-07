@@ -42,7 +42,7 @@ public sealed class ImportRound9Tests
     [InlineData(float.PositiveInfinity)][InlineData(float.NegativeInfinity)][InlineData(float.NaN)]
     public void SparseOverridesMustBeFinite(float value)
     {
-        var (json, bin) = Triangle().Write("mesh.bin"); var root = JsonNode.Parse(json)!;
+        var (json, bin) = Triangle().Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
         int oldLength = bin.Length; Array.Resize(ref bin, oldLength + 16);
         BinaryPrimitives.WriteSingleLittleEndian(bin.AsSpan(oldLength + 4), value);
         var views = root["bufferViews"]!.AsArray(); int vi = views.Count;
@@ -61,7 +61,7 @@ public sealed class ImportRound9Tests
         var doc = Triangle(); var material = new GltfMaterial { ImageUri = "rock.png", AlphaMode = "MASK", AlphaCutoff = cutoff };
         if (recorded) material.Extras = new JsonObject { ["recoil"] = new JsonObject { ["texture"] = "rock" } };
         doc.Roots[0].Mesh!.Primitives[0].Material = material;
-        var (json, bin) = doc.Write("mesh.bin"); var parsed = Read(JsonNode.Parse(json)!, bin);
+        var (json, bin) = doc.Write("mesh.bin", TestContext.Current.CancellationToken); var parsed = Read(JsonNode.Parse(json)!, bin);
         Assert.Equal(cutoff, parsed.Roots[0].Mesh!.Primitives[0].Material!.AlphaCutoff);
         if (accepted) Assert.NotEmpty(Import(parsed));
         else Assert.Contains("MASK", Assert.Throws<InvalidDataException>(() => Import(parsed)).Message);
@@ -71,7 +71,7 @@ public sealed class ImportRound9Tests
     [InlineData(0)][InlineData(1)][InlineData(2)][InlineData(3)][InlineData(7)]
     public void UnsupportedPrimitiveModesCannotDisappear(int mode)
     {
-        var (json, bin) = Triangle().Write("mesh.bin"); var root = JsonNode.Parse(json)!;
+        var (json, bin) = Triangle().Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
         root["meshes"]![0]!["primitives"]![0]!["mode"] = mode;
         Assert.Contains("mode", Assert.Throws<InvalidDataException>(() => Read(root, bin)).Message);
     }
@@ -80,7 +80,7 @@ public sealed class ImportRound9Tests
     [InlineData("POSITION", true)]
     public void NonfiniteAccessorComponentsFailBeforeGeometryImport(string attribute, bool morph)
     {
-        var (json, bin) = Triangle().Write("mesh.bin"); var root = JsonNode.Parse(json)!;
+        var (json, bin) = Triangle().Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!;
         var p = root["meshes"]![0]!["primitives"]![0]!;
         int index = (morph ? p["targets"]![0]![attribute] : p["attributes"]![attribute])!.GetValue<int>();
         var a = root["accessors"]![index]!;
@@ -93,7 +93,7 @@ public sealed class ImportRound9Tests
     public void UntexturedMasksRetainTheCutoffResult(float alpha, float cutoff, int expected)
     {
         var doc = Triangle(); doc.Roots[0].Mesh!.Primitives[0].Material = new() { AlphaMode = "MASK", BaseColor = new(1,1,1,alpha) };
-        var (json, bin) = doc.Write("mesh.bin"); var root = JsonNode.Parse(json)!; root["materials"]![0]!["alphaCutoff"] = cutoff;
+        var (json, bin) = doc.Write("mesh.bin", TestContext.Current.CancellationToken); var root = JsonNode.Parse(json)!; root["materials"]![0]!["alphaCutoff"] = cutoff;
         var imported = Import(Read(root, bin)); Assert.Equal(expected, (int)(imported[0].Model!.Polygons[0].Material!.Flags & 255));
     }
 }

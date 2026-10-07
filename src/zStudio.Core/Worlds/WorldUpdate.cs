@@ -50,14 +50,16 @@ public static class WorldUpdate
     }
 
     /// <summary>zDi::RebuildBounds (retail 0x483AD0): the model's box (vertices, points, blended vertices; facades symmetric about the origin) and approximate sphere.</summary>
-    public static WorldBox ModelBounds(WorldModel model)
+    public static WorldBox ModelBounds(WorldModel model, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         WorldBox box;
         if (model.Vertices.Count > 0) box = new(model.Vertices[0], model.Vertices[0]);
         else if (model.Points.FirstOrDefault(p => p.Vertices.Length > 0) is { } first) box = new(first.Vertices[0], first.Vertices[0]);
         else box = WorldBox.Empty;
         Vector3 min = box.Min, max = box.Max;
-        void Add(Vector3 p) { min = Vector3.Min(min, p); max = Vector3.Max(max, p); }
+        int visited = 0;
+        void Add(Vector3 p) { if ((++visited & 4095) == 0) token.ThrowIfCancellationRequested(); min = Vector3.Min(min, p); max = Vector3.Max(max, p); }
         foreach (var point in model.Points) foreach (var v in point.Vertices) Add(v);
         for (int i = 1; i < model.Vertices.Count; i++) Add(model.Vertices[i]);
         for (int i = 0; i < model.Morphs.Count && i < model.Vertices.Count; i++) Add(model.Vertices[i] + model.Morphs[i]);
@@ -108,13 +110,28 @@ public static class WorldUpdate
     /// Recomputes every node's model, child and cached bounds bottom-up (gwNodeUpdateDisplayInstance,
     /// gwNodeComputeChildBBox, gwNodeRecalcBBox) and every model's sphere. World nodes keep no bounds.
     /// </summary>
-    public static void RebuildBounds(GameZWorld world)
+    public static void RebuildBounds(GameZWorld world, CancellationToken token = default) => RebuildBoundsCore(world, token);
+
+    /// <summary>Returns the number of distinct models rebuilt; geometry shared by nodes is measured only once per pass.</summary>
+    internal static int RebuildBoundsCore(GameZWorld world, CancellationToken token)
     {
-        foreach (var model in world.Models) RebuildModel(model);
+        token.ThrowIfCancellationRequested();
+        Dictionary<WorldModel, WorldBox> models = new(ReferenceEqualityComparer.Instance);
+        WorldBox Bounds(WorldModel model)
+        {
+            if (models.TryGetValue(model, out var known)) return known;
+            var box = ModelBounds(model, token);
+            (model.BoundsCentre, model.BoundsRadius) = Sphere(box);
+            models.Add(model, box);
+            return box;
+        }
+        foreach (var model in world.Models) { token.ThrowIfCancellationRequested(); _ = Bounds(model); }
         HashSet<WorldNode> done = new(ReferenceEqualityComparer.Instance), visiting = new(ReferenceEqualityComparer.Instance);
         foreach (var node in world.Nodes) Visit(node);
+        return models.Count;
         void Visit(WorldNode node)
         {
+            token.ThrowIfCancellationRequested();
             if (done.Contains(node)) return;
             if (!visiting.Add(node)) throw new InvalidDataException($"Node {node.Name} is its own descendant.");
             foreach (var child in node.Children) Visit(child);
@@ -123,7 +140,7 @@ public static class WorldUpdate
             if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod or WorldNodeClass.Plain)) return;
             uint flags = node.Flags & ~(CachedBoundsFlag | ModelBoundsFlag | ChildBoundsFlag);
             WorldBox? primary = null, secondary = null;
-            if (node.Model != null) { primary = ModelBounds(node.Model); flags |= ModelBoundsFlag; node.PrimaryBounds = primary.Value; }
+            if (node.Model != null) { primary = Bounds(node.Model); flags |= ModelBoundsFlag; node.PrimaryBounds = primary.Value; }
             foreach (var child in node.Children.Where(c => (c.Flags & CachedBoundsFlag) != 0))
             {
                 var box = WorldBox.Of(ParentCorners(child));

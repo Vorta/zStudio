@@ -26,6 +26,12 @@ internal sealed class SourceModelDialog : Window
     private readonly RadioButton unplaced = new() { IsChecked = true, Margin = new(0, 2, 0, 2) }, placed = new() { Margin = new(0, 2, 0, 2) };
     private readonly TextBlock listNote = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8, Margin = new(0, 2, 0, 0) }, nameNote = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8, Margin = new(0, 2, 0, 0) }, animationNote = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0.8 }, error = new() { TextWrapping = TextWrapping.Wrap, Foreground = System.Windows.Media.Brushes.IndianRed };
     private readonly StackPanel animations = new();
+    private readonly TextBox animationFilter = new();
+    private readonly TextBlock animationCount = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly Button animationPrevious = new() { Content = "Previous", MinWidth = 80 }, animationNext = new() { Content = "Next", MinWidth = 80, Margin = new(6, 0, 0, 0) };
+    private IReadOnlyList<SourceDefinitionFile> animationFiles = [];
+    private readonly HashSet<string> chosenAnimations = new(StringComparer.Ordinal);
+    private int animationPage;
     private readonly Button add = new() { Content = "Add", IsDefault = true, MinWidth = 80, Margin = new(0, 0, 8, 0), IsEnabled = false };
     private readonly DispatcherTimer lookup = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private CancellationTokenSource? lookupCancellation;
@@ -33,6 +39,8 @@ internal sealed class SourceModelDialog : Window
     /// <summary>The node name the shown animation definitions were looked up for.</summary>
     private string? animationsFor;
     private bool closed;
+    private bool accepting;
+    private long inputRevision, nameRevision;
 
     public SourceModelDialog(Window owner, string mission, IReadOnlyList<SourceModelChoice> models, IReadOnlySet<string> worldNames, Vector3 position,
         Func<string, CancellationToken, Task<IReadOnlyList<SourceDefinitionFile>>> definitions, Func<SourceModelAddition, string?> validate)
@@ -72,7 +80,14 @@ internal sealed class SourceModelDialog : Window
             coordinates.Children.Add(box);
         }
         panel.Children.Add(coordinates);
-        panel.Children.Add(Label("Animations", 10)); panel.Children.Add(animationNote); panel.Children.Add(animations);
+        panel.Children.Add(Label("Animations", 10)); panel.Children.Add(animationNote);
+        System.Windows.Automation.AutomationProperties.SetName(animationFilter, "Filter animation definition files");
+        panel.Children.Add(animationFilter); panel.Children.Add(animationCount); panel.Children.Add(animations);
+        StackPanel animationPages = new() { Orientation = Orientation.Horizontal };
+        animationPages.Children.Add(animationPrevious); animationPages.Children.Add(animationNext); panel.Children.Add(animationPages);
+        animationFilter.TextChanged += (_, _) => { animationPage = 0; FillAnimations(); };
+        animationPrevious.Click += (_, _) => { animationPage--; FillAnimations(); };
+        animationNext.Click += (_, _) => { animationPage++; FillAnimations(); };
         panel.Children.Add(error);
         StackPanel buttons = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new(0, 12, 0, 0) };
         Button cancel = new() { Content = "Cancel", IsCancel = true, MinWidth = 80 };
@@ -82,6 +97,7 @@ internal sealed class SourceModelDialog : Window
         filter.TextChanged += (_, _) => Fill();
         list.SelectionChanged += (_, _) => ModelChanged();
         name.TextChanged += (_, _) => { NameChanged(); lookup.Stop(); lookup.Start(); };
+        foreach (var box in new[] { x, y, z, heading }) box.TextChanged += (_, _) => inputRevision++;
         lookup.Tick += async (_, _) => { lookup.Stop(); await LookUpAnimationsAsync(); };
         placed.Checked += (_, _) => Placement(); unplaced.Checked += (_, _) => Placement();
         add.Click += async (_, _) => await AcceptAsync();
@@ -117,63 +133,106 @@ internal sealed class SourceModelDialog : Window
     private SourceModelChoice? Model => (list.SelectedItem as ModelRow)?.Model;
     private void ModelChanged()
     {
+        inputRevision++;
         if (Model is not { } model) { add.IsEnabled = false; return; }
         // Follow the model's name until a name is typed.
         if (name.Text.Length == 0 || name.Text == suggestedName) { suggestedName = model.Name; name.Text = model.Name; }
-        add.IsEnabled = true;
+        add.IsEnabled = !accepting;
     }
     private void NameChanged()
     {
+        inputRevision++; nameRevision++;
+        lookupCancellation?.Cancel();
+        animationsFor = null; ClearAnimations(); animationNote.Text = "";
         string text = name.Text.Trim();
         nameNote.Text = text.Length == 0 ? "Resources and animations find the model by this name." :
             worldNames.Contains(text) ? $"The {mission} world already has a node named {text}. Resources and animations bind to one of them; a new name keeps them apart." :
             "Resources and animations find the model by this name.";
     }
-    private void Placement() { foreach (var box in new[] { x, y, z, heading }) box.IsEnabled = placed.IsChecked == true; }
+    private void Placement() { inputRevision++; foreach (var box in new[] { x, y, z, heading }) box.IsEnabled = placed.IsChecked == true; }
 
     private async Task LookUpAnimationsAsync()
     {
         lookupCancellation?.Cancel();
         string root = name.Text.Trim();
-        animations.Children.Clear(); animationsFor = null;
+        long revision = nameRevision;
+        ClearAnimations(); animationsFor = null;
         if (root.Length == 0) { animationNote.Text = ""; animationsFor = root; return; }
         using CancellationTokenSource cancellation = new(); lookupCancellation = cancellation;
+        bool Current() => !closed && IsLoaded && !cancellation.IsCancellationRequested && lookupCancellation == cancellation && nameRevision == revision && name.Text.Trim() == root;
         animationNote.Text = $"Looking for animation definitions for {root}…";
         try
         {
             var files = await definitions(root, cancellation.Token);
-            if (cancellation.IsCancellationRequested || !IsLoaded) return;
+            if (!Current()) return;
             animationsFor = root;
-            // As zstudio_source_world_definitions returns them: the first files in path order, with the total. A longer list is
-            // chosen from explicitly (zstudio_source_world_add_model refuses to add it whole), so its files start unchecked.
-            int shown = Math.Min(files.Count, SourceWorlds.MaximumDefinitionChoices);
-            bool truncated = files.Count > shown;
+            // The selection cap is independent of discovery: every file is reachable through filtering and pages.
+            animationFiles = files;
+            bool choose = files.Count > SourceWorlds.MaximumDefinitionChoices;
+            if (!choose) foreach (var file in files) chosenAnimations.Add(file.Path);
             animationNote.Text = files.Count == 0 ? $"No other mission lists animation definitions for {root}."
-                : truncated ? $"{files.Count:N0} definition files of other missions list animations for {root}; the first {shown} in path order are listed, unchecked. Checked files are added to {mission}'s animation list; files not listed are not added."
+                : choose ? $"{files.Count:N0} definition files of other missions list animations for {root}; filter or browse all files and choose up to {SourceWorlds.MaximumDefinitionChoices}. Checked files are added to {mission}'s animation list."
                 : $"Other missions list these animation definitions for {root}. Checked files are added to {mission}'s animation list:";
-            foreach (var file in files.Take(shown))
-                animations.Children.Add(new CheckBox
-                {
-                    IsChecked = !truncated, Tag = file.Path, Margin = new(0, 2, 0, 2),
-                    Content = new TextBlock { Text = $"{file.Path}  —  {string.Join(", ", file.Animations.Take(6).Select(n => n.Length > 64 ? n[..64] + "…" : n))}{(file.Animations.Count > 6 ? ", …" : "")} (used by {string.Join(", ", file.Missions.Take(8))}{(file.Missions.Count > 8 ? $" and {file.Missions.Count - 8} more" : "")})", TextWrapping = TextWrapping.Wrap }
-                });
+            FillAnimations();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) when (ex is System.IO.InvalidDataException or System.IO.IOException or UnauthorizedAccessException) { if (!cancellation.IsCancellationRequested) animationNote.Text = "Animation definitions could not be read: " + ex.Message; }
+        catch (Exception ex) when (ex is System.IO.InvalidDataException or System.IO.IOException or UnauthorizedAccessException) { if (Current()) animationNote.Text = "Animation definitions could not be read: " + ex.Message; }
         finally { if (lookupCancellation == cancellation) lookupCancellation = null; }
+    }
+
+    private void ClearAnimations()
+    {
+        animationFiles = []; chosenAnimations.Clear(); animationPage = 0;
+        animationFilter.Text = ""; FillAnimations();
+    }
+    private void FillAnimations()
+    {
+        var matches = animationFiles.Where(f => f.Path.Contains(animationFilter.Text.Trim(), StringComparison.OrdinalIgnoreCase)).ToArray();
+        int size = SourceWorlds.MaximumDefinitionChoices;
+        animationPage = Math.Clamp(animationPage, 0, Math.Max(0, (matches.Length - 1) / size));
+        animations.Children.Clear();
+        foreach (var file in matches.Skip(animationPage * size).Take(size))
+        {
+            CheckBox box = new()
+            {
+                IsChecked = chosenAnimations.Contains(file.Path), Tag = file.Path, Margin = new(0, 2, 0, 2),
+                Content = new TextBlock { Text = $"{file.Path}  —  {string.Join(", ", file.Animations.Take(6).Select(n => n.Length > 64 ? n[..64] + "…" : n))}{(file.Animations.Count > 6 ? ", …" : "")} (used by {string.Join(", ", file.Missions.Take(8))}{(file.Missions.Count > 8 ? $" and {file.Missions.Count - 8} more" : "")})", TextWrapping = TextWrapping.Wrap }
+            };
+            box.Checked += (_, _) =>
+            {
+                if (chosenAnimations.Count >= size && !chosenAnimations.Contains(file.Path))
+                { box.IsChecked = false; error.Text = $"Choose at most {size} animation definition files."; return; }
+                chosenAnimations.Add(file.Path); error.Text = ""; Count();
+            };
+            box.Unchecked += (_, _) => { chosenAnimations.Remove(file.Path); error.Text = ""; Count(); };
+            animations.Children.Add(box);
+        }
+        animationPrevious.IsEnabled = animationPage > 0; animationNext.IsEnabled = (animationPage + 1) * size < matches.Length;
+        Count();
+        void Count() => animationCount.Text = $"Showing {Math.Min(animationPage * size + 1, matches.Length)}–{Math.Min((animationPage + 1) * size, matches.Length)} of {matches.Length:N0} matching files ({animationFiles.Count:N0} total). {chosenAnimations.Count} of {size} selected.";
     }
 
     private async Task AcceptAsync()
     {
+        if (accepting || closed) return;
+        accepting = true; add.IsEnabled = false;
+        try { await AcceptCurrentAsync(); }
+        finally { accepting = false; if (!closed) add.IsEnabled = Model != null; }
+    }
+    private async Task AcceptCurrentAsync()
+    {
         error.Text = "";
+        long revision = inputRevision;
         if (animationsFor != name.Text.Trim())
         {
             // The listed definitions belong to another name; show this name's before adding.
-            lookup.Stop(); add.IsEnabled = false;
-            try { await LookUpAnimationsAsync(); } finally { add.IsEnabled = Model != null; }
+            lookup.Stop();
+            await LookUpAnimationsAsync();
             // Canceling the dialog during the lookup ends it; a closed dialog has no result to set.
             if (closed) return;
-            if (animationsFor == name.Text.Trim() && animations.Children.Count > 0) { error.Text = "Review the animation definitions for this name, then choose Add again."; return; }
+            if (revision != inputRevision) { error.Text = "The model or its settings changed while looking up animations; review them and choose Add again."; return; }
+            if (animationsFor != name.Text.Trim()) { error.Text = "Animation definitions could not be read for this name; retry before adding the model."; return; }
+            if (animationFiles.Count > 0) { error.Text = "Review the animation definitions for this name, then choose Add again."; return; }
         }
         if (Model is not { } model) { error.Text = "Choose a model."; return; }
         Vector3? position = null; float angle = 0;
@@ -184,7 +243,7 @@ internal sealed class SourceModelDialog : Window
         }
         SourceModelAddition addition = new(model.Path, name.Text.Trim(), position, angle);
         if (validate(addition) is { } problem) { error.Text = problem; return; }
-        var files = animations.Children.OfType<CheckBox>().Where(c => c.IsChecked == true).Select(c => (string)c.Tag).ToArray();
+        var files = animationFiles.Where(f => chosenAnimations.Contains(f.Path)).Select(f => f.Path).ToArray();
         Result = new(addition, files);
         DialogResult = true;
     }

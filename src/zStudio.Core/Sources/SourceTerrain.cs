@@ -87,7 +87,9 @@ public static class SourceTerrain
         string stem = Path.GetFileName(recipePath)[..^TerrainRecipe.Extension.Length];
         nodeList.Add(new JsonObject { ["name"] = $"{stem}_terrain", ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = RelativePath(database, recipePath) } } });
         (scene["nodes"] as JsonArray ?? (JsonArray)(scene["nodes"] = new JsonArray())).Add(nodeList.Count - 1);
-        byte[] marked = JsonSerializer.SerializeToUtf8Bytes(root);
+        byte[] marked = GltfJson.Write(root, indented: false, token);
+        _ = GltfDocument.Read(marked, uri => workspace.Read(WorldAssembler.Relative(database, uri), token)
+            ?? throw new InvalidDataException($"{database}: buffer {JsonData.ShownText(uri)} is unavailable."), token);
         return workspace.Apply($"Create terrain {stem}", [(recipePath, recipe.Write()), (database, marked)], token) ?? throw new InvalidDataException("Creating the terrain changed nothing.");
     }
 

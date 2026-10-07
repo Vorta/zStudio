@@ -87,45 +87,56 @@ public sealed partial class SourcePublisher
     /// </summary>
     public SourcePublishResult Publish(IReadOnlyList<SourceFileWrite> writes, string description, CancellationToken token = default)
     {
+        using DirectoryLease directories = new();
         ArgumentNullException.ThrowIfNull(writes); ArgumentNullException.ThrowIfNull(description);
         if (description.Length > MaximumDescriptionLength) throw new ArgumentException($"The save description is longer than {MaximumDescriptionLength} characters.", nameof(description));
-        var (changes, checks) = Plan(writes, token);
+
+       directories.Hold(root);
+        var (changes, checks) = Plan(directories, writes, token);
         token.ThrowIfCancellationRequested();
-        using FileStream gate = Lock();
-        Tidy(token);
-        if (Journals(token).FirstOrDefault(j => !j.Committed && !j.RolledBack) is { } pending) throw Blocked(pending);
-        string[] conflicts = [.. changes.Concat(checks).OrderBy(t => t.Order).Where(t => !Look(t.Path, token, t.Expected).Is(t.Expected)).Select(t => t.Name)];
+        using FileStream gate = Lock(directories);
+        Tidy(directories, token);
+        if (Journals(directories, token).FirstOrDefault(j => !j.Committed && !j.RolledBack) is { } pending) throw Blocked(pending);
+        string[] conflicts = [.. changes.Concat(checks).OrderBy(t => t.Order).Where(t => !Look(directories, t.Path, token, t.Expected).Is(t.Expected)).Select(t => t.Name)];
         if (conflicts.Length > 0) throw new SourceConflictException($"{string.Join(", ", conflicts)} changed on disk since {(conflicts.Length == 1 ? "it was" : "they were")} read, or cannot be read now; nothing was saved. Reload to continue from the files on disk.", conflicts);
         foreach (var change in changes)
-            if (new FileInfo(change.Path) is { Exists: true } file && file.Attributes.HasFlag(FileAttributes.ReadOnly)) throw new UnauthorizedAccessException($"{change.Name} is read-only; nothing was saved.");
+        {
+            try
+            {
+                using FileStream file = directories.OpenFile(change.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (File.GetAttributes(file.SafeFileHandle).HasFlag(FileAttributes.ReadOnly)) throw new UnauthorizedAccessException($"{change.Name} is read-only; nothing was saved.");
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { }
+        }
 
         string id = NewSaveId();
-        JournalManifest manifest = new(JournalFormat, id, description, DateTime.UtcNow, [.. changes.Select(c => new JournalFile(c.Relative, c.Expected, c.Content))], NewFolders(changes));
-        EventLog log = Prepare(manifest, changes, token);
-        try { Install(manifest, changes, log); }
+        JournalManifest manifest = new(JournalFormat, id, description, DateTime.UtcNow, [.. changes.Select(c => new JournalFile(c.Relative, c.Expected, c.Content))], NewFolders(directories, changes));
+        EventLog log = Prepare(directories, manifest, changes, token);
+        try { Install(directories, manifest, changes, log); }
         finally { log.Dispose(); }
         // The save is committed: a failure to clean up only leaves a committed journal that the next save removes.
-        try { Step("cleanup", -1); Discard(id); }
+        try { Step("cleanup", -1); Discard(directories, id); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return new(id, [.. changes.Select(c => c.Name)]);
     }
 
     /// <summary>Writes the journal (new contents, then the manifest, then "prepared") and stages every new content; on failure removes them again.</summary>
-    private EventLog Prepare(JournalManifest manifest, Target[] changes, CancellationToken token)
+    private EventLog Prepare(DirectoryLease directories, JournalManifest manifest, Target[] changes, CancellationToken token)
     {
         string journal = JournalPath(manifest.SaveId), staging = StagingPath(manifest.SaveId); EventLog? log = null;
+
         try
         {
-            Directory.CreateDirectory(Path.Combine(journal, AfterFolder));
+           directories.Hold(Path.Combine(journal, AfterFolder), create: true);
             for (int i = 0; i < changes.Length; i++)
-                if (changes[i].Bytes is { } bytes) { token.ThrowIfCancellationRequested(); Step("after", i); CheckWorkingPath(AfterPath(journal, i)); WriteDurable(AfterPath(journal, i), bytes); }
-            Step("manifest", -1); CheckJournalPaths(manifest.SaveId); WriteManifest(journal, manifest);
-            log = EventLog.Open(journal, manifest.Files.Count);
+                if (changes[i].Bytes is { } bytes) { token.ThrowIfCancellationRequested(); Step("after", i); CheckWorkingPath(AfterPath(journal, i)); WriteDurable(directories, AfterPath(journal, i), bytes); }
+            Step("manifest", -1); CheckJournalPaths(manifest.SaveId); WriteManifest(directories, journal, manifest);
+            log = EventLog.Open(directories, journal, manifest.Files.Count);
             Step("prepared", -1); log.Append("prepared", -1);
             SourceProject.RejectNestedLinks(root, StagingFolder);
-            Directory.CreateDirectory(staging);
+           directories.Hold(staging, create: true);
             for (int i = 0; i < changes.Length; i++)
-                if (changes[i].Bytes is { } bytes) { token.ThrowIfCancellationRequested(); Step("stage", i); WriteVerified(StagedPath(staging, i), bytes); }
+                if (changes[i].Bytes is { } bytes) { token.ThrowIfCancellationRequested(); Step("stage", i); WriteVerified(directories, StagedPath(staging, i), bytes); }
             token.ThrowIfCancellationRequested();
             return log;
         }
@@ -133,42 +144,50 @@ public sealed partial class SourcePublisher
         catch
         {
             // Nothing in the project changed yet.
-            log?.TryAppend("rolled-back"); log?.Dispose(); Discard(manifest.SaveId);
+            log?.TryAppend("rolled-back"); log?.Dispose(); Discard(directories, manifest.SaveId);
             throw;
         }
     }
 
     /// <summary>Moves each original aside and each new file into place, then commits; a failure undoes what was done, in reverse.</summary>
-    private void Install(JournalManifest manifest, Target[] changes, EventLog log)
+    private void Install(DirectoryLease directories, JournalManifest manifest, Target[] changes, EventLog log)
     {
         string journal = JournalPath(manifest.SaveId), staging = StagingPath(manifest.SaveId);
         bool[] moved = new bool[changes.Length], installed = new bool[changes.Length];
         int reached = -1; bool committing = false;
+
         try
         {
+            // Capture existing ancestors without creating folders for files this save may never reach.
+            foreach (Target file in changes) _ = directories.CapturedPath(file.Path);
+           directories.Hold(journal);
+           directories.Hold(Path.Combine(journal, HeldFolder), create: true);
+           directories.Hold(Path.Combine(journal, TakenFolder), create: true);
+           directories.Hold(staging);
             for (int i = 0; i < changes.Length; i++)
             {
                 Target file = changes[i]; reached = i;
+                directories.Parent(file.Path, create: file.Content != null);
                 Step("intent", i); log.Append("intent", i);
                 CheckWorkingPath(StagedPath(staging, i));
                 // The staged copy is checked against the journaled content before the original moves aside, and held until it
                 // is in place: no other program can write or rename it meanwhile, so the file installed is the one journaled.
-                using SealedFile? staged = file.Content is { } content ? Seal(StagedPath(staging, i), content, file) : null;
+                using SealedFile? staged = file.Content is { } content ? Seal(StagedPath(staging, i), content, file, directories) : null;
                 Step("hold", i);
                 SourceProject.RejectNestedLinks(root, file.Relative);
                 if (file.Expected is { } expected)
                 {
-                    var result = MoveIfContent(file.Path, HeldPath(journal, i), expected);
+                    var result = MoveIfContent(file.Path, HeldPath(journal, i), expected, directories);
                     moved[i] = result != Moved.Unchanged;
                     if (result != Moved.Done) throw ChangedDuringSave(file);
                     log.Append("held", i);
                 }
-                else if (Path.Exists(file.Path)) throw CreatedDuringSave(file);
+                else if (Exists(directories, file.Path)) throw CreatedDuringSave(file);
                 if (staged == null) continue;
                 Step("install", i);
-                Directory.CreateDirectory(Path.GetDirectoryName(file.Path)!);
+               directories.Parent(file.Path, create: true);
                 try { staged.MoveTo(file.Path); }
-                catch (IOException ex) when (Path.Exists(file.Path)) { throw CreatedDuringSave(file, ex); }
+                catch (IOException ex) when (Exists(directories, file.Path)) { throw CreatedDuringSave(file, ex); }
                 installed[i] = true; log.Append("installed", i);
             }
             Step("commit", -1); committing = true; log.Append("committed", -1);
@@ -179,18 +198,19 @@ public sealed partial class SourcePublisher
             if (!log.TryAppend("rollback") && committing) throw Unfinished(manifest.SaveId, [.. changes.Select(c => c.Name)], ex);
             List<SourceRecoveryConflict> left = [];
             for (int i = reached; i >= 0; i--)
-                if (Undo(journal, manifest.Files[i], i, log, moved[i], installed[i]).Conflict is { } conflict) left.Add(conflict with { Relative = changes[i].Name });
-            RemoveFolders(manifest.Folders);
+                if (Undo(directories, journal, manifest.Files[i], i, log, moved[i], installed[i]).Conflict is { } conflict) left.Add(conflict with { Relative = changes[i].Name });
+
+            RemoveFolders(directories, manifest.Folders);
             if (left.Count > 0) throw Unfinished(manifest.SaveId, [.. left.Select(c => c.Relative)], ex, left);
-            log.TryAppend("rolled-back"); log.Dispose(); Discard(manifest.SaveId);
+            log.TryAppend("rolled-back"); log.Dispose(); Discard(directories, manifest.SaveId);
             throw;
         }
     }
 
     /// <summary>Holds a staged copy while it has <paramref name="content"/> (see <see cref="SealedFile"/>).</summary>
-    private static SealedFile Seal(string staged, JournalDigest content, Target file)
+    private static SealedFile Seal(string staged, JournalDigest content, Target file, DirectoryLease directories)
     {
-        try { return SealedFile.Open(staged, content); }
+        try { return SealedFile.Open(staged, content, directories); }
         catch (IOException ex) { throw new IOException($"The staged copy of {file.Name} was not installed: {ex.Message}", ex); }
     }
     private static SourceConflictException ChangedDuringSave(Target file) => new($"{file.Name} changed on disk during the save; the save was undone. Reload to continue from the file on disk.", [file.Name]);
@@ -203,12 +223,12 @@ public sealed partial class SourcePublisher
         pending.Id, [.. pending.Manifest.Files.Select(f => f.Relative)]);
 
     /// <summary>Validates every write before anything is written: changed entries are published, identical ones only checked.</summary>
-    private (Target[] Changes, Target[] Checks) Plan(IReadOnlyList<SourceFileWrite> writes, CancellationToken token)
+    private (Target[] Changes, Target[] Checks) Plan(DirectoryLease directories, IReadOnlyList<SourceFileWrite> writes, CancellationToken token)
     {
         if (writes.Count == 0) throw new ArgumentException("A save needs at least one file.", nameof(writes));
         if (writes.Count > SourceProject.MaximumFiles) throw new ArgumentException($"A save can include at most {SourceProject.MaximumFiles:N0} files.", nameof(writes));
         HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase); List<Target> changes = [], checks = [];
-        Dictionary<string, Dictionary<string, FileSystemInfo>> listings = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, Dictionary<string, WorkingEntry>> listings = new(StringComparer.OrdinalIgnoreCase);
         // Each folder on the way to a written file is listed once; together the listings are a scan of the project like any other.
         SourceProject.ScanBudget budget = new(ScanLimit, maximum => new IOException(
             $"The folders this save writes into hold more than {maximum:N0} files and folders, far more than a source project needs. " +
@@ -218,7 +238,7 @@ public sealed partial class SourcePublisher
             token.ThrowIfCancellationRequested();
             SourceFileWrite write = writes[i] ?? throw new ArgumentException($"Save entry {i} is missing.", nameof(writes));
             ArgumentNullException.ThrowIfNull(write.Relative, nameof(writes));
-            string relative = Canonical(write.Relative, listings, budget);
+            string relative = Canonical(directories, write.Relative, listings, budget);
             if (!seen.Add(relative)) throw new ArgumentException($"{write.Relative} is listed more than once in the save.", nameof(writes));
             string path = SourceProject.Resolve(root, relative);
             if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException($"{write.Relative} is inside the protected zbd_1998/zbd_1999 folders; nothing was saved.");
@@ -236,7 +256,7 @@ public sealed partial class SourcePublisher
     /// (so never zStudio's working data), names Windows would alter or treat as devices, other spellings of an existing
     /// entry (such as short 8.3 names, which would let one file be listed twice) and files used as folders.
     /// </summary>
-    private string Canonical(string relative, Dictionary<string, Dictionary<string, FileSystemInfo>> listings, SourceProject.ScanBudget budget)
+    private string Canonical(DirectoryLease directories, string relative, Dictionary<string, Dictionary<string, WorkingEntry>> listings, SourceProject.ScanBudget budget)
     {
         CheckSyntax(relative);
         string[] parts = relative.Split('/'); string current = root; bool exists = true;
@@ -248,17 +268,17 @@ public sealed partial class SourcePublisher
                 if (!listings.TryGetValue(current, out var entries))
                 {
                     entries = new(StringComparer.OrdinalIgnoreCase);
-                    foreach (var info in SourceProject.Entries(current, budget))
+                    foreach (var info in WorkingEntries(directories, current, budget))
                         if (entries.TryAdd(info.Name, info) && entries.Count > SourceProject.MaximumFiles) throw new IOException($"{current} has more than {SourceProject.MaximumFiles:N0} entries.");
                     listings[current] = entries;
                 }
                 if (entries.TryGetValue(parts[i], out var entry))
                 {
                     if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{entry.FullName} is a link; nothing was written through it.");
-                    if (i < parts.Length - 1 && entry is not DirectoryInfo) throw new InvalidDataException($"'{relative}' uses the file {entry.FullName} as a folder.");
+                    if (i < parts.Length - 1 && !entry.IsDirectory) throw new InvalidDataException($"'{relative}' uses the file {entry.FullName} as a folder.");
                     parts[i] = entry.Name; next = Path.Combine(current, entry.Name);
                 }
-                else if (Path.Exists(next)) throw new InvalidDataException($"'{relative}' names an existing entry by another spelling (such as a short name); use its full name.");
+                else if (Exists(directories, next)) throw new InvalidDataException($"'{relative}' names an existing entry by another spelling (such as a short name); use its full name.");
                 else exists = false;
             }
             current = next;
@@ -283,7 +303,7 @@ public sealed partial class SourcePublisher
     private static partial Regex DeviceName();
 
     /// <summary>Folders a save creates for new files, outermost first; a rollback removes them again while they are empty.</summary>
-    private string[] NewFolders(IEnumerable<Target> changes)
+    private string[] NewFolders(DirectoryLease directories, IEnumerable<Target> changes)
     {
         List<string> folders = []; HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
         foreach (var change in changes.Where(c => c.Bytes != null))
@@ -292,38 +312,43 @@ public sealed partial class SourcePublisher
             for (int n = 2; n < parts.Length; n++)
             {
                 string folder = string.Join('/', parts[..n]);
-                if (seen.Add(folder) && !Directory.Exists(SourceProject.Resolve(root, folder))) folders.Add(folder);
+                if (seen.Add(folder) && !ExistingDirectory(directories, SourceProject.Resolve(root, folder))) folders.Add(folder);
             }
         }
         return [.. folders];
     }
 
-    private void RemoveFolders(IReadOnlyList<string> folders)
+    private void RemoveFolders(DirectoryLease directories, IReadOnlyList<string> folders)
     {
         foreach (string folder in folders.OrderByDescending(f => f.Count(c => c == '/')).ThenByDescending(f => f, StringComparer.Ordinal))
         {
             try
             {
                 SourceProject.RejectNestedLinks(root, folder);
-                DirectoryInfo directory = new(SourceProject.Resolve(root, folder));
-                if (directory.Exists && !directory.EnumerateFileSystemInfos().Any()) directory.Delete();
+
+                string path = SourceProject.Resolve(root, folder);
+               directories.Hold(path);
+                // Native empty-directory deletion is the check: a concurrent new entry prevents removal.
+               directories.DeleteDirectory(path);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
 
     /// <summary>The project-wide publication lock; saves and recoveries in every process take it for their whole duration.</summary>
-    private FileStream Lock()
+    private FileStream Lock(DirectoryLease directories)
     {
         // Working data is deleted recursively, so neither folder may lead elsewhere; nor may the project itself, which can
         // have become a link since this publisher was made.
         SourceProject.RejectLinkedProject(root);
         SourceProject.RejectNestedLinks(root, RecoveryFolder); SourceProject.RejectNestedLinks(root, StagingFolder);
         string folder = SourceProject.Resolve(root, RecoveryFolder);
-        if (PickupPlacementEditSession.IsProtectedPath(folder)) throw new IOException("Source projects inside the protected zbd_1998/zbd_1999 folders cannot be saved.");
-        Directory.CreateDirectory(folder);
-        try { return new FileStream(Path.Combine(folder, LockName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-        catch (IOException ex) when (ex.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021))
+        if (PickupPlacementEditSession.IsProtectedPath(folder) || PickupPlacementEditSession.IsProtectedPath(directories.CapturedPath(folder)))
+            throw new IOException("Source projects inside the protected zbd_1998/zbd_1999 folders cannot be saved.");
+       directories.Hold(folder, create: true);
+        try { return directories.OpenFile(Path.Combine(folder, LockName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        catch (IOException ex) when (ex.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021)
+            || ex.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: 32 or 33 })
         { throw new IOException($"Another save or recovery is running for {root}; nothing was changed. Try again when it has finished.", ex); }
     }
 
@@ -342,6 +367,14 @@ public sealed partial class SourcePublisher
     private string Display(string path) => SourceProject.Relative(root, path);
 
     private enum Presence { Absent, File, Other }
+    // An unreadable or non-file entry counts as present. It must never be mistaken for a free publication name or a
+    // missing manifest that would let a later save bypass an unresolved journal.
+    private static bool Exists(DirectoryLease directories, string path) => Look(directories, path, default).Kind != Presence.Absent;
+    private static bool ExistingDirectory(DirectoryLease directories, string path)
+    {
+        try { directories.Hold(path); return true; }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return false; }
+    }
     /// <summary>
     /// What a path holds now: nothing, a regular file of <see cref="Length"/> bytes, or something else (a folder, a link, an
     /// unreadable file). A file's <see cref="Digest"/> is known only when its length is that of a content it was probed for.
@@ -357,14 +390,12 @@ public sealed partial class SourcePublisher
     /// is held against writers while it is read; it is read (in blocks, observing <paramref name="token"/>) only when its
     /// length is a candidate's, so a file another program replaced with something of another size is never hashed.
     /// </summary>
-    private static Probe Look(string path, CancellationToken token, params ReadOnlySpan<JournalDigest?> candidates)
+    private static Probe Look(DirectoryLease directories, string path, CancellationToken token, params ReadOnlySpan<JournalDigest?> candidates)
     {
         try
         {
-            FileInfo info = new(path);
-            if (!info.Exists) return Path.Exists(path) ? new(Presence.Other, null) : new(Presence.Absent, null);
-            if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) return new(Presence.Other, null);
-            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+            using FileStream stream = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             long length = stream.Length;
             foreach (JournalDigest? candidate in candidates)
                 if (candidate?.Length == length) return new(Presence.File, JournalDigest.Of(stream, token), length);
@@ -374,71 +405,110 @@ public sealed partial class SourcePublisher
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return new(Presence.Other, null); }
     }
     /// <summary><see cref="Look"/> for a journal path, treating a link that appeared on the way as an unexpected entry.</summary>
-    private Probe LookAt(string relative, CancellationToken token, params ReadOnlySpan<JournalDigest?> candidates)
+    private Probe LookAt(DirectoryLease directories, string relative, CancellationToken token, params ReadOnlySpan<JournalDigest?> candidates)
     {
         try { SourceProject.RejectNestedLinks(root, relative); }
         catch (IOException) { return new(Presence.Other, null); }
-        return Look(SourceProject.Resolve(root, relative), token, candidates);
+        return Look(directories, SourceProject.Resolve(root, relative), token, candidates);
     }
 
     internal enum Moved { Done, Unchanged, Stranded }
     /// <summary>
-    /// Moves a file only while it has the expected content: other writers are excluded while it is compared, and the moved
-    /// file is checked again in case another program renamed something over the name in between. A file that turns out to
-    /// differ is moved back while the name is free (<see cref="Moved.Unchanged"/>); otherwise it stays at the destination
-    /// (<see cref="Moved.Stranded"/>). Exports and reconstructions undo their own files with it too: moved to a new name
-    /// on the same volume and deleted there, a file is removed only while it still has the content the run wrote.
+    /// Moves a file only while it has the expected content, excluding other writers and renames from comparison through
+    /// the handle-based move. A missing, changed or unavailable original is left alone (<see cref="Moved.Unchanged"/>).
+    /// Exports and reconstructions undo their own files with it too: moved to a new name on the same volume and deleted
+    /// there, a file is removed only while it still has the content the run wrote. The Stranded outcome remains understood
+    /// by recovery callers for the former path-based move; this implementation never moves an unverified replacement.
     /// </summary>
-    internal static Moved MoveIfContent(string path, string destination, JournalDigest expected)
+    internal static Moved MoveIfContent(string path, string destination, JournalDigest expected, DirectoryLease? captured = null)
     {
-        SourceProject.RejectLinks(Path.GetDirectoryName(path)!);
-        SourceProject.RejectLinks(Path.GetDirectoryName(destination)!);
-        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        using DirectoryLease? owned = captured == null ? new() : null;
+        DirectoryLease directories = captured ?? owned!;
+       directories.Parent(destination, create: true);
+        SealedFile file;
         try
         {
-            FileInfo info = new(path);
-            if (!info.Exists || info.Attributes.HasFlag(FileAttributes.ReparsePoint)) return Moved.Unchanged;
-            using FileStream guard = new(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            if (!expected.Matches(guard)) return Moved.Unchanged;
-            File.Move(path, destination, false);
+           directories.Parent(path);
+            file = SealedFile.Open(path, expected, directories);
         }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return Moved.Unchanged; }
-        if (Look(destination, default, expected).Is(expected)) return Moved.Done;
-        try { File.Move(destination, path, false); return Moved.Unchanged; }
-        catch (IOException) { return Moved.Stranded; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Moved.Unchanged; }
+        // Rename the exact compared file through its held handle; neither its content nor its directory can redirect us.
+        using (file) file.MoveTo(destination);
+        return Moved.Done;
     }
 
-    private static void WriteDurable(string path, byte[] bytes)
+    private static void WriteDurable(DirectoryLease directories, string path, byte[] bytes)
     {
-        using FileStream stream = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        directories.Parent(path);
+        using FileStream stream = directories.OpenFile(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         stream.Write(bytes); stream.Flush(true);
     }
     /// <summary>Writes, flushes and reads a file back before it may be published.</summary>
-    private void WriteVerified(string path, byte[] bytes)
+    private void WriteVerified(DirectoryLease directories, string path, byte[] bytes)
     {
+        directories.Parent(path);
         CheckWorkingPath(path);
-        using (FileStream stream = new(path, FileMode.Create, FileAccess.Write, FileShare.None)) { stream.Write(bytes); stream.Flush(true); }
-        if (!SourceProject.FileEquals(path, bytes)) throw new IOException($"{path} did not read back as it was written; nothing was saved.");
+        using (FileStream stream = directories.OpenFile(path, FileMode.Create, FileAccess.Write, FileShare.None)) { stream.Write(bytes); stream.Flush(true); }
+        using FileStream verify = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (!JournalDigest.OfContent(bytes).Matches(verify)) throw new IOException($"{path} did not read back as it was written; nothing was saved.");
     }
 
-    private static void TryDelete(string folder)
+    private void TryDelete(DirectoryLease directories, string folder)
     {
-        try { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
+        try
+        {
+            directories.Hold(folder);
+            SourceProject.ScanBudget budget = WorkingBudget(folder, default);
+            Stack<(string Path, bool Remove)> pending = new([(folder, false)]);
+            while (pending.TryPop(out var next))
+            {
+                if (next.Remove) { directories.DeleteDirectory(next.Path); continue; }
+               directories.Hold(next.Path);
+                pending.Push((next.Path, true));
+                // Finish enumeration before deleting entries, and bound unknown material in a damaged journal too.
+                var entries = directories.Entries(next.Path).Select(entry => { budget.Visit(); return entry; }).ToArray();
+                foreach (var entry in entries)
+                {
+                    string path = Path.Combine(next.Path, entry.Name);
+                    if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{path} is a link; journal cleanup left it alone.");
+                    if (entry.Attributes.HasFlag(FileAttributes.Directory)) pending.Push((path, false));
+                    else directories.DeleteFile(path);
+                }
+            }
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
-    private static bool HasFiles(string folder) => Directory.Exists(folder) && Directory.EnumerateFileSystemEntries(folder).Any();
+    private static bool HasFiles(DirectoryLease directories, string folder)
+    {
+        try { return directories.Entries(folder).Any(); }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return false; }
+    }
+
+    private sealed record WorkingEntry(string Name, string FullName, FileAttributes Attributes)
+    {
+        public bool IsDirectory => Attributes.HasFlag(FileAttributes.Directory);
+    }
+    private static IEnumerable<WorkingEntry> WorkingEntries(DirectoryLease directories, string folder, SourceProject.ScanBudget budget)
+    {
+
+        foreach (var entry in directories.Entries(folder))
+        {
+            budget.Visit();
+            yield return new(entry.Name, Path.Combine(folder, entry.Name), entry.Attributes);
+        }
+    }
 
     /// <summary>Removes a journal and its staging folder, renaming the journal first so a partial deletion never leaves a journal that looks interrupted.</summary>
-    private void Discard(string id)
+    private void Discard(DirectoryLease directories, string id)
     {
         CheckJournalPaths(id);
         string journal = JournalPath(id);
-        TryDelete(StagingPath(id));
-        if (!Directory.Exists(journal)) return;
+        TryDelete(directories, StagingPath(id));
+        if (!ExistingDirectory(directories, journal)) return;
         string removed = journal + RemovedSuffix;
-        try { Directory.Move(journal, removed); }
+        try { directories.Hold(journal); directories.MoveDirectory(journal, removed); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
-        TryDelete(removed);
+        TryDelete(directories, removed);
     }
 
     private void CheckWorkingPath(string path) => SourceProject.RejectNestedLinks(root, SourceProject.Relative(root, path));
@@ -454,22 +524,23 @@ public sealed partial class SourcePublisher
     /// Removes what finished saves left behind (under the lock): journals already renamed for removal, committed or rolled-back
     /// journals, journals that never got a manifest and hold no original, and staging folders without a journal.
     /// </summary>
-    private void Tidy(CancellationToken token)
+    private void Tidy(DirectoryLease directories, CancellationToken token)
     {
         string recovery = SourceProject.Resolve(root, RecoveryFolder);
-        foreach (var entry in SourceProject.Entries(recovery, WorkingBudget(RecoveryFolder, token)))
+        foreach (var entry in WorkingEntries(directories, recovery, WorkingBudget(RecoveryFolder, token)))
         {
-            if (entry is not DirectoryInfo directory || directory.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
-            if (directory.Name.EndsWith(RemovedSuffix, StringComparison.Ordinal) && IsSaveId(directory.Name[..^RemovedSuffix.Length])) TryDelete(directory.FullName);
-            else if (IsSaveId(directory.Name) && !File.Exists(Path.Combine(directory.FullName, ManifestName))
-                && !HasFiles(Path.Combine(directory.FullName, HeldFolder)) && !HasFiles(Path.Combine(directory.FullName, TakenFolder))) TryDelete(directory.FullName);
+            if (!entry.IsDirectory || entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+            var directory = entry;
+            if (directory.Name.EndsWith(RemovedSuffix, StringComparison.Ordinal) && IsSaveId(directory.Name[..^RemovedSuffix.Length])) TryDelete(directories, directory.FullName);
+            else if (IsSaveId(directory.Name) && !Exists(directories, Path.Combine(directory.FullName, ManifestName))
+                && !HasFiles(directories, Path.Combine(directory.FullName, HeldFolder)) && !HasFiles(directories, Path.Combine(directory.FullName, TakenFolder))) TryDelete(directories, directory.FullName);
         }
-        foreach (var journal in Journals(token))
-            if (journal.Committed || journal.RolledBack && !HasFiles(Path.Combine(JournalPath(journal.Id), HeldFolder))) Discard(journal.Id);
+        foreach (var journal in Journals(directories, token))
+            if (journal.Committed || journal.RolledBack && !HasFiles(directories, Path.Combine(JournalPath(journal.Id), HeldFolder))) Discard(directories, journal.Id);
         string staging = SourceProject.Resolve(root, StagingFolder);
-        if (Directory.Exists(staging)) // Lock() refused links on the way.
-            foreach (var entry in SourceProject.Entries(staging, WorkingBudget(StagingFolder, token)))
-                if (entry is DirectoryInfo directory && !directory.Attributes.HasFlag(FileAttributes.ReparsePoint) && IsSaveId(directory.Name) && !Directory.Exists(JournalPath(directory.Name))) TryDelete(directory.FullName);
+        if (ExistingDirectory(directories, staging)) // Lock() refused links on the way.
+            foreach (var entry in WorkingEntries(directories, staging, WorkingBudget(StagingFolder, token)))
+                if (entry.IsDirectory && !entry.Attributes.HasFlag(FileAttributes.ReparsePoint) && IsSaveId(entry.Name) && !ExistingDirectory(directories, JournalPath(entry.Name))) TryDelete(directories, entry.FullName);
     }
     /// <summary>
     /// A listing of one of zStudio's own folders (<paramref name="folder"/>: recovery or staging), which holds a folder for each

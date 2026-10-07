@@ -528,7 +528,7 @@ public static class SourceObjectEdits
             uint? LoadZone(long mark) => BuiltInstanceZone(target, origin.ModelFile, mark);
             return GltfFile(target.Workspace, origin, label, (root, copies) =>
             {
-                var zones = GltfNodeEdits.InstanceZones(root).ToDictionary(z => z.Mark, z => z.Zone);
+                var zones = GltfNodeEdits.InstanceZones(root, token).ToDictionary(z => z.Mark, z => z.Zone);
                 // Beside the node in every copy of an instance holding it, as copies of one new instance where it is one.
                 Dictionary<long, long> instances = [];
                 foreach (int each in copies)
@@ -540,7 +540,7 @@ public static class SourceObjectEdits
                 }
                 // A shared node inside the copy is a new one, read from its own first copy: it keeps the zone of the one it copies,
                 // which the original's holder may have given it from elsewhere in the file.
-                KeepInstanceZones(root, origin.ModelFile, zones, instances.ToDictionary(p => p.Value, p => p.Key), LoadZone, copyNotes);
+                KeepInstanceZones(root, origin.ModelFile, zones, instances.ToDictionary(p => p.Value, p => p.Key), LoadZone, copyNotes, token);
             }, token, copyNotes, loadZone: LoadZone);
         }
         var created = Created(target, ["LoadGameGen"], "copied");
@@ -701,10 +701,10 @@ public static class SourceObjectEdits
         // animations start from); when Q also turns, the scale stays and only the rotation takes Q's turn.
         if (node.Class == WorldNodeClass.Object3D)
         {
-            if (!Matrix4x4.Invert(WorldMatrix(parent), out var inverse))
+            if (!Matrix4x4.Invert(WorldMatrix(parent, token), out var inverse))
                 throw new InvalidDataException($"{parent.Name} has a singular world transform; choose another parent or change its zero scale before reparenting.");
             var anchor = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).OrderBy(w => w.Line).LastOrDefault() ?? created;
-            var q = WorldMatrix(current) * inverse;
+            var q = WorldMatrix(current, token) * inverse;
             var stored = ObjectTransform.Of(node);
             var basis = q with { M41 = 0, M42 = 0, M43 = 0 };
             if (Near(basis, Matrix4x4.Identity))
@@ -719,7 +719,7 @@ public static class SourceObjectEdits
             {
                 // A scaled or mirrored parent change: the transform is decomposed whole. Scripts hold translation, rotation and
                 // scale only, so a parent whose scale is not uniform, turned against the node, would shear it.
-                var exact = WorldMatrix(node) * inverse;
+                var exact = WorldMatrix(node, token) * inverse;
                 var local = ObjectTransform.FromMatrix(exact);
                 if (HasShear(exact))
                     throw new InvalidDataException($"Under {parent.Name}, {node.Name} would need a sheared or flattened transform (a parent whose scale is not uniform, turned against it, or a zero scale), which the script's Object3DTranslate, Object3DRotate and Object3DScale cannot hold; choose another parent or change the scales first.");
@@ -1166,10 +1166,25 @@ public static class SourceObjectEdits
     public static string CopyKey(WorldNodeProvenance origin)
     {
         StringBuilder key = new();
-        int depth = 0;
-        for (var by = origin.ReferencedBy; by != null && depth++ < 64; by = by.ReferencedBy)
-            key.Append(by.ModelFile?.ToLowerInvariant()).Append('#').Append(by.ModelNode).Append(by.Load is { } load ? $"@{load.Script.ToLowerInvariant()}:{load.Line}" : "").Append('/');
+        HashSet<WorldNodeProvenance> seen = new(ReferenceEqualityComparer.Instance);
+        for (var by = origin.ReferencedBy; by != null; by = by.ReferencedBy)
+        {
+            if (!seen.Add(by) || seen.Count > GltfDocument.MaximumDepth)
+                throw new InvalidDataException($"The source reference lineage is cyclic or exceeds {GltfDocument.MaximumDepth} levels; rebuild the world before selecting a copy.");
+            // Paths may contain the punctuation previously used as separators. Four length-prefixed fields
+            // per hop keep file/node/load identities distinct without restricting valid source filenames.
+            Field(by.ModelFile?.ToLowerInvariant());
+            Field(by.ModelNode.ToString(CultureInfo.InvariantCulture));
+            Field(by.Load?.Script.ToLowerInvariant());
+            Field(by.Load?.Line.ToString(CultureInfo.InvariantCulture));
+        }
         return key.ToString();
+
+        void Field(string? value)
+        {
+            key.Append((value?.Length ?? -1).ToString(CultureInfo.InvariantCulture)).Append(':');
+            if (value != null) key.Append(value);
+        }
     }
     /// <summary>
     /// <paramref name="nodes"/> with every other copy of their part nodes: an edit of a part's file changes each copy the
@@ -1202,11 +1217,17 @@ public static class SourceObjectEdits
         return true;
     }
     /// <summary>A node's world transform: its local transform under its first parent's, up to the root.</summary>
-    private static Matrix4x4 WorldMatrix(WorldNode node)
+    private static Matrix4x4 WorldMatrix(WorldNode node, CancellationToken token)
     {
         var m = Matrix4x4.Identity; WorldNode? at = node;
-        for (int depth = 0; at != null && depth <= GltfDocument.MaximumDepth; depth++, at = at.Parents.FirstOrDefault())
+        HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
+        for (; at != null; at = at.Parents.FirstOrDefault())
+        {
+            token.ThrowIfCancellationRequested();
+            if (!seen.Add(at) || seen.Count > WorldUpdate.MaximumDepth)
+                throw new InvalidDataException($"The object's world hierarchy is cyclic or exceeds {WorldUpdate.MaximumDepth} levels; rebuild the world before reparenting it.");
             if (at.Class == WorldNodeClass.Object3D) m *= WorldUpdate.LocalMatrix(at) ?? Matrix4x4.Identity;
+        }
         return m;
     }
     /// <summary>
@@ -1286,6 +1307,11 @@ public static class SourceObjectEdits
         string file = origin.ModelFile!;
         byte[] bytes = workspace.Read(file, token, GltfDocument.MaximumJsonBytes) ?? throw new InvalidDataException($"{file} no longer exists.");
         if (!file.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{file} is a binary glTF; save it as .gltf to edit its nodes here.");
+        // A clean source can have changed after the shown build was checked. Validate its actual topology and metadata
+        // before any editing helper traverses or clones it, as well as validating the final candidate below.
+        var checkedSource = GltfDocument.Read(bytes, uri => workspace.Read(WorldAssembler.Relative(file, uri), token)
+            ?? throw new InvalidDataException($"{file}: buffer {JsonData.ShownText(uri)} is unavailable."), token);
+        WorldGltf.ValidateSupported(checkedSource, file);
         JsonNode? root;
         try { GltfDocument.ValidateJsonText(bytes, token); root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }); }
         catch (JsonException ex) { throw new InvalidDataException($"{file} is not valid JSON: {ex.Message}", ex); }
@@ -1302,13 +1328,16 @@ public static class SourceObjectEdits
         // not stand for the first's.
         if (copies.Count > 1 && Shape(nodes, copies[0], 0) is var shape && copies.Skip(1).Any(c => !JsonNode.DeepEquals(Shape(nodes, c, 0), shape)))
             throw new InvalidDataException($"The copies of {shown} in the instance {file} places under several parents differ; make them alike in Blender first.");
-        var zones = GltfNodeEdits.InstanceZones(document).ToDictionary(z => z.Mark, z => z.Zone);
+        var zones = GltfNodeEdits.InstanceZones(document, token).ToDictionary(z => z.Mark, z => z.Zone);
         change(document, copies);
         List<string> kept = [];
-        KeepInstanceZones(document, file, zones, new Dictionary<long, long>(), loadZone, kept);
+        KeepInstanceZones(document, file, zones, new Dictionary<long, long>(), loadZone, kept, token);
         // zStudio and Blender write glTF indented or minified; keep the file's style.
         bool indented = bytes.AsSpan(0, Math.Min(bytes.Length, 4096)).Contains((byte)'\n');
-        byte[] content = JsonSerializer.SerializeToUtf8Bytes(root, new JsonSerializerOptions { WriteIndented = indented });
+        byte[] content = GltfJson.Write(root, indented, token);
+        var updated = GltfDocument.Read(content, uri => workspace.Read(WorldAssembler.Relative(file, uri), token)
+            ?? throw new InvalidDataException($"{file}: buffer {JsonData.ShownText(uri)} is unavailable."), token);
+        WorldGltf.ValidateSupported(updated, file);
         if (content.AsSpan().SequenceEqual(bytes)) return new(label, [], $"{file} node {origin.ModelNode}", notes);
         List<string> all = [.. notes, .. kept];
         if (copies.Count > 1) all.Add($"{file} holds {shown} in an instance it places under several parents: the change applies to each of its {copies.Count} copies.");
@@ -1324,27 +1353,25 @@ public static class SourceObjectEdits
     /// when unknown). A shared node made as a copy of another (<paramref name="copiedFrom"/>: new mark, original mark) keeps
     /// its original's zone. Outer shared nodes come first: the zone written on one passes on to those inside it.
     /// </summary>
-    private static void KeepInstanceZones(JsonObject document, string file, IReadOnlyDictionary<long, uint?> before, IReadOnlyDictionary<long, long> copiedFrom, Func<long, uint?>? loadZone, List<string> notes)
+    internal static void KeepInstanceZones(JsonObject document, string file, IReadOnlyDictionary<long, uint?> before, IReadOnlyDictionary<long, long> copiedFrom, Func<long, uint?>? loadZone, List<string> notes, CancellationToken token)
     {
-        // A shared node given its zone states it on every copy, which settles it.
-        HashSet<long> kept = [];
-        for (int round = 0; round <= before.Count + copiedFrom.Count; round++)
+        int described = 0, omitted = 0;
+        string shownFile = JsonData.ShownText(file, 192);
+        GltfNodeEdits.PreserveInstanceZones(document, (mark, now) =>
         {
-            (long Mark, long Original, uint? Was, uint? Now)? moved = null;
-            foreach (var (mark, now) in GltfNodeEdits.InstanceZones(document))
+            long original = copiedFrom.TryGetValue(mark, out long source) ? source : mark;
+            if (!before.TryGetValue(original, out uint? was) || was == now) return null;
+            uint keep = was ?? loadZone?.Invoke(original)
+                ?? throw new InvalidDataException($"The node {shownFile} places under several parents (instance {original}) takes its zone from what loads the file, which differs between the file's copies; after this change the build would read its copy under another node, which gives it {(now is uint z ? $"zone {z}" : "another zone")}. Make the change in Blender.");
+            if (mark == original)
             {
-                long original = copiedFrom.TryGetValue(mark, out long source) ? source : mark;
-                if (!kept.Contains(mark) && before.TryGetValue(original, out uint? was) && was != now) { moved = (mark, original, was, now); break; }
+                if (described++ < 32)
+                    notes.Add($"The node {shownFile} places under several parents (instance {mark}) keeps zone {keep}: the build now reads its copy under another node, which would give it {(now is uint other ? $"zone {other}" : "the zone of what loads the file")}.");
+                else omitted++;
             }
-            if (moved is not { } m) return;
-            kept.Add(m.Mark);
-            uint keep = m.Was ?? loadZone?.Invoke(m.Original)
-                ?? throw new InvalidDataException($"The node {file} places under several parents (instance {m.Original}) takes its zone from what loads the file, which differs between the file's copies; after this change the build would read its copy under another node, which gives it {(m.Now is uint z ? $"zone {z}" : "another zone")}. Make the change in Blender.");
-            GltfNodeEdits.SetInstanceZone(document, m.Mark, keep);
-            if (m.Mark == m.Original)
-                notes.Add($"The node {file} places under several parents (instance {m.Mark}) keeps zone {keep}: the build now reads its copy under another node, which would give it {(m.Now is uint other ? $"zone {other}" : "the zone of what loads the file")}.");
-        }
-        throw new InvalidDataException($"The zones of the nodes {file} places under several parents could not be kept; make the change in Blender.");
+            return keep;
+        }, token);
+        if (omitted > 0) notes.Add($"{omitted:N0} further shared nodes keep their original zones; individual notes were omitted after 32 instances.");
     }
     /// <summary>
     /// The zone the build gave the shared node <paramref name="mark"/> of <paramref name="file"/>, when every copy of the file

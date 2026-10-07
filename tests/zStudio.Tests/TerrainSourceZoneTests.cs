@@ -91,7 +91,7 @@ public sealed class TerrainSourceZoneTests
         foreach (var holder in new[] { left, right }) { holder.Children.Add(shelf); shelf.Parents.Add(holder); }
         own.Children.Add(Node("slab", 300, piece: true));
         HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance) { shelf, left, right, own };
-        var (json, bin) = WorldGltf.Export([left, right, own], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0), Group = groups.Contains }).Write("m1.bin");
+        var (json, bin) = WorldGltf.Export([left, right, own], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0), Group = groups.Contains }).Write("m1.bin", TestContext.Current.CancellationToken);
         fixture.Write("data/m1/models/m1.gltf", json); fixture.Write("data/m1/models/m1.bin", bin);
         Assert.Equal(2, Regex.Count(Encoding.UTF8.GetString(json), "\"plank\""));
         SourceWorkspace workspace = new(fixture.Project);

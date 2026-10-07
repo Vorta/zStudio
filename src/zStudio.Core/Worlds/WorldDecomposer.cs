@@ -38,7 +38,7 @@ public static class WorldDecomposer
         token.ThrowIfCancellationRequested();
         var root = world.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World) ?? throw new InvalidDataException("The world has no world node.");
         // Work on a plain graph: the world's cells hold children the same way its own list does.
-        foreach (var cell in root.Areas) { foreach (var n in cell.Nodes) if (!root.Children.Contains(n)) root.Children.Add(n); cell.Nodes.Clear(); }
+        FlattenAreas(root, token);
         Dictionary<WorldNode, int> slot = new(ReferenceEqualityComparer.Instance);
         for (int i = 0; i < world.Nodes.Count; i++) slot[world.Nodes[i]] = i;
         var namedNodes = world.Nodes.GroupBy(n => n.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal);
@@ -161,6 +161,22 @@ public static class WorldDecomposer
     }
 
     private static string Arg(TracedInstruction step, int index) => index < step.Args.Count ? step.Args[index] : "";
+
+    /// <summary>Keep first occurrence order while gathering shared cell references in linear membership work.</summary>
+    internal static void FlattenAreas(WorldNode root, CancellationToken token, IEqualityComparer<WorldNode>? comparer = null)
+    {
+        HashSet<WorldNode> children = new(root.Children, comparer ?? ReferenceEqualityComparer.Instance);
+        foreach (var cell in root.Areas)
+        {
+            token.ThrowIfCancellationRequested();
+            foreach (var node in cell.Nodes)
+            {
+                token.ThrowIfCancellationRequested();
+                if (children.Add(node)) root.Children.Add(node);
+            }
+            cell.Nodes.Clear();
+        }
+    }
 
     private static WorldNode? FindSub(WorldNode node, string name) => WorldAssembler.FindSub(node, name);
 }

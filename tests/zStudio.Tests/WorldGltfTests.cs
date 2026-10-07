@@ -37,7 +37,7 @@ public sealed class WorldGltfTests
     {
         var (root, _) = Sample();
         var exported = WorldGltf.Export([root], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 2) });
-        var (json, bin) = exported.Write("tank.bin");
+        var (json, bin) = exported.Write("tank.bin", TestContext.Current.CancellationToken);
         string text = Encoding.UTF8.GetString(json);
         Assert.Contains("\"uri\": \"../textures/rock.png\"", text);
         Assert.Contains("\"wrapT\": 33071", text);
@@ -303,7 +303,7 @@ public sealed class WorldGltfTests
         WorldUpdate.RebuildModel(flare);
         WorldNode a = new("halo", WorldNodeClass.Object3D) { Model = flare, Flags = WorldGltf.DefaultCarried }; a.SetPayloadInt(0, 0x28);
         WorldNode b = new("halo", WorldNodeClass.Object3D) { Model = flare, Flags = WorldGltf.DefaultCarried }; b.SetPayloadInt(0, 0x28);
-        var (json, bin) = WorldGltf.Export([a, b], 0xFF, new() { Texture = _ => ("", 0) }).Write("halo.bin");
+        var (json, bin) = WorldGltf.Export([a, b], 0xFF, new() { Texture = _ => ("", 0) }).Write("halo.bin", TestContext.Current.CancellationToken);
         var parsed = JsonNode.Parse(json)!;
         Assert.All(parsed["meshes"] as JsonArray ?? [], m => Assert.NotEmpty(m!["primitives"]!.AsArray()));
         var doc = GltfDocument.Read(json, _ => bin, Token);
@@ -367,7 +367,7 @@ public sealed class WorldGltfTests
     public void NamesThatLookLikeBlenderCopiesKeepTheirSuffix()
     {
         WorldNode gun = new("gun.001", WorldNodeClass.Object3D) { Flags = WorldGltf.DefaultCarried }; gun.SetPayloadInt(0, 0x28);
-        var (json, bin) = WorldGltf.Export([gun], 0xFF, new() { Texture = _ => ("", 0) }).Write("gun.bin");
+        var (json, bin) = WorldGltf.Export([gun], 0xFF, new() { Texture = _ => ("", 0) }).Write("gun.bin", TestContext.Current.CancellationToken);
         var node = WorldGltf.Import(GltfDocument.Read(json, _ => bin, Token), "gun.gltf", 0xFF, Context(new())).Single();
         Assert.Equal("gun.001", node.Name);
     }
@@ -425,7 +425,7 @@ public sealed class WorldGltfTests
         // The pickup's collision volume shares its engine material with a wall the game draws.
         List<WorldNode> roots = [Node("arc", Quad(new() { Texture = glow, Flags = 0x1FF }, 0)), Node("lock", Quad(new() { Texture = cut, Flags = 0x1FF }, 1)),
             Node("box", Quad(new() { Texture = rock, Flags = 0x1FF }, 2)), Node("wall", Quad(violet, 3)), Node("bvol", Quad(violet, 4))];
-        var (json, bin) = WorldGltf.Export(roots, 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("ammo.bin");
+        var (json, bin) = WorldGltf.Export(roots, 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("ammo.bin", TestContext.Current.CancellationToken);
         static TextureTransparency? Transparency(string uri) => uri switch
         {
             "../textures/glow.png" => TextureTransparency.Alpha, "../textures/cut.png" => TextureTransparency.Keyed, "../textures/rock.png" => TextureTransparency.Opaque, _ => null,

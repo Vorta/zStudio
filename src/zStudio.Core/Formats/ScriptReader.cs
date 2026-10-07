@@ -20,13 +20,34 @@ public sealed record PreparedScriptPackage(ReadOnlyMemory<byte> Header, ReadOnly
 
 internal sealed class ScriptReader : IZbdFormatReader
 {
+    // Count actual decoded shape, including both retained token-reference arrays and
+    // per-token/per-instruction objects, before allocating it. Raw padding is not decoded.
+    internal const long MaximumDecodedBytes = 128L * 1024 * 1024;
+    internal const int MaximumInstructions = 65_536;
+    private sealed class DecodeBudget(long maximumBytes = MaximumDecodedBytes)
+    {
+        private long remaining = maximumBytes;
+        private readonly long limit = maximumBytes;
+        private int instructions;
+        public void Instruction()
+        {
+            if (++instructions > MaximumInstructions) throw new InvalidDataException("Prepared-script instruction count exceeds the supported 65,536 per package; source bytes are retained.");
+        }
+        public void Reserve(long bytes)
+        {
+            if (bytes > remaining) throw new InvalidDataException($"Prepared-script decoded data exceeds the supported {(limit == MaximumDecodedBytes ? "128 MiB" : $"{limit:N0} byte")} budget; source bytes are retained.");
+            remaining -= bytes;
+        }
+    }
     public FormatFamily Family => FormatFamily.Scripts;
     public void Read(ZbdDocument doc, CancellationToken token)
     {
         BinaryCursor c = new(doc.Bytes); c.Skip(8); uint stored = c.U32(); FormatRegistry.CheckEntries("Script entry", stored); int count = c.Count(stored, 128);
+        DecodeBudget budget = new(); budget.Reserve(512L * count);
         List<(string Name, uint Time, uint Offset, ReadOnlyMemory<byte> Raw)> directory = [];
         for (int i = 0; i < count; i++)
         {
+            token.ThrowIfCancellationRequested();
             var raw = doc.Slice(12L + i * 128L, 128);
             directory.Add((c.String(120), c.U32(), c.U32(), raw));
         }
@@ -40,12 +61,12 @@ internal sealed class ScriptReader : IZbdFormatReader
             {
                 if (e.Offset < tableEnd) throw new InvalidDataException("Script overlaps the index.");
                 var bytes = doc.Slice(e.Offset, end - e.Offset);
-                var (instructions, used) = DecodeRecords(bytes, e.Offset, token);
+                var (instructions, used) = DecodeRecords(bytes, e.Offset, token, budget);
                 var following = bytes[used..];
                 if (i == count - 1) { tail = following; following = ReadOnlyMemory<byte>.Empty; }
                 entries.Add(new(Guid.NewGuid(), i, e.Name, e.Time, e.Raw, instructions, following));
                 var a = doc.Add(AssetKind.Script, i, e.Name, e.Offset, end - e.Offset,
-                    new JsonObject { ["file_time"] = (long)e.Time }, Content(instructions));
+                    new JsonObject { ["file_time"] = (long)e.Time }, Content(instructions, token));
                 a.Summary = $"{instructions.Count:N0} instructions";
             }
             catch (InvalidDataException ex) { doc.Diagnostics.Add(new("Error", $"Script {e.Name}: {ex.Message}", i, e.Offset)); }
@@ -54,33 +75,73 @@ internal sealed class ScriptReader : IZbdFormatReader
         // complete lossless package can be edited; never serialize a partial parse.
         if (entries.Count == count) doc.Scripts = new(doc.Bytes[..12], doc.Slice(tableEnd, first - tableEnd), entries, tail);
     }
-    public static ScriptContent Decode(ReadOnlyMemory<byte> bytes, CancellationToken token)
-        => Content(DecodeRecords(bytes, 0, token).Instructions);
-    private static (IReadOnlyList<ScriptInstruction> Instructions, int Used) DecodeRecords(ReadOnlyMemory<byte> bytes, long sourceOffset, CancellationToken token)
+    public static ScriptContent Decode(ReadOnlyMemory<byte> bytes, CancellationToken token, long maximumDecodedBytes = MaximumDecodedBytes)
+        => Content(DecodeRecords(bytes, 0, token, new(maximumDecodedBytes)).Instructions, token);
+    private static (IReadOnlyList<ScriptInstruction> Instructions, int Used) DecodeRecords(ReadOnlyMemory<byte> bytes, long sourceOffset, CancellationToken token, DecodeBudget budget)
     {
         BinaryCursor c = new(bytes); List<ScriptInstruction> instructions = [];
+        long previewCharacters = 0;
+        // The formatter retains at most this prefix. Eight bytes per character
+        // conservatively covers StringBuilder chunks/capacity and its final string.
+        // Empty scripts still render one newline; later reservations may overcount it.
+        ReservePreview(1);
         while (c.Remaining > 0)
         {
             token.ThrowIfCancellationRequested(); int start = bytes.Length - c.Remaining;
             uint size = c.U32(); if (size == 0) return (instructions, bytes.Length - c.Remaining);
+            budget.Instruction();
             uint count = c.U32(); if (count > size) throw new InvalidDataException("Script argument count exceeds its string block.");
-            var strings = c.Take(c.Count(size)); int pos = 0; string[] args = new string[count];
+            var strings = c.Take(c.Count(size)); int pos = 0;
+            budget.Reserve(224L + 64L * count);
+            ReservePreview(Math.Max(1L, 3L * count)); // Quotes, separators and line ending.
+            // Validate every span and reserve its UTF-16 storage before allocating
+            // the token array or any string. A corrupt late token cannot allocate a prefix.
             for (int i = 0; i < count; i++)
             {
-                int nul = strings.Span[pos..].IndexOf((byte)0); if (nul < 0) throw new InvalidDataException("Unterminated script argument.");
+                token.ThrowIfCancellationRequested();
+                int length = TokenLength(strings.Span[pos..], token);
+                budget.Reserve(2L * length);
+                ReservePreview(2L * length); // Every authored character may need escaping.
+                pos += length + 1;
+            }
+            pos = 0; string[] args = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                int nul = TokenLength(strings.Span[pos..], token);
                 args[i] = Encoding.Latin1.GetString(strings.Span.Slice(pos, nul)); pos += nul + 1;
             }
             instructions.Add(new(Guid.NewGuid(), args, bytes.Slice(start, checked((int)size + 8)), sourceOffset + start) { Padding = strings[pos..] });
         }
         throw new InvalidDataException("Missing script terminator.");
+
+        void ReservePreview(long added)
+        {
+            long next = Math.Min(PreparedScriptText.PreviewCharacters, previewCharacters + added);
+            budget.Reserve(8L * (next - previewCharacters));
+            previewCharacters = next;
+        }
     }
-    internal static ScriptContent Content(IEnumerable<ScriptInstruction> records)
+    private static int TokenLength(ReadOnlySpan<byte> bytes, CancellationToken token)
     {
-        var instructions = records.Select(i => i.Tokens.ToArray()).ToArray();
-        return new(instructions, string.Join('\n', instructions.Select(a => string.Join(' ', a.Select(Quote)))) + "\n");
+        for (int offset = 0; offset < bytes.Length; offset += 65_536)
+        {
+            token.ThrowIfCancellationRequested();
+            int nul = bytes.Slice(offset, Math.Min(65_536, bytes.Length - offset)).IndexOf((byte)0);
+            if (nul >= 0) return offset + nul;
+        }
+        throw new InvalidDataException("Unterminated script argument.");
     }
-    private static string Quote(string s) => s.Length == 0 || s.Any(char.IsWhiteSpace) || s.Contains('"')
-        ? "\"" + s.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"" : s;
+    internal static ScriptContent Content(IEnumerable<ScriptInstruction> records, CancellationToken token = default)
+    {
+        List<string[]> instructions = [];
+        foreach (var record in records)
+        {
+            token.ThrowIfCancellationRequested();
+            instructions.Add(record.Tokens.ToArray());
+        }
+        return new(instructions, token);
+    }
 }
 
 public static class PreparedScriptWriter

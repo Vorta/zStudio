@@ -60,7 +60,7 @@ internal static partial class DatabaseRecords
     }
 
     /// <summary>The engine's node table: the free list on top of the slots never used, in order.</summary>
-    private sealed class Table
+    internal sealed class Table
     {
         public Stack<int> Free = new();
         public int Next;
@@ -76,6 +76,19 @@ internal static partial class DatabaseRecords
     /// need at most 2.7 million (1999 and 1998 m2; m6 1.9 million, the others far fewer).
     /// </summary>
     public const int MaximumMirroredNodes = 1 << 24;
+
+    /// <summary>Candidate, slot and cloned-node work across every retained-cache boundary tried by one inference.</summary>
+    internal const int MaximumRetainedWork = 1 << 24;
+    internal sealed class RetainedMatchBudget(int maximum = MaximumRetainedWork)
+    {
+        private int work;
+        internal void Take()
+        {
+            if (work >= maximum)
+                throw new InvalidDataException($"Matching retained database caches exceeds the {maximum:N0}-step work limit; the database keeps the world's object order.");
+            work++;
+        }
+    }
 
     /// <summary>
     /// The children of the database's nodes as the world lists them. Each reading of the database puts them in the order
@@ -101,12 +114,13 @@ internal static partial class DatabaseRecords
         if (database == null || database.Content.Count == 0) return null;
         ChildOrder shipped = new(WorldAssembler.Subtree(database.Content));
         OriginalLoader.MirrorBudget budget = new(mirrorLimit, limit => $"reading its files from the slots would make the loader's caches mirror more than {limit:N0} nodes in all.");
-        try { return Read(world, build, database, isReference, mission, notes, shipped, budget, token); }
+        RetainedMatchBudget retained = new();
+        try { return Read(world, build, database, isReference, mission, notes, shipped, budget, retained, token); }
         catch { shipped.Restore(); throw; }
     }
 
     private static Records? Read(GameZWorld world, WorldDecomposition build, LoadedModel database, Func<WorldNode, bool> isReference, string mission, List<string> notes,
-        ChildOrder shipped, OriginalLoader.MirrorBudget budget, CancellationToken token)
+        ChildOrder shipped, OriginalLoader.MirrorBudget budget, RetainedMatchBudget retained, CancellationToken token)
     {
         var slot = GameZWriter.NodeSlots(world);
         Records? Fail(string reason) { shipped.Restore(); notes.Add($"{mission}: the mission database keeps the world's object order without its groups: {reason}"); return null; }
@@ -176,7 +190,7 @@ internal static partial class DatabaseRecords
         {
             foreach (var (variant, path) in Variants())
             {
-                if (Parts.Infer(slot, isReference, database, variant, before, mission, shipped.Restore, budget, token, search, kept) is { } tried && (parts == null || tried.Inexact == null || tried.Matched > parts.Matched))
+                if (Parts.Infer(slot, isReference, database, variant, before, mission, shipped.Restore, budget, retained, token, search, kept) is { } tried && (parts == null || tried.Inexact == null || tried.Matched > parts.Matched))
                 { parts = tried; list = variant; laterPaths = path is { } chosen ? [chosen] : []; }
                 if (parts is { Inexact: null }) break;
             }
