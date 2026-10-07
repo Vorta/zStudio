@@ -129,6 +129,36 @@ public sealed class GameZBoundsTests
         Assert.Equal(30, ((System.Text.Json.Nodes.JsonArray)retail["partitions"]!).Count);
     }
     /// <summary>A version-15 world node payload followed by its interleaved partition cells and node indices.</summary>
+    [Theory]
+    [InlineData(13, -1, 0)][InlineData(13, 0, -1)][InlineData(15, -1, 0)][InlineData(15, 0, -1)]
+    public void StoredNegativePartitionCountsAreNotReadAsAnEmptyWorld(int version, int columns, int rows)
+    {
+        var error = Assert.Throws<InvalidDataException>(() => GameZReader.ReadNodeData(new BinaryCursor(WorldNode(columns, rows, _ => 0)), "world", GameZLayouts.For((uint)version)));
+        Assert.Contains("negative", error.Message);
+    }
+
+    [Theory]
+    [InlineData(13, 0, 2)][InlineData(13, 2, 0)][InlineData(15, 0, 65537)][InlineData(15, 65537, 0)]
+    public void OneEmptyGridAxisCannotBypassTheCellBudget(int version, int columns, int rows)
+    {
+        var error = Assert.Throws<InvalidDataException>(() => GameZReader.ReadNodeData(new BinaryCursor(WorldNode(columns, rows, _ => 0)), "world", GameZLayouts.For((uint)version)));
+        Assert.Contains("both", error.Message);
+    }
+
+    [Theory]
+    [InlineData(13)][InlineData(15)]
+    public void PartitionCellsShareADocumentBudgetBeforeMetadataAllocation(int version)
+    {
+        GameZReader.RecordBudget cells = new("world partition cell", 3);
+        var layout = GameZLayouts.For((uint)version);
+        byte[] bytes = WorldNode(2,1,_ => 0);
+        GameZReader.ReadNodeData(new BinaryCursor(bytes), "world", layout, partitionCells: cells);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var error = Assert.Throws<InvalidDataException>(() => GameZReader.ReadNodeData(new BinaryCursor(bytes), "world", layout, partitionCells: cells));
+        Assert.Contains("cell count 4",error.Message);
+        Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 100_000);
+    }
+
     private static byte[] WorldNode(int x, int z, Func<int, int> references, int lights = 0)
     {
         using MemoryStream stream = new(); using BinaryWriter w = new(stream);

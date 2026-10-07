@@ -119,7 +119,7 @@ public static class GameZWriter
                 case WorldNodeClass.World:
                     {
                         int columns = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(0x78)), rows = BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(0x7C));
-                        if ((long)Math.Max(0, columns) * Math.Max(0, rows) != node.Areas.Count) throw new InvalidDataException($"World {node.Name} has {node.Areas.Count} areas for a {columns} × {rows} grid.");
+                        if (columns < 0 || rows < 0 || (columns == 0) != (rows == 0) || (long)columns * rows != node.Areas.Count) throw new InvalidDataException($"World {node.Name} has {node.Areas.Count} areas for a {columns} × {rows} grid.");
                         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(0x90), node.WorldLights.Count); BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(0x9C), node.WorldSounds.Count);
                         foreach (int offset in new[] { 0x0C, 0x80, 0x94, 0x98, 0xA0, 0xA4 }) BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(offset), 0);
                         w.Write(payload);
@@ -228,12 +228,12 @@ public static class GameZWriter
             foreach (var polygon in model.Polygons) bytes += 4L * ((long)polygon.Vertices.Length + polygon.Normals.Length) + 8L * polygon.Uvs.Length;
             FormatRegistry.ValidateDocumentSize(bytes);
         }
-        GameZReader.RecordBudget references = new("node reference");
+        GameZReader.RecordBudget references = new("node reference"), partitionCells = new("world partition cell", FormatRegistry.MaximumDirectoryEntries);
         foreach (var node in world.Nodes)
         {
             token.ThrowIfCancellationRequested(); WorldNumbers.Node(node);
             long links = (long)node.Parents.Count + node.Children.Count + node.WorldLights.Count + node.WorldSounds.Count + node.AttachedWorlds.Count;
-            GameZLayouts.CheckEntries("world partition cell", node.Areas.Count);
+            partitionCells.Add(node.Areas.Count);
             foreach (var area in node.Areas) links += area.Nodes.Count;
             references.Add(links);
             bytes += node.Payload.Length + 64L * node.Areas.Count + 4L * links;

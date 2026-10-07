@@ -382,6 +382,16 @@ public static partial class WorldGltf
             }
     }
 
+    /// <summary>Compatibility for old reconstructed point-only meshes, validated with the importer that preserves their records.</summary>
+    internal static bool IsLegacyPointMesh(GltfMesh mesh)
+    {
+        if (mesh.Extras?[Key] is not JsonObject values || values["points"] is not JsonArray { Count: > 0 }) return false;
+        WorldModel model = new();
+        ApplyValues(model, values, 0, "Legacy point mesh");
+        WorldNumbers.Model(model);
+        return model.Points.Count > 0;
+    }
+
     private static void ValidateMesh(GltfMesh mesh, string path)
     {
         if (mesh.Weights.Count > 1 || mesh.Primitives.Any(p => p.Targets.Count > 1))

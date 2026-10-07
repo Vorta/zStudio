@@ -151,6 +151,21 @@ internal static class SourceWorldMcpChecks
             string script = fixture.Path("gamegen/m1.gs");
             Assert.Contains("LoadGameGen tank.gltf tank\r\n", await File.ReadAllTextAsync(script, token));
 
+            // A file touched by another world must not invalidate this build.
+            const string unrelated = "data/m2/models/unrelated.gltf";
+            fixture.Write(unrelated, """{"asset":{"version":"2.0"},"nodes":[]}""");
+            var workspace = redone.SourceWorld!.Workspace;
+            var unrelatedBytes = workspace.Read(unrelated, token)!;
+            Assert.DoesNotContain(unrelated, redone.SourceBuild!.Dependencies);
+            workspace.Apply("Another world edit", [(unrelated, unrelatedBytes.Concat(new byte[] { 32 }).ToArray())], token);
+            await workspace.SaveAsync(token);
+            await File.AppendAllTextAsync(fixture.Path(unrelated), "# outside m1\\r\\n", token);
+            Assert.Contains(unrelated, workspace.ExternalChanges());
+            await main.ViewModel.CheckExternalChangesAsync(); Assert.False(redone.IsStale);
+            Assert.False(await Task.Run(() => redone.SourceInputsChanged(token), token));
+            await File.WriteAllBytesAsync(fixture.Path(unrelated), unrelatedBytes, token);
+            await workspace.ReloadAsync(token);
+
             // A changed model marks the world stale; reloading rebuilds it from disk.
             await main.ViewModel.CheckExternalChangesAsync(); Assert.False(redone.IsStale);
             File.SetLastWriteTimeUtc(fixture.Path(fixture.Tank), DateTime.UtcNow.AddMinutes(2));

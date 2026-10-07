@@ -172,8 +172,12 @@ public static class WorldUpdate
     {
         // Every cell is allocated and written; the reader accepts at most 65,536 (retail worlds use at most 738).
         if (!float.IsFinite(cellX) || !float.IsFinite(cellZ) || cellX == 0 || cellZ == 0) throw new InvalidDataException($"World partition cells need a finite, nonzero size ({cellX} × {cellZ}).");
+        // Area rectangles and partition lookup advance along +X and -Z; reversed axes invert their bounds.
+        if (cellX < 0 || cellZ > 0) throw new InvalidDataException("World partition cells must advance along +X and -Z.");
         double cellsX = world.PayloadFloat(0x3C) / (double)cellX, cellsZ = world.PayloadFloat(0x40) / (double)cellZ;
-        if (!(cellsX <= 0 || cellsZ <= 0 || Math.Ceiling(cellsX) * Math.Ceiling(cellsZ) <= Formats.FormatRegistry.MaximumDirectoryEntries))
+        if (!(cellsX > 0 && cellsZ > 0))
+            throw new InvalidDataException("World partition cells must divide each extent into a positive number of cells; check the extent and cell-size signs.");
+        if (!(Math.Ceiling(cellsX) * Math.Ceiling(cellsZ) <= Formats.FormatRegistry.MaximumDirectoryEntries))
             throw new InvalidDataException($"Cells of {cellX} × {cellZ} divide the world into more than {Formats.FormatRegistry.MaximumDirectoryEntries:N0} cells.");
         WorldNumbers.Finite(1.0f / cellX); WorldNumbers.Finite(1.0f / cellZ);
         WorldNumbers.Finite(cellX * cellX + cellZ * cellZ);

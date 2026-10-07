@@ -318,10 +318,17 @@ public sealed class GltfDocument
         // A required extension changes what the file means, so one the reader does not implement refuses the file (glTF has
         // readers do so). It implements KHR_mesh_quantization (integer vertex attributes, below) and KHR_texture_transform
         // on the base-colour texture, the only texture it reads.
-        if (parsed.TryGetProperty("extensionsRequired", out var required) && required.ValueKind == JsonValueKind.Array)
-            foreach (var extension in required.EnumerateArray())
-                if (extension.ValueKind != JsonValueKind.String || !extension.ValueEquals(MeshQuantization) && !extension.ValueEquals(TextureTransform))
-                    throw new InvalidDataException($"The glTF file requires extension {Shown(extension)}, which zStudio does not support.");
+        foreach (string declaration in (ReadOnlySpan<string>)["extensionsRequired", "extensionsUsed"])
+            if (parsed.TryGetProperty(declaration, out var extensions))
+            {
+                if (extensions.ValueKind != JsonValueKind.Array) throw new InvalidDataException($"glTF {declaration} must be an array of extension names.");
+                foreach (var extension in extensions.EnumerateArray())
+                {
+                    if (declaration == "extensionsRequired" && (extension.ValueKind != JsonValueKind.String || !extension.ValueEquals(MeshQuantization) && !extension.ValueEquals(TextureTransform)))
+                        throw new InvalidDataException($"The glTF file requires extension {Shown(extension)}, which zStudio does not support.");
+                    if (extension.ValueKind != JsonValueKind.String) throw new InvalidDataException($"glTF {declaration} must contain only extension names.");
+                }
+            }
         // The vertex attributes KHR_mesh_quantization adds (8- and 16-bit integer positions, normals and texture
         // coordinates) are glTF only in a file that declares it, as glTF has a file declare every extension it uses.
         bool quantized = Declares(parsed, "extensionsUsed") || Declares(parsed, "extensionsRequired");
@@ -574,8 +581,12 @@ public sealed class GltfDocument
             token.ThrowIfCancellationRequested();
             GltfMesh mesh = new() { Name = m?["name"]?.GetValue<string>() ?? "", Extras = Extras(m) };
             foreach (var w in m?["weights"] as JsonArray ?? []) mesh.Weights.Add(w!.GetValue<float>());
+            // Older reconstructed point-only models used an empty mesh. Recognize that engine record by validated
+            // content; an ordinary glTF mesh still needs primitives, including when its extras are empty or malformed.
+            if (m?["primitives"] is not JsonArray meshPrimitives || meshPrimitives.Count == 0 && !Worlds.WorldGltf.IsLegacyPointMesh(mesh))
+                throw new InvalidDataException($"glTF mesh {meshes.Count} must contain a nonempty primitives array.");
             int number = -1;
-            foreach (var p in m?["primitives"] as JsonArray ?? [])
+            foreach (var p in meshPrimitives)
             {
                 number++;
                 int mode = GltfInteger.OptionalInt32(p?["mode"], "mode") ?? 4;
@@ -734,8 +745,8 @@ public sealed class GltfDocument
         int nodes = Entries("nodes", MaximumNodes);
         foreach (string list in (ReadOnlySpan<string>)["meshes", "materials", "images", "textures", "samplers", "scenes"]) Entries(list, MaximumNodes);
         Entries("accessors", MaximumEntries); Entries("bufferViews", MaximumEntries);
-        if (root.TryGetProperty("buffers", out var buffers) && buffers.ValueKind == JsonValueKind.Array && buffers.GetArrayLength() > MaximumBuffers)
-            throw new InvalidDataException($"The glTF file lists {buffers.GetArrayLength():N0} buffers; a model may use at most {MaximumBuffers:N0}.");
+        Entries("buffers", MaximumBuffers);
+        Length(root, "animations"); Length(root, "skins");
         long metadata = root.TryGetProperty("asset", out var asset) && asset.ValueKind == JsonValueKind.Object ? Bytes(asset, "generator", JsonValueKind.String) : 0;
         long children = 0, primitives = 0, targets = 0, weights = 0;
         foreach (var node in Objects(root, "nodes"))
@@ -770,14 +781,34 @@ public sealed class GltfDocument
 
         int Entries(string list, int maximum)
         {
-            if (!root.TryGetProperty(list, out var array) || array.ValueKind != JsonValueKind.Array) return 0;
-            int count = array.GetArrayLength();
+            int count = Length(root, list);
+            if (!root.TryGetProperty(list, out var array)) return 0;
             if (count > maximum) throw new InvalidDataException($"The glTF file lists {count:N0} {(list == "bufferViews" ? "buffer views" : list)}; a model may hold at most {maximum:N0}, so remove those it does not use or split it into several files.");
+            int index = 0;
+            foreach (var entry in array.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object)
+                    throw new InvalidDataException($"glTF {(list == "meshes" ? "mesh" : list == "bufferViews" ? "buffer view" : list[..^1])} {index} is not an object.");
+                index++;
+            }
             return count;
         }
-        static IEnumerable<JsonElement> Objects(JsonElement holder, string list) =>
-            holder.TryGetProperty(list, out var array) && array.ValueKind == JsonValueKind.Array ? array.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object) : [];
-        static int Length(JsonElement holder, string list) => holder.TryGetProperty(list, out var array) && array.ValueKind == JsonValueKind.Array ? array.GetArrayLength() : 0;
+        static IEnumerable<JsonElement> Objects(JsonElement holder, string list)
+        {
+            Length(holder, list);
+            if (!holder.TryGetProperty(list, out var array)) yield break;
+            foreach (var entry in array.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object) throw new InvalidDataException($"glTF {list} must contain only objects.");
+                yield return entry;
+            }
+        }
+        static int Length(JsonElement holder, string list)
+        {
+            if (!holder.TryGetProperty(list, out var array)) return 0;
+            if (array.ValueKind != JsonValueKind.Array) throw new InvalidDataException($"glTF {list} must be an array.");
+            return array.GetArrayLength();
+        }
         // The bytes of a value of the kind the reader keeps (a string name, an object of extras), as written.
         static long Bytes(JsonElement holder, string property, JsonValueKind kind) =>
             holder.TryGetProperty(property, out var value) && value.ValueKind == kind ? JsonMarshal.GetRawUtf8Value(value).Length : 0;
@@ -908,6 +939,8 @@ public sealed class GltfDocument
         {
             if (translation != null || rotation != null || scale != null) throw Malformed("has both a matrix and translation, rotation or scale; glTF allows one or the other");
             float[] m = Numbers(matrix, 16, "matrix");
+            if (m[3] != 0 || m[7] != 0 || m[11] != 0 || m[15] != 1)
+                throw Malformed("has a non-affine matrix; its homogeneous terms must be [0, 0, 0, 1]");
             return new(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
         }
         if (translation == null && rotation == null && scale == null) return null;

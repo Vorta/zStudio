@@ -358,11 +358,13 @@ public sealed class SourceWorkspace
 
     /// <summary>Touched files changed on disk by another program since the workspace read or saved them, in path order.</summary>
     public IReadOnlyList<string> ExternalChanges() => ExternalChanges(CancellationToken.None);
-    /// <summary>Content checking is the default; metadata-only checks are preliminary UI guards, never publication evidence.</summary>
-    public IReadOnlyList<string> ExternalChanges(CancellationToken token, bool verifyContent = true)
+    /// <summary>Content checking is the default; metadata-only checks are preliminary UI guards, never publication evidence.
+    /// A dependency set limits checks before disk access; workspace save/reload callers omit it to retain global conflict detection.</summary>
+    public IReadOnlyList<string> ExternalChanges(CancellationToken token, bool verifyContent = true, IReadOnlyCollection<string>? dependencies = null)
     {
         List<string> changed = []; KeyValuePair<string, Baseline>[] entries;
-        lock (gate) entries = [.. baselines];
+        var selected = dependencies?.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        lock (gate) entries = [.. baselines.Where(p => selected == null || selected.Contains(p.Key))];
         foreach (var (relative, baseline) in entries)
             if (!Matches(relative, baseline, token, verifyContent)) changed.Add(relative);
         return changed.Order(StringComparer.OrdinalIgnoreCase).ToArray();

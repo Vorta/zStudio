@@ -495,6 +495,7 @@ public sealed class WorldAssemblyTests
     [InlineData("1 -1")]
     [InlineData("0.001 -0.001")]
     [InlineData("0 0")]
+    [InlineData("-256 256")][InlineData("-256 -256")][InlineData("256 256")]
     public void PartitionsTheReaderCannotHoldAreRefused(string cells)
     {
         // Every cell is allocated and written, and the reader accepts at most 65,536; a typo must not allocate billions.
