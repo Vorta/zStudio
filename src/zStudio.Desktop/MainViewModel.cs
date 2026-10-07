@@ -325,7 +325,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             long revision = doc.Revision; bool stale;
             try
             {
-                try { stale = await Task.Run(doc.SourceInputsChanged); }
+                try { stale = await Task.Run(() => doc.SourceInputsChanged()); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { stale = true; }
                 // An edit, save or rebuild during the check makes its result obsolete; the next check reads the new state.
                 if (!doc.IsDisposed && doc.Revision == revision && doc.SourceWorld?.Workspace.IsSaving != true) doc.IsStale = stale;

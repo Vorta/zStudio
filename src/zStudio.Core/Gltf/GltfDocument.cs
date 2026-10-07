@@ -48,6 +48,8 @@ public sealed class GltfMaterial
 {
     public string Name { get; set; } = "";
     public Vector4 BaseColor { get; set; } = Vector4.One;
+    /// <summary>RECOIL-authored materials are nonmetallic; a parsed implicit glTF material has factor 1.</summary>
+    public float MetallicFactor { get; set; }
     /// <summary>The texture image, as a URI relative to the glTF file.</summary>
     public string? ImageUri { get; set; }
     /// <summary>The base-colour texture's image is stored in the file (a buffer view or data URI) rather than as a file.</summary>
@@ -114,6 +116,7 @@ public sealed class GltfDocument
         Dictionary<GltfNode, int> nodeIndex = new(ReferenceEqualityComparer.Instance);
         Dictionary<GltfMesh, int> meshIndex = new(ReferenceEqualityComparer.Instance);
         Dictionary<GltfMaterial, int> materialIndex = new(ReferenceEqualityComparer.Instance);
+        GltfMaterial neutralMaterial = new(); // An in-memory RECOIL primitive without a material is neutral, not glTF's default metal.
         Dictionary<string, int> imageIndex = new(StringComparer.Ordinal);
         Dictionary<(bool, bool), int> samplerIndex = [];
         List<GltfNode> ordered = [];
@@ -149,7 +152,7 @@ public sealed class GltfDocument
         int Material(GltfMaterial m)
         {
             if (materialIndex.TryGetValue(m, out int index)) return index;
-            JsonObject pbr = new() { ["metallicFactor"] = 0.0, ["roughnessFactor"] = 1.0 };
+            JsonObject pbr = new() { ["metallicFactor"] = m.MetallicFactor, ["roughnessFactor"] = 1.0 };
             if (m.BaseColor != Vector4.One) pbr["baseColorFactor"] = new JsonArray(m.BaseColor.X, m.BaseColor.Y, m.BaseColor.Z, m.BaseColor.W);
             if (m.ImageUri != null)
             {
@@ -183,7 +186,7 @@ public sealed class GltfDocument
                 for (int i = 0; i < p.Indices.Count; i++) if (wide) BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(i * 4), (uint)p.Indices[i]); else BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(i * 2), (ushort)p.Indices[i]);
                 accessors.Add(new JsonObject { ["bufferView"] = View(data, 34963), ["componentType"] = wide ? 5125 : 5123, ["count"] = p.Indices.Count, ["type"] = "SCALAR" });
                 JsonObject primitive = new() { ["attributes"] = attributes, ["indices"] = accessors.Count - 1, ["mode"] = 4 };
-                if (p.Material != null) primitive["material"] = Material(p.Material);
+                primitive["material"] = Material(p.Material ?? neutralMaterial);
                 if (p.Targets.Count > 0) primitive["targets"] = new JsonArray(p.Targets.Select(t => (JsonNode)new JsonObject { ["POSITION"] = Vectors(t, true) }).ToArray());
                 if (p.Extras != null) primitive["extras"] = p.Extras.DeepClone();
                 primitives.Add(primitive);
@@ -523,7 +526,7 @@ public sealed class GltfDocument
             RefuseMaterialChannels(m!, pbr, materials.Count);
             if (pbr?["baseColorFactor"] is { } factor)
             {
-                if (!TryNumbers(factor, 4, out var c)) throw new InvalidDataException($"glTF material {materials.Count} has a base colour that is not 4 finite numbers.");
+                if (!TryNumbers(factor, 4, out var c) || c.Any(v => v < 0 || v > 1)) throw new InvalidDataException($"glTF material {materials.Count} has a base colour that is not 4 finite numbers between 0 and 1.");
                 material.BaseColor = new(c[0], c[1], c[2], c[3]);
             }
             (int Set, Matrix3x2? Transform) sampled = (0, null);
@@ -548,6 +551,7 @@ public sealed class GltfDocument
             }
             materials.Add(material); sampling.Add(sampled);
         }
+        GltfMaterial implicitMaterial = new() { MetallicFactor = 1 };
         List<GltfMesh> meshes = [];
         foreach (var m in root["meshes"] as JsonArray ?? [])
         {
@@ -568,6 +572,7 @@ public sealed class GltfDocument
                     int shown = Reference(material, materials.Count, "material");
                     primitive.Material = materials[shown]; sampled = sampling[shown];
                 }
+                else primitive.Material = implicitMaterial;
                 var attributes = p["attributes"]!;
                 if (attributes["COLOR_0"] != null)
                     throw new InvalidDataException("RECOIL models cannot preserve glTF vertex colours. Bake vertex colours into the PNG texture before exporting.");
@@ -786,7 +791,8 @@ public sealed class GltfDocument
         foreach (string field in new[] { "normalTexture", "occlusionTexture", "emissiveTexture" })
             if (material[field] != null) Unsupported(field);
         if (pbr?["metallicRoughnessTexture"] != null) Unsupported("metallicRoughnessTexture");
-        if (pbr?["metallicFactor"] is { } metallic && (!TryNumber(metallic, out float m) || m != 0)) Unsupported("metallicFactor (only 0 is representable)");
+        // glTF defaults metalness to 1, including when the entire PBR object is absent.
+        if (pbr?["metallicFactor"] is not { } metallic || !TryNumber(metallic, out float m) || m != 0) Unsupported("metallicFactor (defaults to 1; explicitly set 0 for RECOIL)");
         if (pbr?["roughnessFactor"] is { } roughness && (!TryNumber(roughness, out float r) || r != 1)) Unsupported("roughnessFactor (only 1 is representable)");
         if (material["emissiveFactor"] is { } emissive && (!TryNumbers(emissive, 3, out var e) || e.Any(v => v != 0))) Unsupported("emissiveFactor");
     }

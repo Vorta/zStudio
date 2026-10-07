@@ -360,7 +360,7 @@ public partial class MainWindow
         RequireNoDrafts(doc, committing: true);
         // Plans from the build (node and line numbers, archive layouts) hold only while every source it read is unchanged,
         // in the workspace and on disk.
-        if (fromBuild && doc.SourceInputsChanged())
+        if (fromBuild && doc.SourceInputsChanged(verifyContent: false))
             throw new StudioCommandException("stale_document", "Sources this world was built from changed since (an edit in another world, an undo, or another program); reload the world before editing it.");
         long contentBefore = session.Workspace.ContentRevision;
         Action? revert;
@@ -411,7 +411,7 @@ public partial class MainWindow
         RequireNoDrafts(doc, committing: true, committingCard);
         string? draftToken = committingCard?.DraftToken;
         long revision = session.Workspace.Revision;
-        if (fromBuild && doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources changed; reload the world before editing it.");
+        if (fromBuild && doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources changed; reload the world before editing it.");
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         var prepared = session.Workspace.BeginPreparedEdit();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
@@ -421,7 +421,16 @@ public partial class MainWindow
         ViewModel.Status = $"Preparing {action}…";
         try
         {
-            await Task.Run(() => { SourceEditPreparing?.Invoke(cancellation.Token); prepare(prepared.Workspace, cancellation.Token); cancellation.Token.ThrowIfCancellationRequested(); }, cancellation.Token);
+            await Task.Run(() =>
+            {
+                void CheckSources()
+                {
+                    if (fromBuild && doc.SourceInputsChanged(cancellation.Token))
+                        throw new StudioCommandException("stale_document", "Sources changed; reload the world before editing it.");
+                }
+                CheckSources(); SourceEditPreparing?.Invoke(cancellation.Token); prepare(prepared.Workspace, cancellation.Token);
+                CheckSources(); cancellation.Token.ThrowIfCancellationRequested();
+            }, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the edit was prepared.");
         }
@@ -460,8 +469,8 @@ public partial class MainWindow
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt; read zstudio_state for its current document.");
         RequireSourceWorldIdle(session);
         // The rebuild is checked against the shown build; a stale one would blame the addition for others' changes.
-        if (doc.SourceInputsChanged()) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before adding a model.");
-        return PrepareSourceWorldEditAsync(doc, $"Adding {addition.Model.Name}", (workspace, ct) => SourceWorlds.AddModel(workspace, mission, addition, ct), token, [addition.Model], fromBuild: false);
+        if (doc.SourceInputsChanged(verifyContent: false)) throw new StudioCommandException("stale_document", "Sources this world was built from changed since; reload the world before adding a model.");
+        return PrepareSourceWorldEditAsync(doc, $"Adding {addition.Model.Name}", (workspace, ct) => SourceWorlds.AddModel(workspace, mission, addition, ct), token, [addition.Model]);
     }
     private Task<DocumentModel> UndoSourceWorldAsync(DocumentModel doc, bool redo, CancellationToken token)
     {

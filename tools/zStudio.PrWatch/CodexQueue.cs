@@ -24,6 +24,17 @@ public sealed class CodexQueue(string executable, string workspace, Func<Cancell
         await using var rpc = await OpenAsync(token);
         await rpc.ListAsync(thread);
     }
+    /// <summary>Inspect only this notice; a missing queue row is never proof of delivery.</summary>
+    public async Task<string> InspectAsync(Guid thread, Notice notice, CancellationToken token)
+    {
+        await using var rpc = await OpenAsync(token);
+        var rows = (await rpc.ListAsync(thread)).Where(r => r["clientUserMessageId"]?.GetValue<string>() == notice.Id.ToString("D")).ToArray();
+        if (rows.Length == 0) return "absent (not delivery proof)";
+        if (rows.Length != 1 || !JsonNode.DeepEquals(rows[0]["input"], Input(notice.Message)) ||
+            (notice.Submission != null && rows[0]["id"]?.GetValue<string>() != notice.Submission))
+            throw new IOException("Queue identity/content changed; delivery cannot be established.");
+        return "pending in Codex queue (not yet acknowledged; an active turn can delay delivery)";
+    }
     public async Task<string> AddAsync(Guid thread, Notice notice, CancellationToken token)
     {
         await using var rpc = await OpenAsync(token);

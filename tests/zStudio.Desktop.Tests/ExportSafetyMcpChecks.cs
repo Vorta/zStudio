@@ -73,6 +73,21 @@ internal static class ExportSafetyMcpChecks
         Assert.Contains(definition, doc.SourceBuild!.MissingInputs); Assert.False(doc.SourceInputsChanged());
         fixture.Write(definition, definitions); Assert.True(doc.SourceInputsChanged());
         main.ViewModel.CloseResolved(doc);
+        await job("source_world_open", new() { ["mission"] = "m1" }, "completed");
+        doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+        string path = fixture.Path(model); DateTime stamp = File.GetLastWriteTimeUtc(path);
+        string json = File.ReadAllText(path); Assert.Contains("ground", json);
+        fixture.Write(model, json.Replace("ground", "GROUND", StringComparison.Ordinal)); File.SetLastWriteTimeUtc(path, stamp);
+        Assert.True(await Task.Run(() => doc.SourceInputsChanged(token), token));
+        main.ViewModel.CloseResolved(doc);
+
+        fixture.Write(model, original);
+        fixture.Write("gamegen/build-profiles/pair.json", """{"format":"recoil-build-profile","version":1,"texturePacks":[{"file":"rtexture2.zbd"},{"file":"rtexture16.zbd"}]}""");
+        string stale = Path.Combine(destination, "m1/rtexture16.zbd"); Directory.CreateDirectory(Path.GetDirectoryName(stale)!); File.WriteAllBytes(stale, [1, 2, 3]);
+        var exported = await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/rtexture2.zbd" }, ["profile"] = "pair" }, "completed");
+        Assert.Contains("m1/rtexture16.zbd", exported.ToJsonString());
+        var exportedGui = await main.ExportSourceProjectAsync(destination, ["m1/rtexture2.zbd"], true, token, profile: "pair");
+        Assert.Contains(exportedGui.Notes, n => n.StartsWith("m1/rtexture16.zbd", StringComparison.Ordinal));
     }
 
     private static async Task ExportChoiceContextChecks(MainWindow main, CancellationToken token)

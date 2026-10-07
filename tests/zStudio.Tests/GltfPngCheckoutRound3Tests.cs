@@ -168,6 +168,7 @@ public sealed class GltfPngCheckoutRound3Tests
     // Order and repetition, on which decoders differ.
     [InlineData("tRNS before PLTE", "comes before its palette")]
     [InlineData("PLTE after IDAT", "follows its image data")]
+    [InlineData("RGB PLTE after tRNS", "must come before its transparency")]
     [InlineData("tRNS after IDAT", "follows its image data")]
     [InlineData("two PLTE", "two palettes")]
     [InlineData("two tRNS", "two transparency")]
@@ -183,6 +184,7 @@ public sealed class GltfPngCheckoutRound3Tests
             "RGBA with tRNS" => Png(1, 1, 8, 6, [0, 1, 2, 3, 4], ("tRNS", [0, 1, 0, 2, 0, 3])),
             "tRNS before PLTE" => Png(2, 1, 8, 3, [0, 0, 1], ("tRNS", [128]), ("PLTE", Palette)),
             "PLTE after IDAT" => Png(2, 1, 8, 3, [0, 0, 1], Data, ("PLTE", Palette)),
+            "RGB PLTE after tRNS" => Png(1, 1, 8, 2, [0, 1, 2, 3], ("tRNS", [0, 1, 0, 2, 0, 3]), ("PLTE", Palette)),
             "tRNS after IDAT" => Png(2, 1, 8, 3, [0, 0, 1], ("PLTE", Palette), Data, ("tRNS", [128])),
             "two PLTE" => Png(2, 1, 8, 3, [0, 0, 1], ("PLTE", Palette), ("PLTE", [0, 0, 255, 255, 0, 0])),
             "two tRNS" => Png(2, 1, 8, 0, [0, 10, 20], ("tRNS", [0, 20]), ("tRNS", [0, 10])),

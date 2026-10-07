@@ -84,7 +84,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     /// Whether a project file this world was built from changed since: in the workspace (another world's edit, an undo) or on
     /// disk. Reads only immutable build state and thread-safe workspace queries, so it runs off the UI thread.
     /// </summary>
-    internal bool SourceInputsChanged()
+    internal bool SourceInputsChanged(CancellationToken token = default, bool verifyContent = true)
     {
         if (SourceWorld is not { } world || SourceBuild is not { } build) return false;
         var changed = world.Workspace.ChangedSince(SourceRevision);
@@ -93,8 +93,10 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (build.MissingInputs.Any(relative => System.IO.Path.Exists(Recoil.Zbd.Core.Sources.SourceProject.Resolve(world.Root, relative)))) return true;
         foreach (var (relative, stamp) in build.Inputs)
         {
+            token.ThrowIfCancellationRequested();
             string path = Recoil.Zbd.Core.Sources.SourceProject.Resolve(world.Root, relative);
             if (!File.Exists(path) || FileStamp.Read(path) != stamp) return true;
+            if (verifyContent && build.InputHashes.TryGetValue(relative, out string? hash) && !Recoil.Zbd.Core.Sources.SourceRead.Matches(path, stamp.Length, hash, token)) return true;
         }
         return false;
     }

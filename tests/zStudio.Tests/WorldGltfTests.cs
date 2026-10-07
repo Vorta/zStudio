@@ -76,7 +76,7 @@ public sealed class WorldGltfTests
         {"asset":{"version":"2.0","generator":"Khronos glTF Blender I/O"},"scene":0,"scenes":[{"nodes":[0]}],
          "nodes":[{"name":"crate.001","translation":[1,2,3],"rotation":[0,0.7071068,0,0.7071068],"scale":[2,2,2],"mesh":0,"extras":{"recoil":{"flags":"0x01000098"}}}],
          "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"material":0}]}],
-         "materials":[{"name":"paint","pbrMetallicRoughness":{"baseColorFactor":[1,0.5,0,1]}}],
+         "materials":[{"name":"paint","pbrMetallicRoughness":{"metallicFactor":0,"baseColorFactor":[1,0.5,0,1]}}],
          "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5121,"count":3,"type":"SCALAR"}],
          "bufferViews":[{"buffer":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":3}],
          "buffers":[{"byteLength":39,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAEC"}]}
@@ -164,9 +164,9 @@ public sealed class WorldGltfTests
              {"attributes":{"POSITION":0,"NORMAL":1},"material":1},
              {"attributes":{"POSITION":0,"NORMAL":1},"material":2}],
            "extras":{"recoil":{"scroll":[0.5, 1.25, 3.0]} } }],
-         "materials":[{"name":"flat","extras":{"recoil":{"color":[10.0, 20.0, 30.0],"priority":2.0} } },
-                      {"name":"smooth","extras":{"recoil":{"color":[10, 20, 31],"normals":true,"backface":1} } },
-                      {"name":"new","pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]} }],
+         "materials":[{"name":"flat","pbrMetallicRoughness":{"metallicFactor":0},"extras":{"recoil":{"color":[10.0, 20.0, 30.0],"priority":2.0} } },
+                      {"name":"smooth","pbrMetallicRoughness":{"metallicFactor":0},"extras":{"recoil":{"color":[10, 20, 31],"normals":true,"backface":1} } },
+                      {"name":"new","pbrMetallicRoughness":{"metallicFactor":0,"baseColorFactor":[1,0,0,1]} }],
          "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"}],
          "bufferViews":[{"buffer":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36}],
          "buffers":[{"byteLength":72,"uri":"{{DataUri([.. positions, .. normals])}}"}]}
@@ -196,7 +196,7 @@ public sealed class WorldGltfTests
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
          "nodes":[{"name":"flag","mesh":0}],
          "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":2,"material":0,"targets":[{"POSITION":1}]}],"weights":[0.5]}],
-         "materials":[{"name":"cloth","extras":{"recoil":{"color":[1,2,3]} } }],
+         "materials":[{"name":"cloth","pbrMetallicRoughness":{"metallicFactor":0},"extras":{"recoil":{"color":[1,2,3]} } }],
          "accessors":[{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3"},
                       {"componentType":5126,"count":4,"type":"VEC3","sparse":{"count":2,"indices":{"bufferView":2,"componentType":5121},"values":{"bufferView":1} } },
                       {"bufferView":3,"componentType":5121,"count":6,"type":"SCALAR"}],
@@ -401,7 +401,7 @@ public sealed class WorldGltfTests
         string json = $$"""
         {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"box","mesh":0}],
          "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
-         "materials":[{"name":"paint","pbrMetallicRoughness":{"baseColorTexture":{"index":0} } }],
+         "materials":[{"name":"paint","pbrMetallicRoughness":{"metallicFactor":0,"baseColorTexture":{"index":0} } }],
          "textures":[{"source":0}],"images":[{"bufferView":1,"mimeType":"image/png","name":"paint"}],
          "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
          "bufferViews":[{"buffer":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":4}],
@@ -472,7 +472,7 @@ public sealed class WorldGltfTests
         // Files of other shapes are left alone.
         var odd = JsonNode.Parse("""
             {"nodes":[{"name":"bvol","mesh":0},{"name":"bvol","mesh":"0"}],"meshes":[{"primitives":[{"material":99},{"material":1}]}],
-             "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":7},"baseColorFactor":[1,"x"]}},5],"textures":[{"source":-1}]}
+             "materials":[{"pbrMetallicRoughness":{"metallicFactor":0,"baseColorTexture":{"index":7},"baseColorFactor":[1,"x"]}},5],"textures":[{"source":-1}]}
             """)!.AsObject();
         Assert.False(WorldGltf.ApplyPresentation(odd, _ => TextureTransparency.Alpha, pickup: true));
 
@@ -480,7 +480,7 @@ public sealed class WorldGltfTests
         // attributes (given normals, so import reads them as before).
         static JsonObject Volume(string extras) => JsonNode.Parse($$"""
             {"nodes":[{"name":"bvol","mesh":0}],"meshes":[{"primitives":[{"material":0}]}],
-             "materials":[{"name":"glass","alphaMode":"BLEND","pbrMetallicRoughness":{"baseColorFactor":[1,1,1,0.5]}{{extras}}}]}
+             "materials":[{"name":"glass","alphaMode":"BLEND","pbrMetallicRoughness":{"metallicFactor":0,"baseColorFactor":[1,1,1,0.5]}{{extras}}}]}
             """)!.AsObject();
         var recorded = Volume(""","extras":{"recoil":{"color":[1,2,3]}}""");
         Assert.True(WorldGltf.ApplyPresentation(recorded, _ => null, pickup: true));

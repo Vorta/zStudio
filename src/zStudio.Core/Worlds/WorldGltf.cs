@@ -390,6 +390,8 @@ public static partial class WorldGltf
 
     private static void ValidateMaterial(GltfMaterial? source, string path)
     {
+        if (source is { MetallicFactor: not 0 })
+            throw new InvalidDataException($"{path}: the glTF material has metallicFactor {source.MetallicFactor} (1 when no material is assigned); assign a material with metallicFactor 0 for RECOIL.");
         if (source?.EmbeddedImage == true)
             throw new InvalidDataException($"{path}: material {JsonData.ShownText(source.Name)} has an embedded image; save it as an external PNG beside the model (for example with Blender's glTF Separate format).");
         if (source is { AlphaMode: "MASK" } && (source.ImageUri != null || source.EmbeddedImage || source.Extras?[Key]?["texture"] != null)

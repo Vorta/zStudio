@@ -46,7 +46,7 @@ public sealed class GltfModelReviewFixTests
         Assert.Contains("weights", Refused(Asset($"\"meshes\":[{{\"weights\":[{Repeat("0", entries)}]}}]")).Message);
 
         // At the limits the same lists read.
-        Assert.Empty(Read(Asset($"\"materials\":[{Repeat("{}", GltfDocument.MaximumNodes)}]")).Roots);
+        Assert.Empty(Read(Asset($"\"materials\":[{Repeat("{\"pbrMetallicRoughness\":{\"metallicFactor\":0}}", GltfDocument.MaximumNodes)}]")).Roots);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public sealed class GltfModelReviewFixTests
         var doc = Read(Asset($$$"""
             "scene":0,"scenes":[{"nodes":[0],"extras":{{{Extras(300)}}}}],"nodes":[{"name":"crate","mesh":0}],
             "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],"accessors":[{"componentType":5126,"count":3,"type":"VEC3"}],
-            "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}},"extras":{{{Extras(600)}}}}],
+            "materials":[{"pbrMetallicRoughness":{"metallicFactor":0,"baseColorTexture":{"index":0}},"extras":{{{Extras(600)}}}}],
             "textures":[{"source":0}],"images":[{"uri":"data:image/png;base64,{{{new string('A', 4000)}}}"}]
             """), small);
         Assert.Equal(new string('x', 587), doc.Roots[0].Mesh!.Primitives[0].Material!.Extras!["recoil"]!.GetValue<string>());
@@ -86,7 +86,7 @@ public sealed class GltfModelReviewFixTests
     {
         // A long path shown by many materials is one string, not one copy per material.
         string path = "textures/" + new string('a', 5000) + "%20b.png";
-        var doc = Read(Asset($"\"textures\":[{{\"source\":0}}],\"images\":[{{\"uri\":\"{path}\"}}],\"materials\":[{Repeat("{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}", 50)}]," +
+        var doc = Read(Asset($"\"textures\":[{{\"source\":0}}],\"images\":[{{\"uri\":\"{path}\"}}],\"materials\":[{Repeat("{\"pbrMetallicRoughness\":{\"metallicFactor\":0,\"baseColorTexture\":{\"index\":0}}}", 50)}]," +
             $"\"meshes\":[{{\"primitives\":[{string.Join(",", Enumerable.Range(0, 50).Select(i => $"{{\"attributes\":{{\"POSITION\":0}},\"material\":{i}}}"))}]}}]," +
             "\"accessors\":[{\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"}],\"nodes\":[{\"mesh\":0}]"));
         var materials = doc.Roots[0].Mesh!.Primitives.Select(p => p.Material!).ToList();

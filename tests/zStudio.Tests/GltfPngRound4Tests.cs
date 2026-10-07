@@ -92,7 +92,7 @@ public sealed class GltfPngRound4Tests
         public void Textured(JsonObject info)
         {
             info["index"] = 0;
-            Root["materials"] = new JsonArray(new JsonObject { ["name"] = "rock", ["pbrMetallicRoughness"] = new JsonObject { ["baseColorTexture"] = info } });
+            Root["materials"] = new JsonArray(new JsonObject { ["name"] = "rock", ["pbrMetallicRoughness"] = new JsonObject { ["metallicFactor"] = 0, ["baseColorTexture"] = info } });
             Root["textures"] = new JsonArray(new JsonObject { ["source"] = 0 });
             Root["images"] = new JsonArray(new JsonObject { ["uri"] = "rock.png" });
             Primitive["material"] = 0;

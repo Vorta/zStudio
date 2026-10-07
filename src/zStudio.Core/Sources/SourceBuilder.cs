@@ -140,6 +140,7 @@ public static partial class SourceBuilder
             RetainedBytes += bytes;
         }
         private readonly Dictionary<string, (string Sha, FileStamp Stamp)> files = new(StringComparer.OrdinalIgnoreCase);
+        internal IReadOnlyDictionary<string, string> Hashes() => files.ToDictionary(p => p.Key, p => p.Value.Sha, StringComparer.OrdinalIgnoreCase);
         // Negative lookups affect compilation too (optional definitions, search paths and fallback resources).
         private readonly Dictionary<string, FileStamp?> probes = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Every project file the run read or asked about, from the overlay or the disk: what its outputs depend on.</summary>
@@ -267,6 +268,9 @@ public static partial class SourceBuilder
                 token.ThrowIfCancellationRequested();
                 string path = SourceProject.Resolve(root, relative);
                 if (!File.Exists(path) || FileStamp.Read(path) != entry.Stamp) throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
+                // Timestamps and lengths are hints, not content identities: editors can preserve both.
+                if (!SourceRead.Matches(path, entry.Stamp.Length, entry.Sha, token) || FileStamp.Read(path) != entry.Stamp)
+                    throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
             }
         }
     }
@@ -354,13 +358,16 @@ public static partial class SourceBuilder
                 try
                 {
                     foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
-                        foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, all.Where(p => p.Family == "textures" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), token))
-                            notes.Add($"{pack} is not a pack the {profile.Name} profile builds, but the game may load it instead of the exported ones. Delete it, or export with a profile that builds a pack of that name.");
+                        foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == "textures" && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), token))
+                            notes.Add($"{pack} is not being replaced by this export, but the game may load it instead of the exported ones. Delete it, or include that pack in the selected outputs of a profile that builds it.");
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's texture packs could not be listed ({ex.Message}); a pack left there by another export may be loaded instead of the exported ones."); }
             progress?.Report(new(selected.Count, selected.Count, destination == null ? "Checked" : "Publishing"));
-            await Task.Run(() => CheckPlanUnchanged(root, profileName, profile, outputs == null ? null : selected, all, snapshot, token), token);
-            snapshot.CheckUnchanged(token);
+            await Task.Run(() =>
+            {
+                CheckPlanUnchanged(root, profileName, profile, outputs == null ? null : selected, all, snapshot, token);
+                snapshot.CheckUnchanged(token);
+            }, token);
             if (staging != null && destination != null)
             {
                 if (results.Any(r => r.Status == "failed")) throw new InvalidDataException("Nothing was written because some outputs failed: " + string.Join("; ", results.Where(r => r.Status == "failed").Select(r => $"{r.Path}: {r.Error}")));

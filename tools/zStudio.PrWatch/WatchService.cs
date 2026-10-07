@@ -44,7 +44,7 @@ public sealed class WatchService(WatchStore store, IPrSource source, INoticeQueu
                     store.Save(state);
                 }
                 storeFailures = 0;
-                return state.Active ? TimeSpan.FromSeconds(60) : TimeSpan.Zero;
+                return state.Active ? TimeSpan.FromSeconds(state.CommentsArmed ? 15 : 60) : TimeSpan.Zero;
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException && !token.IsCancellationRequested)

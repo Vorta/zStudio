@@ -52,8 +52,11 @@ public static class PngDecoder
             else if (type.SequenceEqual("PLTE"u8))
             {
                 if (!header || length % 3 != 0 || length == 0 || length > 768) throw new InvalidDataException("Invalid PNG palette.");
+                if (colorType is 0 or 4) throw new InvalidDataException("Greyscale PNG images cannot have a palette (PLTE).");
+                if (colorType == 3 && length / 3 > 1 << depth) throw new InvalidDataException("The PNG palette has more entries than its indexed bit depth permits.");
                 if (palette != null) throw new InvalidDataException("The PNG has two palettes (PLTE chunks); it may have one.");
                 if (imageData) throw new InvalidDataException("The PNG's palette (PLTE) follows its image data; it must come before it.");
+                if (transparency != null) throw new InvalidDataException("The PNG's palette (PLTE) must come before its transparency (tRNS).");
                 palette = data.ToArray();
             }
             else if (type.SequenceEqual("tRNS"u8))

@@ -1,5 +1,12 @@
 # Desktop implementation status
 
+## PR18 polling latency and content validation (2026-10-07)
+
+The next notification was queued about two seconds after the user had already started a turn, within the old 60-second polling interval; read-only queue inspection found the exact notice pending. Armed polling is now every 15 seconds, with the 60-second disarmed interval and error/rate-limit backoff retained. `status -DeliveryCheck` distinguishes a matching pending notice, absence and an uncertain transport check without consuming or resending anything. Absence is not delivery proof.
+
+Five review findings are fixed: glTF material defaults and unit-range colors, same-length/same-timestamp source rewrites, stale texture packs omitted from the actual output selection, and PNG palette rules across color types and indexed depths. The challenge pass also covers unassigned glTF materials, same-stamp preview staleness with off-thread pre/post edit-preparation checks, and RGB palette/transparency ordering. GUI and MCP use the shared services; tool arguments and catalog remain unchanged.
+
+Validation: full solution 1,700/1,700 with the 1999 and MW3 corpora (Core1,514, Desktop110, watcher76); final Desktop110/110 and watcher76/76 after threading/diagnostic refinements; 42 final source checks including the nine 1998 reconstruction/terrain cases; 227 final glTF/PNG/import checks after the last PNG order guard. Final Release build has zero warnings/errors. Full actual-base coverage and a separate final challenge are recorded locally before commit. The user-retained atomic direct compiled-save race and the previously observed intermittent partial-minus/theme GUI test remain explicitly unresolved; the latter did not recur in this round. No merge, release or version bump.
 ## PR18 source and texture review fixes (2026-10-07)
 
 Seven further findings are fixed through the shared source services: absent dependency observations are checked before publication and retained for preview staleness; all glTF components are checked for cycles and depth; software packs keep their supported aspect ratios; reconstruction validates duplicate texture identities before ranking variants; embedded images and conflicting addressing modes are refused; and texture-only exports fail when their world dependency fails. Blender checkout and update use the same material preflight. A separate challenge also fixed opaque black disappearing from a shared software palette.

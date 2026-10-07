@@ -3,6 +3,12 @@ namespace Recoil.Zbd.Core.Sources;
 /// <summary>Read the opened file, never a length checked on a different path lookup.</summary>
 public static class SourceRead
 {
+    /// <summary>Compare content through one held handle, without allocating another copy of the file.</summary>
+    public static bool Matches(string path, long length, string sha256, CancellationToken token = default)
+    {
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return new JournalDigest(length, sha256).Matches(stream, token);
+    }
     /// <summary>Asynchronously reads one held handle, applying the limit before allocating the result.</summary>
     public static async Task<byte[]> AllAsync(string path, long maximum, CancellationToken token = default)
     {

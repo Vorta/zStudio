@@ -27,12 +27,12 @@ public sealed class ImportRound10Tests
     }
     [Theory]
     [InlineData("\"pbrMetallicRoughness\":{\"metallicFactor\":0.5}")]
-    [InlineData("\"pbrMetallicRoughness\":{\"roughnessFactor\":0.2}")]
+    [InlineData("\"pbrMetallicRoughness\":{\"metallicFactor\":0,\"roughnessFactor\":0.2}")]
     [InlineData("\"pbrMetallicRoughness\":{\"metallicRoughnessTexture\":{\"index\":0}}")]
     [InlineData("\"normalTexture\":{\"index\":0}")]
     [InlineData("\"occlusionTexture\":{\"index\":0}")]
     [InlineData("\"emissiveTexture\":{\"index\":0}")]
-    [InlineData("\"emissiveFactor\":[1,0,0]")]
+    [InlineData("\"pbrMetallicRoughness\":{\"metallicFactor\":0},\"emissiveFactor\":[1,0,0]")]
     public void AuthoredUnsupportedMaterialChannelsAreRefused(string field)
     {
         byte[] json = Encoding.UTF8.GetBytes("{\"asset\":{\"version\":\"2.0\"},\"materials\":[{" + field + "}]}");

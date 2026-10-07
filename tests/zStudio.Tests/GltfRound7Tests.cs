@@ -64,7 +64,7 @@ public sealed class GltfRound7Tests
         /// <summary>Material 0 (rock), showing rock.png through texture 0 with <paramref name="sampler"/> (none when null).</summary>
         public void Textured(JsonNode? sampler)
         {
-            Root["materials"] = new JsonArray(new JsonObject { ["name"] = "rock", ["pbrMetallicRoughness"] = new JsonObject { ["baseColorTexture"] = new JsonObject { ["index"] = 0 } } });
+            Root["materials"] = new JsonArray(new JsonObject { ["name"] = "rock", ["pbrMetallicRoughness"] = new JsonObject { ["metallicFactor"] = 0, ["baseColorTexture"] = new JsonObject { ["index"] = 0 } } });
             JsonObject texture = new() { ["source"] = 0 };
             if (sampler != null) { texture["sampler"] = 0; Root["samplers"] = new JsonArray(sampler); }
             Root["textures"] = new JsonArray(texture);
