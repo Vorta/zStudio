@@ -181,6 +181,10 @@ The round trip uses only files:
 
 Nothing Blender writes reaches the project until the update is applied, and nothing reaches the disk until **Save**.
 
+Every applied Blender update records all changed files, including its model, buffers and textures, so the next export from that checkout recognizes them as accepted states. Identical states share one record; earlier states remain recognized after undo. Planning refuses an update that would exceed the checkout manifest's 4 MiB limit and asks for a new checkout before changing the workspace.
+
+Model and terrain imports refuse a base-colour texture without a valid texture index and image source, or a textured primitive without the UV set its material selects. They also refuse core glTF camera nodes, whose semantics cannot be preserved by this importer. Reconstructed RECOIL cameras retain their engine attributes. These checks apply to source builds and Blender updates through the same services.
+
 ### Saving and recovery
 
 Recovery verifies the original's content before restoring it, even when its size and timestamp still match. A missing or damaged held original leaves the installed file intact and reports a conflict. Links inside staging or recovery, including their held files, are refused. Recovery scans allow at most 64 MiB of manifest and event-log data together and 50,000 file rows across the journals.

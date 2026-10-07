@@ -32,6 +32,7 @@ public static partial class WorldGltf
             if (matches.Count != 1) throw new InvalidDataException($"{recipePath}: surface {surface.Id} names node {surface.Node}, which {path} has {(matches.Count == 0 ? "no" : "more than one")} of.");
             var (node, world) = matches[0];
             var mesh = node.Mesh ?? throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has no mesh.");
+            ValidateMesh(mesh, path);
             var values = mesh.Extras?[Key] as JsonObject;
             if (values?["points"] is JsonArray { Count: > 0 }) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has point entries (lens flares), which terrain pieces cannot share; keep it an object.");
             if (values?["mode"] is JsonValue mode && !(mode.TryGetValue(out double m) && m == 0)) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) is a facade or point model (mode {JsonData.Shown(mode, asText: true)}); keep it an object.");

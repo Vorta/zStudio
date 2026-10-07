@@ -1,3 +1,10 @@
+## PR18 import, comparison and checkout review fixes (2026-10-07)
+
+Five new PR findings are fixed: incomplete base-colour texture references, absent selected UV sets, unsupported core glTF camera nodes, omitted detached World nodes in comparisons, and incomplete Blender applied-state tracking. The sibling challenge also covers terrain UV validation, area-only comparison members, world interchangeability and reordered world slots. Blender planning checks its manifest capacity before accepting changes, retaining every applied state within its documented byte limit. A GUI validation failure exposed the explorer probing the recovery coordination file during the exclusive recovery check; that file is now excluded from asset scanning, while ordinary user `.lock` files remain visible.
+
+The updated PR watcher delivered this real notice into the idle conversation, confirming delivery with the 15-second armed interval. It is re-armed after each validated fix push. No watcher code changed in this round.
+
+Validation: Release build with zero warnings/errors; full solution 1,714/1,714 with 1999/MW3 before the final challenge refinements; 72 follow-up Core tests with 1998, including its nine reconstruction/terrain checks; final 64 focused Core tests and all 110 Desktop tests after the last changes. Actual GUI/MCP tests cover additional worlds and recovery scanning. Full actual-base coverage and a separate final challenge are recorded locally before commit. One intermediate GUI run reproduced the historical partial-minus/theme failure (actual text `C`); the final serial run passes, but its cause remains unresolved. The user-retained atomic direct compiled-save race also remains unresolved. No merge, release or version bump.
 # Desktop implementation status
 
 ## PR18 polling latency and content validation (2026-10-07)

@@ -186,15 +186,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             {
                 List<FileEntry> entries = [];
                 var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
-                // A source project's mission world builds are zStudio's derived data, not files to open or edit, also when
-                // the folder opened holds the project.
+                // Derived world builds and the save/recovery coordination file are not assets. Even a shared read of
+                // the lock file can race the recovery check's exclusive open when a project is first scanned.
                 string previews = Path.DirectorySeparatorChar + Recoil.Zbd.Core.Sources.SourceWorlds.PreviewFolder.Replace('/', Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                string recoveryLock = Path.DirectorySeparatorChar + Recoil.Zbd.Core.Sources.SourcePublisher.LockFile.Replace('/', Path.DirectorySeparatorChar);
                 Dictionary<string, bool> projects = new(StringComparer.OrdinalIgnoreCase);
-                bool Preview(string file)
+                bool WorkingFile(string file)
                 {
                     // Only below the folder opened: a build folder opened itself lists its files.
-                    int at = file.IndexOf(previews, Math.Max(0, root.Length - 1), StringComparison.OrdinalIgnoreCase);
-                    if (at < 0) return false;
+                    int at = file.EndsWith(recoveryLock, StringComparison.OrdinalIgnoreCase) ? file.Length - recoveryLock.Length
+                        : file.IndexOf(previews, Math.Max(0, root.Length - 1), StringComparison.OrdinalIgnoreCase);
+                    if (at < Math.Max(0, root.Length - 1)) return false;
                     string project = file[..at];
                     if (!projects.TryGetValue(project, out bool isProject)) projects[project] = isProject = Recoil.Zbd.Core.Sources.SourceProject.IsProject(project);
                     return isProject;
@@ -202,7 +204,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 foreach (string file in Directory.EnumerateFiles(root, "*", options))
                 {
                     token.ThrowIfCancellationRequested();
-                    if (Preview(file)) continue;
+                    if (WorkingFile(file)) continue;
                     entries.Add(new(file, Path.GetRelativePath(root, file), FormatRegistry.Probe(file)));
                 }
                 return entries.OrderBy(f => f.RelativePath, DisplayPathComparer)

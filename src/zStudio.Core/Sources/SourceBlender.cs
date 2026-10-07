@@ -295,23 +295,8 @@ public static partial class SourceBlender
     /// </summary>
     public static void RecordApplied(BlenderCheckout checkout, BlenderUpdatePlan plan)
     {
-        SourceProject.RejectLinks(checkout.Folder);
-        SourceProject.RejectNestedLinks(checkout.Folder, ManifestName);
+        byte[] writtenManifest = AppliedManifest(checkout, plan.Changes);
         string path = Path.Combine(checkout.Folder, ManifestName);
-        if (new FileInfo(path).Length > 4 * 1024 * 1024) return;
-        byte[] previous = SourceRead.All(path, 4 * 1024 * 1024);
-        var manifest = JsonNode.Parse(previous) as JsonObject ?? throw new InvalidDataException($"{path} is not a checkout manifest.");
-        var applied = manifest["applied"] as JsonArray ?? (JsonArray)(manifest["applied"] = new JsonArray());
-        long estimatedBytes = previous.Length;
-        foreach (var (relative, content) in plan.Changes)
-            if (applied.Count < 4096)
-            {
-                // Charge escaped paths before appending or serializing thousands of records.
-                if ((estimatedBytes += 6L * relative.Length + 128) > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
-                applied.Add(new JsonObject { ["project"] = relative, ["sha256"] = SourceProject.Sha256(content) });
-            }
-        byte[] writtenManifest = JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions { WriteIndented = true });
-        if (writtenManifest.Length > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
@@ -323,6 +308,31 @@ public static partial class SourceBlender
             sealedFile.MoveTo(path, replace: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    // Also run while planning, before accepting any edit: a manifest limit must refuse the update, never omit states.
+    private static byte[] AppliedManifest(BlenderCheckout checkout, IReadOnlyList<(string Relative, byte[] Content)> changes)
+    {
+        SourceProject.RejectLinks(checkout.Folder);
+        SourceProject.RejectNestedLinks(checkout.Folder, ManifestName);
+        string path = Path.Combine(checkout.Folder, ManifestName);
+        if (new FileInfo(path).Length > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest exceeds 4 MiB; create a new checkout.");
+        byte[] previous = SourceRead.All(path, 4 * 1024 * 1024);
+        var manifest = JsonNode.Parse(previous) as JsonObject ?? throw new InvalidDataException($"{path} is not a checkout manifest.");
+        var applied = manifest["applied"] as JsonArray ?? (JsonArray)(manifest["applied"] = new JsonArray());
+        var known = applied.Select(f => (f!["project"]!.GetValue<string>().ToUpperInvariant(), f["sha256"]!.GetValue<string>().ToUpperInvariant())).ToHashSet();
+        long estimatedBytes = previous.Length;
+        foreach (var (relative, content) in changes)
+        {
+            string sha = SourceProject.Sha256(content);
+            if (!known.Add((relative.ToUpperInvariant(), sha.ToUpperInvariant()))) continue;
+            // Charge escaped paths before appending or serializing thousands of records.
+            if ((estimatedBytes += 6L * relative.Length + 128) > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
+            applied.Add(new JsonObject { ["project"] = relative, ["sha256"] = sha });
+        }
+        byte[] writtenManifest = JsonSerializer.SerializeToUtf8Bytes(manifest, new JsonSerializerOptions { WriteIndented = true });
+        if (writtenManifest.Length > 4 * 1024 * 1024) throw new InvalidDataException("The checkout manifest would exceed 4 MiB; create a new checkout.");
+        return writtenManifest;
     }
 
     /// <summary>
@@ -484,6 +494,7 @@ public static partial class SourceBlender
             throw new BlenderConflictException(attributesDropped ? [.. conflicts.Prepend(model).Distinct(StringComparer.OrdinalIgnoreCase)] : conflicts, string.Join(" ", reasons));
         }
         if (conflicts.Count > 0) notes.Add($"Replaced changes made since the checkout in {string.Join(", ", conflicts.Take(8))}.");
+        _ = AppliedManifest(checkout, changes);
         return new($"Update {Path.GetFileName(model)} from Blender", changes, notes, sealedFolder) { Expected = expected };
 
         // The second read is compared block by block with the first, so a file of hundreds of megabytes is held once.

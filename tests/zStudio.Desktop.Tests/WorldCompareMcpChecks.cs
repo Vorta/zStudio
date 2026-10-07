@@ -148,6 +148,18 @@ internal static class WorldCompareMcpChecks
             }
             finally { try { Directory.Delete(demoFolder, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
 
+            // A second, parentless World and its descendant are visible to both the comparison window and MCP.
+            WorldNode detached = new("detached", WorldNodeClass.World), detachedChild = new("detached-child", WorldNodeClass.Object3D);
+            detached.Children.Add(detachedChild); detachedChild.Parents.Add(detached); changed.Nodes.AddRange([detached, detachedChild]);
+            string extraWorld = fixture.Path("extra-world.zbd");
+            await File.WriteAllBytesAsync(extraWorld, GameZWriter.Write(changed, token), token);
+            var extraSummary = await Job("world_compare", new() { ["retail"] = rebuilt, ["rebuilt"] = extraWorld });
+            Assert.Equal(2, extraSummary["onlyRebuilt"]!.GetValue<int>());
+            var extraRoots = await Call("world_compare_tree", new() { ["context"] = extraSummary["context"]!.GetValue<string>() });
+            var extra = Assert.Single(extraRoots["children"]!["items"]!.AsArray(), r => r!["name"]!.GetValue<string>() == "detached")!;
+            Assert.Equal("only rebuilt", extra["status"]!.GetValue<string>());
+            Assert.Contains(window.View!.Roots, r => r.Name == "detached");
+
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);

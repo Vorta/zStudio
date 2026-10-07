@@ -30,6 +30,8 @@ public sealed class GltfPrimitive
     public List<Vector3> Positions { get; } = [];
     public List<Vector3> Normals { get; } = [];
     public List<Vector2> TexCoords { get; } = [];
+    /// <summary>The source UV set selected by the material, retained for missing-coordinate diagnostics.</summary>
+    internal int TextureCoordinateSet { get; set; }
     public List<int> Indices { get; } = [];
     public List<List<Vector3>> Targets { get; } = [];
     public JsonObject? Extras { get; set; }
@@ -315,6 +317,8 @@ public sealed class GltfDocument
             throw new InvalidDataException("glTF animation channels cannot be preserved in a RECOIL model. Export the static model and author animations in the project's .zad/.zan sources.");
         if ((root["nodes"] as JsonArray ?? []).Any(n => n?["skin"] != null))
             throw new InvalidDataException("glTF skinning cannot be preserved in a RECOIL model. Bake the armature's intended pose into the mesh before exporting.");
+        if ((root["nodes"] as JsonArray ?? []).Any(n => n?["camera"] != null))
+            throw new InvalidDataException("Core glTF camera nodes cannot be preserved in a RECOIL model. Remove cameras from the export; reconstructed RECOIL cameras use their recorded engine attributes.");
         // Every buffer is held until the views are read, so together they are bounded like one file: a URI listed again is the
         // bytes already read, a buffer's declared length is checked against what is left before its file is read, and what
         // each read returns counts once.
@@ -530,16 +534,16 @@ public sealed class GltfDocument
                 material.BaseColor = new(c[0], c[1], c[2], c[3]);
             }
             (int Set, Matrix3x2? Transform) sampled = (0, null);
-            if (pbr?["baseColorTexture"] is { } textureInfo && textureInfo["index"] is { } textureIndex)
+            if (pbr?["baseColorTexture"] is { } textureInfo)
             {
+                var textureIndex = textureInfo["index"] ?? throw new InvalidDataException($"glTF material {materials.Count}'s baseColorTexture needs a texture index.");
                 sampled = Sampling(textureInfo, materials.Count);
-                var texture = jsonTextures[Reference(textureIndex, jsonTextures.Count, "texture")]!;
-                if (texture["source"] is { } source)
-                {
-                    int image = Reference(source, jsonImages.Count, "image");
-                    (material.ImageUri, material.EmbeddedImage) = imagePaths[image] ??=
-                        jsonImages[image]?["uri"]?.GetValue<string>() is { } uri && !uri.StartsWith("data:", StringComparison.Ordinal) ? (Uri.UnescapeDataString(uri), false) : ((string?)null, true);
-                }
+                int textureNumber = Reference(textureIndex, jsonTextures.Count, "texture");
+                var texture = jsonTextures[textureNumber] as JsonObject ?? throw new InvalidDataException($"glTF texture {textureNumber} is not an object.");
+                var source = texture["source"] ?? throw new InvalidDataException($"glTF texture {textureNumber} needs an image source; export the base-colour image as an external PNG.");
+                int image = Reference(source, jsonImages.Count, "image");
+                (material.ImageUri, material.EmbeddedImage) = imagePaths[image] ??=
+                    jsonImages[image]?["uri"]?.GetValue<string>() is { } uri && !uri.StartsWith("data:", StringComparison.Ordinal) ? (Uri.UnescapeDataString(uri), false) : ((string?)null, true);
                 // Without a sampler the texture repeats (glTF's default); its filters are not kept (see Clamps).
                 if (texture["sampler"] is { } sampler)
                 {
@@ -596,6 +600,7 @@ public sealed class GltfDocument
                         primitive.TexCoords.Add(coordinates);
                     }
                 }
+                primitive.TextureCoordinateSet = sampled.Set;
                 foreach (var target in p["targets"] as JsonArray ?? [])
                 {
                     if (target?["NORMAL"] != null || target?["TANGENT"] != null)

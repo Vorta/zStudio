@@ -47,6 +47,8 @@ public sealed partial class SourcePublisher
     /// <summary>zStudio's working data beside <c>data</c> and <c>gamegen</c>; builds never read it.</summary>
     public const string WorkingFolder = "zstudio";
     public const string RecoveryFolder = WorkingFolder + "/recovery", StagingFolder = WorkingFolder + "/staging", AbandonedFolder = RecoveryFolder + "/abandoned";
+    /// <summary>Coordination only: opening this file to probe content can prevent an exclusive save/recovery lock.</summary>
+    public const string LockFile = RecoveryFolder + "/" + LockName;
     public const int MaximumDescriptionLength = 1024;
     private const string ManifestName = "manifest.json", EventsName = "events.log", LockName = ".lock", RemovedSuffix = ".removed";
     private const string AfterFolder = "after", HeldFolder = "held", TakenFolder = "removed";

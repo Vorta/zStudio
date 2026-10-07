@@ -16,6 +16,23 @@ public sealed class SourceBlenderTests
     private const string Model = "data/m1/models/m1.gltf";
 
     [Fact]
+    public void FullAppliedManifestRefusesPlanningBeforeAcceptingAnUpdate()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        var checkout = SourceBlender.Checkout(workspace, Model, Token);
+        string export = Export(checkout, change: g => Rename(g, "renamed"));
+        string manifest = Path.Combine(checkout.Folder, "manifest.json");
+        var json = JsonNode.Parse(File.ReadAllText(manifest))!.AsObject(); json["padding"] = "";
+        json["padding"] = new string('x', 4 * 1024 * 1024 - Encoding.UTF8.GetByteCount(json.ToJsonString()) - 128);
+        File.WriteAllText(manifest, json.ToJsonString());
+        byte[] original = workspace.Read(Model, Token)!, originalManifest = File.ReadAllBytes(manifest);
+        Assert.Contains("4 MiB", Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, export, token: Token)).Message);
+        Assert.Equal(original, workspace.Read(Model, Token)); Assert.Equal(originalManifest, File.ReadAllBytes(manifest));
+        Assert.Empty(Directory.GetDirectories(Path.Combine(checkout.Folder, "sealed")));
+    }
+
+    [Fact]
     public void AppliedManifestChargesEscapedPathsBeforeSerializationAndLeavesTheOriginal()
     {
         using SourceWorldFixture fixture = new();

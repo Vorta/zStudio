@@ -386,6 +386,13 @@ public static partial class WorldGltf
     {
         if (mesh.Weights.Count > 1 || mesh.Primitives.Any(p => p.Targets.Count > 1))
             throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} has multiple morph targets; RECOIL stores one shape key per model. Export at most one shape key.");
+        foreach (var primitive in mesh.Primitives)
+            if (primitive.Material is { } material && (material.ImageUri != null || material.EmbeddedImage || material.Extras?[Key]?["texture"] != null)
+                && primitive.TexCoords.Count != primitive.Positions.Count)
+            {
+                ValidateMaterial(material, path);
+                throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} needs TEXCOORD_{primitive.TextureCoordinateSet}, which its material selects, with one texture coordinate per vertex. Export that UV set with the mesh.");
+            }
     }
 
     private static void ValidateMaterial(GltfMaterial? source, string path)
@@ -532,10 +539,6 @@ public static partial class WorldGltf
             // Editors write normals for every surface (Blender does); a material with engine values says whether its
             // polygons stored them, so flat surfaces stay flat.
             bool textured = material.Texture != null, normals = storesNormals != false && primitive.Normals.Count == primitive.Positions.Count;
-            if (textured && primitive.TexCoords.Count != primitive.Positions.Count)
-            {
-                context.Warnings.Add($"{path}: mesh {JsonData.ShownText(mesh.Name)} uses texture {material.Texture!.Name} without texture coordinates; they were set to zero.");
-            }
             var targets = primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0] : null;
             int added = 0;
             foreach (var corners in Polygons(primitive, textured))
@@ -543,7 +546,7 @@ public static partial class WorldGltf
                 if ((++added & 1023) == 0) context.Token.ThrowIfCancellationRequested();
                 Vector3[] points = corners.Select(i => primitive.Positions[i]).ToArray();
                 PolygonInput input = new(points,
-                    textured ? corners.Select(i => i < primitive.TexCoords.Count ? primitive.TexCoords[i] : Vector2.Zero).ToArray() : [],
+                    textured ? corners.Select(i => primitive.TexCoords[i]).ToArray() : [],
                     normals ? corners.Select(i => primitive.Normals[i]).ToArray() : [],
                     targets != null ? corners.Select(i => primitive.Positions[i] + targets[i]).ToArray() : [],
                     material, priority, backface, zone);

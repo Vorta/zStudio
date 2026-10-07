@@ -13,6 +13,19 @@ public sealed class SourceTerrainTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Fact]
+    public async Task TexturedTerrainWithoutUvsIsRefusedBeforePublishingPieces()
+    {
+        using var fixture = Fixture(); const string model = "data/m1/models/coast.gltf";
+        var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path(model)))!;
+        json["meshes"]![0]!["primitives"]![0]!["attributes"]!.AsObject().Remove("TEXCOORD_0");
+        fixture.Write(model, json.ToJsonString());
+        string output = Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "missing-uv");
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", output, token: Token));
+        Assert.Contains("TEXCOORD_0", error.Message);
+        Assert.False(File.Exists(Path.Combine(output, "m1", "gamez.zbd")));
+    }
+
+    [Fact]
     public void TerrainMarkerRefusesOversizedJsonBeforeReadingOrBuildingItsDom()
     {
         using var fixture = Fixture(); const string database = "data/m1/models/m1.gltf";
