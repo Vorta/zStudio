@@ -20,7 +20,12 @@ public sealed partial class AnimationCompiler
     /// holds at most 32,767 entries including the blank first one.
     /// </summary>
     public const int HeaderSize = 308, MaximumEntries = short.MaxValue;
-    public sealed record Result(byte[] Bytes, AnimationPackage Package, IReadOnlyList<string> Warnings, IReadOnlyList<string> Inputs);
+    public sealed record Result(byte[] Bytes, AnimationPackage Package, IReadOnlyList<string> Warnings, IReadOnlyList<string> Inputs)
+    {
+        /// <summary>The first known engine load failure, retained independently of the diagnostic cap. Diagnostic
+        /// compilation remains available to reconstruction; source builds must refuse to publish this result.</summary>
+        public string? EngineRejection { get; init; }
+    }
 
     private readonly AnimationDefinitionSet definitions;
     private readonly AnimationRoots roots;
@@ -30,9 +35,11 @@ public sealed partial class AnimationCompiler
     private readonly CancellationToken token;
     private readonly long maximumBytes;
     private long bytes;
+    private string? engineRejection;
     /// <summary>Keyframe scripts by name and naming file: each is read and parsed once per compilation.</summary>
     private readonly Dictionary<(string Name, string From), Script?> scripts = [];
     private void Warn(string message) { if (warnings.Count < 2000 && seen.Add(message)) warnings.Add(message); }
+    private void Reject(string message) { engineRejection ??= message; Warn(message); }
 
     private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token)
     {
@@ -63,7 +70,7 @@ public sealed partial class AnimationCompiler
         foreach (var w in set.Warnings) compiler.Warn(w);
         var package = compiler.Build();
         byte[] bytes = AnimationWriter.Write(package, token);
-        return new(bytes, AnimationPackage.Read(bytes, token), compiler.warnings, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+        return new(bytes, AnimationPackage.Read(bytes, token), compiler.warnings, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()) { EngineRejection = compiler.engineRejection };
     }
 
     /// <summary>

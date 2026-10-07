@@ -355,8 +355,8 @@ public sealed class GltfDocument
             token.ThrowIfCancellationRequested();
             if (buffer is not JsonObject entry) throw new InvalidDataException("A glTF buffer is not an object.");
             string? uri = entry["uri"]?.GetValue<string>();
-            long? declared = GltfInteger.OptionalInt64(entry["byteLength"], "byteLength");
-            if (declared < 0) throw new InvalidDataException("A glTF buffer has a negative length.");
+            long declared = GltfInteger.OptionalInt64(entry["byteLength"], "byteLength") ?? 0;
+            if (declared <= 0) throw new InvalidDataException("A glTF buffer requires a positive byteLength.");
             byte[]? data;
             if (uri == null)
             {
@@ -381,9 +381,9 @@ public sealed class GltfDocument
             }
             if (data != null && held.Add(data) && (heldBytes += data.Length) > bufferBytes) throw TooLarge();
             int dataLength = data?.Length ?? glbBinary.Length;
-            if (dataLength < (declared ?? 0)) throw new InvalidDataException("A glTF buffer is shorter than declared.");
-            if (data == null && declared is { } statedLength && dataLength - statedLength > 3) throw new InvalidDataException("GLB BIN padding exceeds three bytes.");
-            buffers.Add(data); bufferLengths.Add(declared ?? dataLength);
+            if (dataLength < declared) throw new InvalidDataException("A glTF buffer is shorter than declared.");
+            if (data == null && dataLength - declared > 3) throw new InvalidDataException("GLB BIN padding exceeds three bytes.");
+            buffers.Add(data); bufferLengths.Add(declared);
         }
         JsonArray views = root["bufferViews"] as JsonArray ?? [], accessors = root["accessors"] as JsonArray ?? [];
         // Accessors may be shared by any number of primitives; every use is decoded, so the file's total is bounded, with what

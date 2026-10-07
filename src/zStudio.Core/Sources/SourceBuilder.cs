@@ -209,11 +209,11 @@ public static partial class SourceBuilder
         internal HashSet<string> DamageMasks(CancellationToken token)
         {
             if (damageMasks != null) return damageMasks;
-            damageMasks = new(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> masks = new(StringComparer.OrdinalIgnoreCase);
             foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), Added, token))
                 foreach (var line in GameGenScriptText.Tokenize(GameGenScriptText.Decode(Read(script, token))))
-                    if (line.Count > 1 && ScriptCommands.Core(line[0]) == "WriteTextureSetMap") damageMasks.Add(Path.GetFileNameWithoutExtension(line[1]));
-            return damageMasks;
+                    if (line.Count > 1 && ScriptCommands.Core(line[0]) == "WriteTextureSetMap") masks.Add(Path.GetFileNameWithoutExtension(line[^1]));
+            return damageMasks = masks;
         }
         /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>
         internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<WorldNode> LoadedRoots)
@@ -789,7 +789,7 @@ public static partial class SourceBuilder
     /// <summary>
     /// A mission's animations (see <see cref="Animation.AnimationCompiler"/>), bound to the world this export builds:
     /// definitions whose root the world lacks are left out, and names the game could not resolve (world nodes, and
-    /// effect templates that effects.zrd does not define) are reported.
+    /// effect templates that effects.zrd does not define) prevent publication.
     /// </summary>
     private static Built BuildAnimations(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
@@ -801,6 +801,7 @@ public static partial class SourceBuilder
         // Without an effects.zrd in the project the game's own resource archives supply it, so nothing can be checked.
         var effects = EffectNames(root, mission, snapshot, token);
         var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, token);
+        if (result.EngineRejection is { } rejection) throw new InvalidDataException(rejection);
         return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]) { Package = result.Package };
     }
     /// <summary>

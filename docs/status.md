@@ -1,3 +1,11 @@
+## PR18 buffer, damage-mask and animation export review fixes (2026-10-07)
+
+Every glTF buffer now requires a positive declared byteLength before external resolution, including data URI and GLB buffers. Software texture packs keep the texture named by the final WriteTextureSetMap argument unpaletted. Source checks and exports reject animations with known missing attachment, tracked/node or effect references; the first rejection survives the ordinary warning cap. Diagnostic compilation remains available to reconstruction, while a failed export publishes no outputs.
+
+The full actual-base review covered 295 files with a separate challenge before commit. Regressions cover capped warnings, unchanged destination bytes after refused multi-output replacement, valid created light/sound nodes and skipped shared roots, bufferless models, GLB padding, command prefixes and quoted mask paths. The earlier buffer-budget fixture now declares one byte instead of zero, preserving its allocation and read-count assertions.
+
+Validation: final Release build has zero warnings/errors; all 1,651 Core tests with 1998/MW3 pass, including 19 new regressions. All 110 Desktop GUI/MCP tests and 76 watcher tests pass at the final production code. The earlier 1999/MW3 full run passed 1,832 of 1,833, with only the now-corrected zero-length test fixture failing. The automatic notice reached this conversation. The user-retained atomic direct compiled-save race and historical GUI height/theme and script-selection intermittencies remain unresolved. No merge, release or version bump.
+
 ## PR18 grid, glTF and dependency review fixes (2026-10-07)
 
 Source partitions now reject nonpositive counts and reversed axes before changing the world. GameZ readers and the writer reject negative or single-zero grid dimensions, and all world nodes share one 65,536-cell limit before metadata/output allocation. The shared glTF reader refuses malformed collection and extension declarations, ordinary empty meshes and non-affine node matrices. Older reconstructed point-only meshes retain compatibility through validated engine point records and the existing importer. Source-world stale checks inspect only the displayed build's dependencies; workspace-wide save/reload conflict checks remain global.

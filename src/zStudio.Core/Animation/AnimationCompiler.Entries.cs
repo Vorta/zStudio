@@ -27,8 +27,8 @@ public sealed partial class AnimationCompiler
             string name = Bound(item.TextOf("ANIMATION_NAME") ?? root);
             string attach = Bound(item.TextOf("ANIMATION_ROOT_NAME") ?? root);
             Text(header, 0, name, 32, "ANIMATION_NAME"); Text(header, 32, root, 32, "NAME"); Text(header, 68, attach, 32, "ANIMATION_ROOT_NAME");
-            if (!compiler.NodeExists(root)) compiler.Warn($"{JsonData.ShownText(definition.File)}: {name} is bound to {root}, which the world lacks; the game rejects the animation file.");
-            if (!compiler.NodeExists(attach)) compiler.Warn($"{JsonData.ShownText(definition.File)}: {name} is attached to {attach}, which the world lacks; the game rejects the animation file.");
+            if (!compiler.NodeExists(root)) compiler.Reject($"{JsonData.ShownText(definition.File)}: {name} is bound to {root}, which the world lacks; the game rejects the animation file.");
+            if (!compiler.NodeExists(attach)) compiler.Reject($"{JsonData.ShownText(definition.File)}: {name} is attached to {attach}, which the world lacks; the game rejects the animation file.");
 
             uint flags = 0; byte activation = 0, priority = 4; float range = 0, reset = 0, health = 0; bool secondReset = false;
             foreach (var key in item.Items)
@@ -79,13 +79,13 @@ public sealed partial class AnimationCompiler
             foreach (var record in tables[0].Skip(1).Concat(tables[1].Skip(1)))
             {
                 string node = Name(record, 36);
-                if (!created.Contains(node) && !compiler.NodeExists(node)) compiler.Warn($"{JsonData.ShownText(definition.File)}: {name} names node {node}, which the world lacks; the game rejects the animation file.");
+                if (!created.Contains(node) && !compiler.NodeExists(node)) compiler.Reject($"{JsonData.ShownText(definition.File)}: {name} names node {node}, which the world lacks; the game rejects the animation file.");
             }
             // LoadZbd also rejects the file when an effect template is not in effects.zrd (retail 0x45F899).
             foreach (var record in tables[5].Skip(1))
             {
                 string effect = Name(record, 32);
-                if (!compiler.EffectExists(effect)) compiler.Warn($"{JsonData.ShownText(definition.File)}: {name} spawns effect {effect}, which effects.zrd does not define; the game rejects the animation file.");
+                if (!compiler.EffectExists(effect)) compiler.Reject($"{JsonData.ShownText(definition.File)}: {name} spawns effect {effect}, which effects.zrd does not define; the game rejects the animation file.");
             }
             for (int t = 0; t < 8; t++)
                 foreach (var record in tables[t]) entry.References[t].Add(new(record));

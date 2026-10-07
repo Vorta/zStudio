@@ -34,6 +34,7 @@ internal static class ExportSafetyMcpChecks
             await RelativePathChecks(main, Job, token);
             await ExportChoiceContextChecks(main, token);
             await TextureFailureAndMissingInputChecks(main, Job, token);
+            await RejectedAnimationChecks(main, Job, token);
             await LookupBaselineChecks(main, Call, Job, token);
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
@@ -50,6 +51,22 @@ internal static class ExportSafetyMcpChecks
             }
         }
         finally { foreach (var doc in main.ViewModel.Documents.ToArray()) main.ViewModel.CloseResolved(doc); main.Close(); }
+    }
+
+    private static async Task RejectedAnimationChecks(MainWindow main, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)
+    {
+        using SourceWorldFixture fixture = new();
+        fixture.Write("data/m1/zrdr/gates.zad", "ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ANIMATION_DEFINITION ( NAME ( ground ) ANIMATION_ROOT_NAME ( absent ) ) ) )");
+        await main.ViewModel.OpenRootAsync(fixture.Project, token);
+        var check = await job("source_export", new() { ["outputs"] = new[] { "m1/anim.zbd" } }, "completed");
+        Assert.Equal(1, check["failed"]!.GetValue<int>());
+        Assert.Contains("absent", check.ToJsonString());
+        var gui = await main.ExportSourceProjectAsync(null, ["m1/anim.zbd"], false, token);
+        Assert.Equal(1, gui.Failed);
+        Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Error" && p.Message.Contains("rejects", StringComparison.Ordinal));
+        string destination = Path.Combine(fixture.Root, "export");
+        await job("source_export", new() { ["destination"] = destination, ["outputs"] = new[] { "m1/anim.zbd" } }, "failed");
+        Assert.Empty(Directory.GetFileSystemEntries(destination));
     }
 
     private static async Task TextureFailureAndMissingInputChecks(MainWindow main, Func<string, Dictionary<string, object?>, string, Task<JsonNode>> job, CancellationToken token)

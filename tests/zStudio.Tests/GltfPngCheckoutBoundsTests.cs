@@ -37,7 +37,7 @@ public sealed class GltfPngCheckoutBoundsTests
 
         // Different files add up, whatever they declare: the second 600-byte file exceeds 1,024 bytes and nothing after it is read.
         reads = 0;
-        var together = Assert.Throws<InvalidDataException>(() => GltfDocument.Read(Gltf([.. Enumerable.Range(0, 100).Select(i => Buffer($"b{i}.bin", 0))]),
+        var together = Assert.Throws<InvalidDataException>(() => GltfDocument.Read(Gltf([.. Enumerable.Range(0, 100).Select(i => Buffer($"b{i}.bin", 1))]),
             _ => { reads++; return new byte[600]; }, 1024, Token));
         Assert.Contains("together", together.Message);
         Assert.Equal(2, reads);
@@ -49,7 +49,7 @@ public sealed class GltfPngCheckoutBoundsTests
 
         // Bytes a resolver hands back again (its own cache, under another spelling) count once.
         byte[] cached = new byte[600];
-        GltfDocument.Read(Gltf(Buffer("a.bin", 600), Buffer("./a.bin", 0)), _ => cached, 1024, Token);
+        GltfDocument.Read(Gltf(Buffer("a.bin", 600), Buffer("./a.bin", 1)), _ => cached, 1024, Token);
 
         // Data URIs count too, checked before they are decoded.
         string data = "data:application/octet-stream;base64," + Convert.ToBase64String(new byte[600]);
@@ -59,7 +59,7 @@ public sealed class GltfPngCheckoutBoundsTests
         // more buffers than a model may use.
         static byte[] Never(string uri) => throw new Xunit.Sdk.XunitException($"{uri} was read.");
         Assert.Contains("512 MiB", Assert.Throws<InvalidDataException>(() => GltfDocument.Read(Gltf(Buffer("huge.bin", GltfDocument.MaximumBufferBytes + 1)), Never, Token)).Message);
-        Assert.Throws<InvalidDataException>(() => GltfDocument.Read(Gltf([.. Enumerable.Range(0, GltfDocument.MaximumBuffers + 1).Select(_ => Buffer("x.bin", 0))]), Never, Token));
+        Assert.Throws<InvalidDataException>(() => GltfDocument.Read(Gltf([.. Enumerable.Range(0, GltfDocument.MaximumBuffers + 1).Select(_ => Buffer("x.bin", 1))]), Never, Token));
     }
 
     private static string Node(string transform) =>
