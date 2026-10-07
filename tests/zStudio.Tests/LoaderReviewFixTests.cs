@@ -330,6 +330,38 @@ public sealed class LoaderReviewFixTests
     }
 
     [Fact]
+    public void CancellationDuringInferenceRestoresTheWorldsChildOrder()
+    {
+        var (world, build, isReference, hut) = Crafted(HutProject(objects: 40));
+        Assert.Equal(["window", "door"], hut.Children.Select(c => c.Name));
+        var children = world.Nodes.Select(n => (Node: n, Children: n.Children.ToArray())).ToArray();
+        using CancellationTokenSource stop = new();
+        bool canceledAfterReordering = false;
+        bool IsReference(WorldNode node)
+        {
+            // The inference has reordered actual source children before replaying its candidate. Cancel from its
+            // existing classification callback so neither a timer nor a worker's scheduling chooses the interleaving.
+            if (!canceledAfterReordering && hut.Children[0].Name == "door")
+            {
+                canceledAfterReordering = true;
+                stop.Cancel();
+            }
+            return isReference(node);
+        }
+        List<string> notes = [];
+        var error = Assert.ThrowsAny<OperationCanceledException>(() => DatabaseRecords.Infer(world, build, IsReference, "m1", notes, stop.Token));
+        Assert.True(canceledAfterReordering);
+        Assert.Equal(stop.Token, error.CancellationToken);
+        foreach (var (node, original) in children) Assert.Equal(original, node.Children);
+        Assert.Empty(notes);
+
+        // A canceled candidate must not poison a subsequent inference over the same world.
+        Assert.NotNull(DatabaseRecords.Infer(world, build, isReference, "m1", notes, Token));
+        Assert.Equal(["door", "window"], hut.Children.Select(c => c.Name));
+        Assert.Empty(notes);
+    }
+
+    [Fact]
     public void TheMirrorBudgetStopsTheWholeInferenceAndLeavesTheWorldsChildOrder()
     {
         var files = HutProject(objects: 40);

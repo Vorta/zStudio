@@ -277,57 +277,17 @@ public sealed class ReconstructionInferenceTests
         Assert.Equal(["+ring.flt", "+s1", "+", "+s2", "+"], Cache(Placement("s1", a, 3), Placement("s2", a, 4)));
     }
 
-    /// <summary>
-    /// A shipped world whose database had <paramref name="groups"/> groups, each holding one object, and whose free list
-    /// the deletion cannot have left (shuffled): the inference searches every reading before it gives up.
-    /// </summary>
-    private static (GameZWorld World, WorldDecomposition Build) Unreadable(int groups)
-    {
-        GameZWorld world = new() { NodeCapacity = GameZWorld.MaximumNodeCapacity };
-        WorldNode root = new("world1", WorldNodeClass.World); world.Nodes.Add(root);
-        List<WorldNode> objects = [];
-        for (int i = 0; i < groups; i++)
-        {
-            var o = Node($"o{i}", Quad(1, 0)); o.Parents.Add(root); root.Children.Add(o);
-            world.Nodes.Add(o); objects.Add(o);
-            world.FreedSlots[2 + 2 * i] = FreedSlot($"g{i}");
-        }
-        world.FreedSlots[1] = FreedSlot("m1.flt");
-        List<int> chain = [.. world.FreedSlots.Keys.Order()];
-        new Random(7).Shuffle(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(chain));
-        for (int i = 0; i < chain.Count; i++)
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(world.FreedSlots[chain[i]].AsSpan(192), (uint)(i + 1 < chain.Count ? chain[i + 1] : 2 * groups + 2));
-        world.FreeHead = chain[0];
-        TracedInstruction Step(string command, params string[] args) => new("m1.gs", command, args, [], null, []);
-        return (world, new([new("m1.flt", "m1.flt", Step("LoadGameGen", "m1.flt", "m1.flt"), true, null, objects, false) { Step = 1 }],
-            new Dictionary<int, WorldNode> { [0] = root }));
-        static byte[] FreedSlot(string name)
-        {
-            byte[] slot = new byte[196]; Encoding.ASCII.GetBytes(name).CopyTo(slot, 0);
-            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(slot.AsSpan(60), -1);
-            return slot;
-        }
-    }
-
     [Fact]
-    public async Task TheInferenceStopsSoonAfterItIsCanceled()
+    public void TheBoundarySearchObservesCancellationBeforeAdvancingAgain()
     {
-        // A second in, the search for where the caches end (quadratic in the free list) is under way.
-        var (world, build) = Unreadable(20_000);
+        // Exercise the formerly quadratic phase directly: after 100 candidates, cancellation must prevent candidate 101.
+        // Yielding fixes the interleaving without depending on machine speed or thread-pool scheduling.
+        int[] slots = [.. Enumerable.Range(1, 20_000).Reverse()];
         using CancellationTokenSource stop = new();
-        long stopped = 0;
-        var inference = Task.Run(() =>
-        {
-            try { return DatabaseRecords.Infer(world, build, _ => false, "m1", [], stop.Token); }
-            finally { Volatile.Write(ref stopped, System.Diagnostics.Stopwatch.GetTimestamp()); }
-        }, Token);
-        await Task.Delay(1000, Token);
-        // Canceled here and timed on the inference's own thread: a busy thread pool can delay a timer's cancellation, or
-        // when this test resumes, but not how soon the inference sees the cancellation.
-        long canceled = System.Diagnostics.Stopwatch.GetTimestamp();
+        using var candidates = DatabaseRecords.BoundaryCandidates(slots, [0], 0, stop.Token).GetEnumerator();
+        for (int i = 0; i < 100; i++) Assert.True(candidates.MoveNext());
         stop.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => inference.WaitAsync(TimeSpan.FromMinutes(2), Token));
-        var latency = System.Diagnostics.Stopwatch.GetElapsedTime(canceled, Volatile.Read(ref stopped));
-        Assert.True(latency < TimeSpan.FromSeconds(3), $"The inference stopped {latency.TotalMilliseconds:N0} ms after it was canceled.");
+        var error = Assert.ThrowsAny<OperationCanceledException>(() => candidates.MoveNext());
+        Assert.Equal(stop.Token, error.CancellationToken);
     }
 }
