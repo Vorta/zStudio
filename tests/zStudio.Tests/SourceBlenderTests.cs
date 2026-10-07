@@ -48,7 +48,7 @@ public sealed class SourceBlenderTests
         {
             var node = nodes[0]!.DeepClone();
             node["name"] = new string('x', 120) + i;
-            node["extras"]![WorldGltf.Key]!["name"] = new string('x', 120) + i;
+            node["extras"]![WorldGltf.Key]!["name"] = new string('x', 32) + i;
             json["scenes"]![0]!["nodes"]!.AsArray().Add(nodes.Count); nodes.Add(node);
         }
         fixture.Write(Model, json.ToJsonString());

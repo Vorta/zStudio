@@ -124,10 +124,11 @@ public static class TextureSources
     /// <remarks>A name stored more than once (image.zbd has eight) was a file in more than one folder: each copy takes its run's folder.</remarks>
     public static IReadOnlyList<string> PlaceImages(IReadOnlyList<string> names, IReadOnlyList<(string Archive, string Member, ZrdNode Tree)> resources)
     {
-        HashSet<string> wanted = new(names.Select(n => n.ToLowerInvariant()));
-        Dictionary<string, Dictionary<string, int>> paths = [];
-        Dictionary<string, int> objectiveMission = [];
-        HashSet<string> fonts = [], hud = [];
+        int maximumName = names.Count == 0 ? 0 : names.Max(n => n.Length);
+        HashSet<string> wanted = new(names, StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, Dictionary<string, int>> paths = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> objectiveMission = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> fonts = new(StringComparer.OrdinalIgnoreCase), hud = new(StringComparer.OrdinalIgnoreCase);
         foreach (var (archive, member, tree) in resources.OrderBy(r => MissionNumber(r.Archive)).ThenBy(r => r.Archive, StringComparer.Ordinal).ThenBy(r => r.Member, StringComparer.Ordinal))
         {
             string file = member.ToLowerInvariant(); int mission = MissionNumber(archive);
@@ -141,9 +142,9 @@ public static class TextureSources
                     var child = children[i];
                     if (child.Kind == ZrdKind.String && child.Text == "IMAGE_PATH" && i + 1 < children.Count && children[i + 1] is { Kind: ZrdKind.Array, Children: [{ Kind: ZrdKind.String } path, ..] })
                         imagePath = RecordedFolder(path.Text) ?? imagePath;
-                    else if (child.Kind == ZrdKind.String && wanted.Contains(child.Text.ToLowerInvariant()))
+                    else if (child.Kind == ZrdKind.String && child.Text.Length <= maximumName && wanted.Contains(child.Text))
                     {
-                        string name = child.Text.ToLowerInvariant();
+                        string name = child.Text;
                         if (imagePath != null) { var counts = paths.TryGetValue(name, out var c) ? c : paths[name] = []; counts[imagePath] = counts.GetValueOrDefault(imagePath) + 1; }
                         if (file == "objectives.zrd" && mission > 0) objectiveMission.TryAdd(name, mission);
                         if (file == "fonts.zrd") fonts.Add(name);
@@ -161,7 +162,7 @@ public static class TextureSources
                 : fonts.Contains(name) ? Fonts : hud.Contains(name) ? HudImages : null;
             if (folder != null) evidence[name] = folder;
         }
-        var repeated = names.GroupBy(n => n.ToLowerInvariant()).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
+        var repeated = names.GroupBy(n => n, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         List<string> folders = [];
         foreach (var run in Runs(names))
         {
@@ -174,6 +175,9 @@ public static class TextureSources
     /// <summary><c>..\data\common\images\dialog\briefing</c> → <c>data/common/images/dialog/briefing</c>; null unless it is a relative data path.</summary>
     internal static string? RecordedFolder(string recorded)
     {
+        // Recorded compile paths are short. An unrelated resource scalar is not a useful folder and must not
+        // allocate full-size normalized copies before that can be established.
+        if (recorded.Length > 4096) return null;
         string path = recorded.Replace('\\', '/').TrimEnd('/');
         while (path.StartsWith("../", StringComparison.Ordinal)) path = path[3..];
         if (!path.StartsWith("data/", StringComparison.OrdinalIgnoreCase)) return null;

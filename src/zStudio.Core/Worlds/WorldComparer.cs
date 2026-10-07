@@ -174,6 +174,7 @@ public static class WorldComparer
         List<WorldDifference> differences = [];
         List<WorldComparisonNode> roots = [];
         Dictionary<WorldNode, WorldNode> counterpart = new(ReferenceEqualityComparer.Instance);
+        List<(WorldComparisonNode Node, WorldNode A, WorldNode B, bool WorldChild, bool Root)> pending = [];
         // Area tables often repeat nodes already placed under another parent. Their membership is compared as class
         // data; only area-only nodes need an additional tree place. Cache each world's list across shared instances.
         HashSet<WorldNode> inChildren = new(expected.Nodes.Concat(actual.Nodes).SelectMany(n => n.Children), ReferenceEqualityComparer.Instance);
@@ -212,7 +213,7 @@ public static class WorldComparer
         {
             WorldComparisonNode world = new(null, "world", worldA.Name, worldA, worldB); made++;
             roots.Add(world); counterpart[worldA] = worldB; expanded.Add((worldA, worldB));
-            Place(world, Differ(worldA, worldB, false, true));
+            pending.Add((world, worldA, worldB, false, true));
             Match(world, Members(worldA), Members(worldB), true, 0);
         }
         // The nodes no parent holds (templates the build loaded, cameras, lights): a merged level of their own.
@@ -220,6 +221,14 @@ public static class WorldComparer
         bool pairedWorld = worldA != null && worldB != null;
         Match(detached, expected.Nodes.Where(n => n.Parents.Count == 0 && !(pairedWorld && ReferenceEquals(n, worldA))).ToList(), actual.Nodes.Where(n => n.Parents.Count == 0 && !(pairedWorld && ReferenceEquals(n, worldB))).ToList(), false, 0);
         roots.AddRange(detached.Children);
+        // References may point to a later sibling or detached node. Establish every counterpart before comparing
+        // class references; names alone lose identity when two distinct nodes share a name.
+        memo.Counterparts = counterpart;
+        var slotsA = GameZWriter.NodeSlots(expected); var slotsB = GameZWriter.NodeSlots(actual);
+        memo.ExpectedSlots = slotsA; memo.ActualSlots = slotsB;
+        memo.RepeatedNames = expected.Nodes.GroupBy(n => n.Name, StringComparer.Ordinal).Concat(actual.Nodes.GroupBy(n => n.Name, StringComparer.Ordinal))
+            .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (var (node, a, b, worldChild, root) in pending) Place(node, Differ(a, b, worldChild, root));
         var textureOwner = pairedWorld ? roots[0] : null;
         var textureDetails = textureOwner?.Described.ToList();
         foreach (var difference in WorldTextureComparison.Compare(expected.Textures, actual.Textures, token))
@@ -251,7 +260,6 @@ public static class WorldComparer
             return below;
         }
         foreach (var root in roots) Summarize(root);
-        var slotsA = GameZWriter.NodeSlots(expected); var slotsB = GameZWriter.NodeSlots(actual);
         List<WorldNameBinding> bindings = [];
         var byNameB = actual.Nodes.GroupBy(n => n.Name).ToDictionary(g => g.Key, g => g.ToList());
         foreach (var group in expected.Nodes.GroupBy(n => n.Name))
@@ -334,7 +342,7 @@ public static class WorldComparer
                 Match(null, childrenA, childrenB, a.Class == WorldNodeClass.World, depth + 1);
                 return null;
             }
-            Place(node, Differ(a, b, worldChild));
+            pending.Add((node, a, b, worldChild, false));
             if (a.Class != b.Class) return node;
             if (depth > 256) { if (childrenA.Count + childrenB.Count > 0) truncated = node.Truncated = true; pairingTruncated |= childrenA.Count > 0 && childrenB.Count > 0; }
             else Match(node, childrenA, childrenB, a.Class == WorldNodeClass.World, depth + 1);
@@ -521,6 +529,10 @@ public static class WorldComparer
     /// </summary>
     private sealed class Memo(CancellationToken token)
     {
+        public IReadOnlyDictionary<WorldNode, WorldNode>? Counterparts { get; set; }
+        public IReadOnlyDictionary<WorldNode, int>? ExpectedSlots { get; set; }
+        public IReadOnlyDictionary<WorldNode, int>? ActualSlots { get; set; }
+        public HashSet<string> RepeatedNames { get; set; } = new(StringComparer.Ordinal);
         public CancellationToken Token => token;
         private readonly Dictionary<(WorldNode, int), ulong> signatures = [];
         private readonly Dictionary<WorldNode, ulong> structures = new(ReferenceEqualityComparer.Instance), identities = new(ReferenceEqualityComparer.Instance);
@@ -588,25 +600,45 @@ public static class WorldComparer
                 for (int o = 0; o + 4 <= Math.Min(a.Payload.Length, b.Payload.Length); o += 4)
                     if (Array.IndexOf(skip, o) < 0 && BitConverter.ToUInt32(a.Payload, o) != BitConverter.ToUInt32(b.Payload, o)
                         && Differs($"data+{o}", BitConverter.ToSingle(a.Payload, o), BitConverter.ToSingle(b.Payload, o))) return false;
-                // The nodes class data names by slot, compared by name: their slots differ from world to world.
+                // Slot numbers can change, but each reference must still name its established counterpart.
                 if (a.Class == WorldNodeClass.Camera)
                     foreach (var (x, y, field) in new[] { (a.CameraWorld, b.CameraWorld, "camera.world"), (a.CameraWindow, b.CameraWindow, "camera.window"),
                         (a.CameraHorizon, b.CameraHorizon, "camera.horizon"), (a.CameraHorizonXZ, b.CameraHorizonXZ, "camera.horizonXZ") })
-                        if (x?.Name != y?.Name && Differs(field, x?.Name, y?.Name)) return false;
-                if (a.Class == WorldNodeClass.Light && !NamesEqual(a.AttachedWorlds, b.AttachedWorlds) && Differs("light.worlds", new Listed(a.AttachedWorlds), new Listed(b.AttachedWorlds))) return false;
+                        if (!ReferenceSame(x, y) && Differs(field, ReferenceLabel(x, true), ReferenceLabel(y, false))) return false;
+                if (a.Class == WorldNodeClass.Light && !ReferencesSame(a.AttachedWorlds, b.AttachedWorlds) && Differs("light.worlds", ReferenceList(a.AttachedWorlds, true), ReferenceList(b.AttachedWorlds, false))) return false;
                 if (a.Class != WorldNodeClass.World) return true;
-                if (!NamesEqual(a.WorldLights, b.WorldLights) && Differs("world.lights", new Listed(a.WorldLights), new Listed(b.WorldLights))) return false;
-                if (!NamesEqual(a.WorldSounds, b.WorldSounds) && Differs("world.sounds", new Listed(a.WorldSounds), new Listed(b.WorldSounds))) return false;
+                if (!ReferencesSame(a.WorldLights, b.WorldLights) && Differs("world.lights", ReferenceList(a.WorldLights, true), ReferenceList(b.WorldLights, false))) return false;
+                if (!ReferencesSame(a.WorldSounds, b.WorldSounds) && Differs("world.sounds", ReferenceList(a.WorldSounds, true), ReferenceList(b.WorldSounds, false))) return false;
                 if (a.Areas.Count != b.Areas.Count) return !Differs("world.areas", a.Areas.Count, b.Areas.Count);
                 for (int i = 0; i < a.Areas.Count; i++)
                 {
                     // Every area is compared; only the differences listed are described.
-                    var x = a.Areas[i].Nodes.Select(n => n.Name).Order(StringComparer.Ordinal).ToList(); var y = b.Areas[i].Nodes.Select(n => n.Name).Order(StringComparer.Ordinal).ToList();
-                    if (!x.SequenceEqual(y) && Differs($"world.area{i}", new Listed(x), new Listed(y))) return false;
+                    Token.ThrowIfCancellationRequested();
+                    var x = a.Areas[i].Nodes; var y = b.Areas[i].Nodes;
+                    if (!MembersSame(x, y) && Differs($"world.area{i}", ReferenceList(x, true), ReferenceList(y, false))) return false;
                 }
                 return true;
             }
-            static bool NamesEqual(List<WorldNode> x, List<WorldNode> y) => x.Select(n => n.Name).SequenceEqual(y.Select(n => n.Name));
+            WorldNode? MatchReference(WorldNode x) => found == null ? x : Counterparts?.GetValueOrDefault(x);
+            string ReferenceLabel(WorldNode? node, bool expected) => node == null ? "(none)" : !RepeatedNames.Contains(node.Name) ? node.Name : $"{node.Name} [slot {(expected ? ExpectedSlots : ActualSlots)?.GetValueOrDefault(node, -1) ?? -1}]";
+            Listed ReferenceList(List<WorldNode> nodes, bool expected) => new(nodes.Select(n => ReferenceLabel(n, expected)));
+            bool ReferenceSame(WorldNode? x, WorldNode? y) => x == null ? y == null : y != null && ReferenceEquals(MatchReference(x), y);
+            bool ReferencesSame(List<WorldNode> x, List<WorldNode> y) => x.Count == y.Count && x.Where((node, i) => !ReferenceSame(node, y[i])).Any() == false;
+            bool MembersSame(List<WorldNode> x, List<WorldNode> y)
+            {
+                if (x.Count != y.Count) return false;
+                // Interchangeable compares the actual area contents recursively in ChildrenSame, not through a
+                // cross-world counterpart map. Keep that semantic-copy check separate from stored reference identity.
+                if (found == null) return true;
+                Dictionary<WorldNode, int> counts = new(ReferenceEqualityComparer.Instance);
+                foreach (var node in y) counts[node] = counts.GetValueOrDefault(node) + 1;
+                foreach (var node in x)
+                {
+                    if (MatchReference(node) is not { } mapped || !counts.TryGetValue(mapped, out int remaining) || remaining == 0) return false;
+                    counts[mapped] = remaining - 1;
+                }
+                return true;
+            }
         }
 
         /// <summary>

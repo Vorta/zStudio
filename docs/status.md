@@ -1,3 +1,11 @@
+## PR18 reference identity and source import review fixes (2026-10-07)
+
+World comparison resolves camera, light and world references through matched node identities; area membership preserves multiplicity without treating same-name nodes as interchangeable. Source glTF imports reject engine names that would change during serialization and malformed engine metadata or material vectors before mutation. Texture placement bounds authored strings before copying them. Reconstruction refuses differing duplicate script definitions and publishes its script index only after the corresponding source is written. Accepted Blender updates retain checkout-recording failures as persistent GUI warnings and MCP result notes.
+
+The full actual-base review covered 296 files, retaining earlier contextual coverage and completing a separate challenge before commit. Thirty focused regressions cover duplicate identities, membership order/counts, malformed metadata, effective-name boundaries, allocation growth and script rollback. A real GUI/MCP test forces the checkout manifest write to fail after an accepted update. Existing semantic-copy behavior and ordinary diagnostic wording remain compatible.
+
+Validation: Release build has zero warnings/errors; all 1,867 solution tests pass with the 1998/MW3 corpora, including 110 Desktop and 76 watcher tests. The automatic notice reached this conversation. The user-retained atomic direct compiled-save race and historical GUI height/theme and script-selection intermittencies remain unresolved. No merge, release or version bump.
+
 ## PR18 buffer, damage-mask and animation export review fixes (2026-10-07)
 
 Every glTF buffer now requires a positive declared byteLength before external resolution, including data URI and GLB buffers. Software texture packs keep the texture named by the final WriteTextureSetMap argument unpaletted. Source checks and exports reject animations with known missing attachment, tracked/node or effect references; the first rejection survives the ordinary warning cap. Diagnostic compilation remains available to reconstruction, while a failed export publishes no outputs.

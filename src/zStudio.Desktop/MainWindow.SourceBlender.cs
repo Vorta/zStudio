@@ -86,7 +86,11 @@ public partial class MainWindow
             return t;
         }, token, fromBuild: false);
         try { if (written.Count > 0) SourceBlender.RecordApplied(checkout, plan); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) { ViewModel.Status = $"The update was applied, but the checkout could not record it: {ex.Message}"; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            // Keep this first so bounded MCP notes cannot hide the accepted-but-unrecorded state.
+            plan = plan with { Notes = [Bounded($"The update was applied, but the checkout could not record it: {Bounded(ex.Message, 256)}. Create a new checkout before the next update.", 512), .. plan.Notes] };
+        }
         foreach (string note in plan.Notes) ViewModel.AddProblem(Bounded($"{session.Label}: {note}"), "Warning", Path.Combine(session.Root, checkout.Model.Replace('/', Path.DirectorySeparatorChar)));
         return (next, plan, written);
     }

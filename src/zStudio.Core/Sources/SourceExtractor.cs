@@ -601,6 +601,18 @@ public static class SourceExtractor
         {
             var doc = FormatRegistry.Default.OpenBytes(output, bytes, token: token);
             var package = doc.Scripts ?? throw new InvalidDataException("the prepared scripts are not a complete package");
+            Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> definitions = new(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in package.Entries)
+            {
+                token.ThrowIfCancellationRequested();
+                var lines = entry.Instructions.Select(i => (IReadOnlyList<string>)i.Tokens).ToArray();
+                if (definitions.TryGetValue(entry.Name, out var previous) || Scripts.TryGetValue(entry.Name, out previous))
+                {
+                    if (previous.Count != lines.Length || previous.Where((line, i) => !line.SequenceEqual(lines[i], StringComparer.Ordinal)).Any())
+                        throw new IOException($"{output}: duplicate script {JsonData.ShownText(entry.Name)} has different instructions; reconstruction cannot choose an unambiguous source.");
+                }
+                else definitions.Add(entry.Name, lines);
+            }
             // The source scripts name the project's files: glTF models and PNG textures (see GameGenScriptText.ProjectFileNames).
             var modelMacros = GameGenScriptText.ModelMacros(package.Entries.Select(e => (IReadOnlyList<IReadOnlyList<string>>)[.. e.Instructions.Select(i => (IReadOnlyList<string>)i.Tokens)]));
             foreach (var entry in package.Entries)
@@ -608,12 +620,14 @@ public static class SourceExtractor
                 token.ThrowIfCancellationRequested();
                 var parts = entry.Name.Split('\\');
                 if (parts.Any(p => p.Length == 0 || p is "." or ".." || p.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)) { Notes.Add($"{output}: script '{entry.Name}' is not a relative path and was skipped."); continue; }
-                Scripts[entry.Name] = entry.Instructions.Select(i => (IReadOnlyList<string>)i.Tokens).ToArray();
+                if (Scripts.ContainsKey(entry.Name)) continue;
+                var instructions = definitions[entry.Name];
                 string text;
-                try { text = GameGenScriptText.Write(GameGenScriptText.ProjectFileNames(Scripts[entry.Name], modelMacros)); }
+                try { text = GameGenScriptText.Write(GameGenScriptText.ProjectFileNames(instructions, modelMacros)); }
                 catch (InvalidDataException) { Notes.Add($"{output}: script {entry.Name} has instructions that cannot be written as text and was skipped."); continue; }
                 // The prepared index records each script's modification time; the source file keeps it.
                 await WriteAsync($"{SourceProject.GameGenFolder}/{string.Join('/', parts)}", Encoding.Latin1.GetBytes(text), DateTime.UnixEpoch.AddSeconds(entry.FileTime));
+                Scripts.Add(entry.Name, instructions);
             }
         }
 

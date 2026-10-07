@@ -361,10 +361,13 @@ public static partial class WorldGltf
     /// <summary>Shared build/Blender preflight: refuse model semantics GameZ cannot represent before accepting sources.</summary>
     internal static void ValidateSupported(GltfDocument doc, string path)
     {
+        _ = EngineValues(doc.SceneExtras, path);
         HashSet<GltfMesh> meshes = [];
         HashSet<GltfMaterial> materials = [];
         Dictionary<string, int> addressing = new(StringComparer.OrdinalIgnoreCase);
         foreach (var node in doc.AllNodes())
+        {
+            _ = ValidatedEngineName(node, path);
             if (node.Mesh is { } mesh && meshes.Add(mesh))
             {
                 ValidateMesh(mesh, path);
@@ -380,6 +383,7 @@ public static partial class WorldGltf
                         throw new InvalidDataException($"{path}: texture {JsonData.ShownText(name)} is sampled with different edge modes; use one mode per texture or give the images distinct names.");
                 }
             }
+        }
     }
 
     /// <summary>Compatibility for old reconstructed point-only meshes, validated with the importer that preserves their records.</summary>
@@ -394,23 +398,34 @@ public static partial class WorldGltf
 
     private static void ValidateMesh(GltfMesh mesh, string path)
     {
+        _ = EngineValues(mesh.Extras, path);
         if (mesh.Weights.Count > 1 || mesh.Primitives.Any(p => p.Targets.Count > 1))
             throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} has multiple morph targets; RECOIL stores one shape key per model. Export at most one shape key.");
         foreach (var primitive in mesh.Primitives)
+        {
+            _ = EngineValues(primitive.Extras, path);
+            _ = EngineValues(primitive.Material?.Extras, path);
             if (primitive.Material is { } material && (material.ImageUri != null || material.EmbeddedImage || material.Extras?[Key]?["texture"] != null)
                 && primitive.TexCoords.Count != primitive.Positions.Count)
             {
                 ValidateMaterial(material, path);
                 throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} needs TEXCOORD_{primitive.TextureCoordinateSet}, which its material selects, with one texture coordinate per vertex. Export that UV set with the mesh.");
             }
+        }
     }
 
     private static void ValidateMaterial(GltfMaterial? source, string path)
     {
-        if (source?.Extras?[Key] is JsonObject engine)
+        if (EngineValues(source?.Extras, path) is { } engine)
         {
             if (engine["flags"] is { } flags) _ = MaterialWord(flags, "flags", path);
             if (engine["packedColor"] is { } packed) _ = MaterialWord(packed, "packedColor", path);
+            foreach (string field in new[] { "fields", "color" })
+                if (engine.TryGetPropertyValue(field, out var value))
+                {
+                    if (value is not JsonArray { Count: 3 } vector) throw new InvalidDataException($"{path}: material {field} must be an array of exactly three finite numbers.");
+                    foreach (var component in vector) _ = Real(component, field, path);
+                }
         }
         if (source is { MetallicFactor: not 0 })
             throw new InvalidDataException($"{path}: the glTF material has metallicFactor {source.MetallicFactor} (1 when no material is assigned); assign a material with metallicFactor 0 for RECOIL.");
@@ -476,7 +491,7 @@ public static partial class WorldGltf
         if (++context.Created + context.World.Nodes.Count > GameZWorld.MaximumNodeCapacity)
             throw new InvalidDataException($"{path}: the model expands to more nodes than a world holds ({GameZWorld.MaximumNodeCapacity:N0}).");
         bool lod = extras?["class"] is { } kind && Text(kind, "class", path) == "lod";
-        string name = extras?["name"] is { } authored ? Text(authored, "name", path) : BlenderSuffix().Replace(source.Name, "");
+        string name = ValidatedEngineName(source, path);
         WorldNode node = new(name, lod ? WorldNodeClass.Lod : WorldNodeClass.Object3D);
         if (instance is { } first) { instances[first] = node; place = new(first); }
         context.NodeImported?.Invoke(node, path, source, place);
@@ -786,6 +801,26 @@ public static partial class WorldGltf
     /// <summary>A glTF node's engine name: its recorded name, else its glTF name without an editor's copy suffix (".001").</summary>
     public static string EngineName(GltfNode node) =>
         (node.Extras?[Key] as JsonObject)?["name"] is JsonValue n && n.TryGetValue(out string? named) ? named : BlenderSuffix().Replace(node.Name, "");
+    private static string ValidatedEngineName(GltfNode node, string path)
+    {
+        string name;
+        if (EngineValues(node.Extras, path)?.TryGetPropertyValue("name", out var authored) == true)
+            name = Text(authored, "name", path);
+        else
+        {
+            // At most the four-character Blender suffix can disappear; reject before regex/string copies.
+            if (node.Name.Length > 39) throw InvalidName();
+            name = BlenderSuffix().Replace(node.Name, "");
+        }
+        if (name.Length > 35 || name.Any(c => c == 0 || c > 255)) throw InvalidName();
+        return name;
+        InvalidDataException InvalidName() => new($"{path}: node {JsonData.ShownText(node.Name)} needs an engine name of at most 35 Latin-1 characters without NUL; shorten or rename it before importing.");
+    }
+    private static JsonObject? EngineValues(JsonObject? extras, string path)
+    {
+        if (extras?.TryGetPropertyValue(Key, out var values) != true) return null;
+        return values as JsonObject ?? throw new InvalidDataException($"{path}: extras.{Key} must be an object when present.");
+    }
     /// <summary>
     /// Whether a node is a group of a mission database (<c>extras.recoil.group</c>): the original database's group records,
     /// which the build creates with the database and deletes with it (<c>DeleteTree %dbName%</c>), so that the objects below

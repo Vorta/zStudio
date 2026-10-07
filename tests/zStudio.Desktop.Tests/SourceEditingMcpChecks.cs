@@ -167,7 +167,15 @@ internal static class SourceEditingMcpChecks
             await File.WriteAllBytesAsync(Path.Combine(outbox, "textures", "rock.png"), Recoil.Zbd.Core.Export.PngEncoder.Encode(image), token);
             var listed = await Call("source_blender_checkouts", new());
             Assert.Equal("edit/m1.gltf", listed["checkouts"]![0]!["exports"]![0]!["path"]!.GetValue<string>());
-            var updated = await Job("source_blender_update", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision, ["checkout"] = checkout["id"]!.GetValue<string>() });
+            // The manifest becomes read-only to replacement after planning succeeds, while the world rebuilds.
+            // Accepted edits must still report this failure to GUI Problems and the MCP operation result.
+            FileStream? manifestLock = null;
+            main.SourceBuildStep = _ => manifestLock ??= new FileStream(Path.Combine(checkout["folder"]!.GetValue<string>(), "manifest.json"), FileMode.Open, FileAccess.Read, FileShare.Read);
+            JsonNode updated;
+            try { updated = await Job("source_blender_update", new() { ["document"] = Id(flagged), ["revision"] = flagged.Revision, ["checkout"] = checkout["id"]!.GetValue<string>() }); }
+            finally { main.SourceBuildStep = null; manifestLock?.Dispose(); }
+            Assert.Contains(updated["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("could not record", StringComparison.Ordinal));
+            Assert.Contains(main.ViewModel.Problems, p => p.Severity == "Warning" && p.Message.Contains("could not record", StringComparison.Ordinal));
             Assert.Contains("data/m1/textures/rock.png", updated["files"]!.AsArray().Select(f => f!.GetValue<string>()));
             Assert.Contains(updated["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("rock.png", StringComparison.Ordinal));
             var blended = Document(updated["document"]!);
