@@ -34,8 +34,11 @@ public static class GameZWorldReader
         }
         for (int i = 0; i < scene.Textures.Count; i++)
         {
+            token.ThrowIfCancellationRequested();
             int next = BinaryPrimitives.ReadInt32LittleEndian(bytes[(layout.TextureOffset + i * 36 + 32)..]);
-            if (next >= 0 && next < world.Textures.Count) world.Textures[i].NextVariant = world.Textures[next];
+            if (next < -1 || next >= world.Textures.Count)
+                throw new InvalidDataException($"Texture {i} has next-variant index {next} outside its directory; it cannot be reconstructed or compared as no link.");
+            if (next >= 0) world.Textures[i].NextVariant = world.Textures[next];
         }
         for (int i = 0; i < scene.Materials.Count; i++)
         {

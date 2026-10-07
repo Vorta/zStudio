@@ -160,6 +160,21 @@ internal static class WorldCompareMcpChecks
             Assert.Equal("only rebuilt", extra["status"]!.GetValue<string>());
             Assert.Contains(window.View!.Roots, r => r.Name == "detached");
 
+            // Directory-only link changes mark the world row and are inspectable in both the window and MCP.
+            WorldTexture texture = new("variant"), next = new("variant-low"); texture.NextVariant = next;
+            changed.Textures.AddRange([texture, next]);
+            string linked = fixture.Path("linked.zbd"), unlinked = fixture.Path("unlinked.zbd");
+            await File.WriteAllBytesAsync(linked, GameZWriter.Write(changed, token), token);
+            texture.NextVariant = null;
+            await File.WriteAllBytesAsync(unlinked, GameZWriter.Write(changed, token), token);
+            var links = await Job("world_compare", new() { ["retail"] = linked, ["rebuilt"] = unlinked });
+            Assert.Equal(1, links["differences"]!.GetValue<int>()); Assert.Equal(1, links["changed"]!.GetValue<int>());
+            var linkedRoots = await Call("world_compare_tree", new() { ["context"] = links["context"]!.GetValue<string>() });
+            var linkedWorld = Assert.Single(linkedRoots["children"]!["items"]!.AsArray(), r => r!["status"]!.GetValue<string>() == "changed")!;
+            Assert.Contains(linkedWorld["differences"]!.AsArray(), d => d!["field"]!.GetValue<string>().Contains("nextVariant", StringComparison.Ordinal));
+            var row = window.View!.Roots.Single(r => r.Source.Status == WorldComparisonStatus.Changed);
+            Assert.Contains(window.View.Details(row), d => d.Differs && d.Field.Contains("nextVariant", StringComparison.Ordinal));
+
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);

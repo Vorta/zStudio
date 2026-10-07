@@ -1,3 +1,13 @@
+## PR18 texture identity and input validation review fixes (2026-10-07)
+
+World comparison now retains texture-directory multiplicity, stored load states and next-variant targets, with bounded details visible on the world row through both GUI and MCP. Distinct names may reorder; duplicate names pair conservatively by directory occurrence. Reconstruction hashes every input through the same held handle used for its initial probe and verifies that digest on every later read, including original-data checks. Initial hash work is capped at 4 GiB of inputs. The glTF importer requires canonical supported version 2.0 and a valid minimum version no greater than 2.0. Engine material flags and packed colours must fit their 16-bit stored fields before import changes any state.
+
+The adversarial challenge also found unsupported stored texture-link indices disappearing as no link. The shared world reconstruction/comparison reader now refuses those values; original bytes remain inspectable, and valid cyclic links retain their identities. Material refusal tests also verify successful retry with the full valid field width.
+
+Validation: initial regressions failed for all four findings and the packed-colour sibling. Full solution 1,763/1,763 with 1999/MW3 passed before the final minimum-version and malformed-link refinements. Final Release build has zero warnings/errors; 316 focused Core tests with the 1998 corpus and all 110 Desktop tests passed after the final fixes. Actual GUI/MCP checks inspect a link-only difference. A read-only scan of all 7,887 texture entries across 19 retail worlds confirmed the new link-index guard accepts them. The command catalog was regenerated from the live registry, and parity passed. Full actual-base coverage and a separate final challenge were completed before commit.
+
+The automatic PR notice reached this conversation. The user-retained atomic direct compiled-save race and historical partial-minus/theme GUI intermittency remain unresolved; the latter did not recur this round. No merge, release or version bump.
+
 ## PR18 workspace consistency and bounded conversion review fixes (2026-10-07)
 
 Six findings are addressed: source workspace reads/reloads now detect same-length, same-timestamp changes; terrain conversion bounds projected geometry and aggregate wildcard work; small positive overlaps remain separate surfaces; sound declarations preserve their ceilings throughout the parser's accepted nesting depth; and animation wildcard roots share an index and cumulative work budget across definitions. Related texture paths and animation-list traversal now also retain deeply nested accepted data.

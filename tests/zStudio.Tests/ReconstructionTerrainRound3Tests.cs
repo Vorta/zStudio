@@ -63,6 +63,7 @@ public sealed class ReconstructionTerrainRound3Tests
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, true)]
+    [InlineData(false, false)]
     public async Task AGameFileChangedAfterTheFolderWasListedIsRefused(bool otherSize, bool otherTime)
     {
         using var fixture = new SourceFixture();

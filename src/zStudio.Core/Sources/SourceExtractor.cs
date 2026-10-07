@@ -10,6 +10,8 @@ public sealed record SourceReconstructionReport(string Project, int SourceFiles,
 public static class SourceExtractor
 {
     public const int MaximumFiles = 10_000;
+    /// <summary>Total input bytes hashed by the initial consistency check, bounded before any file is read.</summary>
+    public const long MaximumCheckedBytes = 4L * 1024 * 1024 * 1024;
     /// <summary>
     /// What a reconstruction may hold in memory at once from the files it has read: sound banks, texture packs, worlds,
     /// animations, decoded resources and scripts stay until every file is read, because placing one family's sources needs
@@ -34,7 +36,15 @@ public static class SourceExtractor
         // The game reads its data from the folder itself and its mission folders (mN): only those files are reconstructed
         // and decide whether the folder can be. Files anywhere else, such as a demo copied into a subfolder, are not read.
         var files = all.Where(f => GameFile(f.Relative)).ToList();
-        var probes = files.Select(f => (f.Relative, Probe: FormatRegistry.Probe(f.Path))).ToArray();
+        RequireCheckedInputCapacity(files, token);
+        Dictionary<string, string> checkedContent = new(StringComparer.Ordinal);
+        List<(string Relative, FormatProbe Probe)> probes = [];
+        foreach (var file in files)
+        {
+            var checkedFile = await ProbeInputAsync(file, token);
+            checkedContent.Add(file.Path, checkedFile.Digest);
+            probes.Add((file.Relative, checkedFile.Probe));
+        }
         // The recovered build layout is RECOIL's; MechWarrior 3 data uses other formats and folders (c1, t1), so a folder
         // without RECOIL mission folders is MechWarrior 3's when any of its files is.
         static bool Mw3(FormatProbe probe) => probe is { Family: FormatFamily.GameZ, Version: 27 } or { Family: FormatFamily.Animation, Version: 39 };
@@ -47,10 +57,8 @@ public static class SourceExtractor
         // Require positive RECOIL evidence: prepared scripts, a version-15 world or a version-28 animation program.
         if (!probes.Any(f => f.Probe is { Family: FormatFamily.Scripts, Version: 7 } or { Family: FormatFamily.GameZ, Version: 15 } or { Family: FormatFamily.Animation, Version: 28 }))
             throw new InvalidDataException("No RECOIL game data was found. Choose the folder that contains interp.zbd, zrdr.zbd and the mission folders.");
-        // The checks above decided on the files as the folder was listed; each file is read again when its sources are
-        // reconstructed and must still be that file (see ReadInputAsync), and an archive the definitions check read whole
-        // must still hold what it read.
-        Dictionary<string, string> checkedContent = new(StringComparer.Ordinal);
+        // Every probe hashed the same held file it inspected. All later reads, including the original-data check,
+        // must match that content, even when another program preserves the file's size and modification time.
         if (!await CarriesDefinitionsAsync(files, checkedContent, retainedBudget, token)) throw new InvalidDataException(NotOriginal);
         Writes writes = new(projectRoot);
         writes.CreateDirectory(projectRoot);
@@ -79,17 +87,16 @@ public static class SourceExtractor
     /// carry the animation definitions (<c>anim.zrd</c>) every <c>anim.zbd</c> was compiled from. zStudio's exports leave
     /// the definitions in the project (<c>.zad</c>), so the tree only ever goes on to be exported, not unpacked again.
     /// </summary>
-    /// <param name="read">Receives the digest of each archive read (by path), which it must still have when it is reconstructed.</param>
-    private static async Task<bool> CarriesDefinitionsAsync(List<Input> files, Dictionary<string, string> read, long budget, CancellationToken token)
+    /// <param name="read">The checked digest of every input; the original-data check cannot replace that evidence.</param>
+    private static async Task<bool> CarriesDefinitionsAsync(List<Input> files, IReadOnlyDictionary<string, string> read, long budget, CancellationToken token)
     {
         HashSet<string> carrying = new(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files.Where(f => Path.GetFileName(f.Relative).Equals("zrdr.zbd", StringComparison.OrdinalIgnoreCase)))
         {
             token.ThrowIfCancellationRequested();
             RequireReconstructionCapacity(file.Relative, 0, file.Length, budget);
-            byte[] bytes = await ReadInputAsync(file, null, token);
+            byte[] bytes = await ReadInputAsync(file, read[file.Path], token);
             ReserveArchive(file.Relative, bytes, 0, budget);
-            read[file.Path] = SourceProject.Sha256(bytes);
             try
             {
                 var members = ArchiveSources.Read(bytes);
@@ -111,16 +118,44 @@ public static class SourceExtractor
             .All(f => carrying.Contains(Path.GetDirectoryName(f.Relative) ?? ""));
     }
 
+    internal static void RequireCheckedInputCapacity(IReadOnlyList<Input> files, CancellationToken token, long maximumBytes = MaximumCheckedBytes)
+    {
+        long total = 0;
+        foreach (var file in files)
+        {
+            token.ThrowIfCancellationRequested();
+            if (file.Length < 0 || file.Length > maximumBytes - total)
+                throw new IOException($"The reconstruction inputs exceed the {maximumBytes:N0}-byte consistency-check limit; choose the original game data folder without unrelated files.");
+            total += file.Length;
+        }
+    }
+
+    /// <summary>Probe and hash the same held file without retaining its content; later phases must read these exact bytes.</summary>
+    private static async Task<(FormatProbe Probe, string Digest)> ProbeInputAsync(Input file, CancellationToken token)
+    {
+        await using FileStream stream = new(file.Path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (stream.Length != file.Length || File.GetLastWriteTimeUtc(stream.SafeFileHandle) != file.Modified)
+            throw new IOException($"{file.Relative} changed while the game data folder was checked; try again.");
+        byte[] prefix = new byte[(int)Math.Min(36, stream.Length)], trailer = new byte[(int)Math.Min(8, stream.Length)];
+        await stream.ReadExactlyAsync(prefix, token);
+        stream.Seek(-trailer.Length, SeekOrigin.End); await stream.ReadExactlyAsync(trailer, token);
+        stream.Position = 0;
+        string digest = Convert.ToHexStringLower(await System.Security.Cryptography.SHA256.HashDataAsync(stream, token));
+        if (stream.Length != file.Length || File.GetLastWriteTimeUtc(stream.SafeFileHandle) != file.Modified)
+            throw new IOException($"{file.Relative} changed while the game data folder was checked; try again.");
+        return (FormatRegistry.Probe(prefix, trailer, file.Length, Path.GetExtension(file.Path)), digest);
+    }
+
     /// <summary>A game file as the folder was listed: its size and modification time, which it must still have when it is read.</summary>
     internal sealed record Input(string Path, string Relative, long Length, DateTime Modified);
 
     /// <summary>
     /// A game file's bytes, read while no other program can write it. The checks before reconstruction decided on the files
     /// as the folder was listed, so a file that is no longer that file (gone, or another size or modification time), or no
-    /// longer holds what a check read whole (<paramref name="checkedDigest"/>), is refused rather than reconstructed from
+    /// longer holds the content the initial probe hashed (<paramref name="checkedDigest"/>), is refused rather than reconstructed from
     /// data nothing checked: an original archive replaced by an exported one would otherwise give an incomplete project.
     /// </summary>
-    private static async Task<byte[]> ReadInputAsync(Input file, string? checkedDigest, CancellationToken token)
+    private static async Task<byte[]> ReadInputAsync(Input file, string checkedDigest, CancellationToken token)
     {
         FileStream stream;
         try { stream = new(file.Path, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.Asynchronous | FileOptions.SequentialScan); }
@@ -130,7 +165,7 @@ public static class SourceExtractor
             if (stream.Length != file.Length || File.GetLastWriteTimeUtc(stream.SafeFileHandle) != file.Modified) throw Changed();
             byte[] bytes = new byte[file.Length];
             await stream.ReadExactlyAsync(bytes, token);
-            if (checkedDigest != null && SourceProject.Sha256(bytes) != checkedDigest) throw Changed();
+            if (SourceProject.Sha256(bytes) != checkedDigest) throw Changed();
             return bytes;
         }
         IOException Changed(Exception? inner = null) =>
@@ -261,7 +296,7 @@ public static class SourceExtractor
     /// <summary>A mission's world (<c>mN/gamez.zbd</c>), the worlds reconstruction reads.</summary>
     private static bool MissionWorld(string relative) => TextureSources.MissionNumber(relative) > 0 && Path.GetFileName(relative).Equals("gamez.zbd", StringComparison.OrdinalIgnoreCase);
 
-    /// <param name="checkedContent">The digest of each file the checks before reconstruction read whole (by path), which it must still have.</param>
+    /// <param name="checkedContent">The digest of every reconstruction input at the initial probe, which each subsequent read must still have.</param>
     /// <param name="elsewhere">Files outside the game's folders, listed as not reconstructed.</param>
     /// <param name="budget">
     /// The most the files read may keep in memory together (<see cref="MaximumRetainedBytes"/>). Each file is counted with
@@ -287,7 +322,7 @@ public static class SourceExtractor
         {
             token.ThrowIfCancellationRequested(); var file = files[i]; string path = file.Path, relative = file.Relative; progress?.Report(new(i, files.Count, relative));
             RequireReconstructionCapacity(relative, retained, file.Length, budget);
-            byte[] bytes = await ReadInputAsync(file, checkedContent.GetValueOrDefault(path), token);
+            byte[] bytes = await ReadInputAsync(file, checkedContent[path], token);
             var probe = FormatRegistry.Probe(bytes.AsSpan(0, Math.Min(36, bytes.Length)), bytes.AsSpan(Math.Max(0, bytes.Length - 8)), bytes.Length, Path.GetExtension(path));
             string? family = null;
             try

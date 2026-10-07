@@ -302,7 +302,19 @@ public sealed class GltfDocument
         if (parsed.ValueKind != JsonValueKind.Object) throw new InvalidDataException("glTF JSON must be an object.");
         Bound(parsed, limits.MetadataBytes);
         JsonObject root = JsonObject.Create(parsed)!;
-        if (root["asset"]?["version"]?.GetValue<string>() is not { } version || !version.StartsWith('2')) throw new InvalidDataException("Only glTF 2.0 is supported.");
+        if (!parsed.TryGetProperty("asset", out var asset) || asset.ValueKind != JsonValueKind.Object
+            || !asset.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.String || !version.ValueEquals("2.0"))
+            throw new InvalidDataException("The glTF asset.version must be '2.0'; other or malformed versions are not supported.");
+        if (asset.TryGetProperty("minVersion", out var minimum) && !SupportedMinimum(minimum))
+            throw new InvalidDataException("The glTF asset.minVersion must be canonical major.minor, no greater than the supported version 2.0.");
+        static bool SupportedMinimum(JsonElement value)
+        {
+            if (value.ValueKind != JsonValueKind.String || value.GetString() is not { Length: <= 19 } text) return false;
+            var parts = text.Split('.');
+            if (parts.Length != 2 || parts.Any(p => p.Length is < 1 or > 9 || p.Length > 1 && p[0] == '0' || !p.All(char.IsAsciiDigit))) return false;
+            int major = int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture), minor = int.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture);
+            return major < 2 || major == 2 && minor == 0;
+        }
         // A required extension changes what the file means, so one the reader does not implement refuses the file (glTF has
         // readers do so). It implements KHR_mesh_quantization (integer vertex attributes, below) and KHR_texture_transform
         // on the base-colour texture, the only texture it reads.

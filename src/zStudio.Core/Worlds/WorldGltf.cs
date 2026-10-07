@@ -397,6 +397,11 @@ public static partial class WorldGltf
 
     private static void ValidateMaterial(GltfMaterial? source, string path)
     {
+        if (source?.Extras?[Key] is JsonObject engine)
+        {
+            if (engine["flags"] is { } flags) _ = MaterialWord(flags, "flags", path);
+            if (engine["packedColor"] is { } packed) _ = MaterialWord(packed, "packedColor", path);
+        }
         if (source is { MetallicFactor: not 0 })
             throw new InvalidDataException($"{path}: the glTF material has metallicFactor {source.MetallicFactor} (1 when no material is assigned); assign a material with metallicFactor 0 for RECOIL.");
         if (source?.EmbeddedImage == true)
@@ -710,7 +715,7 @@ public static partial class WorldGltf
         uint opacity = extras?["opacity"] is { } o ? (uint)Integer(o, "opacity", path, 0, 255)
             : source is { AlphaMode: "MASK" } && source.ImageUri == null && !source.EmbeddedImage && namedTexture == null ? (source.BaseColor.W < source.AlphaCutoff ? 0u : 255u)
             : source != null && source.AlphaMode == "BLEND" && source.BaseColor.W < 1 ? (uint)Math.Clamp(MathF.Round(source.BaseColor.W * 255), 0, 255) : 0xFF;
-        uint extraFlags = extras?["flags"] is { } f ? Hex(f, "flags", path) & ~0x1FFu : 0;
+        uint extraFlags = extras?["flags"] is { } f ? MaterialWord(f, "flags", path) & ~0x1FFu : 0;
         material.Flags = (ushort)(opacity & 0xFF | extraFlags);
         if (textureName != null)
         {
@@ -723,7 +728,7 @@ public static partial class WorldGltf
                 : source != null ? new(MathF.Round(source.BaseColor.X * 255), MathF.Round(source.BaseColor.Y * 255), MathF.Round(source.BaseColor.Z * 255)) : new(200);
             material.PackedColor = 0;
         }
-        if (extras?["packedColor"] is { } packed) material.PackedColor = (ushort)Hex(packed, "packedColor", path);
+        if (extras?["packedColor"] is { } packed) material.PackedColor = MaterialWord(packed, "packedColor", path);
         if (extras?["fields"] is JsonArray fields && fields.Count == 3) { material.Field14 = Real(fields[0], "fields", path); material.Field18 = Real(fields[1], "fields", path); material.Field1C = Real(fields[2], "fields", path); }
         material.Soil = extras?["soil"] is { } soil ? unchecked((uint)Integer(soil, "soil", path, int.MinValue, uint.MaxValue)) : 0;
         return (Shared(context, material), priority, backface, zone, normals);
@@ -798,6 +803,12 @@ public static partial class WorldGltf
     /// <summary>The refusal of an engine value, which shows only a preview of it: a value can be as large as the extras may be.</summary>
     private static InvalidDataException Invalid(string what, string path, JsonNode? node) =>
         new($"{path}: the engine value '{what}' is invalid ({JsonData.Shown(node)}).");
+    private static ushort MaterialWord(JsonNode value, string what, string path)
+    {
+        uint number = Hex(value, what, path);
+        if (number > ushort.MaxValue) throw new InvalidDataException($"{path}: the engine value '{what}' must fit an unsigned 16-bit material field ({JsonData.Shown(value)}).");
+        return (ushort)number;
+    }
     private static long Integer(JsonNode? node, string what, string path, long minimum = long.MinValue, long maximum = long.MaxValue)
     {
         if (GltfInteger.TryInt64(node, out long whole) && whole >= minimum && whole <= maximum) return whole;

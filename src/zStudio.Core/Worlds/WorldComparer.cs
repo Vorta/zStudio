@@ -141,7 +141,7 @@ public sealed class WorldComparison
 /// <summary>
 /// Compares two worlds by meaning: nodes are matched by name path (repeated names by their structure, children and
 /// position, then in order), and each pair's class, carried and derived flags, zone, local transform, class data (with the
-/// nodes it names), grid cell and model are compared, along with the world, its lights and the texture names. A model
+/// nodes it names), grid cell and model are compared, along with the world, its lights and the texture directory entries and variant links. A model
 /// compares every value it keeps: display mode and flags, scrolling, morph factor, point entries (lens flares), bounds and
 /// polygons, whose corners carry their positions, UVs, normals and morph deltas and whose materials all their fields. Node
 /// slots, stored pointers, runtime counters, child order and polygon order do not matter; <see cref="CompareTree"/> also
@@ -220,9 +220,20 @@ public static class WorldComparer
         bool pairedWorld = worldA != null && worldB != null;
         Match(detached, expected.Nodes.Where(n => n.Parents.Count == 0 && !(pairedWorld && ReferenceEquals(n, worldA))).ToList(), actual.Nodes.Where(n => n.Parents.Count == 0 && !(pairedWorld && ReferenceEquals(n, worldB))).ToList(), false, 0);
         roots.AddRange(detached.Children);
-        var texturesA = expected.Textures.Select(t => t.Name.ToLowerInvariant()).ToHashSet(); var texturesB = actual.Textures.Select(t => t.Name.ToLowerInvariant()).ToHashSet();
-        foreach (var t in texturesA.Except(texturesB).Order()) Other(null, "textures", "missing", t, "");
-        foreach (var t in texturesB.Except(texturesA).Order()) Other(null, "textures", "extra", "", t);
+        var textureOwner = pairedWorld ? roots[0] : null;
+        var textureDetails = textureOwner?.Described.ToList();
+        foreach (var difference in WorldTextureComparison.Compare(expected.Textures, actual.Textures, token))
+        {
+            Other(textureOwner, difference.Name, difference.Field, difference.Expected, difference.Actual);
+            if (textureOwner == null) continue;
+            textureOwner.DifferenceCount++;
+            // The same bounded details are visible on the world row in the GUI and MCP, even with a zero flat-list limit.
+            if (textureDetails!.Count >= MaximumNodeDifferences || memo.DescribedText >= MaximumDescribedText) continue;
+            string field = difference.Name + "." + difference.Field;
+            memo.DescribedText += field.Length + difference.Expected.Length + difference.Actual.Length;
+            textureDetails.Add((field, difference.Expected, difference.Actual));
+        }
+        if (textureOwner != null) textureOwner.Described = [.. textureDetails!];
 
         Dictionary<WorldComparisonStatus, int> counts = Enum.GetValues<WorldComparisonStatus>().ToDictionary(s => s, _ => 0);
         Dictionary<WorldNode, List<WorldComparisonNode>> places = new(ReferenceEqualityComparer.Instance);
