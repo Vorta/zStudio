@@ -383,7 +383,8 @@ public static partial class WorldGltf
         public required Func<string, string, (GltfDocument Document, string Path)> Reference { get; init; }
         /// <summary>Texture name for a material's image URI (relative to the file at the given path).</summary>
         public required Func<string, string?, string, string> TextureName { get; init; }
-        public List<string> Warnings { get; } = [];
+        internal BoundedDiagnostics Diagnostics { get; init; } = new();
+        public List<string> Warnings => Diagnostics.Snapshot();
         /// <summary>
         /// Called for each node a glTF node becomes, with the file's path, the glTF node (a shared node once, from its first
         /// copy) and, for a shared node or a node inside one, its place there.
@@ -656,7 +657,7 @@ public static partial class WorldGltf
         float weight = nodeWeight ?? (mesh.Extras?[Key]?["morphFactor"] is { } factor ? Real(factor, "morphFactor", path) : mesh.Weights.Count > 0 ? mesh.Weights[0] : 0);
         if (!float.IsFinite(weight)) throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} has a non-finite morph weight.");
         if (context.Models.TryGetValue((reading, mesh), out var variants) && variants.TryGetValue(weight, out var existing)) return existing;
-        ModelBuilder builder = new();
+        ModelBuilder builder = new() { Diagnostics = context.Diagnostics.WithContext(path, "mesh", mesh.Name) };
         var model = builder.Model;
         ApplyValues(model, mesh.Extras?[Key] as JsonObject, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path);
         model.MorphFactor = weight;
@@ -681,7 +682,6 @@ public static partial class WorldGltf
                 builder.Add(input);
             }
         }
-        foreach (var warning in builder.Warnings.Distinct()) context.Warnings.Add($"{path}: mesh {JsonData.ShownText(mesh.Name)}: {warning}");
         builder.Finish();
         context.AddModel(model);
         if (variants == null) context.Models[(reading, mesh)] = variants = [];

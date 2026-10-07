@@ -1048,7 +1048,14 @@ public static class WorldComparer
         & (Close(WorldUpdate.LocalMatrix(node) ?? Matrix4x4.Identity, Matrix4x4.Identity) ? ~0x39u : uint.MaxValue);
     private static bool Close(Matrix4x4 a, Matrix4x4 b)
     {
-        for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++) if (Math.Abs(a[r, c] - b[r, c]) > 1e-3f * (1 + Math.Abs(a[r, c]))) return false;
+        for (int r = 0; r < 4; r++) for (int c = 0; c < 4; c++)
+        {
+            float x = a[r, c], y = b[r, c];
+            // Compiled inputs can retain nonfinite words. Equal values (including identical infinities/NaNs)
+            // compare consistently with the other stored fields; tolerance applies only to finite operands.
+            if (x.Equals(y)) continue;
+            if (!float.IsFinite(x) || !float.IsFinite(y) || Math.Abs((double)x - y) > 1e-3 * (1 + Math.Abs((double)x))) return false;
+        }
         return true;
     }
     private static string Format(Matrix4x4 m) => $"[{m.M11:G4} {m.M12:G4} {m.M13:G4}; {m.M21:G4} {m.M22:G4} {m.M23:G4}; {m.M31:G4} {m.M32:G4} {m.M33:G4}; {m.M41:G6} {m.M42:G6} {m.M43:G6}]";

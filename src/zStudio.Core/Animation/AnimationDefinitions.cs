@@ -10,15 +10,57 @@ namespace Recoil.Zbd.Core.Animation;
 /// </summary>
 public sealed class AnimationItem(string key, ZrdNode? values, string source)
 {
+    // Only the compiler's operation-owned view caches this frozen tree. Public items may wrap an editable caller's
+    // child list, so their existing live-query behavior remains unchanged.
+    private readonly Action<long>? reserve;
+    private IReadOnlyList<ZrdNode>? scalars;
+    private IReadOnlyList<AnimationItem>? parsed;
+    private Dictionary<string, AnimationItem>? first;
+    internal AnimationItem(string key, ZrdNode? values, string source, Action<long> reserve) : this(key, values, source) => this.reserve = reserve;
     public string Key { get; } = key;
     public ZrdNode? Values { get; } = values;
     /// <summary>The definition file the item came from, for diagnostics.</summary>
     public string Source { get; } = source;
-    public IReadOnlyList<ZrdNode> Scalars => Values?.Children.Where(c => c.Kind != ZrdKind.Array).ToArray() ?? [];
-    public IEnumerable<AnimationItem> Items => Values == null ? [] : Parse(Values, Source);
-    public AnimationItem? Item(string key) => Items.FirstOrDefault(i => i.Key == key);
+    public IReadOnlyList<ZrdNode> Scalars
+    {
+        get
+        {
+            if (scalars != null) return scalars;
+            if (Values == null) return [];
+            reserve?.Invoke(32L + 8L * Values.Children.Count);
+            var result = Values.Children.Where(c => c.Kind != ZrdKind.Array).ToArray();
+            if (reserve != null) scalars = result;
+            return result;
+        }
+    }
+    public IEnumerable<AnimationItem> Items
+    {
+        get
+        {
+            if (Values == null) return [];
+            if (reserve == null) return Parse(Values, Source);
+            if (parsed == null)
+            {
+                reserve(32L + 16L * Values.Children.Count); // Growing list plus its final array, before enumeration.
+                parsed = Parse(Values, Source, reserve).ToArray();
+            }
+            return parsed;
+        }
+    }
+    public AnimationItem? Item(string key)
+    {
+        if (reserve == null) return Items.FirstOrDefault(i => i.Key == key);
+        if (first == null)
+        {
+            _ = Items;
+            reserve(64L + 64L * (parsed?.Count ?? 0));
+            first = new(StringComparer.Ordinal);
+            foreach (var item in parsed ?? []) first.TryAdd(item.Key, item);
+        }
+        return first.GetValueOrDefault(key);
+    }
     public IEnumerable<AnimationItem> All(string key) => Items.Where(i => i.Key == key);
-    public bool Has(string key) => Items.Any(i => i.Key == key);
+    public bool Has(string key) => Item(key) != null;
     public string Text(int index = 0)
     {
         var values = Scalars;
@@ -54,14 +96,17 @@ public sealed class AnimationItem(string key, ZrdNode? values, string source)
     public InvalidDataException Error(string message) => new($"{JsonData.ShownText(Source)}: {message}");
 
     /// <summary>The items of a list: each string followed by a list is a keyword with values; a lone string is a bare keyword.</summary>
-    public static IEnumerable<AnimationItem> Parse(ZrdNode list, string source)
+    public static IEnumerable<AnimationItem> Parse(ZrdNode list, string source) => Parse(list, source, null);
+    private static IEnumerable<AnimationItem> Parse(ZrdNode list, string source, Action<long>? reserve)
     {
         var c = list.Children;
         for (int i = 0; i < c.Count; i++)
         {
             if (c[i].Kind != ZrdKind.String) continue;
-            if (i + 1 < c.Count && c[i + 1].Kind == ZrdKind.Array) { yield return new(c[i].Text, c[i + 1], source); i++; }
-            else yield return new(c[i].Text, null, source);
+            reserve?.Invoke(96); // The operation-owned item and its eventual cached lookup fields.
+            ZrdNode? values = i + 1 < c.Count && c[i + 1].Kind == ZrdKind.Array ? c[i + 1] : null;
+            yield return reserve == null ? new(c[i].Text, values, source) : new(c[i].Text, values, source, reserve);
+            if (values != null) i++;
         }
     }
 }

@@ -50,7 +50,7 @@ public sealed partial class AnimationCompiler
                     case "SAVE_LOG": if (key.Text() == "OFF") flags |= 0x1000; break;
                     case "NETWORK_LOG": if (key.Text() == "OFF") flags |= 0x0400; break;
                     case "ACTIVATION_PREREQUISITE": Prerequisites(key); break;
-                    default: compiler.Warn($"{JsonData.ShownText(definition.File)}: {name}: {JsonData.ShownText(key.Key)} is not an animation setting and was ignored."); break;
+                    default: compiler.diagnostics.Add($"{JsonData.ShownText(definition.File)}: {name}: {JsonData.ShownText(key.Key)} is not an animation setting and was ignored."); break;
                 }
             if (!secondReset) flags |= 0x20;
             if (Events(item).Any(e => e.Key == "CALLBACK")) flags |= 0x10;
@@ -164,7 +164,7 @@ public sealed partial class AnimationCompiler
                                 for (int i = 0; i < names.Length; i++) Add(i == names.Length - 1 ? 2 : 3, names[i], required);
                             }
                             break;
-                        default: compiler.Warn($"{JsonData.ShownText(definition.File)}: ACTIVATION_PREREQUISITE {JsonData.ShownText(part.Key)} was ignored."); break;
+                        default: compiler.diagnostics.Add($"{JsonData.ShownText(definition.File)}: ACTIVATION_PREREQUISITE {JsonData.ShownText(part.Key)} was ignored."); break;
                     }
             }
             if (key.Has("OPTIONS") || key.Has("REQUIRED"))
@@ -187,7 +187,7 @@ public sealed partial class AnimationCompiler
                 switch (key.Key)
                 {
                     case "NAME": continue;
-                    case "ACTIVATION": if (key.Text() == "ON_CALL") { header[32] = 3; header[33] = 3; } else compiler.Warn($"{JsonData.ShownText(definition.File)}: sequence {name}: ACTIVATION {JsonData.ShownText(key.Text())} was ignored."); continue;
+                    case "ACTIVATION": if (key.Text() == "ON_CALL") { header[32] = 3; header[33] = 3; } else compiler.diagnostics.Add($"{JsonData.ShownText(definition.File)}: sequence {name}: ACTIVATION {JsonData.ShownText(key.Text())} was ignored."); continue;
                     // The original compiler ignored a START_TIME given to a whole sequence; every shipped one is unused.
                     case "START_TIME": continue;
                 }
@@ -217,7 +217,7 @@ public sealed partial class AnimationCompiler
                 "FBFX_COLOR_FROM_TO" => (36, 64), "FBFX_CSINWAVE_FROM_TO" => (37, 112), "ANIM_VERBOSE" => (39, 16),
                 _ => null,
             };
-            if (spec == null) { compiler.Warn($"{JsonData.ShownText(key.Source)}: {JsonData.ShownText(key.Key)} is not an animation event and was ignored."); return null; }
+            if (spec == null) { compiler.diagnostics.Add($"{JsonData.ShownText(key.Source)}: {JsonData.ShownText(key.Key)} is not an animation event and was ignored."); return null; }
             var (type, size) = spec.Value;
             E e = new(new byte[size]);
             e.Bytes[0] = type; e.Bytes[1] = 1; e.Int(4, size);
@@ -473,7 +473,7 @@ public sealed partial class AnimationCompiler
                     case "TO_T": flags |= 0x1000; e.Float(64, part.Number()); e.Float(68, part.Number()); break;
                     case "RUN_TIME": e.Float(80, part.Number()); break;
                     case "MAX_LENGTH": flags |= 0x8000; e.Float(84, part.Number()); break;
-                    default: compiler.Warn($"{JsonData.ShownText(key.Source)}: OBJECT_CONNECTOR {JsonData.ShownText(part.Key)} was ignored."); break;
+                    default: compiler.diagnostics.Add($"{JsonData.ShownText(key.Source)}: OBJECT_CONNECTOR {JsonData.ShownText(part.Key)} was ignored."); break;
                 }
             float time = e.Get(80);
             if (time > 0) { e.Float(56, Rate(e.Get(48), e.Get(52), time)); e.Float(72, Rate(e.Get(64), e.Get(68), time)); }
@@ -495,7 +495,7 @@ public sealed partial class AnimationCompiler
                     case "TO_NODE": flags |= 0x40; e.Short(54, Node(part.Text())); break;
                     case "TO_INPUT_NODE_POS": flags |= 0x200; break;
                     case "TO_POS": flags |= 0x400; e.Vector(68, Vec(part, 0)); break;
-                    default: compiler.Warn($"{JsonData.ShownText(key.Source)}: CALL_OBJECT_CONNECTOR {JsonData.ShownText(part.Key)} was ignored."); break;
+                    default: compiler.diagnostics.Add($"{JsonData.ShownText(key.Source)}: CALL_OBJECT_CONNECTOR {JsonData.ShownText(part.Key)} was ignored."); break;
                 }
             e.UInt(12, flags);
         }

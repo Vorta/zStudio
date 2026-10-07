@@ -63,9 +63,12 @@ internal static partial class WorldSources
     /// <param name="transparency">How a texture source (project path) is transparent, so viewers draw its materials as the game does.</param>
     public static List<Output> Reconstruct(IReadOnlyList<MissionWorld> missions, Func<string, IReadOnlyList<IReadOnlyList<string>>?> scripts,
         Func<int, string, string?> texturePath, IReadOnlySet<string> textureFiles, Func<string, int> addressing, List<string> notes, CancellationToken token,
-        Func<string, TextureTransparency?>? transparency = null, long maximumOutputBytes = ReconstructionBudget.MaximumBytes)
+        Func<string, TextureTransparency?>? transparency = null, long maximumOutputBytes = ReconstructionBudget.MaximumBytes,
+        long maximumTraceUnits = ScriptTraceBudget.MaximumUnits)
     {
         ReconstructionBudget outputBudget = new(maximumOutputBytes);
+        ScriptTraceBudget traceBudget = new(maximumTraceUnits);
+        BoundedDiagnostics diagnostics = new(notes);
         // The missions that run each script: a model a mission's own script loads belongs to that mission.
         Dictionary<string, SortedSet<int>> scriptMissions = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<WorldNode, string> hashes = new(ReferenceEqualityComparer.Instance);
@@ -99,13 +102,13 @@ internal static partial class WorldSources
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
-            var trace = ScriptTrace.Trace(scripts, $"m{mission.Mission}.gs", notes);
+            var trace = ScriptTrace.Trace(scripts, $"m{mission.Mission}.gs", notes, traceBudget, diagnostics);
             foreach (var instruction in trace)
             {
                 if (!scriptMissions.TryGetValue(instruction.Script, out var runs)) scriptMissions[instruction.Script] = runs = [];
                 runs.Add(mission.Mission);
             }
-            var decomposition = WorldDecomposer.DecomposeAll(mission.World, trace, notes, token);
+            var decomposition = WorldDecomposer.DecomposeAll(mission.World, trace, notes, token, diagnostics);
             var decomposed = decomposition.Loads.ToList();
             foreach (var load in decomposed) if (load.Root != null) roots.Add(load.Root);
             // The database in its file's record order, with the groups the build deleted.
@@ -114,7 +117,7 @@ internal static partial class WorldSources
             DatabaseRecords.Records? records = null;
             // A world the inference cannot replay (its caches exceed what a load can hold) keeps its order, like any other.
             try { if (database >= 0) records = DatabaseRecords.Infer(mission.World, decomposition, node => IsReference(node) && !roots.Contains(node), $"m{mission.Mission}", notes, token); }
-            catch (InvalidDataException ex) { notes.Add($"m{mission.Mission}: the mission database keeps the world's object order without its groups: {ex.Message}"); }
+            catch (InvalidDataException ex) { diagnostics.Add($"m{mission.Mission}: the mission database keeps the world's object order without its groups: {ex.Message}"); }
             if (records != null)
             {
                 decomposed[database] = decomposed[database] with { Content = records.Roots };
@@ -313,12 +316,12 @@ internal static partial class WorldSources
         foreach (var (mission, load, unit) in loads)
         {
             string? resolved = load.Instruction.ModelDirectories.Select(d => $"{d}/{Stem(load.File)}.gltf").FirstOrDefault(taken.Contains);
-            if (resolved == null) notes.Add($"m{mission}: {load.File} is written to {unit.Path}, which the build does not search when it loads {load.NodeName}.");
-            else if (!resolved.Equals(unit.Path, StringComparison.OrdinalIgnoreCase)) notes.Add($"m{mission}: {load.File} ({load.NodeName}) resolves to {resolved}, not to its own version {unit.Path}.");
+            if (resolved == null) diagnostics.Add($"m{mission}: {load.File} is written to {unit.Path}, which the build does not search when it loads {load.NodeName}.");
+            else if (!resolved.Equals(unit.Path, StringComparison.OrdinalIgnoreCase)) diagnostics.Add($"m{mission}: {load.File} ({load.NodeName}) resolves to {resolved}, not to its own version {unit.Path}.");
         }
         HashSet<Unit> copied = new(copies.Keys.Select(k => k.Unit), ReferenceEqualityComparer.Instance);
         foreach (var unit in references.Values.Where(u => !copied.Contains(u)).OrderBy(u => u.Stem, StringComparer.Ordinal))
-            notes.Add($"External reference {unit.Stem}.flt is used by no loaded file and was not written.");
+            diagnostics.Add($"External reference {unit.Stem}.flt is used by no loaded file and was not written.");
         // The campaign's vehicle scripts (bft1.gw–bft6.gw) each set their mission's own folder and load the same enemy files.
         // Worlds record no file paths, a file in data/common/models (which those loads search too) builds the same world,
         // and the packs show the vehicles' textures were one shared copy in data/common/textures. So the version of a file

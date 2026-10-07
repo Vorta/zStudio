@@ -36,6 +36,7 @@ public sealed partial class AnimationPlayer
     public const double StepSeconds = 1.0 / 60;
     public const int MaximumInstances = 256;
     private readonly AnimationPreviewContext context;
+    private AnimationEntryLookup entryLookup = null!;
     private readonly int entryIndex;
     private readonly bool resetPhase;
     public int LodLevel { get; set; }
@@ -84,6 +85,8 @@ public sealed partial class AnimationPlayer
     }
     public void Reset()
     {
+        // The GUI may reset a player after accepted edits; never retain an index of the previous entry names.
+        entryLookup = new(context.Package);
         ticks = nextId = traceOrdinal = traceDropped = 0; previewIssues.Clear(); diagnosticContext = new(entryIndex); measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
         instances = []; sharedNodes = []; effects = []; trace = []; notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();

@@ -94,7 +94,7 @@ public static partial class WorldGltf
         }
         string label = Label(recipePath);
         var compiled = TerrainCompiler.Compile(label, recipe, surfaces, infos, grid, context.Token);
-        foreach (string warning in compiled.Warnings) context.Warnings.Add($"{recipePath}: {warning}");
+        foreach (string warning in compiled.Warnings) context.Diagnostics.Add($"{recipePath}: {warning}");
         List<WorldNode> nodes = [];
         foreach (var piece in compiled.Pieces)
         {
@@ -106,7 +106,7 @@ public static partial class WorldGltf
             node.SetPayloadInt(0, 0x28);
             node.SetPayloadFloat(0x24, 1); node.SetPayloadFloat(0x28, 1); node.SetPayloadFloat(0x2C, 1);
             node.SetPayloadFloat(0x30, 1); node.SetPayloadFloat(0x40, 1); node.SetPayloadFloat(0x50, 1);
-            ModelBuilder builder = new();
+            ModelBuilder builder = new() { Diagnostics = context.Diagnostics.WithContext(recipePath, "piece", piece.Name) };
             foreach (var polygon in piece.Polygons)
             {
                 var source = materials[polygon.Material];
@@ -115,7 +115,6 @@ public static partial class WorldGltf
                 builder.Add(new([.. polygon.Corners.Select(c => c.Position)], textured ? [.. polygon.Corners.Select(c => c.Uv)] : [],
                     source.Normals ? [.. polygon.Corners.Select(c => c.Normal)] : [], [], material, polygon.Priority ?? source.Priority, source.BackFace, polygon.ZoneWord));
             }
-            foreach (var warning in builder.Warnings.Distinct()) context.Warnings.Add($"{recipePath}: piece {piece.Name}: {warning}");
             node.Model = builder.Finish();
             var (modelValues, morph, modelPath) = models[piece.Surface];
             ApplyValues(node.Model, modelValues, morph, modelPath);

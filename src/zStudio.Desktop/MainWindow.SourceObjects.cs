@@ -34,7 +34,7 @@ public partial class MainWindow
     private void RefuseResourceEditOfWorkspaceFile(DocumentModel doc)
     {
         if (sourceWorkspace is not { } workspace) return;
-        string full = Path.GetFullPath(doc.Path), prefix = workspace.Root + Path.DirectorySeparatorChar;
+        string full = Path.GetFullPath(doc.Path), prefix = Path.EndsInDirectorySeparator(workspace.Root) ? workspace.Root : workspace.Root + Path.DirectorySeparatorChar;
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return;
         string relative = SourceProject.Relative(workspace.Root, full);
         if (workspace.IsFileDirty(relative))

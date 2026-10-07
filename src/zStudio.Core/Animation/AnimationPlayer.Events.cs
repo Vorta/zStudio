@@ -213,7 +213,7 @@ public sealed partial class AnimationPlayer
         if (starting)
         {
             string name = AnimationAudioDependencies.ChildName(ev);
-            var target = AnimationAudioDependencies.ResolveChild(context.Package, ev);
+            var target = entryLookup.ResolveChild(ev);
             if (target == null) { unavailableDuration = true; AddNote($"Unresolved child animation: {name}"); return 2; }
             Vector3? position = null; int? bound = null;
             if (ev.Type == 19) position = OffsetPosition(parent, ev.I16(52), ev.Vector(56));

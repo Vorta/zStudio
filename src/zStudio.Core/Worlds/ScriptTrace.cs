@@ -8,6 +8,28 @@ namespace Recoil.Zbd.Core.Worlds;
 /// </summary>
 public sealed record TracedInstruction(string Script, string Command, IReadOnlyList<string> Args, IReadOnlyList<string> ModelDirectories, string? ScriptModelDirectory, IReadOnlyList<string> TextureDirectories);
 
+/// <summary>One operation's retained model and texture directory history, charged before an array is copied.</summary>
+internal sealed class ScriptTraceBudget(long maximumUnits = ScriptTraceBudget.MaximumUnits, long maximumWorkUnits = DirectoryWorkBudget.MaximumUnits)
+{
+    internal const long MaximumUnits = 4_194_304;
+    private readonly long maximum = maximumUnits is >= 0 and <= MaximumUnits ? maximumUnits : throw new ArgumentOutOfRangeException(nameof(maximumUnits));
+    internal long UsedUnits { get; private set; }
+    private bool snapshotsExhausted;
+    internal DirectoryWorkBudget Work { get; } = new(maximumWorkUnits);
+    internal bool Exhausted => snapshotsExhausted || Work.Exhausted;
+
+    internal void ReserveSnapshot(int count)
+    {
+        long units = (long)count + 4; // References plus array overhead, in reference-sized units.
+        if (Exhausted || units > maximum - UsedUnits)
+        {
+            snapshotsExhausted = true;
+            throw new InvalidDataException("The scripts retain too much model and texture directory history. Reduce directory changes or split the source project into fewer missions.");
+        }
+        UsedUnits += units;
+    }
+}
+
 /// <summary>
 /// The retail interpreter's built-in commands that decide whether a line runs (CZInterp::HandleBuiltinCommand, retail
 /// 0x4C1C50). Built-ins match by case-sensitive prefix (<c>ifdef</c>, <c>ifndef</c>, <c>endif</c>, <c>set</c>,
@@ -87,7 +109,12 @@ internal sealed class ScriptConditions
 public static class ScriptTrace
 {
     public static List<TracedInstruction> Trace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry, List<string> notes)
+        => Trace(script, entry, notes, new ScriptTraceBudget());
+
+    internal static List<TracedInstruction> Trace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry, List<string> notes, ScriptTraceBudget budget,
+        BoundedDiagnostics? diagnostics = null)
     {
+        diagnostics ??= new(notes);
         List<TracedInstruction> result = []; Dictionary<string, string> variables = new(StringComparer.Ordinal);
         List<string> directories = [], textures = []; bool written = false; ScriptConditions conditions = new();
         // As many instructions as the build runs: scripts sourcing each other repeatedly would otherwise multiply.
@@ -103,7 +130,7 @@ public static class ScriptTrace
             if (depth > WorldAssembler.MaximumScriptDepth) throw new InvalidDataException($"Scripts source each other more than {WorldAssembler.MaximumScriptDepth} levels deep.");
             if (written) return;
             var lines = script(name.Replace('/', '\\'));
-            if (lines == null) { notes.Add($"Script {name} is missing."); return; }
+            if (lines == null) { diagnostics.Add($"Script {name} is missing."); return; }
             string? ownDirectory = null;
             foreach (var line in lines)
             {
@@ -118,19 +145,25 @@ public static class ScriptTrace
                 command = ScriptCommands.Core(command);
                 if (command == "SetModelDirectory")
                 {
-                    foreach (string part in (args.Length > 0 ? args[0] : "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                        if (WorldAssembler.ProjectPath(part) is { } folder) { directories.Remove(folder); directories.Insert(0, folder); ownDirectory = folder; }
-                    modelView = [.. directories];
+                    ownDirectory = WorldDirectoryPaths.Add(directories, args.Length > 0 ? args[0] : "", budget.Work) ?? ownDirectory;
+                    modelView = Snapshot(directories, modelView);
                 }
                 if (command == "SetTextureDirectory")
                 {
-                    foreach (string part in (args.Length > 0 ? args[0] : "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                        if (WorldAssembler.ProjectPath(part) is { } folder) { textures.Remove(folder); textures.Insert(0, folder); }
-                    textureView = [.. textures];
+                    WorldDirectoryPaths.Add(textures, args.Length > 0 ? args[0] : "", budget.Work);
+                    textureView = Snapshot(textures, textureView);
                 }
                 result.Add(new(name, command, args, modelView, ownDirectory, textureView));
                 if (command == "GameZWriteZBDFile") written = true;
             }
+        }
+        IReadOnlyList<string> Snapshot(List<string> current, IReadOnlyList<string> previous)
+        {
+            // Even a command that revisits several directories can finish in the same order. Its own-directory
+            // assignment still matters, but it needs no new immutable history when the final search order matches.
+            if (WorldDirectoryPaths.SameOrder(current, previous, budget.Work)) return previous;
+            budget.ReserveSnapshot(current.Count);
+            return current.ToArray();
         }
         string Expand(string token) => ScriptConditions.Expand(token, variables);
     }

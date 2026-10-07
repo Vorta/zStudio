@@ -163,7 +163,7 @@ public partial class MainWindow
         RequireNoDrafts();
         // Exports read source files from disk, so pending edits to them must be saved or discarded first. A source
         // world shows a private build in the project's zstudio/cache/worlds, but its pending edits belong to the project's scripts.
-        string project = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), prefix = project + Path.DirectorySeparatorChar;
+        string project = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), prefix = Path.EndsInDirectorySeparator(project) ? project : project + Path.DirectorySeparatorChar;
         if (ViewModel.Documents.FirstOrDefault(d => d.IsDirty && (d.SourceWorld is { } world ? world.Root.Equals(project, StringComparison.OrdinalIgnoreCase)
             : Path.GetFullPath(d.Path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) is { } dirty)
             throw new StudioCommandException("unsaved_changes", $"Save or discard the edits to {dirty.SourceWorld?.Label ?? Path.GetFileName(dirty.Path)} before exporting.");

@@ -265,10 +265,11 @@ public sealed class GltfDocument
         return false;
     }
 
-    private static GltfDocument ReadDocument(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, ReadLimits limits, CancellationToken token)
+    /// <summary>The shared JSON/glb container framing and bounded JSON scan, without decoding geometry or buffers.</summary>
+    internal static ReadOnlySpan<byte> ContainerJson(ReadOnlySpan<byte> bytes, CancellationToken token, out ReadOnlySpan<byte> glbBinary)
     {
-        long bufferBytes = limits.BufferBytes;
-        ReadOnlySpan<byte> glbBinary = default, jsonBytes = bytes;
+        glbBinary = default;
+        ReadOnlySpan<byte> jsonBytes = bytes;
         if (bytes.Length >= 12 && bytes[..4].SequenceEqual("glTF"u8))
         {
             if (BinaryPrimitives.ReadUInt32LittleEndian(bytes[4..]) != 2) throw new InvalidDataException("Only glTF 2.0 is supported.");
@@ -298,6 +299,13 @@ public sealed class GltfDocument
             if (jsonBytes.IsEmpty) throw new InvalidDataException("GLB without JSON.");
         }
         ValidateJsonText(jsonBytes, token);
+        return jsonBytes;
+    }
+
+    private static GltfDocument ReadDocument(ReadOnlySpan<byte> bytes, Func<string, byte[]> resolve, ReadLimits limits, CancellationToken token)
+    {
+        long bufferBytes = limits.BufferBytes;
+        ReadOnlySpan<byte> jsonBytes = ContainerJson(bytes, token, out var glbBinary);
         JsonElement parsed = JsonElement.Parse(jsonBytes, new JsonDocumentOptions { MaxDepth = 64 });
         if (parsed.ValueKind != JsonValueKind.Object) throw new InvalidDataException("glTF JSON must be an object.");
         Bound(parsed, limits.MetadataBytes);

@@ -46,6 +46,9 @@ public static class SourceTerrain
     /// also stay ordinary objects.
     /// </summary>
     public static SourceTransaction Create(SourceWorkspace workspace, string database, string model, IReadOnlyList<string> nodes, string? recipePath = null, CancellationToken token = default)
+        => Create(workspace, database, model, nodes, recipePath, token, SourceProject.MaximumFiles);
+
+    internal static SourceTransaction Create(SourceWorkspace workspace, string database, string model, IReadOnlyList<string> nodes, string? recipePath, CancellationToken token, int maximumReferenceFiles)
     {
         database = Checked(database); model = Checked(model);
         if (!database.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"The mission database {database} must be a .gltf file to hold a terrain marker.");
@@ -53,7 +56,7 @@ public static class SourceTerrain
         if (model.Equals(database, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Terrain surfaces must be in their own glTF file, not in the mission database, whose nodes are objects of the world.");
         // A file the database references (a part of it, or a model its objects reference) is loaded with it: its nodes would
         // stay objects as well, and take their zones from the references.
-        if (Referenced(workspace, database, token).Contains(model))
+        if (Referenced(workspace, database, token, maximumReferenceFiles).Contains(model))
             throw new InvalidDataException($"{model} is loaded with the mission database (a part of it, or a model its objects reference), so its nodes are objects of the world; terrain surfaces must be in a glTF file of their own.");
         if (nodes.Count is 0 or > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"Choose 1–{TerrainRecipe.MaximumSurfaces} surfaces.");
         recipePath = Checked(recipePath ?? model[..model.LastIndexOf('.')] + TerrainRecipe.Extension);
@@ -105,22 +108,28 @@ public static class SourceTerrain
         return new() { Flags = flags, NodeZone = !zone.Explicit ? null : zone.Zone == 0xFF ? TerrainAttributes.AnyZone : (int)zone.Zone };
     }
     /// <summary>The files a glTF file references (<c>extras.recoil.ref</c>), and theirs in turn, as project paths.</summary>
-    private static HashSet<string> Referenced(SourceWorkspace workspace, string file, CancellationToken token)
+    internal static HashSet<string> Referenced(SourceWorkspace workspace, string file, CancellationToken token, int maximumFiles = SourceProject.MaximumFiles)
     {
-        HashSet<string> found = new(StringComparer.OrdinalIgnoreCase); Queue<string> pending = new([file]);
-        while (pending.TryDequeue(out var current) && found.Count < SourceProject.MaximumFiles)
+        HashSet<string> found = new(StringComparer.OrdinalIgnoreCase), read = new(StringComparer.OrdinalIgnoreCase); Queue<string> pending = new([file]);
+        while (pending.TryDequeue(out var current))
         {
             token.ThrowIfCancellationRequested();
+            if (!read.Add(current)) continue;
             if (workspace.Read(current, token, MaximumDatabaseJsonBytes) is not { } bytes) continue;
             JsonObject? root;
-            try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject; }
+            try { root = JsonNode.Parse(GltfDocument.ContainerJson(bytes, token, out _), documentOptions: new() { MaxDepth = 64 }) as JsonObject; }
             catch (JsonException) { continue; }
             foreach (var node in root?["nodes"] as JsonArray ?? [])
                 if (((node as JsonObject)?["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject engine && engine["ref"] is JsonValue reference && reference.TryGetValue(out string? uri))
                 {
                     string target;
                     try { target = WorldAssembler.Relative(current, uri); } catch (InvalidDataException) { continue; }
-                    if (found.Add(target)) pending.Enqueue(target);
+                    if (found.Contains(target)) continue;
+                    // Exhaustion must not return a partial protection set. References can also live under
+                    // gamegen/, outside the data-model inventory, or occur on currently unused nodes.
+                    if (found.Count >= maximumFiles)
+                        throw new InvalidDataException($"The mission database references more than {maximumFiles:N0} files; its complete model references cannot be checked, so terrain creation is refused.");
+                    found.Add(target); pending.Enqueue(target);
                 }
         }
         return found;

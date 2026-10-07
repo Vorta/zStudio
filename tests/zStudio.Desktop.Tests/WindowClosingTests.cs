@@ -69,6 +69,8 @@ public sealed class WindowClosingTests
                     await SourceTakeBackMcpChecks.Run();
                     await SourcePreviewChangeMcpChecks.Run();
                     await SourceTerrainMcpChecks.Run();
+                    await SourceTerrainReferenceCapacityChecks.Run();
+                    await SourceRootResourceGuardChecks.Run();
                     await WorldCompareMcpChecks.Run();
                     await WorldCompareBoundsChecks.Run();
                     await WorldCompareBudgetChecks.Run();

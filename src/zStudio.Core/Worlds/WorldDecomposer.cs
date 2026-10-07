@@ -34,6 +34,10 @@ public static class WorldDecomposer
 
     /// <inheritdoc cref="Decompose"/>
     public static WorldDecomposition DecomposeAll(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes, CancellationToken token = default)
+        => DecomposeAll(world, trace, notes, token, new BoundedDiagnostics(notes));
+
+    internal static WorldDecomposition DecomposeAll(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes, CancellationToken token,
+        BoundedDiagnostics diagnostics)
     {
         token.ThrowIfCancellationRequested();
         var root = world.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World) ?? throw new InvalidDataException("The world has no world node.");
@@ -154,7 +158,7 @@ public static class WorldDecomposer
             var step = trace[i]; if (step.Command != "LoadGameGen") continue;
             string file = Arg(step, 0), name = Arg(step, 1);
             if (i == databaseStep) result.Add(new(file, name, step, true, null, root.Children.ToList(), false) { Step = i });
-            else if (!created.TryGetValue(i, out var loadRoot)) notes.Add($"{step.Script}: LoadGameGen {file} {name} left no node in the world.");
+            else if (!created.TryGetValue(i, out var loadRoot)) diagnostics.Add($"{step.Script}: LoadGameGen {file} {name} left no node in the world.");
             else result.Add(new(file, name, step, false, loadRoot, loadRoot.Children.ToList(), editedRoots.Contains(loadRoot)) { Step = i });
         }
         return new(result, created.Where(c => trace[c.Key].Command != "LoadGameGen").ToDictionary());

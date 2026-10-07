@@ -41,9 +41,10 @@ public sealed partial class AnimationPlayer
     /// <summary>Run only the immediate initialization frontier on an owned scene copy, without advancing time.</summary>
     internal static HashSet<int> ApplyInitialization(AnimationPreviewContext context, bool cleanup, string[] startup, List<string> diagnostics, CancellationToken token)
     {
+        AnimationEntryLookup lookup = new(context.Package);
         var entries = cleanup ? context.Package.Entries.Where(e => e.Index > 0 && e.Bytes[152] is not (2 or 5)).SelectMany(e =>
             ((e.U32(148) & 0x20) != 0 ? new[] { (Entry: e, Primary: true) } : []).Concat(e.Bytes[153] == 4 && e.Bytes[152] != 4 ? [(Entry: e, Primary: false)] : [])) :
-            startup.Select(name => context.Package.Entries.FirstOrDefault(e => e.Name == name)).OfType<AnimationEntry>().Select(e => (Entry: e, Primary: false));
+            startup.Select(name => lookup.Find(name, token)).OfType<AnimationEntry>().Select(e => (Entry: e, Primary: false));
         return ApplyInitialization(context, entries.Select(e => (e.Entry, e.Primary, (int?)null)), diagnostics, token);
     }
 

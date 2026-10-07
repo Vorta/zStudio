@@ -381,4 +381,28 @@ public sealed class LoaderReviewFixTests
         Assert.Equal(["window", "door"], hut.Children.Select(c => c.Name));
         Assert.Empty(notes);
     }
+
+    [Fact]
+    public void ReferenceMatchingBudgetStopsInferenceAndRestoresChildOrder()
+    {
+        var files = HutProject(objects: 4);
+        files["data/m1/models/empty.gltf"] = Encoding.ASCII.GetBytes("""{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[]}]}""");
+        // A part with repeated empty references needs a second cache despite having no model identities to distinguish
+        // it. The inference must rank these references, not skip them as though empty files were not references.
+        WorldNode[] empty = [.. Enumerable.Range(0, 8).Select(_ => Node("empty.flt"))];
+        var group = Node("g", null, empty);
+        var references = empty.Select((node, i) => (node, uri: i == empty.Length - 1 ? "./empty.gltf" : "empty.gltf"))
+            .ToDictionary(p => p.node, p => p.uri);
+        Gltf(files, "data/m1/models", "m1_01", [group], references, Set(group));
+        var (world, build, isReference, hut) = Crafted(files);
+        var children = world.Nodes.Select(n => (Node: n, Children: n.Children.ToArray())).ToArray();
+        List<string> notes = [];
+        var error = Assert.Throws<InvalidDataException>(() => DatabaseRecords.Infer(world, build, isReference,
+            "m1", notes, Token, matchingLimit: 1));
+        Assert.Contains("work limit", error.Message);
+        foreach (var (node, original) in children) Assert.Equal(original, node.Children);
+        Assert.Equal(["window", "door"], hut.Children.Select(c => c.Name));
+        Assert.Empty(notes);
+        Assert.NotNull(DatabaseRecords.Infer(world, build, isReference, "m1", notes, Token));
+    }
 }

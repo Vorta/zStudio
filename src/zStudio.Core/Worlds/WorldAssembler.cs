@@ -25,9 +25,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     internal long ScriptSourceByteLimit { get; init; } = MaximumScriptSourceBytes;
     private long scriptSourceBytes, scriptSourceTokens;
     public GameZWorld World { get; } = new();
-    public List<string> Warnings => [.. warnings];
-    private readonly List<string> warnings = []; private readonly HashSet<string> seenWarnings = new(StringComparer.Ordinal);
-    private void Warn(string message) { if (seenWarnings.Add(message)) warnings.Add(message); }
+    public List<string> Warnings => diagnostics.Snapshot();
+    private readonly BoundedDiagnostics diagnostics = new();
     /// <summary>Texture files the loaded models referenced, by texture name (project-relative paths).</summary>
     public Dictionary<string, string> TextureFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>Clamp words (1 clamps U, 2 clamps V) of the textures the models sample, from their glTF samplers.</summary>
@@ -71,6 +70,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private readonly List<WorldNode> worldChildren = [];
     private readonly Dictionary<string, string> variables = new(StringComparer.Ordinal);
     private readonly List<string> modelDirectories = [], textureDirectories = [], readerDirectories = [];
+    private readonly DirectoryWorkBudget directoryWork = new();
     private readonly ScriptConditions conditions = new();
     /// <summary>The instruction lines of each script read so far, by project path (the file system finds scripts without case).</summary>
     private readonly Dictionary<string, Sources.GameGenScriptLine[]> parsedScripts = new(StringComparer.OrdinalIgnoreCase);
@@ -101,7 +101,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     {
         if (depth > MaximumScriptDepth) throw new InvalidDataException($"Scripts source each other more than {MaximumScriptDepth} levels deep.");
         string relative = $"{SourceProject.GameGenFolder}/{script.Replace('\\', '/')}";
-        if (!files.Exists(relative)) { Warn($"Script {script} does not exist."); return; }
+        if (!files.Exists(relative)) { diagnostics.Add($"Script {script} does not exist."); return; }
         ScriptFiles.Add(relative);
         // Each script is read once per assembly: one sourced many times (or holding only comments) costs its instructions, not its text again.
         if (!parsedScripts.TryGetValue(relative, out var lines))
@@ -236,12 +236,12 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "LightSetSaturated": if (current?.Class == WorldNodeClass.Light) current.SetPayloadInt(196, On(0) ? 1 : 0); break;
             case "LightSetActive": if (current?.Class == WorldNodeClass.Light) current.SetPayloadInt(4, On(0) ? 1 : 0); break;
 
-            case "FindNode": current = Find(A(0), null); if (current == null) Warn($"{script}: FindNode {A(0)} found no node."); break;
-            case "FindSubNode": current = current == null ? null : FindSub(current, A(0)); if (current == null) Warn($"{script}: FindSubNode {A(0)} found no node."); break;
+            case "FindNode": current = Find(A(0), null); if (current == null) diagnostics.Add($"{script}: FindNode {A(0)} found no node."); break;
+            case "FindSubNode": current = current == null ? null : FindSub(current, A(0)); if (current == null) diagnostics.Add($"{script}: FindSubNode {A(0)} found no node."); break;
             case "NodeSetDescription": if (current != null) current.Name = A(0); break;
             case "AddChild":
                 if (current != null && Find(A(0), null) is { } child) { AddChild(current, child); if (instruction != null) Origin(child).Attached = instruction; Name(child); }
-                else Warn($"{script}: AddChild {A(0)} has no node or parent.");
+                else diagnostics.Add($"{script}: AddChild {A(0)} has no node or parent.");
                 break;
             case "DeleteChild":
                 if (current != null && FindSub(current, A(0)) is { } removed && removed != current) { Name(removed); Unlink(current, removed); }
@@ -267,7 +267,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             // Commands that change nodes or models in the retail interpreter but are not built here are reported.
             default:
                 unapplied = ScriptCommands.IsRecognized(command) && !NonWorldCommands.Contains(command);
-                if (unapplied) Warn($"{script}: {command} is recognized by the game's interpreter, but the source build does not apply it.");
+                if (unapplied) diagnostics.Add($"{script}: {command} is recognized by the game's interpreter, but the source build does not apply it.");
                 break;
         }
 
@@ -275,7 +275,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
 
         // A node an instruction found by name to act on.
         WorldNode? Name(WorldNode? node) { if (node != null && instruction != null) Origin(node).Named.Add(instruction); return node; }
-        void WorldSet(Action<WorldNode> action) { if (current?.Class == WorldNodeClass.World) action(current); else Warn($"{script}: {command} needs a world node."); }
+        void WorldSet(Action<WorldNode> action) { if (current?.Class == WorldNodeClass.World) action(current); else diagnostics.Add($"{script}: {command} needs a world node."); }
         void LightMode(int offset)
         {
             if (current?.Class != WorldNodeClass.Light) return;
@@ -310,13 +310,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
 
     private void AddDirectories(List<string> list, string value)
     {
-        // zRdrAddSearchPaths inserts at the head, so later directories are searched first.
-        foreach (string part in value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            string? folder = ProjectPath(part);
-            if (folder == null) continue;
-            list.Remove(folder); list.Insert(0, folder);
-        }
+        WorldDirectoryPaths.Add(list, value, directoryWork);
     }
     /// <summary><c>..\data\m1\models</c> (relative to the gamegen folder) → <c>data/m1/models</c>; other paths are outside the project.</summary>
     internal static string? ProjectPath(string scriptPath)
@@ -424,7 +418,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
 
     private void AddChild(WorldNode parent, WorldNode child)
     {
-        if (parent == child || Descends(parent, child)) { Warn($"AddChild would make {child.Name} its own ancestor."); return; }
+        if (parent == child || Descends(parent, child)) { diagnostics.Add($"AddChild would make {child.Name} its own ancestor."); return; }
         child.Parents.Add(parent);
         if (parent.Class == WorldNodeClass.World) worldChildren.Add(child); else parent.Children.Add(child);
     }
@@ -448,7 +442,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// <summary>DestroyNodeRecursive: a node without parents is freed; each child is detached and freed only when it has no other parent.</summary>
     private void DeleteTree(WorldNode node)
     {
-        if (node.Parents.Count > 0) { Warn($"DeleteTree {node.Name}: the node still has parents."); return; }
+        if (node.Parents.Count > 0) { diagnostics.Add($"DeleteTree {node.Name}: the node still has parents."); return; }
         // Script-built hierarchies have not reached Finish's depth validation yet. Follow child order without using
         // the process stack; shared children are released only when their last parent edge has been removed.
         bool ownsRemovals = deferredRemovals == null;
@@ -496,7 +490,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // The root takes its slot after the caches of the files the load references (see OriginalLoader).
         WorldNode root = new(name, WorldNodeClass.Object3D) { Flags = 0x0108001C, Zone = 0xFF }; Object3D(root); LoadedRoots.Add(root); current = root;
         string? path = ResolveModel(file);
-        if (path == null) { Allocate(root); Warn($"{script}: LoadGameGen found no model for {file} in {string.Join(", ", modelDirectories)}."); pendingWorld = null; return; }
+        if (path == null) { Allocate(root); diagnostics.Add($"{script}: LoadGameGen found no model for {file} in {BoundedDiagnostics.DirectoryList(modelDirectories)}."); pendingWorld = null; return; }
         // One load parses each file once; models follow the loader's caches (see WorldGltf.ImportContext).
         Dictionary<string, (GltfDocument, string)> documents = new(StringComparer.OrdinalIgnoreCase);
         (GltfDocument, string) Load(string file) => documents.TryGetValue(file, out var loaded) ? loaded : documents[file] = LoadDocument(file);
@@ -511,7 +505,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         WorldGltf.ImportContext context = null!;
         context = new()
         {
-            World = World,
+            World = World, Diagnostics = diagnostics,
             NodeImported = (node, file, source, place) =>
             {
                 if (context.Referencing is { } referencing) Origin(node).ReferencedBy = Origin(referencing);
@@ -545,7 +539,6 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         int firstModel = World.Models.Count;
         try { nodes = WorldGltf.Import(doc, documentPath, 0xFF, context); }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
-        foreach (var w in context.Warnings) Warn(w);
         foreach (var (texture, addressing) in context.TextureAddressing)
             if (!TextureAddressing.TryAdd(texture, addressing) && TextureAddressing[texture] != addressing)
                 throw new InvalidDataException($"Texture {JsonData.ShownText(texture)} is sampled with different edge modes in different models; use one mode per texture or give the images distinct names.");
@@ -588,7 +581,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             { member.Parents.Add(pendingWorld); worldChildren.Add(member); }
         }
         // FindNode and AddChild take the newest node with a name, and the file's own nodes are newer than the root.
-        if (Subtree(nodes).Any(n => n.Name == name)) Warn($"{script}: {file} has a node of its own named {name}, so FindNode and AddChild {name} find that node rather than the loaded root.");
+        if (Subtree(nodes).Any(n => n.Name == name)) diagnostics.Add($"{script}: {file} has a node of its own named {name}, so FindNode and AddChild {name} find that node rather than the loaded root.");
         pendingWorld = null; current = root;
         // The database's objects: its scene roots, and for a group the objects below it. A group's own transform would be
         // lost when the script deletes it (its objects keep theirs), so a group has none.
@@ -668,9 +661,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             throw new InvalidDataException($"{from}: texture name '{JsonData.ShownText(textureName)}' needs 1–19 Latin-1 characters without path separators.");
         string? file = textureDirectories.Select(d => $"{d}/{textureName}{TextureSources.Extension}").FirstOrDefault(files.Exists);
         if (file == null && uri.Length > 0) { string candidate = Relative(from, uri); if (files.Exists(candidate)) file = candidate; }
-        if (file == null) Warn($"{from}: texture {textureName} has no PNG; the game shows its default texture.");
+        if (file == null) diagnostics.Add($"{from}: texture {textureName} has no PNG; the game shows its default texture.");
         else if (TextureFiles.TryGetValue(textureName, out string? other) && !other.Equals(file, StringComparison.OrdinalIgnoreCase))
-            Warn($"Texture {textureName} comes from both {other} and {file}; the pack uses {other}.");
+            diagnostics.Add($"Texture {textureName} comes from both {other} and {file}; the pack uses {other}.");
         else TextureFiles[textureName] = file;
         return textureName;
     }

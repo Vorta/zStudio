@@ -22,13 +22,14 @@ public sealed class ModelBuilder(WorldModel model)
     /// <summary>How far a corner's UV may lie from the first triangle's affine map and still count as on it.</summary>
     public const float AffineTolerance = 1f / 32;
     public WorldModel Model { get; } = model;
-    public List<string> Warnings { get; } = [];
+    internal BoundedDiagnostics Diagnostics { get; init; } = new();
+    public List<string> Warnings => Diagnostics.Snapshot();
     public ModelBuilder() : this(new WorldModel()) { }
 
     public bool Add(PolygonInput polygon)
     {
         int n = polygon.Points.Length;
-        if (n < 3) { Warnings.Add($"A polygon with {n} corners was discarded."); return false; }
+        if (n < 3) { Diagnostics.Add($"A polygon with {n} corners was discarded."); return false; }
         bool textured = polygon.Material.Texture != null;
         if (textured && polygon.Uvs.Length != n) throw new InvalidDataException("A textured polygon needs a UV for every corner.");
         // A non-finite coordinate would reach the world's bounds and grid cells.
@@ -39,8 +40,8 @@ public sealed class ModelBuilder(WorldModel model)
         // Validate derived UVs before adding any vertices or fanning the polygon: finite authored values can overflow
         // the tile shift or integer quantization. Rejection must leave the builder usable for the next polygon.
         Vector2[] uvs = textured ? Uvs(polygon.Uvs) : [];
-        if (n > MaximumCorners) { Warnings.Add($"A polygon with {n} corners exceeds the engine limit and was fanned."); return Fan(polygon); }
-        if (!HasArea(polygon.Points)) { Warnings.Add("A polygon without area (all corners on one line) was discarded."); return false; }
+        if (n > MaximumCorners) { Diagnostics.Add($"A polygon with {n} corners exceeds the engine limit and was fanned."); return Fan(polygon); }
+        if (!HasArea(polygon.Points)) { Diagnostics.Add($"A polygon without area (all corners on one line) was discarded."); return false; }
         if (polygon.Points.Length > SplitCorners) return Split(polygon);
 
         int count = polygon.Points.Length; bool morphs = polygon.Targets.Length == count;
@@ -55,7 +56,7 @@ public sealed class ModelBuilder(WorldModel model)
             {
                 Model.Vertices.RemoveRange(vertexCount, Model.Vertices.Count - vertexCount);
                 Model.Morphs.RemoveRange(morphCount, Model.Morphs.Count - morphCount);
-                Warnings.Add($"The model exceeds {MaximumVertices} vertices; a polygon was discarded."); return false;
+                Diagnostics.Add($"The model exceeds {MaximumVertices} vertices; a polygon was discarded."); return false;
             }
         }
         int[] normals = polygon.Normals.Length == count ? AddNormals(polygon.Normals) : [];
@@ -204,7 +205,7 @@ public sealed class ModelBuilder(WorldModel model)
             if (found < 0) { found = existing + added.Count; added.Add(source[i]); }
             indices[i] = found;
         }
-        if (existing + added.Count > MaximumVertices) { Warnings.Add($"The model exceeds {MaximumVertices} normals; polygons past them are stored without normals."); return []; }
+        if (existing + added.Count > MaximumVertices) { Diagnostics.Add($"The model exceeds {MaximumVertices} normals; polygons past them are stored without normals."); return []; }
         Model.Normals.AddRange(added);
         return indices;
         static int Find(List<Vector3> normals, Vector3 normal)

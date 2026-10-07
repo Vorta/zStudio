@@ -23,6 +23,7 @@ public partial class MainWindow
         return doc.SourceBuild!.Provenance.Values.FirstOrDefault(p => p.Load != null && origin.Created != null && p.Load.Script == origin.Created.Script && p.Load.Line == origin.Created.Line && p.ModelFile != null)?.ModelFile;
     }
 
+    internal Func<SourceWorkspace, string, CancellationToken, BlenderCheckout> CheckoutSourceModel { get; set; } = SourceBlender.Checkout;
     private async Task<BlenderCheckout> CheckoutForBlenderAsync(string model, CancellationToken token)
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
@@ -31,7 +32,8 @@ public partial class MainWindow
         // Off the UI thread: a checkout copies the model's files and decodes its textures to show their transparency.
         long revision = workspace.ContentRevision;
         BlenderCheckout checkout;
-        try { checkout = await Task.Run(() => SourceBlender.Checkout(workspace, model, token), token); }
+        var copy = CheckoutSourceModel;
+        try { checkout = await Task.Run(() => copy(workspace, model, token), token); }
         // Another program changed a file the checkout read before its copies were complete (it removed them).
         catch (SourceFileChangedException ex) { throw new StudioCommandException("context_changed", ex.Message); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
@@ -39,8 +41,9 @@ public partial class MainWindow
         // The workspace changes on this thread: an edit, undo or reload made while the files were copied could mix two states.
         if (workspace.ContentRevision != revision)
         {
-            try { Directory.Delete(checkout.Folder, true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            throw new StudioCommandException("context_changed", "The project changed while the model was checked out; check it out again.");
+            // The completed copy no longer owns filesystem handles. Its textual path may now name another folder,
+            // so a stale GUI result must never recursively delete that path.
+            throw new StudioCommandException("context_changed", $"The checkout completed, but the project changed before it could be opened; check the model out again. The completed copy was left where it was written (recorded path: {Bounded(checkout.Folder, 512)}).");
         }
         return checkout;
     }

@@ -20,6 +20,9 @@ public sealed partial class AnimationCompiler
     /// holds at most 32,767 entries including the blank first one.
     /// </summary>
     public const int HeaderSize = 308, MaximumEntries = short.MaxValue;
+    /// <summary>Syntax nodes and authored characters expanded across all roots of one compilation, including ignored
+    /// settings which produce no compiled bytes. Charged before an entry's repeated syntax walks.</summary>
+    internal const long MaximumExpansionWork = 64L * 1024 * 1024;
     public sealed record Result(byte[] Bytes, AnimationPackage Package, IReadOnlyList<string> Warnings, IReadOnlyList<string> Inputs)
     {
         /// <summary>The first known engine load failure, retained independently of the diagnostic cap. Diagnostic
@@ -30,20 +33,23 @@ public sealed partial class AnimationCompiler
     private readonly AnimationDefinitionSet definitions;
     private readonly AnimationRoots roots;
     private readonly HashSet<string>? nodeSet, effectSet;
-    private readonly List<string> warnings = [];
-    private readonly HashSet<string> seen = new(StringComparer.Ordinal);
+    private readonly BoundedDiagnostics diagnostics = new();
+    private readonly Dictionary<AnimationItem, long> definitionWork = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<AnimationItem, AnimationDefinition> indexedDefinitions = new(ReferenceEqualityComparer.Instance);
     private readonly CancellationToken token;
     private readonly long maximumBytes;
-    private long bytes;
+    private readonly long maximumExpansionWork;
+    private long bytes, expansionWork;
     private string? engineRejection;
     /// <summary>Keyframe scripts by name and naming file: each is read and parsed once per compilation.</summary>
     private readonly Dictionary<(string Name, string From), Script?> scripts = [];
-    private void Warn(string message) { if (warnings.Count < 2000 && seen.Add(message)) warnings.Add(message); }
+    private void Warn(string message) => diagnostics.Add($"{message}");
     private void Reject(string message) { engineRejection ??= message; Warn(message); }
 
-    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token)
+    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token, long maximumExpansionWork)
     {
         this.definitions = definitions; roots = new(worldNodes, token); this.token = token; this.maximumBytes = maximumBytes;
+        this.maximumExpansionWork = maximumExpansionWork;
         nodeSet = worldNodes == null ? null : new(worldNodes, StringComparer.Ordinal);
         effectSet = effects == null ? null : new(effects, StringComparer.Ordinal);
     }
@@ -63,14 +69,15 @@ public sealed partial class AnimationCompiler
     public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, CancellationToken token = default)
         => Compile(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token);
 
-    internal static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token)
+    internal static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
+        long maximumExpansionWork = MaximumExpansionWork)
     {
         var set = AnimationDefinitionSet.Load(files, root, token);
-        AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token);
+        AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork);
         foreach (var w in set.Warnings) compiler.Warn(w);
         var package = compiler.Build();
         byte[] bytes = AnimationWriter.Write(package, token);
-        return new(bytes, AnimationPackage.Read(bytes, token), compiler.warnings, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()) { EngineRejection = compiler.engineRejection };
+        return new(bytes, AnimationPackage.Read(bytes, token), compiler.diagnostics.Messages, set.Files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()) { EngineRejection = compiler.engineRejection };
     }
 
     /// <summary>
@@ -81,6 +88,43 @@ public sealed partial class AnimationCompiler
     {
         bytes += count;
         if (bytes > maximumBytes) throw new InvalidDataException($"The compiled animations would be larger than {maximumBytes:N0} bytes.");
+    }
+
+    private void ReserveDefinition(AnimationItem definition)
+    {
+        token.ThrowIfCancellationRequested();
+        if (!definitionWork.TryGetValue(definition, out long cost))
+        {
+            Stack<ZrdNode> pending = new();
+            if (definition.Values != null) pending.Push(definition.Values);
+            while (pending.TryPop(out var node))
+            {
+                token.ThrowIfCancellationRequested();
+                cost += 1L + node.Text.Length;
+                if (cost > maximumExpansionWork) throw TooMuch();
+                foreach (var child in node.Children) pending.Push(child);
+            }
+            definitionWork.Add(definition, cost);
+        }
+        if (cost > maximumExpansionWork - expansionWork) throw TooMuch();
+        expansionWork += cost;
+        InvalidDataException TooMuch() => definition.Error("animation definition expansion exceeds its work budget; reduce repeated settings or the number of matching roots.");
+    }
+
+    private void ReserveSyntax(long count)
+    {
+        token.ThrowIfCancellationRequested();
+        if (count > maximumExpansionWork - expansionWork)
+            throw new InvalidDataException("animation definition expansion exceeds its work budget; reduce repeated settings or the number of matching roots.");
+        expansionWork += count;
+    }
+
+    private AnimationDefinition Indexed(AnimationDefinition definition)
+    {
+        if (!indexedDefinitions.TryGetValue(definition.Item, out var indexed))
+            indexedDefinitions.Add(definition.Item, indexed = definition with
+            { Item = new(definition.Item.Key, definition.Item.Values, definition.Item.Source, ReserveSyntax) });
+        return indexed;
     }
 
     /// <summary>
@@ -141,7 +185,8 @@ public sealed partial class AnimationCompiler
                 // Definitions are shared between missions; one whose root the world lacks has no animation there.
                 if (!NodeExists(root)) continue;
                 if (entries.Count >= MaximumEntries) throw definition.Item.Error($"more than {MaximumEntries - 1} animations; the game reads at most {MaximumEntries} entries, including the blank first one.");
-                try { entries.Add(new EntryBuilder(this, definition, root, bindings, entries.Count).Build()); }
+                ReserveDefinition(definition.Item);
+                try { entries.Add(new EntryBuilder(this, Indexed(definition), root, bindings, entries.Count).Build()); }
                 catch (InvalidDataException ex) when (!ex.Message.StartsWith(definition.File, StringComparison.Ordinal)) { throw definition.Item.Error($"{JsonData.ShownText(Name(definition.Item))}: {ex.Message}"); }
             }
         }

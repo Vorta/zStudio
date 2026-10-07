@@ -77,7 +77,7 @@ internal static partial class DatabaseRecords
     /// </summary>
     public const int MaximumMirroredNodes = 1 << 24;
 
-    /// <summary>Candidate, slot and cloned-node work across every retained-cache boundary tried by one inference.</summary>
+    /// <summary>Candidate, model-identity, slot and cloned-node work across every reading tried by one inference.</summary>
     internal const int MaximumRetainedWork = 1 << 24;
     internal sealed class RetainedMatchBudget(int maximum = MaximumRetainedWork)
     {
@@ -85,8 +85,45 @@ internal static partial class DatabaseRecords
         internal void Take()
         {
             if (work >= maximum)
-                throw new InvalidDataException($"Matching retained database caches exceeds the {maximum:N0}-step work limit; the database keeps the world's object order.");
+                throw new InvalidDataException($"Matching database model references or retained caches exceeds the {maximum:N0}-step work limit; the database keeps the world's object order.");
             work++;
+        }
+    }
+
+    /// <summary>
+    /// Model identity comparisons during one unchanged candidate ordering. Empty references in particular must not
+    /// allocate a subtree walk for every pair. A fresh comparison is used after inferred content can change.
+    /// </summary>
+    internal sealed class ModelSharing(Func<WorldNode, IEnumerable<WorldNode>> below, RetainedMatchBudget budget, CancellationToken token)
+    {
+        private readonly Dictionary<WorldNode, HashSet<WorldModel>> models = new(ReferenceEqualityComparer.Instance);
+
+        public bool Shares(WorldNode a, WorldNode b)
+        {
+            token.ThrowIfCancellationRequested(); budget.Take();
+            var left = Models(a);
+            if (left.Count == 0) return false;
+            var right = Models(b);
+            foreach (var model in left)
+            {
+                budget.Take();
+                if (right.Contains(model)) return true;
+            }
+            return false;
+        }
+
+        private HashSet<WorldModel> Models(WorldNode node)
+        {
+            if (models.TryGetValue(node, out var found)) return found;
+            token.ThrowIfCancellationRequested(); budget.Take();
+            found = new(ReferenceEqualityComparer.Instance);
+            foreach (var child in below(node))
+            {
+                token.ThrowIfCancellationRequested(); budget.Take();
+                if (child.Model != null) found.Add(child.Model);
+            }
+            models.Add(node, found);
+            return found;
         }
     }
 
@@ -108,13 +145,14 @@ internal static partial class DatabaseRecords
     /// <param name="isReference">Whether a node of the shipped world is an external reference (its children a referenced file's content).</param>
     /// <param name="mirrorLimit">The most nodes the simulated caches may mirror in all (see <see cref="MaximumMirroredNodes"/>); beyond it the inference stops.</param>
     /// <exception cref="InvalidDataException">The inference would mirror more cached nodes than <paramref name="mirrorLimit"/>; the database's nodes keep the world's child order.</exception>
-    public static Records? Infer(GameZWorld world, WorldDecomposition build, Func<WorldNode, bool> isReference, string mission, List<string> notes, CancellationToken token, int mirrorLimit = MaximumMirroredNodes)
+    public static Records? Infer(GameZWorld world, WorldDecomposition build, Func<WorldNode, bool> isReference, string mission, List<string> notes, CancellationToken token, int mirrorLimit = MaximumMirroredNodes,
+        int matchingLimit = MaximumRetainedWork)
     {
         var database = build.Loads.FirstOrDefault(l => l.Database);
         if (database == null || database.Content.Count == 0) return null;
         ChildOrder shipped = new(WorldAssembler.Subtree(database.Content));
         OriginalLoader.MirrorBudget budget = new(mirrorLimit, limit => $"reading its files from the slots would make the loader's caches mirror more than {limit:N0} nodes in all.");
-        RetainedMatchBudget retained = new();
+        RetainedMatchBudget retained = new(matchingLimit);
         try { return Read(world, build, database, isReference, mission, notes, shipped, budget, retained, token); }
         catch { shipped.Restore(); throw; }
     }
@@ -260,13 +298,14 @@ internal static partial class DatabaseRecords
         // A later load's second path also serves the file's later references that copy its cache (share its models).
         List<(string LoadFile, string Reference, int Occurrence)> Follow(List<(string LoadFile, string Reference, int Occurrence)> chosen)
         {
+            ModelSharing sharing = new(WorldAssembler.Subtree, retained, token);
             HashSet<(string, string, int)> all = [.. chosen];
             foreach (var (loadFile, reference, occurrence) in chosen)
                 foreach (var load in build.Loads.Where(l => !l.Database && l.Root != null && l.Step > database.Step && l.File.Equals(loadFile, StringComparison.OrdinalIgnoreCase)))
                 {
                     var named = OwnReferences(load).Where(r => File(r) == reference).ToList();
                     for (int k = occurrence + 1; k < named.Count; k++)
-                        if (SharesModels(WorldAssembler.Subtree(named[occurrence]), WorldAssembler.Subtree(named[k]))) all.Add((loadFile, reference, k));
+                        if (sharing.Shares(named[occurrence], named[k])) all.Add((loadFile, reference, k));
                 }
             return [.. all];
         }
@@ -477,14 +516,6 @@ internal static partial class DatabaseRecords
         return new([.. parts.Root.Children], groups,
             parts.Content.ToDictionary<KeyValuePair<WorldNode, List<WorldNode>>, WorldNode, IReadOnlyList<WorldNode>>(p => p.Key, p => p.Value, ReferenceEqualityComparer.Instance),
             new Dictionary<WorldNode, int>(parts.SecondPaths, ReferenceEqualityComparer.Instance));
-    }
-
-    /// <summary>Whether two copies share a model: copies of one cache share its models, and another cache has models of its own.</summary>
-    private static bool SharesModels(IEnumerable<WorldNode> a, IEnumerable<WorldNode> b)
-    {
-        HashSet<WorldModel> models = new(ReferenceEqualityComparer.Instance);
-        foreach (var n in a) if (n.Model != null) models.Add(n.Model);
-        return models.Count > 0 && b.Any(n => n.Model != null && models.Contains(n.Model));
     }
 
     /// <summary>

@@ -8,13 +8,13 @@ public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IRea
         ArgumentOutOfRangeException.ThrowIfNegative(entryIndex);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(entryIndex, package.Entries.Count);
         HashSet<string> names = new(StringComparer.Ordinal);
-        List<string> diagnostics = [];
-        HashSet<AnimationEntry> visited = [];
+        BoundedDiagnostics diagnostics = new();
+        AnimationEntryLookup entries = new(package);
+        HashSet<AnimationEntry> scheduled = [package.Entries[entryIndex]];
         Stack<AnimationEntry> pending = new([package.Entries[entryIndex]]);
         while (pending.TryPop(out var entry))
         {
             token.ThrowIfCancellationRequested();
-            if (!visited.Add(entry)) continue;
             foreach (var ev in entry.AllSequences.SelectMany(s => s.Events))
             {
                 token.ThrowIfCancellationRequested();
@@ -33,20 +33,17 @@ public sealed record AnimationAudioDependencies(IReadOnlySet<string> Names, IRea
                 {
                     if (ev.I32(52) == 1) names.Add(ev.Text(12));
                 }
-                else if (ResolveChild(package, ev) is { } child) pending.Push(child);
+                else if (entries.ResolveChild(ev, token) is { } child)
+                { if (scheduled.Add(child)) pending.Push(child); }
                 else diagnostics.Add($"Audio preparation: unresolved child animation in #{entry.Index} ({entry.Name}).");
             }
         }
-        return new(names, diagnostics);
+        return new(names, diagnostics.Messages);
     }
 
     // Keep the preload closure and the runtime's index/name fallback identical. Names are not unique.
     internal static AnimationEntry? ResolveChild(AnimationPackage package, AnimationEvent ev)
-    {
-        int index = ev.I16(48);
-        string name = ChildName(ev);
-        return index > 0 && index < package.Entries.Count ? package.Entries[index] : package.Entries.FirstOrDefault(e => e.Name == name);
-    }
+        => new AnimationEntryLookup(package).ResolveChild(ev);
     /// <summary>
     /// The launched animation's name: 32 bytes at 16 (type 19) or 12 (type 24). The engine compares the whole field with
     /// the entry name (retail 0x45BC60), and shipped names such as reset_the_transporters run past 20 characters.

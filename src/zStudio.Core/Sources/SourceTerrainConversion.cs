@@ -96,8 +96,12 @@ public static partial class SourceTerrainConversion
             Words(source);
             if (resource)
             {
-                try { foreach (string text in Strings(ZrdText.Parse(source, token))) Add(text); }
-                catch (InvalidDataException) { }
+                ZrdNode tree;
+                try { tree = ZrdText.Parse(source, token); }
+                catch (InvalidDataException) { continue; }
+                // Only malformed text falls back to its words. A decoded reference exceeding a budget must refuse
+                // the whole conversion, or a named object could be converted from an incomplete protection set.
+                foreach (string text in InOrder(tree)) Add(text);
             }
             else if (!keyframes)
                 foreach (var line in GameGenScriptSyntax.Parse(source).Lines.Where(l => l.IsInstruction)) foreach (string t in line.Tokens) Add(t);
@@ -108,6 +112,7 @@ public static partial class SourceTerrainConversion
         // Each distinct name and pattern once, within the limits.
         void Add(ReadOnlySpan<char> t)
         {
+            token.ThrowIfCancellationRequested();
             if (!t.Contains('*'))
             {
                 if (knownNames.Contains(t)) return;
@@ -124,11 +129,6 @@ public static partial class SourceTerrainConversion
             string pattern = t.ToString();
             wildcards.Add(pattern);
             patterns.Add(new Regex("^" + Regex.Escape(pattern).Replace("\\*", "[0-9]") + "$", RegexOptions.CultureInvariant));
-        }
-        static IEnumerable<string> Strings(ZrdNode node)
-        {
-            Stack<ZrdNode> pending = new([node]);
-            while (pending.TryPop(out var n)) { if (n.Kind == ZrdKind.String) yield return n.Text; foreach (var c in n.Children) pending.Push(c); }
         }
         // The tree's strings in the order its source lists them, holding only the path to each (a compiled tree may be wide).
         static IEnumerable<string> InOrder(ZrdNode root)

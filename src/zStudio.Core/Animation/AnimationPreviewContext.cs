@@ -379,12 +379,13 @@ public sealed partial class AnimationPreviewContext
     /// <summary>The first node named <paramref name="name"/> in <paramref name="root"/>'s subtree, among the scene's first <paramref name="limit"/> nodes.</summary>
     private int FindBelow(int root, string name, int limit) => Descendants(root, limit).FirstOrDefault(i => Scene.Nodes[i].Name == name, -1);
     /// <summary>FindSubNodeByName (scripts' FindSubNode): the node itself, then its children last to first, depth first.</summary>
-    public int FindSubBelow(int root, string name)
+    public int FindSubBelow(int root, string name) => FindSubBelow(root, name, Scene.Nodes.Count);
+    private int FindSubBelow(int root, string name, int limit)
     {
         HashSet<int> visited = []; Stack<int> pending = new(); pending.Push(root);
         while (pending.TryPop(out int index))
         {
-            if (index < 0 || index >= Scene.Nodes.Count || !visited.Add(index)) continue;
+            if (index < 0 || index >= Math.Min(limit, Scene.Nodes.Count) || !visited.Add(index)) continue;
             if (Scene.Nodes[index].Name == name) return index;
             foreach (int child in SceneBuilder.Children(Scene.Nodes[index])) pending.Push(child);
         }

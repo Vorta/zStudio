@@ -84,6 +84,8 @@ public sealed partial class SourcePublisher
 {
     private const int JournalFormat = 1, MaximumJournals = 1024;
     private const long MaximumManifestBytes = 64L * 1024 * 1024;
+    internal int JournalFoldersLimit { get; init; } = SourceProject.MaximumScannedEntries;
+    internal long ManifestBytesLimit { get; init; } = MaximumManifestBytes;
     internal long RecoveryBytesLimit { get; init; } = MaximumManifestBytes;
     internal int RecoveryFilesLimit { get; init; } = SourceProject.MaximumFiles;
     private static readonly JsonSerializerOptions JournalJson = new()
@@ -460,7 +462,7 @@ public sealed partial class SourcePublisher
         try
         {
             CheckJournalPaths(id);
-            JournalManifest manifest = ReadManifest(directories, folder, id, maximumBytes, out long bytes);
+            JournalManifest manifest = ReadManifest(directories, folder, id, maximumBytes, out long bytes, token);
             var events = EventLog.Read(directories, folder, manifest.Files.Count, maximumBytes - bytes, out long eventBytes, token);
             return new(manifest, events, bytes + eventBytes);
         }
@@ -470,23 +472,49 @@ public sealed partial class SourcePublisher
         }
     }
 
-    private static void WriteManifest(DirectoryLease directories, string journal, JournalManifest manifest)
+    private byte[] PrepareManifest(JournalManifest manifest, CancellationToken token)
+    {
+        ValidateManifest(manifest, manifest.SaveId, token);
+        // Leave room for every publication and rollback event, including a failed commit followed by recovery.
+        long maximum = Math.Min(MaximumManifestBytes, ManifestBytesLimit) - EventLog.ReservedBytes(manifest.Files.Count);
+        using ManifestBuffer buffer = new(maximum, token);
+        JsonSerializer.Serialize(buffer, manifest, JournalJson);
+        return buffer.ToArray();
+    }
+
+    private sealed class ManifestBuffer(long maximum, CancellationToken token) : MemoryStream
+    {
+        public override void Write(byte[] buffer, int offset, int count) { Reserve(count); base.Write(buffer, offset, count); }
+        public override void Write(ReadOnlySpan<byte> buffer) { Reserve(buffer.Length); base.Write(buffer); }
+        private void Reserve(int count)
+        {
+            token.ThrowIfCancellationRequested();
+            if (count > maximum - Position) throw new InvalidDataException("The save journal exceeds its byte budget after reserving recovery events; split it into smaller saves.");
+        }
+    }
+
+    private static void WriteManifest(DirectoryLease directories, string journal, byte[] bytes)
     {
         // Written whole under another name first, so a manifest that exists is complete.
         string temporary = Path.Combine(journal, ManifestName + ".tmp");
-        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JournalJson);
         directories.Hold(journal);
         WriteDurable(directories, temporary, bytes);
         using SealedFile complete = SealedFile.Open(temporary, JournalDigest.OfContent(bytes), directories);
         complete.MoveTo(Path.Combine(journal, ManifestName));
     }
 
-    private JournalManifest ReadManifest(DirectoryLease directories, string journal, string id, long maximumBytes, out long length)
+    private JournalManifest ReadManifest(DirectoryLease directories, string journal, string id, long maximumBytes, out long length, CancellationToken token)
     {
         directories.Hold(journal);
         using FileStream stream = directories.OpenFile(Path.Combine(journal, ManifestName), FileMode.Open, FileAccess.Read, FileShare.Read);
-        byte[] bytes = SourceRead.All(stream, Math.Min(MaximumManifestBytes, maximumBytes), "its manifest"); length = bytes.LongLength;
+        byte[] bytes = SourceRead.All(stream, Math.Min(MaximumManifestBytes, maximumBytes), "its manifest", token); length = bytes.LongLength;
         JournalManifest manifest = JsonSerializer.Deserialize<JournalManifest>(bytes, JournalJson) ?? throw new InvalidDataException("its manifest is empty.");
+        ValidateManifest(manifest, id, token);
+        return manifest;
+    }
+
+    private void ValidateManifest(JournalManifest manifest, string id, CancellationToken token)
+    {
         if (manifest.Format != JournalFormat) throw new InvalidDataException($"its format {manifest.Format} is not supported by this version of zStudio.");
         if (manifest.SaveId != id) throw new InvalidDataException($"its manifest belongs to the save {manifest.SaveId}.");
         if (manifest.Description.Length > MaximumDescriptionLength) throw new InvalidDataException("its description is too long.");
@@ -494,26 +522,29 @@ public sealed partial class SourcePublisher
         HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
         foreach (JournalFile? file in manifest.Files)
         {
+            token.ThrowIfCancellationRequested();
             if (file == null) throw new InvalidDataException("it lists an empty file entry.");
             CheckSyntax(file.Relative);
             if (!seen.Add(file.Relative)) throw new InvalidDataException($"it lists {file.Relative} more than once.");
             if (file.Expected == file.Content || !Valid(file.Expected) || !Valid(file.Content)) throw new InvalidDataException($"its entry for {file.Relative} is not a change.");
         }
-        if (manifest.Folders.Count > manifest.Files.Count * 64) throw new InvalidDataException("it lists too many folders.");
+        if (manifest.Folders.Count > JournalFoldersLimit) throw new InvalidDataException($"it lists more than {JournalFoldersLimit:N0} folders.");
         // Each folder must hold one of the new files. Sorted once, the new files that start with a folder's path are
         // adjacent, and the first path at or after it is one of them if any is: a binary search per folder instead of a
-        // scan of every file (a journal may list 50,000 files and 64 folders for each).
+        // scan of every file (a journal may list 50,000 files and 250,000 folders).
         string[] created = [.. manifest.Files.Where(f => f.Content != null).Select(f => f.Relative).Order(StringComparer.OrdinalIgnoreCase)];
+        seen.Clear();
         foreach (string folder in manifest.Folders)
         {
+            token.ThrowIfCancellationRequested();
             if (folder == null) throw new InvalidDataException("it lists an empty folder entry.");
             CheckSyntax(folder);
+            if (!seen.Add(folder)) throw new InvalidDataException($"it lists the folder {folder} more than once.");
             string prefix = folder + "/";
             int at = Array.BinarySearch(created, prefix, StringComparer.OrdinalIgnoreCase);
             if (at < 0) at = ~at;
             if (at == created.Length || !created[at].StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"it lists the folder {folder}, which holds none of its new files.");
         }
-        return manifest;
         static bool Valid(JournalDigest? digest) => digest == null || digest.Length >= 0 && digest.Sha256 is { Length: 64 } hash && hash.All(char.IsAsciiHexDigitLower);
     }
 
@@ -524,10 +555,16 @@ public sealed partial class SourcePublisher
     /// </summary>
     private sealed class EventLog : IDisposable
     {
+        internal static long ReservedBytes(int files) => (6L * files + 8) * 64;
         private const long MaximumBytes = 64L * 1024 * 1024;
         private static readonly string[] Steps = ["prepared", "intent", "held", "installed", "committed", "rollback", "removed", "restored", "rolled-back"];
-        private readonly FileStream stream; private int count; private bool broken;
-        private EventLog(FileStream stream, int count) { this.stream = stream; this.count = count; }
+        private readonly FileStream stream; private int count; private bool broken, committed;
+        private readonly HashSet<JournalEvent> recorded;
+        private EventLog(FileStream stream, IReadOnlyList<JournalEvent> events)
+        {
+            this.stream = stream; count = events.Count; recorded = [.. events];
+            committed = events.Aggregate(false, (state, e) => e.Step == "committed" || state && e.Step != "rollback");
+        }
 
         public static EventLog Open(DirectoryLease directories, string journal, int files)
         {
@@ -537,7 +574,7 @@ public sealed partial class SourcePublisher
                 var (events, valid) = Parse(Contents(stream), files);
                 if (valid != stream.Length) { stream.SetLength(valid); stream.Flush(true); }
                 stream.Seek(0, SeekOrigin.End);
-                return new(stream, events.Count);
+                return new(stream, events);
             }
             catch { stream.Dispose(); throw; }
         }
@@ -556,9 +593,19 @@ public sealed partial class SourcePublisher
         public void Append(string step, int index)
         {
             if (broken) throw new IOException("The save journal's event log could not be extended.");
+            JournalEvent entry = new(step, index);
+            // Recovery depends on whether an intent ever occurred and the last commit/rollback transition.
+            // Repeated attempts do not need duplicate facts; retain real commit transitions after a rollback.
+            if (step == "committed" ? committed : step == "rollback" ? !committed && recorded.Contains(entry) : recorded.Contains(entry)) return;
             string body = string.Create(CultureInfo.InvariantCulture, $"{count + 1}|{step}|{index}");
             long start = stream.Position;
-            try { stream.Write(Encoding.ASCII.GetBytes($"{body}|{Check(body)}\n")); stream.Flush(true); count++; }
+            try
+            {
+                stream.Write(Encoding.ASCII.GetBytes($"{body}|{Check(body)}\n")); stream.Flush(true); count++;
+                recorded.Add(entry);
+                if (step == "committed") committed = true;
+                else if (step == "rollback") committed = false;
+            }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // A partial record must not remain in front of later ones.

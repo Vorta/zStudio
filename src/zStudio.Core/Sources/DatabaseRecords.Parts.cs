@@ -510,7 +510,7 @@ internal static partial class DatabaseRecords
             Stack<WorldNode> pending = new(records.Reverse());
             while (pending.TryPop(out var record))
             {
-                token.ThrowIfCancellationRequested();
+                token.ThrowIfCancellationRequested(); retainedBudget.Take();
                 if (!seen.Add(record)) continue;
                 if (Content.ContainsKey(record)) continue;
                 if (!Made.ContainsKey(record) && isModelReference(record)) { yield return record; continue; }
@@ -587,9 +587,20 @@ internal static partial class DatabaseRecords
         /// can: <paramref name="candidates"/> in order, those sharing models with an <paramref name="earlier"/> reference
         /// by the first path last (1999 m5's third btundr1.flt, in zone 11, has its own models and polygon zones).
         /// </summary>
-        private IEnumerable<WorldNode> ByOwnModels(IEnumerable<WorldNode> candidates, Func<WorldNode, IEnumerable<WorldNode>> earlier) =>
-            candidates.OrderBy(c => earlier(c).Any(e => !SecondPaths.ContainsKey(e) && SharesModels(e, c)) ? 1 : 0);
-        private bool SharesModels(WorldNode a, WorldNode b) => DatabaseRecords.SharesModels(Below(a), Below(b));
+        private IEnumerable<WorldNode> ByOwnModels(IEnumerable<WorldNode> candidates, Func<WorldNode, IEnumerable<WorldNode>> earlier)
+        {
+            ModelSharing sharing = new(Below, retainedBudget, token);
+            return candidates.OrderBy(candidate =>
+            {
+                token.ThrowIfCancellationRequested(); retainedBudget.Take();
+                foreach (var previous in earlier(candidate))
+                {
+                    retainedBudget.Take();
+                    if (!SecondPaths.ContainsKey(previous) && sharing.Shares(previous, candidate)) return 1;
+                }
+                return 0;
+            });
+        }
 
         /// <summary>
         /// Every reference a second path's cache served. The slots show which reference made each cache, not which later
@@ -599,21 +610,38 @@ internal static partial class DatabaseRecords
         /// </summary>
         public void FollowModels()
         {
+            ModelSharing sharing = new(Below, retainedBudget, token);
             // The references of each file's records in order: the database's, and each part's.
             List<List<WorldNode>> files = [[.. ReferencesInOrder().Where(r => !Content.ContainsKey(r))]];
             foreach (var content in Content.Values) files.Add([.. OwnReferences(content)]);
             foreach (var references in files)
-                foreach (var (trigger, path) in SecondPaths.Where(p => references.Contains(p.Key)).ToList())
-                    foreach (var other in references.SkipWhile(r => r != trigger).Skip(1))
-                        if (!SecondPaths.ContainsKey(other) && other.Name.Equals(trigger.Name, StringComparison.OrdinalIgnoreCase) && SharesModels(trigger, other))
+            {
+                Dictionary<WorldNode, int> positions = new(ReferenceEqualityComparer.Instance);
+                for (int i = 0; i < references.Count; i++) { retainedBudget.Take(); positions.TryAdd(references[i], i); }
+                List<(WorldNode Trigger, int Path)> paths = [];
+                foreach (var pair in SecondPaths)
+                {
+                    retainedBudget.Take();
+                    if (positions.ContainsKey(pair.Key)) paths.Add((pair.Key, pair.Value));
+                }
+                foreach (var (trigger, path) in paths)
+                    for (int i = positions[trigger] + 1; i < references.Count; i++)
+                    {
+                        retainedBudget.Take();
+                        var other = references[i];
+                        if (!SecondPaths.ContainsKey(other) && other.Name.Equals(trigger.Name, StringComparison.OrdinalIgnoreCase) && sharing.Shares(trigger, other))
                             SecondPaths[other] = path;
+                    }
+            }
             // Model files: the later references to the file that copy the second path's cache, in any copy of the file.
             foreach (var (file, name, occurrence) in FilePaths.ToList())
-                foreach (var copy in live.Values.Where(n => isModelReference(n) && n.Name.Equals(file, StringComparison.OrdinalIgnoreCase)))
+                foreach (var copy in live.Values)
                 {
+                    retainedBudget.Take();
+                    if (!isModelReference(copy) || !copy.Name.Equals(file, StringComparison.OrdinalIgnoreCase)) continue;
                     var named = OwnReferences(copy.Children).Where(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
                     for (int k = occurrence + 1; k < named.Count; k++)
-                        if (SharesModels(named[occurrence], named[k])) FilePaths.Add((file, name, k));
+                        if (sharing.Shares(named[occurrence], named[k])) FilePaths.Add((file, name, k));
                 }
         }
         /// <summary>A reference and what its copy holds (a part's content, not its own records).</summary>
@@ -940,8 +968,9 @@ internal static partial class DatabaseRecords
                 if (Content.ContainsKey(reference) && Combined(reference)) { cached.Add(Key(reference)); lastTrigger = i; continue; }
                 // A reference to a file already cached that makes the next cache named the file by another path.
                 bool second = false;
-                var between = references.Skip(lastTrigger + 1).Take(i - lastTrigger - 1).Where(r => !Content.ContainsKey(r) && !Made.ContainsKey(r));
-                foreach (var other in ByOwnModels(between, c => references.TakeWhile(e => e != c).Where(e => e.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase))))
+                var between = references.Skip(lastTrigger + 1).Take(i - lastTrigger - 1).Where(r =>
+                { retainedBudget.Take(); return !Content.ContainsKey(r) && !Made.ContainsKey(r); });
+                foreach (var other in ByOwnModels(between, EarlierNamed))
                 {
                     if (second) break;
                     int j = references.IndexOf(other);
@@ -966,6 +995,17 @@ internal static partial class DatabaseRecords
             Leftover = [.. Enumerable.Reverse(table.Free)];
             HighWater = table.Next;
             Consumed = Math.Max(offset, 0);
+
+            IEnumerable<WorldNode> EarlierNamed(WorldNode candidate)
+            {
+                foreach (var earlier in references)
+                {
+                    // Charge before filtering: a run of differently named references still scans the whole prefix.
+                    retainedBudget.Take();
+                    if (ReferenceEquals(earlier, candidate)) yield break;
+                    if (earlier.Name.Equals(candidate.Name, StringComparison.OrdinalIgnoreCase)) yield return earlier;
+                }
+            }
         }
 
         private string Describe(WorldNode reference) => Content.TryGetValue(reference, out var content)

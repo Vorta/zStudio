@@ -414,6 +414,7 @@ public static class SourceObjectEdits
         string label = $"Delete {node.Name}";
         if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can be deleted here.");
         List<string> notes = [$"Animations and resources that find {node.Name} by name no longer find it; Problems lists what the rebuild reports."];
+        BoundedDiagnostics diagnostics = new(notes);
         if (origin.ModelFile != null)
         {
             if (!origin.Database) throw new InvalidDataException($"{node.Name} is part of the model file {origin.ModelFile}; delete the object that loads it, or remove the part in Blender.");
@@ -443,8 +444,8 @@ public static class SourceObjectEdits
             {
                 if (!Disableable.Contains(instruction.Command) && !(instruction.Command == "FindSubNode" && !attaches))
                     throw new InvalidDataException($"{instruction.Script} line {instruction.Line} ({instruction.Command}) acts on {part.Name}{(ReferenceEquals(part, node) ? "" : $", a part of {node.Name},")} in a way a deletion cannot take out; edit the script directly.");
-                if (instruction.Command == "AddChild" && instruction.Args.Count > 0) notes.Add($"{instruction.Args[0]} was attached to {part.Name} and is no longer in the world.");
-                if (instruction.Command == "NodeSetDescription" && instruction.Args.Count > 0 && !ReferenceEquals(part, node)) notes.Add($"Animations and resources that find {instruction.Args[0]} by name no longer find it.");
+                if (instruction.Command == "AddChild" && instruction.Args.Count > 0) diagnostics.Add($"{instruction.Args[0]} was attached to {part.Name} and is no longer in the world.");
+                if (instruction.Command == "NodeSetDescription" && instruction.Args.Count > 0 && !ReferenceEquals(part, node)) diagnostics.Add($"Animations and resources that find {instruction.Args[0]} by name no longer find it.");
             }
         }
         // Unlike a value (see InThisMission), an object a shared script made has no exact deletion in this mission alone: a
@@ -520,11 +521,12 @@ public static class SourceObjectEdits
                 : TransformCommands.Any(origin.Writers.ContainsKey) ? built : null;
             bool flags = origin.Applied.Any(i => FlagCommands.Values.Contains(i.Command));
             List<string> copyNotes = ["The copy shares the original's meshes and textures (a point-only model, such as a lens flare, gets its own).", parts];
+            BoundedDiagnostics copyDiagnostics = new(copyNotes);
             // A part is copied wherever the database references it, and so is a copy made in it.
             int copies = target.Provenance.Values.Count(p => p.Part && p.ModelNode == origin.ModelNode && string.Equals(p.ModelFile, origin.ModelFile, StringComparison.OrdinalIgnoreCase));
             if (origin.Part && copies > 1) copyNotes.Add($"The mission database copies {origin.ModelFile} {copies} times, so the world gets {copies} nodes named {name}.");
             foreach (var i in origin.Applied.Where(i => !TransformCommands.Contains(i.Command) && !FlagCommands.Values.Contains(i.Command) && i.Command is not ("NodeSetLighting" or "FindSubNode")))
-                copyNotes.Add($"{i.Script} line {i.Line} ({i.Command}) acts on {node.Name} by name; the copy does not get it.");
+                copyDiagnostics.Add($"{i.Script} line {i.Line} ({i.Command}) acts on {node.Name} by name; the copy does not get it.");
             uint? LoadZone(long mark) => BuiltInstanceZone(target, origin.ModelFile, mark);
             return GltfFile(target.Workspace, origin, label, (root, copies) =>
             {
@@ -551,10 +553,11 @@ public static class SourceObjectEdits
         var parent = SingleParent(target, node, "copied");
         List<IReadOnlyList<string>> lines = [["SetModelDirectory", "..\\" + Path.GetDirectoryName(file.Replace('\\', '/'))!.Replace('/', '\\')], ["LoadGameGen", Token(created.Args[0]), name]];
         List<string> notes = [parts];
+        BoundedDiagnostics diagnostics = new(notes);
         foreach (var instruction in origin.Applied)
         {
             if (TransformCommands.Contains(instruction.Command) && transform != null) continue;
-            if (instruction.Command == "AddChild") { notes.Add($"{(instruction.Args.Count > 0 ? instruction.Args[0] : "A node")}, which a script attached to {node.Name}, is not copied."); continue; }
+            if (instruction.Command == "AddChild") { diagnostics.Add($"{(instruction.Args.Count > 0 ? instruction.Args[0] : "A node")}, which a script attached to {node.Name}, is not copied."); continue; }
             if (!Copyable.Contains(instruction.Command)) throw new InvalidDataException($"{instruction.Script} line {instruction.Line} ({instruction.Command}) acts on {node.Name} in a way a copy cannot repeat; copy it in the script.");
             lines.Add([instruction.Command, .. instruction.Args.Select(Token)]);
         }
@@ -703,8 +706,9 @@ public static class SourceObjectEdits
         {
             if (!Matrix4x4.Invert(WorldMatrix(parent, token), out var inverse))
                 throw new InvalidDataException($"{parent.Name} has a singular world transform; choose another parent or change its zero scale before reparenting.");
+            inverse = FiniteTransform(inverse);
             var anchor = TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).OrderBy(w => w.Line).LastOrDefault() ?? created;
-            var q = WorldMatrix(current, token) * inverse;
+            var q = FiniteTransform(WorldMatrix(current, token) * inverse);
             var stored = ObjectTransform.Of(node);
             var basis = q with { M41 = 0, M42 = 0, M43 = 0 };
             if (Near(basis, Matrix4x4.Identity))
@@ -719,7 +723,7 @@ public static class SourceObjectEdits
             {
                 // A scaled or mirrored parent change: the transform is decomposed whole. Scripts hold translation, rotation and
                 // scale only, so a parent whose scale is not uniform, turned against the node, would shear it.
-                var exact = WorldMatrix(node, token) * inverse;
+                var exact = FiniteTransform(WorldMatrix(node, token) * inverse);
                 var local = ObjectTransform.FromMatrix(exact);
                 if (HasShear(exact))
                     throw new InvalidDataException($"Under {parent.Name}, {node.Name} would need a sheared or flattened transform (a parent whose scale is not uniform, turned against it, or a zero scale), which the script's Object3DTranslate, Object3DRotate and Object3DScale cannot hold; choose another parent or change the scales first.");
@@ -823,11 +827,18 @@ public static class SourceObjectEdits
     /// <summary>Refuses when a script instruction (other than <paramref name="handled"/>) acts on one of <paramref name="nodes"/> or finds it by name.</summary>
     private static void RefuseUsers(SourceObjectTarget target, IEnumerable<WorldNode> nodes, string name, string verb, IEnumerable<SourceInstruction>? handled = null)
     {
-        var skip = (handled ?? []).ToList();
+        // A child attached repeatedly has one Named entry per instruction, also present in its owner's Applied
+        // entries. Index those instruction identities once instead of scanning the full handled list per use.
+        Dictionary<string, HashSet<int>> skip = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var instruction in handled ?? [])
+        {
+            if (!skip.TryGetValue(instruction.Script, out var lines)) skip[instruction.Script] = lines = [];
+            lines.Add(instruction.Line);
+        }
         HashSet<WorldNode> own = new(nodes, ReferenceEqualityComparer.Instance), below = new(Subtree(target.Node), ReferenceEqualityComparer.Instance);
         // The node itself only when the caller asks (a copy refuses its own instructions elsewhere, see PlanDuplicate).
         foreach (var n in WithCopies(target, own).Where(n => own.Contains(n) || !ReferenceEquals(n, target.Node)))
-            if (target.Provenance.TryGetValue(n, out var p) && p.Applied.Concat(p.Named).FirstOrDefault(u => !skip.Any(h => Same(h, u))) is { } user)
+            if (target.Provenance.TryGetValue(n, out var p) && p.Applied.Concat(p.Named).FirstOrDefault(u => !skip.TryGetValue(u.Script, out var lines) || !lines.Contains(u.Line)) is { } user)
                 throw new InvalidDataException($"{user.Script} line {user.Line} ({user.Command}) acts on {n.Name}{(ReferenceEquals(n, target.Node) ? "" : below.Contains(n) ? $", which is below {name}" : $", which {p.ModelFile} holds below {name} (in another copy of it, or where a script moved it)")}; {name} cannot be {verb} until that instruction changes.");
     }
     /// <summary>An argument as one script token, refused when the tokenizer would read it otherwise.</summary>
@@ -980,6 +991,7 @@ public static class SourceObjectEdits
         var byName = now.ToLookup(n => n.Name, StringComparer.Ordinal);
         var originsByNode = provenance.Where(p => string.Equals(p.ModelFile, model, StringComparison.OrdinalIgnoreCase)).ToLookup(p => p.ModelNode);
         List<string> notes = []; int traced = 0, untraced = 0;
+        ScriptTraceBudget traceBudget = new();
         foreach (var group in was.Select((n, i) => (n, i)).GroupBy(p => p.n.Name, StringComparer.Ordinal))
         {
             var later = byName[group.Key].ToList(); int occurrence = 0;
@@ -996,7 +1008,7 @@ public static class SourceObjectEdits
                 if (reason == null && traced++ >= 64) { untraced++; continue; }
                 // A model this world does not load is still found where other missions load it.
                 var origin = origins.FirstOrDefault() ?? new WorldNodeProvenance { ModelFile = model, ModelNode = index, ModelNodeName = node.Name };
-                if (reason == null && TransformElsewhere(workspace, mission, origin, node.Name, token) is { } elsewhere)
+                if (reason == null && TransformElsewhere(workspace, mission, origin, node.Name, token, traceBudget) is { } elsewhere)
                     reason = $"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}, where {elsewhere.Mission} loads the file)";
                 if (reason != null) notes.Add($"{node.Name} {change} in the export, so {reason} {(node.Authored ? "starts" : "stops")} turning or scaling it.");
             }
@@ -1014,9 +1026,10 @@ public static class SourceObjectEdits
     /// loaded (the newest node of the name, possibly another: not certain), through NodeSetDescription renames. The node's
     /// own transform instructions are skipped: they run in this mission too, and the edit is planned with them.
     /// </summary>
-    internal static (string Mission, SourceInstruction Instruction, bool Certain)? TransformElsewhere(SourceWorkspace workspace, string mission, WorldNodeProvenance origin, string nodeName, CancellationToken token)
+    internal static (string Mission, SourceInstruction Instruction, bool Certain)? TransformElsewhere(SourceWorkspace workspace, string mission, WorldNodeProvenance origin, string nodeName, CancellationToken token, ScriptTraceBudget? traceBudget = null)
     {
         if (origin.ModelFile is not { } file) return null;
+        traceBudget ??= new();
         Dictionary<string, byte[]?> files = new(StringComparer.OrdinalIgnoreCase);
         ReconstructionBudget retained = new();
         Dictionary<string, GameGenScriptSyntax> parsedScripts = new(StringComparer.OrdinalIgnoreCase);
@@ -1045,7 +1058,7 @@ public static class SourceObjectEdits
             if (holds.TryGetValue(path, out bool known)) return known;
             holds[path] = false;
             bool found = false;
-            if (depth < GltfDocument.MaximumDepth && path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) && Read(path) is { } bytes
+            if (depth < GltfDocument.MaximumDepth && (path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase)) && Read(path) is { } bytes
                 && Parse(bytes)?["nodes"] is JsonArray nodes)
                 foreach (var n in nodes)
                 {
@@ -1065,7 +1078,7 @@ public static class SourceObjectEdits
             if (other.Equals(mission, StringComparison.OrdinalIgnoreCase)) continue;
             try { if (Trace(world) is { } hit) return (other, hit.Instruction, hit.Certain); }
             // A world whose scripts cannot run (a macro expanding past the interpreter's buffer) builds nothing.
-            catch (InvalidDataException) { }
+            catch (InvalidDataException) when (!traceBudget.Exhausted) { }
         }
         return null;
 
@@ -1075,7 +1088,8 @@ public static class SourceObjectEdits
             ScriptConditions conditions = new();
             List<string> directories = [];
             // Each load: the file as LoadGameGen names it and the model directories then, resolved only when needed.
-            List<(string Name, string[] Directories)> loads = [];
+            List<(string Name, IReadOnlyList<string> Directories)> loads = [];
+            IReadOnlyList<string> directoryView = [];
             Dictionary<int, bool> loadHolds = [];
             bool LoadHolds(int load)
             {
@@ -1124,10 +1138,17 @@ public static class SourceObjectEdits
                     switch (command)
                     {
                         case "SetModelDirectory":
-                            foreach (string part in A(0).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                                if (WorldAssembler.ProjectPath(part) is { } folder) { directories.Remove(folder); directories.Insert(0, folder); }
+                            WorldDirectoryPaths.Add(directories, A(0), traceBudget.Work);
                             break;
-                        case "LoadGameGen": loads.Add((A(0), [.. directories])); roots[A(1)] = loads.Count - 1; at = (false, loads.Count - 1, 0, true); break;
+                        case "LoadGameGen":
+                            // Loads keep the search order at their own instruction, but unchanged orders share one
+                            // immutable view. Charge changed histories across all missions before copying them.
+                            if (!WorldDirectoryPaths.SameOrder(directories, directoryView, traceBudget.Work))
+                            {
+                                traceBudget.ReserveSnapshot(directories.Count);
+                                directoryView = directories.ToArray();
+                            }
+                            loads.Add((A(0), directoryView)); roots[A(1)] = loads.Count - 1; at = (false, loads.Count - 1, 0, true); break;
                         case "FindNode":
                             at = targets.Contains(A(0)) && loads.Count > 0 ? (true, -1, loads.Count, false) : roots.TryGetValue(A(0), out int load) ? (false, load, 0, true) : (false, -1, 0, false);
                             break;
@@ -1154,7 +1175,7 @@ public static class SourceObjectEdits
         JsonNode? Parse(byte[]? bytes)
         {
             if (bytes == null) return null;
-            try { GltfDocument.ValidateJsonText(bytes, token); return JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }); }
+            try { return JsonNode.Parse(GltfDocument.ContainerJson(bytes, token, out _), documentOptions: new() { MaxDepth = 64 }); }
             catch (JsonException) { return null; }
         }
     }
@@ -1228,7 +1249,14 @@ public static class SourceObjectEdits
                 throw new InvalidDataException($"The object's world hierarchy is cyclic or exceeds {WorldUpdate.MaximumDepth} levels; rebuild the world before reparenting it.");
             if (at.Class == WorldNodeClass.Object3D) m *= WorldUpdate.LocalMatrix(at) ?? Matrix4x4.Identity;
         }
-        return m;
+        return FiniteTransform(m);
+    }
+    private static Matrix4x4 FiniteTransform(Matrix4x4 matrix)
+    {
+        for (int row = 0; row < 4; row++) for (int column = 0; column < 4; column++)
+            if (!float.IsFinite(matrix[row, column]))
+                throw new InvalidDataException("The derived transform exceeds the finite number range and cannot keep the object in place; choose another parent or reduce the transforms first.");
+        return matrix;
     }
     /// <summary>
     /// Whether a requested value differs from the one shown. Values echo exactly (Properties writes them round-trip, MCP as
@@ -1239,7 +1267,8 @@ public static class SourceObjectEdits
     private static bool Differs(float requested, float shown) => !(requested <= MathF.BitIncrement(shown) && requested >= MathF.BitDecrement(shown));
     private static bool Near(Matrix4x4 a, Matrix4x4 b)
     {
-        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) if (MathF.Abs(a[i, j] - b[i, j]) > 1e-5f) return false;
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++)
+            if (!float.IsFinite(a[i, j]) || !float.IsFinite(b[i, j]) || Math.Abs((double)a[i, j] - b[i, j]) > 1e-5) return false;
         return true;
     }
 
@@ -1417,6 +1446,9 @@ public static class SourceObjectEdits
     /// </summary>
     private static (bool[] Changed, Vector3 Built) Compare(SourceInstruction? writer, Vector3 value, Vector3 unset, Vector3? shown)
     {
+        // Derived reparenting values must not vanish as "unchanged": NaN comparisons are false, and infinity
+        // would otherwise compare infinity > infinity when it scales its own tolerance.
+        WorldNumbers.Vector(value);
         Vector3 built = writer == null ? unset : new(Arg(0), Arg(1), Arg(2));
         float Arg(int i) => i < writer!.Args.Count ? WorldAssembler.Number(writer.Args[i]) : 0;
         bool[] changed = [.. Enumerable.Range(0, 3).Select(i => shown is { } s ? Differs(value[i], s[i])

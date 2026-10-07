@@ -277,7 +277,7 @@ public partial class MainWindow
         if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a mission world of a source project first.");
         Microsoft.Win32.OpenFileDialog pick = new() { Title = "Choose the glTF file with the terrain surfaces", Filter = "glTF (*.gltf;*.glb)|*.gltf;*.glb", InitialDirectory = Path.Combine(session.Root, SourceProject.DataFolder) };
         if (pick.ShowDialog(this) != true) return;
-        string full = Path.GetFullPath(pick.FileName), prefix = session.Root + Path.DirectorySeparatorChar;
+        string full = Path.GetFullPath(pick.FileName), prefix = Path.EndsInDirectorySeparator(session.Root) ? session.Root : session.Root + Path.DirectorySeparatorChar;
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new StudioCommandException("invalid_argument", "Choose a file inside the source project.");
         string model = SourceProject.Relative(session.Root, full);
         IReadOnlyList<string> meshes;

@@ -79,7 +79,7 @@ public sealed partial class AnimationPreviewContext
                     if (Worlds.ScriptConditions.IsSource(command)) Read(arg.Replace('/', '\\'));
                     // The scripts run as the mission loads: the world file's highest slot of the name.
                     else if (Is("FindNode")) node = LoadedNamed(arg) is { Count: > 0 } named ? named[0] : -1;
-                    else if (Is("FindSubNode")) node = node >= 0 ? FindSubBelow(node, arg) : -1;
+                    else if (Is("FindSubNode")) node = node >= 0 ? FindSubBelow(node, arg, LoadedCount) : -1;
                     else if (Is("CycleTextureSetLooping")) { loop = arg.Equals("on", StringComparison.OrdinalIgnoreCase) || arg.Equals("true", StringComparison.OrdinalIgnoreCase); Publish(); }
                     else if (Is("CycleTextureSetMap")) { if (maps.Count < count) maps.Add(arg); Publish(); }
                     else if (Is("CycleTextureSetOn"))

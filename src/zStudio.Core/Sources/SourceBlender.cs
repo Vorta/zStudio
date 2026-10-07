@@ -128,18 +128,20 @@ public static partial class SourceBlender
     public static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token = default) => Checkout(workspace, model, token, null);
     /// <summary>As <see cref="Checkout(SourceWorkspace, string, CancellationToken)"/>; <paramref name="read"/> is told each project file the checkout has read (tests change files there).</summary>
     internal static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read,
-        int maximumManifestBytes = MaximumCheckoutManifestBytes, long maximumScriptCacheBytes = MaximumScriptCacheBytes)
+        int maximumManifestBytes = MaximumCheckoutManifestBytes, long maximumScriptCacheBytes = MaximumScriptCacheBytes,
+        long maximumTraceUnits = Worlds.ScriptTraceBudget.MaximumUnits)
     {
         using CopyFiles written = new();
-        var checkout = Checkout(workspace, model, token, read, written, maximumManifestBytes, maximumScriptCacheBytes);
+        var checkout = Checkout(workspace, model, token, read, written, maximumManifestBytes, maximumScriptCacheBytes, maximumTraceUnits);
         written.Keep();
         return checkout;
     }
     private static BlenderCheckout Checkout(SourceWorkspace workspace, string model, CancellationToken token, Action<string>? read, CopyFiles written,
-        int maximumManifestBytes, long maximumScriptCacheBytes)
+        int maximumManifestBytes, long maximumScriptCacheBytes, long maximumTraceUnits)
     {
         if (maximumManifestBytes is < 0 or > MaximumCheckoutManifestBytes) throw new ArgumentOutOfRangeException(nameof(maximumManifestBytes));
         if (maximumScriptCacheBytes is < 0 or > MaximumScriptCacheBytes) throw new ArgumentOutOfRangeException(nameof(maximumScriptCacheBytes));
+        Worlds.ScriptTraceBudget traceBudget = new(maximumTraceUnits);
         model = SourceWorkspace.Normalize(model);
         workspace.CheckEditable(model);
         if (!model.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{model} is not a .gltf model; Blender checkouts work on glTF files with separate buffers and textures.");
@@ -240,7 +242,7 @@ public static partial class SourceBlender
             textures[name] = (relative, sha);
             if (Transparency(bytes, token) is { } kind) transparency[name] = kind;
         }
-        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null, LoadedAsPickup(snapshot, workspace.Root, model, Load, maximumScriptCacheBytes, token));
+        Worlds.WorldGltf.ApplyPresentation(root, uri => transparency.TryGetValue(Path.GetFileName(uri), out var kind) ? kind : null, LoadedAsPickup(snapshot, workspace.Root, model, Load, maximumScriptCacheBytes, traceBudget, token));
         // Blender moves nodes freely: each keeps the zone it has (PlanUpdate takes the stated zones back out).
         Worlds.WorldGltf.ExplicitZones(root);
         byte[] checkoutJson = GltfJson.Write(root, indented: true, token);
@@ -653,7 +655,7 @@ public static partial class SourceBlender
     /// the load resolves its file as the build does, through the model folders the scripts set up to that point, so a
     /// model of the same name in another folder is not the pickup (reconstruction decides the same per written file).
     /// </summary>
-    private static bool LoadedAsPickup(SourceBuilder.Snapshot snapshot, string root, string model, Func<string, byte[]?> load, long maximumScriptCacheBytes, CancellationToken token)
+    private static bool LoadedAsPickup(SourceBuilder.Snapshot snapshot, string root, string model, Func<string, byte[]?> load, long maximumScriptCacheBytes, Worlds.ScriptTraceBudget traceBudget, CancellationToken token)
     {
         string stem = Path.GetFileNameWithoutExtension(model);
         // The scripts are read from the checkout's snapshot, like the model's files.
@@ -662,6 +664,8 @@ public static partial class SourceBlender
         Dictionary<string, IReadOnlyList<IReadOnlyList<string>>?> scripts = new(StringComparer.OrdinalIgnoreCase);
         long scriptBytes = 0;
         bool limitExceeded = false;
+        List<string> traceNotes = [];
+        BoundedDiagnostics traceDiagnostics = new(traceNotes);
         IReadOnlyList<IReadOnlyList<string>>? Script(string name)
         {
             string relative = $"{SourceProject.GameGenFolder}/{name.Replace('\\', '/')}";
@@ -697,8 +701,8 @@ public static partial class SourceBlender
             if (!MissionScript().IsMatch(entry) || !Directory.Exists(SourceProject.Resolve(root, $"{SourceProject.DataFolder}/{name}"))) continue;
             List<Worlds.TracedInstruction> trace;
             // A mission whose scripts the build cannot run loads nothing.
-            try { trace = Worlds.ScriptTrace.Trace(Script, name + ".gs", []); }
-            catch (InvalidDataException) when (!limitExceeded) { continue; }
+            try { trace = Worlds.ScriptTrace.Trace(Script, name + ".gs", traceNotes, traceBudget, traceDiagnostics); }
+            catch (InvalidDataException) when (!limitExceeded && !traceBudget.Exhausted) { continue; }
             foreach (var step in trace)
                 if (step is { Command: "LoadGameGen", Args: [var file, var node, ..] } && Worlds.WorldGltf.IsPickupName(node)
                     && Path.GetFileNameWithoutExtension(file.Replace('\\', '/')).Equals(stem, StringComparison.OrdinalIgnoreCase)

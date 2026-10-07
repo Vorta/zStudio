@@ -93,6 +93,9 @@ public sealed partial class SourcePublisher
 
        directories.Hold(root);
         var (changes, checks) = Plan(directories, writes, token);
+        string id = NewSaveId();
+        JournalManifest manifest = new(JournalFormat, id, description, DateTime.UtcNow, [.. changes.Select(c => new JournalFile(c.Relative, c.Expected, c.Content))], NewFolders(directories, changes, token));
+        byte[] manifestBytes = PrepareManifest(manifest, token);
         token.ThrowIfCancellationRequested();
         using FileStream gate = Lock(directories);
         Tidy(directories, token);
@@ -109,9 +112,7 @@ public sealed partial class SourcePublisher
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { }
         }
 
-        string id = NewSaveId();
-        JournalManifest manifest = new(JournalFormat, id, description, DateTime.UtcNow, [.. changes.Select(c => new JournalFile(c.Relative, c.Expected, c.Content))], NewFolders(directories, changes));
-        EventLog log = Prepare(directories, manifest, changes, token);
+        EventLog log = Prepare(directories, manifest, manifestBytes, changes, token);
         try { Install(directories, manifest, changes, log); }
         finally { log.Dispose(); }
         // The save is committed: a failure to clean up only leaves a committed journal that the next save removes.
@@ -121,7 +122,7 @@ public sealed partial class SourcePublisher
     }
 
     /// <summary>Writes the journal (new contents, then the manifest, then "prepared") and stages every new content; on failure removes them again.</summary>
-    private EventLog Prepare(DirectoryLease directories, JournalManifest manifest, Target[] changes, CancellationToken token)
+    private EventLog Prepare(DirectoryLease directories, JournalManifest manifest, byte[] manifestBytes, Target[] changes, CancellationToken token)
     {
         string journal = JournalPath(manifest.SaveId), staging = StagingPath(manifest.SaveId); EventLog? log = null;
 
@@ -130,7 +131,7 @@ public sealed partial class SourcePublisher
            directories.Hold(Path.Combine(journal, AfterFolder), create: true);
             for (int i = 0; i < changes.Length; i++)
                 if (changes[i].Bytes is { } bytes) { token.ThrowIfCancellationRequested(); Step("after", i); CheckWorkingPath(AfterPath(journal, i)); WriteDurable(directories, AfterPath(journal, i), bytes); }
-            Step("manifest", -1); CheckJournalPaths(manifest.SaveId); WriteManifest(directories, journal, manifest);
+            Step("manifest", -1); CheckJournalPaths(manifest.SaveId); WriteManifest(directories, journal, manifestBytes);
             log = EventLog.Open(directories, journal, manifest.Files.Count);
             Step("prepared", -1); log.Append("prepared", -1);
             SourceProject.RejectNestedLinks(root, StagingFolder);
@@ -303,16 +304,24 @@ public sealed partial class SourcePublisher
     private static partial Regex DeviceName();
 
     /// <summary>Folders a save creates for new files, outermost first; a rollback removes them again while they are empty.</summary>
-    private string[] NewFolders(DirectoryLease directories, IEnumerable<Target> changes)
+    private string[] NewFolders(DirectoryLease directories, IEnumerable<Target> changes, CancellationToken token)
     {
         List<string> folders = []; HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        long characters = 0;
         foreach (var change in changes.Where(c => c.Bytes != null))
         {
             string[] parts = change.Relative.Split('/');
             for (int n = 2; n < parts.Length; n++)
             {
+                token.ThrowIfCancellationRequested();
                 string folder = string.Join('/', parts[..n]);
-                if (seen.Add(folder) && !ExistingDirectory(directories, SourceProject.Resolve(root, folder))) folders.Add(folder);
+                if (seen.Add(folder) && !ExistingDirectory(directories, SourceProject.Resolve(root, folder)))
+                {
+                    if (folders.Count == JournalFoldersLimit) throw new InvalidDataException($"A save would create more than {JournalFoldersLimit:N0} folders; split it into smaller saves.");
+                    characters += folder.Length;
+                    if (characters > ManifestBytesLimit) throw new InvalidDataException("The save journal's folder paths exceed its byte budget; split it into smaller saves.");
+                    folders.Add(folder);
+                }
             }
         }
         return [.. folders];
