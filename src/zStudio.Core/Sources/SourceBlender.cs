@@ -468,8 +468,14 @@ public static partial class SourceBlender
         // Engine attributes travel in extras.recoil, which Blender writes only with Custom Properties on.
         bool attributesDropped = EngineAttributes(checkedOut) > 0 && EngineAttributes(root) == 0;
         if (attributesDropped) notes.Add("The export had no engine attributes (Custom Properties off); the model's flags, zones, references and material attributes were dropped.");
-        var removed = before.Except(after, StringComparer.Ordinal).Take(16).ToArray();
-        if (removed.Length > 0) notes.Add("Nodes no longer present (animations and placements find nodes by name): " + string.Join(", ", removed.Take(32).Select(n => JsonData.ShownText(n))) + (removed.Length > 32 ? $" and {removed.Length - 32:N0} more." : "."));
+        var removed = before.Select(pair => (Name: pair.Key, Count: pair.Value - after.GetValueOrDefault(pair.Key))).Where(n => n.Count > 0).ToArray();
+        if (removed.Length > 0)
+        {
+            int removedCount = removed.Sum(n => n.Count), shown = removed.Take(16).Sum(n => n.Count);
+            notes.Add($"Nodes no longer present (animations and placements find nodes by name; {removedCount:N0} removed): "
+                + string.Join(", ", removed.Take(16).Select(n => $"{JsonData.ShownText(n.Name)} ({n.Count:N0} removed)"))
+                + (shown < removedCount ? $"; {removedCount - shown:N0} more removed nodes." : "."));
+        }
         // After counting the engine attributes the export carries: the zones the checkout stated go back to what the
         // file's hierarchy gives, which can leave a node without any.
         Worlds.WorldGltf.ImplicitZones(root, chosen.Relative);
@@ -616,9 +622,9 @@ public static partial class SourceBlender
     private static int EngineAttributes(JsonObject root) => new[] { "nodes", "meshes", "materials", "scenes" }
         .Sum(key => (root[key] as JsonArray ?? []).Count(item => ((item as JsonObject)?["extras"] as JsonObject)?[Worlds.WorldGltf.Key] != null));
     /// <summary>The engine names of a glTF's nodes; unexpected shapes of extras or names (another tool's output) count as no name.</summary>
-    private static HashSet<string> Names(JsonObject root) => (root["nodes"] as JsonArray ?? [])
+    private static Dictionary<string, int> Names(JsonObject root) => (root["nodes"] as JsonArray ?? [])
         .Select(n => Text((((n as JsonObject)?["extras"] as JsonObject)?[Worlds.WorldGltf.Key] as JsonObject)?["name"]) ?? Text((n as JsonObject)?["name"]) ?? "")
-        .Where(n => n.Length > 0).ToHashSet(StringComparer.Ordinal);
+        .Where(n => n.Length > 0).GroupBy(n => n, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
     private static JsonObject Parse(byte[] json, string name, CancellationToken token)
     {
         try { GltfDocument.ValidateJsonText(json, token); return JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 }) as JsonObject ?? throw new InvalidDataException($"{name} is not a glTF JSON object."); }

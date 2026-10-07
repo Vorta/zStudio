@@ -77,6 +77,43 @@ internal static class SourceTerrainMcpChecks
             Assert.Equal(4, listed["recipes"]![0]!["pieces"]!.GetValue<int>());
             Assert.Empty((await Call("source_terrain", new() { ["document"] = Id(doc), ["offset"] = 1 }))["recipes"]!.AsArray());
 
+            // Reader-valid rings above the editing budget must remain inspectable through the real protocol and Properties.
+            var originalRecipe = SourceTerrain.Read(workspace, Recipe, token);
+            var longRing = Enumerable.Range(0, 150_000).Select(i => new Vector2(i, 0)).ToArray();
+            var largeRecipe = originalRecipe with { Regions = [new("large", [], new([new(longRing, []), new(longRing, [])]), TerrainAttributes.None)] };
+            workspace.Apply("inspection fixture", [(Recipe, largeRecipe.Write())], token);
+            var largeDescription = await Call("source_terrain", new() { ["document"] = Id(doc), ["recipe"] = Recipe, ["region"] = "large" });
+            Assert.Null(largeDescription["regions"]![0]!["shape"]!["area"]);
+            Assert.Contains("complexity", largeDescription["regions"]![0]!["shape"]!["areaUnavailable"]!.GetValue<string>());
+            Assert.Null(largeDescription["regionShape"]!["squareUnits"]);
+            Assert.True(largeDescription["regionShape"]!["truncated"]!.GetValue<bool>());
+            Assert.Equal(300_000, largeDescription["regionShape"]!["pointCount"]!.GetValue<int>());
+            var largeRegionEditor = new TerrainPropertiesEditor(Recipe, largeRecipe, null, null, "large", null, noEdits);
+            Assert.InRange(LogicalButtons(largeRegionEditor), 1, 160);
+            workspace.Undo();
+
+            // A held inspection leaves the dispatcher responsive and cannot label stale content as the current revision.
+            var originalReader = main.TerrainRecipeReader;
+            TaskCompletionSource readEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using SemaphoreSlim readProceed = new(0);
+            main.TerrainRecipeReader = (w, path, ct) =>
+            {
+                Assert.False(main.Dispatcher.CheckAccess());
+                var value = originalReader(w, path, ct); readEntered.TrySetResult();
+                Assert.True(readProceed.Wait(TimeSpan.FromSeconds(20), ct)); return value;
+            };
+            try
+            {
+                var reading = Call("source_terrain", new() { ["document"] = Id(doc), ["recipe"] = Recipe }, error: true);
+                await readEntered.Task.WaitAsync(token);
+                await Call("state", new());
+                workspace.Apply("concurrent recipe", [(Recipe, largeRecipe.Write())], token);
+                readProceed.Release();
+                Assert.Contains("context_changed", (await reading).GetValue<string>());
+                workspace.Undo();
+            }
+            finally { main.TerrainRecipeReader = originalReader; readProceed.Release(); }
+
             // The expensive edit callback runs on a worker. While held, protocol reads and Tools Cancel remain responsive.
             TaskCompletionSource editEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
             main.SourceEditPreparing = ct =>

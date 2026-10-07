@@ -92,8 +92,17 @@ public static class SourceExtractor
             read[file.Path] = SourceProject.Sha256(bytes);
             try
             {
-                if (ArchiveSources.Read(bytes).Any(m => m.Name.Equals("anim.zrd", StringComparison.OrdinalIgnoreCase)))
-                    carrying.Add(Path.GetDirectoryName(file.Relative) ?? "");
+                var members = ArchiveSources.Read(bytes);
+                var candidates = members.Where(m => m.Name.Equals("anim.zrd", StringComparison.OrdinalIgnoreCase)).ToArray();
+                // A name alone is not evidence of original data; duplicate members are ambiguous too.
+                if (candidates.Length == 1)
+                {
+                    // This preliminary decode needs the same reservation as resource reconstruction, before allocating a tree.
+                    RequireReconstructionCapacity(file.Relative, 0, bytes.LongLength + MemberCost * members.Count + 16L * candidates[0].Payload.Length, budget);
+                    if (ZrdDecoder.TryRead(candidates[0].Payload, token) is { Kind: ZrdKind.Array } tree
+                        && Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
+                        carrying.Add(Path.GetDirectoryName(file.Relative) ?? "");
+                }
             }
             catch (InvalidDataException) { }
         }

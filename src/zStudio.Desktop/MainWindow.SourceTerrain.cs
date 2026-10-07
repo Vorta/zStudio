@@ -303,11 +303,19 @@ public partial class MainWindow
 
     private void RegisterSourceTerrainCommands(StudioCommands r)
     {
-        Register(r, "source_terrain", "Describe the terrain recipes of the open source world's project (data/**/*.terrain.json): without recipe, each recipe with its surface and region counts and the pieces it compiled to in this world; with recipe, its surfaces, defaults and regions in the order they apply (name, surfaces, the attributes each sets, and its shape's parts, area and bounds); with region too, that region's shape coordinates (up to 4,096 points). Recipe attributes: zones, nodeZone, nodeGate, collision, standable, craters (allowed, blocked, ignored), soil, priority, flags.", false,
+        Register(r, "source_terrain", "Describe the terrain recipes of the open source world's project (data/**/*.terrain.json): without recipe, each recipe with its surface and region counts and the pieces it compiled to in this world; with recipe, its surfaces, defaults and regions in the order they apply (name, surfaces, the attributes each sets, and its shape's parts, area and bounds); with region too, that region's shape coordinates (up to 4,096 points). Area is null with areaUnavailable when the safe clipping work budget is exceeded; the region remains inspectable. Recipe attributes: zones, nodeZone, nodeGate, collision, standable, craters (allowed, blocked, ignored), soil, priority, flags.", false,
             [DocumentParameter, P("recipe", "string", "A recipe's project path, as listed."), P("region", "string", "A region of the recipe, for its shape's coordinates."), new("offset", "integer", "Recipe listing offset, or region listing offset with recipe; follow nextOffset. Pages contain at most 64 rows.", Minimum: 0, Maximum: int.MaxValue)], async (a, token) =>
         {
             var d = TargetDocument(a);
-            var workspace = SourceWorldOf(d).Workspace; var used = UsedTerrainRecipes(d);
+            var session = SourceWorldOf(d); var workspace = session.Workspace; var used = UsedTerrainRecipes(d);
+            long workspaceRevision = workspace.ContentRevision;
+            var readRecipe = TerrainRecipeReader;
+            void VerifyCurrent()
+            {
+                token.ThrowIfCancellationRequested();
+                if (d.IsDisposed || session.Owner != d) throw new StudioCommandException("stale_document", "The source world was rebuilt or closed during terrain inspection.");
+                if (workspace.ContentRevision != workspaceRevision) throw new StudioCommandException("context_changed", "The source workspace changed during terrain inspection; try again.");
+            }
             var pieces = d.SourceBuild?.Provenance.Values.Where(p => p.Terrain != null).GroupBy(p => p.Terrain!, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase) ?? [];
             // The project's files are listed and its recipes (up to 64 MB each) read off the UI thread.
             if (a["recipe"] is null)
@@ -318,10 +326,11 @@ public partial class MainWindow
                     var listed = TerrainRecipes(workspace, used);
                     return TerrainRecipePage(listed, offset, path =>
                     {
-                        var recipe = SourceTerrain.Read(workspace, path, token);
+                        var recipe = readRecipe(workspace, path, token);
                         return (recipe.Surfaces.Count, recipe.Regions.Count);
                     }, path => pieces.GetValueOrDefault(path)?.Count ?? 0, token);
                 }, token);
+                VerifyCurrent();
                 var data = page.Data.AsObject();
                 var rows = data["items"]; data.Remove("items"); data["recipes"] = rows;
                 data["recipeCount"] = data["total"]!.GetValue<int>(); data.Remove("total");
@@ -329,9 +338,28 @@ public partial class MainWindow
                 return page;
             }
             string path = Text(a, "recipe");
+            int regionOffset = Int(a, "offset");
+            string? selectedName = a["region"] is null ? null : Text(a, "region");
             TerrainRecipe parsed;
-            try { parsed = await Task.Run(() => SourceTerrain.Read(workspace, path, token), token); }
+            Dictionary<TerrainShape, TerrainArea> areas;
+            try
+            {
+                (parsed, areas) = await Task.Run(() =>
+                {
+                    var recipe = readRecipe(workspace, path, token);
+                    Dictionary<TerrainShape, TerrainArea> measured = new(ReferenceEqualityComparer.Instance);
+                    // Compute only the requested page and selected region, once per shape, away from the dispatcher.
+                    foreach (var region in recipe.Regions.Skip(regionOffset).Take(64).Concat(recipe.Regions.Where(r => r.Name == selectedName)))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (region.Shape is { } value && !measured.ContainsKey(value)) measured.Add(value, TerrainShapes.InspectArea(value.Polygons));
+                    }
+                    return (recipe, measured);
+                }, token);
+            }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
+            VerifyCurrent();
+            TerrainArea Area(TerrainShape value) => areas[value];
             object? shape = null;
             if (a["region"] is not null)
             {
@@ -348,7 +376,7 @@ public partial class MainWindow
                     polygonCount = region.Shape.Polygons.Count, pointCount = TerrainShapes.PointCount(region.Shape.Polygons),
                     // Coordinates stop at 4,096 points, at a whole polygon.
                     truncated = shown.Length < region.Shape.Polygons.Count,
-                    squareUnits = TerrainShapes.SquareUnits(region.Shape.Polygons), minY = region.Shape.MinY, maxY = region.Shape.MaxY
+                    squareUnits = Area(region.Shape).SquareUnits, areaUnavailable = Area(region.Shape).Unavailable, minY = region.Shape.MinY, maxY = region.Shape.MaxY
                 };
             }
             var built = pieces.GetValueOrDefault(path) ?? [];
@@ -357,15 +385,15 @@ public partial class MainWindow
                 document = d.SessionId, revision = d.Revision, recipe = path, compiler = parsed.Compiler,
                 defaults = parsed.Defaults.ToJson(),
                 surfaces = parsed.Surfaces.Select(s => new { id = s.Id, model = s.Model, node = s.Node, defaults = s.Defaults.ToJson(), pieces = built.Count(p => p.TerrainSurface == s.Id) }).ToArray(),
-                regions = parsed.Regions.Select((x, i) => new
+                regions = parsed.Regions.Skip(Int(a, "offset")).Take(64).Select((x, i) => new
                 {
-                    index = i, name = x.Name, surfaces = x.Surfaces, set = x.Set.ToJson(),
+                    index = Int(a, "offset") + i, name = x.Name, surfaces = x.Surfaces, set = x.Set.ToJson(),
                     shape = x.Shape == null ? null : new
                     {
-                        parts = x.Shape.Polygons.Count, points = TerrainShapes.PointCount(x.Shape.Polygons), area = TerrainShapes.SquareUnits(x.Shape.Polygons), minY = x.Shape.MinY, maxY = x.Shape.MaxY,
+                        parts = x.Shape.Polygons.Count, points = TerrainShapes.PointCount(x.Shape.Polygons), area = Area(x.Shape).SquareUnits, areaUnavailable = Area(x.Shape).Unavailable, minY = x.Shape.MinY, maxY = x.Shape.MaxY,
                         bounds = x.Shape.Polygons.Count == 0 ? null : new[] { x.Shape.Polygons.Min(p => p.Outer.Min(v => v.X)), x.Shape.Polygons.Min(p => p.Outer.Min(v => v.Y)), x.Shape.Polygons.Max(p => p.Outer.Max(v => v.X)), x.Shape.Polygons.Max(p => p.Outer.Max(v => v.Y)) }
                     }
-                }).Skip(Int(a, "offset")).Take(64).ToArray(),
+                }).ToArray(),
                 offset = Int(a, "offset"), nextOffset = (long)Int(a, "offset") + 64 < parsed.Regions.Count ? (int?)(Int(a, "offset") + 64) : null,
                 regionCount = parsed.Regions.Count, regionShape = shape, pieces = built.Count,
                 brush = terrainBrush?.Recipe == path ? new { region = terrainBrush.Region, mode = terrainBrush.Add ? "paint" : "erase", radius = terrainBrush.Radius } : null

@@ -5626,7 +5626,7 @@
   },
   {
     "Name": "zstudio_source_terrain",
-    "Description": "Describe the terrain recipes of the open source world\u0027s project (data/**/*.terrain.json): without recipe, each recipe with its surface and region counts and the pieces it compiled to in this world; with recipe, its surfaces, defaults and regions in the order they apply (name, surfaces, the attributes each sets, and its shape\u0027s parts, area and bounds); with region too, that region\u0027s shape coordinates (up to 4,096 points). Recipe attributes: zones, nodeZone, nodeGate, collision, standable, craters (allowed, blocked, ignored), soil, priority, flags.",
+    "Description": "Describe the terrain recipes of the open source world\u0027s project (data/**/*.terrain.json): without recipe, each recipe with its surface and region counts and the pieces it compiled to in this world; with recipe, its surfaces, defaults and regions in the order they apply (name, surfaces, the attributes each sets, and its shape\u0027s parts, area and bounds); with region too, that region\u0027s shape coordinates (up to 4,096 points). Area is null with areaUnavailable when the safe clipping work budget is exceeded; the region remains inspectable. Recipe attributes: zones, nodeZone, nodeGate, collision, standable, craters (allowed, blocked, ignored), soil, priority, flags.",
     "Mutates": false,
     "Parameters": [
       {

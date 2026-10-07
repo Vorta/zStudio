@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Numerics;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -419,42 +418,109 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
     /// <summary>The recipe as canonical JSON: fixed key order, shortest round-trip numbers, two-space indentation.</summary>
     public byte[] Write()
     {
-        JsonObject root = new()
+        // Write coordinates directly, without a JSON node graph or a UTF-16 copy of the complete recipe.
+        // Validate sizes before handing authored values to the writer, whose own buffer is flushed in bounded batches.
+        if (Surfaces.Count is 0 or > MaximumSurfaces || Regions.Count > MaximumRegions)
+            throw new InvalidDataException("The recipe exceeds its surface or region limits.");
+        long points = 0;
+        foreach (var surface in Surfaces)
         {
-            ["format"] = Format, ["version"] = Version, ["compiler"] = Compiler,
-            ["surfaces"] = new JsonArray(Surfaces.Select(s =>
+            TextSize(surface.Id, 32); TextSize(surface.Model, 260); TextSize(surface.Node, 128);
+        }
+        foreach (var region in Regions)
+        {
+            TextSize(region.Name, 128);
+            if (region.Surfaces.Count > MaximumSurfaces) throw new InvalidDataException("The region lists too many surfaces.");
+            foreach (string id in region.Surfaces) TextSize(id, 32);
+            if (region.Shape is not { } shape) continue;
+            if (shape.Polygons.Count > MaximumPolygons) throw new InvalidDataException("The region has too many polygons.");
+            foreach (var polygon in shape.Polygons)
             {
-                JsonObject o = new() { ["id"] = s.Id, ["model"] = s.Model, ["node"] = s.Node };
-                if (!s.Defaults.IsEmpty) o["defaults"] = Json(s.Defaults);
-                return (JsonNode?)o;
-            }).ToArray()),
-        };
-        if (!Defaults.IsEmpty) root["defaults"] = Json(Defaults);
+                Count(polygon.Outer);
+                if (polygon.Holes.Count > MaximumPoints / 3) throw new InvalidDataException("The polygon has too many holes.");
+                foreach (var hole in polygon.Holes) Count(hole);
+            }
+        }
+        using RecipeStream stream = new();
+        using Utf8JsonWriter writer = new(stream, new() { Indented = true, NewLine = "\n", Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        writer.WriteStartObject();
+        writer.WriteString("format", Format); writer.WriteNumber("version", Version); writer.WriteNumber("compiler", Compiler);
+        writer.WriteStartArray("surfaces");
+        foreach (var surface in Surfaces)
+        {
+            writer.WriteStartObject(); writer.WriteString("id", surface.Id); writer.WriteString("model", surface.Model); writer.WriteString("node", surface.Node);
+            if (!surface.Defaults.IsEmpty) Attributes("defaults", surface.Defaults);
+            writer.WriteEndObject(); writer.Flush();
+        }
+        writer.WriteEndArray();
+        if (!Defaults.IsEmpty) Attributes("defaults", Defaults);
         if (Regions.Count > 0)
-            root["regions"] = new JsonArray(Regions.Select(r =>
+        {
+            writer.WriteStartArray("regions");
+            foreach (var region in Regions)
             {
-                JsonObject o = new() { ["name"] = r.Name };
-                if (r.Surfaces.Count > 0) o["surfaces"] = new JsonArray(r.Surfaces.Select(s => (JsonNode?)JsonValue.Create(s)).ToArray());
-                if (r.Shape is { } shape)
+                writer.WriteStartObject(); writer.WriteString("name", region.Name);
+                if (region.Surfaces.Count > 0)
                 {
-                    JsonObject s = new() { ["plane"] = "xz" };
-                    if (shape.MinY is { } min) s["minY"] = min;
-                    if (shape.MaxY is { } max) s["maxY"] = max;
-                    s["polygons"] = new JsonArray(shape.Polygons.Select(p =>
-                    {
-                        JsonObject polygon = new() { ["outer"] = Ring(p.Outer) };
-                        if (p.Holes.Count > 0) polygon["holes"] = new JsonArray(p.Holes.Select(h => (JsonNode?)Ring(h)).ToArray());
-                        return (JsonNode?)polygon;
-                    }).ToArray());
-                    o["shape"] = s;
+                    writer.WriteStartArray("surfaces"); foreach (string id in region.Surfaces) writer.WriteStringValue(id); writer.WriteEndArray();
                 }
-                o["set"] = Json(r.Set);
-                return (JsonNode?)o;
-            }).ToArray());
-        string text = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
-        return Encoding.UTF8.GetBytes(text.Replace("\r\n", "\n") + "\n");
+                if (region.Shape is { } shape)
+                {
+                    writer.WriteStartObject("shape"); writer.WriteString("plane", "xz");
+                    if (shape.MinY is { } min) writer.WriteNumber("minY", min);
+                    if (shape.MaxY is { } max) writer.WriteNumber("maxY", max);
+                    writer.WriteStartArray("polygons");
+                    foreach (var polygon in shape.Polygons)
+                    {
+                        writer.WriteStartObject(); writer.WritePropertyName("outer"); Ring(polygon.Outer);
+                        if (polygon.Holes.Count > 0)
+                        {
+                            writer.WriteStartArray("holes"); foreach (var hole in polygon.Holes) Ring(hole); writer.WriteEndArray();
+                        }
+                        writer.WriteEndObject();
+                    }
+                    writer.WriteEndArray(); writer.WriteEndObject();
+                }
+                Attributes("set", region.Set); writer.WriteEndObject(); writer.Flush();
+            }
+            writer.WriteEndArray();
+        }
+        writer.WriteEndObject(); writer.Flush(); stream.WriteByte((byte)'\n');
+        return stream.ToArray();
 
-        static JsonArray Ring(IReadOnlyList<Vector2> ring) => new(ring.Select(p => (JsonNode?)new JsonArray(p.X, p.Y)).ToArray());
-        static JsonObject Json(TerrainAttributes a) => a.ToJson();
+        void Ring(IReadOnlyList<Vector2> ring)
+        {
+            writer.WriteStartArray(); int count = 0;
+            foreach (var point in ring)
+            {
+                writer.WriteStartArray(); writer.WriteNumberValue(point.X); writer.WriteNumberValue(point.Y); writer.WriteEndArray();
+                if (++count % 512 == 0) writer.Flush();
+            }
+            writer.WriteEndArray(); writer.Flush();
+        }
+        void Attributes(string name, TerrainAttributes value) { writer.WritePropertyName(name); value.ToJson().WriteTo(writer); }
+        static void TextSize(string value, int limit)
+        {
+            if (value.Length is 0 || value.Length > limit) throw new InvalidDataException("A recipe name or path exceeds its text limit.");
+        }
+        void Count(IReadOnlyList<Vector2> ring)
+        {
+            if (ring.Count is < 3 or > MaximumRingPoints || (points += ring.Count) > MaximumPoints)
+                throw new InvalidDataException("The recipe exceeds its ring or total point limits.");
+        }
+    }
+
+    /// <summary>Bounds output before allocation, including the final newline and MemoryStream's capacity growth.</summary>
+    private sealed class RecipeStream : MemoryStream
+    {
+        private void Reserve(int count)
+        {
+            long required = Position + count;
+            if (required > MaximumBytes) throw new InvalidDataException("The terrain recipe is larger than 64 MB.");
+            if (required > Capacity) Capacity = (int)Math.Min(MaximumBytes, Math.Max(required, Math.Max(4096L, Capacity * 2L)));
+        }
+        public override void Write(ReadOnlySpan<byte> buffer) { Reserve(buffer.Length); base.Write(buffer); }
+        public override void Write(byte[] buffer, int offset, int count) { Reserve(count); base.Write(buffer, offset, count); }
+        public override void WriteByte(byte value) { Reserve(1); base.WriteByte(value); }
     }
 }

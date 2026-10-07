@@ -13,6 +13,13 @@ public static class TerrainShapes
     /// <summary>Points a shape may hold after an edit; a stroke that would exceed it is refused.</summary>
     public const int MaximumPoints = 200_000;
 
+    /// <summary>Area within the clipping work budget, or a reason it is unavailable. Inspection must not reject a valid recipe because editing has stricter limits.</summary>
+    public static TerrainArea InspectArea(IReadOnlyList<TerrainOutline> shape)
+    {
+        try { return new(SquareUnits(shape), null); }
+        catch (InvalidDataException ex) { return new(null, ex.Message); }
+    }
+
     /// <summary>The shape's area as clean polygons: overlaps merged, holes inside their polygons, islands as polygons of their own.</summary>
     public static IReadOnlyList<TerrainOutline> Normalize(IReadOnlyList<TerrainOutline> shape) => Outlines(Area(shape));
 
@@ -157,3 +164,6 @@ public static class TerrainShapes
         }
     }
 }
+
+/// <summary>A bounded area calculation; a missing value carries an explicit explanation.</summary>
+public sealed record TerrainArea(double? SquareUnits, string? Unavailable);

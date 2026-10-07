@@ -16,6 +16,53 @@ public sealed class SourceBlenderTests
     private const string Model = "data/m1/models/m1.gltf";
 
     [Fact]
+    public void RemovingOneOfTwoSameNamedNodesWarnsBeforeAccepting()
+    {
+        using SourceWorldFixture fixture = new();
+        var json = JsonNode.Parse(File.ReadAllText(fixture.Path(Model)))!.AsObject();
+        var nodes = json["nodes"]!.AsArray();
+        int duplicate = nodes.Count;
+        nodes.Add(nodes[0]!.DeepClone());
+        json["scenes"]![0]!["nodes"]!.AsArray().Add(duplicate);
+        fixture.Write(Model, json.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project);
+        var checkout = SourceBlender.Checkout(workspace, Model, Token);
+        string export = Export(checkout, change: g =>
+        {
+            g["nodes"]!.AsArray().RemoveAt(duplicate);
+            var roots = g["scenes"]![0]!["nodes"]!.AsArray(); roots.RemoveAt(roots.Count - 1);
+        });
+        var plan = SourceBlender.PlanUpdate(workspace, checkout, export, token: Token);
+        Assert.Contains(plan.Notes, n => n.Contains("Nodes no longer present", StringComparison.Ordinal) && n.Contains("1 removed"));
+        string unchanged = Export(checkout, "unchanged");
+        Assert.DoesNotContain(SourceBlender.PlanUpdate(workspace, checkout, unchanged, token: Token).Notes, n => n.Contains("Nodes no longer present"));
+    }
+
+    [Fact]
+    public void DeletedNodeWarningBoundsItsSampleAndRetainsTheTotalCount()
+    {
+        using SourceWorldFixture fixture = new();
+        var json = JsonNode.Parse(File.ReadAllText(fixture.Path(Model)))!.AsObject();
+        var nodes = json["nodes"]!.AsArray(); int original = nodes.Count;
+        for (int i = 0; i < 40; i++)
+        {
+            var node = nodes[0]!.DeepClone();
+            node["name"] = new string('x', 120) + i;
+            node["extras"]![WorldGltf.Key]!["name"] = new string('x', 120) + i;
+            json["scenes"]![0]!["nodes"]!.AsArray().Add(nodes.Count); nodes.Add(node);
+        }
+        fixture.Write(Model, json.ToJsonString());
+        SourceWorkspace workspace = new(fixture.Project); var checkout = SourceBlender.Checkout(workspace, Model, Token);
+        string export = Export(checkout, change: g =>
+        {
+            while (g["nodes"]!.AsArray().Count > original) g["nodes"]!.AsArray().RemoveAt(original);
+            var roots = g["scenes"]![0]!["nodes"]!.AsArray(); while (roots.Count > original) roots.RemoveAt(original);
+        });
+        var warning = Assert.Single(SourceBlender.PlanUpdate(workspace, checkout, export, token: Token).Notes, n => n.Contains("Nodes no longer present"));
+        Assert.Contains("40 removed", warning); Assert.Contains("24 more removed nodes", warning); Assert.InRange(warning.Length, 1, 4096);
+    }
+
+    [Fact]
     public void FullAppliedManifestRefusesPlanningBeforeAcceptingAnUpdate()
     {
         using SourceWorldFixture fixture = new();
