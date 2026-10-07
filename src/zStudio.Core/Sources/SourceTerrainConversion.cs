@@ -282,9 +282,7 @@ public static partial class SourceTerrainConversion
         nodes.Add(new JsonObject { ["name"] = stem, ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = SourceTerrain.RelativePath(plan.Database, plan.Recipe) } } });
         // Removal renumbers the scene's list into a new array.
         ((JsonArray)((JsonArray)root["scenes"]!)[sceneIndex]!["nodes"]!).Insert(place, nodes.Count - 1);
-        byte[] original = workspace.Read(plan.Database, token) ?? [];
-        bool indented = original.AsSpan(0, Math.Min(original.Length, 4096)).Contains((byte)'\n');
-        byte[] database = Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = indented }));
+        byte[] database = JsonSerializer.SerializeToUtf8Bytes(root);
         return workspace.Apply($"Convert {Path.GetFileName(plan.Database)} to editable terrain",
             [(plan.Surfaces, json), ($"{folder}/{binary}", bin), (plan.Recipe, TerrainRecipe.Parse(recipe.Write(), plan.Recipe).Write()), (plan.Database, database)], token)
             ?? throw new InvalidDataException("The conversion changed nothing.");
@@ -294,11 +292,22 @@ public static partial class SourceTerrainConversion
     {
         database = SourceWorkspace.Normalize(database);
         if (!database.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{database} must be a .gltf file to convert.");
-        byte[] bytes = workspace.Read(database, token) ?? throw new InvalidDataException($"The project has no {database}.");
+        byte[] bytes = workspace.Read(database, token, SourceTerrain.MaximumDatabaseJsonBytes) ?? throw new InvalidDataException($"The project has no {database}.");
         var doc = GltfDocument.Read(bytes, uri => workspace.Read(WorldAssembler.Relative(database, uri), token) ?? throw new InvalidDataException($"{database} names {JsonData.ShownText(uri)}, which does not exist."), token);
         JsonObject root;
         try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject ?? throw new InvalidDataException($"{database} is not a JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{database} is not valid JSON: {ex.Message}", ex); }
+        // Match the shared reader's implicit-root semantics before the editor removes/renumbers nodes.
+        if (root["scenes"] is not JsonArray { Count: > 0 })
+        {
+            root["scene"] = 0;
+            root["scenes"] = new JsonArray(new JsonObject { ["nodes"] = new JsonArray(doc.Roots.Select(n => (JsonNode?)JsonValue.Create(n.Index)).ToArray()) });
+        }
+        else
+        {
+            int scene = GltfInteger.OptionalInt32(root["scene"], "scene") ?? 0;
+            root["scenes"]![scene]!["nodes"] ??= new JsonArray();
+        }
         return (root, doc);
     }
     private static uint Flags(JsonObject? extras) =>

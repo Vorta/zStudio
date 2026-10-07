@@ -100,7 +100,7 @@ public static partial class SourceBlender
             return bytes;
         }
         byte[] json = Load(model) ?? throw new InvalidDataException($"{model} does not exist.");
-        JsonObject root = Parse(json, model);
+        JsonObject root = Parse(json, model, token);
         // Read as a build reads it before anything is copied: a model the build could not load is refused, and the buffers it
         // copies are those the reader read and bounded (at most 4,096, of 512 MiB together), each project file once.
         Dictionary<string, byte[]> bufferBytes = new(StringComparer.OrdinalIgnoreCase);
@@ -360,7 +360,7 @@ public static partial class SourceBlender
         string outbox = Path.GetFullPath(checkout.Outbox), exportFolder = Path.GetDirectoryName(chosen.Gltf)!;
         SourceProject.RejectNestedLinks(checkout.Folder, Path.GetRelativePath(checkout.Folder, chosen.Gltf).Replace('\\', '/'));
         byte[] json = Stable(chosen.Gltf, token);
-        JsonObject root = Parse(json, chosen.Relative);
+        JsonObject root = Parse(json, chosen.Relative, token);
         Dictionary<string, byte[]> uses = new(StringComparer.OrdinalIgnoreCase);
         long total = json.Length;
         // The sealed copy keeps the export's place in the outbox, so it never leaves the sealed folder.
@@ -451,7 +451,7 @@ public static partial class SourceBlender
             changes.Add((project, png));
         }
         // Node names find animations and placements; report the ones the export no longer has.
-        var checkedOut = Parse(workspace.Read(model, token) ?? throw new InvalidDataException($"{model} no longer exists."), model);
+        var checkedOut = Parse(workspace.Read(model, token, GltfDocument.MaximumJsonBytes) ?? throw new InvalidDataException($"{model} no longer exists."), model, token);
         var before = Names(checkedOut);
         var after = Names(root);
         // Engine attributes travel in extras.recoil, which Blender writes only with Custom Properties on.
@@ -607,9 +607,9 @@ public static partial class SourceBlender
     private static HashSet<string> Names(JsonObject root) => (root["nodes"] as JsonArray ?? [])
         .Select(n => Text((((n as JsonObject)?["extras"] as JsonObject)?[Worlds.WorldGltf.Key] as JsonObject)?["name"]) ?? Text((n as JsonObject)?["name"]) ?? "")
         .Where(n => n.Length > 0).ToHashSet(StringComparer.Ordinal);
-    private static JsonObject Parse(byte[] json, string name)
+    private static JsonObject Parse(byte[] json, string name, CancellationToken token)
     {
-        try { return JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 }) as JsonObject ?? throw new InvalidDataException($"{name} is not a glTF JSON object."); }
+        try { GltfDocument.ValidateJsonText(json, token); return JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 }) as JsonObject ?? throw new InvalidDataException($"{name} is not a glTF JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{name} is not valid JSON: {ex.Message}", ex); }
     }
 }

@@ -88,13 +88,14 @@ public static class BuildProfiles
     /// cannot be used (one written for looser rules, say) is listed with its <see cref="BuildProfile.Error"/>, so it blocks only
     /// itself; it fails the list when it may be the default (it says so, or its JSON cannot be read), which could not be chosen.
     /// </summary>
-    public static IReadOnlyList<BuildProfile> List(string root, Func<string, byte[]?>? read = null, IEnumerable<string>? files = null)
+    public static IReadOnlyList<BuildProfile> List(string root, Func<string, byte[]?>? read = null, IEnumerable<string>? files = null, CancellationToken token = default)
     {
         Dictionary<string, BuildProfile> profiles = new(StringComparer.OrdinalIgnoreCase) { [Original.Name] = Original, [Modern.Name] = Modern };
-        foreach (string path in ProfileFiles(root, files))
+        foreach (string path in ProfileFiles(root, files, token))
         {
             string name = Path.GetFileNameWithoutExtension(path);
-            byte[] json = ReadProfile(root, path, read);
+            token.ThrowIfCancellationRequested();
+            byte[] json = ReadProfile(root, path, read, token);
             BuildProfile profile;
             try { profile = Parse(name, json, path); }
             catch (InvalidDataException ex) when (!MayBeDefault(json)) { profile = new(name, "", "invalid", [], path) { Error = ex.Message }; }
@@ -123,35 +124,36 @@ public static class BuildProfiles
     /// The named profile, reading only its own file, so another malformed profile does not block it; the project's
     /// default (which needs every file) when null.
     /// </summary>
-    public static BuildProfile Find(string root, string? name, Func<string, byte[]?>? read = null, IEnumerable<string>? files = null)
+    public static BuildProfile Find(string root, string? name, Func<string, byte[]?>? read = null, IEnumerable<string>? files = null, CancellationToken token = default)
     {
-        if (name == null) return List(root, read, files).Single(p => p.IsDefault);
-        var paths = ProfileFiles(root, files);
+        if (name == null) return List(root, read, files, token).Single(p => p.IsDefault);
+        var paths = ProfileFiles(root, files, token);
         if (paths.FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals(name, StringComparison.OrdinalIgnoreCase)) is { } own)
-            return Parse(Path.GetFileNameWithoutExtension(own), ReadProfile(root, own, read), own);
+            return Parse(Path.GetFileNameWithoutExtension(own), ReadProfile(root, own, read, token), own);
         if (name.Equals(Original.Name, StringComparison.OrdinalIgnoreCase)) return Original;
         if (name.Equals(Modern.Name, StringComparison.OrdinalIgnoreCase)) return Modern;
         throw new InvalidDataException($"The project has no build profile {name} ({string.Join(", ", paths.Select(Path.GetFileNameWithoutExtension).Append(Original.Name).Append(Modern.Name).Distinct(StringComparer.OrdinalIgnoreCase))}).");
     }
     /// <summary>Whether the project has a profile of that name (built in, or a file of it), however its file reads.</summary>
-    public static bool Exists(string root, string name, IEnumerable<string>? files = null) =>
+    public static bool Exists(string root, string name, IEnumerable<string>? files = null, CancellationToken token = default) =>
         name.Equals(Original.Name, StringComparison.OrdinalIgnoreCase) || name.Equals(Modern.Name, StringComparison.OrdinalIgnoreCase)
-        || (files ?? SourceProject.Files(root, Folder, n => n.EndsWith(".json", StringComparison.OrdinalIgnoreCase)))
+        || (files ?? SourceProject.Files(root, Folder, n => n.EndsWith(".json", StringComparison.OrdinalIgnoreCase), token: token))
             .Any(p => p.StartsWith(Folder + "/", StringComparison.OrdinalIgnoreCase) && !p[(Folder.Length + 1)..].Contains('/') && Path.GetFileNameWithoutExtension(p).Equals(name, StringComparison.OrdinalIgnoreCase));
     /// <summary>The profile files: .json files directly in the profiles folder (sub-folders are not profiles).</summary>
-    private static IReadOnlyList<string> ProfileFiles(string root, IEnumerable<string>? files)
+    private static IReadOnlyList<string> ProfileFiles(string root, IEnumerable<string>? files, CancellationToken token)
     {
-        var paths = (files ?? SourceProject.Files(root, Folder, n => n.EndsWith(".json", StringComparison.OrdinalIgnoreCase)))
+        token.ThrowIfCancellationRequested();
+        var paths = (files ?? SourceProject.Files(root, Folder, n => n.EndsWith(".json", StringComparison.OrdinalIgnoreCase), token: token))
             .Where(p => p.StartsWith(Folder + "/", StringComparison.OrdinalIgnoreCase) && !p[(Folder.Length + 1)..].Contains('/')).Order(StringComparer.OrdinalIgnoreCase).ToArray();
         if (paths.Length > MaximumProfiles) throw new InvalidDataException($"{Folder} holds more than {MaximumProfiles} profiles.");
         return paths;
     }
-    private static byte[] ReadProfile(string root, string path, Func<string, byte[]?>? read)
+    private static byte[] ReadProfile(string root, string path, Func<string, byte[]?>? read, CancellationToken token)
     {
         if (read != null) return read(path) ?? throw new InvalidDataException($"{path} does not exist.");
         var info = new FileInfo(SourceProject.Resolve(root, path));
         if (info.Length > MaximumFileBytes) throw new InvalidDataException($"{path} is larger than 64 KB.");
-        return SourceRead.All(info.FullName, MaximumFileBytes);
+        return SourceRead.All(info.FullName, MaximumFileBytes, token);
     }
 
     /// <summary>A profile file: <c>{ "format": "recoil-build-profile", "version": 1, "description", "status", "default", "texturePacks": [ { "file", "budgetMiB", "maximumDimension", "missions" } ] }</c>.</summary>

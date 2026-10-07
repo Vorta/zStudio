@@ -57,6 +57,11 @@ public sealed class WatchState
 
 public static class WatchLogic
 {
+    public static void ValidateChannel(bool claude, string? codexThread)
+    {
+        if (claude && !string.IsNullOrWhiteSpace(codexThread))
+            throw new InvalidOperationException("This is a Codex conversation. Omit --claude to use its queue; foreground listen output does not wake Codex. Use status/read on the old channel to inspect its history.");
+    }
     public static Notice? Observe(WatchState state, Observation observation, DateTimeOffset now)
     {
         state.LastSuccess = now; state.LastError = null; state.FailureCount = 0;

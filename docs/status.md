@@ -1,5 +1,13 @@
 # Desktop implementation status
 
+## PR18 notification and review fixes (2026-10-07)
+
+PR notifications now use the Codex queue for a Codex conversation. The helper refuses foreground-only Claude delivery in that environment and reports actual listener process liveness; listener cancellation and completion clear its identity. The current-conversation queue add/read/delete probe passed. A real subsequent notification is still needed to establish idle-turn delivery by the host.
+
+Six further review findings are fixed: complete glTF JSON is bounded before DOM construction, unsupported authored material channels are refused, KHR texture rotation follows the specification, profile enumeration and selection run off the dispatcher with cancellation and stale-result checks, build/preview references stay within authoritative source folders, and terrain conversion preserves implicit roots in scene-less databases. Sibling guards cover Blender and object-edit JSON parsing, conversion JSON rewriting, nested buffer references and profile acceptance behavior.
+
+The full actual-base review was reconciled with prior per-file coverage and the reopened risk categories, followed by a separate final challenge before commit. The solution passes 1,659 tests (1,477 Core with 1999/MW3, 110 Desktop/MCP and 72 watcher tests); the final Desktop rerun passes all 110 after profile acceptance refinements, and the 1998 reconstruction/terrain subset passes nine. Release builds have zero warnings/errors. The direct compiled-save check/replacement race remains explicitly unresolved by user choice. No merge, public release or version bump is included.
+
 ## PR18 follow-up review fixes (2026-10-06)
 
 The next nine findings have fixes for unsupported glTF primitives, non-finite accessors and compiled numbers, MASK semantics, terrain JSON allocation, reconstruction reservations, same-bank sound ambiguity, background source-edit preparation and shared build-profile MCP selection. The sibling pass also covers generated geometry, writer model bounds, archive preflight, recipe reads, object/placement edits and Blender acceptance. Retail banks' byte-identical duplicate sounds remain supported; differing duplicates are refused.

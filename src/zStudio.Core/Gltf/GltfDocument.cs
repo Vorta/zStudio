@@ -97,6 +97,8 @@ public sealed class GltfDocument
     /// copy of each, also of entries nothing uses, and its callers read the extras again.
     /// </summary>
     public const long MaximumMetadataBytes = 32L * 1024 * 1024;
+    /// <summary>Complete JSON, including unknown properties and inline data, bounded before either DOM is allocated.</summary>
+    public const int MaximumJsonBytes = 32 * 1024 * 1024;
     public List<GltfNode> Roots { get; } = [];
     public JsonObject? SceneExtras { get; set; }
     public string Generator { get; set; } = "zStudio";
@@ -290,9 +292,10 @@ public sealed class GltfDocument
             }
             if (jsonBytes.IsEmpty) throw new InvalidDataException("GLB without JSON.");
         }
-        // The parsed text is checked before any of it is read into objects (see Bound); the objects read it as they are used.
+        ValidateJsonText(jsonBytes, token);
         JsonElement parsed = JsonElement.Parse(jsonBytes, new JsonDocumentOptions { MaxDepth = 64 });
         if (parsed.ValueKind != JsonValueKind.Object) throw new InvalidDataException("glTF JSON must be an object.");
+        Bound(parsed, limits.MetadataBytes);
         JsonObject root = JsonObject.Create(parsed)!;
         if (root["asset"]?["version"]?.GetValue<string>() is not { } version || !version.StartsWith('2')) throw new InvalidDataException("Only glTF 2.0 is supported.");
         // A required extension changes what the file means, so one the reader does not implement refuses the file (glTF has
@@ -305,7 +308,6 @@ public sealed class GltfDocument
         // The vertex attributes KHR_mesh_quantization adds (8- and 16-bit integer positions, normals and texture
         // coordinates) are glTF only in a file that declares it, as glTF has a file declare every extension it uses.
         bool quantized = Declares(parsed, "extensionsUsed") || Declares(parsed, "extensionsRequired");
-        Bound(parsed, limits.MetadataBytes);
         if (root["animations"] is JsonArray { Count: > 0 })
             throw new InvalidDataException("glTF animation channels cannot be preserved in a RECOIL model. Export the static model and author animations in the project's .zad/.zan sources.");
         if ((root["nodes"] as JsonArray ?? []).Any(n => n?["skin"] != null))
@@ -518,6 +520,7 @@ public sealed class GltfDocument
             if (m?["alphaCutoff"] is { } cutoff) material.AlphaCutoff = cutoff.GetValue<float>();
             if (!float.IsFinite(material.AlphaCutoff) || material.AlphaCutoff < 0) throw new InvalidDataException($"glTF material {materials.Count} has an invalid alpha cutoff.");
             var pbr = m?["pbrMetallicRoughness"];
+            RefuseMaterialChannels(m!, pbr, materials.Count);
             if (pbr?["baseColorFactor"] is { } factor)
             {
                 if (!TryNumbers(factor, 4, out var c)) throw new InvalidDataException($"glTF material {materials.Count} has a base colour that is not 4 finite numbers.");
@@ -755,10 +758,36 @@ public sealed class GltfDocument
     /// <summary>An entry's extras when they are an object (anything else is not extras), copied so the parsed text is not held.</summary>
     private static JsonObject? Extras(JsonNode? entry) => entry?["extras"] is JsonObject extras ? (JsonObject)extras.DeepClone() : null;
 
+    /// <summary>Shared pre-DOM guard for the importer and source JSON editors, including unknown properties.</summary>
+    internal static void ValidateJsonText(ReadOnlySpan<byte> json, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (json.Length > MaximumJsonBytes)
+            throw new InvalidDataException("glTF JSON exceeds 32 MiB. Remove unused metadata/extras and put large inline buffers in external .bin files or a GLB BIN chunk.");
+        Utf8JsonReader scan = new(json, new JsonReaderOptions { MaxDepth = 64 });
+        int tokens = 0;
+        while (scan.Read())
+        {
+            if ((++tokens & 1023) == 0) token.ThrowIfCancellationRequested();
+            if (tokens > 4_000_000) throw new InvalidDataException("glTF JSON holds more than 4,000,000 tokens. Split the model or remove unused metadata.");
+        }
+    }
+
+    private static void RefuseMaterialChannels(JsonNode material, JsonNode? pbr, int index)
+    {
+        void Unsupported(string field) => throw new InvalidDataException($"glTF material {index} uses {field}, which RECOIL cannot preserve. Bake the appearance into the base-colour texture and remove that channel.");
+        foreach (string field in new[] { "normalTexture", "occlusionTexture", "emissiveTexture" })
+            if (material[field] != null) Unsupported(field);
+        if (pbr?["metallicRoughnessTexture"] != null) Unsupported("metallicRoughnessTexture");
+        if (pbr?["metallicFactor"] is { } metallic && (!TryNumber(metallic, out float m) || m != 0)) Unsupported("metallicFactor (only 0 is representable)");
+        if (pbr?["roughnessFactor"] is { } roughness && (!TryNumber(roughness, out float r) || r != 1)) Unsupported("roughnessFactor (only 1 is representable)");
+        if (material["emissiveFactor"] is { } emissive && (!TryNumbers(emissive, 3, out var e) || e.Any(v => v != 0))) Unsupported("emissiveFactor");
+    }
+
     /// <summary>
     /// Where a material's base-colour texture (its texture info) is sampled: the texture coordinate set it names (texCoord,
     /// 0 when absent) and the transform its KHR_texture_transform extension applies, as glTF states it: the coordinates are
-    /// scaled, rotated by <c>rotation</c> radians (u gains v·sin, v loses u·sin) and offset, and the extension's own texCoord
+    /// scaled, rotated by <c>rotation</c> radians (u loses v·sin, v gains u·sin) and offset, and the extension's own texCoord
     /// replaces the set. Another extension on it may change where the texture lies as well, so it is refused rather than read
     /// without it, as is a set or transform that is not a valid number.
     /// </summary>
@@ -781,10 +810,10 @@ public sealed class GltfDocument
                 float rotation = 0;
                 if (t["rotation"] is { } r && !(TryNumber(r, out rotation) && float.IsFinite(rotation))) throw Malformed($"a {TextureTransform} rotation that is not a finite number");
                 if (t["texCoord"] is { } replaced) set = Set(replaced);
-                // u' = offset.u + cos·scale.u·u + sin·scale.v·v, v' = offset.v − sin·scale.u·u + cos·scale.v·v (translation ·
+                // u' = offset.u + cos·scale.u·u - sin·scale.v·v, v' = offset.v + sin·scale.u·u + cos·scale.v·v (translation ·
                 // rotation · scale), as Vector2.Transform applies a Matrix3x2.
                 float cos = (float)Math.Cos(rotation), sin = (float)Math.Sin(rotation);
-                transform = new(cos * scale[0], -sin * scale[0], sin * scale[1], cos * scale[1], offset[0], offset[1]);
+                transform = new(cos * scale[0], sin * scale[0], -sin * scale[1], cos * scale[1], offset[0], offset[1]);
             }
         }
         return (set, transform);

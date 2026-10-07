@@ -35,6 +35,13 @@ public static partial class SourceProject
     }
     public static string Relative(string root, string path) => System.IO.Path.GetRelativePath(root, path).Replace('\\', '/');
 
+    internal static void RequireSource(string relative)
+    {
+        string first = relative.Split('/')[0];
+        if (!first.Equals(DataFolder, StringComparison.OrdinalIgnoreCase) && !first.Equals(GameGenFolder, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"{JsonData.ShownText(relative)} is not an authoritative source: build inputs must stay under data/ or gamegen/.");
+    }
+
     /// <summary>
     /// Whether the file at <paramref name="path"/> holds exactly <paramref name="expected"/>. The file is read in small
     /// blocks, so checking a file of hundreds of megabytes against the copy already in memory needs no second copy of it.

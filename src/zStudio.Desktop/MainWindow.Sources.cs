@@ -95,28 +95,58 @@ public partial class MainWindow
 
     /// <summary>The build profile Tools → Build profile chose for a project (null: the project's default).</summary>
     private (string Root, string Name)? sourceProfileChoice;
-    private object SelectSourceProfile(string root, string? name)
+    internal Action<CancellationToken>? SourceProfilesReading { get; set; }
+    private long sourceProfileSelection, sourceProfileMenuRequest;
+    private async Task<object> SelectSourceProfileAsync(string root, string? name, CancellationToken token = default)
     {
         if (SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The source project changed; choose its profile again.");
-        var profile = ResolveProfile(root, name);
+        if (operation != null) throw new StudioCommandException("busy", "Another source operation is running.");
+        long generation = ViewModel.WorkspaceGeneration, request = ++sourceProfileSelection;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
+        operation = cancellation; CancelOperationItem.IsEnabled = true;
+        BuildProfile profile; IReadOnlyList<BuildProfile>? profiles; string? menuError;
+        try
+        {
+            (profile, profiles, menuError) = await Task.Run(() =>
+            {
+                SourceProfilesReading?.Invoke(cancellation.Token);
+                var selected = ResolveProfile(root, name, cancellation.Token);
+                // A malformed unrelated/default profile may prevent listing, but must not block a valid named choice.
+                try { return (selected, (IReadOnlyList<BuildProfile>?)BuildProfiles.List(root, token: cancellation.Token), (string?)null); }
+                catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+                { return (selected, (IReadOnlyList<BuildProfile>?)null, (string?)Bounded(ex.Message, 512)); }
+            }, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (generation != ViewModel.WorkspaceGeneration || request != sourceProfileSelection || SourceProjectRoot != root)
+                throw new StudioCommandException("context_changed", "The source project changed; choose its profile again.");
+        }
+        finally { if (operation == cancellation) { operation = null; CancelOperationItem.IsEnabled = false; } }
         sourceProfileChoice = profile.IsDefault ? null : (root, profile.Name);
-        FillSourceProfileMenu(root);
+        ++sourceProfileMenuRequest; // A scan started before this choice must not replace its menu.
+        if (profiles != null) FillSourceProfileMenu(root, profiles);
+        else { SourceProfileMenu.Items.Clear(); SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = menuError, MaxWidth = 420, TextWrapping = TextWrapping.Wrap }, IsEnabled = false }); }
         ViewModel.Status = $"Exports build the {profile.Name} profile.";
         return new { project = root, profile = profile.Name, usesDefault = profile.IsDefault };
     }
-    private string? SourceProfileFor(string root)
+    private async Task<string?> SourceProfileForAsync(string root, CancellationToken token = default)
     {
         if (sourceProfileChoice is not { } choice || !choice.Root.Equals(root, StringComparison.OrdinalIgnoreCase)) return null;
         // A chosen profile whose file was removed falls back to the project's default; a broken one stays chosen, so the
         // export reports it rather than building another profile's packs.
-        try { if (BuildProfiles.Exists(root, choice.Name)) return choice.Name; }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { return choice.Name; }
+        long generation = ViewModel.WorkspaceGeneration;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
+        bool exists;
+        try { exists = await Task.Run(() => BuildProfiles.Exists(root, choice.Name, token: cancellation.Token), cancellation.Token); }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { exists = true; }
+        cancellation.Token.ThrowIfCancellationRequested();
+        if (generation != ViewModel.WorkspaceGeneration || sourceProfileChoice != choice) throw new StudioCommandException("context_changed", "The project or profile choice changed.");
+        if (exists) return choice.Name;
         sourceProfileChoice = null; return null;
     }
     /// <summary>A project's build profile, refused as an invalid argument when its files are malformed or the name is unknown.</summary>
-    private static BuildProfile ResolveProfile(string root, string? name)
+    private static BuildProfile ResolveProfile(string root, string? name, CancellationToken token = default)
     {
-        try { return BuildProfiles.Find(root, name); }
+        try { return BuildProfiles.Find(root, name, token: token); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
     }
@@ -194,12 +224,15 @@ public partial class MainWindow
     private async Task<object> SourceStatusAsync(JsonObject a, CancellationToken token)
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
+        long generation = ViewModel.WorkspaceGeneration;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken);
+        token = cancellation.Token;
         IReadOnlyList<SourceOutputPlan> plan; IReadOnlyList<BuildProfile> profiles; BuildProfile profile;
         try
         {
-            profiles = await Task.Run(() => BuildProfiles.List(root), token);
+            profiles = await Task.Run(() => BuildProfiles.List(root, token: token), token);
             // Without a profile, the one chosen in Tools → Build profile (as source_export uses), else the project's default.
-            string? name = a["profile"] is null ? SourceProfileFor(root) : Text(a, "profile");
+            string? name = a["profile"] is null ? await SourceProfileForAsync(root, token) : Text(a, "profile");
             profile = name == null ? profiles.Single(p => p.IsDefault) : profiles.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidDataException($"The project has no build profile {name}.");
             // A profile chosen in Tools → Build profile whose file can no longer be used: the status still lists every
             // profile, with that one's error and no outputs, so the choice can be seen and another profile named.
@@ -208,9 +241,10 @@ public partial class MainWindow
         }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
+        token.ThrowIfCancellationRequested(); RequireExportGeneration(generation);
         return new
         {
-            project = root, profile = profile.Name, profileError = profile.Error == null ? null : Bounded(profile.Error, 512), selected = SourceProfileFor(root) ?? profiles.Single(p => p.IsDefault).Name,
+            project = root, profile = profile.Name, profileError = profile.Error == null ? null : Bounded(profile.Error, 512), selected = await SourceProfileForAsync(root, token) ?? profiles.Single(p => p.IsDefault).Name,
             profiles = profiles.Select(p => new
             {
                 name = p.Name, status = p.Status, @default = p.IsDefault, source = p.Source, description = Bounded(p.Description, 512), error = p.Error == null ? null : Bounded(p.Error, 512),
@@ -251,20 +285,23 @@ public partial class MainWindow
             async (a, token) =>
             {
                 // Without profile, the one Tools → Build profile shows checked (the project's default unless the user chose another).
-                string? profile = a["profile"] == null ? SourceProjectRoot is { } chosenRoot ? SourceProfileFor(chosenRoot) : null : Text(a, "profile");
-                if (profile != null && SourceProjectRoot is { } root) ResolveProfile(root, profile);
-                var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, profile);
+                long generation = ViewModel.WorkspaceGeneration;
+                string? profile = a["profile"] == null ? SourceProjectRoot is { } chosenRoot ? await SourceProfileForAsync(chosenRoot, token) : null : Text(a, "profile");
+                if (profile != null && SourceProjectRoot is { } root) await Task.Run(() => ResolveProfile(root, profile, token), token);
+                var report = await ExportSourceProjectAsync(a["destination"] == null ? null : Text(a, "destination"), OutputArguments(a), Flag(a, "overwrite"), token, profile, generation);
                 // Written (or checked): the job completes with the report, even when a cancel arrives as publication ends.
                 CommitRunningJob();
                 return Result(ExportResult(SourceProjectRoot ?? "", report));
             });
         RegisterJob(r, "source_profile", "Choose the open source project's shared Tools > Build profile selection for subsequent GUI and MCP checks/exports. Omit profile to restore the project default. source_status lists valid profiles. Invalid choices leave the selection unchanged.",
             [P("profile", "string", "Profile name; omit to restore the project's default.")], true,
-            (a, token) =>
+            async (a, token) =>
             {
                 token.ThrowIfCancellationRequested();
                 string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project first.");
-                return Task.FromResult(Result(SelectSourceProfile(root, a["profile"] == null ? null : Text(a, "profile"))));
+                var result = await SelectSourceProfileAsync(root, a["profile"] == null ? null : Text(a, "profile"), token);
+                CommitRunningJob();
+                return Result(result);
             });
         RegisterJob(r, "source_status", "Describe the open source project: its build profiles (the default marked; built-in original and modern plus gamegen/build-profiles/*.json) and the game files it can build with the chosen profile, with family and source inputs (16 previewed at 512 characters), paged and filtered by path. Large previews shorten pages; follow nextOffset.", [.. PageParameters, P("profile", "string", "Build profile whose texture packs are listed; default: the profile chosen in Tools → Build profile, else the project's default.")], false,
             async (a, token) => Result(await SourceStatusAsync(a, token)));
@@ -307,8 +344,9 @@ public partial class MainWindow
         if (folder.ShowDialog(this) != true) return;
         RequireExportGeneration(generation);
         // Existing game files are replaced only after an explicit confirmation.
-        string? profileName = SourceProfileFor(root); var profile = ResolveProfile(root, profileName);
-        var plan = await Task.Run(() => SourceBuilder.Plan(root, null, profile));
+        CancellationToken token = ViewModel.WorkspaceToken;
+        string? profileName = await SourceProfileForAsync(root, token); var profile = await Task.Run(() => ResolveProfile(root, profileName, token), token);
+        var plan = await Task.Run(() => SourceBuilder.Plan(root, null, profile, token: token), token);
         RequireExportGeneration(generation);
         var existing = plan.Where(p => outputs == null || outputs.Contains(p.Path, StringComparer.OrdinalIgnoreCase)).Select(p => p.Path)
             .Where(p => File.Exists(Path.Combine(folder.FolderName, p))).ToArray();
@@ -327,7 +365,7 @@ public partial class MainWindow
             throw new StudioCommandException("context_changed", "The source project changed while the export destination was being prepared; choose the export again.");
     }
     private async void CheckSourceClick(object sender, RoutedEventArgs e) => await RunUi(async () =>
-        ShowExportResult(await ExportSourceProjectAsync(null, null, false, CancellationToken.None, SourceProjectRoot is { } root ? SourceProfileFor(root) : null)));
+        ShowExportResult(await ExportSourceProjectAsync(null, null, false, CancellationToken.None, SourceProjectRoot is { } root ? await SourceProfileForAsync(root) : null)));
     private void ShowExportResult(SourceExportReport report)
     {
         int warnings = report.Outputs.Sum(o => o.Warnings.Count) + report.Notes.Count;
@@ -344,18 +382,32 @@ public partial class MainWindow
             EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = SourceRecoveryMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
         AddSourceModelMenu.IsEnabled = UpdateFromBlenderMenu.IsEnabled = CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         EditInBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld != null && selectedNode != null;
-        if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceWorldMenuAsync(root); FillSourceProfileMenu(root); }
+        if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceWorldMenuAsync(root); _ = FillSourceProfileMenuAsync(root); }
     }
     /// <summary>Lists the project's build profiles; the checked one is what exports and checks build until another is chosen.</summary>
-    private void FillSourceProfileMenu(string root)
+    private async Task FillSourceProfileMenuAsync(string root)
+    {
+        long generation = ViewModel.WorkspaceGeneration, request = ++sourceProfileMenuRequest;
+        CancellationToken token = ViewModel.WorkspaceToken;
+        SourceProfileMenu.Items.Clear();
+        SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = "Reading profiles…" }, IsEnabled = false });
+        IReadOnlyList<BuildProfile> profiles;
+        try { profiles = await Task.Run(() => { SourceProfilesReading?.Invoke(token); return BuildProfiles.List(root, token: token); }, token); }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            if (generation != ViewModel.WorkspaceGeneration || request != sourceProfileMenuRequest) return;
+            SourceProfileMenu.Items.Clear(); SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = Bounded(ex.Message, 512), TextWrapping = TextWrapping.Wrap, MaxWidth = 420 }, IsEnabled = false }); return;
+        }
+        if (token.IsCancellationRequested || generation != ViewModel.WorkspaceGeneration || request != sourceProfileMenuRequest || SourceProjectRoot != root) return;
+        FillSourceProfileMenu(root, profiles);
+    }
+    private void FillSourceProfileMenu(string root, IReadOnlyList<BuildProfile> profiles)
     {
         SourceProfileMenu.Items.Clear();
-        IReadOnlyList<BuildProfile> profiles;
-        try { profiles = BuildProfiles.List(root); }
-        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = ex.Message, TextWrapping = TextWrapping.Wrap, MaxWidth = 420 }, IsEnabled = false }); return; }
         // A chosen profile whose file was removed falls back to the default.
-        if (SourceProfileFor(root) is { } stale && !profiles.Any(p => p.Name.Equals(stale, StringComparison.OrdinalIgnoreCase))) sourceProfileChoice = null;
-        string chosen = SourceProfileFor(root) ?? profiles.Single(p => p.IsDefault).Name;
+        if (sourceProfileChoice is { } stale && stale.Root == root && !profiles.Any(p => p.Name.Equals(stale.Name, StringComparison.OrdinalIgnoreCase))) sourceProfileChoice = null;
+        string chosen = sourceProfileChoice is { } choice && choice.Root == root ? choice.Name : profiles.Single(p => p.IsDefault).Name;
         foreach (var profile in profiles)
         {
             // A file that cannot be used is shown with the reason, and cannot be chosen; one chosen before stays chosen, so
@@ -376,7 +428,12 @@ public partial class MainWindow
             };
             System.Windows.Automation.AutomationProperties.SetName(item, profile.Name);
             string name = profile.Name;
-            item.Click += (_, _) => _ = RunUi(() => { SelectSourceProfile(root, name); return Task.CompletedTask; });
+            item.Click += (_, _) =>
+            {
+                // Native checkable items toggle before Click; keep the old choice visible until the worker accepts the new one.
+                FillSourceProfileMenu(root, profiles);
+                _ = RunUi(async () => { await SelectSourceProfileAsync(root, name); });
+            };
             SourceProfileMenu.Items.Add(item);
         }
     }
@@ -386,8 +443,11 @@ public partial class MainWindow
         long generation = ++sourceMenuGeneration;
         ExportSourceFileMenu.Items.Clear();
         ExportSourceFileMenu.Items.Add(new MenuItem { Header = "Reading source project…", IsEnabled = false });
-        IReadOnlyList<SourceOutputPlan>? plan = null; string? error = null; string? profile = SourceProfileFor(root);
-        try { plan = await Task.Run(() => SourceBuilder.Plan(root, null, BuildProfiles.Find(root, profile))); }
+        IReadOnlyList<SourceOutputPlan>? plan = null; string? error = null;
+        CancellationToken token = ViewModel.WorkspaceToken;
+        try { string? profile = await SourceProfileForAsync(root, token); plan = await Task.Run(() => SourceBuilder.Plan(root, null, BuildProfiles.Find(root, profile, token: token), token: token), token); }
+        catch (OperationCanceledException) { return; }
+        catch (StudioCommandException) { return; }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { error = ex.Message; }
         if (generation != sourceMenuGeneration || SourceProjectRoot != root) return;
         ExportSourceFileMenu.Items.Clear();

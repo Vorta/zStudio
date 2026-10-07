@@ -169,6 +169,7 @@ internal static class ExportSafetyMcpChecks
         Assert.Equal("modern", status["profile"]!.GetValue<string>());
         Assert.Contains("software renderer", status["profiles"]!.AsArray().Single(p => p!["name"]!.GetValue<string>() == "old")!["error"]!.GetValue<string>());
         typeof(MainWindow).GetMethod("ToolsMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+        while (((MenuItem)main.FindName("SourceProfileMenu")).Items.Count != 3) await Task.Delay(10, token);
         var profiles = ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().ToArray();
         Assert.False(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "old").IsEnabled);
         Assert.True(profiles.Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "modern").IsChecked);
@@ -176,13 +177,21 @@ internal static class ExportSafetyMcpChecks
         // the chosen one's error, so another can be named.
         fixture.Write("gamegen/build-profiles/fine.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" } ] }""");
         typeof(MainWindow).GetMethod("ToolsMenuOpened", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
+        while (((MenuItem)main.FindName("SourceProfileMenu")).Items.Count != 4) await Task.Delay(10, token);
         ((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "fine").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        while (!((MenuItem)main.FindName("SourceProfileMenu")).Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == "fine").IsChecked) await Task.Delay(10, token);
         fixture.Write("gamegen/build-profiles/fine.json", """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" }, { "file": "texturemax.zbd", "maximumDimension": 2048 } ] }""");
         status = await job("source_status", new(), "completed");
         Assert.Equal(("fine", "fine"), (status["profile"]!.GetValue<string>(), status["selected"]!.GetValue<string>()));
         Assert.Contains("software renderer", status["profileError"]!.GetValue<string>());
         Assert.Equal(["fine", "modern", "old", "original"], status["profiles"]!.AsArray().Select(p => p!["name"]!.GetValue<string>()).Order());
         File.Delete(fixture.Path("gamegen/build-profiles/fine.json"));
+        // An unrelated unreadable profile may block listing/default resolution, but not a valid named selection.
+        fixture.Write("gamegen/build-profiles/broken.json", "{");
+        var selected = await job("source_profile", new() { ["profile"] = "original" }, "completed");
+        Assert.Equal("original", selected["profile"]!.GetValue<string>());
+        File.Delete(fixture.Path("gamegen/build-profiles/broken.json"));
+        await job("source_profile", new(), "completed");
 
         // The checkout returns an operation, which can be cancelled, and completes with the checkout.
         var started = await call("source_blender_checkout", new() { ["model"] = "data/m1/models/m1.gltf" });

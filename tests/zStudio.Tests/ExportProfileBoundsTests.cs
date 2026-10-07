@@ -48,7 +48,7 @@ public sealed class ExportProfileBoundsTests
         // their alpha planes, counted as every pack's budget counts them, they need 2.25 MB.
         byte[] glass = Png(512, 128);
         for (int i = 0; i < 3; i++) fixture.Write($"data/m1/textures/glass{i}.png", glass);
-        var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small"), token: TestContext.Current.CancellationToken), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
+        var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small", token: TestContext.Current.CancellationToken), token: TestContext.Current.CancellationToken), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
         Assert.Equal("m1/rtexture2.zbd", plan.Path);
         Assert.Empty(plan.Notes);
 
@@ -73,7 +73,7 @@ public sealed class ExportProfileBoundsTests
         fixture.Write("data/m2/textures/bft/camo.png", Png(1024, 255));
         byte[] stone = Png(512, 255);
         for (int i = 0; i < 3; i++) fixture.Write($"data/m1/textures/stone{i}.png", stone);
-        var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small"), token: TestContext.Current.CancellationToken), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
+        var plan = Assert.Single(SourceBuilder.Plan(fixture.Project, null, BuildProfiles.Find(fixture.Project, "small", token: TestContext.Current.CancellationToken), token: TestContext.Current.CancellationToken), p => p.Automatic && p.Path.StartsWith("m1/", StringComparison.Ordinal));
         Assert.Equal("m1/rtexture2.zbd", plan.Path);
 
         List<string> warnings = [];
@@ -132,23 +132,23 @@ public sealed class ExportProfileBoundsTests
         // Written for looser rules: the software renderer does not draw textures wider than 1024 texels.
         const string Old = """{ "format": "recoil-build-profile", "version": 1, "texturePacks": [ { "file": "rtexture4.zbd" }, { "file": "texturemax.zbd", "maximumDimension": 2048 } ] }""";
         var files = new Dictionary<string, byte[]> { ["gamegen/build-profiles/old.json"] = Encoding.UTF8.GetBytes(Old) };
-        var listed = BuildProfiles.List("unused", f => files[f], files.Keys);
+        var listed = BuildProfiles.List("unused", f => files[f], files.Keys, token: TestContext.Current.CancellationToken);
         var old = Assert.Single(listed, p => p.Name == "old");
         Assert.Contains("software renderer", old.Error);
         Assert.Empty(old.TexturePacks); Assert.False(old.IsDefault);
         Assert.Equal("modern", Assert.Single(listed, p => p.IsDefault).Name);
         Assert.All(listed.Where(p => p.Name != "old"), p => Assert.Null(p.Error));
-        Assert.Same(BuildProfiles.Modern.TexturePacks, BuildProfiles.Find("unused", null, f => files[f], files.Keys).TexturePacks);
-        Assert.Contains("software renderer", Assert.Throws<InvalidDataException>(() => BuildProfiles.Find("unused", "old", f => files[f], files.Keys)).Message);
+        Assert.Same(BuildProfiles.Modern.TexturePacks, BuildProfiles.Find("unused", null, f => files[f], files.Keys, token: TestContext.Current.CancellationToken).TexturePacks);
+        Assert.Contains("software renderer", Assert.Throws<InvalidDataException>(() => BuildProfiles.Find("unused", "old", f => files[f], files.Keys, token: TestContext.Current.CancellationToken)).Message);
         // When it may be the default (it says so, or its JSON cannot be read), the default cannot be chosen.
         foreach (string json in new[] { Old.Replace("\"version\": 1,", "\"version\": 1, \"default\": true,"), Old.Replace("\"version\": 1,", "\"version\": 1, \"default\": \"yes\","), "{ \"format\": " })
         {
             files["gamegen/build-profiles/old.json"] = Encoding.UTF8.GetBytes(json);
-            Assert.Contains("old.json", Assert.Throws<InvalidDataException>(() => BuildProfiles.List("unused", f => files[f], files.Keys)).Message);
+            Assert.Contains("old.json", Assert.Throws<InvalidDataException>(() => BuildProfiles.List("unused", f => files[f], files.Keys, token: TestContext.Current.CancellationToken)).Message);
         }
         // So is a file replacing the modern profile, the default without a project's own.
         files.Clear(); files["gamegen/build-profiles/modern.json"] = Encoding.UTF8.GetBytes(Old);
-        Assert.Contains("software renderer", Assert.Throws<InvalidDataException>(() => BuildProfiles.List("unused", f => files[f], files.Keys)).Message);
+        Assert.Contains("software renderer", Assert.Throws<InvalidDataException>(() => BuildProfiles.List("unused", f => files[f], files.Keys, token: TestContext.Current.CancellationToken)).Message);
 
         // A project's default export and check build while the file is there.
         using SourceWorldFixture fixture = new();

@@ -15,6 +15,8 @@ $head = gh pr view 14 --json headRefOid --jq .headRefOid
 
 The repository comes from this checkout's GitHub origin, and the thread comes from `CODEX_THREAD_ID`. `-Codex`, `-Gh` and `-Thread` can explicitly select the native executables/current thread; shell shims and a thread conflicting with the environment are rejected. Discovery skips missing executable paths, including a stale `CC_PLUGIN_CODEX_EXECUTABLE` value.
 
+In Codex, use the default queue channel. Do not use `-Claude`: a foreground listener started through an ordinary shell command can print a notice after the turn ends without waking the conversation. Arming, resuming or listening with `-Claude` is refused when `CODEX_THREAD_ID` is present. Status/read/stop remain available to inspect and retire an old foreground watch without losing its history. A transport probe (`check -NotifyTest`) verifies add/list/delete for the current conversation; a real subsequent notice is still needed to establish that the host wakes an idle turn.
+
 The example is a notification-only watch. Add `-ReleaseOnApproval` to `arm` only when the user has explicitly authorized, in the current conversation, merge/release/merged-branch cleanup of this selected PR after the review bot's qualifying approval. The flag records that authorization; it does not grant permission on its own. Every `arm` records exactly the value supplied, so re-arming without the flag clears a previous authorization. `resume` keeps the recorded value and rejects the flag. The helper itself never edits files outside its local state, fixes code, pushes, merges, creates tags, or publishes releases.
 
 Initial arming baselines comments already present; inspect existing feedback separately. Re-arming retains handled identities. Run `arm` again after each validated successful fix push, using the full remote head SHA. Do this before waiting for CI: feedback can arrive quickly after a push.
@@ -69,6 +71,8 @@ $head = gh pr view 14 --json headRefOid --jq .headRefOid
 Comments posted together or in quick succession therefore produce a single notification. Comments arriving after the claim wait until the snapshot is acknowledged and the watch is re-armed. Only code review feedback wakes this channel: inline review comments/replies and nonempty published review summaries. Every conversation comment is informational here, as are the Codex channel's informational comments. Approvals behave as in the Codex watch. A closed PR or stopped watch prints `closed` or `stopped` instead.
 
 Build output never reaches stdout. The listener runs from a private runtime copy, so solution builds during fix work are unaffected. If the Monitor expires without an event, run `listen` again; the durable state means nothing is lost or repeated.
+
+The foreground channel requires an actual Monitor capable of delivering process output as a new turn. `status` checks the listener's PID and process start time, just as it checks the Codex worker; being configured for this channel does not imply that a listener is running. Only one listener may hold its lease. Returning a notice, cancellation and ordinary exit clear the listener identity; a killed process is detected by the process check.
 
 On a notice, follow the steps above with `-Claude`:
 

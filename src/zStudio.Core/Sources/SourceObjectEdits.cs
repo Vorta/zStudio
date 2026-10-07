@@ -839,9 +839,9 @@ public static class SourceObjectEdits
     private static IEnumerable<WorldNode> FileSubtree(SourceObjectTarget target, WorldNode node, WorldNodeProvenance origin, CancellationToken token)
     {
         var built = Subtree(node).ToList();
-        if (origin.ModelFile is not { } file || target.Workspace.Read(file, token) is not { } bytes) return built;
+        if (origin.ModelFile is not { } file || target.Workspace.Read(file, token, GltfDocument.MaximumJsonBytes) is not { } bytes) return built;
         JsonObject? root;
-        try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject; }
+        try { GltfDocument.ValidateJsonText(bytes, token); root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }) as JsonObject; }
         catch (JsonException) { return built; }
         if (root?["nodes"] is not JsonArray nodes || origin.ModelNode < 0 || origin.ModelNode >= nodes.Count) return built;
         var indices = GltfNodeEdits.Descendants(root, origin.ModelNode);
@@ -964,9 +964,12 @@ public static class SourceObjectEdits
     public static IReadOnlyList<string> ScriptTransformsReached(SourceWorkspace workspace, string mission, string model, byte[] before, byte[] after, IEnumerable<WorldNodeProvenance> provenance, CancellationToken token = default)
     {
         // By engine name: Blender renames repeated names (wheel.001), which the import reads back.
-        static List<(string Name, bool Authored)> Nodes(byte[] bytes) =>
-            JsonNode.Parse(bytes) is JsonObject { } root && root["nodes"] is JsonArray nodes
+        List<(string Name, bool Authored)> Nodes(byte[] bytes)
+        {
+            GltfDocument.ValidateJsonText(bytes, token);
+            return JsonNode.Parse(bytes) is JsonObject { } root && root["nodes"] is JsonArray nodes
                 ? [.. nodes.OfType<JsonObject>().Select(n => (WorldGltf.EngineName(n), Authored(n)))] : [];
+        }
         // A malformed transform (which no build reads, so the update replacing it is not refused here) still states one.
         static bool Authored(JsonObject node)
         {
@@ -1148,10 +1151,10 @@ public static class SourceObjectEdits
                 }
             }
         }
-        static JsonNode? Parse(byte[]? bytes)
+        JsonNode? Parse(byte[]? bytes)
         {
             if (bytes == null) return null;
-            try { return JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }); }
+            try { GltfDocument.ValidateJsonText(bytes, token); return JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }); }
             catch (JsonException) { return null; }
         }
     }
@@ -1281,10 +1284,10 @@ public static class SourceObjectEdits
         Func<long, uint?>? loadZone = null)
     {
         string file = origin.ModelFile!;
-        byte[] bytes = workspace.Read(file, token) ?? throw new InvalidDataException($"{file} no longer exists.");
+        byte[] bytes = workspace.Read(file, token, GltfDocument.MaximumJsonBytes) ?? throw new InvalidDataException($"{file} no longer exists.");
         if (!file.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{file} is a binary glTF; save it as .gltf to edit its nodes here.");
         JsonNode? root;
-        try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }); }
+        try { GltfDocument.ValidateJsonText(bytes, token); root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }); }
         catch (JsonException ex) { throw new InvalidDataException($"{file} is not valid JSON: {ex.Message}", ex); }
         if (root is not JsonObject document || document["nodes"] is not JsonArray nodes || origin.ModelNode < 0 || origin.ModelNode >= nodes.Count || nodes[origin.ModelNode] is not JsonObject node)
             throw new InvalidDataException($"{file} no longer has node {origin.ModelNode}; rebuild the world.");
@@ -1305,7 +1308,7 @@ public static class SourceObjectEdits
         KeepInstanceZones(document, file, zones, new Dictionary<long, long>(), loadZone, kept);
         // zStudio and Blender write glTF indented or minified; keep the file's style.
         bool indented = bytes.AsSpan(0, Math.Min(bytes.Length, 4096)).Contains((byte)'\n');
-        byte[] content = Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = indented }));
+        byte[] content = JsonSerializer.SerializeToUtf8Bytes(root, new JsonSerializerOptions { WriteIndented = indented });
         if (content.AsSpan().SequenceEqual(bytes)) return new(label, [], $"{file} node {origin.ModelNode}", notes);
         List<string> all = [.. notes, .. kept];
         if (copies.Count > 1) all.Add($"{file} holds {shown} in an instance it places under several parents: the change applies to each of its {copies.Count} copies.");

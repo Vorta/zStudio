@@ -124,7 +124,7 @@ public sealed class PreviewBuildRound6Tests
         using SourceWorldFixture fixture = new();
         // The project's exports build only rtexture4 by default.
         fixture.Write("gamegen/build-profiles/small.json", """{ "format": "recoil-build-profile", "version": 1, "default": true, "texturePacks": [ { "file": "rtexture4.zbd" } ] }""");
-        var profile = BuildProfiles.Find(fixture.Project, null);
+        var profile = BuildProfiles.Find(fixture.Project, null, token: TestContext.Current.CancellationToken);
         Assert.Equal("small", profile.Name);
         Assert.DoesNotContain(SourceBuilder.Plan(fixture.Project, null, profile, token: Token), p => p.Path == "m1/rtexture16.zbd");
 

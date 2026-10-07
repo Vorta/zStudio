@@ -314,6 +314,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         while (path.Contains("//")) path = path.Replace("//", "/");
         if (!path.StartsWith("../", StringComparison.Ordinal)) return null;
         path = path[3..].TrimEnd('/');
+        string first = path.Split('/')[0];
+        if (!first.Equals("data", StringComparison.OrdinalIgnoreCase) && !first.Equals("gamegen", StringComparison.OrdinalIgnoreCase)) return null;
         return path.Split('/').Any(p => p is "" or "." or "..") ? null : path;
     }
 

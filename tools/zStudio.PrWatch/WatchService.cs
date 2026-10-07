@@ -73,6 +73,28 @@ public sealed class WatchService(WatchStore store, IPrSource source, INoticeQueu
     /// </summary>
     public async Task<ListenResult> ListenAsync(CancellationToken token, TimeSpan? poll = null, TimeSpan? settle = null, TimeSpan? maximumSettle = null, TimeSpan? settlePoll = null)
     {
+        using var lease = await store.LockAsync("worker", token, wait: false);
+        using var process = Process.GetCurrentProcess();
+        using (await store.LockAsync("state", token))
+        {
+            var state = store.Load() ?? throw new InvalidOperationException("No watch exists.");
+            state.WorkerPid = process.Id; state.WorkerStartTicks = process.StartTime.ToUniversalTime().Ticks;
+            store.Save(state);
+        }
+        try { return await ListenCoreAsync(token, poll, settle, maximumSettle, settlePoll); }
+        finally
+        {
+            // Cancellation must clear our identity too; the lease prevents another listener replacing it.
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using (await store.LockAsync("state", cleanup.Token))
+            {
+                var state = store.Load() ?? throw new InvalidOperationException("No watch exists.");
+                state.WorkerPid = 0; state.WorkerStartTicks = 0; store.Save(state);
+            }
+        }
+    }
+    private async Task<ListenResult> ListenCoreAsync(CancellationToken token, TimeSpan? poll, TimeSpan? settle, TimeSpan? maximumSettle, TimeSpan? settlePoll)
+    {
         TimeSpan interval = poll ?? TimeSpan.FromSeconds(60), quiet = settle ?? TimeSpan.FromSeconds(45), longest = maximumSettle ?? TimeSpan.FromMinutes(5), recheck = settlePoll ?? TimeSpan.FromSeconds(15);
         HashSet<string>? burst = null; DateTimeOffset first = default, changed = default; int generation = -1;
         while (true)

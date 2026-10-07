@@ -30,6 +30,8 @@ public static class Program
         if (!int.TryParse(Value("--pr"), out int pr) || pr <= 0) throw new ArgumentException("PR must be a positive integer.");
         // Claude Code has no conversation queue: its watch is a separate channel delivered by a foreground listener.
         bool claude = options.ContainsKey("--claude");
+        if (action is "arm" or "resume" or "listen")
+            WatchLogic.ValidateChannel(claude, Environment.GetEnvironmentVariable("CODEX_THREAD_ID"));
         WatchStore store = new(workspace, pr, claude ? "claude" : null);
         if (action == "runtime")
         {
@@ -219,7 +221,7 @@ public static class Program
     {
         if (state == null) return new { exists = false, path = store.StatePath };
         // Claude watches are delivered by a foreground listen command, not a detached worker.
-        bool alive = store.Channel != null || CommandRunner.Alive(state.WorkerPid, state.WorkerStartTicks);
+        bool alive = CommandRunner.Alive(state.WorkerPid, state.WorkerStartTicks);
         return new
         {
             exists = true, path = store.StatePath, channel = store.Channel ?? "codex", watch = state.Id, state.Repository, state.Pr, state.Thread, state.ExpectedHead, state.ObservedHead, state.Generation,

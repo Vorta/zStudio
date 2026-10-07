@@ -256,8 +256,8 @@ public sealed class GltfPngRound4Tests
     public void TheBaseColourTextureTransformIsApplied()
     {
         // KHR_texture_transform (gltfpack dequantizes texture coordinates with it; Blender writes a Mapping node as it): the
-        // coordinates are scaled, rotated and offset — u' = 0.5 + cos·2u + sin·3v, v' = 0.25 − sin·2u + cos·3v at a quarter
-        // turn (u' = 0.5 + 3v, v' = 0.25 − 2u) — and its texCoord replaces the texture info's.
+        // Khronos' column-major GLSL example maps (1,0) to (0,1) for +pi/2. After scale and offset:
+        // u' = 0.5 - 3v, v' = 0.25 + 2u. Its texCoord replaces the texture info's.
         Triangle file = new();
         file.Declare("extensionsUsed", "KHR_texture_transform");
         file.Attributes["TEXCOORD_0"] = file.TexCoords(9, 9, 9, 9, 9, 9);
@@ -269,7 +269,7 @@ public sealed class GltfPngRound4Tests
                 ["KHR_texture_transform"] = new JsonObject { ["offset"] = new JsonArray(0.5, 0.25), ["rotation"] = Math.PI / 2, ["scale"] = new JsonArray(2, 3), ["texCoord"] = 1 },
             },
         });
-        Vector2[] expected = [new(0.5f, -1.75f), new(3.5f, 0.25f), new(3.5f, -1.75f)];
+        Vector2[] expected = [new(0.5f, 2.25f), new(-2.5f, 0.25f), new(-2.5f, 2.25f)];
         var read = file.Read().TexCoords;
         Assert.Equal(3, read.Count);
         for (int i = 0; i < 3; i++) Assert.True(Vector2.Distance(expected[i], read[i]) < 1e-5f, $"Corner {i}: {read[i]}, expected {expected[i]}.");

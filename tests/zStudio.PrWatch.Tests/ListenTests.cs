@@ -9,6 +9,38 @@ public sealed class ListenTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Fact]
+    public void CodexCannotArmTheForegroundOnlyChannel()
+    {
+        Assert.Throws<InvalidOperationException>(() => WatchLogic.ValidateChannel(true, Guid.NewGuid().ToString()));
+        WatchLogic.ValidateChannel(false, Guid.NewGuid().ToString());
+        WatchLogic.ValidateChannel(true, null);
+    }
+
+    [Fact]
+    public async Task ListenerIdentityIsLiveOnlyWhileListeningAndClearedOnCancellation()
+    {
+        using var fixture = new ClaudeFixture(); fixture.Save(fixture.NewState());
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new HeldSource(entered);
+        var service = new WatchService(fixture.Store, source, new FakeQueue());
+        var listening = service.ListenAsync(cancel.Token);
+        await entered.Task.WaitAsync(Token);
+        var state = fixture.Store.Load()!;
+        Assert.True(CommandRunner.Alive(state.WorkerPid, state.WorkerStartTicks));
+        await Assert.ThrowsAsync<IOException>(() => service.ListenAsync(Token));
+        cancel.Cancel(); await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listening);
+        state = fixture.Store.Load()!;
+        Assert.False(CommandRunner.Alive(state.WorkerPid, state.WorkerStartTicks));
+        Assert.Contains("not running", WatchLogic.StatusWarning(state, false));
+    }
+    private sealed class HeldSource(TaskCompletionSource entered) : IPrSource
+    {
+        public async Task<Observation> ReadAsync(string repository, int pr, CancellationToken token)
+        { entered.TrySetResult(); await Task.Delay(Timeout.InfiniteTimeSpan, token); return Observe(); }
+    }
+
+    [Fact]
     public async Task AGrowingBurstProducesOneNoticeAfterItSettles()
     {
         using var fixture = new ClaudeFixture(); fixture.Save(fixture.NewState());
@@ -20,6 +52,7 @@ public sealed class ListenTests
         Assert.True(source.Reads >= 4, $"Only {source.Reads} reads; the burst was not allowed to settle.");
         Assert.Equal(0, queue.Adds);
         var state = fixture.Store.Load()!;
+        Assert.Equal(0, state.WorkerPid);
         Assert.Single(state.Notices); Assert.False(state.CommentsArmed); Assert.Equal("claimed", state.Notices[0].Delivery);
         await service.MarkEmittedAsync(result.Notice, Token);
         Assert.Equal("emitted", fixture.Store.Load()!.Notices[0].Delivery);

@@ -233,13 +233,14 @@ public static partial class SourceBuilder
         {
             public bool Exists(string relative)
             {
+                SourceProject.RequireSource(relative);
                 snapshot.Depend(relative);
                 if (overlay?.ContainsKey(relative) == true) return true;
                 if (!File.Exists(SourceProject.Resolve(root, relative))) return false;
                 SourceProject.RejectNestedLinks(root, relative);
                 return true;
             }
-            public byte[] Read(string relative, CancellationToken token) { if (overlay?.ContainsKey(relative) != true) SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token); }
+            public byte[] Read(string relative, CancellationToken token) { SourceProject.RequireSource(relative); if (overlay?.ContainsKey(relative) != true) SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token); }
         }
 
         internal void CheckUnchanged(CancellationToken token)
@@ -362,7 +363,7 @@ public static partial class SourceBuilder
         // As a profile is read without a snapshot: a file over 64 KB is refused before it is read.
         if (new FileInfo(SourceProject.Resolve(root, path)).Length > BuildProfiles.MaximumFileBytes) throw new InvalidDataException($"{path} is larger than 64 KB.");
         return snapshot.Read(path, token, BuildProfiles.MaximumFileBytes);
-    });
+    }, token: token);
     /// <summary>
     /// Refuses outputs whose plan the project no longer gives, because it changed after it was planned: the plan is made again,
     /// as the run made it, and must name the same profile and give each built output the same inputs, pack and notes (with no outputs

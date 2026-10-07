@@ -59,6 +59,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(2, status["families"]!["archive"]!.GetValue<int>()); Assert.Equal(3, status["families"]!["sounds"]!.GetValue<int>());
 
             // Export commands appear once a source project is the root; the one-file menu lists every buildable game file.
+            main.SourceProfilesReading = ct => Assert.False(main.Dispatcher.CheckAccess());
             typeof(MainWindow).GetMethod("ToolsMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
             Assert.Equal(Visibility.Visible, ((MenuItem)main.FindName("ExportSourceMenu")).Visibility);
             var single = (MenuItem)main.FindName("ExportSourceFileMenu");
@@ -66,6 +67,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(["zrdr.zbd", "interp.zbd", "soundsh.zbd", "soundsm.zbd", "soundsl.zbd", "m1/zrdr.zbd"], single.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
             // Build profiles: the GUI's choice and source_status list the same profiles; source_export names the one it built with.
             var profiles = (MenuItem)main.FindName("SourceProfileMenu");
+            while (profiles.Items.Count != 2) await Task.Delay(10, token);
             Assert.Equal(["modern (default) · experimental", "original"], profiles.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
             Assert.True(((MenuItem)profiles.Items[0]).IsChecked);
             Assert.Equal(["modern", "original"], status["profiles"]!.AsArray().Select(p => p!["name"]!.GetValue<string>()));
@@ -74,6 +76,20 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(["m6"], shippedPacks.Single(t => t!["file"]!.GetValue<string>() == "texture8.zbd")!["missions"]!.AsArray().Select(m => m!.GetValue<string>()));
             Assert.Null(shippedPacks.Single(t => t!["file"]!.GetValue<string>() == "rtexture4.zbd")!["missions"]);
             Assert.Equal("modern", status["profile"]!.GetValue<string>());
+            // Profile discovery is a cancellable worker; state requests and Tools Cancel work while it is held.
+            TaskCompletionSource reading = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            main.SourceProfilesReading = ct =>
+            {
+                Assert.False(main.Dispatcher.CheckAccess()); reading.TrySetResult();
+                Assert.True(ct.WaitHandle.WaitOne(TimeSpan.FromSeconds(20))); ct.ThrowIfCancellationRequested();
+            };
+            var cancelledChoice = Job("source_profile", new() { ["profile"] = "original" }, "canceled");
+            await reading.Task.WaitAsync(token);
+            await Call("state", new());
+            ((MenuItem)main.FindName("CancelOperationItem")).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await cancelledChoice;
+            Assert.True(((MenuItem)profiles.Items[0]).IsChecked);
+            main.SourceProfilesReading = ct => Assert.False(main.Dispatcher.CheckAccess());
             var chosen = await Job("source_profile", new() { ["profile"] = "original" });
             Assert.Equal("original", chosen["profile"]!.GetValue<string>());
             Assert.True(((MenuItem)profiles.Items[1]).IsChecked);
@@ -83,7 +99,22 @@ internal static class SourceProjectMcpChecks
             Assert.Equal("original", (await Job("source_status", new()))["profile"]!.GetValue<string>());
             await Job("source_profile", new());
             Assert.True(((MenuItem)profiles.Items[0]).IsChecked);
+            // A menu scan that began before a new selection cannot overwrite its checked item afterward.
+            using (ManualResetEventSlim release = new())
+            {
+                TaskCompletionSource oldMenuEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                main.SourceProfilesReading = ct => { Assert.False(main.Dispatcher.CheckAccess()); oldMenuEntered.TrySetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(20), ct)); };
+                var oldMenu = (Task)typeof(MainWindow).GetMethod("FillSourceProfileMenuAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [fixture.Project])!;
+                await oldMenuEntered.Task.WaitAsync(token);
+                main.SourceProfilesReading = ct => Assert.False(main.Dispatcher.CheckAccess());
+                try { await Job("source_profile", new() { ["profile"] = "original" }); }
+                finally { release.Set(); }
+                await oldMenu;
+                Assert.True(((MenuItem)profiles.Items[1]).IsChecked);
+            }
+            await Job("source_profile", new());
             ((MenuItem)profiles.Items[1]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            while (!((MenuItem)profiles.Items[1]).IsChecked) await Task.Delay(10, token);
             Assert.Equal("original", ((ValueTuple<string, string>?)typeof(MainWindow).GetField("sourceProfileChoice", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main))!.Value.Item2);
             var badProfile = await Job("source_export", new() { ["profile"] = "missing" }, "failed");
             Assert.Equal("invalid_argument", badProfile["code"]!.GetValue<string>());
