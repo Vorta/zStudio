@@ -174,7 +174,17 @@ internal static class AnimationSources
         try { return (SiScriptWriter.Write([.. ordered.Select(t => new SiScriptWriter.Track(t.Object, t.Frames, t.Rate))], layout, token), null); }
         catch (InvalidDataException ex)
         {
-            return (AnimationScript.Write(tracks.Ordered.Select(t => (t.Object, t.Text))),
+            string text = AnimationScript.Write(tracks.Ordered.Select(t => (t.Object, t.Text)), token);
+            var parsed = AnimationScript.Parse(Encoding.Latin1.GetBytes(text), path, token);
+            foreach (var track in tracks.Ordered)
+            {
+                token.ThrowIfCancellationRequested();
+                var keys = AnimationScript.Track(parsed, track.Object) ?? throw new InvalidDataException($"{path}: a reconstructed track is missing.");
+                var compiled = AnimationScript.Compile(keys, track.Rate, path, token);
+                if (compiled.Count != track.Frames.Count || !compiled.Zip(track.Frames).All(pair => SiScriptWriter.Same(pair.First, pair.Second)))
+                    throw new InvalidDataException($"{path}: the reconstructed keyframe script does not compile back exactly.");
+            }
+            return (text,
                 $"{path}: the keyframes have no SI Animation Script ({ex.Message}); it was written in zStudio's keyframe format.");
         }
     }

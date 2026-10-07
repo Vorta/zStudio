@@ -3,6 +3,18 @@ namespace Recoil.Zbd.Core.Sources;
 /// <summary>Read the opened file, never a length checked on a different path lookup.</summary>
 public static class SourceRead
 {
+    // File/Directory.Exists hide access and I/O failures as false. Protection and dependency scans need
+    // evidence of absence; only the two not-found results establish it.
+    internal static bool FileExists(string path) => Attributes(path) is { } attributes && !attributes.HasFlag(FileAttributes.Directory);
+    internal static bool DirectoryExists(string path) => Attributes(path) is { } attributes && attributes.HasFlag(FileAttributes.Directory);
+    internal static bool PathExists(string path) => Attributes(path) != null;
+    private static FileAttributes? Attributes(string path)
+    {
+        try { return File.GetAttributes(path); }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
+    }
+
     /// <summary>Compare content through one held handle, without allocating another copy of the file.</summary>
     public static bool Matches(string path, long length, string sha256, CancellationToken token = default)
     {

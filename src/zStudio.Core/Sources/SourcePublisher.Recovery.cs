@@ -556,6 +556,9 @@ public sealed partial class SourcePublisher
     private sealed class EventLog : IDisposable
     {
         internal static long ReservedBytes(int files) => (6L * files + 8) * 64;
+        // ReservedBytes allows 64 bytes including the newline. Even int.MaxValue sequence/index digits,
+        // the longest step and the checksum fit; damaged lines must be bounded before decoding or splitting.
+        private const int MaximumRecordBytes = 63;
         private const long MaximumBytes = 64L * 1024 * 1024;
         private static readonly string[] Steps = ["prepared", "intent", "held", "installed", "committed", "rollback", "removed", "restored", "rolled-back"];
         private readonly FileStream stream; private int count; private bool broken, committed;
@@ -633,12 +636,14 @@ public sealed partial class SourcePublisher
                 token.ThrowIfCancellationRequested();
                 int end = Array.IndexOf(bytes, (byte)'\n', start);
                 if (end < 0) break; // An unterminated last record is torn.
-                if (Record(Encoding.ASCII.GetString(bytes, start, end - start), events.Count + 1, files) is not { } record)
+                JournalEvent? record = end - start <= MaximumRecordBytes
+                    ? Record(Encoding.ASCII.GetString(bytes, start, end - start), events.Count + 1, files) : null;
+                if (record == null)
                 {
                     if (Array.IndexOf(bytes, (byte)'\n', end + 1) >= 0) throw new InvalidDataException($"its event log is damaged at record {events.Count + 1}.");
                     break; // So is an unreadable last record.
                 }
-                events.Add(record); start = end + 1;
+                events.Add(record.Value); start = end + 1;
             }
             return (events, start);
         }

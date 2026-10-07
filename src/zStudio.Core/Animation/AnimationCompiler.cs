@@ -40,6 +40,9 @@ public sealed partial class AnimationCompiler
     private readonly long maximumBytes;
     private readonly long maximumExpansionWork;
     private long bytes, expansionWork;
+    // Four maximum-sized fallback scripts, at 256 conservatively estimated bytes per retained key.
+    internal const int MaximumScriptKeys = 4 * AnimationScript.MaximumTotalKeys;
+    private int scriptKeys;
     private string? engineRejection;
     /// <summary>Keyframe scripts by name and naming file: each is read and parsed once per compilation.</summary>
     private readonly Dictionary<(string Name, string From), Script?> scripts = [];
@@ -151,27 +154,34 @@ public sealed partial class AnimationCompiler
         private readonly SiAnimationScript.Script? si;
         private readonly Dictionary<string, List<AnimationScript.Key>> objects = new(StringComparer.Ordinal);
         private readonly List<AnimationScript.Key>? loose;
-        public Script(string path, byte[] bytes)
+        public Script(string path, byte[] bytes, CancellationToken token, Action reserveKey)
         {
             Path = path;
             if (SiAnimationScript.Recognize(bytes)) { si = SiAnimationScript.Parse(bytes, path); return; }
-            var tracks = AnimationScript.Parse(bytes, path);
+            var tracks = AnimationScript.Parse(bytes, path, token, reserveKey);
             foreach (var (name, keys) in tracks) if (name != null) objects[name] = keys;
             loose = tracks.Count == 1 && tracks[0].Object == null ? tracks[0].Keys : null;
         }
         /// <summary>Whether the script moves a node of this name (an SI script lists it; a keyframe-format script has its OBJECT section or no sections).</summary>
         public bool Moves(string name) => si?.Has(name) ?? (objects.ContainsKey(name) || loose != null);
         /// <summary>The node's keyframes at <paramref name="frameRate"/> frames per second.</summary>
-        public List<AnimationKeyframe> Compile(string name, float frameRate, string source) => si != null
+        public List<AnimationKeyframe> Compile(string name, float frameRate, string source, CancellationToken token) => si != null
             ? SiAnimationScript.Compile(si, name, frameRate, source)
-            : AnimationScript.Compile(objects.GetValueOrDefault(name) ?? loose!, frameRate, source);
+            : AnimationScript.Compile(objects.GetValueOrDefault(name) ?? loose!, frameRate, source, token);
     }
     private Script? ReadScript(string name, string from)
     {
         if (scripts.TryGetValue((name, from), out var cached)) return cached;
-        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, file.Bytes) : null;
+        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, file.Bytes, token, ReserveKey) : null;
         scripts[(name, from)] = script;
         return script;
+
+        void ReserveKey()
+        {
+            if (scriptKeys >= MaximumScriptKeys)
+                throw new InvalidDataException($"Animation keyframe sources together exceed {MaximumScriptKeys:N0} decoded keys; split the mission's animation sources.");
+            scriptKeys++;
+        }
     }
 
     private AnimationPackage Build()

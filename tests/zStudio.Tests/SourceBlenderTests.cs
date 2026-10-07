@@ -125,6 +125,46 @@ public sealed class SourceBlenderTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void DeletedCheckoutInputsRequireAnExplicitDecisionBeforeRestoring(bool texture)
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        var checkout = SourceBlender.Checkout(workspace, Model, Token);
+        string export = Export(checkout);
+        string relative = texture ? "data/m1/textures/rock.png" : "data/m1/models/m1.bin";
+        byte[] expected = texture ? PngEncoder.Encode(new DecodedImage(1, 1, [0, 255, 0, 255]), Token) : File.ReadAllBytes(fixture.Path(relative));
+        if (texture) File.WriteAllBytes(Path.Combine(checkout.Outbox, "edit", "textures", "rock.png"), expected);
+        File.Delete(fixture.Path(relative));
+
+        var refused = Assert.Throws<BlenderConflictException>(() => SourceBlender.PlanUpdate(workspace, checkout, export, token: Token));
+        Assert.Equal([relative], refused.Files);
+        Assert.False(File.Exists(fixture.Path(relative))); Assert.False(workspace.IsDirty);
+        Assert.Empty(Directory.Exists(Path.Combine(checkout.Folder, "sealed")) ? Directory.GetDirectories(Path.Combine(checkout.Folder, "sealed")) : []);
+        var forced = SourceBlender.PlanUpdate(workspace, checkout, export, force: true, token: Token);
+        Assert.Null(forced.Expected[relative]);
+        Apply(workspace, forced);
+        Assert.Equal(expected, workspace.Read(relative, Token));
+        Assert.False(File.Exists(fixture.Path(relative))); // Acceptance is still an unsaved source edit.
+    }
+
+    [Fact]
+    public void ANewAbsentExportTextureNeedsNoOverwriteDecision()
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        var checkout = SourceBlender.Checkout(workspace, Model, Token);
+        string export = Export(checkout, change: json => json["images"]![0]!["uri"] = "textures/newrock.png");
+        byte[] png = PngEncoder.Encode(new DecodedImage(1, 1, [0, 255, 0, 255]), Token);
+        File.WriteAllBytes(Path.Combine(checkout.Outbox, "edit", "textures", "newrock.png"), png);
+        var plan = SourceBlender.PlanUpdate(workspace, checkout, export, token: Token);
+        Assert.Null(plan.Expected["data/m1/textures/newrock.png"]);
+        Assert.Contains(plan.Changes, change => change.Relative == "data/m1/textures/newrock.png" && change.Content.AsSpan().SequenceEqual(png));
+        Assert.False(workspace.IsDirty);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void UnsupportedMaterialOrMorphExportIsRejectedWithoutChangingWorkspace(bool morph)
     {
         using SourceWorldFixture fixture = new();

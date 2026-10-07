@@ -124,7 +124,7 @@ public sealed partial class PickupPlacementEditSession
                     throw new InvalidDataException("An intact ZAR pickup resource is required.");
                 if (result.Overlaps(doc, asset, token))
                     throw new InvalidDataException("Pickup member overlaps another archive member.");
-                var tree = asset.Content as ZrdNode ?? ZrdDecoder.Read(doc.Slice(asset.Offset, asset.Length), token);
+                var tree = ZrdDecoder.ReadAsset(doc, asset, token);
                 if (tree.Kind != ZrdKind.Array || tree.Children is not { Count: 1 } root || root[0].Kind != ZrdKind.Array)
                     throw new InvalidDataException("Expected an ordered pickup placement list.");
                 var rows = root[0].Children;

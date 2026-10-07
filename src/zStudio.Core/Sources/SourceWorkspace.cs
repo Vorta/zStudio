@@ -517,7 +517,7 @@ public sealed class SourceWorkspace
     {
         token.ThrowIfCancellationRequested();
         string path = SourceProject.Resolve(Root, relative);
-        bool exists = File.Exists(path);
+        bool exists = SourceRead.FileExists(path);
         if (!exists) return baseline.Stamp == null && baseline.Sha256 == null;
         if (baseline.Stamp == null) return false;
         try
@@ -536,8 +536,8 @@ public sealed class SourceWorkspace
             if (!Matches(relative, frozen, token)) throw new SourceFileChangedException($"{relative} changed while the edit was prepared; try again.", [relative]);
         }
         string path = SourceProject.Resolve(Root, relative);
-        if (!File.Exists(path)) { Baseline absent = new(null, null); preparedReads?.TryAdd(relative, absent); return absent; }
         SourceProject.RejectNestedLinks(Root, relative);
+        if (!SourceRead.FileExists(path)) { Baseline absent = new(null, null); preparedReads?.TryAdd(relative, absent); return absent; }
         var stamp = FileStamp.Read(path);
         if (stamp.Length > maximumBytes) throw new InvalidDataException($"{relative} exceeds this operation's {maximumBytes:N0}-byte source limit; move inline buffers out and simplify metadata.");
         byte[] bytes = SourceRead.All(path, maximumBytes, token);

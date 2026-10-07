@@ -111,8 +111,15 @@ public static class WorldLookups
     /// left out unread.
     /// </summary>
     public static IReadOnlyList<(string Source, string Name)> FindNodes(Func<string, byte[]?> read, string mission, CancellationToken token = default)
+        => FindNodes(read, mission, token, WorldAssembler.MaximumScriptSourceBytes, GameGenScriptText.MaximumTokens);
+
+    internal static IReadOnlyList<(string Source, string Name)> FindNodes(Func<string, byte[]?> read, string mission, CancellationToken token,
+        long maximumScriptBytes, long maximumScriptTokens)
     {
+        if (maximumScriptBytes is < 0 or > WorldAssembler.MaximumScriptSourceBytes) throw new ArgumentOutOfRangeException(nameof(maximumScriptBytes));
+        if (maximumScriptTokens is < 0 or > GameGenScriptText.MaximumTokens) throw new ArgumentOutOfRangeException(nameof(maximumScriptTokens));
         List<(string, string)> names = []; HashSet<string> visited = new(StringComparer.OrdinalIgnoreCase); int instructions = 0;
+        long scriptBytes = 0, scriptTokens = 0;
         void Run(string path, int depth)
         {
             if (!visited.Add(path)) return;
@@ -120,10 +127,17 @@ public static class WorldLookups
                 throw new InvalidDataException($"{path}: the scripts source each other more than {WorldAssembler.MaximumScriptDepth} levels deep, deeper than a build follows them, so the names they look up are not known.");
             token.ThrowIfCancellationRequested();
             if (read(path) is not { } bytes) return;
+            if (bytes.LongLength > maximumScriptBytes - scriptBytes)
+                throw new InvalidDataException("The lookup scripts together exceed the 64 MiB source limit, so their node lookups cannot be established.");
+            scriptBytes += bytes.Length;
             // Bounded like every script source before it is decoded.
             string text;
             try { text = GameGenScriptText.Decode(bytes); }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
+            long tokensInScript = GameGenScriptText.CountTokens(text, token);
+            if (tokensInScript > maximumScriptTokens - scriptTokens)
+                throw new InvalidDataException("The lookup scripts together exceed four million tokens, so their node lookups cannot be established.");
+            scriptTokens += tokensInScript;
             foreach (var tokens in GameGenScriptText.Tokenize(text))
             {
                 token.ThrowIfCancellationRequested();
@@ -163,6 +177,10 @@ public static class WorldLookups
     /// subtree lacks it, and each node name inside an animation that neither subtree has.
     /// </summary>
     public static IReadOnlyList<SourceLookup> Resolve(string mission, GameZWorld world, AnimationPackage? animations, IEnumerable<(string Source, string Name)> findNodes, CancellationToken token = default)
+        => Resolve(mission, world, animations, findNodes, token, new LookupWorkBudget(token: token));
+
+    internal static IReadOnlyList<SourceLookup> Resolve(string mission, GameZWorld world, AnimationPackage? animations, IEnumerable<(string Source, string Name)> findNodes,
+        CancellationToken token, LookupWorkBudget lookupWork)
     {
         var slots = GameZWriter.NodeSlots(world);
         var byName = world.Nodes.GroupBy(n => n.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.OrderByDescending(n => slots[n]).ToList(), StringComparer.Ordinal);
@@ -195,7 +213,7 @@ public static class WorldLookups
                 WorldNode? attachment = bound;
                 if (entry.AttachName.Length > 0 && entry.AttachName != root)
                 {
-                    attachment = bound == null ? null : FirstBelow(bound, entry.AttachName);
+                    attachment = bound == null ? null : lookupWork.FindSub(bound, entry.AttachName, firstChildFirst: true);
                     if (attachment == null) { attachment = Highest(entry.AttachName); Add(SourceLookup.AnimationAttachment, entry.AttachName, entry.Name, attachment, occurrence); }
                 }
                 // Tracked nodes and node references (LoadZbd skips each table's reserved first record); a name the subtrees
@@ -204,7 +222,7 @@ public static class WorldLookups
                 foreach (var name in new[] { 0, 1 }.SelectMany(table => entry.References[table].Skip(1)).Select(r => r.Text(0, 36)))
                 {
                     if (name.Length == 0 || name == root) continue;
-                    below ??= [.. new[] { bound, attachment }.OfType<WorldNode>().SelectMany(WorldAssembler.Subtree).Select(n => n.Name),
+                    below ??= [.. lookupWork.Subtree(new[] { bound, attachment }.OfType<WorldNode>()).Select(lookupWork.Name),
                         .. new[] { 2, 3 }.SelectMany(table => entry.References[table].Skip(1)).Select(r => r.Text(0, 36))];
                     if (!below.Contains(name)) Add(SourceLookup.AnimationName, name, entry.Name, Highest(name), occurrence);
                 }
@@ -222,18 +240,6 @@ public static class WorldLookups
             }
         }
         return result;
-        // ResolveNodeByName's subtree search: depth first, children in order, the node itself first.
-        static WorldNode? FirstBelow(WorldNode node, string name)
-        {
-            HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Stack<WorldNode> stack = new([node]);
-            while (stack.TryPop(out var next))
-            {
-                if (!seen.Add(next)) continue;
-                if (next.Name == name) return next;
-                for (int i = next.Children.Count - 1; i >= 0; i--) stack.Push(next.Children[i]);
-            }
-            return null;
-        }
     }
 
     /// <summary>

@@ -23,6 +23,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     public const int MaximumScriptDepth = 32, MaximumInstructions = 1_000_000;
     public const long MaximumScriptSourceBytes = 64 * 1024 * 1024;
     internal long ScriptSourceByteLimit { get; init; } = MaximumScriptSourceBytes;
+    internal long LookupWorkLimit { get; init; } = LookupWorkBudget.MaximumUnits;
+    private LookupWorkBudget? lookupWork;
+    private LookupWorkBudget Lookups => lookupWork ??= new(LookupWorkLimit, token);
     private long scriptSourceBytes, scriptSourceTokens;
     public GameZWorld World { get; } = new();
     public List<string> Warnings => diagnostics.Snapshot();
@@ -237,14 +240,14 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "LightSetActive": if (current?.Class == WorldNodeClass.Light) current.SetPayloadInt(4, On(0) ? 1 : 0); break;
 
             case "FindNode": current = Find(A(0), null); if (current == null) diagnostics.Add($"{script}: FindNode {A(0)} found no node."); break;
-            case "FindSubNode": current = current == null ? null : FindSub(current, A(0)); if (current == null) diagnostics.Add($"{script}: FindSubNode {A(0)} found no node."); break;
-            case "NodeSetDescription": if (current != null) current.Name = A(0); break;
+            case "FindSubNode": current = current == null ? null : Lookups.FindSub(current, A(0)); if (current == null) diagnostics.Add($"{script}: FindSubNode {A(0)} found no node."); break;
+            case "NodeSetDescription": if (current != null) { current.Name = A(0); Lookups.Invalidate(current); } break;
             case "AddChild":
                 if (current != null && Find(A(0), null) is { } child) { AddChild(current, child); if (instruction != null) Origin(child).Attached = instruction; Name(child); }
                 else diagnostics.Add($"{script}: AddChild {A(0)} has no node or parent.");
                 break;
             case "DeleteChild":
-                if (current != null && FindSub(current, A(0)) is { } removed && removed != current) { Name(removed); Unlink(current, removed); }
+                if (current != null && Lookups.FindSub(current, A(0)) is { } removed && removed != current) { Name(removed); Unlink(current, removed); }
                 break;
             case "DeleteTree": if (Find(A(0), null) is { } tree) { Name(tree); DeleteTree(tree); } break;
             case "NewObject3D": Object3D(Create(A(0), WorldNodeClass.Object3D)); break;
@@ -337,6 +340,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private void Allocate(WorldNode node)
     {
         token.ThrowIfCancellationRequested();
+        Lookups.Invalidate(node);
         if (deferredRemovals?.Remove(node) == true) World.Nodes.Remove(node);
         World.Nodes.Add(node);
         int slot = freeSlots.Count > 0 ? freeSlots.Pop() : nextSlot++;
@@ -344,6 +348,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     }
     private void Free(WorldNode node)
     {
+        Lookups.Invalidate(node);
         if (deferredRemovals != null) deferredRemovals.Add(node); else World.Nodes.Remove(node);
         if (!slots.Remove(node, out int slot)) return;
         freeSlots.Push(slot); freedNodes[slot] = node;
@@ -386,14 +391,14 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private WorldNode? Find(string name, WorldNodeClass? kind)
     {
         for (int i = World.Nodes.Count - 1; i >= 0; i--)
-            if (World.Nodes[i].Name == name && (kind == null || World.Nodes[i].Class == kind)) return World.Nodes[i];
+            if (Lookups.Matches(World.Nodes[i], name) && (kind == null || World.Nodes[i].Class == kind)) return World.Nodes[i];
         return null;
     }
     /// <summary>
     /// FindSubNodeByName: the node itself, then its children depth first from the last child. A node shared by several
     /// parents is searched once (a repeat visit cannot find what the first did not), so the search stays linear.
     /// </summary>
-    internal static WorldNode? FindSub(WorldNode node, string name) => Subtree(node).FirstOrDefault(n => n.Name == name);
+    internal static WorldNode? FindSub(WorldNode node, string name) => new LookupWorkBudget().FindSub(node, name);
     /// <summary>A node and its descendants, each once, in FindSubNodeByName's order; the walk keeps its own stack.</summary>
     internal static IEnumerable<WorldNode> Subtree(WorldNode node) => Subtree([node]);
     /// <summary>
@@ -423,14 +428,16 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         if (parent.Class == WorldNodeClass.World) worldChildren.Add(child); else parent.Children.Add(child);
     }
     /// <summary>Whether <paramref name="ancestor"/> is above <paramref name="node"/>; each ancestor is visited once.</summary>
-    private static bool Descends(WorldNode node, WorldNode ancestor)
+    private bool Descends(WorldNode node, WorldNode ancestor)
     {
+        Lookups.Reserve(node.Parents.Count);
         HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); Stack<WorldNode> stack = new(node.Parents);
         while (stack.Count > 0)
         {
+            Lookups.Reserve(1);
             var parent = stack.Pop();
             if (parent == ancestor) return true;
-            if (seen.Add(parent)) foreach (var above in parent.Parents) stack.Push(above);
+            if (seen.Add(parent)) { Lookups.Reserve(parent.Parents.Count); foreach (var above in parent.Parents) stack.Push(above); }
         }
         return false;
     }

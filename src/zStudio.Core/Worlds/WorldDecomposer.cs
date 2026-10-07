@@ -40,6 +40,7 @@ public static class WorldDecomposer
         BoundedDiagnostics diagnostics)
     {
         token.ThrowIfCancellationRequested();
+        LookupWorkBudget lookupWork = new(token: token);
         var root = world.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World) ?? throw new InvalidDataException("The world has no world node.");
         // Work on a plain graph: the world's cells hold children the same way its own list does.
         FlattenAreas(root, token);
@@ -119,10 +120,10 @@ public static class WorldDecomposer
                 case "FindNode": current = Newest(Arg(step, 0), i); currentName = Arg(step, 0); break;
                 case "FindSubNode":
                     {
-                        var found = current == null ? null : FindSub(current, Arg(step, 0));
+                        var found = current == null ? null : lookupWork.FindSub(current, Arg(step, 0));
                         // A part renamed right after it is found is found under its new name.
                         if (found == null && current != null && i + 1 < trace.Count && trace[i + 1].Command == "NodeSetDescription")
-                            found = FindSub(current, Arg(trace[i + 1], 0));
+                            found = lookupWork.FindSub(current, Arg(trace[i + 1], 0));
                         current = found; currentName = Arg(step, 0);
                         break;
                     }
@@ -182,5 +183,4 @@ public static class WorldDecomposer
         }
     }
 
-    private static WorldNode? FindSub(WorldNode node, string name) => WorldAssembler.FindSub(node, name);
 }

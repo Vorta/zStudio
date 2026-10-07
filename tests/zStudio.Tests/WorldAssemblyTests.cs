@@ -530,7 +530,9 @@ public sealed class WorldAssemblyTests
         }
         var deep = AssembleScript(Chain(WorldUpdate.MaximumDepth), out _);
         Assert.NotEmpty(GameZWriter.Write(deep, Token));
-        var error = Assert.Throws<InvalidDataException>(() => AssembleScript(Chain(20_000), out _));
+        // Exercise the hierarchy limit itself; a vastly longer script can now hit the independent lookup-work
+        // allowance while constructing its chain, before Finish reaches hierarchy validation.
+        var error = Assert.Throws<InvalidDataException>(() => AssembleScript(Chain(WorldUpdate.MaximumDepth + 1), out _));
         Assert.Contains("deeper", error.Message);
     }
 

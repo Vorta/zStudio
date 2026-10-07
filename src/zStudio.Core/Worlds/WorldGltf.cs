@@ -54,6 +54,7 @@ public static partial class WorldGltf
         internal Dictionary<WorldModel, GltfMesh> Meshes { get; } = new(ReferenceEqualityComparer.Instance);
         internal Dictionary<SurfaceKey, GltfMaterial> Materials { get; } = [];
         internal HashSet<string> MaterialNames { get; } = new(StringComparer.Ordinal);
+        internal Dictionary<string, int> NextMaterialSuffix { get; } = new(StringComparer.Ordinal);
         internal Dictionary<WorldNode, IReadOnlyList<WorldNode>> ReferenceChildren { get; } = new(ReferenceEqualityComparer.Instance);
     }
 
@@ -332,7 +333,15 @@ public static partial class WorldGltf
         if (key.ShowBackFace) { extras["backface"] = true; name += "~b"; }
         if (key.Zone != DefaultPolygonZone) { extras["zone"] = $"0x{key.Zone:X8}"; name += $"~z{key.Zone:X8}"; }
         if (key.Normals) extras["normals"] = true; else name += "~flat";
-        string unique = name; for (int i = 2; !context.MaterialNames.Add(unique); i++) unique = $"{name}~{i}";
+        string unique = name;
+        if (!context.MaterialNames.Add(unique))
+        {
+            // Distinct material values can all have the same display name. Resume after this base's last
+            // suffix, while still checking names another base occupied (for example rock and rock~2).
+            int suffix = context.NextMaterialSuffix.GetValueOrDefault(name, 2);
+            do { unique = $"{name}~{suffix++}"; } while (!context.MaterialNames.Add(unique));
+            context.NextMaterialSuffix[name] = suffix;
+        }
         material.Name = unique; material.Extras = new() { [Key] = extras };
         context.Materials[key] = material;
         return material;

@@ -308,7 +308,7 @@ public sealed class SiAnimationScriptTests
         // A still stretch is written on the script's step, but never beyond the frames a script may hold: a gap of twenty
         // million frames (still on the frame grid) is refused before anything is filled.
         var far = AnimationScript.Compile(AnimationScript.Track(AnimationScript.Parse(
-            "FRAME 0 POSITION 0 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 1 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 2\nFRAME 20000000 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 20000002"u8, "far.zan"), "a")!, 10, "far.zan");
+            "FRAME 0 POSITION 0 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 1 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 2\nFRAME 20000000 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 20000002"u8, "far.zan", TestContext.Current.CancellationToken), "a")!, 10, "far.zan", TestContext.Current.CancellationToken);
         long before = GC.GetAllocatedBytesForCurrentThread();
         Assert.Contains($"more than {SiAnimationScript.MaximumFrames} frames", Assert.Throws<InvalidDataException>(() => SiScriptWriter.Write([new("a", far, 10)], new("3.7"), Token)).Message);
         Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 16 << 20);
@@ -365,9 +365,9 @@ public sealed class SiAnimationScriptTests
         // Off the frame grid of the given rate.
         Assert.Contains("frame grid", Assert.Throws<InvalidDataException>(() => SiScriptWriter.Write([.. Tracks(Flight, 15).Select(t => t with { FrameRate = 16 })], new("3.7", true), Token)).Message);
         // A cut (two keys at one frame) and a value no six-decimal text reads back as.
-        var cut = AnimationScript.Compile(AnimationScript.Track(AnimationScript.Parse("FRAME 0 POSITION 0 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 0 POSITION 5 5 5 ROTATION 0 1 0 0 SCALE 1 1 1\nFRAME 10 POSITION 5 5 5\nFRAME 20"u8, "cut.zan"), "a")!, 10, "cut.zan");
+        var cut = AnimationScript.Compile(AnimationScript.Track(AnimationScript.Parse("FRAME 0 POSITION 0 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 0 POSITION 5 5 5 ROTATION 0 1 0 0 SCALE 1 1 1\nFRAME 10 POSITION 5 5 5\nFRAME 20"u8, "cut.zan", TestContext.Current.CancellationToken), "a")!, 10, "cut.zan", TestContext.Current.CancellationToken);
         Assert.Contains("two keys at frame 0", Assert.Throws<InvalidDataException>(() => SiScriptWriter.Write([new("a", cut, 10)], new("3.7", true), Token)).Message);
-        var fine = AnimationScript.Compile(AnimationScript.Track(AnimationScript.Parse("FRAME 0 POSITION 0.1234567 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 10 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 20"u8, "fine.zan"), "a")!, 10, "fine.zan");
+        var fine = AnimationScript.Compile(AnimationScript.Track(AnimationScript.Parse("FRAME 0 POSITION 0.1234567 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 10 POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME 20"u8, "fine.zan", TestContext.Current.CancellationToken), "a")!, 10, "fine.zan", TestContext.Current.CancellationToken);
         Assert.Contains("six-decimal", Assert.Throws<InvalidDataException>(() => SiScriptWriter.Write([new("a", fine, 10)], new("3.7", true), Token)).Message);
     }
 }

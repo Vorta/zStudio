@@ -199,18 +199,18 @@ public sealed class AnimationCompilerTests
     [Fact]
     public void ScriptsRoundTripAndRefuseBadInput()
     {
-        var tracks = AnimationScript.Parse(Encoding.ASCII.GetBytes(Script), "gate.zan");
-        var frames = AnimationScript.Compile(AnimationScript.Track(tracks, "door")!, 10, "gate.zan");
+        var tracks = AnimationScript.Parse(Encoding.ASCII.GetBytes(Script), "gate.zan", TestContext.Current.CancellationToken);
+        var frames = AnimationScript.Compile(AnimationScript.Track(tracks, "door")!, 10, "gate.zan", TestContext.Current.CancellationToken);
         string text = AnimationScript.Decompile(frames, 10)!;
-        var reparsed = AnimationScript.Parse(Encoding.ASCII.GetBytes(AnimationScript.Write([("door", text)])), "again.zan");
-        var again = AnimationScript.Compile(AnimationScript.Track(reparsed, "door")!, 10, "again.zan");
+        var reparsed = AnimationScript.Parse(Encoding.ASCII.GetBytes(AnimationScript.Write([("door", text)], TestContext.Current.CancellationToken)), "again.zan", TestContext.Current.CancellationToken);
+        var again = AnimationScript.Compile(AnimationScript.Track(reparsed, "door")!, 10, "again.zan", TestContext.Current.CancellationToken);
         Assert.Equal(frames.Select(f => Convert.ToHexString(f.Bytes)), again.Select(f => Convert.ToHexString(f.Bytes)));
         // Times off the frame grid cannot be a script.
         Assert.Null(AnimationScript.Decompile(frames, 7));
         Assert.Null(AnimationScript.Track(tracks, "other"));
-        Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("FRAME 0 POSITION 1 2\nFRAME 1"u8, "bad.zan"));
-        Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("FRAME 0 VELOCITY 1 2 3\nFRAME 1"u8, "bad.zan"));
-        Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("OBJECT a\nFRAME 0 POSITION 0 0 0\nOBJECT a\nFRAME 0 POSITION 0 0 0\nFRAME 1"u8, "bad.zan"));
+        Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("FRAME 0 POSITION 1 2\nFRAME 1"u8, "bad.zan", TestContext.Current.CancellationToken));
+        Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("FRAME 0 VELOCITY 1 2 3\nFRAME 1"u8, "bad.zan", TestContext.Current.CancellationToken));
+        Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("OBJECT a\nFRAME 0 POSITION 0 0 0\nOBJECT a\nFRAME 0 POSITION 0 0 0\nFRAME 1"u8, "bad.zan", TestContext.Current.CancellationToken));
     }
 
     private sealed class CountingFiles(Dictionary<string, byte[]> files) : IProjectFiles
@@ -281,8 +281,8 @@ public sealed class AnimationCompilerTests
     public void KeysAtTheSameFrameJumpWithoutNonFiniteRates()
     {
         // A key repeated at one frame is a cut: its zero-length segment holds its value, and the engine samples it at time 0.
-        var tracks = AnimationScript.Parse("FRAME 0 POSITION 0 0 0 ROTATION 1 0 0 0\nFRAME 0 POSITION 5 5 5 ROTATION 0 1 0 0\nFRAME 10 POSITION 5 5 5\nFRAME 20"u8, "cut.zan");
-        var frames = AnimationScript.Compile(AnimationScript.Track(tracks, "any")!, 10, "cut.zan");
+        var tracks = AnimationScript.Parse("FRAME 0 POSITION 0 0 0 ROTATION 1 0 0 0\nFRAME 0 POSITION 5 5 5 ROTATION 0 1 0 0\nFRAME 10 POSITION 5 5 5\nFRAME 20"u8, "cut.zan", TestContext.Current.CancellationToken);
+        var frames = AnimationScript.Compile(AnimationScript.Track(tracks, "any")!, 10, "cut.zan", TestContext.Current.CancellationToken);
         Assert.Equal(Vector3.Zero, frames[0].Vector(frames[0].ChannelOffset(0) + 16));
         Assert.Equal(Vector3.Zero, frames[0].Vector(frames[0].ChannelOffset(1) + 16));
         Assert.All(frames, f => f.Validate());
@@ -292,7 +292,7 @@ public sealed class AnimationCompilerTests
     [Fact]
     public void ScriptsRefuseRotationsThatAreNotQuaternions()
     {
-        var error = Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("FRAME 0 ROTATION 0 0 0 0\nFRAME 1"u8, "zero.zan"));
+        var error = Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("FRAME 0 ROTATION 0 0 0 0\nFRAME 1"u8, "zero.zan", TestContext.Current.CancellationToken));
         Assert.Contains("line 1", error.Message); Assert.Contains("ROTATION", error.Message);
     }
 
@@ -339,7 +339,7 @@ public sealed class AnimationCompilerTests
         var outputs = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
         Assert.Contains(notes, n => n.Contains("my door"));
         var named = outputs.Single(o => o.Path == "data/m1/zrdr/named.zan");
-        Assert.NotNull(AnimationScript.Track(AnimationScript.Parse(named.Bytes, named.Path), Latin));
+        Assert.NotNull(AnimationScript.Track(AnimationScript.Parse(named.Bytes, named.Path, TestContext.Current.CancellationToken), Latin));
     }
 
     private const string Swing = """
@@ -417,7 +417,7 @@ public sealed class AnimationCompilerTests
         Assert.Contains(notes, n => n.StartsWith("data/m1/zrdr/slide.zan: the keyframes have no SI Animation Script") && n.EndsWith("written in zStudio's keyframe format."));
         var slide = outputs.Single(o => o.Path == "data/m1/zrdr/slide.zan");
         Assert.False(SiAnimationScript.Recognize(slide.Bytes));
-        Assert.NotNull(AnimationScript.Track(AnimationScript.Parse(slide.Bytes, slide.Path), "door"));
+        Assert.NotNull(AnimationScript.Track(AnimationScript.Parse(slide.Bytes, slide.Path, TestContext.Current.CancellationToken), "door"));
     }
 
     [Fact]
@@ -520,7 +520,7 @@ public sealed class AnimationCompilerTests
         List<string> notes = [];
         var lamps = AnimationSources.Reconstruct([new(1, m1, [], first), new(2, m2, [], second)], files, notes, Token).Single(o => o.Path == "data/m1/zrdr/lamps.zan");
         Assert.Single(notes, n => n.StartsWith("data/m1/zrdr/lamps.zan: ", StringComparison.Ordinal));
-        var tracks = AnimationScript.Parse(lamps.Bytes, lamps.Path);
+        var tracks = AnimationScript.Parse(lamps.Bytes, lamps.Path, TestContext.Current.CancellationToken);
         Assert.Equal(["lamp1", "lamp2"], tracks.Select(t => t.Object));
     }
 }

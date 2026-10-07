@@ -78,8 +78,8 @@ public partial class MainWindow
 
     private const string TerrainPlanChanged = "The project's sources changed since the conversion was planned; convert again.";
     /// <summary>Plans a conversion from the files a build read; runs off the UI thread (tests hold it to check where it runs and to change the project meanwhile).</summary>
-    internal Func<SourceWorkspace, string, IReadOnlyCollection<string>, CancellationToken, TerrainConversionPlan> PlanSourceTerrainConversion { get; set; } =
-        static (workspace, database, dependencies, token) => SourceTerrainConversion.Plan(workspace, database, SourceTerrainConversion.References(workspace, dependencies, token), token);
+    internal Func<SourceWorkspace, string, IReadOnlyCollection<string>, string, CancellationToken, TerrainConversionPlan> PlanSourceTerrainConversion { get; set; } =
+        static (workspace, database, dependencies, entryScript, token) => SourceTerrainConversion.Plan(workspace, database, SourceTerrainConversion.References(workspace, dependencies, entryScript, token), token);
 
     /// <summary>
     /// What converting this world's mission database to editable terrain would do (references come from the files its build
@@ -103,7 +103,7 @@ public partial class MainWindow
         operation = cancellation; CancelOperationItem.IsEnabled = true;
         ViewModel.Status = $"Planning the conversion of {database} to editable terrain…";
         TerrainConversionPlan planned;
-        try { planned = await Task.Run(() => plan(workspace, database, dependencies, cancellation.Token), cancellation.Token); }
+        try { planned = await Task.Run(() => plan(workspace, database, dependencies, $"gamegen/{build.Mission}.gs", cancellation.Token), cancellation.Token); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
         // The world was replaced or closed while the plan was made: the plan was for a world no longer shown.

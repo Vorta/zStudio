@@ -23,7 +23,7 @@ public sealed class ImportRound23AnimationSourceTests
         files.Files.Remove(Script);
         List<string> notes = [];
         var output = AnimationSources.Reconstruct([new(1, shipped, [], world)], files, notes, Token).Single(o => o.Path == Script);
-        var parsed = AnimationScript.Parse(output.Bytes, Script);
+        var parsed = AnimationScript.Parse(output.Bytes, Script, TestContext.Current.CancellationToken);
         Assert.Equal(objects, parsed.Select(t => t.Object));
         Assert.Contains(notes, n => n.Contains("earlier animation at 10"));
         files.Files[Script] = output.Bytes;

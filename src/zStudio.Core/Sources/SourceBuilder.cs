@@ -115,7 +115,7 @@ public static partial class SourceBuilder
             string name = mission.ToLowerInvariant();
             if (onlyMission != null && !name.Equals(onlyMission, StringComparison.OrdinalIgnoreCase)) continue;
             string entry = WorldScript(name);
-            if (File.Exists(SourceProject.Resolve(root, entry)) || added?.Contains(entry, StringComparer.OrdinalIgnoreCase) == true)
+            if (SourceRead.FileExists(SourceProject.Resolve(root, entry)) || added?.Contains(entry, StringComparer.OrdinalIgnoreCase) == true)
             {
                 if (models == null)
                 {
@@ -128,7 +128,7 @@ public static partial class SourceBuilder
             var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd, added, token);
             if (resources.Count > 0) AddPlan(new($"{name}/zrdr.zbd", "archive", resources));
             string definitions = AnimationRoot(name);
-            if (File.Exists(SourceProject.Resolve(root, definitions)) || added?.Contains(definitions, StringComparer.OrdinalIgnoreCase) == true)
+            if (SourceRead.FileExists(SourceProject.Resolve(root, definitions)) || added?.Contains(definitions, StringComparer.OrdinalIgnoreCase) == true)
             {
                 scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase), added, token);
                 AddPlan(new($"{name}/anim.zbd", "animations", new PrefixedInputs(definitions, scriptsFound)));
@@ -185,7 +185,7 @@ public static partial class SourceBuilder
         private readonly Lock dependencyGate = new();
         internal IReadOnlyCollection<string> Dependencies() { lock (dependencyGate) return dependencies.ToArray(); }
         /// <summary>Pending files the disk does not hold yet (new files of a workspace), which count as present.</summary>
-        internal IReadOnlyCollection<string> Added { get; } = overlay?.Keys.Where(k => !File.Exists(SourceProject.Resolve(root, k))).ToArray() ?? [];
+        internal IReadOnlyCollection<string> Added { get; } = overlay?.Keys.Where(k => !SourceRead.FileExists(SourceProject.Resolve(root, k))).ToArray() ?? [];
         internal void Depend(string relative) { lock (dependencyGate) dependencies.Add(relative); }
         /// <summary>The disk files read or found by a search and their stamps (pending content is not included).</summary>
         internal IReadOnlyDictionary<string, FileStamp> Stamps() => probes.Where(p => p.Value != null).ToDictionary(p => p.Key, p => p.Value!, StringComparer.OrdinalIgnoreCase);
@@ -197,7 +197,7 @@ public static partial class SourceBuilder
             if (overlay?.ContainsKey(relative) == true) return true;
             string path = SourceProject.Resolve(root, relative);
             SourceProject.RejectNestedLinks(root, relative);
-            FileStamp? observed = File.Exists(path) ? FileStamp.Read(path) : null;
+            FileStamp? observed = SourceRead.FileExists(path) ? FileStamp.Read(path) : null;
             if (probes.TryGetValue(relative, out var first) && first != observed)
                 throw Changed(relative, $"{relative} changed while exporting; export again.");
             probes[relative] = observed;
@@ -297,14 +297,14 @@ public static partial class SourceBuilder
                 token.ThrowIfCancellationRequested();
                 string path = SourceProject.Resolve(root, relative);
                 SourceProject.RejectNestedLinks(root, relative);
-                if (stamp == null ? Path.Exists(path) : !File.Exists(path) || FileStamp.Read(path) != stamp)
+                if (stamp == null ? SourceRead.PathExists(path) : !SourceRead.FileExists(path) || FileStamp.Read(path) != stamp)
                     throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
             }
             foreach (var (relative, entry) in files)
             {
                 token.ThrowIfCancellationRequested();
                 string path = SourceProject.Resolve(root, relative);
-                if (!File.Exists(path) || FileStamp.Read(path) != entry.Stamp) throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
+                if (!SourceRead.FileExists(path) || FileStamp.Read(path) != entry.Stamp) throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
                 // Timestamps and lengths are hints, not content identities: editors can preserve both.
                 if (!SourceRead.Matches(path, entry.Stamp.Length, entry.Sha, token) || FileStamp.Read(path) != entry.Stamp)
                     throw Changed(relative, $"{relative} changed while exporting; nothing was written.");
@@ -481,8 +481,8 @@ public static partial class SourceBuilder
     /// The game binds a built world with the destination's animations when this export leaves them, and built animations
     /// with the destination's world likewise, so those are resolved together.
     /// </summary>
-    private static (List<SourceLookup> Lookups, List<SourceLookupChange> Changes, List<string> NotChecked) MissionLookups(IReadOnlyList<SourceExportResult> results, IReadOnlyDictionary<string, Animation.AnimationPackage> packages,
-        Snapshot snapshot, string? destination, CancellationToken token)
+    internal static (List<SourceLookup> Lookups, List<SourceLookupChange> Changes, List<string> NotChecked) MissionLookups(IReadOnlyList<SourceExportResult> results, IReadOnlyDictionary<string, Animation.AnimationPackage> packages,
+        Snapshot snapshot, string? destination, CancellationToken token, long lookupWorkLimit = LookupWorkBudget.MaximumUnits)
     {
         List<SourceLookup> lookups = []; List<SourceLookupChange> changes = []; List<string> notChecked = [];
         foreach (string mission in results.Where(r => r.Status == "built" && r.Family is "world" or "animations").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))
@@ -499,7 +499,7 @@ public static partial class SourceBuilder
                 previous = destination == null ? null : Replaced(destination, mission, token);
                 after = worldBuilt || previous == null ? snapshot.World(mission, token).World : previous.Value.World;
                 findNodes = FindNodes(mission, snapshot, token);
-                resolved = WorldLookups.Resolve(mission, after, packages.GetValueOrDefault(mission) ?? previous?.Animations, findNodes, token);
+                resolved = WorldLookups.Resolve(mission, after, packages.GetValueOrDefault(mission) ?? previous?.Animations, findNodes, token, new(lookupWorkLimit, token));
             }
             catch (Exception ex) when (IsBuildFailure(ex)) { notChecked.Add(LookupsUnchecked(mission, ex)); continue; }
             lookups.AddRange(resolved.Where(l => l.Ambiguous));
@@ -507,10 +507,13 @@ public static partial class SourceBuilder
             if (previous is { } replaced)
                 try
                 {
-                    var before = WorldLookups.Resolve(mission, replaced.World, replaced.Animations, findNodes, token);
+                    var before = WorldLookups.Resolve(mission, replaced.World, replaced.Animations, findNodes, token, new(lookupWorkLimit, token));
                     changes.AddRange(WorldLookups.Changes(replaced.World, before, after, resolved, token));
                 }
-                catch (Exception ex) when (IsBuildFailure(ex)) { }
+                catch (Exception ex) when (IsBuildFailure(ex))
+                {
+                    notChecked.Add($"The node lookup comparison with the previous {mission} world was not completed; changes from the replaced files are not reported: {JsonData.ShownText(ex.Message, 512)}");
+                }
         }
         return (lookups, changes, notChecked);
     }

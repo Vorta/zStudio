@@ -133,9 +133,19 @@ public sealed class WorldNode
         {
             // gwNodeSetName: a name that fits is copied with its terminator; a longer one keeps 34 characters and the
             // field is terminated at its last byte.
-            var bytes = Encoding.Latin1.GetBytes(value);
-            if (bytes.Length >= NameField.Length) { bytes.AsSpan(0, 34).CopyTo(NameField); NameField[35] = 0; }
-            else { bytes.CopyTo(NameField, 0); NameField[bytes.Length] = 0; }
+            ArgumentNullException.ThrowIfNull(value);
+            // Latin1's fixed best-fit encoding emits one byte per UTF-16 code unit (including each surrogate).
+            // Bound the input before encoding: repeated long authored names must not allocate their discarded tails.
+            if (value.Length >= NameField.Length)
+            {
+                Encoding.Latin1.GetBytes(value.AsSpan(0, 34), NameField);
+                NameField[35] = 0;
+            }
+            else
+            {
+                int written = Encoding.Latin1.GetBytes(value.AsSpan(), NameField);
+                NameField[written] = 0;
+            }
         }
     }
     public WorldNodeClass Class { get; }

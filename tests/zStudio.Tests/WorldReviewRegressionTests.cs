@@ -458,7 +458,7 @@ public sealed class WorldReviewRegressionTests
             for (int i = 0; i < count; i++)
             {
                 string text = $"FRAME {2*i} POSITION 0 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME {2*i+1} POSITION 1 0 0 ROTATION 1 0 0 0 SCALE 1 1 1\nFRAME {2*i+2}";
-                var frames = AnimationScript.Compile(AnimationScript.Track(AnimationScript.Parse(Encoding.ASCII.GetBytes(text), "growth.zan"), "a")!, 1, "growth.zan");
+                var frames = AnimationScript.Compile(AnimationScript.Track(AnimationScript.Parse(Encoding.ASCII.GetBytes(text), "growth.zan", TestContext.Current.CancellationToken), "a")!, 1, "growth.zan", TestContext.Current.CancellationToken);
                 tracks.Add(new("a" + i, frames, 1));
             }
             long before = GC.GetAllocatedBytesForCurrentThread();

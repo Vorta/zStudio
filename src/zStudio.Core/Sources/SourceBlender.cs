@@ -577,14 +577,17 @@ public static partial class SourceBlender
         {
             string? current = workspace.Read(relative, token) is { } bytes ? SourceProject.Sha256(bytes) : null;
             expected[relative] = current;
-            if (current != null && (!accepted.TryGetValue(relative, out var states) || !states.Contains(current))) conflicts.Add(relative);
+            // A missing former input is a change too: restoring an externally deleted buffer/texture requires the
+            // same decision as replacing modified content. Only an absent file never recorded by this checkout is new.
+            if (accepted.TryGetValue(relative, out var states) ? current == null || !states.Contains(current) : current != null)
+                conflicts.Add(relative);
         }
         // One question covers everything the update would replace or drop, so one "update anyway" never hides another.
         if (!force && (conflicts.Count > 0 || attributesDropped))
         {
             List<string> reasons = [];
             if (attributesDropped) reasons.Add("The export has none of the model's engine attributes (extras.recoil: node flags, zones, references, materials); export again with Include → Custom Properties on.");
-            if (conflicts.Count > 0) reasons.Add($"It would replace {string.Join(", ", conflicts.Take(8))}{(conflicts.Count > 8 ? $" and {conflicts.Count - 8} more" : "")}, which changed in the project since the checkout or were not part of it (another model's texture of the same name).");
+            if (conflicts.Count > 0) reasons.Add($"It would replace or recreate {string.Join(", ", conflicts.Take(8))}{(conflicts.Count > 8 ? $" and {conflicts.Count - 8} more" : "")}, which changed in the project since the checkout or were not part of it (another model's texture of the same name).");
             reasons.Add("Check the model out again, or update anyway to accept this.");
             throw new BlenderConflictException(attributesDropped ? [.. conflicts.Prepend(model).Distinct(StringComparer.OrdinalIgnoreCase)] : conflicts, string.Join(" ", reasons));
         }

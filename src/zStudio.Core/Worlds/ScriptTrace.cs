@@ -113,6 +113,16 @@ public static class ScriptTrace
 
     internal static List<TracedInstruction> Trace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry, List<string> notes, ScriptTraceBudget budget,
         BoundedDiagnostics? diagnostics = null)
+        => RunTrace(script, entry, notes, budget, diagnostics, null, true, default);
+
+    /// <summary>Observe executed operands without retaining instruction history, optionally including post-write scripts.</summary>
+    internal static void Visit(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
+        Action<TracedInstruction> inspect, CancellationToken token, bool stopAtWorldWrite = true)
+        => RunTrace(script, entry, [], new(), null, inspect, stopAtWorldWrite, token);
+
+    private static List<TracedInstruction> RunTrace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
+        List<string> notes, ScriptTraceBudget budget, BoundedDiagnostics? diagnostics, Action<TracedInstruction>? inspect,
+        bool stopAtWorldWrite, CancellationToken token)
     {
         diagnostics ??= new(notes);
         List<TracedInstruction> result = []; Dictionary<string, string> variables = new(StringComparer.Ordinal);
@@ -126,6 +136,7 @@ public static class ScriptTrace
 
         void Run(string name, int depth)
         {
+            token.ThrowIfCancellationRequested();
             // The build refuses scripts that source each other this deep.
             if (depth > WorldAssembler.MaximumScriptDepth) throw new InvalidDataException($"Scripts source each other more than {WorldAssembler.MaximumScriptDepth} levels deep.");
             if (written) return;
@@ -134,6 +145,7 @@ public static class ScriptTrace
             string? ownDirectory = null;
             foreach (var line in lines)
             {
+                token.ThrowIfCancellationRequested();
                 if (written) return;
                 if (++instructions > WorldAssembler.MaximumInstructions) throw new InvalidDataException("The scripts run too many instructions.");
                 string command = line[0];
@@ -153,8 +165,9 @@ public static class ScriptTrace
                     WorldDirectoryPaths.Add(textures, args.Length > 0 ? args[0] : "", budget.Work);
                     textureView = Snapshot(textures, textureView);
                 }
-                result.Add(new(name, command, args, modelView, ownDirectory, textureView));
-                if (command == "GameZWriteZBDFile") written = true;
+                TracedInstruction instruction = new(name, command, args, modelView, ownDirectory, textureView);
+                if (inspect == null) result.Add(instruction); else inspect(instruction);
+                if (stopAtWorldWrite && command == "GameZWriteZBDFile") written = true;
             }
         }
         IReadOnlyList<string> Snapshot(List<string> current, IReadOnlyList<string> previous)

@@ -57,16 +57,28 @@ public static partial class SourceTerrainConversion
     /// <see cref="MaximumNameCharacters"/> characters of them) are refused before the name past the limit is kept.
     /// </summary>
     public static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) References(SourceWorkspace workspace, IEnumerable<string> files, CancellationToken token = default)
+        => ReferencesCore(workspace, files, null, token);
+
+    /// <summary>Includes the executed operands of the exact world entry script, with shared macros across sourced files.</summary>
+    public static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) References(SourceWorkspace workspace, IEnumerable<string> files,
+        string entryScript, CancellationToken token = default) => ReferencesCore(workspace, files, entryScript, token);
+
+    private static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) ReferencesCore(SourceWorkspace workspace,
+        IEnumerable<string> files, string? entryScript, CancellationToken token)
     {
         HashSet<string> names = new(StringComparer.Ordinal), wildcards = new(StringComparer.Ordinal); List<Regex> patterns = [];
         // Looked up by span, so a word already kept (most of them) is not copied again.
         var knownNames = names.GetAlternateLookup<ReadOnlySpan<char>>();
         var knownWildcards = wildcards.GetAlternateLookup<ReadOnlySpan<char>>();
         long nameCharacters = 0, patternCharacters = 0;
+        Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> scripts = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> needsContext = new(StringComparer.OrdinalIgnoreCase);
+        long scriptBytes = 0, scriptTokens = 0, operandWork = 0;
         string reading = "";
-        foreach (string file in files)
+        foreach (string input in files)
         {
             token.ThrowIfCancellationRequested();
+            string file = SourceWorkspace.Normalize(input);
             reading = file;
             bool resource = file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase);
             bool keyframes = file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase);
@@ -104,9 +116,68 @@ public static partial class SourceTerrainConversion
                 foreach (string text in InOrder(tree)) Add(text);
             }
             else if (!keyframes)
-                foreach (var line in GameGenScriptSyntax.Parse(source).Lines.Where(l => l.IsInstruction)) foreach (string t in line.Tokens) Add(t);
+            {
+                var lines = ReadScript(file, bytes, source);
+                foreach (var line in lines)
+                {
+                    foreach (string t in line) Add(t);
+                }
+            }
         }
+        if (entryScript != null)
+        {
+            string entry = SourceWorkspace.Normalize(entryScript);
+            if (!entry.StartsWith("gamegen/", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Terrain reference discovery needs the world's entry script under gamegen/.");
+            ScriptTrace.Visit(LoadScript, entry["gamegen/".Length..], Executed, token, stopAtWorldWrite: false);
+            // A mission's archive-mode load script is a separate, known entry point. Its macros do not inherit
+            // the build's state. Dependencies also contain the whole interp.zbd inventory, including other
+            // missions and unused fragments: those retain literal protection above, but are not execution
+            // dependencies of this world. Only these roots and the scripts they source provide macro context.
+            string runtime = WorldLookups.LoadScript(Path.GetFileNameWithoutExtension(entry));
+            if (scripts.ContainsKey(runtime))
+                ScriptTrace.Visit(LoadScript, runtime["gamegen/".Length..], Executed, token, stopAtWorldWrite: false);
+        }
+        else if (needsContext.Count > 0)
+            throw new InvalidDataException("Terrain reference discovery needs the world's entry script to resolve macros and sourced scripts; terrain conversion is refused without that execution context.");
         return (names, patterns);
+
+        void Executed(TracedInstruction instruction)
+        {
+            reading = "gamegen/" + instruction.Script.Replace('\\', '/');
+            foreach (string operand in instruction.Args)
+            {
+                // The trace streams records, so repeated operands cannot retain histories. Charge repeated
+                // hashing/matching too: a long literal can be executed many times from one cached source.
+                if (operand.Length + 1L > WorldAssembler.MaximumScriptSourceBytes - operandWork)
+                    throw new InvalidDataException("Terrain reference discovery exceeds its executed-operand work budget; simplify the world scripts before converting.");
+                operandWork += operand.Length + 1L;
+                Add(operand);
+            }
+        }
+
+        IReadOnlyList<IReadOnlyList<string>> LoadScript(string name)
+        {
+            token.ThrowIfCancellationRequested();
+            string file = "gamegen/" + name.Replace('\\', '/');
+            if (scripts.TryGetValue(file, out var cached)) return cached;
+            byte[] bytes = workspace.Read(file, token, SourceProject.MaximumSourceTextBytes)
+                ?? throw new InvalidDataException($"The script {JsonData.ShownText(file)} is unavailable; terrain references cannot be established, so conversion is refused.");
+            return ReadScript(file, bytes, GameGenScriptText.Decode(bytes));
+        }
+        IReadOnlyList<IReadOnlyList<string>> ReadScript(string file, byte[] bytes, string source)
+        {
+            if (scripts.TryGetValue(file, out var cached)) return cached;
+            if (bytes.LongLength > WorldAssembler.MaximumScriptSourceBytes - scriptBytes)
+                throw new InvalidDataException("Terrain reference discovery's script sources exceed 64 MiB; simplify the world scripts before converting.");
+            scriptBytes += bytes.Length;
+            if ((scriptTokens += GameGenScriptText.CountTokens(source, token)) > GameGenScriptText.MaximumTokens)
+                throw new InvalidDataException("Terrain reference discovery's script sources exceed four million tokens.");
+            var lines = GameGenScriptText.Tokenize(source);
+            if (lines.Any(line => ScriptConditions.IsSource(line[0]) || line.Any(ScriptConditions.HasMacro))) needsContext.Add(file);
+            scripts.Add(file, lines);
+            return lines;
+        }
 
         void Words(string text) { foreach (var m in Word().EnumerateMatches(text)) Add(text.AsSpan(m.Index, m.Length)); }
         // Each distinct name and pattern once, within the limits.

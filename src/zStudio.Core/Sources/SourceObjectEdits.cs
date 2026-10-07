@@ -1025,6 +1025,7 @@ public static class SourceObjectEdits
     /// its name), a FindSubNode below it (certain), and a FindNode or FindSubNode of the node's name once the file is
     /// loaded (the newest node of the name, possibly another: not certain), through NodeSetDescription renames. The node's
     /// own transform instructions are skipped: they run in this mission too, and the edit is planned with them.
+    /// Missing files remain missing; a file that cannot be read refuses the edit because its uses cannot be inspected.
     /// </summary>
     internal static (string Mission, SourceInstruction Instruction, bool Certain)? TransformElsewhere(SourceWorkspace workspace, string mission, WorldNodeProvenance origin, string nodeName, CancellationToken token, ScriptTraceBudget? traceBudget = null)
     {
@@ -1038,7 +1039,13 @@ public static class SourceObjectEdits
         {
             if (files.TryGetValue(path, out var bytes)) return bytes;
             try { bytes = workspace.Read(path, token); }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { bytes = null; }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                // A failed read is not evidence that another mission does not use this model. In particular,
+                // a temporarily locked script/reference may apply transforms as soon as its lock is released.
+                // Use IOException so the malformed-mission catch below cannot turn incomplete inspection into absence.
+                throw new IOException($"Cannot check the other missions' transforms because {JsonData.ShownText(path)} could not be read. Close programs locking it or restore access, then retry the edit.", ex);
+            }
             if (bytes != null) retained.Retain(bytes.LongLength);
             return files[path] = bytes;
         }

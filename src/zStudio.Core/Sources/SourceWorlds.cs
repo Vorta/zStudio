@@ -265,9 +265,8 @@ public static partial class SourceWorlds
         {
             SourceProject.RequireSource(relative);
             if (overlay?.ContainsKey(relative) == true) return true;
-            if (!File.Exists(SourceProject.Resolve(root, relative))) return false;
             SourceProject.RejectNestedLinks(root, relative);
-            return true;
+            return SourceRead.FileExists(SourceProject.Resolve(root, relative));
         }
         public byte[] Read(string relative, CancellationToken token)
         {

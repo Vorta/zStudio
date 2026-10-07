@@ -37,7 +37,7 @@ public sealed partial class PickupPlacementEditSession
                     throw new InvalidDataException("An intact, non-overlapping archive member is required.");
                 string archive = Path.GetFullPath(doc.Path).ToUpperInvariant();
                 bool ai = MissionAiNetworks.IsCandidate(asset.Name);
-                var tree = asset.Content as ZrdNode ?? ZrdDecoder.Read(doc.Slice(asset.Offset, asset.Length), token);
+                var tree = ZrdDecoder.ReadAsset(doc, asset, token);
                 var fields = tree.Kind == ZrdKind.Array ? tree.Children : throw new InvalidDataException("Expected a record array.");
                 if (fields.Count == 1 && fields[0].Kind == ZrdKind.Array) fields = fields[0].Children;
                 if (fields.Count % 2 != 0) throw new InvalidDataException("Incomplete mission record pair.");

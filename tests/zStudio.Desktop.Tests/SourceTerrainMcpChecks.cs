@@ -230,14 +230,14 @@ internal static class SourceTerrainMcpChecks
             // and a plan the project changed under, or made for a world that was replaced meanwhile, is never shown.
             var planner = main.PlanSourceTerrainConversion;
             bool? planOnUi = null; SemaphoreSlim planEntered = new(0), planProceed = new(0);
-            main.PlanSourceTerrainConversion = (w, database, dependencies, t) =>
+            main.PlanSourceTerrainConversion = (w, database, dependencies, entryScript, t) =>
             {
                 planOnUi = main.Dispatcher.CheckAccess();
                 // Planned on the UI thread, the click would not return before the plan, so nothing could stop or change it.
                 if (planOnUi == true) throw new InvalidDataException("The conversion was planned on the UI thread.");
                 planEntered.Release();
                 Assert.True(planProceed.Wait(TimeSpan.FromSeconds(30)));
-                return planner(w, database, dependencies, t);
+                return planner(w, database, dependencies, entryScript, t);
             };
             try
             {

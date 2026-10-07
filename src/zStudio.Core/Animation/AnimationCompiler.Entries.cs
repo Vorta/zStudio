@@ -444,7 +444,7 @@ public sealed partial class AnimationCompiler
             string file = Bound(Req(key, "SCRIPT_FILENAME")); float rate = key.Item("SCRIPT_FRAME_RATE")?.Number() ?? 30;
             var script = compiler.ReadScript(file, key.Source) ?? throw key.Error($"keyframe script {JsonData.ShownText(file)} was not found in the animation path.");
             if (!script.Moves(Bound(target))) throw key.Error($"keyframe script {JsonData.ShownText(file)} has no track for {Bound(target)}.");
-            var frames = script.Compile(Bound(target), rate, $"{script.Path}, object {Bound(target)}");
+            var frames = script.Compile(Bound(target), rate, $"{script.Path}, object {Bound(target)}", compiler.token);
             var ev = new AnimationEvent(e.Bytes) { Version = 28 }.WithKeyframes(frames);
             ev.SetInt(16, frames.Count);
             return ev;
@@ -454,7 +454,7 @@ public sealed partial class AnimationCompiler
         {
             string beam = Req(key, "NAME"); Track(beam); e.Short(16, Node(beam));
             uint flags = 0; e.Float(64, 1); e.Float(68, 1);
-            foreach (var part in key.Items.DistinctBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+            foreach (var part in key.Items.DistinctBy(p => p.Key, StringComparer.Ordinal))
                 switch (part.Key)
                 {
                     case "NAME" or "START_TIME": break;
@@ -484,7 +484,7 @@ public sealed partial class AnimationCompiler
         {
             string animation = Req(key, "NAME"); e.Text(16, Bound(animation), 32); e.Short(50, -1);
             uint flags = 0;
-            foreach (var part in key.Items.DistinctBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+            foreach (var part in key.Items.DistinctBy(p => p.Key, StringComparer.Ordinal))
                 switch (part.Key)
                 {
                     case "NAME" or "START_TIME": break;

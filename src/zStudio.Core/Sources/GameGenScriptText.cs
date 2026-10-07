@@ -73,6 +73,19 @@ public static class GameGenScriptText
         return lines;
     }
 
+    /// <summary>Count source tokens without allocating their strings, for a shared cache budget before tokenization.</summary>
+    internal static long CountTokens(string text, CancellationToken token)
+    {
+        long count = 0;
+        foreach (var (start, length) in Lines(text))
+        {
+            token.ThrowIfCancellationRequested();
+            count += TokenizeLine(text, start, start + length, null, null);
+            if (count > MaximumTokens) throw new InvalidDataException($"The script has more than {MaximumTokens:N0} tokens, which is not supported.");
+        }
+        return count;
+    }
+
     public static IReadOnlyList<string> TokenizeLine(string line)
     {
         List<string> tokens = [];

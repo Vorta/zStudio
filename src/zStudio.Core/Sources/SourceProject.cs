@@ -98,14 +98,10 @@ public static partial class SourceProject
     }
     private static IReadOnlyList<string> DiskFiles(string root, string folder, Func<string, bool> include, int maximumEntries, CancellationToken token)
     {
-        string path = Resolve(root, folder), current = System.IO.Path.GetFullPath(root);
+        string path = Resolve(root, folder);
         // The folders leading to the listed one must be regular too; enumeration below only sees their contents.
-        foreach (string part in folder.Split('/'))
-        {
-            current = System.IO.Path.Combine(current, part); DirectoryInfo step = new(current);
-            if (step.Exists && step.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{step.FullName} is a link; source projects contain regular files.");
-        }
-        if (!Directory.Exists(path)) return [];
+        RejectNestedLinks(root, folder);
+        if (!SourceRead.DirectoryExists(path)) return [];
         List<string> files = [];
         // Counted before it is looked at: files the scan does not want (editor caches, backups) cost as much to visit.
         foreach (var info in Entries(path, new ScanBudget(maximumEntries, maximum => TooManyEntries(folder, maximum), token), recurse: true))
@@ -163,7 +159,7 @@ public static partial class SourceProject
     internal static IReadOnlyList<string> MissionFolders(string root, CancellationToken token, int maximumEntries = MaximumScannedEntries)
     {
         string data = Resolve(root, DataFolder);
-        if (!Directory.Exists(data)) return [];
+        if (!SourceRead.DirectoryExists(data)) return [];
         return Entries(data, new ScanBudget(maximumEntries, maximum => TooManyEntries(DataFolder, maximum), token))
             .Where(e => e is DirectoryInfo && MissionName().IsMatch(e.Name)).Select(e => e.Name).OrderBy(n => int.Parse(n.AsSpan(1))).ToArray();
     }

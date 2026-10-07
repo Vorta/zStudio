@@ -89,6 +89,15 @@ public sealed record ZrdNode(Guid Id, ZrdKind Kind, uint Bits, string Text, IRea
 
 public static partial class ZrdDecoder
 {
+    /// <summary>Ordinary archive consumers honor the shared decoder's refusal; only explicit raw export may bypass it.</summary>
+    internal static ZrdNode ReadAsset(ZbdDocument document, AssetRecord asset, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (asset.Metadata["typed_decode_limited"]?.GetValue<bool>() == true)
+            throw new InvalidDataException("This archive member exceeds the shared typed-decoding budget; use raw inspection, exact member export or replacement.");
+        return asset.Content as ZrdNode ?? Read(document.Slice(asset.Offset, asset.Length), token);
+    }
+
     internal static ZrdNode? TryRead(ReadOnlyMemory<byte> bytes, CancellationToken token, ArchiveZrdBudget? allocation = null)
     {
         if (bytes.Length < 8 || BinaryPrimitives.ReadUInt32LittleEndian(bytes.Span) is < 1 or > 4) return null;

@@ -40,7 +40,7 @@ public sealed class TerrainConversionCorpusTests
             SourceWorkspace workspace = new(project);
             string database = $"data/{mission}/models/{mission}.gltf";
             var before = await SourceWorlds.BuildPreviewAsync(project, mission, Path.Combine(SourceWorlds.PreviewRoot(project), "before"), workspace.Overlay(), token: Token);
-            var plan = SourceTerrainConversion.Plan(workspace, database, SourceTerrainConversion.References(workspace, before.Dependencies, Token), Token);
+            var plan = SourceTerrainConversion.Plan(workspace, database, SourceTerrainConversion.References(workspace, before.Dependencies, $"gamegen/{before.Mission}.gs", Token), Token);
             var output = TestContext.Current.TestOutputHelper;
             output?.WriteLine($"{mission}: {plan.Converted} pieces into {plan.Groups.Count} surfaces; kept {plan.Kept.Count}: " +
                 string.Join("; ", plan.Kept.GroupBy(k => k.Reason).Select(g => $"{g.Key} ×{g.Count()}")));

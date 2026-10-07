@@ -29,7 +29,10 @@ namespace Recoil.Zbd.Core.Animation;
 public static class AnimationScript
 {
     public const string Extension = ".zan";
+    /// <summary>Keys in one object track; a file can contain several independently bounded tracks.</summary>
     public const int MaximumKeys = 65_536;
+    /// <summary>At most 64 MiB of conservatively estimated decoded keys (256 bytes each) in one file.</summary>
+    public const int MaximumTotalKeys = 4 * MaximumKeys;
 
     public sealed class Key
     {
@@ -39,8 +42,14 @@ public static class AnimationScript
     }
 
     /// <summary>A script's tracks by object name (null for a script without OBJECT lines), in file order.</summary>
-    public static List<(string? Object, List<Key> Keys)> Parse(ReadOnlySpan<byte> bytes, string source)
+    public static List<(string? Object, List<Key> Keys)> Parse(ReadOnlySpan<byte> bytes, string source, CancellationToken token = default)
+        => Parse(bytes, source, token, null);
+
+    internal static List<(string? Object, List<Key> Keys)> Parse(ReadOnlySpan<byte> bytes, string source, CancellationToken token, Action? reserveKey)
     {
+        token.ThrowIfCancellationRequested();
+        if (bytes.Length > Sources.SourceProject.MaximumSourceTextBytes)
+            throw new InvalidDataException($"{JsonData.ShownText(source)} exceeds the {Sources.SourceProject.MaximumSourceTextBytes:N0}-byte keyframe source limit.");
         List<(string? Object, List<Key> Keys)> tracks = [];
         HashSet<string> objects = new(StringComparer.Ordinal);
         List<Key>? keys = null; int total = 0;
@@ -48,6 +57,7 @@ public static class AnimationScript
         int lineNumber = 0;
         foreach (string raw in text.Split('\n'))
         {
+            token.ThrowIfCancellationRequested();
             lineNumber++;
             string line = raw; int hash = line.IndexOf('#'); if (hash >= 0) line = line[..hash];
             var tokens = line.Split([' ', '\t', '\r'], StringSplitOptions.RemoveEmptyEntries);
@@ -61,9 +71,11 @@ public static class AnimationScript
                 continue;
             }
             if (keys == null) { keys = []; tracks.Add((null, keys)); }
-            if (++total > MaximumKeys) throw Error($"more than {MaximumKeys} keys.");
+            if (keys.Count >= MaximumKeys) throw Error($"more than {MaximumKeys} keys in one track.");
+            if (++total > MaximumTotalKeys) throw Error($"more than {MaximumTotalKeys} keys across the script's tracks.");
             if (!tokens[0].Equals("FRAME", StringComparison.OrdinalIgnoreCase) || tokens.Length < 2 || !int.TryParse(tokens[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int frame) || frame < 0)
                 throw Error("a key starts with FRAME and a frame number of 0 or more.");
+            reserveKey?.Invoke(); // The compiler's shared retained-key allowance, before creating the next key.
             Key key = new() { Frame = frame };
             for (int i = 2; i < tokens.Length;)
             {
@@ -110,13 +122,14 @@ public static class AnimationScript
         tracks.FirstOrDefault(t => t.Object == name).Keys ?? (tracks.Count == 1 && tracks[0].Object == null ? tracks[0].Keys : null);
 
     /// <summary>The keyframes of a script at <paramref name="frameRate"/> frames per second, as the original compiler wrote them.</summary>
-    public static List<AnimationKeyframe> Compile(IReadOnlyList<Key> keys, float frameRate, string source)
+    public static List<AnimationKeyframe> Compile(IReadOnlyList<Key> keys, float frameRate, string source, CancellationToken token = default)
     {
         if (!(frameRate > 0) || !float.IsFinite(frameRate)) throw new InvalidDataException($"{source}: SCRIPT_FRAME_RATE must be above 0.");
         List<AnimationKeyframe> frames = [];
         float step = FrameStep(frameRate);
         for (int i = 0; i + 1 < keys.Count; i++)
         {
+            token.ThrowIfCancellationRequested();
             var key = keys[i];
             float time = keys[i].Frame * step, end = keys[i + 1].Frame * step;
             if (!float.IsFinite(time) || !float.IsFinite(end)) throw new InvalidDataException($"{source}: frame {keys[i + 1].Frame} is beyond single-precision time at {frameRate} frames per second.");
@@ -200,15 +213,30 @@ public static class AnimationScript
     public static bool IsObjectName(string name) => name.Length > 0 && !name.Any(c => c is ' ' or '\t' or '\r' or '\n' or '#' or '\0' || c > 255);
 
     /// <summary>A script file of object tracks (each from <see cref="Decompile"/>), in the given order.</summary>
-    public static string Write(IEnumerable<(string Object, string Track)> tracks)
+    public static string Write(IEnumerable<(string Object, string Track)> tracks, CancellationToken token = default)
     {
         StringBuilder text = new("# RECOIL keyframe script, reconstructed by zStudio: a track per OBJECT, keys as FRAME n and\n# channels with their rates per second.\n");
+        int total = 0;
         foreach (var (name, track) in tracks)
         {
+            token.ThrowIfCancellationRequested();
             if (!IsObjectName(name)) throw new InvalidDataException($"'{name}' cannot name a script track.");
+            if (8L + name.Length + track.Length > Sources.SourceProject.MaximumSourceTextBytes - text.Length)
+                throw new InvalidDataException($"The keyframe script exceeds the {Sources.SourceProject.MaximumSourceTextBytes:N0}-byte source limit.");
+            int keys = 0;
+            foreach (var raw in track.AsSpan().EnumerateLines())
+            {
+                token.ThrowIfCancellationRequested();
+                var line = raw.TrimStart();
+                if (!line.StartsWith("FRAME", StringComparison.OrdinalIgnoreCase) || line.Length > 5 && !char.IsWhiteSpace(line[5])) continue;
+                if (++keys > MaximumKeys) throw new InvalidDataException($"A keyframe track exceeds {MaximumKeys:N0} keys.");
+                if (++total > MaximumTotalKeys) throw new InvalidDataException($"The keyframe script exceeds {MaximumTotalKeys:N0} keys across its tracks.");
+            }
             text.Append("OBJECT ").Append(name).Append('\n').Append(track);
         }
-        return text.ToString();
+        string result = text.ToString();
+        _ = Parse(Encoding.Latin1.GetBytes(result), "reconstructed keyframe script", token);
+        return result;
     }
 
     /// <summary>
