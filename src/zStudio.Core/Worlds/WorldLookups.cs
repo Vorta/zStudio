@@ -115,6 +115,14 @@ public static class WorldLookups
 
     internal static IReadOnlyList<(string Source, string Name)> FindNodes(Func<string, byte[]?> read, string mission, CancellationToken token,
         long maximumScriptBytes, long maximumScriptTokens)
+        => FindNodes((path, _) => read(path), mission, token, maximumScriptBytes, maximumScriptTokens);
+
+    /// <summary>Reads lookup scripts with their remaining cumulative source allowance admitted before file allocation.</summary>
+    public static IReadOnlyList<(string Source, string Name)> FindNodes(Func<string, long, byte[]?> read, string mission, CancellationToken token = default)
+        => FindNodes(read, mission, token, WorldAssembler.MaximumScriptSourceBytes, GameGenScriptText.MaximumTokens);
+
+    internal static IReadOnlyList<(string Source, string Name)> FindNodes(Func<string, long, byte[]?> read, string mission, CancellationToken token,
+        long maximumScriptBytes, long maximumScriptTokens)
     {
         if (maximumScriptBytes is < 0 or > WorldAssembler.MaximumScriptSourceBytes) throw new ArgumentOutOfRangeException(nameof(maximumScriptBytes));
         if (maximumScriptTokens is < 0 or > GameGenScriptText.MaximumTokens) throw new ArgumentOutOfRangeException(nameof(maximumScriptTokens));
@@ -126,19 +134,19 @@ public static class WorldLookups
             if (depth > WorldAssembler.MaximumScriptDepth)
                 throw new InvalidDataException($"{path}: the scripts source each other more than {WorldAssembler.MaximumScriptDepth} levels deep, deeper than a build follows them, so the names they look up are not known.");
             token.ThrowIfCancellationRequested();
-            if (read(path) is not { } bytes) return;
+            if (read(path, Math.Min(SourceProject.MaximumSourceTextBytes, maximumScriptBytes - scriptBytes)) is not { } bytes) return;
             if (bytes.LongLength > maximumScriptBytes - scriptBytes)
                 throw new InvalidDataException("The lookup scripts together exceed the 64 MiB source limit, so their node lookups cannot be established.");
             scriptBytes += bytes.Length;
             // Bounded like every script source before it is decoded.
             string text;
-            try { text = GameGenScriptText.Decode(bytes); }
+            try { text = GameGenScriptText.Decode(bytes, token); }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
             long tokensInScript = GameGenScriptText.CountTokens(text, token);
             if (tokensInScript > maximumScriptTokens - scriptTokens)
                 throw new InvalidDataException("The lookup scripts together exceed four million tokens, so their node lookups cannot be established.");
             scriptTokens += tokensInScript;
-            foreach (var tokens in GameGenScriptText.Tokenize(text))
+            foreach (var tokens in GameGenScriptText.TokenizeCancellable(text, token))
             {
                 token.ThrowIfCancellationRequested();
                 if (++instructions > WorldAssembler.MaximumInstructions)
@@ -182,20 +190,30 @@ public static class WorldLookups
     internal static IReadOnlyList<SourceLookup> Resolve(string mission, GameZWorld world, AnimationPackage? animations, IEnumerable<(string Source, string Name)> findNodes,
         CancellationToken token, LookupWorkBudget lookupWork)
     {
+        token.ThrowIfCancellationRequested(); lookupWork.Reserve(2L * world.Nodes.Count);
         var slots = GameZWriter.NodeSlots(world);
-        var byName = world.Nodes.GroupBy(n => n.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.OrderByDescending(n => slots[n]).ToList(), StringComparer.Ordinal);
+        var byName = world.Nodes.GroupBy(n => { token.ThrowIfCancellationRequested(); return lookupWork.Name(n); }, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g =>
+            {
+                token.ThrowIfCancellationRequested();
+                return g.OrderByDescending(n => slots[n]).ToList();
+            }, StringComparer.Ordinal);
         int Count(string name) => byName.TryGetValue(name, out var list) ? list.Count : 0;
         WorldNode? Highest(string name) => byName.TryGetValue(name, out var list) ? list[0] : null;
         List<SourceLookup> result = []; HashSet<(string, string, int, string)> seen = [];
         // Many lookups find one node (66 hit walls attach to one wall1): its path and fingerprint are made once.
         Dictionary<WorldNode, (string Path, string Fingerprint)> described = new(ReferenceEqualityComparer.Instance);
+        // A different target can share most descendants with a previous target. Keep the signature memo for this entire
+        // immutable lookup snapshot, with the same aggregate allowance as subtree name discovery.
+        WorldComparer.PairKeyMemo fingerprints = new(token, lookupWork);
         void Add(string kind, string name, string source, WorldNode? found, int occurrence = 0)
         {
+            token.ThrowIfCancellationRequested(); lookupWork.Reserve(1);
             if (!seen.Add((kind, source, occurrence, name))) return;
-            (string Path, string Fingerprint)? node = found == null ? null : described.TryGetValue(found, out var known) ? known : described[found] = (Path(found), Fingerprint(found));
+            (string Path, string Fingerprint)? node = found == null ? null : described.TryGetValue(found, out var known) ? known : described[found] = (Path(found, token, lookupWork), Fingerprint(found, fingerprints));
             result.Add(new(mission, kind, name, source, Count(name), found == null ? -1 : slots[found], node?.Path) { Fingerprint = node?.Fingerprint, Occurrence = occurrence });
         }
-        foreach (var (source, name) in findNodes) Add(SourceLookup.TextureEffect, name, source, Highest(name));
+        foreach (var (source, name) in findNodes) { token.ThrowIfCancellationRequested(); Add(SourceLookup.TextureEffect, name, source, Highest(name)); }
         if (animations != null)
         {
             var entries = animations.Entries;
@@ -221,6 +239,7 @@ public static class WorldLookups
                 HashSet<string>? below = null;
                 foreach (var name in new[] { 0, 1 }.SelectMany(table => entry.References[table].Skip(1)).Select(r => r.Text(0, 36)))
                 {
+                    token.ThrowIfCancellationRequested(); lookupWork.Reserve(1);
                     if (name.Length == 0 || name == root) continue;
                     below ??= [.. lookupWork.Subtree(new[] { bound, attachment }.OfType<WorldNode>()).Select(lookupWork.Name),
                         .. new[] { 2, 3 }.SelectMany(table => entry.References[table].Skip(1)).Select(r => r.Text(0, 36))];
@@ -231,6 +250,7 @@ public static class WorldLookups
                 bool pathStart = true;
                 foreach (var prerequisite in entry.References[6])
                 {
+                    token.ThrowIfCancellationRequested(); lookupWork.Reserve(1);
                     byte mode = prerequisite.Bytes.Length > 4 ? prerequisite.Bytes[4] : (byte)0;
                     if (mode is not (2 or 3)) continue;
                     string name = prerequisite.Text(12, 28);
@@ -281,28 +301,39 @@ public static class WorldLookups
     }
 
     /// <summary>A digest of the node's structure (its pairing key: classes and children's names six levels down, which grows with the subtree), transform and flags.</summary>
-    private static string Fingerprint(WorldNode node) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        WorldComparer.PairKey(node) + "|" + (node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) is { } m ? m.ToString() : "") + "|" + Convert.ToHexString(node.Payload.AsSpan(0, Math.Min(node.Payload.Length, 4))))));
+    private static string Fingerprint(WorldNode node, WorldComparer.PairKeyMemo fingerprints) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+        fingerprints.Key(node) + "|" + (node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) is { } m ? m.ToString() : "") + "|" + Convert.ToHexString(node.Payload.AsSpan(0, Math.Min(node.Payload.Length, 4))))));
 
     /// <summary>A node's path: its first parents' names from the top (a world's name for its members), unnamed nodes as "(unnamed)".</summary>
-    public static string Path(WorldNode node)
+    public static string Path(WorldNode node) => Path(node, default, null);
+    private static string Path(WorldNode node, CancellationToken token, LookupWorkBudget? work)
     {
         List<string> names = []; HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
-        for (var n = node; n != null && seen.Add(n) && names.Count < 64; n = n.Parents.FirstOrDefault()) names.Add(n.Name.Length == 0 ? "(unnamed)" : n.Name);
+        for (var n = node; n != null && names.Count < 64; n = n.Parents.FirstOrDefault())
+        {
+            token.ThrowIfCancellationRequested(); work?.Reserve(1);
+            if (!seen.Add(n)) break;
+            string name = n.Name; names.Add(name.Length == 0 ? "(unnamed)" : name);
+        }
         names.Reverse();
         return string.Join("/", names);
     }
 
     /// <summary>A one-line description of a change for warnings; <paramref name="before"/> says what it is compared with.</summary>
-    public static string Describe(SourceLookupChange change, string before = "") =>
-        $"{change.After.Mission}: {Describe(change.After)} finds {change.After.Found ?? "no node"}{(change.After.Slot >= 0 ? $" (slot {change.After.Slot})" : "")} instead of {change.Before.Found ?? "no node"}{(change.Before.Slot >= 0 ? $" (slot {change.Before.Slot})" : "")}{before}{(change.Uncertain ? " (possibly: the worlds are too large to tell every copy apart)" : "")}.";
+    public static string Describe(SourceLookupChange change, string before = "")
+    {
+        BoundedDiagnostics note = new(); Describe(note, change, before); return note.Messages[0];
+    }
+    /// <summary>The report's shared allowance gates even the nested description before it is formatted.</summary>
+    internal static void Describe(BoundedDiagnostics notes, SourceLookupChange change, string before = "") =>
+        notes.Add($"{change.After.Mission}: {Describe(change.After)} finds {change.After.Found ?? "no node"}{(change.After.Slot >= 0 ? $" (slot {change.After.Slot})" : "")} instead of {change.Before.Found ?? "no node"}{(change.Before.Slot >= 0 ? $" (slot {change.Before.Slot})" : "")}{before}{(change.Uncertain ? " (possibly: the worlds are too large to tell every copy apart)" : "")}.");
     /// <summary>What makes a lookup: "FindNode scrollramp8 in gamegen/support/tex_fxm6.gw", "the root scrollramp8 of animation ramp_scroll".</summary>
     public static string Describe(SourceLookup lookup) => lookup.Kind switch
     {
-        SourceLookup.TextureEffect => $"FindNode {lookup.Name} in {lookup.Source}",
-        SourceLookup.AnimationRoot => $"the root {lookup.Name} of animation {lookup.Source}",
-        SourceLookup.AnimationAttachment => $"the attachment {lookup.Name} of animation {lookup.Source}",
-        SourceLookup.AnimationPrerequisite => $"the prerequisite node {lookup.Name} of animation {lookup.Source}",
-        _ => $"the name {lookup.Name} in animation {lookup.Source}",
+        SourceLookup.TextureEffect => $"FindNode {JsonData.ShownText(lookup.Name, 64)} in {JsonData.ShownText(lookup.Source, 192)}",
+        SourceLookup.AnimationRoot => $"the root {JsonData.ShownText(lookup.Name, 64)} of animation {JsonData.ShownText(lookup.Source, 192)}",
+        SourceLookup.AnimationAttachment => $"the attachment {JsonData.ShownText(lookup.Name, 64)} of animation {JsonData.ShownText(lookup.Source, 192)}",
+        SourceLookup.AnimationPrerequisite => $"the prerequisite node {JsonData.ShownText(lookup.Name, 64)} of animation {JsonData.ShownText(lookup.Source, 192)}",
+        _ => $"the name {JsonData.ShownText(lookup.Name, 64)} in animation {JsonData.ShownText(lookup.Source, 192)}",
     };
 }

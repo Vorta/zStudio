@@ -19,7 +19,7 @@ public sealed partial class AnimationTests
         var before = player.EvaluateForTest(.1);
         var duration = player.MeasureDuration(TestContext.Current.CancellationToken);
         Assert.Equal(AnimationDurationKind.Finite, duration.Kind); Assert.Equal(frames, duration.Frames);
-        Assert.Equal(before.Time, player.Time); Assert.Equal(before.Nodes, player.Frame().Nodes);
+        Assert.Equal(before.Time, player.Time); Assert.Equal(before.Nodes, player.Frame(TestContext.Current.CancellationToken).Nodes);
         Assert.Equal(source, Pack(package));
     }
 

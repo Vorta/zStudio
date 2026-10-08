@@ -2,15 +2,9 @@ using System.Globalization;
 using System.Numerics;
 using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core.Sources;
+using Recoil.Zbd.Core.Terrain;
 
 namespace Recoil.Zbd.Core.Worlds;
-
-/// <summary>Reads project files for the assembler; a build uses its frozen snapshot, the editor reads the disk.</summary>
-public interface IProjectFiles
-{
-    bool Exists(string relative);
-    byte[] Read(string relative, CancellationToken token);
-}
 
 /// <summary>
 /// Assembles a mission world from a source project the way the original gamegen build did: it runs the mission's
@@ -23,9 +17,18 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     public const int MaximumScriptDepth = 32, MaximumInstructions = 1_000_000;
     public const long MaximumScriptSourceBytes = 64 * 1024 * 1024;
     internal long ScriptSourceByteLimit { get; init; } = MaximumScriptSourceBytes;
+    internal int ModelJsonByteLimit { get; init; } = GltfDocument.MaximumJsonBytes;
+    internal long ModelBufferByteLimit { get; init; } = GltfDocument.MaximumBufferBytes;
     internal long LookupWorkLimit { get; init; } = LookupWorkBudget.MaximumUnits;
+    internal long CommandAllocationLimit { get; init; } = WorldCommandBudget.MaximumBytes;
+    internal long OperandReferenceLimit { get; init; } = ScriptOperandBudget.MaximumReferences;
+    internal long OperandCharacterLimit { get; init; } = ScriptOperandBudget.MaximumCharacters;
+    private ScriptOperandBudget? operandBudget;
+    private ScriptOperandBudget Operands => operandBudget ??= new(OperandReferenceLimit, OperandCharacterLimit);
     private LookupWorkBudget? lookupWork;
     private LookupWorkBudget Lookups => lookupWork ??= new(LookupWorkLimit, token);
+    private WorldCommandBudget? commandBudget;
+    private WorldCommandBudget Commands => commandBudget ??= new(CommandAllocationLimit, token);
     private long scriptSourceBytes, scriptSourceTokens;
     public GameZWorld World { get; } = new();
     public List<string> Warnings => diagnostics.Snapshot();
@@ -69,8 +72,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private static readonly HashSet<string> CurrentCommands = new(["AddChild", "DeleteChild", "FindSubNode", "GameGenSetWorld"], StringComparer.Ordinal);
     public string? WorldFile { get; private set; }
     public string? AnimationFile { get; private set; }
-    /// <summary>World children in the order they were added; their cells are assigned after the update pass.</summary>
-    private readonly List<WorldNode> worldChildren = [];
+    /// <summary>Current script macro values, with the interpreter's case-sensitive identities.</summary>
     private readonly Dictionary<string, string> variables = new(StringComparer.Ordinal);
     private readonly List<string> modelDirectories = [], textureDirectories = [], readerDirectories = [];
     private readonly DirectoryWorkBudget directoryWork = new();
@@ -95,6 +97,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// <summary>Runs <paramref name="script"/> (relative to the gamegen folder, e.g. <c>m1.gs</c>) and returns the written world.</summary>
     public GameZWorld Assemble(string script)
     {
+        ReadMapZones(script);
         Source(script, 0);
         if (!written) throw new InvalidDataException($"{script} never writes a world (GameZWriteZBDFile).");
         return World;
@@ -109,25 +112,36 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // Each script is read once per assembly: one sourced many times (or holding only comments) costs its instructions, not its text again.
         if (!parsedScripts.TryGetValue(relative, out var lines))
         {
-            byte[] source = files.Read(relative, token);
+            byte[] source;
+            try { source = files.Read(relative, token, ProjectReadLimits.Text(ScriptSourceByteLimit - scriptSourceBytes)); }
+            catch (InvalidDataException ex)
+            { throw new InvalidDataException($"{relative}: the world's script sources together cannot be read within their per-file and cumulative limits: {ex.Message}", ex); }
             if (source.LongLength > ScriptSourceByteLimit - scriptSourceBytes)
                 throw new InvalidDataException("The world's script sources together exceed 64 MiB; split or simplify the sources.");
             scriptSourceBytes += source.Length;
-            var syntax = Sources.GameGenScriptSyntax.Parse(source);
-            if ((scriptSourceTokens += syntax.Lines.Sum(l => (long)l.Tokens.Count)) > GameGenScriptText.MaximumTokens)
-                throw new InvalidDataException("The world's script sources together exceed four million tokens.");
-            parsedScripts[relative] = lines = [.. syntax.Lines.Where(l => l.IsInstruction)];
+            var syntax = Sources.GameGenScriptSyntax.Parse(source, token);
+            List<GameGenScriptLine> active = [];
+            foreach (var parsed in syntax.Lines)
+            {
+                token.ThrowIfCancellationRequested();
+                if ((scriptSourceTokens += parsed.Tokens.Count) > GameGenScriptText.MaximumTokens)
+                    throw new InvalidDataException("The world's script sources together exceed four million tokens.");
+                if (parsed.IsInstruction) active.Add(parsed);
+            }
+            token.ThrowIfCancellationRequested();
+            parsedScripts[relative] = lines = [.. active];
         }
         foreach (var line in lines)
         {
             token.ThrowIfCancellationRequested();
             if (++instructions > MaximumInstructions) throw new InvalidDataException("The scripts run too many instructions.");
             var raw = line.Tokens;
+            Operands.Inspect(raw, token);
             string command = raw[0];
             // Conditions follow the retail interpreter (see ScriptConditions): TRUE-valued macros, no nesting while skipping.
             if (!conditions.Runs(raw, variables)) continue;
             // Macros expand in arguments only; an unknown macro expands to nothing.
-            string[] args = raw.Skip(1).Select(Expand).ToArray();
+            string[] args = Operands.Expand(raw, variables, token);
             if (ScriptConditions.IsQuit(command)) return;
             // Macros are set before and after the world is written (tex_fx scripts may use them).
             if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; continue; }
@@ -148,7 +162,6 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         }
     }
 
-    private string Expand(string token) => ScriptConditions.Expand(token, variables);
 
     /// <summary>After the world is written, scripts (tex_fx) only register textures the mission pack must hold.</summary>
     private void Late(string command, string[] args)
@@ -173,7 +186,16 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "SetModel3DArraySize": World.ModelCapacity = Math.Clamp((int)F(0), 16, GameZWorld.MaximumNodeCapacity); break;
             case "SetMaterialArraySize": World.MaterialCapacity = Math.Clamp((int)F(0), 16, 32767); break;
             case "LensFlareTexture" or "CycleTextureSetMap" or "WriteTextureSetMap" or "TextureAdd":
-                if (args.Length > 0) { string name = TextureStem(args[^1]); ScriptTextures.Add(name); WorldGltf.Texture(World, name); }
+                if (args.Length > 0)
+                {
+                    string name = TextureStem(args[^1]);
+                    // The directory only grows; a name registered by an earlier script command is already present.
+                    if (!ScriptTextures.Contains(name))
+                    {
+                        WorldGltf.Texture(World, name);
+                        ScriptTextures.Add(name);
+                    }
+                }
                 break;
 
             case "NewWorld":
@@ -187,7 +209,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "GameGenSetWorld": if (current?.Class == WorldNodeClass.World) pendingWorld = current; break;
             case "WorldOrigin": WorldSet(w => { w.SetPayloadFloat(0x34, F(0)); w.SetPayloadFloat(0x38, F(1)); UpdateMax(w); }); break;
             case "WorldExtents": WorldSet(w => { w.SetPayloadFloat(0x3C, F(0)); w.SetPayloadFloat(0x40, F(1)); UpdateMax(w); }); break;
-            case "WorldPartition": WorldSet(w => WorldUpdate.SetPartition(w, F(0), F(1))); break;
+            case "WorldPartition": WorldSet(w => WorldUpdate.SetPartition(w, F(0), F(1), Commands, token)); break;
             case "WorldPartitionInclusionTolerance": WorldSet(w => { w.SetPayloadFloat(0x70, F(0)); w.SetPayloadFloat(0x74, F(1)); }); break;
             case "WorldPartitionMaxDECFeatureCount": WorldSet(w => w.SetPayloadInt(0x4C, Math.Clamp((int)F(0), 0, 255))); break;
             case "WorldSetFogState": WorldSet(w => w.SetPayloadInt(0x10, A(0).ToLowerInvariant() switch { "linear" => 1, "exponential" => 2, _ => 0 })); break;
@@ -262,7 +284,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             case "NodeSetCanModify": Flag(0x10000, On(0)); break;
             case "NodeSetOverwrite": Flag(0x800000, On(0)); break;
             // CZNode::AssignInt32ToDiRecursive: the models of the node and everything below it.
-            case "NodeSetLighting": if (current != null) foreach (var model in Subtree(current).Select(n => n.Model).OfType<WorldModel>()) model.Flags = On(0) ? model.Flags | 1 : model.Flags & ~1u; break;
+            case "NodeSetLighting": if (current != null) foreach (var model in Lookups.Subtree([current], reserveTraversal: Commands.Traversal).Select(n => n.Model).OfType<WorldModel>()) model.Flags = On(0) ? model.Flags | 1 : model.Flags & ~1u; break;
 
             case "LoadGameGen": LoadGameGen(A(0), A(1), script); break;
             case "GameZWriteZBDFile": WorldFile = A(0); WriteInstruction = instruction; Finish(); break;
@@ -332,10 +354,16 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     private WorldNode Create(string name, WorldNodeClass kind)
     {
         // Node lookups scan the table, so it never grows past what a world can hold.
-        if (World.Nodes.Count >= GameZWorld.MaximumNodeCapacity) throw new InvalidDataException($"The scripts create more nodes than a world holds ({GameZWorld.MaximumNodeCapacity:N0}).");
+        ReservePersistentNode();
         WorldNode node = new(name, kind) { Flags = 0x0108001C, Zone = 0xFF };
         Allocate(node); current = node;
         return node;
+    }
+    private void ReservePersistentNode()
+    {
+        token.ThrowIfCancellationRequested();
+        if (World.Nodes.Count >= GameZWorld.MaximumNodeCapacity)
+            throw new InvalidDataException($"The scripts create more nodes than a world holds ({GameZWorld.MaximumNodeCapacity:N0}).");
     }
     private void Allocate(WorldNode node)
     {
@@ -425,7 +453,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     {
         if (parent == child || Descends(parent, child)) { diagnostics.Add($"AddChild would make {child.Name} its own ancestor."); return; }
         child.Parents.Add(parent);
-        if (parent.Class == WorldNodeClass.World) worldChildren.Add(child); else parent.Children.Add(child);
+        parent.Children.Add(child);
     }
     /// <summary>Whether <paramref name="ancestor"/> is above <paramref name="node"/>; each ancestor is visited once.</summary>
     private bool Descends(WorldNode node, WorldNode ancestor)
@@ -443,8 +471,10 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     }
     private void Unlink(WorldNode parent, WorldNode child)
     {
+        // List.Remove scans for the occurrence and shifts its tail; repeated duplicate edges must pay for
+        // that actual list work, not only for visiting the two nodes.
+        Lookups.Reserve((long)parent.Children.Count + child.Parents.Count);
         parent.Children.Remove(child); child.Parents.Remove(parent);
-        if (parent.Class == WorldNodeClass.World) worldChildren.Remove(child);
     }
     /// <summary>DestroyNodeRecursive: a node without parents is freed; each child is detached and freed only when it has no other parent.</summary>
     private void DeleteTree(WorldNode node)
@@ -453,7 +483,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         // Script-built hierarchies have not reached Finish's depth validation yet. Follow child order without using
         // the process stack; shared children are released only when their last parent edge has been removed.
         bool ownsRemovals = deferredRemovals == null;
+        if (ownsRemovals) Lookups.Reserve(World.Nodes.Count);
         deferredRemovals ??= new(ReferenceEqualityComparer.Instance);
+        Commands.Traversal(1);
         Stack<(WorldNode Node, int Next)> pending = new([(node, 0)]);
         try
         {
@@ -463,8 +495,11 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                 var (n, next) = frame;
                 if (next < n.Children.Count)
                 {
+                    Commands.Traversal(2);
                     pending.Push((n, next + 1));
-                    var child = n.Children[next]; child.Parents.Remove(n);
+                    var child = n.Children[next];
+                    Lookups.Reserve(child.Parents.Count);
+                    child.Parents.Remove(n);
                     if (child.Parents.Count == 0) pending.Push((child, 0));
                     continue;
                 }
@@ -494,64 +529,98 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// </summary>
     private void LoadGameGen(string file, string name, string script)
     {
+        // Every load retains its root, including absent models and valid empty scenes. Refuse before changing
+        // current/LoadedRoots. OriginalLoader's temporary cache slots keep their separate lifetime and budget.
+        ReservePersistentNode();
         // The root takes its slot after the caches of the files the load references (see OriginalLoader).
         WorldNode root = new(name, WorldNodeClass.Object3D) { Flags = 0x0108001C, Zone = 0xFF }; Object3D(root); LoadedRoots.Add(root); current = root;
         string? path = ResolveModel(file);
         if (path == null) { Allocate(root); diagnostics.Add($"{script}: LoadGameGen found no model for {file} in {BoundedDiagnostics.DirectoryList(modelDirectories)}."); pendingWorld = null; return; }
         // One load parses each file once; models follow the loader's caches (see WorldGltf.ImportContext).
         Dictionary<string, (GltfDocument, string)> documents = new(StringComparer.OrdinalIgnoreCase);
-        (GltfDocument, string) Load(string file) => documents.TryGetValue(file, out var loaded) ? loaded : documents[file] = LoadDocument(file);
+        (GltfDocument, string) Load(string file)
+        {
+            _ = ModelExists(file);
+            string geometry = GeometryPath(file);
+            if (!documents.TryGetValue(geometry, out var loaded)) documents[geometry] = loaded = LoadDocument(geometry);
+            return (loaded.Item1, file);
+        }
         var (doc, documentPath) = Load(path);
         if (WorldGltf.RootFlags(doc) is { } rootFlags) root.Flags = (root.Flags & ~WorldGltf.CarriedFlags) | rootFlags;
+        if (ZoneAsset(path)?.Profile.LoadRoot is { } rootZone)
+        {
+            root.Zone = rootZone.Word;
+            root.Flags = rootZone.Gate ? root.Flags | 0x01000000u : root.Flags & ~0x01000000u;
+        }
         bool database = pendingWorld != null; var load = instruction;
-        Origin(root).LoadedFile = documentPath;
+        Origin(root).LoadedFile = GeometryPath(documentPath);
+        Origin(root).LogicalLoadedFile = documentPath;
+        Origin(root).ZoneManifest = ZoneAsset(documentPath) != null ? zoneManifest : null;
+        Origin(root).ImportedZoneWord = root.Zone;
+        Origin(root).ImportedZoneGate = (root.Flags & WorldGltf.ZoneGate) != 0;
         HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
+        List<WorldNode> imported = [];
         // A reference's file as its node names it: references naming one file by different paths each have a cache.
         Dictionary<WorldNode, string> referenceText = new(ReferenceEqualityComparer.Instance);
         HashSet<string> parts = new(StringComparer.OrdinalIgnoreCase);
         WorldGltf.ImportContext context = null!;
         context = new()
         {
-            World = World, Diagnostics = diagnostics,
+            World = World, Diagnostics = diagnostics, LinkWork = Lookups, Created = 1, // Reserve the not-yet-allocated load root too.
+            ZoneProfile = (file, _) => ZoneAsset(file)?.Profile,
+            AssetReference = ZoneReference,
             NodeImported = (node, file, source, place) =>
             {
+                imported.Add(node);
                 if (context.Referencing is { } referencing) Origin(node).ReferencedBy = Origin(referencing);
-                var origin = Origin(node); origin.ModelFile = file; origin.ModelNode = source.Index; origin.ModelNodeName = source.Name; origin.ModelTransformAuthored = source.Matrix is { } m && !m.IsIdentity; origin.Load = load;
+                var origin = Origin(node); origin.ModelFile = GeometryPath(file); origin.LogicalModelFile = file; origin.ModelNode = source.Index; origin.ModelNodeName = source.Name; origin.ModelTransformAuthored = source.Matrix is { } m && !m.IsIdentity; origin.Load = load;
+                var layout = ZoneLayout(documents[GeometryPath(file)].Item1)[source];
+                int zoneNode = layout.Node;
+                origin.ZoneManifest = ZoneAsset(file) != null ? zoneManifest : null;
+                origin.ZoneNode = zoneNode; origin.ZoneMesh = layout.Mesh;
                 origin.Instance = place;
                 // The database's nodes: of its file and of its parts, the files its groups reference.
                 bool part = parts.Contains(file);
                 origin.Database = database && (part || string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase));
                 origin.Part = database && part;
-                string? uri = (source.Extras?[WorldGltf.Key] as System.Text.Json.Nodes.JsonObject)?["ref"] is System.Text.Json.Nodes.JsonValue text && text.TryGetValue(out string? value) ? value : null;
+                string? uri = ZoneReference(file, zoneNode) ?? ((source.Extras?[WorldGltf.Key] as System.Text.Json.Nodes.JsonObject)?["ref"] is System.Text.Json.Nodes.JsonValue text && text.TryGetValue(out string? value) ? value : null);
                 if (uri != null) referenceText[node] = uri;
                 if (origin.Database && WorldGltf.IsGroup(source, file)) { groups.Add(node); if (uri != null) parts.Add(Relative(file, uri)); }
             },
             Reference = (uri, from) => Load(Relative(from, uri)),
             ReadFile = (uri, from) =>
             {
-                string file = Relative(from, uri);
+                string file = Relative(GeometryPath(from), uri);
                 if (!files.Exists(file)) throw new InvalidDataException($"{from} names {JsonData.ShownText(uri)}, which does not exist.");
                 ModelFiles.Add(file);
-                return (files.Read(file, token), file);
+                return (files.Read(file, token, ProjectReadLimits.Bytes(TerrainRecipe.MaximumBytes)), file);
             },
             Grid = database ? () => Grid(pendingWorld!) : null,
             TerrainPieceImported = (node, recipe, piece, surface) =>
             {
                 var origin = Origin(node); origin.Terrain = recipe; origin.TerrainSurface = surface; origin.TerrainCell = (piece.Column, piece.Row); origin.Load = load;
             },
-            TextureName = (uri, name, from) => Texture(uri, name, from),
+            TextureName = (uri, name, from) => Texture(uri, name, GeometryPath(from)),
             Token = token,
         };
         List<WorldNode> nodes;
         int firstModel = World.Models.Count;
-        try { nodes = WorldGltf.Import(doc, documentPath, 0xFF, context); }
+        try { nodes = WorldGltf.Import(doc, documentPath, root.Zone & 0xFF, context); }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
+        finally { zoneLayouts.Clear(); } // Do not retain parsed geometry after this load's provenance is complete.
+        foreach (var node in imported)
+        {
+            token.ThrowIfCancellationRequested();
+            Origin(node).ImportedZoneWord = node.Zone;
+            Origin(node).ImportedZoneGate = (node.Flags & WorldGltf.ZoneGate) != 0;
+            if (node.Model != null && context.SourcePolygons.TryGetValue(node.Model, out var polygons)) Origin(node).ZonePolygons = polygons;
+        }
         foreach (var (texture, addressing) in context.TextureAddressing)
             if (!TextureAddressing.TryAdd(texture, addressing) && TextureAddressing[texture] != addressing)
                 throw new InvalidDataException($"Texture {JsonData.ShownText(texture)} is sampled with different edge modes in different models; use one mode per texture or give the images distinct names.");
         // Nodes take slots as the original loader made and freed them (caches of referenced files, the root, the records,
         // each reference's content after the next record). A referenced file's nodes are the children from another file.
-        string FileOf(WorldNode node) => Provenance.TryGetValue(node, out var p) && p.ModelFile != null ? p.ModelFile : documentPath;
+        string FileOf(WorldNode node) => Provenance.TryGetValue(node, out var p) && p.LogicalModelFile != null ? p.LogicalModelFile : documentPath;
         // Each node's content once: the loader asks for it several times per node (the load's children no longer change).
         Dictionary<WorldNode, List<WorldNode>> contents = new(ReferenceEqualityComparer.Instance);
         List<WorldNode> Content(WorldNode node) => contents.TryGetValue(node, out var found) ? found
@@ -585,7 +654,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             Dictionary<WorldNode, int> made = new(ReferenceEqualityComparer.Instance);
             for (int i = 0; i < World.Nodes.Count; i++) made[World.Nodes[i]] = i;
             foreach (var member in Members(nodes, new(ReferenceEqualityComparer.Instance)).OrderBy(m => made.GetValueOrDefault(m, int.MaxValue)))
-            { member.Parents.Add(pendingWorld); worldChildren.Add(member); }
+            { member.Parents.Add(pendingWorld); pendingWorld.Children.Add(member); }
         }
         // FindNode and AddChild take the newest node with a name, and the file's own nodes are newer than the root.
         if (Subtree(nodes).Any(n => n.Name == name)) diagnostics.Add($"{script}: {file} has a node of its own named {name}, so FindNode and AddChild {name} find that node rather than the loaded root.");
@@ -613,7 +682,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// The first model directory (most recently added first) holding the file the script names: a .gltf or .glb file as
     /// named, or for another name (the original OpenFlight .flt of older projects) its .gltf or .glb.
     /// </summary>
-    public string? ResolveModel(string file) => ResolveModel(file, modelDirectories, files.Exists);
+    public string? ResolveModel(string file) => ResolveModel(file, modelDirectories, ModelExists);
     /// <summary>The model a <c>LoadGameGen</c> of <paramref name="file"/> loads from <paramref name="directories"/> (searched in order), or null.</summary>
     internal static string? ResolveModel(string file, IReadOnlyList<string> directories, Func<string, bool> exists)
     {
@@ -633,15 +702,24 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         ModelFiles.Add(path);
         try
         {
-            var doc = GltfDocument.Read(files.Read(path, token), uri =>
+            var doc = ReadModel(files.Read(path, token, ProjectReadLimits.Model(maximumJsonBytes: ModelJsonByteLimit)), path, (buffer, remaining) =>
             {
-                string buffer = Relative(path, uri); ModelFiles.Add(buffer);
-                return files.Read(buffer, token);
-            }, token);
+                ModelFiles.Add(buffer);
+                return files.Read(buffer, token, ProjectReadLimits.Bytes(remaining));
+            }, token, ModelBufferByteLimit);
             return (doc, path);
         }
         catch (InvalidDataException ex) { throw new InvalidDataException($"{path}: {ex.Message}", ex); }
     }
+    /// <summary>
+    /// Reads a project model with external-buffer admission. Canonical project aliases share the same held array and do not spend its
+    /// remaining allowance again. The cache is local to one document read; full project identities are retained.
+    /// </summary>
+    internal static GltfDocument ReadModel(ReadOnlySpan<byte> bytes, string from, Func<string, long, byte[]> read,
+        CancellationToken token, long bufferBytes = GltfDocument.MaximumBufferBytes)
+        => GltfDocument.Read(bytes, (uri, remaining) => read(Relative(from, uri), remaining), bufferBytes, token,
+            uri => Relative(from, uri).ToUpperInvariant());
+
     /// <summary>A URI relative to <paramref name="from"/>, as a project path that stays inside the project.</summary>
     internal static string Relative(string from, string uri)
     {
@@ -694,7 +772,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         WorldUpdate.CheckHierarchy(World.Nodes);
         WorldUpdate.RebuildBounds(World, token);
         foreach (var world in World.Nodes.Where(n => n.Class == WorldNodeClass.World))
-            WorldUpdate.Partition(world, worldChildren.Where(c => c.Parents.Contains(world)).ToList());
+            WorldUpdate.Partition(world, world.Children.ToArray(), parentsAttached: true);
         WorldUpdate.SingleParentFlags(World);
         // References to nodes that are no longer in the world are dropped.
         HashSet<WorldNode> live = new(World.Nodes, ReferenceEqualityComparer.Instance);

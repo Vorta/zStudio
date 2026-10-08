@@ -172,9 +172,10 @@ public sealed class ReconstructionTerrainRound3Tests
         InvalidDataException? error = null;
         long allocated = Allocated(() => error = Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.References(workspace, [file], Token)));
         Assert.Contains(file, error!.Message, StringComparison.Ordinal);
-        Assert.Contains("16 MiB", error.Message, StringComparison.Ordinal);
-        // Only the file's bytes: not their 32 MB as a string.
-        Assert.True(allocated <= read + (1 << 20), $"{allocated:N0} bytes; reading {read:N0}");
+        Assert.Contains($"{SourceProject.MaximumSourceTextBytes:N0}", error.Message, StringComparison.Ordinal);
+        // The raw-read control materializes the payload; typed admission now refuses before that allocation too.
+        Assert.True(read >= text.Length);
+        Assert.True(allocated < (1 << 20), $"{allocated:N0} bytes; raw reading {read:N0}");
     }
 
     [Fact]

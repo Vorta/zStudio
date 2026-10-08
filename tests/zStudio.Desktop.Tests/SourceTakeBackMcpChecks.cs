@@ -3,6 +3,8 @@ using System.IO.Pipes;
 using System.Reflection;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Desktop;
@@ -40,6 +42,7 @@ internal static class SourceTakeBackMcpChecks
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
             await main.ViewModel.OpenRootAsync(fixture.Project, token);
             var doc = Document((await Job("source_world_open", new() { ["mission"] = "m1" }))["document"]!);
+            Assert.StartsWith("Built the m1 world from its sources", main.ViewModel.Status);
             var workspace = doc.SourceWorld!.Workspace;
             await Preview();
 
@@ -76,6 +79,67 @@ internal static class SourceTakeBackMcpChecks
             Assert.Single(main.ViewModel.Problems, p => p.Message.Contains("FindNode lid in gamegen/support/tex_fxm1.gw finds", StringComparison.Ordinal));
             Assert.StartsWith("Rebuilt the m1 world from its sources. The copy shares", main.ViewModel.Status);
             Assert.EndsWith("1 lookup by name now finds another node than when the world was opened or last saved; Problems lists it.", main.ViewModel.Status);
+
+            // A published replacement still waits for its own delayed presentation. Late cancellation must
+            // neither retract the edit nor turn its already accepted MCP operation into a canceled result.
+            var discover = main.DiscoverTexturePacksAsync;
+            await AcceptedPresentation(cancel: true, supersede: false, fail: false);
+            await AcceptedPresentation(cancel: false, supersede: true, fail: false);
+            await AcceptedPresentation(cancel: false, supersede: false, fail: true);
+            main.DiscoverTexturePacksAsync = discover;
+            var reloadBefore = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(reloadBefore), ["revision"] = reloadBefore.Revision }));
+            Assert.True(reloadBefore.IsDisposed); Assert.False(reloaded.IsDisposed);
+            Assert.StartsWith("Rebuilt the m1 world from its sources.", main.ViewModel.Status);
+
+            async Task AcceptedPresentation(bool cancel, bool supersede, bool fail)
+            {
+                var before = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+                int undo = workspace.UndoCount;
+                TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                TaskCompletionSource<string[]> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                main.DiscoverTexturePacksAsync = (_, _, _) => { entered.TrySetResult(); return release.Task; };
+                var started = await Call("source_world_object_edit", new()
+                {
+                    ["document"] = Id(before), ["revision"] = before.Revision, ["node"] = Node(before, "post"),
+                    ["flag"] = "0x10000", ["on"] = supersede
+                });
+                await entered.Task.WaitAsync(token);
+                var published = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+                Assert.NotSame(before, published); Assert.True(before.IsDisposed);
+                Assert.Equal(undo + 1, workspace.UndoCount); Assert.True(workspace.IsDirty);
+                string operation = started["id"]!.GetValue<string>();
+                Assert.Equal("running", (await Call("operation", new() { ["id"] = operation }))["State"]!.GetValue<string>());
+                if (cancel) await Call("operation", new() { ["id"] = operation, ["cancel"] = true });
+                string? navigationStatus = null;
+                if (supersede)
+                {
+                    main.ViewModel.SelectedDocument = null;
+                    await Preview(); navigationStatus = main.ViewModel.Status;
+                }
+                if (fail)
+                {
+                    // A real deferred selection event awaits the same document transition. Its async-void
+                    // boundary must observe the fault and leave the transition's single diagnostic intact.
+                    var grid = (DataGrid)main.FindName("AssetGrid");
+                    grid.SelectedItem = published.SelectedAsset;
+                    grid.RaiseEvent(new SelectionChangedEventArgs(Selector.SelectionChangedEvent, Array.Empty<object>(), new object[] { published.SelectedAsset! }));
+                    release.SetException(new InvalidOperationException("test presentation failure"));
+                }
+                else release.SetResult([]);
+                var completed = await AwaitJob("source_world_object_edit", started, "completed");
+                Assert.Equal(Id(published), completed["document"]!["id"]!.GetValue<string>());
+                Assert.Same(published, main.ViewModel.Documents.Single(d => d.SourceWorld != null));
+                Assert.Equal(undo + 1, workspace.UndoCount); Assert.True(workspace.IsDirty);
+                if (supersede) { Assert.Null(main.ViewModel.SelectedDocument); Assert.Equal(navigationStatus, main.ViewModel.Status); }
+                else if (fail) Assert.Single(main.ViewModel.Problems, p => p.File == published.Path && p.Message.Contains("test presentation failure", StringComparison.Ordinal));
+                else Assert.StartsWith("Rebuilt the m1 world from its sources.", main.ViewModel.Status);
+                main.DiscoverTexturePacksAsync = discover;
+                // A failed/superseded presentation remains retryable through the same accepted document.
+                main.ViewModel.SelectedDocument = null; await Preview();
+                main.ViewModel.SelectedDocument = published; await Preview();
+                Assert.False(published.IsDisposed); Assert.Same(published, main.ViewModel.SelectedDocument);
+            }
 
             // A world that does not open, and a reload whose build fails, also say so rather than keep the build's progress.
             fixture.Write("gamegen/m2.gs", "Quit\r\n");
@@ -126,6 +190,10 @@ internal static class SourceTakeBackMcpChecks
             async Task<JsonNode> Job(string name, Dictionary<string, object?> arguments, string expected = "completed")
             {
                 var job = await Call(name, arguments);
+                return await AwaitJob(name, job, expected);
+            }
+            async Task<JsonNode> AwaitJob(string name, JsonNode job, string expected)
+            {
                 if (job["id"] == null || job["State"] == null) return job;
                 string id = job["id"]!.GetValue<string>();
                 while (job["State"]!.GetValue<string>() is "queued" or "running") { await Task.Delay(10, token); job = await Call("operation", new() { ["id"] = id }); }

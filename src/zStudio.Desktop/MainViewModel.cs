@@ -39,29 +39,55 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<string,FolderNode> fileNodes = new(StringComparer.OrdinalIgnoreCase);
     private FolderNode? otherOpenFiles;
     private long navigationGeneration;
+    private CancellationTokenSource? documentPreparation;
+    private long AdvanceNavigation()
+    {
+        documentPreparation?.Cancel();
+        return ++navigationGeneration;
+    }
     private bool disposed;
     internal long NavigationGeneration => navigationGeneration;
     internal long WorkspaceGeneration { get; private set; }
     internal long WorkspaceNavigationGeneration { get; private set; }
     internal Func<string, CancellationToken, Task<ZbdDocument>> LoadDocumentAsync { get; set; } =
         static (path, token) => Task.Run(() => FormatRegistry.Default.OpenAsync(path, token), token).WaitAsync(token);
+    // Invoked on the preparation worker, before constructing any UI-bound views.
+    internal Action<ZbdDocument, CancellationToken>? PreparingDocument { get; set; }
+    private async Task<PreparedDocument> PrepareDocumentAsync(ZbdDocument document, CancellationToken token)
+    {
+        var preparing = PreparingDocument;
+        using var preparation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        documentPreparation = preparation;
+        try
+        {
+            return await Task.Run(() =>
+            {
+                preparation.Token.ThrowIfCancellationRequested();
+                preparing?.Invoke(document, preparation.Token);
+                return PreparedDocument.Create(document, preparation.Token);
+            }, preparation.Token);
+        }
+        finally { if (documentPreparation == preparation) documentPreparation = null; }
+    }
     internal Func<string, CancellationToken, Task<bool>> CheckRootExistsAsync { get; set; } =
         static (path, token) => Task.Run(() => Directory.Exists(path), token).WaitAsync(token);
+    internal Func<string, CancellationToken, RootFileInventory> ReadRootInventory { get; set; } =
+        static (path, token) => RootFileInventory.Read(path, DisplayPathComparer, token);
     public MainViewModel()
     {
         difficulty = Settings.Difficulty;
-        Documents.CollectionChanged += (_,_) => { ++navigationGeneration; SynchronizeOpenFiles(); };
+        Documents.CollectionChanged += (_,_) => { AdvanceNavigation(); SynchronizeOpenFiles(); };
     }
     partial void OnSelectedDocumentChanging(DocumentModel? value)
     { if (SelectedDocument != null) SelectedDocument.PropertyChanged -= SelectedDocumentSelectionChanged; }
     partial void OnSelectedDocumentChanged(DocumentModel? value)
     {
-        ++navigationGeneration;
+        AdvanceNavigation();
         if (value != null) value.PropertyChanged += SelectedDocumentSelectionChanged;
         SynchronizeOpenFiles();
     }
     private void SelectedDocumentSelectionChanged(object? sender, PropertyChangedEventArgs e)
-    { if (e.PropertyName == nameof(DocumentModel.SelectedAsset)) ++navigationGeneration; }
+    { if (e.PropertyName == nameof(DocumentModel.SelectedAsset)) AdvanceNavigation(); }
     private void RequireCurrentNavigation(long generation)
     {
         if (disposed || generation != navigationGeneration)
@@ -126,7 +152,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (beforePublish == null && ResolveDraftsAsync != null && !await ResolveDraftsAsync()) return;
-        long generation = ++navigationGeneration;
+        long generation = AdvanceNavigation();
         RequireCurrentNavigation(generation);
         root = Path.GetFullPath(root);
         // Directory checks can block on unavailable network shares. Keep that work off
@@ -156,7 +182,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 }
             }
             finally { ClosingAllDocuments = false; }
-        cancellationToken.ThrowIfCancellationRequested();
+        // Close decisions can save new files into this root. Discover afterward, but keep the old workspace
+        // intact until the complete bounded listing/tree and the final navigation/revision checks succeed.
+        RootFileInventory scanned;
+        using (var scan = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, cancellationToken))
+        {
+            var scanToken = scan.Token;
+            try { scanned = await Task.Run(() => ReadRootInventory(root, scanToken), scanToken).WaitAsync(scanToken); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            { throw new StudioCommandException("context_changed", "The workspace changed while scanning the requested folder."); }
+        }
+        cancellationToken.ThrowIfCancellationRequested(); RequireCurrentNavigation(generation);
         if (acceptedRevisions.Any(pair => pair.Key.IsDisposed || pair.Key.Revision != pair.Value))
             throw new StudioCommandException("revision_conflict", "A document changed after its close decision. Its current edits were retained.");
         ValidateNavigationPublication?.Invoke(true);
@@ -182,48 +218,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
         try
         {
-            List<FileEntry> found = await Task.Run(() =>
-            {
-                List<FileEntry> entries = [];
-                var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
-                // Derived world builds and the save/recovery coordination file are not assets. Even a shared read of
-                // the lock file can race the recovery check's exclusive open when a project is first scanned.
-                string previews = Path.DirectorySeparatorChar + Recoil.Zbd.Core.Sources.SourceWorlds.PreviewFolder.Replace('/', Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-                string recoveryLock = Path.DirectorySeparatorChar + Recoil.Zbd.Core.Sources.SourcePublisher.LockFile.Replace('/', Path.DirectorySeparatorChar);
-                Dictionary<string, bool> projects = new(StringComparer.OrdinalIgnoreCase);
-                bool WorkingFile(string file)
-                {
-                    // Only below the folder opened: a build folder opened itself lists its files.
-                    int at = file.EndsWith(recoveryLock, StringComparison.OrdinalIgnoreCase) ? file.Length - recoveryLock.Length
-                        : file.IndexOf(previews, Math.Max(0, root.Length - 1), StringComparison.OrdinalIgnoreCase);
-                    if (at < Math.Max(0, root.Length - 1)) return false;
-                    string project = file[..at];
-                    if (!projects.TryGetValue(project, out bool isProject)) projects[project] = isProject = Recoil.Zbd.Core.Sources.SourceProject.IsProject(project);
-                    return isProject;
-                }
-                foreach (string file in Directory.EnumerateFiles(root, "*", options))
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (WorkingFile(file)) continue;
-                    entries.Add(new(file, Path.GetRelativePath(root, file), FormatRegistry.Probe(file)));
-                }
-                return entries.OrderBy(f => f.RelativePath, DisplayPathComparer)
-                    .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
-            }, token).WaitAsync(token);
-            token.ThrowIfCancellationRequested(); Files = found;
-            FolderNode rootNode = new(Path.GetFileName(root), root); Dictionary<string, FolderNode> directories = new(StringComparer.OrdinalIgnoreCase) { [root] = rootNode };
-            foreach (var file in found)
-            {
-                string directory = Path.GetDirectoryName(file.Path)!;
-                FolderNode node = new(file.Name,file.Path,file); fileNodes[file.Path] = node; EnsureDirectory(directory).Children.Add(node);
-            }
-            Folders.Add(rootNode); Status = $"{found.Count:N0} files · {found.Count(f => f.Path.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase)):N0} ZBDs · indexing names…";
-            await IndexAsync(found, token);
-            FolderNode EnsureDirectory(string path)
-            {
-                if (directories.TryGetValue(path, out var node)) return node;
-                node = new(Path.GetFileName(path), path); directories[path] = node; EnsureDirectory(Path.GetDirectoryName(path)!).Children.Add(node); return node;
-            }
+            token.ThrowIfCancellationRequested();
+            Files = scanned.Files;
+            foreach (var pair in scanned.FileNodes) fileNodes.Add(pair.Key, pair.Value);
+            Folders.Add(scanned.Root);
+            Status = $"{Files.Count:N0} files · {Files.Count(f => f.Path.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase)):N0} ZBDs · indexing names…";
+            await IndexAsync(scanned.Files, token);
         }
         catch (OperationCanceledException) { if (WorkspaceGeneration == committedWorkspace) Status = "Scan canceled"; cancellationToken.ThrowIfCancellationRequested(); }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
@@ -254,7 +254,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        long generation = ++navigationGeneration;
+        long generation = AdvanceNavigation();
         RequireCurrentNavigation(generation);
         path = Path.GetFullPath(path);
         var existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
@@ -264,10 +264,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             var doc = await LoadDocumentAsync(path, token); token.ThrowIfCancellationRequested();
+            RequireCurrentNavigation(generation);
+            var prepared = await PrepareDocumentAsync(doc, token); token.ThrowIfCancellationRequested();
             RequireCurrentNavigation(generation); ValidateNavigationPublication?.Invoke(false); beforePublish?.Invoke(); RequireCurrentNavigation(generation);
             existing = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
             if (existing != null) { if (activate) SelectedDocument = existing; return existing; }
-            DocumentModel model = new(doc); model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
+            DocumentModel model = new(prepared); model.AttachResolver(Resolver); Documents.Add(model); if (activate) SelectedDocument = model;
             foreach (var diagnostic in doc.Diagnostics) AddProblem(diagnostic.Message, diagnostic.Severity, path, diagnostic.AssetIndex, diagnostic.Offset);
             Status = model.Description; return model;
         }
@@ -346,7 +348,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         int index = Documents.IndexOf(original);
         if (index < 0) throw new StudioCommandException("context_changed", "The document was closed.");
-        ++navigationGeneration;
+        AdvanceNavigation();
         replacement.Query = original.Query; replacement.KindFilter = original.KindFilter;
         replacement.AttachResolver(Resolver);
         var asset = original.SelectedAsset?.Record;
@@ -405,7 +407,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void Dispose()
     {
         if (disposed) return;
-        disposed = true; ++navigationGeneration; ++WorkspaceGeneration;
+        disposed = true; AdvanceNavigation(); ++WorkspaceGeneration;
         if (SelectedDocument != null) SelectedDocument.PropertyChanged -= SelectedDocumentSelectionChanged;
         workspace.Cancel(); foreach (var doc in Documents) doc.Dispose(); workspace.Dispose(); GC.SuppressFinalize(this);
     }

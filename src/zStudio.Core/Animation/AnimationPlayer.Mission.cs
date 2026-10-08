@@ -7,8 +7,10 @@ public sealed partial class AnimationPlayer
     private bool IsWorldNode(int index)
     {
         HashSet<int> seen = [];
-        while (index >= 0 && index < context.Scene.Nodes.Count && seen.Add(index))
+        while (index >= 0 && index < context.Scene.Nodes.Count)
         {
+            bindingOperation?.Reserve(40);
+            if (!seen.Add(index)) break;
             var node = context.Scene.Nodes[index]; if (node.Class == "world") return true;
             index = node.Parents.FirstOrDefault(-1);
         }
@@ -39,26 +41,35 @@ public sealed partial class AnimationPlayer
         instance.Nodes.TryGetValue(index, out var node) ? node : instance.Shared ? SharedNode(index) : null;
 
     /// <summary>Run only the immediate initialization frontier on an owned scene copy, without advancing time.</summary>
-    internal static HashSet<int> ApplyInitialization(AnimationPreviewContext context, bool cleanup, string[] startup, List<string> diagnostics, CancellationToken token)
+    internal static HashSet<int> ApplyInitialization(AnimationPreviewContext context, bool cleanup, string[] startup, List<string> diagnostics, CancellationToken token,
+        AnimationBindingOperation? operation = null)
     {
+        operation ??= new(context, token);
+        operation.Reserve(64L * context.Package.Entries.Count);
         AnimationEntryLookup lookup = new(context.Package);
         var entries = cleanup ? context.Package.Entries.Where(e => e.Index > 0 && e.Bytes[152] is not (2 or 5)).SelectMany(e =>
             ((e.U32(148) & 0x20) != 0 ? new[] { (Entry: e, Primary: true) } : []).Concat(e.Bytes[153] == 4 && e.Bytes[152] != 4 ? [(Entry: e, Primary: false)] : [])) :
             startup.Select(name => lookup.Find(name, token)).OfType<AnimationEntry>().Select(e => (Entry: e, Primary: false));
-        return ApplyInitialization(context, entries.Select(e => (e.Entry, e.Primary, (int?)null)), diagnostics, token);
+        return ApplyInitialization(context, entries.Select(e => (e.Entry, e.Primary, (int?)null)), diagnostics, token, operation);
     }
 
     internal static HashSet<int> ApplyInitialization(AnimationPreviewContext context,
-        IEnumerable<(AnimationEntry Entry, bool Primary, int? Root)> entries, List<string> diagnostics, CancellationToken token)
+        IEnumerable<(AnimationEntry Entry, bool Primary, int? Root)> entries, List<string> diagnostics, CancellationToken token,
+        AnimationBindingOperation? operation = null)
     {
         HashSet<int> positioned = [];
         if (context.Package.Entries.Count == 0) return positioned;
-        var player = new AnimationPlayer(context, 0) { initializingScene = true };
-        player.instances.Clear(); player.sharedNodes.Clear(); player.notes.Clear(); player.nextId = 0;
+        operation ??= new(context, token);
+        operation.Reserve(1);
+        // Another preparation phase may have changed same-count edges. Keep its cumulative allowance,
+        // but do not borrow topology/name results across separately invoked initialization frontiers.
+        operation.Invalidate();
+        var player = new AnimationPlayer(context, operation);
         foreach (var (entry, primary, boundRoot) in entries)
         {
             token.ThrowIfCancellationRequested();
-            int root = boundRoot ?? context.ResolveRoot(entry);
+            operation.Reserve(1);
+            int root = boundRoot ?? operation.Root(entry);
             if (root < 0 || root >= context.Scene.Nodes.Count) { diagnostics.Add($"Mission initialization: unresolved root for {entry.Name}."); continue; }
             player.instances.Clear(); player.dispatchBudget = 10000;
             player.AddInstance(entry, null, boundRoot, primary);
@@ -78,6 +89,7 @@ public sealed partial class AnimationPlayer
             foreach (var instance in player.instances.Where(i => i.Shared || (i.Entry.U32(148) & 0x8000) == 0))
                 foreach (var node in instance.Nodes.Values)
                 {
+                    operation.Reserve(64);
                     var source = context.Scene.Nodes[node.Source];
                     if (source.Class is not ("object3d" or "lod")) continue;
                     source.Metadata["flags"] = node.Active ? source.Metadata.UInt("flags") | 4u : source.Metadata.UInt("flags") & ~4u;

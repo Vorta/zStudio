@@ -70,10 +70,14 @@ public static partial class SourceBuilder
     public static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added = null, BuildProfile? profile = null, bool automaticPacks = true, CancellationToken token = default)
         => Plan(root, added, profile, automaticPacks, token, null);
 
-    internal static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added, BuildProfile? profile, bool automaticPacks, CancellationToken token, Snapshot? snapshot, string? onlyMission = null)
+    internal static IReadOnlyList<SourceOutputPlan> Plan(string root, IReadOnlyCollection<string>? added, BuildProfile? profile, bool automaticPacks, CancellationToken token, Snapshot? snapshot, string? onlyMission = null,
+        InventoryBudget? inventory = null)
     {
+        inventory ??= snapshot?.Inventory ?? new();
         profile ??= BuildProfiles.Modern;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
+        PendingInventory? pending = added == null ? null : PendingInventory.Capture(added, inventory, token);
+        added = pending;
         List<SourceOutputPlan> plans = [];
         long plannedInputs = 0;
         void AddPlan(SourceOutputPlan plan)
@@ -82,18 +86,21 @@ public static partial class SourceBuilder
             if (plan.Inputs.Count > MaximumPlanInputs - plannedInputs)
                 throw new InvalidDataException($"The source plan exceeds {MaximumPlanInputs:N0} aggregate inputs; split the project into smaller source projects.");
             plannedInputs += plan.Inputs.Count;
+            inventory.Rows(1, token); // Shared PrefixedInputs do not copy the underlying path strings.
             plans.Add(plan);
         }
         static bool Zrd(string name) => name.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase);
         // Common resources come from every zrdr folder under data/common (including multi_bft/zrdr).
-        var common = SourceProject.Files(root, "data/common", Zrd, added, token).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase)).ToArray();
+        var commonFiles = SourceProject.Files(root, "data/common", Zrd, added, token, inventory);
+        inventory.Rows(commonFiles.Count, token);
+        var common = commonFiles.Where(p => p.AsSpan().Contains("/zrdr/", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (common.Length > 0) AddPlan(new("zrdr.zbd", "archive", common));
-        var scripts = SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), added, token);
+        var scripts = SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), added, token, inventory);
         if (scripts.Count > 0) AddPlan(new("interp.zbd", "scripts", scripts));
-        var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase), added, token);
+        var sounds = SourceProject.Files(root, SoundsFolder, n => n.EndsWith(".wav", StringComparison.OrdinalIgnoreCase), added, token, inventory);
         if (sounds.Count > 0) foreach (string bank in Banks) AddPlan(new(bank, "sounds", sounds));
         // Listing data for its mission folders is a scan too: every entry counts, and the token is observed at each.
-        var missions = SourceProject.MissionFolders(root, token);
+        var missions = SourceProject.MissionFolders(root, token, inventory: inventory);
         // A world may load any model in the project, and animations any keyframe script; which depends on the sources.
         IReadOnlyList<string>? models = null, scriptsFound = null;
         bool hasModels = false;
@@ -103,11 +110,12 @@ public static partial class SourceBuilder
         {
             if (entries.Count > MaximumPlanInputs - images.Count)
                 throw new InvalidDataException($"The source plan exceeds {MaximumPlanInputs:N0} image inputs; split the project into smaller source projects.");
+            inventory.Rows(entries.Count, token);
             images.AddRange(entries);
         }
-        Images(SourceProject.Files(root, TextureSources.Fonts, Png, added, token));
-        Images(SourceProject.Files(root, TextureSources.Images, Png, added, token));
-        foreach (var mission in missions) Images(SourceProject.Files(root, $"data/{mission}/images", Png, added, token));
+        Images(SourceProject.Files(root, TextureSources.Fonts, Png, added, token, inventory));
+        Images(SourceProject.Files(root, TextureSources.Images, Png, added, token, inventory));
+        foreach (var mission in missions) Images(SourceProject.Files(root, $"data/{mission}/images", Png, added, token, inventory));
         if (images.Count > 0) AddPlan(new("image.zbd", "images", images));
         foreach (var mission in missions)
         {
@@ -115,25 +123,25 @@ public static partial class SourceBuilder
             string name = mission.ToLowerInvariant();
             if (onlyMission != null && !name.Equals(onlyMission, StringComparison.OrdinalIgnoreCase)) continue;
             string entry = WorldScript(name);
-            if (SourceRead.FileExists(SourceProject.Resolve(root, entry)) || added?.Contains(entry, StringComparer.OrdinalIgnoreCase) == true)
+            if (SourceRead.FileExists(SourceProject.Resolve(root, entry)) || pending?.ContainsPath(entry, token) == true)
             {
                 if (models == null)
                 {
-                    models = SourceProject.Files(root, SourceProject.DataFolder, IsModelSource, added, token);
+                    models = SourceProject.Files(root, SourceProject.DataFolder, IsModelSource, added, token, inventory);
                     hasModels = models.Any(m => !m.EndsWith(".bin", StringComparison.OrdinalIgnoreCase));
                 }
                 // A project without glTF models has no world to build (buffers alone are not models).
                 if (hasModels) AddPlan(new($"{name}/gamez.zbd", "world", new PrefixedInputs(entry, models)));
             }
-            var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd, added, token);
+            var resources = SourceProject.Files(root, $"data/{name}/zrdr", Zrd, added, token, inventory);
             if (resources.Count > 0) AddPlan(new($"{name}/zrdr.zbd", "archive", resources));
             string definitions = AnimationRoot(name);
-            if (SourceRead.FileExists(SourceProject.Resolve(root, definitions)) || added?.Contains(definitions, StringComparer.OrdinalIgnoreCase) == true)
+            if (SourceRead.FileExists(SourceProject.Resolve(root, definitions)) || pending?.ContainsPath(definitions, token) == true)
             {
-                scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase), added, token);
+                scriptsFound ??= SourceProject.Files(root, SourceProject.DataFolder, n => n.EndsWith(Animation.AnimationScript.Extension, StringComparison.OrdinalIgnoreCase), added, token, inventory);
                 AddPlan(new($"{name}/anim.zbd", "animations", new PrefixedInputs(definitions, scriptsFound)));
             }
-            var textures = MissionTextures(root, name, added, token, snapshot);
+            var textures = MissionTextures(root, name, added, token, snapshot, inventory);
             if (textures.Count > 0)
                 foreach (var pack in profile.TexturePacks.Where(pack => pack.Builds(name)))
                 {
@@ -166,8 +174,16 @@ public static partial class SourceBuilder
     /// as a Blender checkout, says what to do again); by default it is an export's.
     /// </summary>
     internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null, Func<string, Exception>? changed = null,
-        long maximumRetainedBytes = SourceExtractor.MaximumRetainedBytes)
+        long maximumRetainedBytes = SourceExtractor.MaximumRetainedBytes, EffectLimits? effectLimits = null,
+        long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default)
     {
+        private readonly (InventoryBudget Budget, PendingInventory Added) inventory = CapturePending(root, overlay, inventoryLimit, inventoryToken);
+        internal InventoryBudget Inventory => inventory.Budget;
+        private EffectDiscovery? effectDiscovery;
+        internal HashSet<string>? Effects(string mission, CancellationToken token) =>
+            (effectDiscovery ??= new(this, root, effectLimits ?? new())).ForMission(mission, token);
+        internal long EffectInputBytes => effectDiscovery?.InputBytes ?? 0;
+        internal int EffectFilesDecoded => effectDiscovery?.FilesDecoded ?? 0;
         internal long RetainedBytes { get; private set; }
         /// <summary>Worlds and compiled animation packages share the run's retained-data limit, across every output.</summary>
         internal void Retain(long bytes)
@@ -185,7 +201,20 @@ public static partial class SourceBuilder
         private readonly Lock dependencyGate = new();
         internal IReadOnlyCollection<string> Dependencies() { lock (dependencyGate) return dependencies.ToArray(); }
         /// <summary>Pending files the disk does not hold yet (new files of a workspace), which count as present.</summary>
-        internal IReadOnlyCollection<string> Added { get; } = overlay?.Keys.Where(k => !SourceRead.FileExists(SourceProject.Resolve(root, k))).ToArray() ?? [];
+        internal IReadOnlyCollection<string> Added => inventory.Added;
+        private static (InventoryBudget, PendingInventory) CapturePending(string root, IReadOnlyDictionary<string, byte[]>? overlay,
+            long maximum, CancellationToken token)
+        {
+            InventoryBudget budget = new(maximum);
+            List<string> added = [];
+            if (overlay != null)
+                foreach (string path in overlay.Keys)
+                {
+                    budget.Path((long)root.Length + 1 + path.Length, token); // Before Resolve constructs the full path.
+                    if (!SourceRead.FileExists(SourceProject.Resolve(root, path))) added.Add(path);
+                }
+            return (budget, new(added, budget, token));
+        }
         internal void Depend(string relative) { lock (dependencyGate) dependencies.Add(relative); }
         /// <summary>The disk files read or found by a search and their stamps (pending content is not included).</summary>
         internal IReadOnlyDictionary<string, FileStamp> Stamps() => probes.Where(p => p.Value != null).ToDictionary(p => p.Key, p => p.Value!, StringComparer.OrdinalIgnoreCase);
@@ -204,19 +233,21 @@ public static partial class SourceBuilder
             return observed != null;
         }
         internal byte[] Read(string relative, CancellationToken token, long maximum = FormatRegistry.MaximumDocumentBytes)
+            => Read(relative, token, ProjectReadLimits.Bytes(maximum));
+
+        internal byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
         {
             token.ThrowIfCancellationRequested();
             Depend(relative);
             if (overlay?.TryGetValue(relative, out var pending) == true)
             {
-                if (pending.LongLength > maximum) throw new InvalidDataException($"{JsonData.ShownText(relative)} exceeds {maximum:N0} bytes.");
+                limits.Validate(pending);
                 return pending;
             }
             if (!Exists(relative)) throw new FileNotFoundException($"{relative} does not exist.");
             string path = SourceProject.Resolve(root, relative);
             var stamp = FileStamp.Read(path);
-            if (stamp.Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} exceeds 512 MiB.");
-            byte[] bytes = SourceRead.All(path, maximum, token); string sha = SourceProject.Sha256(bytes);
+            byte[] bytes = SourceRead.All(path, limits, token); string sha = SourceProject.Sha256(bytes);
             if (FileStamp.Read(path) != stamp) throw Changed(relative, $"{relative} changed while it was read; export again.");
             if (files.TryGetValue(relative, out var first) && (first.Sha != sha || first.Stamp != stamp)) throw Changed(relative, $"{relative} changed while exporting; export again.");
             files[relative] = (sha, stamp); return bytes;
@@ -243,14 +274,31 @@ public static partial class SourceBuilder
         internal void Remember(string relative, int width, int height, TextureTransparency transparency) => textures[relative] = (width, height, transparency);
         private HashSet<string>? damageMasks;
         /// <summary>Textures the scripts register as damage-mark masks (WriteTextureSetMap), read once per run.</summary>
-        internal HashSet<string> DamageMasks(CancellationToken token)
+        internal HashSet<string> DamageMasks(CancellationToken token, long maximumSourceBytes = 64L * 1024 * 1024,
+            long maximumTokens = GameGenScriptText.MaximumTokens, long maximumLines = GameGenScriptText.MaximumLines)
         {
+            token.ThrowIfCancellationRequested();
             if (damageMasks != null) return damageMasks;
             HashSet<string> masks = new(StringComparer.OrdinalIgnoreCase);
-            foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), Added, token))
-                foreach (var line in GameGenScriptText.Tokenize(GameGenScriptText.Decode(Read(script, token))))
+            long remaining = maximumSourceBytes, tokens = maximumTokens, lines = maximumLines;
+            foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), Added, token, Inventory))
+            {
+                byte[] bytes = Read(script, token, ProjectReadLimits.Text(remaining));
+                remaining -= bytes.LongLength;
+                string text = GameGenScriptText.Decode(bytes, token);
+                lines -= SourceTextScan.Count(text, '\n', text.Length, token) + (text.Length == 0 || text[^1] != '\n' ? 1 : 0);
+                if (lines < 0 || (tokens -= GameGenScriptText.CountTokens(text, token)) < 0)
+                    throw new InvalidDataException("Damage-mask discovery exceeds its aggregate script line or token allowance. Reduce the scripts before retrying.");
+                foreach (var line in GameGenScriptText.TokenizeCancellable(text, token))
+                {
+                    token.ThrowIfCancellationRequested();
                     if (line.Count > 1 && ScriptCommands.Core(line[0]) == "WriteTextureSetMap") masks.Add(Path.GetFileNameWithoutExtension(line[^1]));
-            return damageMasks = masks;
+                }
+            }
+            token.ThrowIfCancellationRequested();
+            damageMasks = masks;
+            token.ThrowIfCancellationRequested();
+            return masks;
         }
         /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>
         internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<WorldNode> LoadedRoots)
@@ -287,11 +335,12 @@ public static partial class SourceBuilder
         private sealed class ProjectFiles(Snapshot snapshot, string root, IReadOnlyDictionary<string, byte[]>? overlay) : IProjectFiles
         {
             public bool Exists(string relative) => snapshot.Exists(relative);
-            public byte[] Read(string relative, CancellationToken token) { SourceProject.RequireSource(relative); if (overlay?.ContainsKey(relative) != true) SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token); }
+            public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { SourceProject.RequireSource(relative); if (overlay?.ContainsKey(relative) != true) SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token, limits); }
         }
 
         internal void CheckUnchanged(CancellationToken token)
         {
+            effectDiscovery?.CheckUnchanged(token);
             foreach (var (relative, stamp) in probes)
             {
                 token.ThrowIfCancellationRequested();
@@ -335,12 +384,13 @@ public static partial class SourceBuilder
         => RunAsync(root, destination, outputs, overwrite, progress, token, profile);
 
     /// <summary><paramref name="profileName"/> selects the build profile (the project's default when null).</summary>
-    private static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, string? profileName)
+    internal static async Task<SourceExportReport> RunAsync(string root, string? destination, IReadOnlyCollection<string>? outputs, bool overwrite, IProgress<SourceProgress>? progress, CancellationToken token, string? profileName, EffectLimits? effectLimits = null,
+        long inventoryLimit = InventoryBudget.MaximumUnits)
     {
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         // The run's view of the project starts before planning: the profile is read through it, so a change to its file is
         // refused like a changed source, and the plan is made again before publishing (see CheckPlanUnchanged).
-        Snapshot snapshot = new(root);
+        Snapshot snapshot = new(root, effectLimits: effectLimits, inventoryLimit: inventoryLimit, inventoryToken: token);
         var profile = await Task.Run(() => FindProfile(root, profileName, snapshot, token), token);
         var all = await Task.Run(() => Plan(root, null, profile, true, token, snapshot), token);
         var selected = outputs == null ? all : outputs.Select(o => all.FirstOrDefault(p => p.Path.Equals(o.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
@@ -395,15 +445,19 @@ public static partial class SourceBuilder
             // The game opens the largest hardware pack its texture memory allows, so one left from another export would win.
             // These notes come first: results show only the first notes, and many lookup changes must not hide them. Only a
             // report, read before publishing: a destination that cannot be listed must not turn a written export into a failure.
-            List<string> notes = [];
+            BoundedDiagnostics notes = new();
             if (destination != null)
                 try
                 {
+                    InventoryBudget destinationInventory = new();
                     foreach (string mission in results.Where(r => r.Family == "textures").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
-                        foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == "textures" && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), token))
+                        foreach (string pack in BuildProfiles.ShadowingPacks(destination, mission, results.Where(p => p.Family == "textures" && p.Status == "built" && p.Path.StartsWith(mission + "/", StringComparison.OrdinalIgnoreCase)).Select(p => p.Path[(mission.Length + 1)..]).ToArray(), SourceProject.MaximumScannedEntries, token, destinationInventory))
                             notes.Add($"{pack} is not being replaced by this export, but the game may load it instead of the exported ones. Delete it, or include that pack in the selected outputs of a profile that builds it.");
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { notes.Add($"The destination's texture packs could not be listed ({ex.Message}); a pack left there by another export may be loaded instead of the exported ones."); }
+            // Prepare all diagnostic text before publication. Cancellation or refused formatting must never
+            // hide a successful export, and bounded MCP/GUI projections cannot protect an already-expanded report.
+            var reportNotes = LookupNotes(notes, notChecked, changes, token);
             progress?.Report(new(selected.Count, selected.Count, destination == null ? "Checked" : "Publishing"));
             await Task.Run(() =>
             {
@@ -412,12 +466,10 @@ public static partial class SourceBuilder
             }, token);
             if (staging != null && destination != null)
             {
-                if (results.Any(r => r.Status == "failed")) throw new InvalidDataException("Nothing was written because some outputs failed: " + string.Join("; ", results.Where(r => r.Status == "failed").Select(r => $"{r.Path}: {r.Error}")));
+                if (results.Any(r => r.Status == "failed")) throw new InvalidDataException(FailedOutputs(results, token));
                 Publish(staging, destination, [.. results.Select(r => (r.Path, contents[r.Path]))], overwrite, token, captured: directories);
             }
-            notes.AddRange(notChecked);
-            notes.AddRange(changes.Select(c => WorldLookups.Describe(c, " in the files this export replaced")));
-            return new(destination, results) { Profile = profile.Name, Notes = notes, Lookups = lookups, LookupChanges = changes };
+            return new(destination, results) { Profile = profile.Name, Notes = reportNotes, Lookups = lookups, LookupChanges = changes };
         }
         // A staging folder another program holds must not replace the export's own result or error.
         finally
@@ -426,13 +478,43 @@ public static partial class SourceBuilder
         }
     }
 
+    internal static List<string> LookupNotes(BoundedDiagnostics notes, IEnumerable<string> notChecked, IEnumerable<SourceLookupChange> changes, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        foreach (string note in notChecked) { token.ThrowIfCancellationRequested(); notes.Add($"{new BoundedDiagnostics.PreparedMessage(note)}"); }
+        foreach (var change in changes)
+        {
+            token.ThrowIfCancellationRequested();
+            WorldLookups.Describe(notes, change, " in the files this export replaced");
+        }
+        token.ThrowIfCancellationRequested();
+        var result = notes.Snapshot();
+        if (result.Remove(BoundedDiagnostics.OmissionNotice)) result.Insert(0, BoundedDiagnostics.OmissionNotice);
+        return result;
+    }
+
+    internal static string FailedOutputs(IEnumerable<SourceExportResult> results, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        BoundedDiagnostics failures = new();
+        foreach (var result in results)
+        {
+            token.ThrowIfCancellationRequested();
+            if (result.Status == "failed") failures.Add($"{result.Path}: {result.Error}");
+        }
+        token.ThrowIfCancellationRequested();
+        var messages = failures.Snapshot();
+        if (messages.Remove(BoundedDiagnostics.OmissionNotice)) messages.Insert(0, BoundedDiagnostics.OmissionNotice);
+        return "Nothing was written because some outputs failed: " + string.Join("; ", messages);
+    }
+
     /// <summary>The build profile (the project's default when <paramref name="name"/> is null), its files read through the run's snapshot.</summary>
     private static BuildProfile FindProfile(string root, string? name, Snapshot snapshot, CancellationToken token) => BuildProfiles.Find(root, name, path =>
     {
         // As a profile is read without a snapshot: a file over 64 KB is refused before it is read.
         if (new FileInfo(SourceProject.Resolve(root, path)).Length > BuildProfiles.MaximumFileBytes) throw new InvalidDataException($"{path} is larger than 64 KB.");
         return snapshot.Read(path, token, BuildProfiles.MaximumFileBytes);
-    }, token: token);
+    }, files: SourceProject.Files(root, BuildProfiles.Folder, n => n.EndsWith(".json", StringComparison.OrdinalIgnoreCase), token: token, inventory: snapshot.Inventory), token: token);
     /// <summary>
     /// Refuses outputs whose plan the project no longer gives, because it changed after it was planned: the plan is made again,
     /// as the run made it, and must name the same profile and give each built output the same inputs, pack and notes (with no outputs
@@ -440,11 +522,12 @@ public static partial class SourceBuilder
     /// multiplayer load scripts and the mission textures' PNG headers, which the run's snapshot does not hold; the profile
     /// files it reads are in the snapshot, so a changed one fails here or in <see cref="Snapshot.CheckUnchanged"/>.
     /// </summary>
-    private static void CheckPlanUnchanged(string root, string? profileName, BuildProfile profile, IReadOnlyList<SourceOutputPlan>? selected, IReadOnlyList<SourceOutputPlan> planned, Snapshot snapshot, CancellationToken token)
+    internal static void CheckPlanUnchanged(string root, string? profileName, BuildProfile profile, IReadOnlyList<SourceOutputPlan>? selected, IReadOnlyList<SourceOutputPlan> planned, Snapshot snapshot, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         BuildProfile again; IReadOnlyList<SourceOutputPlan> now;
         try { again = FindProfile(root, profileName, snapshot, token); now = Plan(root, null, again, true, token, snapshot); }
+        catch (InventoryCapacityException) { throw; }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new InvalidDataException($"The project changed while exporting; nothing was written. Export again. ({ex.Message})", ex); }
         bool same = again.Name == profile.Name && again.Source == profile.Source && (selected == null
@@ -470,11 +553,15 @@ public static partial class SourceBuilder
     private static IReadOnlyList<(string Source, string Name)> FindNodes(string mission, Snapshot snapshot, CancellationToken token)
     {
         var files = snapshot.Files();
-        return WorldLookups.FindNodes(path => files.Exists(path) ? files.Read(path, token) : null, mission, token);
+        return WorldLookups.FindNodes((path, remaining) => files.Exists(path) ? files.Read(path, token, ProjectReadLimits.Text(remaining)) : null, mission, token);
     }
     /// <summary>Why the lookups by name of a mission could not be checked, as a report says it.</summary>
-    internal static string LookupsUnchecked(string mission, Exception ex) =>
-        $"The lookups by name the game makes as it loads {mission} were not checked, so none of them is reported: {ex.Message}";
+    internal static string LookupsUnchecked(string mission, Exception ex)
+    {
+        BoundedDiagnostics note = new(); LookupsUnchecked(note, mission, ex); return note.Messages[0];
+    }
+    private static void LookupsUnchecked(BoundedDiagnostics notes, string mission, Exception ex) =>
+        notes.Add($"The lookups by name the game makes as it loads {mission} were not checked, so none of them is reported: {ex.Message}");
     /// <summary>
     /// The lookups by name of each mission whose world or animations were built, for the report those several nodes share,
     /// and those that find another node than in the destination's files this export replaces (read before they are replaced).
@@ -484,7 +571,7 @@ public static partial class SourceBuilder
     internal static (List<SourceLookup> Lookups, List<SourceLookupChange> Changes, List<string> NotChecked) MissionLookups(IReadOnlyList<SourceExportResult> results, IReadOnlyDictionary<string, Animation.AnimationPackage> packages,
         Snapshot snapshot, string? destination, CancellationToken token, long lookupWorkLimit = LookupWorkBudget.MaximumUnits)
     {
-        List<SourceLookup> lookups = []; List<SourceLookupChange> changes = []; List<string> notChecked = [];
+        List<SourceLookup> lookups = []; List<SourceLookupChange> changes = []; BoundedDiagnostics notChecked = new();
         foreach (string mission in results.Where(r => r.Status == "built" && r.Family is "world" or "animations").Select(r => r.Path.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
@@ -501,7 +588,7 @@ public static partial class SourceBuilder
                 findNodes = FindNodes(mission, snapshot, token);
                 resolved = WorldLookups.Resolve(mission, after, packages.GetValueOrDefault(mission) ?? previous?.Animations, findNodes, token, new(lookupWorkLimit, token));
             }
-            catch (Exception ex) when (IsBuildFailure(ex)) { notChecked.Add(LookupsUnchecked(mission, ex)); continue; }
+            catch (Exception ex) when (IsBuildFailure(ex)) { LookupsUnchecked(notChecked, mission, ex); continue; }
             lookups.AddRange(resolved.Where(l => l.Ambiguous));
             // Only a report: files that cannot be paired give no changes rather than failing the export.
             if (previous is { } replaced)
@@ -515,7 +602,7 @@ public static partial class SourceBuilder
                     notChecked.Add($"The node lookup comparison with the previous {mission} world was not completed; changes from the replaced files are not reported: {JsonData.ShownText(ex.Message, 512)}");
                 }
         }
-        return (lookups, changes, notChecked);
+        return (lookups, changes, notChecked.Snapshot());
     }
     /// <summary>The destination's world and animations of a mission, when it holds a readable world (version 13 or 15).</summary>
     private static (GameZWorld World, Animation.AnimationPackage? Animations)? Replaced(string destination, string mission, CancellationToken token)
@@ -616,10 +703,9 @@ public static partial class SourceBuilder
                     {
                         // Moved into the backup and deleted there only while it is the file this export installed.
                         string taken = Path.Combine(backup, ".removed", $"{i}-{Guid.NewGuid():N}.bin");
-                        switch (SourcePublisher.MoveIfContent(target, taken, installed, directories))
+                        switch (SourcePublisher.MoveIfContent(target, taken, installed, directories, removeMoved: true))
                         {
                             case SourcePublisher.Moved.Done:
-                                try { directories.DeleteFile(taken); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                                 break;
                             case SourcePublisher.Moved.Stranded:
                                 stranded.Add(taken); if (saved != null) unrestored.Add(target);
@@ -636,7 +722,7 @@ public static partial class SourceBuilder
             }
             string notes = (leftover.Count > 0 ? $". New files that could not be removed: {string.Join(", ", leftover.Take(8))}" : "")
                 + (others.Count > 0 ? $". Files another program wrote at the outputs' names during the export were left as they are: {string.Join(", ", others.Take(8))}" : "")
-                + (stranded.Count > 0 ? $". Files another program put in place while the export was undone were kept as {string.Join(", ", stranded.Take(8))}" : "")
+                + (stranded.Count > 0 ? $". Files that could not be removed while the export was undone were kept as {string.Join(", ", stranded.Take(8))}" : "")
                 + (kept.Count > 0 ? $". The originals of {kept.Count} replaced files are no longer in {backup}, which another program changed, so the files at their names were left as they are: {string.Join(", ", kept.Take(8))}" : "")
                 + (lost.Count > 0 ? $". The originals of {lost.Count} replaced files could not be restored because they are no longer in {backup}, which another program changed: {string.Join(", ", lost.Take(8))}" : "");
             // A canceled export stays a cancellation, with what it could not undo.
@@ -644,7 +730,7 @@ public static partial class SourceBuilder
             Exception Failure(string message) => failure is OperationCanceledException ? new OperationCanceledException(message, failure, token) : new IOException(message, failure);
             if (unrestored.Count > 0 || stranded.Count > 0)
                 throw Failure(failed + (unrestored.Count > 0
-                    ? $" and {unrestored.Count} previous files could not be restored because another program changed or holds them; the originals remain in {backup}: {string.Join(", ", unrestored.Take(8))}"
+                    ? $" and {unrestored.Count} previous files could not be restored; the originals remain in {backup}: {string.Join(", ", unrestored.Take(8))}"
                     : $"; {backup} is kept") + notes);
             // A backup another program changed is left to it.
             if (kept.Count == 0 && lost.Count == 0)
@@ -692,6 +778,7 @@ public static partial class SourceBuilder
     {
         Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase); List<ArchiveSources.Entry> entries = [];
         long retained = 8L + plan.Inputs.Count * ArchiveSources.RecordSize;
+        long remainingInput = FormatRegistry.MaximumDocumentBytes;
         FormatRegistry.ValidateDocumentSize(retained);
         // Members are ordered by source path. The engine scans members for the first case-insensitive name match
         // (zIndexArchive::FindRecordByNameCI, retail 0x4A65D0), so order is free but names must be unique.
@@ -705,7 +792,8 @@ public static partial class SourceBuilder
             if (!ArchiveSources.FitsSourceField(field))
                 throw new InvalidDataException($"{input}: an archive member records its source path in at most {ArchiveSources.MaximumSourceField} Latin-1 characters, and edits made in a built world find the source by it; "
                     + (field.Length > ArchiveSources.MaximumSourceField ? $"this path has {field.Length}. Move the file to a folder with a shorter path." : "this path has characters outside Latin-1. Rename the file or its folders."));
-            byte[] bytes = snapshot.Read(input, token);
+            byte[] bytes = snapshot.Read(input, token, ProjectReadLimits.Resource(remainingInput));
+            remainingInput -= bytes.LongLength;
             byte[] payload;
             try
             {
@@ -735,12 +823,13 @@ public static partial class SourceBuilder
             PreparedScriptWriter.ValidateName(name);
             byte[] source = snapshot.Read(input, token, Math.Min(SourceProject.MaximumSourceTextBytes, maximumSourceBytes - sourceBytes));
             sourceBytes += source.Length;
-            var lines = GameGenScriptText.Tokenize(GameGenScriptText.Decode(source));
+            var lines = GameGenScriptText.TokenizeCancellable(GameGenScriptText.Decode(source, token), token);
             if ((instructionCount += lines.Count) > maximumInstructions || (tokenCount += lines.Sum(l => (long)l.Count)) > maximumTokens)
                 throw new InvalidDataException("The prepared scripts together exceed the instruction or token limit; split or simplify the sources.");
             int line = 0; List<ScriptInstruction> instructions = [];
             foreach (var tokens in lines)
             {
+                token.ThrowIfCancellationRequested();
                 line++;
                 try { PreparedScriptWriter.ValidateTokens(tokens); }
                 catch (InvalidDataException ex) { throw new InvalidDataException($"{input}, instruction {line}: {ex.Message}", ex); }
@@ -769,11 +858,14 @@ public static partial class SourceBuilder
     /// the other campaign missions' vehicle folders. The first folder holding a name wins, as the engine takes the first
     /// match.
     /// </summary>
-    internal static IReadOnlyList<string> MissionTextures(string root, string mission, IReadOnlyCollection<string>? added = null, CancellationToken token = default, Snapshot? snapshot = null)
+    internal static IReadOnlyList<string> MissionTextures(string root, string mission, IReadOnlyCollection<string>? added = null, CancellationToken token = default, Snapshot? snapshot = null,
+        InventoryBudget? inventory = null)
     {
+        inventory ??= snapshot?.Inventory ?? new();
+        added = added == null ? null : PendingInventory.Capture(added, inventory, token);
         List<string> inputs = []; HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
         foreach (string folder in TextureSources.MissionFolders(mission, Multiplayer(root, mission, snapshot, token)))
-            foreach (string file in SourceProject.Files(root, folder, n => n.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase), added, token))
+            foreach (string file in SourceProject.Files(root, folder, n => n.EndsWith(TextureSources.Extension, StringComparison.OrdinalIgnoreCase), added, token, inventory))
                 // Subfolders of a search folder are separate folders (bft is listed on its own).
                 if (Path.GetDirectoryName(file)!.Replace('\\', '/').Equals(folder, StringComparison.OrdinalIgnoreCase) && names.Add(Path.GetFileNameWithoutExtension(file))) inputs.Add(file);
         return inputs;
@@ -815,7 +907,14 @@ public static partial class SourceBuilder
             if (!File.Exists(path)) return false;
             bytes = SourceRead.All(path, SourceProject.MaximumSourceTextBytes, token);
         }
-        return GameGenScriptText.Tokenize(GameGenScriptText.Decode(bytes)).Any(l => l.Any(t => t.Equals("support\\bftmulti.gw", StringComparison.OrdinalIgnoreCase)));
+        foreach (var line in GameGenScriptText.TokenizeCancellable(GameGenScriptText.Decode(bytes, token), token))
+            foreach (string operand in line)
+            {
+                token.ThrowIfCancellationRequested();
+                if (operand.Equals("support\\bftmulti.gw", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        token.ThrowIfCancellationRequested();
+        return false;
     }
 
     /// <summary>
@@ -875,27 +974,11 @@ public static partial class SourceBuilder
         if (snapshot.HasWorld(mission)) nodes = snapshot.World(mission, token).World.Nodes.Select(n => n.Name).ToArray();
         else warnings.Add($"{mission} has no world script ({WorldScript(mission)}), so animation roots and node names are not checked and patterns do not expand.");
         // Without an effects.zrd in the project the game's own resource archives supply it, so nothing can be checked.
-        var effects = EffectNames(root, mission, snapshot, token);
+        var effects = snapshot.Effects(mission, token);
         var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, token);
         if (result.EngineRejection is { } rejection) throw new InvalidDataException(rejection);
         return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]) { Package = result.Package };
     }
-    /// <summary>
-    /// The effect templates the game can find for <paramref name="mission"/>: it loads effects.zrd by name from the
-    /// resource archives, which hold the zrdr folders under data/common and the mission's. Names from every such file
-    /// count, so only an effect none of them defines is reported. Null when there is no effects.zrd.
-    /// </summary>
-    private static HashSet<string>? EffectNames(string root, string mission, Snapshot snapshot, CancellationToken token)
-    {
-        static bool Effects(string name) => name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase);
-        var sources = SourceProject.Files(root, "data/common", Effects, snapshot.Added, token).Where(p => p.Split('/').Contains("zrdr", StringComparer.OrdinalIgnoreCase))
-            .Concat(SourceProject.Files(root, $"data/{mission}/zrdr", Effects, snapshot.Added, token)).ToArray();
-        if (sources.Length == 0) return null;
-        HashSet<string> names = new(StringComparer.Ordinal);
-        foreach (string source in sources) names.UnionWith(Animation.AnimationCompiler.EffectNames(Animation.AnimationDefinitionSet.Read(snapshot.Files(), source, token)));
-        return names;
-    }
-
     /// <summary>The mission world, built by its script from the model sources (see <see cref="WorldAssembler"/>).</summary>
     private static Built BuildWorld(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
@@ -959,8 +1042,8 @@ public static partial class SourceBuilder
         long retained = 8L + plan.Inputs.Count * ArchiveSources.RecordSize;
         FormatRegistry.ValidateDocumentSize(retained);
         int bank = Array.IndexOf(Banks, plan.Path.ToLowerInvariant());
-        var declared = snapshot.Exists(SoundDefinitions) ? DeclaredFormats(snapshot.Read(SoundDefinitions, token), token) : new();
-        List<string> warnings = []; List<ArchiveSources.Entry> entries = []; Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase);
+        var declared = snapshot.Exists(SoundDefinitions) ? DeclaredFormats(snapshot.Read(SoundDefinitions, token, ProjectReadLimits.Resource()), token) : new();
+        BoundedDiagnostics warnings = new(); List<ArchiveSources.Entry> entries = []; Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase);
         foreach (string input in plan.Inputs)
         {
             token.ThrowIfCancellationRequested(); string name = Path.GetFileName(input);
@@ -979,7 +1062,10 @@ public static partial class SourceBuilder
             FormatRegistry.ValidateDocumentSize(retained += payload.Length);
             entries.Add(new(name, ArchiveSources.FitsSourceField(field) ? field : "", payload));
         }
-        return new(ArchiveSources.Write(entries), entries.Count, warnings);
+        var messages = warnings.Snapshot();
+        // GUI and MCP preview only the first few warnings; disclose aggregate omissions there too.
+        if (messages.Remove(BoundedDiagnostics.OmissionNotice)) messages.Insert(0, BoundedDiagnostics.OmissionNotice);
+        return new(ArchiveSources.Write(entries), entries.Count, messages);
     }
 
     /// <summary>
@@ -988,6 +1074,8 @@ public static partial class SourceBuilder
     /// </summary>
     internal static Dictionary<string, WaveFormat[]> DeclaredFormats(byte[] definitions, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        ProjectReadLimits.Resource().Validate(definitions);
         var root = ZrdText.LooksLikeText(definitions) ? ZrdText.Parse(definitions, token) : ZrdDecoder.Read(definitions, token);
         Dictionary<string, WaveFormat[]> formats = new(StringComparer.OrdinalIgnoreCase);
         Visit(root, 0);

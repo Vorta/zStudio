@@ -46,6 +46,7 @@ public sealed class WindowClosingTests
                     await McpWorkspaceChecks.Run(app);
                     await SceneInspectionInputChecks.Run();
                     await SceneInspectionMcpChecks.Run();
+                    await InspectionResultMcpChecks.Run();
                     await SceneTreeMcpChecks.Run();
                     await SceneSelectionMcpChecks.Run();
                     await Mw3MissionMcpChecks.Run();
@@ -61,14 +62,19 @@ public sealed class WindowClosingTests
                     await ExportSafetyMcpChecks.Run();
                     await SourceWorldMcpChecks.Run();
                     await SourceDefinitionPagingChecks.Run();
+                    await SourceWorkspaceStateBoundsChecks.Run();
+                    await FileResultBoundsMcpChecks.Run();
                     await SourceEditingMcpChecks.Run();
                     await SourceRecoveryMcpChecks.Run();
+                    await SourceProjectReadMcpChecks.Run();
+                    await SourceDecisionDialogChecks.Run();
                     await SourceSaveMcpChecks.Run();
                     await SourceModelDialogChecks.Run();
                     await ScriptScanRound6McpChecks.Run();
                     await SourceTakeBackMcpChecks.Run();
                     await SourcePreviewChangeMcpChecks.Run();
                     await SourceTerrainMcpChecks.Run();
+                    await SourceZoneMcpChecks.Run();
                     await SourceTerrainReferenceCapacityChecks.Run();
                     await SourceRootResourceGuardChecks.Run();
                     await SourceRound30PlanningChecks.Run();
@@ -85,6 +91,7 @@ public sealed class WindowClosingTests
                     await ShutdownMcpChecks.Run(app);
                     await PropertiesMcpChecks.Run();
                     await OperationPublicationChecks.Run();
+                    await BlenderCheckoutLifetimeChecks.Run();
                     await AssetInspectionMcpChecks.Run();
                     await ModelReplacementMcpChecks.Run();
                     await SceneSnapshotChecks.Run();
@@ -94,12 +101,15 @@ public sealed class WindowClosingTests
                     await MotionBindingMcpChecks.Run();
                     await MotionLibraryRefreshChecks.Run();
                     await AnimationFogChecks.Run();
+                    await AnimationTextureQueueChecks.Run();
                     await ContentEditingMcpChecks.Run();
                     await NavigationMcpChecks.Run();
                     await GuiNavigationChecks.Run();
                     await DraftResolutionMcpChecks.Run();
                     await AnimationMcpCancellationChecks.Run();
                     await ReloadChecks.Run();
+                    await DocumentPreparationChecks.Run();
+                    await CompiledInventoryChecks.Run();
                 }
                 catch (Exception ex) { failure ??= ex; }
                 finally
@@ -149,7 +159,7 @@ public sealed class WindowClosingTests
                             }
                             Assert.NotEmpty(pending);
                             string answer = pending.Dequeue(); prompts++;
-                            var buttons = ((StackPanel)dialog.Content).Children.OfType<WrapPanel>().Single();
+                            var buttons = ((Grid)dialog.Content).Children.OfType<WrapPanel>().Single();
                             buttons.Children.OfType<Button>().Single(b => Equals(b.Content, answer))
                                 .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                         }

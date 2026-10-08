@@ -44,18 +44,6 @@ public sealed partial class SceneViewport
         }
     }
 
-    private static byte[] WhiteAlphaMask(DecodedImage image, CancellationToken token)
-    {
-        var mask = new byte[image.Rgba.Length];
-        for (int i = 0; i < mask.Length; i += 4)
-        {
-            if ((i & 0xffff) == 0) token.ThrowIfCancellationRequested();
-            mask[i] = mask[i + 1] = mask[i + 2] = 255;
-            mask[i + 3] = image.Rgba[i + 3];
-        }
-        return mask;
-    }
-
     private void ClearWorldHighlights()
     {
         surfaceAppearances.Clear(); highlightMaterials.Clear(); HighlightMode = WorldHighlightMode.None;

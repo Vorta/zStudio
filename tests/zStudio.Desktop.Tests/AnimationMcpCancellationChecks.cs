@@ -17,6 +17,7 @@ internal static class AnimationMcpCancellationChecks
 {
     internal static async Task Run()
     {
+        await CheckReplayRefusal();
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         var entry = new AnimationEntry(new byte[308], 0, 0); package.Entries.Add(entry);
         var sound = AnimationCatalog.Create(2); sound.SetText(12, "retry"); sound.SetInt(52, 1); entry.Primary.Events.Add(sound);
@@ -163,6 +164,65 @@ internal static class AnimationMcpCancellationChecks
             Assert.False(editorLifetime.IsCancellationRequested);
         }
         finally { release.Set(); await audio.DisposeAsync(); }
+    }
+
+    private static async Task CheckReplayRefusal()
+    {
+        var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
+        var entry = new AnimationEntry(new byte[308], 0, 0);
+        entry.SetText(32, "root"); entry.SetText(68, "root"); entry.SetFloat(164, -1); package.Entries.Add(entry);
+        var source = new ZbdDocument("replay", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        using var document = new DocumentModel(source);
+        var safe = Context(1, 0);
+        var retainedPlayer = new AnimationPlayer(safe, 0);
+        var retainedFrame = retainedPlayer.AdvanceTo(1);
+        var audio = new AnimationAudio(() => new SilentOutput());
+        using var editor = new AnimationEditor(document, 0, new AssetResolver(Path.GetTempPath()), CancellationToken.None, null, audio);
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        void Set(string name, object value) => typeof(AnimationEditor).GetField(name, flags)!.SetValue(editor, value);
+        object? Get(string name) => typeof(AnimationEditor).GetField(name, flags)!.GetValue(editor);
+        Set("context", Context(900, 1300)); Set("player", retainedPlayer); Set("frame", retainedFrame);
+        ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Collapsed;
+        ((Slider)editor.FindName("SeekSlider")).Maximum = 1;
+        ((TextBox)editor.FindName("EndTime")).Text = "1";
+        Assert.True(((Button)editor.FindName("PlayButton")).IsEnabled);
+        Assert.False(editor.HasAutomationDrafts);
+        Assert.True(retainedPlayer.Time >= ((Slider)editor.FindName("SeekSlider")).Maximum);
+        try
+        {
+            // Only 2,201 synthetic nodes. The real aggregate guard stops the shared-chain
+            // frame near one million ancestry visits; no GPU scene/audio output is opened.
+            var refusal = await Assert.ThrowsAsync<StudioCommandException>(() => editor.TransportAsync("play"));
+            Assert.Equal("preview_unavailable", refusal.Code);
+            Assert.Contains("Animation binding", refusal.Message);
+            Assert.Same(retainedPlayer, Get("player")); Assert.Same(retainedFrame, Get("frame"));
+            Assert.False((bool)Get("playing")!);
+            // A later valid replay must clear the old failure and publish the new reset.
+            Set("context", safe);
+            await editor.TransportAsync("play");
+            Assert.True((bool)Get("playing")!);
+            Assert.NotSame(retainedPlayer, Get("player"));
+            Assert.Equal(0, ((AnimationFrame)Get("frame")!).Time);
+            Assert.Null(Get("previewOperationFailure"));
+            await editor.TransportAsync("pause");
+            Assert.False((bool)Get("playing")!);
+            Assert.Equal(0, audio.OutputInitializations);
+        }
+        finally { editor.Pause(); await audio.DisposeAsync(); }
+
+        AnimationPreviewContext Context(int depth, int leaves)
+        {
+            GameScene scene = new();
+            scene.Nodes.Add(new(0, "world", "world", null, [], [1], new(), new()));
+            for (int i = 1; i <= depth + leaves; i++)
+            {
+                int[] children = i < depth ? [i + 1] : i == depth ? Enumerable.Range(depth + 1, leaves).ToArray() : [];
+                scene.Nodes.Add(new(i, i == 1 ? "root" : "node" + i, "object3d", i > depth ? 0 : null,
+                    [i <= depth ? i - 1 : depth], children, new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
+            }
+            var world = new ZbdDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+            return new() { Package = document.AnimationEdits!.Package, World = world };
+        }
     }
 
     private sealed class SilentOutput : IAnimationAudioOutput

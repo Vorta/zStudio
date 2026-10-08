@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Recoil.Zbd.Core.Gltf;
@@ -49,6 +51,7 @@ public static partial class WorldGltf
         /// <summary>Clear the runtime state of point entries (elapsed time, packed state, heap words, flare runtime values) to compare content.</summary>
         public bool Canonical { get; init; }
         public CancellationToken Token { get; init; }
+        internal ZoneExportState? Zones { get; set; }
         private PolygonWorkBudget? polygonWork;
         internal PolygonWorkBudget PolygonWork => polygonWork ??= new(Token);
         internal Dictionary<WorldModel, GltfMesh> Meshes { get; } = new(ReferenceEqualityComparer.Instance);
@@ -65,8 +68,10 @@ public static partial class WorldGltf
     public static GltfDocument Export(IReadOnlyList<WorldNode> roots, uint parentZone, ExportContext context, WorldNode? loadRoot = null)
     {
         GltfDocument doc = new();
-        if (loadRoot != null && (loadRoot.Flags & CarriedFlags) != DefaultCarried)
-            doc.SceneExtras = new() { [Key] = new JsonObject { ["rootFlags"] = $"0x{loadRoot.Flags & CarriedFlags:X8}" } };
+        uint rootFlags = loadRoot == null ? DefaultCarried : loadRoot.Flags & CarriedFlags;
+        if (context.Zones != null) rootFlags &= ~ZoneGate;
+        if (loadRoot != null && rootFlags != DefaultCarried)
+            doc.SceneExtras = new() { [Key] = new JsonObject { ["rootFlags"] = $"0x{rootFlags:X8}" } };
         // Count how often each node is reached: a node under several parents is written under each (glTF nodes have
         // one parent) and marked so that import joins the copies again.
         Dictionary<WorldNode, int> reached = new(ReferenceEqualityComparer.Instance); HashSet<WorldNode> path = new(ReferenceEqualityComparer.Instance);
@@ -170,10 +175,18 @@ public static partial class WorldGltf
             extras["instance"] = instance;
         }
         uint carried = node.Flags & CarriedFlags;
+        if (context.Zones is { } zoneExport)
+        {
+            zoneExport.Nodes.Add(result, new(node.Zone, (node.Flags & ZoneGate) != 0, node.Zone == (parentZone & 255u)));
+            carried &= ~ZoneGate;
+        }
         if (carried != DefaultCarried) extras["flags"] = $"0x{carried:X8}";
         uint zone = node.Zone & 0xFF;
-        if (zone != parentZone) extras["zone"] = (int)zone;
-        if ((node.Zone & ~0xFFu) != 0) extras["zoneWord"] = $"0x{node.Zone:X8}";
+        if (context.Zones == null)
+        {
+            if (zone != parentZone) extras["zone"] = (int)zone;
+            if ((node.Zone & ~0xFFu) != 0) extras["zoneWord"] = $"0x{node.Zone:X8}";
+        }
         if (node.Class == WorldNodeClass.Lod)
         {
             extras["class"] = "lod";
@@ -202,7 +215,11 @@ public static partial class WorldGltf
             else extras["model"] = mesh.Extras?[Key]?.DeepClone() ?? new JsonObject();
         }
         if (context.Group(node)) extras["group"] = true;
-        if (context.Reference(node) is { } uri) extras["ref"] = uri;
+        if (context.Reference(node) is { } uri)
+        {
+            if (context.Zones is { } zones) { extras[ZoneReference] = true; zones.References.Add(result, uri); }
+            else extras["ref"] = uri;
+        }
         foreach (var child in OwnChildren(node, context)) result.Children.Add(ExportNode(child, zone, context, state));
         if (extras.Count > 0) result.Extras = new() { [Key] = extras };
         return result;
@@ -224,6 +241,7 @@ public static partial class WorldGltf
     {
         if (context.Meshes.TryGetValue(model, out var existing)) return existing;
         GltfMesh mesh = new() { Name = $"model{context.Meshes.Count}" };
+        List<uint>? zoneWords = context.Zones == null ? null : [];
         GltfPrimitive? primitive = null; SurfaceKey? key = null;
         Dictionary<(int V, int N, float U, float W), int> corners = [];
         // What each stored polygon became, per primitive: a fan's triangle count, or the corners of a polygon written
@@ -237,7 +255,8 @@ public static partial class WorldGltf
             var triangles = Triangulate(points).Where(t => !ModelBuilder.Straight(points[t.Item1], points[t.Item2], points[t.Item3])).ToList();
             if (triangles.Count == 0) continue;
             bool fan = triangles.Count == points.Length - 2 && triangles.Select((t, k) => t == (0, k + 1, k + 2)).All(x => x);
-            SurfaceKey k = new(polygon.Material, polygon.Priority, (polygon.Flags & 0x100) != 0, polygon.Zone, polygon.Normals.Length > 0);
+            SurfaceKey k = new(polygon.Material, polygon.Priority, (polygon.Flags & 0x100) != 0,
+                context.Zones == null ? polygon.Zone : DefaultPolygonZone, polygon.Normals.Length > 0);
             // Consecutive polygons with the same surface share a primitive, keeping the stored polygon order.
             if (primitive == null || key != k)
             {
@@ -261,11 +280,12 @@ public static partial class WorldGltf
                 }
             }
             foreach (var (a, b, c) in triangles) primitive.Indices.AddRange([index[a], index[b], index[c]]);
-            groups[^1].Polygons.Add(fan ? triangles.Count : new JsonObject { ["triangles"] = triangles.Count, ["corners"] = new JsonArray(index.Select(i => (JsonNode)i).ToArray()) });
+            groups[^1].Polygons.Add(fan && context.Zones == null ? triangles.Count : new JsonObject { ["triangles"] = triangles.Count, ["corners"] = new JsonArray(index.Select(i => (JsonNode)i).ToArray()) });
+            zoneWords?.Add(polygon.Zone);
         }
         if (model.Morphs.Count > 0) mesh.Weights.Add(model.MorphFactor);
         foreach (var (target, textured, polygons) in groups)
-            if (polygons.Any(p => p is JsonObject) || !MergeFans(target, textured, context.PolygonWork).Select(p => p.Length - 2).SequenceEqual(polygons.Select(p => p.GetValue<int>())))
+            if (context.Zones != null || polygons.Any(p => p is JsonObject) || !MergeFans(target, textured, context.PolygonWork).Select(p => p.Length - 2).SequenceEqual(polygons.Select(p => p.GetValue<int>())))
                 target.Extras = new() { [Key] = new JsonObject { ["polygons"] = new JsonArray([.. polygons]) } };
         JsonObject extras = [];
         if (model.Mode != 0) extras["mode"] = (int)model.Mode;
@@ -280,6 +300,7 @@ public static partial class WorldGltf
             }).ToArray());
         if (extras.Count > 0) mesh.Extras = new() { [Key] = extras };
         context.Meshes[model] = mesh;
+        if (zoneWords != null) context.Zones!.Meshes.Add(mesh, zoneWords);
         return mesh;
     }
 
@@ -392,6 +413,12 @@ public static partial class WorldGltf
         public required Func<string, string, (GltfDocument Document, string Path)> Reference { get; init; }
         /// <summary>Texture name for a material's image URI (relative to the file at the given path).</summary>
         public required Func<string, string?, string, string> TextureName { get; init; }
+        /// <summary>The map's immutable zone profile for a logical asset path, or null for legacy inline zones.</summary>
+        public Func<string, GltfDocument, WorldZoneProfile?>? ZoneProfile { get; init; }
+        /// <summary>The authored reference URI for a neutral reference holder, by logical path and emitted node ordinal.</summary>
+        public Func<string, int, string?>? AssetReference { get; init; }
+        internal Dictionary<(string Path, GltfDocument Document), BoundZones?> ZoneBindings { get; } = [];
+        internal Dictionary<GltfDocument, ZoneLayout> ZoneLayouts { get; } = new(ReferenceEqualityComparer.Instance);
         internal BoundedDiagnostics Diagnostics { get; init; } = new();
         public List<string> Warnings => Diagnostics.Snapshot();
         /// <summary>
@@ -406,6 +433,20 @@ public static partial class WorldGltf
         public CancellationToken Token { get; init; }
         private PolygonWorkBudget? polygonWork;
         internal PolygonWorkBudget PolygonWork { get => polygonWork ??= new(Token); init => polygonWork = value; }
+        private LookupWorkBudget? linkWork;
+        internal LookupWorkBudget LinkWork { get => linkWork ??= new(token: Token); init => linkWork = value; }
+        private TerrainPlacementBudget? terrainPlacementBudget;
+        internal TerrainPlacementBudget TerrainPlacementBudget { get => terrainPlacementBudget ??= new(Token); init => terrainPlacementBudget = value; }
+        private readonly Dictionary<GltfDocument, TerrainPlacementIndex> terrainPlacements = new(ReferenceEqualityComparer.Instance);
+        internal TerrainPlacementIndex TerrainPlacements(GltfDocument document)
+        {
+            Token.ThrowIfCancellationRequested();
+            if (terrainPlacements.TryGetValue(document, out var known)) return known;
+            // Parsed documents are immutable for this load, as for the shared semantics-validation cache.
+            var index = new TerrainPlacementIndex(document, TerrainPlacementBudget);
+            terrainPlacements.Add(document, index);
+            return index;
+        }
         /// <summary>Reads a file relative to a referencing file (terrain recipes): its bytes and project path.</summary>
         public Func<string, string, (byte[] Bytes, string Path)>? ReadFile { get; init; }
         /// <summary>The world's grid, for the mission database load only; terrain recipes elsewhere are refused.</summary>
@@ -421,11 +462,16 @@ public static partial class WorldGltf
         /// and node; readings compare ignoring case, as the loader's caches do.
         /// </summary>
         internal Dictionary<(string Reading, GltfMesh Mesh), Dictionary<float, WorldModel>> Models { get; } = new(ReadingComparer<GltfMesh>.Instance);
+        internal Dictionary<WorldModel, IReadOnlyList<int>> SourcePolygons { get; } = new(ReferenceEqualityComparer.Instance);
         internal Dictionary<(string Reading, GltfNode Node), WorldModel> ValueModels { get; } = new(ReadingComparer<GltfNode>.Instance);
         internal Dictionary<(string Path, GltfDocument Doc), bool> Loading { get; } = [];
         // One immutable parsed document can be imported by many reference paths. Validate its authored semantics once,
         // before the first import mutates the world's pools, rather than rechecking every expanded copy.
         internal HashSet<GltfDocument> Validated { get; } = new(ReferenceEqualityComparer.Instance);
+        internal HashSet<GltfMesh> ValidatedMeshes { get; } = new(ReferenceEqualityComparer.Instance);
+        // Material decoding and texture resolution belong to a source file, not to every primitive using it.
+        // The path remains part of the key because image URIs are relative to that file.
+        internal Dictionary<(string Path, GltfMaterial? Source), (WorldMaterial Material, int Priority, bool BackFace, uint Zone, bool? StoresNormals)> ImportedMaterials { get; } = [];
         /// <summary>Nodes this load created; with the world's, never more than a world can hold.</summary>
         internal int Created { get; set; }
         /// <summary>The world's materials and textures by value and name, built on first use (a load only adds to them).</summary>
@@ -450,7 +496,7 @@ public static partial class WorldGltf
     public static List<WorldNode> Import(GltfDocument doc, string path, uint parentZone, ImportContext context) => Import(doc, path, path, parentZone, context, 0);
 
     /// <summary>Shared build/Blender preflight: refuse model semantics GameZ cannot represent before accepting sources.</summary>
-    internal static void ValidateSupported(GltfDocument doc, string path)
+    internal static void ValidateSupported(GltfDocument doc, string path, ImportContext? context = null)
     {
         _ = EngineValues(doc.SceneExtras, path);
         HashSet<GltfMesh> meshes = [];
@@ -458,6 +504,7 @@ public static partial class WorldGltf
         Dictionary<string, int> addressing = new(StringComparer.OrdinalIgnoreCase);
         foreach (var node in doc.AllNodes())
         {
+            context?.Token.ThrowIfCancellationRequested();
             _ = ValidatedEngineName(node, path);
             if (EngineValues(node.Extras, path)?["class"] is { } kind && Text(kind, "class", path) == "lod"
                 && node.Matrix is { IsIdentity: false })
@@ -465,9 +512,10 @@ public static partial class WorldGltf
             _ = Appearance(node.Extras?[Key] as JsonObject, path);
             if (node.Mesh is { } mesh && meshes.Add(mesh))
             {
-                ValidateMesh(mesh, path);
+                ValidateMesh(mesh, path, context);
                 foreach (var primitive in mesh.Primitives)
                 {
+                    context?.Token.ThrowIfCancellationRequested();
                     var material = primitive.Material;
                     if (material == null || !materials.Add(material)) continue;
                     ValidateMaterial(material, path);
@@ -491,13 +539,16 @@ public static partial class WorldGltf
         return model.Points.Count > 0;
     }
 
-    private static void ValidateMesh(GltfMesh mesh, string path)
+    private static void ValidateMesh(GltfMesh mesh, string path, ImportContext? context = null)
     {
+        context?.Token.ThrowIfCancellationRequested();
+        if (context?.ValidatedMeshes.Contains(mesh) == true) return;
         _ = EngineValues(mesh.Extras, path);
         if (mesh.Weights.Count > 1 || mesh.Primitives.Any(p => p.Targets.Count > 1))
             throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} has multiple morph targets; RECOIL stores one shape key per model. Export at most one shape key.");
         foreach (var primitive in mesh.Primitives)
         {
+            context?.Token.ThrowIfCancellationRequested();
             _ = EngineValues(primitive.Extras, path);
             _ = EngineValues(primitive.Material?.Extras, path);
             if (primitive.Material is { } material && (material.ImageUri != null || material.EmbeddedImage || material.Extras?[Key]?["texture"] != null)
@@ -507,12 +558,17 @@ public static partial class WorldGltf
                 throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} needs TEXCOORD_{primitive.TextureCoordinateSet}, which its material selects, with one texture coordinate per vertex. Export that UV set with the mesh.");
             }
         }
+        context?.ValidatedMeshes.Add(mesh);
     }
 
     private static void ValidateMaterial(GltfMaterial? source, string path)
     {
         if (EngineValues(source?.Extras, path) is { } engine)
         {
+            // Admit every scalar that import will interpret before decoding any of them. The JSON reader's
+            // document budget permits long numeric spellings, which otherwise multiply across shared primitives.
+            foreach (string field in new[] { "flags", "packedColor", "priority", "backface", "zone", "normals", "opacity", "soil" })
+                NumericOperand(engine[field], field, path);
             if (engine["flags"] is { } flags) _ = MaterialWord(flags, "flags", path);
             if (engine["packedColor"] is { } packed) _ = MaterialWord(packed, "packedColor", path);
             foreach (string field in new[] { "fields", "color" })
@@ -546,11 +602,13 @@ public static partial class WorldGltf
     {
         if (!context.Validated.Contains(doc))
         {
-            ValidateSupported(doc, path);
+            ValidateSupported(doc, path, context);
             // Ordinary source loading follows the original first-definition instance contract. Later records may
             // inherit other zones or omit the first record's children. Editor updates validate agreement separately.
             context.Validated.Add(doc);
         }
+        var zones = BindZones(doc, path, context);
+        if (zones != null) reading += "\u001E" + zones.Identity;
         if (!context.Loading.TryAdd((path, doc), true)) throw new InvalidDataException($"{path} references itself.");
         Dictionary<int, WorldNode> instances = [];
         try
@@ -564,7 +622,7 @@ public static partial class WorldGltf
                     if (depth > 0) throw new InvalidDataException($"{path}: the terrain recipe {JsonData.Shown(recipe, asText: true)} must be a root of the mission database, not of a referenced file.");
                     roots.AddRange(ImportTerrain(Text(recipe, "terrain", path), path, context));
                 }
-                else roots.Add(ImportNode(root, path, reading, parentZone, context, instances, depth));
+                else roots.Add(ImportNode(root, path, reading, parentZone, context, instances, depth, zones: zones));
             }
             return roots;
         }
@@ -577,7 +635,7 @@ public static partial class WorldGltf
     /// <paramref name="depth"/> counts levels across external references, which continue the hierarchy; <paramref name="place"/>
     /// is the node's place in a shared node of its file, if it is inside one.
     /// </summary>
-    private static WorldNode ImportNode(GltfNode source, string path, string reading, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth, InstancePlace? place = null)
+    private static WorldNode ImportNode(GltfNode source, string path, string reading, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth, InstancePlace? place = null, BoundZones? zones = null)
     {
         if (depth >= GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the node hierarchy, with its external references, is deeper than {GltfDocument.MaximumDepth} levels.");
         context.Token.ThrowIfCancellationRequested();
@@ -604,6 +662,12 @@ public static partial class WorldGltf
         uint? word = extras?["zoneWord"] is { } w ? Hex(w, "zoneWord", path) : null;
         uint zone = extras?["zone"] is { } z ? (uint)Integer(z, "zone", path) & 0xFF : word is { } stated ? stated & 0xFF : parentZone;
         node.Zone = word is { } full ? full & ~0xFFu | zone : zone;
+        if (zones != null)
+        {
+            var assigned = zones.Nodes[source];
+            node.Zone = assigned.Inherit ? assigned.Word & ~255u | parentZone & 255u : assigned.Word; zone = node.Zone & 0xFF;
+            node.Flags = assigned.Gate ? node.Flags | ZoneGate : node.Flags & ~ZoneGate;
+        }
         if (lod)
         {
             var fields = extras?["lod"] is { } values ? values as JsonArray ?? throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} has an invalid lod record.") : [];
@@ -619,22 +683,22 @@ public static partial class WorldGltf
             node.SetPayloadInt(0, matrix.IsIdentity ? 0x28 : 0x30);
             node.SetPayloadFloat(0x24, 1); node.SetPayloadFloat(0x28, 1); node.SetPayloadFloat(0x2C, 1);
             for (int i = 0; i < 12; i++) node.SetPayloadFloat(0x30 + i * 4, rows[i]);
-            if (Appearance(extras, path) is { } appearance)
-            {
-                node.SetPayloadInt(0, node.PayloadInt(0) | unchecked((int)appearance.Flags));
-                node.SetPayloadFloat(4, appearance.AlphaScale);
-                node.SetPayloadFloat(8, appearance.Color.X); node.SetPayloadFloat(12, appearance.Color.Y); node.SetPayloadFloat(16, appearance.Color.Z);
-                node.SetPayloadFloat(20, appearance.ColorAlpha);
-            }
+            ApplyAppearance(node, extras, path);
         }
-        if (source.Mesh != null) node.Model = ImportMesh(source.Mesh, path, reading, context, source.Weights.Count > 0 ? source.Weights[0] : null);
+        if (source.Mesh != null) node.Model = ImportMesh(source.Mesh, path, reading, context, source.Weights.Count > 0 ? source.Weights[0] : null, zones);
         else if (extras?["model"] is { } values) node.Model = ImportValues(values as JsonObject ?? throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} has an invalid model record."), source, path, reading, context);
-        if (extras?["ref"] is { } referenceValue)
+        // The ordered lists carry engine semantics; membership uses reference identity so a wide parent does not
+        // scan all earlier children for every append. References and authored children share this one index.
+        HashSet<WorldNode>? linkedChildren = null;
+        string? referenceUri = extras?["ref"] is { } referenceValue ? Text(referenceValue, "ref", path) : null;
+        if (extras?[ZoneReference] != null)
+            referenceUri = zones?.References.GetValueOrDefault(source)
+                ?? throw new InvalidDataException($"{path}: a map reference has no zone profile binding.");
+        if (referenceUri is { } uri)
         {
-            string uri = Text(referenceValue, "ref", path);
             var (doc, referencedPath) = context.Reference(uri, path);
             context.referencing.Add(node);
-            try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1)) Link(node, child); }
+            try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1)) Link(child); }
             finally { context.referencing.RemoveAt(context.referencing.Count - 1); }
         }
         // Inside a shared node each child's place is its name and how many earlier siblings have it (see InstancePlace).
@@ -648,21 +712,49 @@ public static partial class WorldGltf
                 int occurrence = named.GetValueOrDefault(childName); named[childName] = occurrence + 1;
                 at = new(place!.Number, place, i, childName, occurrence);
             }
-            Link(node, ImportNode(source.Children[i], path, reading, zone, context, instances, depth + 1, at));
+            Link(ImportNode(source.Children[i], path, reading, zone, context, instances, depth + 1, at, zones));
         }
         return node;
-        static void Link(WorldNode parent, WorldNode child)
+        void Link(WorldNode child)
         {
+            context.Token.ThrowIfCancellationRequested();
+            context.LinkWork.Reserve(1); // Duplicate attempts count too, across all files/loads in this operation.
             // A shared node found inside its own copy would make the graph cyclic.
-            if (ReferenceEquals(parent, child) || Descends(parent, child, 0)) throw new InvalidDataException($"Node {child.Name} would become its own ancestor.");
-            if (!parent.Children.Contains(child)) { parent.Children.Add(child); child.Parents.Add(parent); }
+            if (ReferenceEquals(node, child) || Descends(child)) throw new InvalidDataException($"Node {child.Name} would become its own ancestor.");
+            linkedChildren ??= new(ReferenceEqualityComparer.Instance);
+            if (linkedChildren.Add(child)) { node.Children.Add(child); child.Parents.Add(node); }
         }
-        static bool Descends(WorldNode node, WorldNode ancestor, int depth) => depth <= 256 && node.Parents.Any(p => ReferenceEquals(p, ancestor) || Descends(p, ancestor, depth + 1));
+        bool Descends(WorldNode ancestor)
+        {
+            // New parents are normally unattached until their children finish. Malformed instance graphs can
+            // provisionally add parent edges; visit each identity once instead of recursively expanding a DAG.
+            if (node.Parents.Count == 0) return false;
+            HashSet<WorldNode> visited = new(ReferenceEqualityComparer.Instance);
+            Stack<WorldNode> pending = new();
+            PushParents(node);
+            while (pending.TryPop(out var next))
+            {
+                context.Token.ThrowIfCancellationRequested();
+                context.LinkWork.Reserve(1);
+                if (ReferenceEquals(next, ancestor)) return true;
+                if (visited.Add(next)) PushParents(next);
+            }
+            return false;
+            void PushParents(WorldNode parent)
+            {
+                foreach (var next in parent.Parents)
+                {
+                    context.Token.ThrowIfCancellationRequested();
+                    context.LinkWork.Reserve(1); // Admit each edge before growing the pending stack.
+                    pending.Push(next);
+                }
+            }
+        }
     }
 
-    private static WorldModel ImportMesh(GltfMesh mesh, string path, string reading, ImportContext context, float? nodeWeight)
+    private static WorldModel ImportMesh(GltfMesh mesh, string path, string reading, ImportContext context, float? nodeWeight, BoundZones? zones = null)
     {
-        ValidateMesh(mesh, path);
+        // Import's document preflight has already validated each mesh once, including meshes shared by many nodes.
         float weight = nodeWeight ?? (mesh.Extras?[Key]?["morphFactor"] is { } factor ? Real(factor, "morphFactor", path) : mesh.Weights.Count > 0 ? mesh.Weights[0] : 0);
         if (!float.IsFinite(weight)) throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} has a non-finite morph weight.");
         if (context.Models.TryGetValue((reading, mesh), out var variants) && variants.TryGetValue(weight, out var existing)) return existing;
@@ -670,6 +762,8 @@ public static partial class WorldGltf
         var model = builder.Model;
         ApplyValues(model, mesh.Extras?[Key] as JsonObject, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path);
         model.MorphFactor = weight;
+        int polygonIndex = 0;
+        List<int> sourcePolygons = [];
         foreach (var primitive in mesh.Primitives)
         {
             context.Token.ThrowIfCancellationRequested();
@@ -679,7 +773,7 @@ public static partial class WorldGltf
             bool textured = material.Texture != null, normals = storesNormals != false && primitive.Normals.Count == primitive.Positions.Count;
             var targets = primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0] : null;
             int added = 0;
-            foreach (var corners in Polygons(primitive, textured, context.PolygonWork))
+            foreach (var corners in zones == null ? Polygons(primitive, textured, context.PolygonWork) : zones.Polygons[primitive])
             {
                 if ((++added & 1023) == 0) context.Token.ThrowIfCancellationRequested();
                 Vector3[] points = corners.Select(i => primitive.Positions[i]).ToArray();
@@ -687,11 +781,15 @@ public static partial class WorldGltf
                     textured ? corners.Select(i => primitive.TexCoords[i]).ToArray() : [],
                     normals ? corners.Select(i => primitive.Normals[i]).ToArray() : [],
                     targets != null ? corners.Select(i => primitive.Positions[i] + targets[i]).ToArray() : [],
-                    material, priority, backface, zone);
+                    material, priority, backface, zones == null ? zone : zones.Meshes[mesh][polygonIndex]);
+                int before = model.Polygons.Count;
                 builder.Add(input);
+                for (int i = before; i < model.Polygons.Count; i++) sourcePolygons.Add(polygonIndex);
+                polygonIndex++;
             }
         }
         builder.Finish();
+        context.SourcePolygons.Add(model, sourcePolygons.ToArray());
         context.AddModel(model);
         if (variants == null) context.Models[(reading, mesh)] = variants = [];
         variants[weight] = model;
@@ -752,11 +850,12 @@ public static partial class WorldGltf
     /// When that record still describes the primitive's triangles (an editor that rebuilt the mesh drops or breaks it),
     /// it is followed; otherwise fans are merged.
     /// </summary>
-    internal static List<int[]> Polygons(GltfPrimitive primitive, bool textured, PolygonWorkBudget? work = null)
+    internal static List<int[]> Polygons(GltfPrimitive primitive, bool textured, PolygonWorkBudget? work = null, bool requireRecorded = false)
     {
         work ??= new(); work.CheckCancellation();
         var indices = primitive.Indices;
-        if ((primitive.Extras?[Key] as JsonObject)?["polygons"] is not JsonArray entries || entries.Count > indices.Count / 3) return MergeFans(primitive, textured, work);
+        List<int[]> Fallback() => requireRecorded ? throw new InvalidDataException("Map zone assignments need unchanged recorded polygon boundaries; rebind the edited geometry before importing.") : MergeFans(primitive, textured, work);
+        if ((primitive.Extras?[Key] as JsonObject)?["polygons"] is not JsonArray entries || entries.Count > indices.Count / 3) return Fallback();
         List<int[]> result = []; int t = 0, triangles = indices.Count / 3;
         foreach (var entry in entries)
         {
@@ -764,20 +863,20 @@ public static partial class WorldGltf
             if (entry is JsonObject listed)
             {
                 long n = JsonData.Integer(listed["triangles"], -1);
-                if (n < 1 || n > triangles - t || listed["corners"] is not JsonArray list || list.Count < 3 || list.Count > ModelBuilder.MaximumCorners) return MergeFans(primitive, textured, work);
+                if (n < 1 || n > triangles - t || listed["corners"] is not JsonArray list || list.Count < 3 || list.Count > ModelBuilder.MaximumCorners) return Fallback();
                 int[] corners = list.Select(c => (int)Math.Clamp(JsonData.Integer(c, -1), -1, int.MaxValue)).ToArray();
-                if (corners.Any(c => c < 0 || c >= primitive.Positions.Count)) return MergeFans(primitive, textured, work);
+                if (corners.Any(c => c < 0 || c >= primitive.Positions.Count)) return Fallback();
                 // Its triangles must lie on its corners.
                 for (int k = 0; k < n; k++)
                 {
                     work.Charge(3L * corners.Length);
-                    for (int j = 0; j < 3; j++) if (Array.IndexOf(corners, indices[(t + k) * 3 + j]) < 0) return MergeFans(primitive, textured, work);
+                    for (int j = 0; j < 3; j++) if (Array.IndexOf(corners, indices[(t + k) * 3 + j]) < 0) return Fallback();
                 }
                 result.Add(corners); t += (int)n;
                 continue;
             }
             long count = JsonData.Integer(entry, -1);
-            if (count < 1 || count > triangles - t) return MergeFans(primitive, textured, work);
+            if (count < 1 || count > triangles - t) return Fallback();
             int a = indices[t * 3]; List<int> polygon = [a, indices[t * 3 + 1], indices[t * 3 + 2]]; bool fan = true;
             for (int k = 1; k < count && fan; k++)
             {
@@ -786,10 +885,11 @@ public static partial class WorldGltf
                 if (indices[o] == a && indices[o + 1] == polygon[^1]) polygon.Add(indices[o + 2]); else fan = false;
             }
             if (fan) result.Add([.. polygon]);
+            else if (requireRecorded) return Fallback();
             else for (int k = 0; k < count; k++) { work.Charge(1); int o = (t + k) * 3; result.Add([indices[o], indices[o + 1], indices[o + 2]]); }
             t += (int)count;
         }
-        return t == triangles ? result : MergeFans(primitive, textured, work);
+        return t == triangles ? result : Fallback();
     }
 
     /// <summary>
@@ -838,6 +938,8 @@ public static partial class WorldGltf
     /// </summary>
     private static (WorldMaterial Material, int Priority, bool BackFace, uint Zone, bool? StoresNormals) ImportMaterial(GltfMaterial? source, string path, ImportContext context)
     {
+        context.Token.ThrowIfCancellationRequested();
+        if (context.ImportedMaterials.TryGetValue((path, source), out var imported)) return imported;
         ValidateMaterial(source, path);
         var extras = source?.Extras?[Key] as JsonObject;
         int priority = extras?["priority"] is { } p ? (int)Integer(p, "priority", path, int.MinValue, int.MaxValue) : 0;
@@ -873,7 +975,9 @@ public static partial class WorldGltf
         if (extras?["packedColor"] is { } packed) material.PackedColor = MaterialWord(packed, "packedColor", path);
         if (extras?["fields"] is JsonArray fields && fields.Count == 3) { material.Field14 = Real(fields[0], "fields", path); material.Field18 = Real(fields[1], "fields", path); material.Field1C = Real(fields[2], "fields", path); }
         material.Soil = extras?["soil"] is { } soil ? unchecked((uint)Integer(soil, "soil", path, int.MinValue, uint.MaxValue)) : 0;
-        return (Shared(context, material), priority, backface, zone, normals);
+        imported = (Shared(context, material), priority, backface, zone, normals);
+        context.ImportedMaterials.Add((path, source), imported);
+        return imported;
     }
 
     /// <summary>The world's texture directory entry for a name, added on first use.</summary>
@@ -881,9 +985,10 @@ public static partial class WorldGltf
     {
         var existing = world.Textures.FirstOrDefault(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         if (existing != null) return existing;
+        if (world.Textures.Count >= 0x1000) throw new InvalidDataException("The texture directory holds at most 4,096 entries.");
         WorldTexture texture = new(name.ToLowerInvariant()); world.Textures.Add(texture); return texture;
     }
-    /// <summary>The texture entry for a name within a load, found through an index so a file with many textures stays linear.</summary>
+    /// <summary>The texture entry for a name within a load, with cached lookups for repeated material names.</summary>
     private static WorldTexture Texture(ImportContext context, string name)
     {
         if (context.TextureIndex == null)
@@ -934,7 +1039,7 @@ public static partial class WorldGltf
         InvalidDataException InvalidName() => new($"{path}: node {JsonData.ShownText(node.Name)} needs an engine name of at most 35 Latin-1 characters without NUL; shorten or rename it before importing.");
     }
 
-    private static (uint Flags, float AlphaScale, Vector3 Color, float ColorAlpha)? Appearance(JsonObject? extras, string path)
+    internal static (uint Flags, float AlphaScale, Vector3 Color, float ColorAlpha)? Appearance(JsonObject? extras, string path)
     {
         if (extras?.TryGetPropertyValue("appearance", out var value) != true) return null;
         if (value is not JsonObject appearance || extras["class"] is { } kind && Text(kind, "class", path) == "lod")
@@ -949,6 +1054,14 @@ public static partial class WorldGltf
         }
         return (flags, appearance["alphaScale"] is { } scale ? Real(scale, "appearance alphaScale", path) : 0,
             color, appearance["colorAlpha"] is { } alpha ? Real(alpha, "appearance colorAlpha", path) : 0);
+    }
+    private static void ApplyAppearance(WorldNode node, JsonObject? extras, string path)
+    {
+        if (Appearance(extras, path) is not { } appearance) return;
+        node.SetPayloadInt(0, node.PayloadInt(0) | unchecked((int)appearance.Flags));
+        node.SetPayloadFloat(4, appearance.AlphaScale);
+        node.SetPayloadFloat(8, appearance.Color.X); node.SetPayloadFloat(12, appearance.Color.Y); node.SetPayloadFloat(16, appearance.Color.Z);
+        node.SetPayloadFloat(20, appearance.ColorAlpha);
     }
     private static JsonObject? EngineValues(JsonObject? extras, string path)
     {
@@ -990,11 +1103,13 @@ public static partial class WorldGltf
     }
     private static long Integer(JsonNode? node, string what, string path, long minimum = long.MinValue, long maximum = long.MaxValue)
     {
+        NumericOperand(node, what, path);
         if (GltfInteger.TryInt64(node, out long whole) && whole >= minimum && whole <= maximum) return whole;
         throw Invalid(what, path, node);
     }
     private static float Real(JsonNode? node, string what, string path)
     {
+        NumericOperand(node, what, path);
         if (node is JsonValue value)
         {
             // Parsed text converts to float directly (rounding once); values built in memory may hold other types.
@@ -1011,7 +1126,20 @@ public static partial class WorldGltf
         node is JsonValue value && value.TryGetValue(out bool flag) ? flag : Integer(node, what, path, 0, 1) == 1;
     private static uint Hex(JsonNode? node, string what, string path)
     {
+        NumericOperand(node, what, path);
         string text = Text(node, what, path);
-        return uint.TryParse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint result) ? result : throw Invalid(what, path, node);
+        return uint.TryParse(text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text.AsSpan(2) : text.AsSpan(), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint result) ? result : throw Invalid(what, path, node);
+    }
+
+    // Ample room for exact float/integer spellings and escaped hexadecimal strings, without permitting a megabyte
+    // of leading/trailing zeroes for one engine word. Names, texture identities and unknown metadata are not clipped.
+    private const int MaximumNumericOperandBytes = 256;
+    private static void NumericOperand(JsonNode? node, string what, string path)
+    {
+        if (node is not JsonValue scalar) return;
+        long length = scalar.TryGetValue(out JsonElement element) ? JsonMarshal.GetRawUtf8Value(element).Length
+            : scalar.TryGetValue(out string? text) ? text?.Length ?? 0 : 0;
+        if (length > MaximumNumericOperandBytes)
+            throw new InvalidDataException($"{path}: the numeric engine value '{what}' exceeds its {MaximumNumericOperandBytes}-byte representation limit; shorten its numeric spelling.");
     }
 }

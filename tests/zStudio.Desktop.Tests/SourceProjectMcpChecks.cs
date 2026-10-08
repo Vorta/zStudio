@@ -35,7 +35,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(main.ViewModel.RootPath!));
             var reopened = await Job("open_root", new() { ["path"] = Path.Combine(fixture.Root, "initialized"), ["project"] = true });
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
-            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Export all ZBD files…", "Export ZBD file", "Check source project", "Resolve interrupted save…", "Build profile", "Open mission world", "Add model to world…", "Edit in Blender…", "Update from Blender export…", "Create terrain…", "Convert to editable terrain…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
+            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Export all ZBD files…", "Export ZBD file", "Check source project", "Resolve interrupted save…", "Build profile", "Open mission world", "Add model to world…", "Edit in Blender…", "Update from Blender export…", "Edit map zones…", "Create terrain…", "Convert to editable terrain…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
             await Job("open_root", new() { ["path"] = fixture.Corpus });
             Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
 
@@ -178,6 +178,22 @@ internal static class SourceProjectMcpChecks
                 Assert.Equal(0, warning["failed"]!.GetValue<int>());
                 Assert.Contains(warning["outputs"]![0]!["warnings"]!.AsArray(), w => w!.GetValue<string>().Contains("Object3DSetPriority", StringComparison.Ordinal));
                 Assert.Contains(main.ViewModel.Problems, p => p.Message.Contains("Object3DSetPriority", StringComparison.Ordinal));
+                // Distinct valid interpreter lookups produce more diagnostics than the GUI preview keeps.
+                string misses = string.Join("\r\n", Enumerable.Range(0, 70).Select(i => $"FindNode absent_warning_{i:D2}"));
+                await File.WriteAllTextAsync(script, original.Replace("# no vehicles", misses, StringComparison.Ordinal), token);
+                warning = await Job("source_export", new() { ["outputs"] = new[] { "m1/gamez.zbd" } });
+                int warningCount = warning["outputs"]![0]!["warningCount"]!.GetValue<int>();
+                Assert.True(warningCount >= 70); Assert.True(warning["outputs"]![0]!["warningsTruncated"]!.GetValue<bool>());
+                string omission = $"Showing 64 of {warningCount} warnings; {warningCount - 64} more not shown.";
+                Assert.Contains(main.ViewModel.Problems, p => p.File == worldFixture.Project && p.Message.Contains(omission, StringComparison.Ordinal));
+                await Job("source_world_open", new() { ["mission"] = "m1" });
+                var world = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+                int buildWarnings = world.SourceBuild!.Outputs.Single(o => o.Path == "m1/gamez.zbd").Warnings.Count;
+                Assert.True(buildWarnings >= 70);
+                string buildOmission = $"Showing 64 of {buildWarnings} warnings; {buildWarnings - 64} more not shown.";
+                Assert.Contains(main.ViewModel.Problems, p => p.File == script && p.Message.Contains(buildOmission, StringComparison.Ordinal));
+                var problems = await Call("problems", new() { ["query"] = "more not shown" });
+                Assert.Contains(problems["items"]!.AsArray(), p => p!["File"]!.GetValue<string>() == script && p["Message"]!.GetValue<string>().Contains(buildOmission, StringComparison.Ordinal));
                 await Job("open_root", new() { ["path"] = elsewhere });
             }
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)

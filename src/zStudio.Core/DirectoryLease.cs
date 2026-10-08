@@ -202,9 +202,19 @@ internal sealed partial class DirectoryLease : IDisposable
     /// <summary>Deletes an internal working tree through held identities, refusing links and excessive traversal.</summary>
     internal void DeleteTree(string directory, int maximumEntries = 100_000, CancellationToken token = default)
     {
+        int visited = 0;
+        DeleteTree(directory, _ =>
+        {
+            if (++visited > maximumEntries) throw new IOException($"Cleanup exceeds {maximumEntries:N0} entries; the remaining working files were kept.");
+        }, token);
+    }
+
+    /// <summary>Shares a caller's traversal/path allowance across every tree in one cleanup operation.</summary>
+    internal void DeleteTree(string directory, Action<long> visit, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
         if (!Exists(directory)) return;
         Stack<(string Path, bool Remove)> pending = new(); pending.Push((Path.GetFullPath(directory), false));
-        int visited = 0;
         while (pending.TryPop(out var next))
         {
             token.ThrowIfCancellationRequested();
@@ -212,7 +222,7 @@ internal sealed partial class DirectoryLease : IDisposable
             Hold(next.Path); pending.Push((next.Path, true));
             foreach (Entry entry in Entries(next.Path, token))
             {
-                if (++visited > maximumEntries) throw new IOException($"Cleanup exceeds {maximumEntries:N0} entries; the remaining working files were kept.");
+                visit((long)next.Path.Length + 1 + entry.Name.Length);
                 string path = Path.Combine(next.Path, entry.Name);
                 if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{path} is a link; cleanup did not follow it.");
                 if (entry.Attributes.HasFlag(FileAttributes.Directory)) pending.Push((path, false)); else DeleteFile(path);
@@ -300,12 +310,12 @@ internal sealed partial class DirectoryLease : IDisposable
         if (!GetFileInformationByHandleEx(handle, 9, out AttributeTag info, 8)) throw Error(path);
         return (FileAttributes)info.Attributes;
     }
-    private static FileIdentity Identity(SafeFileHandle handle, string path)
+    internal static FileIdentity Identity(SafeFileHandle handle, string path)
     {
         if (!GetFileIdentity(handle, 18 /* FileIdInfo */, out FileIdentity id, 24)) throw Error(path);
         return id;
     }
-    private static void Delete(SafeFileHandle handle, string path)
+    internal static void Delete(SafeFileHandle handle, string path)
     {
         if (!SetFileInformationByHandle(handle, 4 /* FileDispositionInfo */, [1], 1)) throw Error(path);
     }
@@ -361,7 +371,7 @@ internal sealed partial class DirectoryLease : IDisposable
     [StructLayout(LayoutKind.Sequential)]
     private struct IoStatus { public nint Status; public nuint Information; }
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct FileIdentity(ulong Volume, ulong Low, ulong High);
+    internal readonly record struct FileIdentity(ulong Volume, ulong Low, ulong High);
     [LibraryImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetFileIdentity(SafeFileHandle handle, int informationClass, out FileIdentity information, uint size);

@@ -92,7 +92,7 @@ public sealed partial class AnimationTests
         Assert.Equal(["target-sound"], AnimationAudioDependencies.Collect(package, 0, TestContext.Current.CancellationToken).Names);
 
         package.Entries[1].SetText(0, "old-target"); package.Entries[2].SetText(0, "target");
-        player.Reset();
+        player.Reset(TestContext.Current.CancellationToken);
         var after = player.EvaluateForTest(.1);
         Assert.Contains("Unresolved sound: other-sound", after.Diagnostics);
         Assert.DoesNotContain("Unresolved sound: target-sound", after.Diagnostics);

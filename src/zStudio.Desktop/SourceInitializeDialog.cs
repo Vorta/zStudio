@@ -28,10 +28,10 @@ internal sealed class SourceInitializeDialog : Window
     /// <summary>The window was asked to close while initializing; it closes once the work has stopped.</summary>
     private bool closeWhenStopped;
 
-    public SourceInitializeDialog(Window owner, string? retailFolder, Initialize initialize)
+    public SourceInitializeDialog(Window owner, string? retailFolder, Initialize initialize, Size? available = null)
     {
         this.initialize = initialize;
-        Owner = owner; Title = "Initialize source project"; Width = 600; SizeToContent = SizeToContent.Height; MinWidth = 460;
+        Owner = owner; Title = "Initialize source project";
         WindowStartupLocation = WindowStartupLocation.CenterOwner; ResizeMode = ResizeMode.NoResize; ShowInTaskbar = false;
         System.Windows.Automation.AutomationProperties.SetName(retail, "Retail ZBD folder");
         System.Windows.Automation.AutomationProperties.SetName(project, "Source project folder");
@@ -39,7 +39,7 @@ internal sealed class SourceInitializeDialog : Window
         System.Windows.Automation.AutomationProperties.SetName(browseProject, "Browse for the source project folder");
         retail.Text = retailFolder ?? "";
 
-        StackPanel panel = new() { Margin = new(16) };
+        StackPanel panel = new();
         panel.Children.Add(new TextBlock { Text = "Unpack the original game files once into RECOIL's source tree (data and gamegen). You then edit the sources and export new game files from them.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 6) });
         panel.Children.Add(Label("Retail ZBD folder"));
         panel.Children.Add(Row(retail, browseRetail));
@@ -48,9 +48,10 @@ internal sealed class SourceInitializeDialog : Window
         panel.Children.Add(Row(project, browseProject));
         panel.Children.Add(Hint("A new or empty folder outside the retail folder."));
         panel.Children.Add(new StackPanel { Margin = new(0, 12, 0, 0), Children = { progressText, progressBar, error } });
-        StackPanel buttons = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new(0, 14, 0, 0) };
-        buttons.Children.Add(start); buttons.Children.Add(cancel); panel.Children.Add(buttons);
-        Content = panel;
+        WrapPanel buttons = new() { HorizontalAlignment = HorizontalAlignment.Right, Margin = new(0, 14, 0, 0) };
+        buttons.Children.Add(start); buttons.Children.Add(cancel);
+        Content = DialogLayout.WithActions(panel, buttons);
+        DialogLayout.Constrain(this, new(600, 520), available);
 
         retail.TextChanged += (_, _) => Changed(); project.TextChanged += (_, _) => Changed();
         browseRetail.Click += (_, _) => Browse(retail, "Choose the retail ZBD folder (contains interp.zbd and m1)");

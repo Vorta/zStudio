@@ -69,6 +69,7 @@ internal static class SourceTerrainMcpChecks
             // The database is not a surface file; a file of its own is.
             var refused = await Job("source_terrain_create", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["model"] = "data/m1/models/m1.gltf", ["surfaces"] = new[] { "ground" } }, "failed");
             Assert.Equal("invalid_argument", refused["code"]!.GetValue<string>());
+            doc = await TerrainCreationCompletionChecks.Run(main, fixture, doc, client, token);
             var created = await Job("source_terrain_create", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["model"] = "data/m1/models/terrain/hills.gltf", ["surfaces"] = new[] { "land" } });
             doc = Document(created["document"]!);
             var workspace = doc.SourceWorld!.Workspace;
@@ -143,6 +144,18 @@ internal static class SourceTerrainMcpChecks
             Assert.NotEmpty(described["regionShape"]!["polygons"]!.AsArray());
             var afterRegion = await Call("source_terrain", new() { ["document"] = Id(doc), ["recipe"] = Recipe, ["offset"] = 1 });
             Assert.Empty(afterRegion["regions"]!.AsArray()); Assert.Equal(1, afterRegion["regionCount"]!.GetValue<int>());
+            // A fully typed polygon with a hole remains the same semantic paint operation as its GUI shape.
+            doc = Document((await Job("source_terrain_edit", new()
+            {
+                ["document"] = Id(doc), ["revision"] = doc.Revision, ["recipe"] = Recipe, ["action"] = "paint", ["region"] = "road",
+                ["polygons"] = new[] { new { outer = new[] { new[] { 210, 210 }, new[] { 230, 210 }, new[] { 230, 230 }, new[] { 210, 230 } },
+                    holes = new[] { new[] { new[] { 215, 215 }, new[] { 225, 215 }, new[] { 225, 225 }, new[] { 215, 225 } } } } }
+            }))["document"]!);
+            var polygonPaint = SourceTerrain.Read(workspace, Recipe, token).Regions[0].Shape!;
+            Assert.InRange(TerrainShapes.SquareUnits(polygonPaint.Polygons), area + 299.99, area + 300.01);
+            Assert.Contains(polygonPaint.Polygons, p => p.Holes.Count == 1);
+            doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
+            Assert.Equal(area, TerrainShapes.SquareUnits(SourceTerrain.Read(workspace, Recipe, token).Regions[0].Shape!.Polygons));
             // A null attribute removes the override; an unknown one is refused.
             var bad = await Job("source_terrain_edit", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["recipe"] = Recipe, ["action"] = "update_region", ["region"] = "road", ["attributes"] = new Dictionary<string, object?> { ["colour"] = 1 } }, "failed");
             Assert.Equal("invalid_argument", bad["code"]!.GetValue<string>());

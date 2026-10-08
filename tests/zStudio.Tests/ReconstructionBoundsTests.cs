@@ -131,7 +131,7 @@ public sealed class ReconstructionBoundsTests
         world.Nodes.Add(new("world1", WorldNodeClass.World));
         for (int s = 1; s < 65_000; s++) world.FreedSlots[s] = new byte[196];
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        Assert.Equal(0, GameZWriter.NodeSlots(world)[world.Nodes[0]]);
+        Assert.Equal(0, GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[world.Nodes[0]]);
         // Milliseconds; finding the last freed slot again for every slot took 20 s.
         Assert.InRange(watch.ElapsedMilliseconds, 0, 3000);
     }
@@ -179,6 +179,7 @@ public sealed class ReconstructionBoundsTests
     private sealed class MemoryFiles(Dictionary<string, byte[]> files) : IProjectFiles
     {
         public bool Exists(string relative) => files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) => files[relative];
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = files[relative]; limits.Validate(result); return result; }
     }
 }

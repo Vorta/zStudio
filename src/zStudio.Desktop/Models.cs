@@ -269,7 +269,8 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     [ObservableProperty] private bool isStale;
     public string[] Kinds { get; private set; }
     public DocumentModel(ZbdDocument doc) : this(doc, null, null) { }
-    internal DocumentModel(ZbdDocument doc, SourceWorldSession? sourceWorld, Recoil.Zbd.Core.Sources.SourceWorldBuild? sourceBuild, long sourceRevision = 0)
+    internal DocumentModel(PreparedDocument prepared) : this(prepared.Document, null, null, 0, prepared) { }
+    internal DocumentModel(ZbdDocument doc, SourceWorldSession? sourceWorld, Recoil.Zbd.Core.Sources.SourceWorldBuild? sourceBuild, long sourceRevision = 0, PreparedDocument? prepared = null)
     {
         Document = doc;
         SourceWorld = sourceWorld; SourceBuild = sourceBuild; SourceRevision = sourceRevision;
@@ -280,7 +281,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         InitializeContentEdits(doc);
         if (doc.Probe.Family is FormatFamily.Archive or FormatFamily.Zrd && !doc.Diagnostics.Any(d => d.Severity == "Error"))
         {
-            ResourceEdits = new(doc);
+            ResourceEdits = prepared?.Resources ?? new(doc);
             ResourceEdits.BeforeEdit += () => { BeforeResourceEdit?.Invoke(this); ClaimResourcePaths([Path, ResourceEdits.TargetPath]); };
             RebuildResourceAssets();
             ResourceEdits.Changed += () =>
@@ -350,7 +351,13 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
     }
     private bool Matches(object o) => o is AssetItem a && (KindFilter == "All types" || KindFilter == a.Kind) && (Query.Length == 0 || a.Name.Contains(Query, StringComparison.OrdinalIgnoreCase) || a.Identity.Contains(Query, StringComparison.OrdinalIgnoreCase));
     partial void OnQueryChanged(string value) => FilteredAssets.Refresh();
-    partial void OnKindFilterChanged(string value) => FilteredAssets.Refresh();
+    partial void OnKindFilterChanged(string? oldValue, string newValue)
+    {
+        // Native selectors clear SelectedItem during document/ItemsSource replacement.
+        // Null is presentation churn, not an authored filter that matches no asset kind.
+        if (newValue == null) { KindFilter = oldValue ?? "All types"; return; }
+        FilteredAssets.Refresh();
+    }
     public void Dispose()
     {
         if (IsDisposed) return;

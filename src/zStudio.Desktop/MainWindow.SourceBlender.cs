@@ -29,17 +29,22 @@ public partial class MainWindow
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
         var workspace = SourceWorkspaceFor(root);
         if (sourceWorkspaceBusy) throw new StudioCommandException("busy", "A world of this source project is rebuilding after an edit; check the model out once it is shown.");
+        long generation = ViewModel.WorkspaceGeneration;
+        var workspaceToken = ViewModel.WorkspaceToken;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, workspaceToken, shutdownToken);
         // Off the UI thread: a checkout copies the model's files and decodes its textures to show their transparency.
         long revision = workspace.ContentRevision;
         BlenderCheckout checkout;
         var copy = CheckoutSourceModel;
-        try { checkout = await Task.Run(() => copy(workspace, model, token), token); }
+        try { checkout = await Task.Run(() => copy(workspace, model, cancellation.Token), cancellation.Token); }
         // Another program changed a file the checkout read before its copies were complete (it removed them).
         catch (SourceFileChangedException ex) { throw new StudioCommandException("context_changed", ex.Message); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-        // The workspace changes on this thread: an edit, undo or reload made while the files were copied could mix two states.
-        if (workspace.ContentRevision != revision)
+        // A completed copy survives a late caller cancellation, but must not be presented in another workspace,
+        // including a reopening of the same root. Compare the captured instance without creating/adopting a new one.
+        if (workspaceToken.IsCancellationRequested || shutdownToken.IsCancellationRequested || ViewModel.WorkspaceGeneration != generation
+            || SourceProjectRoot != root || sourceWorkspace != workspace || workspace.ContentRevision != revision)
         {
             // The completed copy no longer owns filesystem handles. Its textual path may now name another folder,
             // so a stale GUI result must never recursively delete that path.
@@ -68,7 +73,7 @@ public partial class MainWindow
                 var planned = SourceBlender.PlanUpdate(workspace, checkout, export, force, token);
                 // Scripts that turn or scale a node whose own transform the export adds or removes, here or in other missions.
                 if (planned.Changes.FirstOrDefault(c => c.Relative.Equals(checkout.Model, StringComparison.OrdinalIgnoreCase)) is { Content: { } content }
-                    && workspace.Read(checkout.Model, token) is { } current
+                    && workspace.Read(checkout.Model, token, Recoil.Zbd.Core.Gltf.GltfDocument.MaximumJsonBytes) is { } current
                     && SourceObjectEdits.ScriptTransformsReached(workspace, mission, checkout.Model, current, content, provenance, token) is { Count: > 0 } reached)
                     planned = planned with { Notes = [.. planned.Notes, .. reached] };
                 return planned;
@@ -131,9 +136,19 @@ public partial class MainWindow
     /// The project's checkouts with the exports in their outboxes, listed off the UI thread: a zstudio/export folder of many
     /// checkouts or files is read on a worker, bounded and cancellable (<see cref="SourceBlender.CheckoutExports(string, CancellationToken)"/>).
     /// </summary>
-    private static async Task<IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)>> CheckoutExportsAsync(string root, CancellationToken token)
+    internal Func<string, CancellationToken, IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)>> ReadCheckoutExports { get; set; } = SourceBlender.CheckoutExports;
+    private async Task<IReadOnlyList<(BlenderCheckout Checkout, IReadOnlyList<BlenderExport> Exports)>> CheckoutExportsAsync(string root, CancellationToken token)
     {
-        try { return await Task.Run(() => SourceBlender.CheckoutExports(root, token), token); }
+        long generation = ViewModel.WorkspaceGeneration;
+        var workspaceToken = ViewModel.WorkspaceToken;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, workspaceToken, shutdownToken);
+        var read = ReadCheckoutExports;
+        try
+        {
+            var listed = await Task.Run(() => read(root, cancellation.Token), cancellation.Token);
+            RequireSourceRead(root, generation, cancellation.Token);
+            return listed;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
     }
 

@@ -85,12 +85,14 @@ public sealed class FormatRegistry
         return new(FormatFamily.Unknown, null, Recognition.Unknown, "Unrecognized format · raw inspection available");
     }
 
-    public async Task<ZbdDocument> OpenAsync(string path, CancellationToken token = default)
+    public Task<ZbdDocument> OpenAsync(string path, CancellationToken token = default) => OpenAsync(path, MaximumDocumentBytes, token);
+    internal async Task<ZbdDocument> OpenAsync(string path, long maximumBytes, CancellationToken token)
     {
+        if (maximumBytes < 0 || maximumBytes > MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         path = System.IO.Path.GetFullPath(path);
         FileStamp stamp = FileStamp.Read(path);
         ValidateDocumentSize(stamp.Length);
-        byte[] bytes = await Sources.SourceRead.AllAsync(path, MaximumDocumentBytes, token).ConfigureAwait(false);
+        byte[] bytes = await Sources.SourceRead.AllAsync(path, maximumBytes, token).ConfigureAwait(false);
         if (FileStamp.Read(path) != stamp) throw new IOException("The file changed while opening. Reload it to read a consistent snapshot.");
         return await Task.Run(() => OpenBytes(path, bytes, stamp, token), token).ConfigureAwait(false);
     }
@@ -114,10 +116,19 @@ public sealed class FormatRegistry
             }
             else if (probe.Description == SourceScriptDescription)
             {
-                doc.SourceSyntax = "gamegen-script"; string text = Sources.GameGenScriptText.Decode(bytes);
-                var lines = Sources.GameGenScriptText.Tokenize(text);
+                token.ThrowIfCancellationRequested();
+                doc.SourceSyntax = "gamegen-script"; string text = Sources.GameGenScriptText.Decode(bytes, token);
+                var lines = Sources.GameGenScriptText.TokenizeCancellable(text, token);
+                token.ThrowIfCancellationRequested();
+                string[][] instructions = new string[lines.Count][];
+                for (int i = 0; i < instructions.Length; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    instructions[i] = lines[i].ToArray();
+                }
+                token.ThrowIfCancellationRequested();
                 doc.Add(AssetKind.Script, 0, System.IO.Path.GetFileName(path), 0, bytes.Length, new System.Text.Json.Nodes.JsonObject { ["instructions"] = lines.Count },
-                    new ScriptContent(lines.Select(l => l.ToArray()).ToArray(), text)).Summary = $"{lines.Count:N0} instructions";
+                    new ScriptContent(instructions, text)).Summary = $"{lines.Count:N0} instructions";
             }
             else if (readers.TryGetValue(probe.Family, out var reader)) reader.Read(doc, token);
             else if (probe.Family == FormatFamily.Zrd)

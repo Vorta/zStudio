@@ -11,7 +11,11 @@ Researched 2026-10-03 against the 1999 retail executable (1998 where noted) and 
 
 Addresses are retail. The zone probes are documented in the plan, under [How the engine sees a map](world-editor-plan.md#how-the-engine-sees-a-map), and modelled by `ZoneProbe` in Core.
 
+Equal-height probe candidates retain encounter precedence. `Player::SelectProbeSampleHeightFromCandidates` (retail 0x4290F0, byte-matched reconstruction `Battlesport/player_move.cpp`) replaces its selected candidate only when the new height is **strictly greater** and within the rise window. Reversing coincident candidates can therefore change the selected polygon zones, soil and top-level node zone [B]. The point probe visits the point's area entries before the world's overflow children, retaining the stored list and subtree order (0x443D20/0x443F80). Slot order is not encounter order. Terrain conversion's sampled comparison preserves this ordering at exactly equal physical heights; it sorts by physical height before rounding displayed heights. The comparison remains a bounded candidate-surface check, not a simulation of every current-zone gate, water-skip mode, vehicle sample or runtime selection state.
+
 ## Common rules
+
+The map zone source split is an editor/build representation, not a newly discovered retail format. The existing probe and cache evidence still governs export: complete object zone words, the independent altitude gate, ordered polygon zone bytes, inherited placement zones and distinct original model readings must survive rebuilding. `data/mN/meta/zones.json` associates those assignments with neutral geometry; logical asset paths and original reference spellings retain the cache distinctions described below. A shared physical glTF does not imply that every runtime reading shares one mutable compiled model.
 
 - **Errors are silent.** `zError::ReportOld` (0x404e80) is a single `ret` [BN]. Messages such as "GameZ node buffer is full" or "Database intersections array is full" never appear or reach a log. A failure shows only as its effect: a default texture, a missing object, a crash.
 - **Resource keys.** `zRdrGetNode` / `zRdrFindNode` (0x48cf70, 0x48cec0) [B] search depth-first through nested arrays. They return the item after the first string equal to the key anywhere, including strings inside values.
@@ -94,7 +98,7 @@ Addresses are retail. The zone probes are documented in the plan, under [How the
 - **Even shipped data is inconsistent.** Which `smoke1` binds differs between shipped missions. Several cross-links come from wildcard definitions applied to roots that lack the named node, which looks accidental.
 - **For zStudio:**
   - The animation preview takes the highest live slot (freed slots keep their names but are not nodes): `AnimationPreviewContext.ResolveRoot` with the binding loop's chain (`NameLookups.RootPositions`, entry state at +0x98), its whole-world fallback (the most recently created node), effect templates, the texture-cycle lookup in `Textures.cs`, and the mission's AI vehicles. Lookups made as the mission loads see only the world file's nodes.
-  - Check and export report every lookup with more than one candidate (`WorldLookups`), and the lookups an export or an edit changes.
+  - Check and export report ambiguous supported whole-world lookups (`WorldLookups`), and which of those bindings an export or edit changes. The report covers literal texture-script names and animation roots, fallback references and prerequisite roots; runtime macro operands, successful subtree bindings and other resource categories are outside this report. See the [reported lookup scope and limitations](source-project.md#reconstruct-check-and-export).
   - An explicit refactor (renaming the dish, one `smoke1`, restricting wildcards) changes shipped behaviour and must be stated, never silent.
 
 ## Craters and quicksand

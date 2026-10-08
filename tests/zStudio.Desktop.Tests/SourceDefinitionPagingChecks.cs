@@ -18,7 +18,11 @@ internal static class SourceDefinitionPagingChecks
     internal static async Task Run()
     {
         using var fixture = new SourceWorldFixture();
-        var files = Enumerable.Range(0, 65).Select(i => $"data/common/zrdr/late/choice{i:D3}.zad").ToArray();
+        string folder = "data/common/zrdr/" + new string('a', 100) + "/" + new string('b', 100) + "/" + new string('c', 80);
+        var files = Enumerable.Range(0, 65).Select(i => $"{folder}/choice{i:D3}.zad").ToArray();
+        files[^1] = folder + "/" + new string('d', 100) + "/" + new string('e', 100) + "/choice064.zad";
+        Assert.All(files, file => Assert.True(file.Length > 260));
+        Assert.True(files[^1].Length > 512);
         string definition = File.ReadAllText(fixture.Path(SourceWorldFixture.TankDefinitions));
         foreach (var file in files) fixture.Write(file, definition);
         fixture.Write("data/m2/zrdr/anim.zad", SourceWorlds.AddDefinitionFiles("( ANIMATION_DEFINITIONS ( ANIMATION_LIST ( ) ) )"u8, files));
@@ -40,11 +44,17 @@ internal static class SourceDefinitionPagingChecks
             var filtered = await Call("source_world_definitions", new() { ["document"] = id, ["name"] = "tank", ["query"] = "CHOICE064", ["limit"] = 1 });
             Assert.Equal(1, filtered["total"]!.GetValue<int>()); Assert.Equal(65, filtered["fileCount"]!.GetValue<int>());
             Assert.Equal(files[^1], filtered["files"]![0]!["path"]!.GetValue<string>());
-            var added = (await Job("source_world_add_model", new() { ["document"] = id, ["revision"] = opened["Revision"]!.GetValue<long>(),
-                ["model"] = fixture.Tank, ["name"] = "tank", ["definitionFiles"] = new[] { last["files"]![0]!["path"]!.GetValue<string>() } }))["document"]!;
+            var addition = await Job("source_world_add_model", new() { ["document"] = id, ["revision"] = opened["Revision"]!.GetValue<long>(),
+                ["model"] = fixture.Tank, ["name"] = "tank", ["definitionFiles"] = new[] { last["files"]![0]!["path"]!.GetValue<string>() } });
+            Assert.Equal(files[^1][..511] + "…", addition["definitionFiles"]![0]!.GetValue<string>());
+            Assert.Equal(1, addition["definitionFileCount"]!.GetValue<int>());
+            Assert.True(addition["definitionFilesTruncated"]!.GetValue<bool>());
+            var added = addition["document"]!;
             var current = main.ViewModel.Documents.Single(d => d.SessionId.ToString() == added["id"]!.GetValue<string>());
             string list = Encoding.Latin1.GetString(current.SourceWorld!.Workspace.Read("data/m1/zrdr/anim.zad")!);
-            Assert.Contains("choice064.zad", list); Assert.DoesNotContain("choice000.zad", list);
+            string writtenPath = files[^1].Replace("/", @"\\", StringComparison.Ordinal);
+            Assert.Contains(writtenPath, list); Assert.DoesNotContain("choice000.zad", list);
+            Assert.DoesNotContain(writtenPath, File.ReadAllText(fixture.Path("data/m1/zrdr/anim.zad")));
             Assert.Contains(current.PreviewDocument.Scene!.Nodes, n => n.Name == "tank");
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
@@ -67,6 +77,21 @@ internal static class SourceDefinitionPagingChecks
 
 public sealed class SourceDefinitionPagingTests
 {
+    [Fact]
+    public void CompletionPreviewBoundsEscapedSelectionsWithoutChangingTheirIdentities()
+    {
+        string[] files = [.. Enumerable.Range(0, 64).Select(i => "data/" + new string('\u0100', 30_000) + $"/{i:D3}.zad")];
+        string[] original = [.. files];
+        var preview = FileResultPreview.Paths(files, files.Length);
+        string json = System.Text.Json.JsonSerializer.Serialize(new { definitionFiles = preview.Values,
+            definitionFileCount = preview.Count, definitionFilesTruncated = preview.Truncated });
+        Assert.True(json.Length < 200_000);
+        Assert.Equal(64, preview.Count);
+        Assert.True(preview.Truncated);
+        Assert.All(preview.Values, value => Assert.Equal(512, value.Length));
+        Assert.Equal(original, files);
+    }
+
     [Fact]
     public void EscapedPathsKeepTheirIdentityAcrossBoundedPagesAndFilters()
     {

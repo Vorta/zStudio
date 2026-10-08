@@ -29,6 +29,11 @@ public partial class FieldEditor : UserControl
     protected static void ReadOnlyText(StackPanel panel,string text) => panel.Children.Add(new TextBox { Text = text,IsReadOnly = true,TextWrapping = TextWrapping.Wrap,BorderThickness = new(0),Background = Brushes.Transparent,Margin = new(0,3,0,6) });
     protected void Input(StackPanel panel,string label,string value,Action<string> commit,bool readOnly = false,string? hint = null,Func<string>? getter = null,string[]? components = null,string separator = ", ",int? componentColumns = null,Func<string,Task>? asyncCommit = null)
     {
+        if (components != null && separator != "|")
+        {
+            var write = commit; commit = text => { ComponentText.CheckNumeric(text); write(text); };
+            if (asyncCommit != null) { var writeAsync = asyncCommit; asyncCommit = text => { ComponentText.CheckNumeric(text); return writeAsync(text); }; }
+        }
         AddAutomationField(label, components == null ? "text" : "components", () => getter?.Invoke() ?? value, readOnly ? null : commit, components, hint, asyncWrite: readOnly ? null : asyncCommit);
         // A vector's components share one draft and one commit boundary.
         Grid row = new() { Margin = new(0,2,0,5) };
@@ -37,7 +42,7 @@ public partial class FieldEditor : UserControl
         TextBlock caption = new() { Text = label + (readOnly ? " (read-only)" : ""),TextWrapping = TextWrapping.Wrap,Margin = new(0,6,6,0) }; row.Children.Add(caption);
         Grid values = new(); Grid.SetColumn(values,1); row.Children.Add(values);
         if (components != null) { Grid.SetRow(values,1); Grid.SetColumn(values,0); Grid.SetColumnSpan(values,2); Grid.SetColumnSpan(caption,2); row.RowDefinitions.Add(new() { Height = GridLength.Auto }); }
-        var parts = components == null ? new[] { value } : SplitComponents(value,separator);
+        var parts = components == null ? new[] { value } : ComponentText.Display(value,separator,components.Length);
         var boxes = new List<ValueTextBox>();
         int columns = componentColumns ?? components?.Length ?? 1;
         for (int i = 0; i < columns; i++) values.ColumnDefinitions.Add(new());
@@ -64,11 +69,17 @@ public partial class FieldEditor : UserControl
         }
         TextBlock error = new() { TextWrapping = TextWrapping.Wrap,Visibility = Visibility.Collapsed,Margin = new(0,3,0,0) }; Grid.SetRow(error,components == null ? 1 : 2); Grid.SetColumnSpan(error,2); row.Children.Add(error); panel.Children.Add(row);
         FieldDraft draft = new(value,commit,asyncCommit);
-        bool displaying = false;
+        bool displaying = false; string? composedText = null;
         void Display()
         {
-            displaying = true; var text = components == null ? new[] { draft.Text } : SplitComponents(draft.Text,separator);
-            for (int i = 0; i < boxes.Count; i++) { string next = text.ElementAtOrDefault(i) ?? ""; if (boxes[i].Text != next) boxes[i].Text = next; }
+            displaying = true;
+            // A rejected/native input already lives in its component boxes. Redistributing that same pending draft
+            // can move pasted text to another component, reset its caret and copy the whole input unnecessarily.
+            if (!draft.IsPending || !ReferenceEquals(draft.Text,composedText))
+            {
+                var text = components == null ? new[] { draft.Text } : ComponentText.Display(draft.Text,separator,components.Length);
+                for (int i = 0; i < boxes.Count; i++) { string next = text.ElementAtOrDefault(i) ?? ""; if (boxes[i].Text != next) boxes[i].Text = next; }
+            }
             error.Text = draft.Error ?? ""; error.Visibility = draft.Error == null ? Visibility.Collapsed : Visibility.Visible; displaying = false;
         }
         var input = new DraftInput(draft,row,Display,inputScope); if (!readOnly) draftInputs.Add(input);
@@ -76,7 +87,7 @@ public partial class FieldEditor : UserControl
             (inputScope == "properties" ? valueRefresh : referenceRefresh).Add(() => { draft.Refresh(getter()); Display(); });
         foreach (var box in boxes)
         {
-            box.TextChanged += (_,_) => { if (!displaying) draft.Text = components == null ? box.Text : string.Join(separator,boxes.Select(b => b.Text)); };
+            box.TextChanged += (_,_) => { if (!displaying) composedText = draft.Text = components == null ? box.Text : string.Join(separator,boxes.Select(b => b.Text)); };
             box.LostKeyboardFocus += async (_,_) => { if (CanCommitFocus(row) && !readOnly) await CommitInputAsync(input); };
             box.PreviewKeyDown += async (_,e) =>
             {
@@ -89,8 +100,8 @@ public partial class FieldEditor : UserControl
                 DataObject.AddPastingHandler(box,(_,e) =>
                 {
                     if (readOnly || e.DataObject.GetData(DataFormats.UnicodeText) is not string text) return;
-                    var incoming = SplitComponents(text,separator);
-                    if (incoming.Length == boxes.Count) { draft.Text = string.Join(separator,incoming); Display(); e.CancelCommand(); }
+                    if (ComponentText.TrySplit(text,separator,boxes.Count,out var incoming) && incoming.Length == boxes.Count)
+                    { draft.Text = string.Join(separator,incoming); Display(); e.CancelCommand(); }
                 });
             }
         }
@@ -99,7 +110,6 @@ public partial class FieldEditor : UserControl
             ContextMenu menu = new(); MenuItem copy = new() { Header = "Copy complete value" }; copy.Click += (_,_) => Clipboard.SetText(draft.Text); menu.Items.Add(copy); values.ContextMenu = menu;
         }
     }
-    protected static string[] SplitComponents(string value,string separator) => separator == "|" ? value.Split('|') : value.Split([',',' ','\t'],StringSplitOptions.RemoveEmptyEntries);
     protected bool CanCommitFocus(FrameworkElement group)
     {
         if (refreshingFields || disposed || committingDraft || !group.IsVisible || !group.IsEnabled || group.IsKeyboardFocusWithin || (Window.GetWindow(this) is MainWindow { IsChangingLayout: true } || Window.GetWindow(this)?.Owner is MainWindow { IsChangingLayout: true })) return false;

@@ -13,6 +13,25 @@ public sealed class SourceTerrainTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     [Fact]
+    public void CreatingTerrainUsesMapOwnedNodeDefaultsWithoutChangingGeometry()
+    {
+        using var fixture = Fixture();
+        const string model = "data/m1/models/coast.gltf", recipe = "data/m1/models/new.terrain.json";
+        SourceWorkspace workspace = new(fixture.Project);
+        byte[] original = workspace.Read(model, Token)!;
+        var doc = WorldAssembler.ReadModel(original, model, (path, _) => workspace.Read(path, Token)!, Token);
+        var captured = WorldGltf.CaptureZoneProfile(doc, token: Token);
+        var profile = captured with { Nodes = [new(0xAABBCC07, false)] };
+        fixture.Write("data/m1/meta/zones.json", new SourceMapZones([new(model, model, profile, [])]).Write(Token));
+        SourceTerrain.Create(workspace, "data/m1/models/m1.gltf", model, ["land"], recipe, Token);
+        var defaults = Assert.Single(SourceTerrain.Read(workspace, recipe, Token).Surfaces).Defaults;
+        Assert.Equal(7, defaults.NodeZone);
+        Assert.Equal(0u, defaults.Flags!.Value & WorldGltf.ZoneGate);
+        Assert.Equal(original, workspace.Read(model, Token));
+        workspace.Undo(); Assert.False(workspace.IsDirty);
+    }
+
+    [Fact]
     public async Task TexturedTerrainWithoutUvsIsRefusedBeforePublishingPieces()
     {
         using var fixture = Fixture(); const string model = "data/m1/models/coast.gltf";
@@ -115,7 +134,7 @@ public sealed class SourceTerrainTests
             Assert.Equal("rock", piece.Model.Polygons[0].Material!.Texture!.Name);
         }
         // The pieces know their recipe; the build depends on it and on the surface file.
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         var origin = build.Provenance[slots[pieces[0]]];
         Assert.Equal("data/m1/models/coast.terrain.json", origin.Terrain);
         Assert.Equal("land", origin.TerrainSurface);
@@ -144,7 +163,7 @@ public sealed class SourceTerrainTests
             }
         Assert.Equal(40f * 20f, area, 0.5f);
         // A piece's own transform and flags are not sources: the planner points at the recipe.
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         var origin = build.Provenance[slots[road[0]]];
         var refused = Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanFlag(workspace, road[0].Name, origin, build.Executions, 0x10, false, Token));
         Assert.Contains("terrain recipe", refused.Message);
@@ -175,7 +194,7 @@ public sealed class SourceTerrainTests
         var pieces = world.Nodes.Where(n => n.Name.StartsWith("coast_land_", StringComparison.Ordinal)).ToArray();
         // The probe finds the land facing up wherever it lies.
         foreach (var (x, z) in new[] { (210f, 210f), (290f, 290f), (250f, 230f) })
-            Assert.Equal([0f], Recoil.Zbd.Core.Terrain.TerrainProbe.At(pieces, x, z).Select(h => h.Height));
+            Assert.Equal([0f], Recoil.Zbd.Core.Terrain.TerrainProbe.At(pieces, x, z, token: TestContext.Current.CancellationToken).Select(h => h.Height));
     }
 
     [Fact]
@@ -202,7 +221,7 @@ public sealed class SourceTerrainTests
         var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "preview"), workspace.Overlay(), token: Token);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
         Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
-        foreach (var (node, slot) in GameZWriter.NodeSlots(world)) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
+        foreach (var (node, slot) in GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
         var tank = world.Nodes.Single(n => n.Name == "tank_at");
         SourceObjectTarget target = new(workspace, "m1", world, tank, provenance, build.Executions) { Write = build.WriteInstruction };
         // A piece's name is a build label: a script line finding it would break when the recipe changes.

@@ -15,6 +15,20 @@ public partial class MainWindow
     private string? SourceProjectRoot => ViewModel.HasRoot && SourceProject.IsProject(ViewModel.RootPath) ? ViewModel.RootPath : null;
     private static string Bounded(string text, int maximum = 1024) => text.Length <= maximum ? text : text[..maximum] + "…";
     private static string GameFiles(int count) => count == 1 ? "1 game file" : $"{count} game files";
+    private const int SourceWarningsShown = 64;
+    private const int ReconstructionNotesShown = 256;
+    internal static string SourceProblemText(string context, string message) => context.Length == 0 ? Bounded(message, 1023)
+        : $"{Bounded(context, 255)}: {Bounded(message, 765)}";
+    internal static IEnumerable<string> SourceWarningMessages(IReadOnlyList<string> warnings, string context, int maximum = SourceWarningsShown, string noun = "warnings")
+    {
+        int shown = Math.Min(warnings.Count, maximum);
+        for (int i = 0; i < shown; i++) yield return SourceProblemText(context, warnings[i]);
+        if (shown < warnings.Count)
+            yield return SourceProblemText(context, $"Showing {shown} of {warnings.Count} {noun}; {warnings.Count - shown} more not shown.");
+    }
+    internal static string SourceWarningSummary(long total, long shown, string noun = "warnings") => total == 0 ? ""
+        : shown < total ? $"\n{shown} of {total} {noun} are listed in Problems; {total - shown} more not shown."
+        : total == 1 ? $"\n1 {noun.TrimEnd('s')} is listed in Problems." : $"\n{total} {noun} are listed in Problems.";
     /// <summary>Test hook: runs after an export or check finishes and before its result is published to the workspace.</summary>
     internal Func<Task>? SourceExportFinishing { get; set; }
     private long sourceMenuGeneration;
@@ -33,7 +47,11 @@ public partial class MainWindow
         return report;
     }
     // Opening a root clears Problems, so a reconstruction's notes are listed once its project is open (or has failed to open).
-    private void ListReconstructionNotes(SourceReconstructionReport report) { foreach (string note in report.Notes.Take(256)) ViewModel.AddProblem(Bounded(note), "Warning", report.Project); }
+    private void ListReconstructionNotes(SourceReconstructionReport report)
+    {
+        foreach (string note in SourceWarningMessages(report.Notes, "", ReconstructionNotesShown, "notes"))
+            ViewModel.AddProblem(note, "Warning", report.Project);
+    }
 
     /// <summary>Writes a source project without opening it; <paramref name="stage"/> also receives the progress shown in the status bar.</summary>
     private async Task<SourceReconstructionReport> ExtractSourceProjectAsync(string source, string destination, CancellationToken token, IProgress<string>? stage = null)
@@ -83,7 +101,7 @@ public partial class MainWindow
     private void ShowReconstructionSummary(SourceReconstructionReport report)
     {
         string skipped = report.NotReconstructed.Count > 0 ? $"\n{report.NotReconstructed.Count} files were not reconstructed: {string.Join(", ", report.NotReconstructed.Take(5))}{(report.NotReconstructed.Count > 5 ? ", …" : "")}." : "";
-        string notes = report.Notes.Count > 0 ? $"\n{report.Notes.Count} notes are listed in Problems." : "";
+        string notes = SourceWarningSummary(report.Notes.Count, Math.Min(report.Notes.Count, ReconstructionNotesShown), "notes");
         MessageBox.Show(this, $"Reconstructed {report.SourceFiles:N0} source files into {report.Project}.{skipped}{notes}", "Source project ready", MessageBoxButton.OK, MessageBoxImage.Information);
     }
     private static object ReconstructResult(SourceReconstructionReport report, bool open) => new
@@ -181,14 +199,19 @@ public partial class MainWindow
                 : $"The workspace changed after the export wrote {GameFiles(report.Built)} to {report.Destination}.");
             foreach (var output in report.Outputs)
             {
-                if (output.Error != null) ViewModel.AddProblem(Bounded($"{output.Path}: {output.Error}"), file: root);
-                foreach (string warning in output.Warnings.Take(64)) ViewModel.AddProblem(Bounded($"{output.Path}: {warning}"), "Warning", root);
+                if (output.Error != null) ViewModel.AddProblem(SourceProblemText(output.Path, output.Error), file: root);
+                foreach (string warning in SourceWarningMessages(output.Warnings, output.Path)) ViewModel.AddProblem(warning, "Warning", root);
             }
-            foreach (string note in report.Notes.Take(64)) ViewModel.AddProblem(Bounded(note), "Warning", report.Destination ?? root);
+            foreach (string note in SourceWarningMessages(report.Notes, "", noun: "notes")) ViewModel.AddProblem(note, "Warning", report.Destination ?? root);
             // The lookups by name several nodes share, which edits can make find another node; each run replaces the last list.
-            foreach (var old in ViewModel.Problems.Where(p => p.Severity == "Info" && p.File == root && p.Message.Contains(" nodes have the name; the game finds ", StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
+            foreach (var old in ViewModel.Problems.Where(p => p.Severity == "Info" && p.File == root && (p.Message.Contains(" nodes have the name; the game finds ", StringComparison.Ordinal)
+                || p.Message.StartsWith("Ambiguous lookups: ", StringComparison.Ordinal))).ToArray()) ViewModel.Problems.Remove(old);
             foreach (var lookup in report.Lookups.Take(256))
-                ViewModel.AddProblem(Bounded($"{lookup.Mission}: {WorldLookups.Describe(lookup)}: {lookup.Candidates} nodes have the name; the game finds {lookup.Found} (slot {lookup.Slot})."), "Info", root);
+            {
+                var shown = LookupPreview(lookup);
+                ViewModel.AddProblem(SourceProblemText(shown.Mission, $"{WorldLookups.Describe(shown)}: {shown.Candidates} nodes have the name; the game finds {shown.Found} (slot {shown.Slot})."), "Info", root);
+            }
+            if (report.Lookups.Count > 256) ViewModel.AddProblem($"Ambiguous lookups: showing 256 of {report.Lookups.Count}; {report.Lookups.Count - 256} more not shown.", "Info", root);
             ViewModel.Status = destination == null
                 ? $"Checked {GameFiles(report.Outputs.Count)}: {report.Built} build, {report.Failed} failed"
                 : $"Exported {GameFiles(report.Built)} to {destination}";
@@ -201,6 +224,8 @@ public partial class MainWindow
         finally { operation = null; CancelOperationItem.IsEnabled = false; }
     }
     private static object Lookup(SourceLookup l) => new { mission = l.Mission, kind = l.Kind, name = Bounded(l.Name, 64), source = Bounded(l.Source, 256), candidates = l.Candidates, slot = l.Slot, found = l.Found == null ? null : Bounded(l.Found, 512) };
+    private static SourceLookup LookupPreview(SourceLookup lookup) => lookup with
+    { Mission = Bounded(lookup.Mission, 32), Name = Bounded(lookup.Name, 64), Source = Bounded(lookup.Source, 256), Found = lookup.Found == null ? null : Bounded(lookup.Found, 512) };
     internal static object ExportResult(string root, SourceExportReport report)
     {
         const int shown = 256;
@@ -368,9 +393,14 @@ public partial class MainWindow
         ShowExportResult(await ExportSourceProjectAsync(null, null, false, CancellationToken.None, SourceProjectRoot is { } root ? await SourceProfileForAsync(root) : null)));
     private void ShowExportResult(SourceExportReport report)
     {
-        int warnings = report.Outputs.Sum(o => o.Warnings.Count) + report.Notes.Count;
-        string detail = report.Failed > 0 ? "\nFailures are listed in Problems." : warnings > 0 ? $"\n{warnings} warnings are listed in Problems." : "";
+        string detail = ExportProblemSummary(report);
         MessageBox.Show(this, ViewModel.Status + detail, "Source project", MessageBoxButton.OK, report.Failed > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+    }
+    internal static string ExportProblemSummary(SourceExportReport report)
+    {
+        long warnings = report.Outputs.Sum(o => (long)o.Warnings.Count) + report.Notes.Count;
+        long shown = report.Outputs.Sum(o => (long)Math.Min(o.Warnings.Count, SourceWarningsShown)) + Math.Min(report.Notes.Count, SourceWarningsShown);
+        return (report.Failed > 0 ? "\nFailures are listed in Problems." : "") + SourceWarningSummary(warnings, shown);
     }
 
     /// <summary>Presentation only: export commands appear when the open root is a source project.</summary>
@@ -379,8 +409,8 @@ public partial class MainWindow
         if (e.OriginalSource != sender) return;
         string? root = SourceProjectRoot;
         SourceMenuSeparator.Visibility = ExportSourceMenu.Visibility = ExportSourceFileMenu.Visibility = CheckSourceMenu.Visibility = SourceProfileMenu.Visibility = SourceWorldMenu.Visibility = AddSourceModelMenu.Visibility =
-            EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = SourceRecoveryMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
-        AddSourceModelMenu.IsEnabled = UpdateFromBlenderMenu.IsEnabled = CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
+            EditInBlenderMenu.Visibility = UpdateFromBlenderMenu.Visibility = CreateTerrainMenu.Visibility = ConvertTerrainMenu.Visibility = EditZonesMenu.Visibility = SourceRecoveryMenu.Visibility = root != null ? Visibility.Visible : Visibility.Collapsed;
+        AddSourceModelMenu.IsEnabled = UpdateFromBlenderMenu.IsEnabled = CreateTerrainMenu.IsEnabled = ConvertTerrainMenu.IsEnabled = EditZonesMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld is { IsRebuilding: false } && !sourceWorkspaceBusy;
         EditInBlenderMenu.IsEnabled = ViewModel.SelectedDocument?.SourceWorld != null && selectedNode != null;
         if (root != null) { _ = FillExportSourceFileMenuAsync(root); _ = FillSourceWorldMenuAsync(root); _ = FillSourceProfileMenuAsync(root); }
     }

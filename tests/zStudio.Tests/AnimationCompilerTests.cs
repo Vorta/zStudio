@@ -47,7 +47,8 @@ public sealed class AnimationCompilerTests
     {
         public Dictionary<string, byte[]> Files { get; } = files;
         public bool Exists(string relative) => Files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) => Files[relative];
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] bytes = Files[relative]; limits.Validate(bytes); return bytes; }
     }
 
     private const string Root = """
@@ -188,12 +189,12 @@ public sealed class AnimationCompilerTests
         var package = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", World, Token).Package;
         // Rewrite every definition from its compiled entry and compile again.
         var gate = package.Entries[1];
-        var items = AnimationDecompiler.Definition(gate, _ => ("gate.zan", 10f));
-        var tree = AnimationDefinitionSet.ReplaceDefinition(AnimationDefinitionSet.Read(files, "data/m1/zrdr/envmodels/gate.zad", Token), 0, items);
+        var items = AnimationDecompiler.Definition(gate, _ => ("gate.zan", 10f), Token);
+        var tree = AnimationDefinitionSet.ReplaceDefinition(AnimationDefinitionSet.Read(files, "data/m1/zrdr/envmodels/gate.zad", Token), 0, items, Token);
         files.Files["data/m1/zrdr/envmodels/gate.zad"] = Encoding.ASCII.GetBytes(ZrdText.Write(tree, Token));
         var again = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", World, Token).Package;
         Assert.Equal(package.Entries.Count, again.Entries.Count);
-        for (int i = 1; i < package.Entries.Count; i++) Assert.Null(AnimationComparer.Difference(package.Entries[i], again.Entries[i]));
+        for (int i = 1; i < package.Entries.Count; i++) Assert.Null(AnimationComparer.Difference(package.Entries[i], again.Entries[i], Token));
     }
 
     [Fact]
@@ -201,12 +202,12 @@ public sealed class AnimationCompilerTests
     {
         var tracks = AnimationScript.Parse(Encoding.ASCII.GetBytes(Script), "gate.zan", TestContext.Current.CancellationToken);
         var frames = AnimationScript.Compile(AnimationScript.Track(tracks, "door")!, 10, "gate.zan", TestContext.Current.CancellationToken);
-        string text = AnimationScript.Decompile(frames, 10)!;
+        string text = AnimationScript.Decompile(frames, 10, Token)!;
         var reparsed = AnimationScript.Parse(Encoding.ASCII.GetBytes(AnimationScript.Write([("door", text)], TestContext.Current.CancellationToken)), "again.zan", TestContext.Current.CancellationToken);
         var again = AnimationScript.Compile(AnimationScript.Track(reparsed, "door")!, 10, "again.zan", TestContext.Current.CancellationToken);
         Assert.Equal(frames.Select(f => Convert.ToHexString(f.Bytes)), again.Select(f => Convert.ToHexString(f.Bytes)));
         // Times off the frame grid cannot be a script.
-        Assert.Null(AnimationScript.Decompile(frames, 7));
+        Assert.Null(AnimationScript.Decompile(frames, 7, Token));
         Assert.Null(AnimationScript.Track(tracks, "other"));
         Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("FRAME 0 POSITION 1 2\nFRAME 1"u8, "bad.zan", TestContext.Current.CancellationToken));
         Assert.Throws<InvalidDataException>(() => AnimationScript.Parse("FRAME 0 VELOCITY 1 2 3\nFRAME 1"u8, "bad.zan", TestContext.Current.CancellationToken));
@@ -217,7 +218,8 @@ public sealed class AnimationCompilerTests
     {
         public Dictionary<string, int> Reads { get; } = new(StringComparer.Ordinal);
         public bool Exists(string relative) => files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) { Reads[relative] = Reads.GetValueOrDefault(relative) + 1; return files[relative]; }
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); Reads[relative] = Reads.GetValueOrDefault(relative) + 1; byte[] bytes = files[relative]; limits.Validate(bytes); return bytes; }
     }
     private static Dictionary<string, byte[]> Definitions(string definitions, params (string Path, string Text)[] more)
     {
@@ -399,7 +401,7 @@ public sealed class AnimationCompilerTests
         // The written script rebuilds the same animation.
         files.Files["data/m1/zrdr/swing.zan"] = swing.Bytes;
         var rebuilt = AnimationCompiler.Compile(files, "data/m1/zrdr/anim.zad", world, Token).Package;
-        Assert.Null(AnimationComparer.Difference(package.Entries[1], rebuilt.Entries[1]));
+        Assert.Null(AnimationComparer.Difference(package.Entries[1], rebuilt.Entries[1], Token));
     }
 
     [Fact]
@@ -416,7 +418,7 @@ public sealed class AnimationCompilerTests
         var outputs = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token);
         Assert.Contains(notes, n => n.StartsWith("data/m1/zrdr/slide.zan: the keyframes have no SI Animation Script") && n.EndsWith("written in zStudio's keyframe format."));
         var slide = outputs.Single(o => o.Path == "data/m1/zrdr/slide.zan");
-        Assert.False(SiAnimationScript.Recognize(slide.Bytes));
+        Assert.False(SiAnimationScript.Recognize(slide.Bytes, TestContext.Current.CancellationToken));
         Assert.NotNull(AnimationScript.Track(AnimationScript.Parse(slide.Bytes, slide.Path, TestContext.Current.CancellationToken), "door"));
     }
 
@@ -479,8 +481,8 @@ public sealed class AnimationCompilerTests
         var swing = AnimationSources.Reconstruct([new(1, package, [], world)], files, notes, Token, (stage, item) => statuses.Enqueue((stage, item)))
             .Single(o => o.Path == "data/m1/zrdr/swing.zan");
         Assert.Empty(notes);
-        Assert.True(SiAnimationScript.Recognize(swing.Bytes));
-        Assert.True(SiAnimationScript.Parse(swing.Bytes, swing.Path).Has(Latin));
+        Assert.True(SiAnimationScript.Recognize(swing.Bytes, TestContext.Current.CancellationToken));
+        Assert.True(SiAnimationScript.Parse(swing.Bytes, swing.Path, Token).Has(Latin, Token));
         // Writing each script is reconstruction; compiling the mission's animations again afterwards is validation.
         Assert.Equal([(SourceStage.Reconstructing, "keyframe script data/m1/zrdr/swing.zan"), (SourceStage.Validating, "the m1 animations")], statuses);
         // Cancelling while scripts are being written stops the reconstruction; nothing falls back to another format.

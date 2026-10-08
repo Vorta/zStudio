@@ -37,11 +37,11 @@ public sealed class TerrainSourceZoneTests
         Assert.Equal(4u, Find(roots, "leaf").Zone);
         // Moving the leaf under other keeps its zone from the holder's word, which the file states.
         var moved = gltf.DeepClone().AsObject();
-        GltfNodeEdits.Reparent(moved, 2, 3);
+        GltfNodeEdits.Reparent(moved, 2, 3, token: Token);
         Assert.Equal(4u, Find(Import(moved), "leaf").Zone);
         // Moving the holder keeps the word, so the leaf keeps the zone it inherits from it.
         moved = gltf.DeepClone().AsObject();
-        GltfNodeEdits.Reparent(moved, 1, 3, currentZone: 4);
+        GltfNodeEdits.Reparent(moved, 1, 3, currentZone: 4, token: Token);
         var after = Import(moved);
         Assert.Equal(0x104u, Find(after, "holder").Zone); Assert.Equal(4u, Find(after, "leaf").Zone);
         // A zone beside the word states the node's zone: it replaces the word's low byte, for the node and its children.

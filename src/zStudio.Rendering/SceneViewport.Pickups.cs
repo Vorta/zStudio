@@ -54,17 +54,17 @@ public sealed partial class SceneViewport
         PreviewMouseMove += (_, e) =>
         {
             if (InspectionContent is DependencyObject panel && IsInspectionInput(e.OriginalSource as DependencyObject, panel)) return;
-            if (HandleTerrainBrushMove(e.GetPosition(viewport))) { e.Handled = true; return; }
+            if (HandleZoneMove(e.GetPosition(viewport)) || HandleTerrainBrushMove(e.GetPosition(viewport))) { e.Handled = true; return; }
             if (HandlePickupPointerMove(e.GetPosition(viewport))) e.Handled = true;
             else HandleAiPointerMove(e.GetPosition(viewport));
         };
         PreviewMouseUp += (_, e) =>
         {
-            if (HandleTerrainBrushUp(e) || HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
+            if (HandleZoneUp(e) || HandleTerrainBrushUp(e) || HandlePickupPointerUp(e.GetPosition(viewport), e)) e.Handled = true;
         };
         MouseLeave += (_, _) => { CancelPickupDrag(); SetPickupHover(false); hoveredAiNode = null; PublishAiLabel(); };
-        viewport.LostMouseCapture += (_, _) => { if (IsPickupDragging) CancelPickupDrag(); CancelTerrainStroke(); };
-        viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && (CancelPickupDrag() || CancelTerrainStroke())) e.Handled = true; };
+        viewport.LostMouseCapture += (_, _) => { if (IsPickupDragging) CancelPickupDrag(); CancelTerrainStroke(); CancelZoneGesture(); };
+        viewport.PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && (CancelPickupDrag() || CancelTerrainStroke() || CancelZoneGesture())) e.Handled = true; };
     }
     internal bool HandleScenePointerDown(Point point, MouseButtonEventArgs e)
     {
@@ -74,7 +74,7 @@ public sealed partial class SceneViewport
         // The screen-space cube owns its clicks, even over scene geometry or
         // handles. Resolve it before the editing lock can consume a scene click.
         if (e.ChangedButton == MouseButton.Left && NavigateCubeAt(point)) return true;
-        return HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
+        return HandleZoneDown(point, e) || HandleTerrainBrushDown(point, e) || HandlePickupPointerDown(point, e) || HandleInspectionClick(point, e) || HandleAiPointerDown(point, e);
     }
     private void ConfigurePickups()
     {

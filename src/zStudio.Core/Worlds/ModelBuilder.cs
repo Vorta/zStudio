@@ -220,7 +220,7 @@ public sealed class ModelBuilder(WorldModel model)
     }
     private static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
 
-    /// <summary>The engine's UV pipeline for a textured entry: tile shift, affine extrapolation past the first triangle, 1/256 quantization, tile shift.</summary>
+    /// <summary>The build's UV pipeline for a textured entry: preserve each authored corner, tile shift, 1/256 quantization, then tile shift.</summary>
     private static Vector2[] Uvs(Vector2[] source)
     {
         Vector2[] uv = (Vector2[])source.Clone();

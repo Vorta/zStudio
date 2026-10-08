@@ -10,7 +10,8 @@ public sealed class BuildDiagnosticBudgetTests
     private sealed class MemoryFiles(Dictionary<string, byte[]> files) : IProjectFiles
     {
         public bool Exists(string relative) => files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) => files[relative];
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = files[relative]; limits.Validate(result); return result; }
     }
     private static WorldAssembler Assemble(string main, string repeated)
     {
@@ -44,12 +45,14 @@ public sealed class BuildDiagnosticBudgetTests
             assembler.Assemble("main.gs");
             return (assembler, GC.GetAllocatedBytesForCurrentThread() - before);
         }
-        var ten = Run(10); var hundred = Run(100);
-        string warning = Assert.Single(hundred.Assembler.Warnings);
+        // Fifty executions retain the million-character identity but stay below the separate 64 Mi-character
+        // execution allowance. Formatting the complete operand would still add about 80 MB over the ten-run case.
+        var ten = Run(10); var fifty = Run(50);
+        string warning = Assert.Single(fifty.Assembler.Warnings);
         Assert.Contains(command, warning); Assert.Contains("…", warning);
         Assert.InRange(warning.Length, 1, BoundedDiagnostics.MaximumMessageCharacters);
-        Assert.InRange(hundred.Allocated - ten.Allocated, 0, 4 * 1024 * 1024);
-        Assert.InRange(hundred.Allocated, 0, 16 * 1024 * 1024);
+        Assert.InRange(fifty.Allocated - ten.Allocated, 0, 4 * 1024 * 1024);
+        Assert.InRange(fifty.Allocated, 0, 16 * 1024 * 1024);
     }
 
     [Fact]

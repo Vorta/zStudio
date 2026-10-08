@@ -14,8 +14,9 @@ public static class AnimationComparer
     private static readonly int[] NameSizes = [36, 36, 36, 36, 32, 32, 0, 32];
 
     /// <summary>The first authored difference between <paramref name="expected"/> and <paramref name="actual"/>, or null.</summary>
-    public static string? Difference(AnimationEntry expected, AnimationEntry actual)
+    public static string? Difference(AnimationEntry expected, AnimationEntry actual, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         var a = expected; var b = actual;
         if (a.Name != b.Name) return $"name {a.Name}|{b.Name}";
         if (a.RootName != b.RootName || a.AttachName != b.AttachName) return $"root {a.RootName}/{a.AttachName}|{b.RootName}/{b.AttachName}";
@@ -26,6 +27,7 @@ public static class AnimationComparer
             if (a.References[t].Count != b.References[t].Count) return $"T{t}.count {a.References[t].Count}|{b.References[t].Count}";
             for (int r = 0; r < a.References[t].Count; r++)
             {
+                token.ThrowIfCancellationRequested();
                 var ra = a.References[t][r]; var rb = b.References[t][r];
                 if (NameSizes[t] > 0 && ra.Text(0, NameSizes[t]) != rb.Text(0, NameSizes[t])) return $"T{t}[{r}].name {ra.Text(0, NameSizes[t])}|{rb.Text(0, NameSizes[t])}";
                 if (t == 6 && (ra.Bytes[4] == 1 ? ra.Text(8, 32) != rb.Text(8, 32) : ra.Text(12, 28) != rb.Text(12, 28))) return $"T6[{r}].target {ra.Text(12, 28)}|{rb.Text(12, 28)}";
@@ -40,16 +42,20 @@ public static class AnimationComparer
         if (sa.Count != sb.Count) return $"sequences {sa.Count}|{sb.Count}";
         for (int s = 0; s < sa.Count; s++)
         {
+            token.ThrowIfCancellationRequested();
             if (sa[s].Name != sb[s].Name) return $"sequence name {sa[s].Name}|{sb[s].Name}";
             for (int o = 32; o < 56; o++) if (sa[s].Bytes[o] != sb[s].Bytes[o]) return $"sequence {sa[s].Name} header@{o}";
-            if (sa[s].Events.Count != sb[s].Events.Count) return $"sequence {sa[s].Name} events {string.Join(",", sa[s].Events.Select(e => e.Type))}|{string.Join(",", sb[s].Events.Select(e => e.Type))}";
+            if (sa[s].Events.Count != sb[s].Events.Count) return $"sequence {sa[s].Name} event count {sa[s].Events.Count}|{sb[s].Events.Count}";
             for (int e = 0; e < sa[s].Events.Count; e++)
-                if (Event(sa[s].Events[e], sb[s].Events[e]) is { } diff) return $"sequence {sa[s].Name} event {e}: {diff}";
+            {
+                token.ThrowIfCancellationRequested();
+                if (Event(sa[s].Events[e], sb[s].Events[e], token) is { } diff) return $"sequence {sa[s].Name} event {e}: {diff}";
+            }
         }
         return null;
     }
 
-    private static string? Event(AnimationEvent a, AnimationEvent b)
+    private static string? Event(AnimationEvent a, AnimationEvent b, CancellationToken token)
     {
         if (a.Type != b.Type) return $"type {a.Type}|{b.Type}";
         if (a.Bytes.Length != b.Bytes.Length) return $"size {a.Bytes.Length}|{b.Bytes.Length}";
@@ -66,6 +72,7 @@ public static class AnimationComparer
             // Position and scale pad floats hold leftover memory.
             for (int at = 32; at + 12 <= a.Bytes.Length;)
             {
+                token.ThrowIfCancellationRequested();
                 int flags = BitConverter.ToInt32(a.Bytes, at); int offset = at + 12;
                 if ((flags & ~7) != 0) break;
                 for (int c = 0; c < 3; c++) if ((flags & (1 << c)) != 0) { if (c != 1) for (int o = offset + 12; o < offset + 16; o++) skip.Add(o); offset += 28; }
@@ -73,8 +80,11 @@ public static class AnimationComparer
             }
         }
         for (int o = 0; o < a.Bytes.Length; o++)
+        {
+            if ((o & 4095) == 0) token.ThrowIfCancellationRequested();
             if (!skip.Contains(o) && a.Bytes[o] != b.Bytes[o])
                 return $"{a.Spec?.Fields.FirstOrDefault(f => o >= f.Offset && o < f.Offset + f.Size)?.Name ?? (o < 12 ? "timing" : $"byte {o}")} {Hex(a.Bytes, o)}|{Hex(b.Bytes, o)}";
+        }
         return null;
     }
 

@@ -211,19 +211,53 @@ public static class JsonData
     public static JsonObject PreviewObject(JsonObject source, int nodes = 512, int characters = 8192, CancellationToken token = default)
     {
         var preview = Preview(source, nodes, characters, token);
-        var result = (JsonObject)preview.Value!;
+        var result = preview.Value as JsonObject ?? new JsonObject();
         if (preview.Truncated) result["inspection_truncated"] = true;
         return result;
     }
     /// <summary>Bound metadata before copying/serializing, including nested collections and escaped text.</summary>
     public static (JsonNode? Value, bool Truncated) Preview(JsonNode? source, int nodes = 512, int characters = 8192, CancellationToken token = default)
+        => PreviewCore(source, nodes, characters, token, UnderlyingElement);
+
+    // .NET 10's public JsonNode API cannot distinguish a lazy parsed container from an already materialized one:
+    // even Count/first-child access hydrates every immediate child. Its internal virtual getter only reads the
+    // nullable backing JsonElement. Keep this runtime dependency isolated, cached, and fail closed if unavailable.
+    // WriteTo is not a safe alternative: escaped property names/strings can rent their full decoded buffers first.
+    internal static readonly Func<JsonNode, JsonElement?>? UnderlyingElement = FindUnderlyingElement();
+    private static Func<JsonNode, JsonElement?>? FindUnderlyingElement()
+    {
+        try
+        {
+            return typeof(JsonNode).GetProperty("UnderlyingElement", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?.GetMethod?.CreateDelegate<Func<JsonNode, JsonElement?>>();
+        }
+        catch (Exception error) when (error is MemberAccessException or ArgumentException or NotSupportedException) { return null; }
+    }
+
+    internal static (JsonNode? Value, bool Truncated) PreviewCore(JsonNode? source, int nodes, int characters,
+        CancellationToken token, Func<JsonNode, JsonElement?>? underlyingElement)
     {
         bool truncated = false;
+        characters = Math.Max(0, characters);
         var result = Visit(source, 0); return (result, truncated);
-        JsonNode? Visit(JsonNode? node, int depth)
+        bool TakeNode(int depth)
         {
             token.ThrowIfCancellationRequested();
-            if (nodes-- <= 0 || depth > 12) { truncated = true; return null; }
+            if (nodes-- > 0 && depth <= 12) return true;
+            truncated = true; return false;
+        }
+        JsonNode? Visit(JsonNode? node, int depth)
+        {
+            if (!TakeNode(depth)) return null;
+            if (node is JsonObject or JsonArray)
+            {
+                if (!TryUnderlying(node, out var element))
+                {
+                    truncated = true;
+                    return node is JsonObject ? new JsonObject() : new JsonArray();
+                }
+                if (element.HasValue) return Contents(element.Value, depth);
+            }
             if (node is JsonObject obj)
             {
                 JsonObject copy = new();
@@ -240,28 +274,129 @@ public static class JsonData
                 foreach (var value in array) { if (nodes <= 0) { truncated = true; break; } copy.Add(Visit(value, depth + 1)); }
                 return copy;
             }
-            if (node is JsonValue scalar && scalar.TryGetValue<string>(out var text))
+            if (node is JsonValue scalar)
             {
-                int count = Math.Min(text.Length, Math.Min(characters, 1024)); characters -= count;
-                truncated |= count != text.Length; return JsonValue.Create(text[..count]);
+                if (scalar.TryGetValue<JsonElement>(out var element)) return Contents(element, depth);
+                if (scalar.TryGetValue<string>(out var text)) return Text(text);
+                if (CopyKnownScalar(scalar) is { } primitive)
+                {
+                    int length;
+                    try { length = primitive.ToJsonString().Length; }
+                    catch (ArgumentException) { truncated = true; return null; } // Non-finite CLR numbers have no JSON representation.
+                    if (length > characters) { truncated = true; return null; }
+                    characters -= length; return primitive;
+                }
+                truncated = true;
             }
-            return node?.DeepClone();
+            return null;
         }
+        bool TryUnderlying(JsonNode node, out JsonElement? element)
+        {
+            element = null;
+            if (underlyingElement is null) return false;
+            try { element = underlyingElement(node); return true; }
+            catch (Exception error) when (error is MemberAccessException or InvalidOperationException or NotSupportedException) { return false; }
+        }
+        JsonNode? VisitElement(JsonElement element, int depth) => TakeNode(depth) ? Contents(element, depth) : null;
+        JsonNode? Contents(JsonElement element, int depth)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                JsonObject copy = new();
+                foreach (var property in element.EnumerateObject())
+                {
+                    token.ThrowIfCancellationRequested();
+                    // Six raw bytes cover one escaped UTF-16 character. Reserve before Name unescapes/copies.
+                    if (nodes <= 0 || JsonMarshal.GetRawUtf8PropertyName(property).Length > 6L * characters)
+                    { truncated = true; break; }
+                    string key = property.Name;
+                    if (key.Length > characters) { truncated = true; break; }
+                    characters -= key.Length; copy[key] = VisitElement(property.Value, depth + 1);
+                }
+                return copy;
+            }
+            if (element.ValueKind == JsonValueKind.Array)
+            {
+                JsonArray copy = [];
+                foreach (var item in element.EnumerateArray())
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (nodes <= 0) { truncated = true; break; }
+                    copy.Add(VisitElement(item, depth + 1));
+                }
+                return copy;
+            }
+            if (element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;
+            var raw = JsonMarshal.GetRawUtf8Value(element);
+            int room = Math.Min(characters, 1024);
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                if (raw.Length > 6L * room + 2) { truncated = true; return null; }
+                return Text(element.GetString()!);
+            }
+            if (raw.Length > room) { truncated = true; return null; }
+            characters -= raw.Length;
+            // Clone only the bounded scalar: retaining its original JsonDocument would retain every sibling too.
+            return JsonValue.Create(element.Clone());
+        }
+        JsonNode Text(string text)
+        {
+            int count = Math.Min(text.Length, Math.Min(characters, 1024));
+            var kept = Cut(text, count); characters -= kept.Length;
+            truncated |= kept.Length != text.Length; return JsonValue.Create(kept.ToString())!;
+        }
+    }
+    // Recreate supported CLR scalars with the default bounded converter. Serializing an arbitrary customized
+    // JsonValue (or querying its kind) can run a converter over an entire object graph before any output bound.
+    private static JsonValue? CopyKnownScalar(JsonValue value)
+    {
+        if (value.TryGetValue<bool>(out var b)) return JsonValue.Create(b);
+        if (value.TryGetValue<int>(out var i)) return JsonValue.Create(i);
+        if (value.TryGetValue<uint>(out var ui)) return JsonValue.Create(ui);
+        if (value.TryGetValue<long>(out var l)) return JsonValue.Create(l);
+        if (value.TryGetValue<ulong>(out var ul)) return JsonValue.Create(ul);
+        if (value.TryGetValue<float>(out var f)) return JsonValue.Create(f);
+        if (value.TryGetValue<double>(out var d)) return JsonValue.Create(d);
+        if (value.TryGetValue<decimal>(out var m)) return JsonValue.Create(m);
+        if (value.TryGetValue<short>(out var s)) return JsonValue.Create(s);
+        if (value.TryGetValue<ushort>(out var us)) return JsonValue.Create(us);
+        if (value.TryGetValue<byte>(out var by)) return JsonValue.Create(by);
+        if (value.TryGetValue<sbyte>(out var sb)) return JsonValue.Create(sb);
+        if (value.TryGetValue<char>(out var c)) return JsonValue.Create(c);
+        if (value.TryGetValue<Guid>(out var g)) return JsonValue.Create(g);
+        if (value.TryGetValue<DateTime>(out var dt)) return JsonValue.Create(dt);
+        if (value.TryGetValue<DateTimeOffset>(out var dto)) return JsonValue.Create(dto);
+        if (value.TryGetValue<DateOnly>(out var date)) return JsonValue.Create(date);
+        if (value.TryGetValue<TimeOnly>(out var time)) return JsonValue.Create(time);
+        if (value.TryGetValue<Half>(out var half)) return JsonValue.Create(half);
+        if (value.TryGetValue<Int128>(out var wide)) return JsonValue.Create(wide);
+        if (value.TryGetValue<UInt128>(out var unsignedWide)) return JsonValue.Create(unsignedWide);
+        return null;
     }
     /// <summary>How many characters <see cref="Shown"/> and <see cref="ShownText"/> keep of a value for a message.</summary>
     public const int ShownCharacters = 64;
     private static readonly JsonSerializerOptions ShownOptions = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <summary>
-    /// A JSON value for a message, at most <paramref name="characters"/> characters and then "…": as JSON writes it (a
-    /// string quoted), or with <paramref name="asText"/> a string as its text. Only what is shown is read, copied or
-    /// escaped (a parsed value's text as written, an object's or list's first entries), so a large malformed value costs
-    /// no more than its preview, however it would serialize.
+    /// A JSON value for a message, at most <paramref name="characters"/> characters and then "…": scalar JSON (a string
+    /// quoted), or with <paramref name="asText"/> a string as its text. Objects and arrays show only {…} and […]. Even
+    /// accessing Count or the first child of a lazily parsed container can materialize all its children, so diagnostics
+    /// never inspect container contents. Unsupported customized CLR values show &lt;value omitted&gt; without invoking
+    /// their serializer. Scalar text is bounded before copying/escaping; the original JSON is unchanged.
     /// </summary>
     public static string Shown(JsonNode? node, bool asText = false, int characters = ShownCharacters)
     {
+        // Type checks do not hydrate a parsed container. Keep this outside the scalar formatter so even its
+        // temporary builder/callback state is unnecessary when the entire diagnostic is a fixed type summary.
+        if (node is JsonObject) return characters <= 0 ? "…" : characters < 3 ? "{…" : "{…}";
+        if (node is JsonArray) return characters <= 0 ? "…" : characters < 3 ? "[…" : "[…]";
+        return ShownScalar(node, asText, characters);
+    }
+
+    private static string ShownScalar(JsonNode? node, bool asText, int characters)
+    {
         System.Text.StringBuilder text = new();
-        bool whole = asText && node is JsonValue value && value.GetValueKind() == JsonValueKind.String ? Text(value) : Write(node);
+        bool whole = asText && node is JsonValue value ? Text(value) : Write(node);
         return whole ? text.ToString() : text.Append('…').ToString();
 
         // Each returns false once the preview is full (the value goes on).
@@ -273,30 +408,11 @@ public static class JsonData
         }
         bool Write(JsonNode? item)
         {
-            switch (item)
-            {
-                case null: return Add("null");
-                case JsonObject o:
-                    if (!Add("{")) return false;
-                    bool first = true;
-                    foreach (var (key, entry) in o)
-                    {
-                        if (!first && !Add(",")) return false;
-                        first = false;
-                        if (!Quoted(key) || !Add(":") || !Write(entry)) return false;
-                    }
-                    return Add("}");
-                case JsonArray a:
-                    if (!Add("[")) return false;
-                    for (int i = 0; i < a.Count; i++)
-                        if (i > 0 && !Add(",") || !Write(a[i])) return false;
-                    return Add("]");
-            }
+            if (item == null) return Add("null");
             var scalar = (JsonValue)item;
             if (scalar.TryGetValue(out JsonElement element)) return Raw(JsonMarshal.GetRawUtf8Value(element));
             if (scalar.TryGetValue(out string? s)) return Quoted(s);
-            // Values built in memory are numbers, switches and the like, which write short.
-            return Add(scalar.ToJsonString());
+            return CopyKnownScalar(scalar) is { } primitive ? Add(primitive.ToJsonString()) : Add("<value omitted>");
         }
         bool Quoted(string s)
         {
@@ -313,6 +429,7 @@ public static class JsonData
         bool Text(JsonValue item)
         {
             if (!item.TryGetValue(out JsonElement element)) return item.TryGetValue(out string? s) ? Add(s) : Write(item);
+            if (element.ValueKind != JsonValueKind.String) return Write(item);
             var raw = JsonMarshal.GetRawUtf8Value(element);
             // A short string is read as its text; a longer one is shown as written, escapes and all, without its quotes.
             return raw.Length <= 1024 ? Add(element.GetString()) : Raw(raw[1..^1]);

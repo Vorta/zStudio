@@ -82,11 +82,16 @@ internal static partial class DatabaseRecords
     internal sealed class RetainedMatchBudget(int maximum = MaximumRetainedWork)
     {
         private int work;
-        internal void Take()
+        internal bool Exhausted { get; private set; }
+        internal void Take(int units = 1)
         {
-            if (work >= maximum)
+            if (units < 0) throw new ArgumentOutOfRangeException(nameof(units));
+            if (Exhausted || units > maximum - work)
+            {
+                Exhausted = true;
                 throw new InvalidDataException($"Matching database model references or retained caches exceeds the {maximum:N0}-step work limit; the database keeps the world's object order.");
-            work++;
+            }
+            work += units;
         }
     }
 

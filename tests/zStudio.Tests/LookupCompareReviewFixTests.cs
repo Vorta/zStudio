@@ -144,7 +144,7 @@ public sealed class LookupCompareReviewFixTests
         }
         static SourceLookup Lookup(GameZWorld world, string fingerprint)
         {
-            var top = GameZWriter.NodeSlots(world).Where(p => p.Key.Name == "crate").MaxBy(p => p.Value);
+            var top = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken).Where(p => p.Key.Name == "crate").MaxBy(p => p.Value);
             return new("m1", SourceLookup.TextureEffect, "crate", "gamegen/support/tex_fxm1.gw", 2, top.Value, WorldLookups.Path(top.Key)) { Fingerprint = fingerprint };
         }
         GameZWorld before = Build(false), after = Build(true);

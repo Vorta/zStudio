@@ -45,45 +45,49 @@ public static class AnimationScript
     public static List<(string? Object, List<Key> Keys)> Parse(ReadOnlySpan<byte> bytes, string source, CancellationToken token = default)
         => Parse(bytes, source, token, null);
 
-    internal static List<(string? Object, List<Key> Keys)> Parse(ReadOnlySpan<byte> bytes, string source, CancellationToken token, Action? reserveKey)
+    internal static List<(string? Object, List<Key> Keys)> Parse(ReadOnlySpan<byte> bytes, string source, CancellationToken token, Action? reserveKey,
+        Action<int>? scanned = null)
     {
-        token.ThrowIfCancellationRequested();
-        if (bytes.Length > Sources.SourceProject.MaximumSourceTextBytes)
-            throw new InvalidDataException($"{JsonData.ShownText(source)} exceeds the {Sources.SourceProject.MaximumSourceTextBytes:N0}-byte keyframe source limit.");
+        AnimationScriptLexing.Source(bytes, source, token);
+        string shownSource = JsonData.ShownText(source);
         List<(string? Object, List<Key> Keys)> tracks = [];
         HashSet<string> objects = new(StringComparer.Ordinal);
         List<Key>? keys = null; int total = 0;
-        string text = Encoding.Latin1.GetString(bytes);
         int lineNumber = 0;
-        foreach (string raw in text.Split('\n'))
+        AnimationScriptLexing.Lines lines = new(bytes, token, scanned);
+        Span<float> v = stackalloc float[4];
+        while (lines.MoveNext())
         {
             token.ThrowIfCancellationRequested();
-            lineNumber++;
-            string line = raw; int hash = line.IndexOf('#'); if (hash >= 0) line = line[..hash];
-            var tokens = line.Split([' ', '\t', '\r'], StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length == 0) continue;
-            if (tokens[0].Equals("OBJECT", StringComparison.OrdinalIgnoreCase))
+            lineNumber = lines.Number;
+            var line = lines.Current; int hash = AnimationScriptLexing.IndexOf(line, (byte)'#', token); if (hash >= 0) line = line[..hash];
+            AnimationScriptLexing.Words words = new(line, true, source, lineNumber, token);
+            if (!words.Next(out var first)) continue;
+            if (AnimationScriptLexing.Is(first, "OBJECT"u8))
             {
-                if (tokens.Length != 2) throw Error("OBJECT is followed by one object name.");
+                if (!words.Next(out var objectToken) || words.Next(out _)) throw Error("OBJECT is followed by one object name.");
                 if (tracks.Count > 0 && tracks[0].Object == null) throw Error("keys before the first OBJECT line belong to no object.");
-                if (!objects.Add(tokens[1])) throw Error($"object {tokens[1]} has two tracks.");
-                Close(); keys = []; tracks.Add((tokens[1], keys));
+                string name = Encoding.Latin1.GetString(objectToken);
+                if (!objects.Add(name)) throw Error($"object {JsonData.ShownText(name)} has two tracks.");
+                Close(); keys = []; tracks.Add((name, keys));
                 continue;
             }
             if (keys == null) { keys = []; tracks.Add((null, keys)); }
             if (keys.Count >= MaximumKeys) throw Error($"more than {MaximumKeys} keys in one track.");
             if (++total > MaximumTotalKeys) throw Error($"more than {MaximumTotalKeys} keys across the script's tracks.");
-            if (!tokens[0].Equals("FRAME", StringComparison.OrdinalIgnoreCase) || tokens.Length < 2 || !int.TryParse(tokens[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int frame) || frame < 0)
+            if (!AnimationScriptLexing.Is(first, "FRAME"u8) || !words.Next(out var frameToken) || !int.TryParse(frameToken, NumberStyles.Integer, CultureInfo.InvariantCulture, out int frame) || frame < 0)
                 throw Error("a key starts with FRAME and a frame number of 0 or more.");
             reserveKey?.Invoke(); // The compiler's shared retained-key allowance, before creating the next key.
             Key key = new() { Frame = frame };
-            for (int i = 2; i < tokens.Length;)
+            while (words.Next(out var channelToken))
             {
-                string channel = tokens[i].ToUpperInvariant(); int count = channel == "ROTATION" ? 4 : 3;
-                if (channel is not ("POSITION" or "ROTATION" or "SCALE" or "VELOCITY" or "SPIN" or "GROWTH")) throw Error($"unknown channel {tokens[i]}.");
-                float[] v = new float[count];
+                string channel = AnimationScriptLexing.Is(channelToken, "POSITION"u8) ? "POSITION" : AnimationScriptLexing.Is(channelToken, "ROTATION"u8) ? "ROTATION"
+                    : AnimationScriptLexing.Is(channelToken, "SCALE"u8) ? "SCALE" : AnimationScriptLexing.Is(channelToken, "VELOCITY"u8) ? "VELOCITY"
+                    : AnimationScriptLexing.Is(channelToken, "SPIN"u8) ? "SPIN" : AnimationScriptLexing.Is(channelToken, "GROWTH"u8) ? "GROWTH" : "";
+                int count = channel == "ROTATION" ? 4 : 3;
+                if (channel.Length == 0) throw Error($"unknown channel {AnimationScriptLexing.Shown(channelToken)}.");
                 for (int j = 0; j < count; j++)
-                    if (i + 1 + j >= tokens.Length || !float.TryParse(tokens[i + 1 + j], NumberStyles.Float, CultureInfo.InvariantCulture, out v[j]) || !float.IsFinite(v[j]))
+                    if (!words.Next(out var number) || !float.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out v[j]) || !float.IsFinite(v[j]))
                         throw Error($"{channel} needs {count} finite numbers.");
                 switch (channel)
                 {
@@ -97,21 +101,20 @@ public static class AnimationScript
                     case "GROWTH": key.Growth = new(v[0], v[1], v[2]); break;
                     case "SPIN": key.Spin = new(v[0], v[1], v[2]); break;
                 }
-                i += 1 + count;
             }
             if (key.Velocity.HasValue && !key.Position.HasValue || key.Growth.HasValue && !key.Scale.HasValue || key.Spin.HasValue && !key.Rotation.HasValue)
                 throw Error("a rate follows the channel it belongs to.");
             keys.Add(key);
         }
         Close();
-        if (tracks.Count == 0) throw new InvalidDataException($"{source}: the script has no keys.");
+        if (tracks.Count == 0) throw new InvalidDataException($"{shownSource}: the script has no keys.");
         return tracks;
-        InvalidDataException Error(string message) => new($"{source}, line {lineNumber}: {message}");
+        InvalidDataException Error(string message) => new($"{shownSource}, line {lineNumber}: {message}");
         void Close()
         {
             if (tracks.Count == 0) return;
             var (name, last) = tracks[^1];
-            string what = name == null ? source : $"{source}, object {name}";
+            string what = name == null ? shownSource : $"{shownSource}, object {JsonData.ShownText(name)}";
             if (last.Count < 2) throw new InvalidDataException($"{what}: a track needs at least two keys (its last key ends the motion).");
             if (last.Take(last.Count - 1).All(k => k.Position == null && k.Rotation == null && k.Scale == null)) throw new InvalidDataException($"{what}: no key moves anything.");
         }
@@ -123,13 +126,19 @@ public static class AnimationScript
 
     /// <summary>The keyframes of a script at <paramref name="frameRate"/> frames per second, as the original compiler wrote them.</summary>
     public static List<AnimationKeyframe> Compile(IReadOnlyList<Key> keys, float frameRate, string source, CancellationToken token = default)
+        => Compile(keys, frameRate, source, token, new AnimationCompileWork(token));
+
+    internal static List<AnimationKeyframe> Compile(IReadOnlyList<Key> keys, float frameRate, string source, CancellationToken token, AnimationCompileWork work)
     {
+        token.ThrowIfCancellationRequested();
+        source = JsonData.ShownText(source);
         if (!(frameRate > 0) || !float.IsFinite(frameRate)) throw new InvalidDataException($"{source}: SCRIPT_FRAME_RATE must be above 0.");
         List<AnimationKeyframe> frames = [];
         float step = FrameStep(frameRate);
         for (int i = 0; i + 1 < keys.Count; i++)
         {
             token.ThrowIfCancellationRequested();
+            work.Visit();
             var key = keys[i];
             float time = keys[i].Frame * step, end = keys[i + 1].Frame * step;
             if (!float.IsFinite(time) || !float.IsFinite(end)) throw new InvalidDataException($"{source}: frame {keys[i + 1].Frame} is beyond single-precision time at {frameRate} frames per second.");
@@ -161,21 +170,27 @@ public static class AnimationScript
         Vector3 Rate(int index, Func<Key, Vector3?> channel, Vector3 from)
         {
             for (int j = index + 1; j < keys.Count; j++)
+            {
+                work.Visit();
                 if (channel(keys[j]) is { } to)
                 {
                     double seconds = (keys[j].Frame - keys[index].Frame) / (double)frameRate;
                     return seconds == 0 ? Vector3.Zero : Finite(new((float)((to.X - (double)from.X) / seconds), (float)((to.Y - (double)from.Y) / seconds), (float)((to.Z - (double)from.Z) / seconds)), j);
                 }
+            }
             return Vector3.Zero;
         }
         Vector3 SpinTo(int index, Quaternion from)
         {
             for (int j = index + 1; j < keys.Count; j++)
+            {
+                work.Visit();
                 if (keys[j].Rotation is { } to)
                 {
                     double seconds = (keys[j].Frame - keys[index].Frame) / (double)frameRate;
                     return seconds == 0 ? Vector3.Zero : Finite((Vector3)(Log(to, from) / seconds), j);
                 }
+            }
             return Vector3.Zero;
         }
         Vector3 Finite(Vector3 rate, int to) => float.IsFinite(rate.X) && float.IsFinite(rate.Y) && float.IsFinite(rate.Z) ? rate
@@ -210,19 +225,25 @@ public static class AnimationScript
     }
 
     /// <summary>Whether an OBJECT line can hold <paramref name="name"/>: one Latin-1 token without comment marks.</summary>
-    public static bool IsObjectName(string name) => name.Length > 0 && !name.Any(c => c is ' ' or '\t' or '\r' or '\n' or '#' or '\0' || c > 255);
+    public static bool IsObjectName(string name) => name.Length is > 0 and <= AnimationScriptLexing.MaximumTokenBytes && !name.Any(c => c is ' ' or '\t' or '\r' or '\n' or '#' or '\0' || c > 255);
 
     /// <summary>A script file of object tracks (each from <see cref="Decompile"/>), in the given order.</summary>
     public static string Write(IEnumerable<(string Object, string Track)> tracks, CancellationToken token = default)
+        => Write(tracks, token, null);
+
+    internal static string Write(IEnumerable<(string Object, string Track)> tracks, CancellationToken token, Action<long>? reserveText)
     {
-        StringBuilder text = new("# RECOIL keyframe script, reconstructed by zStudio: a track per OBJECT, keys as FRAME n and\n# channels with their rates per second.\n");
-        int total = 0;
+        // Enumerate a possibly single-use source once. Track text already exists; only bounded identities are retained.
+        const string header = "# RECOIL keyframe script, reconstructed by zStudio: a track per OBJECT, keys as FRAME n and\n# channels with their rates per second.\n";
+        List<(string Object, string Track)> ordered = [];
+        int total = 0, characters = header.Length;
         foreach (var (name, track) in tracks)
         {
             token.ThrowIfCancellationRequested();
-            if (!IsObjectName(name)) throw new InvalidDataException($"'{name}' cannot name a script track.");
-            if (8L + name.Length + track.Length > Sources.SourceProject.MaximumSourceTextBytes - text.Length)
+            if (8L + name.Length + track.Length > Sources.SourceProject.MaximumSourceTextBytes - characters)
                 throw new InvalidDataException($"The keyframe script exceeds the {Sources.SourceProject.MaximumSourceTextBytes:N0}-byte source limit.");
+            if (!IsObjectName(name)) throw new InvalidDataException($"'{JsonData.ShownText(name)}' cannot name a script track.");
+            characters += 8 + name.Length + track.Length;
             int keys = 0;
             foreach (var raw in track.AsSpan().EnumerateLines())
             {
@@ -232,9 +253,16 @@ public static class AnimationScript
                 if (++keys > MaximumKeys) throw new InvalidDataException($"A keyframe track exceeds {MaximumKeys:N0} keys.");
                 if (++total > MaximumTotalKeys) throw new InvalidDataException($"The keyframe script exceeds {MaximumTotalKeys:N0} keys across its tracks.");
             }
-            text.Append("OBJECT ").Append(name).Append('\n').Append(track);
+            if (ordered.Count >= MaximumTotalKeys) throw new InvalidDataException($"The keyframe script exceeds {MaximumTotalKeys:N0} object tracks.");
+            reserveText?.Invoke(32);
+            ordered.Add((name, track));
         }
-        string result = text.ToString();
+        string result = AnimationScriptText.Build(text =>
+        {
+            text.Append(header);
+            foreach (var (name, track) in ordered) text.Append("OBJECT ").Append(name).Append('\n').Append(track);
+            return true;
+        }, token, reserve: reserveText)!;
         _ = Parse(Encoding.Latin1.GetBytes(result), "reconstructed keyframe script", token);
         return result;
     }
@@ -243,35 +271,46 @@ public static class AnimationScript
     /// A track for compiled keyframes at <paramref name="frameRate"/>: a key per keyframe start with its channels and
     /// rates, and a final key at the last end. Null when the stream is not on the frame grid (it cannot be a script).
     /// </summary>
-    public static string? Decompile(IReadOnlyList<AnimationKeyframe> frames, float frameRate)
+    public static string? Decompile(IReadOnlyList<AnimationKeyframe> frames, float frameRate, CancellationToken token = default)
+        => Decompile(frames, frameRate, token, Sources.SourceProject.MaximumSourceTextBytes, null);
+
+    internal static string? Decompile(IReadOnlyList<AnimationKeyframe> frames, float frameRate, CancellationToken token,
+        int maximumBytes, Action<long>? reserveText)
     {
+        token.ThrowIfCancellationRequested();
         if (frames.Count == 0 || !(frameRate > 0)) return null;
-        StringBuilder text = new();
         float step = FrameStep(frameRate);
         int? Frame(float time) { int f = (int)Math.Round(time / (double)step); return f >= 0 && f * step == time ? f : null; }
-        int? previous = null;
-        for (int i = 0; i < frames.Count; i++)
-        {
-            var f = frames[i];
-            if (Frame(f.Start) is not int frame || Frame(f.End) is not int next) return null;
-            // A segment that does not start where the last ended follows a key without channels, which holds everything.
-            if (previous is int end && end != frame) text.Append("FRAME ").Append(end.ToString(CultureInfo.InvariantCulture)).Append('\n');
-            text.Append("FRAME ").Append(frame.ToString(CultureInfo.InvariantCulture));
-            if (f.ChannelOffset(0) is int p and >= 0) Channel("POSITION", [f.F32(p), f.F32(p + 4), f.F32(p + 8)], "VELOCITY", f.Vector(p + 16));
-            if (f.ChannelOffset(1) is int r and >= 0) Channel("ROTATION", [f.F32(r), f.F32(r + 4), f.F32(r + 8), f.F32(r + 12)], "SPIN", f.Vector(r + 16));
-            if (f.ChannelOffset(2) is int s and >= 0) Channel("SCALE", [f.F32(s), f.F32(s + 4), f.F32(s + 8)], "GROWTH", f.Vector(s + 16));
-            text.Append('\n');
-            previous = next;
-        }
-        text.Append("FRAME ").Append(previous!.Value.ToString(CultureInfo.InvariantCulture)).Append('\n');
-        return text.ToString();
+        return AnimationScriptText.Build(WriteTrack, token, maximumBytes, reserveText);
 
-        void Channel(string name, float[] values, string rateName, Vector3 rate)
+        bool WriteTrack(AnimationScriptText text)
         {
-            text.Append(' ').Append(name);
-            foreach (float v in values) text.Append(' ').Append(Number(v));
-            text.Append(' ').Append(rateName).Append(' ').Append(Number(rate.X)).Append(' ').Append(Number(rate.Y)).Append(' ').Append(Number(rate.Z));
+            int? previous = null; int keys = 0;
+            for (int i = 0; i < frames.Count; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                var f = frames[i];
+                if (Frame(f.Start) is not int frame || Frame(f.End) is not int next) return false;
+                // A segment that does not start where the last ended follows a key without channels, which holds everything.
+                if (previous is int end && end != frame) { Key(); text.Append("FRAME ").Append(end).Append('\n'); }
+                Key(); text.Append("FRAME ").Append(frame);
+                if (f.ChannelOffset(0) is int p and >= 0) Channel("POSITION", f, p, 3, "VELOCITY");
+                if (f.ChannelOffset(1) is int r and >= 0) Channel("ROTATION", f, r, 4, "SPIN");
+                if (f.ChannelOffset(2) is int s and >= 0) Channel("SCALE", f, s, 3, "GROWTH");
+                text.Append('\n');
+                previous = next;
+            }
+            Key(); text.Append("FRAME ").Append(previous!.Value).Append('\n');
+            return true;
+
+            void Key() { if (++keys > MaximumKeys) throw new InvalidDataException($"A keyframe track exceeds {MaximumKeys:N0} keys."); }
+            void Channel(string name, AnimationKeyframe frame, int offset, int count, string rateName)
+            {
+                text.Append(' ').Append(name);
+                for (int j = 0; j < count; j++) text.Append(' ').Float(frame.F32(offset + 4 * j));
+                var rate = frame.Vector(offset + 16);
+                text.Append(' ').Append(rateName).Append(' ').Float(rate.X).Append(' ').Float(rate.Y).Append(' ').Float(rate.Z);
+            }
         }
     }
-    private static string Number(float value) => value.ToString("R", CultureInfo.InvariantCulture);
 }

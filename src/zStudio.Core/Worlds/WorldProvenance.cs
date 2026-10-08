@@ -46,6 +46,18 @@ public sealed class WorldNodeProvenance
 {
     /// <summary>The project path of the glTF file the node was imported from, or null for a node a script created.</summary>
     public string? ModelFile { get; internal set; }
+    /// <summary>The map's logical model asset, which can alias <see cref="ModelFile"/> with another zone profile.</summary>
+    public string? LogicalModelFile { get; internal set; }
+    /// <summary>The authoritative map zone source, when this node was imported with a map profile.</summary>
+    public string? ZoneManifest { get; internal set; }
+    /// <summary>Node and mesh ordinals in the profile's validated source layout; distinct from compiled slots.</summary>
+    public int ZoneNode { get; internal set; } = -1;
+    public int ZoneMesh { get; internal set; } = -1;
+    /// <summary>Compiled polygon index to authored polygon ordinal; split pieces share an ordinal and dropped faces leave no entry.</summary>
+    public IReadOnlyList<int>? ZonePolygons { get; internal set; }
+    /// <summary>Source-import values before later script instructions change the node; used for explicit legacy profile capture.</summary>
+    public uint? ImportedZoneWord { get; internal set; }
+    public bool? ImportedZoneGate { get; internal set; }
     /// <summary>The node's index in <see cref="ModelFile"/>.</summary>
     public int ModelNode { get; internal set; } = -1;
     /// <summary>The glTF node's name in <see cref="ModelFile"/>, which an edit checks before changing node <see cref="ModelNode"/>.</summary>
@@ -85,6 +97,7 @@ public sealed class WorldNodeProvenance
     public (int Column, int Row) TerrainCell { get; internal set; } = (-1, -1);
     /// <summary>For the root a LoadGameGen created: the project path of the glTF file it loaded.</summary>
     public string? LoadedFile { get; internal set; }
+    public string? LogicalLoadedFile { get; internal set; }
     /// <summary>The instruction that created the node (LoadGameGen for a load's root, NewObject3D, LightNew, NewCamera …).</summary>
     public SourceInstruction? Created { get; internal set; }
     /// <summary>The last AddChild that attached the node.</summary>

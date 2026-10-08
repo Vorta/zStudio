@@ -222,7 +222,8 @@ public sealed class BlenderRoundTripTests
     {
         public Dictionary<string, byte[]> Files { get; } = files;
         public bool Exists(string relative) => Files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) => Files[relative];
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative]; limits.Validate(result); return result; }
     }
 
     [Fact]

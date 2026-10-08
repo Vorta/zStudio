@@ -1,5 +1,7 @@
 # Native model replacement
 
+Model replacement preparation admits original texture-pack bytes and complete replacement packs together under a 512 MiB allowance, before reading another pack or allocating an appended pack. Cancellation or refusal leaves document history unchanged. This allowance covers those retained raw buffers, not total process memory. Texture editing enforces its existing separate source and output allowances before each cold read and output allocation.
+
 zStudio can export a GameZ node hierarchy for Blender and replace its existing model records with solid textured meshes. The animation continues to refer to the same nodes and model indices. Edits are accepted in the visible document, use Undo/Redo, and remain unsaved until an explicit verified Save.
 
 ## Export and prepare in Blender
@@ -11,6 +13,10 @@ Select an animation, a GameZ node, or a node-bound model and choose **File → E
 - `manifest.json` with the GameZ SHA-256, model/node indices, parent/child identities and both local and assembled transforms.
 
 The exporter visits all authored descendants, including inactive LOD variants. `bvol` collision helpers are labeled in the manifest and retained in the reference export. This is a root-hierarchy export; procedural effects and separately spawned child animations are not synthesized into its geometry. Existing animation JSON export is unchanged.
+
+A bundle allows at most 10,000 node instances and 1,024 distinct models. Before constructing its manifest or exporting files, it also reserves a 32 MiB metadata allowance and at most 262,144 repeated parent, child and model-node references. Repeated instances retain their complete identities within these limits; choose a smaller subtree if the expanded hierarchy exceeds them. Scene preview and ordinary OBJ assembly independently bound traversal work, including groups without model geometry, and refuse excessive traversal instead of returning partial geometry. Bounded preview warning lists explicitly disclose omitted diagnostics.
+
+Texture resolution discovers candidate packs once per model export and shares bounded lookup work and a 512 MiB cold-read allowance across its textures. Each exported PNG retains its complete decoded pixels; the preview's cumulative RGBA and highlight-mask allowance does not truncate exported images.
 
 OBJ coordinates use game units, **+Y up and −Z forward**. Import/export these axes in Blender. The local origin is significant: the game applies the original node transform after loading the replacement. Export the mesh at its original local origin, with applied modeling transforms, triangle faces, UVs and normals. OBJ texture V is bottom-origin; zStudio reverses V at the interchange boundary.
 
@@ -33,7 +39,7 @@ Create a separate version-1 replacement manifest next to the Blender exports:
 
 Open the matching **GameZ** document and choose **File → Replace models…**. The entire batch is validated before publication. Names are labels: explicit indices and the source SHA-256 identify the target. Export a fresh bundle before a subsequent import against an edited snapshot. A single local OBJ can target several model indices; their existing node placements remain independent.
 
-The initial importer supports one opaque diffuse texture per batch, non-interlaced 8-bit RGB/RGBA PNG, power-of-two dimensions up to 512×512, and a new ASCII texture name of 1–19 letters/digits/underscores. Retail textures stop at 256×256, and 512 is supported only on hardware that reports it:
+The importer supports one opaque diffuse texture per batch, power-of-two dimensions up to 512×512, and a new ASCII texture name of 1–19 letters/digits/underscores. PNG input uses the shared decoder, including supported greyscale, indexed and RGB/RGBA formats and Adam7 interlacing, and is converted to RGBA8; the resulting diffuse texture must be fully opaque. Retail textures stop at 256×256, and 512 is supported only on hardware that reports it:
 - The retail loader stores 16-bit sizes and allocates by pixel count (`0x46ED70`), and the software renderer's spans cover 512.
 - Direct3D texture creation (`0x4AA0F0`) replaces any texture larger than the device's reported maximum with the default texture. The engine forces that maximum to 256 when a driver reports 0.
 - dgVoodoo-style wrappers report far larger limits. Original 1999-era hardware generally stopped at 256.
@@ -41,6 +47,8 @@ The initial importer supports one opaque diffuse texture per batch, non-interlac
 MTL files are optional; any diffuse map they specify must match the manifest texture. Paths must be relative, stay inside the input directory and avoid filesystem links. A batch contains 1–128 unique models; each has at most 65,535 corner vertices and 20,000 triangles. OBJ files are limited to 16 MiB; manifests/MTLs to 1 MiB; PNG input to 4 MiB. Nonfinite values, missing indices, degenerate triangles, non-triangulated faces and missing UVs/normals are rejected.
 
 Repeated mappings to the same OBJ share one validated import. The batch is limited to 64 MiB of mesh/material input and eight distinct material libraries per OBJ.
+
+OBJ and MTL input is scanned incrementally with cancellation checks inside long lines. Ignored OBJ operands do not become token arrays, and diagnostics bound authored text before formatting it. These presentation bounds do not shorten names or paths used for material lookup.
 
 The writer supports intact GameZ v15 with a contiguous free material slot and texture packs v1. Models with authored morphs or lights are rejected. Full/fragmented pools and noncanonical source offsets fail before mutation.
 

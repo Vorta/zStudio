@@ -13,7 +13,7 @@ public sealed class SourceWorldTests
     [Fact]
     public void ModelInsertionUsesTheBuildsCaseSensitivePrefixDispatch()
     {
-        var rewritten = Encoding.ASCII.GetString(SourceWorlds.InsertIntoScript("quit\nGameZWriteZBDFileExtra world.zbd\nQuit\n"u8, [new("data/m1/models/a.gltf", "a")]));
+        var rewritten = Encoding.ASCII.GetString(SourceWorlds.InsertIntoScript("quit\nGameZWriteZBDFileExtra world.zbd\nQuit\n"u8, [new("data/m1/models/a.gltf", "a")], "the world script", Token));
         Assert.Contains("LoadGameGen a.gltf a\nGameZWriteZBDFileExtra", rewritten);
     }
     private static CancellationToken Token => TestContext.Current.CancellationToken;
@@ -56,7 +56,7 @@ public sealed class SourceWorldTests
         byte[] script = Encoding.ASCII.GetBytes("source support\\load.gw\r\n# keep\r\nGameZWriteZBDFile %MissionZBDFile%\r\nsource support\\tex_fx.gw\r\nQuit\r\n");
         var result = Encoding.ASCII.GetString(SourceWorlds.InsertIntoScript(script, [
             new("data/m2/models/bft/ltank.gltf", "ltank"),
-            new("data/common/models/crate.glb", "crate2", new(2417.5f, 0, -12), -70)]));
+            new("data/common/models/crate.glb", "crate2", new(2417.5f, 0, -12), -70)], "the world script", Token));
         Assert.Equal("""
             source support\load.gw
             # keep
@@ -74,8 +74,8 @@ public sealed class SourceWorldTests
 
             """.ReplaceLineEndings("\r\n"), result);
         // Nothing to add keeps the file; a script that does not write the world (or only after Quit) is refused.
-        Assert.Equal(script, SourceWorlds.InsertIntoScript(script, []));
-        Assert.Throws<InvalidDataException>(() => SourceWorlds.InsertIntoScript("source support\\m1.gw\nQuit\nGameZWriteZBDFile x\n"u8, [new("data/m1/models/a.gltf", "a")]));
+        Assert.Equal(script, SourceWorlds.InsertIntoScript(script, [], "the world script", Token));
+        Assert.Throws<InvalidDataException>(() => SourceWorlds.InsertIntoScript("source support\\m1.gw\nQuit\nGameZWriteZBDFile x\n"u8, [new("data/m1/models/a.gltf", "a")], "the world script", Token));
     }
 
     [Fact]

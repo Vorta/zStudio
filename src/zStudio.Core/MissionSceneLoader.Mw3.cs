@@ -22,11 +22,15 @@ public static partial class MissionSceneLoader
     public static async Task<IReadOnlyList<MissionVariant>> Mw3MissionsAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
         => (await Mw3MissionCatalogAsync(worldPath, resolver, token).ConfigureAwait(false)).Missions;
     public static async Task<Mw3MissionCatalog> Mw3MissionCatalogAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
+        => await Mw3MissionCatalogAsync(worldPath, resolver, token, new CompiledInventory(token)).ConfigureAwait(false);
+    private static async Task<Mw3MissionCatalog> Mw3MissionCatalogAsync(string worldPath, AssetResolver resolver, CancellationToken token, CompiledInventory inventory)
     {
         List<MissionVariant> result = []; PreviewNotes diagnostics = new(); HashSet<string> unreadable = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string path in Directory.EnumerateFiles(Path.GetDirectoryName(Path.GetFullPath(worldPath))!, "*.zbd").Order(StringComparer.OrdinalIgnoreCase))
+        inventory.Path(worldPath.Length);
+        foreach (string path in inventory.Files(Path.GetDirectoryName(Path.GetFullPath(worldPath))!))
         {
             token.ThrowIfCancellationRequested();
+            inventory.Path(path.Length);
             try
             {
                 if (FormatRegistry.Probe(path).Family != FormatFamily.Archive) continue;
@@ -49,7 +53,12 @@ public static partial class MissionSceneLoader
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             { diagnostics.Add($"Mission reader {Path.GetFileName(path)}: {ex.Message}"); unreadable.Add(Path.GetFullPath(path)); }
         }
-        return new(result.OrderBy(m => m.Label.StartsWith("Campaign", StringComparison.Ordinal) ? 0 : 1).ThenBy(m => m.Archive, StringComparer.OrdinalIgnoreCase).ToArray(), diagnostics) { Unreadable = unreadable };
+        inventory.Sort(result, (a, b) =>
+        {
+            int order = (a.Label.StartsWith("Campaign", StringComparison.Ordinal) ? 0 : 1).CompareTo(b.Label.StartsWith("Campaign", StringComparison.Ordinal) ? 0 : 1);
+            return order != 0 ? order : StringComparer.OrdinalIgnoreCase.Compare(a.Archive, b.Archive);
+        }, m => m.Archive);
+        inventory.Rows(result.Count); return new(result.ToArray(), diagnostics) { Unreadable = unreadable };
     }
     /// <summary>
     /// Resolve the requested reader once. A remembered selection that no longer qualifies falls
@@ -57,19 +66,31 @@ public static partial class MissionSceneLoader
     /// </summary>
     internal static async Task<Mw3Resources> Mw3ResourcesAsync(string worldPath, AssetResolver resolver, string? requested, bool exact, CancellationToken token)
     {
-        var catalog = await Mw3MissionCatalogAsync(worldPath, resolver, token).ConfigureAwait(false);
+        CompiledInventory inventory = new(token);
+        var catalog = await Mw3MissionCatalogAsync(worldPath, resolver, token, inventory).ConfigureAwait(false);
         var choices = catalog.Missions; string? unavailable = null; bool unreadable = false;
-        string? selected = requested == null ? null : choices.FirstOrDefault(c => c.Archive.Equals(Path.GetFullPath(requested), StringComparison.OrdinalIgnoreCase))?.Archive;
+        string? requestedPath = null;
+        if (requested != null) { inventory.Path(requested.Length); requestedPath = Path.GetFullPath(requested); }
+        string? selected = null;
+        foreach (var choice in choices)
+        {
+            inventory.Compare(choice.Archive.Length + (long)(requestedPath?.Length ?? 0));
+            if (requestedPath != null && choice.Archive.Equals(requestedPath, StringComparison.OrdinalIgnoreCase)) { selected = choice.Archive; break; }
+        }
         if (requested != null && selected == null)
         {
             if (exact) throw new InvalidDataException($"The mission reader {Path.GetFileName(requested)} is no longer available. Choose another mission.");
-            unavailable = Path.GetFullPath(requested); unreadable = catalog.Unreadable.Contains(unavailable);
+            unavailable = requestedPath; unreadable = catalog.Unreadable.Contains(unavailable!);
         }
         selected ??= choices.FirstOrDefault()?.Archive;
+        foreach (var choice in choices) inventory.Path(choice.Archive.Length);
         var missionFiles = choices.Select(c => c.Archive).ToHashSet(StringComparer.OrdinalIgnoreCase);
         // Only the chosen mission contributes its resources; shared map/root archives follow it.
         // Unreadable readers are neither the chosen mission nor shared resources; the catalog already reports them.
-        string[] files = (selected == null ? Array.Empty<string>() : [selected]).Concat(ResourceFiles(worldPath, resolver).Where(p => !missionFiles.Contains(Path.GetFullPath(p)) && !catalog.Unreadable.Contains(Path.GetFullPath(p)))).ToArray();
+        var shared = ResourceFiles(worldPath, resolver, token, inventory);
+        foreach (string path in shared) inventory.Path(path.Length);
+        inventory.Rows(shared.Length + 1L);
+        string[] files = (selected == null ? Array.Empty<string>() : [selected]).Concat(shared.Where(p => !missionFiles.Contains(Path.GetFullPath(p)) && !catalog.Unreadable.Contains(Path.GetFullPath(p)))).ToArray();
         return new(selected, files, unavailable, catalog.Diagnostics, unreadable);
     }
     private static async Task<MissionSceneContext> LoadMw3Async(ZbdDocument world, AssetResolver resolver, string? requested, bool exact, CancellationToken token)
@@ -140,6 +161,7 @@ public static partial class MissionSceneLoader
                 }
             // MW3 missions have no difficulty resource variants; the shared RECOIL preference neither selects nor reports a layout here.
             var layout = new MissionLayoutSelection(MissionDifficulty.Medium, "aiv.zrd", "vehicle.zrd", "") { MissionArchive = chosen, UnavailableMission = resources.Unreadable ? null : resources.Unavailable, DifficultyApplies = false };
+            MissionResourceSource? actorSource = null; string? actorDescription = null;
             int modelBase = scene.Models.Count;
             if (library?.Scene is { } mechs)
             {
@@ -214,7 +236,11 @@ public static partial class MissionSceneLoader
                         scene.Nodes[root].Metadata["name_truncated"] = label.Length != name.Length;
                         scene.Nodes[root] = scene.Nodes[root] with { Name = label, Parents = [worldRoot] };
                         attachedRoots.Add(root);
-                        actors.Add(new(root, sources[root], label, layout.Description, CoordinateSource: new(Path.GetFullPath(selected!.Path).ToUpperInvariant(), aiv.Index, aiv.Name.ToUpperInvariant(), row / 2), PlacementPosition: position, PlacementRotation: new(0, heading, 0)) { NameCharacters = name.Length });
+                        // Immutable complete reader identity/description is shared by all row-specific actors.
+                        // Keep normalization lazy: a reader with no successful placements need not evaluate it.
+                        actorSource ??= new(Path.GetFullPath(selected!.Path).ToUpperInvariant(), aiv.Index, aiv.Name.ToUpperInvariant());
+                        actorDescription ??= layout.Description;
+                        actors.Add(new(root, sources[root], label, actorDescription, CoordinateSource: new(actorSource.ArchivePath, actorSource.AssetIndex, actorSource.ResourceName, row / 2), PlacementPosition: position, PlacementRotation: new(0, heading, 0)) { NameCharacters = name.Length });
                     }
                     catch (InvalidDataException ex)
                     {
@@ -245,7 +271,7 @@ public static partial class MissionSceneLoader
             }
             if (attachedRoots.Count > 0)
                 scene.Nodes[worldRoot] = scene.Nodes[worldRoot] with { Children = scene.Nodes[worldRoot].Children.Concat(attachedRoots).Distinct().ToArray() };
-            var context = new MissionSceneContext(scene, sources, actors, [], notes, layout, original.Nodes.Count);
+            var context = new MissionSceneContext(scene, sources, actors, [], notes, layout, original.Nodes.Count, token);
             if (selected != null) context.AiNetworks = MissionAiNetworks.Read(selected.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (selected, a)), token);
             context.AiNetworks = MissionAiValves.Attach(context.AiNetworks, archives.Where(a => a == selected || !a.Assets.Any(v => v.Name.Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase))), token);
             return context;

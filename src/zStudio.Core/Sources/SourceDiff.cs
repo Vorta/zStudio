@@ -3,7 +3,7 @@ using System.Text;
 namespace Recoil.Zbd.Core.Sources;
 
 /// <summary>A line of a source diff: ' ' kept, '-' only on disk, '+' only in the workspace; numbers are 1-based (0: not on that side).</summary>
-public sealed record SourceDiffLine(char Kind, int DiskLine, int WorkingLine, string Text);
+public sealed record SourceDiffLine(char Kind, int DiskLine, int WorkingLine, string Text, bool TextTruncated = false);
 /// <summary>A bounded description of how a source file's working content differs from the file on disk.</summary>
 public sealed record SourceDiffReport(string File, bool OnDisk, bool InWorkspace, bool Text, int DiskBytes, int WorkingBytes, int ChangedLines, IReadOnlyList<SourceDiffLine> Lines, bool Truncated);
 
@@ -21,10 +21,14 @@ public static class SourceDiff
     public const int MaximumComparedLines = 200_000;
     /// <summary>The most steps the edit search takes before the change is summarized instead.</summary>
     public const long MaximumComparisons = 100_000_000;
+    /// <summary>Worst-case escaped JSON bytes retained for a report, charged before decoding its displayed lines.</summary>
+    public const int MaximumPresentationBytes = 1024 * 1024;
 
-    public static SourceDiffReport Describe(string file, byte[]? disk, byte[]? working, int maximumLines = 200, CancellationToken token = default)
+    public static SourceDiffReport Describe(string file, byte[]? disk, byte[]? working, int maximumLines = 200, CancellationToken token = default, long maximumPresentationBytes = MaximumPresentationBytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumLines);
+        long presentationBytes = 512 + 6L * file.Length;
+        if (maximumPresentationBytes < presentationBytes) throw new InvalidDataException("The source diff identity exceeds its presentation allowance.");
         bool text = IsText(disk) && IsText(working);
         int diskBytes = disk?.Length ?? 0, workingBytes = working?.Length ?? 0;
         SourceDiffReport Report(int changed, IReadOnlyList<SourceDiffLine> lines, bool truncated) => new(file, disk != null, working != null, true, diskBytes, workingBytes, changed, lines, truncated);
@@ -71,7 +75,12 @@ public static class SourceDiff
             {
                 if (shown.Count == maximumLines) { truncated = true; break; }
                 var (kind, da, dw) = script[j];
-                shown.Add(kind == '+' ? new('+', 0, skipped + dw + 1, Clip(b, right, dw)) : new(kind, skipped + da + 1, kind == '-' ? 0 : skipped + dw + 1, Clip(a, left, da)));
+                int length = kind == '+' ? right.Ends[dw] - right.Starts[dw] : left.Ends[da] - left.Starts[da];
+                long cost = 128 + 6L * Math.Min(length, MaximumLineCharacters + 1);
+                if (cost > maximumPresentationBytes - presentationBytes) { truncated = true; break; }
+                presentationBytes += cost;
+                shown.Add(kind == '+' ? new('+', 0, skipped + dw + 1, Clip(b, right, dw), length > MaximumLineCharacters)
+                    : new(kind, skipped + da + 1, kind == '-' ? 0 : skipped + dw + 1, Clip(a, left, da), length > MaximumLineCharacters));
                 last = j;
             }
         }

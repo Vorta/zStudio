@@ -172,34 +172,39 @@ public sealed class PackGltfRound5Tests
         Assert.Throws<InvalidDataException>(() => WorldGltf.Import(doc, "crate.gltf", 0xFF,
             new() { World = new(), Reference = (_, _) => throw new InvalidOperationException(), TextureName = (u, n, _) => n ?? u }));
 
-    private static long Allocated(Action action)
-    {
-        action();
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        action();
-        return GC.GetAllocatedBytesForCurrentThread() - before;
-    }
-
     [Fact]
     public void AMalformedEngineValueIsShownAsABoundedPreview()
     {
         // An object where a hexadecimal word belongs, within the reader's metadata limit: written whole, its text would
         // escape six-fold.
+        // Warm a different tiny document. The measured target must remain cold: its first refusal used to
+        // materialize all lazy container children, which repeating the same Import before measurement hid.
+        _ = Import(Model("{\"warm\":0}"));
         var doc = Model("{\"text\":\"" + new string('<', 1 << 20) + "\",\"more\":[1,2,3]}");
+        long before = GC.GetAllocatedBytesForCurrentThread();
         var refused = Import(doc);
-        Assert.StartsWith("crate.gltf: the engine value 'flags' is invalid ({\"text\":\"", refused.Message, StringComparison.Ordinal);
-        Assert.EndsWith("…).", refused.Message, StringComparison.Ordinal);
+        long large = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal("crate.gltf: the engine value 'flags' is invalid ({…}).", refused.Message);
         Assert.True(refused.Message.Length < 200, refused.Message);
         var small = Model("{\"text\":\"<\"}");
-        long large = Allocated(() => Import(doc)), baseline = Allocated(() => Import(small));
+        before = GC.GetAllocatedBytesForCurrentThread();
+        _ = Import(small);
+        long baseline = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.True(large - baseline < 64 << 10, $"Refusing the large value allocated {large:N0} bytes, a small one {baseline:N0}.");
 
-        // A string that is not hexadecimal and a number with a million digits: as written, cut short.
-        Assert.Matches("^crate\\.gltf: the engine value 'flags' is invalid \\(\"z{63}…\\)\\.$", Import(Model("\"" + new string('z', 1 << 20) + "\"")).Message);
-        Assert.Matches("^crate\\.gltf: the engine value 'flags' is invalid \\(7{64}…\\)\\.$", Import(Model(new string('7', 1 << 20))).Message);
+        // Admitted scalar spellings still use bounded previews. Pathological scalar padding is refused before
+        // decoding under the numeric representation limit; the large cold-container allocation check above remains.
+        Assert.Matches("^crate\\.gltf: the engine value 'flags' is invalid \\(\"z{63}…\\)\\.$", Import(Model("\"" + new string('z', 128) + "\"")).Message);
+        Assert.Matches("^crate\\.gltf: the engine value 'flags' is invalid \\(7{64}…\\)\\.$", Import(Model(new string('7', 128))).Message);
+        foreach (string scalar in new[] { "\"" + new string('z', 1 << 20) + "\"", new string('7', 1 << 20) })
+        {
+            string message = Import(Model(scalar)).Message;
+            Assert.Contains("256-byte representation limit", message);
+            Assert.True(message.Length < 200);
+        }
         // Small values read as before.
         Assert.Equal("crate.gltf: the engine value 'flags' is invalid (\"0xZZ\").", Import(Model("\"0xZZ\"")).Message);
-        Assert.Equal("crate.gltf: the engine value 'flags' is invalid ({\"a\":[1,true,null,\"x\"]}).", Import(Model("{ \"a\": [1, true, null, \"x\"] }")).Message);
+        Assert.Equal("crate.gltf: the engine value 'flags' is invalid ({…}).", Import(Model("{ \"a\": [1, true, null, \"x\"] }")).Message);
     }
 
     [Fact]
@@ -209,24 +214,20 @@ public sealed class PackGltfRound5Tests
         Assert.Equal("5", JsonData.Shown(JsonValue.Create(5)));
         Assert.Equal("\"a\\\"b\"", JsonData.Shown(JsonValue.Create("a\"b")));
         Assert.Equal("a\"b", JsonData.Shown(JsonValue.Create("a\"b"), asText: true));
-        Assert.Equal("[]", JsonData.Shown(new JsonArray()));
-        Assert.Equal("{\"x\":{\"y\":[1.5,false]}}", JsonData.Shown(JsonNode.Parse("{ \"x\" : { \"y\" : [ 1.5, false ] } }")));
+        Assert.Equal("[…]", JsonData.Shown(new JsonArray()));
+        Assert.Equal("{…}", JsonData.Shown(JsonNode.Parse("{ \"x\" : { \"y\" : [ 1.5, false ] } }")));
         Assert.Equal("tile.terrain.json", JsonData.Shown(JsonNode.Parse("\"tile.terrain.json\""), asText: true));
         Assert.Equal(new string('a', 64) + "…", JsonData.Shown(JsonNode.Parse($"\"{new string('a', 5000)}\""), asText: true));
         Assert.Equal(new string('a', 64) + "…", JsonData.Shown(JsonValue.Create(new string('a', 5000)), asText: true));
 
-        // A parsed object of a hundred thousand long strings, previewed after its first characters.
-        // Parsed text is shown as written, with the escapes the writer chose.
-        JsonObject large = []; for (int i = 0; i < 100_000; i++) large[$"key{i}"] = new string('<', 64);
-        var parsed = JsonNode.Parse(large.ToJsonString())!;
-        string first = JsonData.Shown(parsed);
+        // Warm a separate tiny node, then measure the first access to a fresh large parsed object.
+        _ = JsonData.Shown(JsonNode.Parse("{\"warm\":0}"));
+        var parsed = JsonNode.Parse("{" + string.Join(',', Enumerable.Range(0, 100_000).Select(i => $"\"key{i}\":0")) + "}")!;
         long before = GC.GetAllocatedBytesForCurrentThread();
         string shown = JsonData.Shown(parsed);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.Equal(first, shown);
-        Assert.Equal(JsonData.ShownCharacters + 1, shown.Length);
-        Assert.StartsWith("{\"key0\":\"\\u003C\\u003C", shown, StringComparison.Ordinal);
-        Assert.EndsWith("…", shown, StringComparison.Ordinal);
+        Assert.Equal("{…}", shown);
+        Assert.Equal(shown, JsonData.Shown(parsed));
         Assert.True(allocated < 16 << 10, $"The preview allocated {allocated:N0} bytes.");
 
         // A long string as text and a surrogate pair at the cut, which stays whole or is left out.

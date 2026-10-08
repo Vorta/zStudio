@@ -213,7 +213,8 @@ public static partial class TexturePackWriter
     /// default texture, so 512 needs a device/wrapper that reports at least 512.
     /// </summary>
     public const int MaximumDimension = 512;
-    public static byte[] Append(ZbdDocument source, string name, DecodedImage image, CancellationToken token = default)
+    public static byte[] Append(ZbdDocument source, string name, DecodedImage image, CancellationToken token = default) => Append(source, name, image, FormatRegistry.MaximumDocumentBytes, token);
+    internal static byte[] Append(ZbdDocument source, string name, DecodedImage image, long maximumBytes, CancellationToken token)
     {
         ModelReplacementWriter.ValidateName(name);
         if (source.Probe.Family != FormatFamily.TexturePack || source.Probe.Version != 1 || source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact v1 texture pack is required.");
@@ -221,9 +222,14 @@ public static partial class TexturePackWriter
         if (image.Width < 1 || image.Width > MaximumDimension || image.Height < 1 || image.Height > MaximumDimension || !System.Numerics.BitOperations.IsPow2(image.Width) || !System.Numerics.BitOperations.IsPow2(image.Height) || image.Rgba.Length != image.Width * image.Height * 4)
             throw new InvalidDataException($"Game textures must be power-of-two RGB/RGBA images up to {MaximumDimension} × {MaximumDimension}.");
         if (Enumerable.Range(0, image.Width * image.Height).Any(i => image.Rgba[i * 4 + 3] != 255)) throw new InvalidDataException("Replacement solid meshes require an opaque diffuse texture.");
+        // Opaque, non-indexed Encode emits a 16-byte header and two bytes per pixel.
+        // Admit the complete output before Encode or Write allocates any payload.
+        long outputBytes = source.Bytes.Length + 40L + 16 + (long)image.Width * image.Height * 2;
+        FormatRegistry.ValidateDocumentSize(outputBytes);
+        if (outputBytes > maximumBytes) throw new InvalidDataException("The replacement texture pack exceeds the remaining edit buffer budget.");
         int count = source.Assets.Count;
         var encoded = Encode(name, image, token: token);
-        byte[] bytes = Write(new(source, new Dictionary<int, TexturePayload>(), [encoded.Payload]), token);
+        byte[] bytes = Write(new(source, new Dictionary<int, TexturePayload>(), [encoded.Payload]), maximumBytes, token);
         var parsed = FormatRegistry.Default.OpenBytes(source.Path, bytes, token: token);
         if (parsed.Diagnostics.Any(d => d.Severity == "Error") || parsed.Assets.Count != count + 1) throw new InvalidDataException("Texture pack failed readback.");
         return bytes;

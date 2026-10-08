@@ -18,19 +18,17 @@ internal sealed class TerrainCreateDialog : Window
     private int page;
     public IReadOnlyList<string> Chosen => nodes.Where(chosen.Contains).ToArray();
 
-    public TerrainCreateDialog(string file, IReadOnlyList<string> nodes)
+    public TerrainCreateDialog(string file, IReadOnlyList<string> nodes, Size? available = null)
     {
         this.nodes = nodes;
         if (nodes.Count == 1) chosen.Add(nodes[0]);
-        Title = "Create terrain"; Width = 460; SizeToContent = SizeToContent.Height; MaxHeight = 640; ResizeMode = ResizeMode.NoResize;
+        Title = "Create terrain"; ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
-        Grid layout = new() { Margin = new(16) };
-        layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
-        layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
-        layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
-        StackPanel panel = new(), footer = new();
-        layout.Children.Add(panel); Grid.SetRow(footer, 2); layout.Children.Add(footer);
-        panel.Children.Add(new TextBlock { Text = $"Surfaces of {file}", FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        StackPanel panel = new();
+        panel.Children.Add(new TextBlock { Text = "Surfaces of", FontWeight = FontWeights.SemiBold });
+        TextBox modelPath = new() { Text = file, IsReadOnly = true, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
+        System.Windows.Automation.AutomationProperties.SetName(modelPath, "Terrain source model path");
+        panel.Children.Add(modelPath);
         panel.Children.Add(new TextBlock
         {
             Text = "The chosen meshes become terrain: a recipe is created beside the file and a marker in the mission database places its pieces. Keep floors, ceilings, walls, water and seafloor as separate meshes.",
@@ -38,20 +36,19 @@ internal sealed class TerrainCreateDialog : Window
         });
         System.Windows.Automation.AutomationProperties.SetName(filter, "Filter terrain mesh nodes");
         panel.Children.Add(filter); panel.Children.Add(count);
-        ScrollViewer choices = new() { Content = list, MaxHeight = 400, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-        Grid.SetRow(choices, 1); layout.Children.Add(choices);
+        panel.Children.Add(list);
         StackPanel pages = new() { Orientation = Orientation.Horizontal, Margin = new(0, 6, 0, 0) };
-        pages.Children.Add(previous); pages.Children.Add(next); footer.Children.Add(pages); footer.Children.Add(error);
+        pages.Children.Add(previous); pages.Children.Add(next); panel.Children.Add(pages); panel.Children.Add(error);
         filter.TextChanged += (_, _) => { page = 0; Fill(); };
         previous.Click += (_, _) => { page--; Fill(); };
         next.Click += (_, _) => { page++; Fill(); };
-        StackPanel buttons = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new(0, 12, 0, 0) };
+        WrapPanel buttons = new() { HorizontalAlignment = HorizontalAlignment.Right, Margin = new(0, 12, 0, 0) };
         Button ok = new() { Content = "Create", IsDefault = true, MinWidth = 88, Margin = new(0, 0, 8, 0) };
         ok.Click += (_, _) => { if (Chosen.Count == 0) { MessageBox.Show(this, "Choose at least one surface.", Title); return; } DialogResult = true; };
         Button cancel = new() { Content = "Cancel", IsCancel = true, MinWidth = 88 };
         buttons.Children.Add(ok); buttons.Children.Add(cancel);
-        footer.Children.Add(buttons);
-        Content = layout;
+        Content = DialogLayout.WithActions(panel, buttons);
+        DialogLayout.Constrain(this, new(460, 640), available);
         Fill();
     }
 

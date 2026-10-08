@@ -88,6 +88,7 @@ public sealed class AnimationCompilationWorkTests
     private sealed class MemoryFiles(byte[] content) : IProjectFiles
     {
         public bool Exists(string relative) => relative == Root;
-        public byte[] Read(string relative, CancellationToken token) { token.ThrowIfCancellationRequested(); return content; }
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] bytes = content; limits.Validate(bytes); return bytes; }
     }
 }

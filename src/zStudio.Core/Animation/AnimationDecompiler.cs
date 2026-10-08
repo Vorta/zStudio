@@ -15,13 +15,21 @@ public static class AnimationDecompiler
     /// The definition items of <paramref name="entry"/> as a list node (the value of ANIMATION_DEFINITION).
     /// <paramref name="script"/> names the script file and frame rate of each keyframe event, whose keys live in a script.
     /// </summary>
-    public static ZrdNode Definition(AnimationEntry entry, Func<AnimationEvent, (string File, float Rate)> script)
+    public static ZrdNode Definition(AnimationEntry entry, Func<AnimationEvent, (string File, float Rate)> script, CancellationToken token = default)
+        => Definition(entry, script, new AnimationDefinitionBudget(token));
+
+    internal static ZrdNode Definition(AnimationEntry entry, Func<AnimationEvent, (string File, float Rate)> script, AnimationDefinitionBudget budget)
     {
-        Builder b = new(entry, script);
+        // Every event needs at least its keyword and value array. Refuse large admitted binary streams before
+        // constructing even the first candidate node; detailed charges below cover their remaining operands.
+        long minimum = 1;
+        foreach (var sequence in entry.AllSequences) { budget.Visit(); minimum += 2L * sequence.Events.Count; }
+        budget.CheckNodes(minimum);
+        Builder b = new(entry, script, budget);
         return b.Definition();
     }
 
-    private sealed class Builder(AnimationEntry entry, Func<AnimationEvent, (string File, float Rate)> script)
+    private sealed class Builder(AnimationEntry entry, Func<AnimationEvent, (string File, float Rate)> script, AnimationDefinitionBudget budget)
     {
         private readonly List<ZrdNode> items = [];
 
@@ -343,8 +351,8 @@ public static class AnimationDecompiler
             if (offset != Vector3.Zero || always) at.AddRange(V(offset));
             Key(p, "AT_NODE", [.. at]);
         }
-        private static void RunTime(List<ZrdNode> p, float time) { if (time != 0) Key(p, "RUN_TIME", F(time)); }
-        private static ZrdNode[] Opacity(float value, short state) => state < 0 ? [F(value)] : [F(value), S(state != 0 ? "ON" : "OFF")];
+        private void RunTime(List<ZrdNode> p, float time) { if (time != 0) Key(p, "RUN_TIME", F(time)); }
+        private ZrdNode[] Opacity(float value, short state) => state < 0 ? [F(value)] : [F(value), S(state != 0 ? "ON" : "OFF")];
 
         // ------------------------------------------------------------ references
 
@@ -383,11 +391,11 @@ public static class AnimationDecompiler
             return guess;
         }
 
-        private static ZrdNode S(string text) => new(Guid.NewGuid(), ZrdKind.String, 0, text, []);
-        private static ZrdNode I(int value) => new(Guid.NewGuid(), ZrdKind.Int, unchecked((uint)value), "", []);
-        private static ZrdNode F(float value) => new(Guid.NewGuid(), ZrdKind.Float, BitConverter.SingleToUInt32Bits(value), "", []);
-        private static ZrdNode[] V(Vector3 v) => [F(v.X), F(v.Y), F(v.Z)];
-        private static ZrdNode A(params ZrdNode[] children) => new(Guid.NewGuid(), ZrdKind.Array, 0, "", children);
-        private static void Key(List<ZrdNode> list, string key, params ZrdNode[] values) { list.Add(S(key)); list.Add(A(values)); }
+        private ZrdNode S(string text) { budget.Node(text.Length); return new(Guid.NewGuid(), ZrdKind.String, 0, text, []); }
+        private ZrdNode I(int value) { budget.Node(); return new(Guid.NewGuid(), ZrdKind.Int, unchecked((uint)value), "", []); }
+        private ZrdNode F(float value) { budget.Node(); return new(Guid.NewGuid(), ZrdKind.Float, BitConverter.SingleToUInt32Bits(value), "", []); }
+        private ZrdNode[] V(Vector3 v) => [F(v.X), F(v.Y), F(v.Z)];
+        private ZrdNode A(params ZrdNode[] children) { budget.Node(); return new(Guid.NewGuid(), ZrdKind.Array, 0, "", children); }
+        private void Key(List<ZrdNode> list, string key, params ZrdNode[] values) { list.Add(S(key)); list.Add(A(values)); }
     }
 }

@@ -61,13 +61,22 @@ public static class ZoneProbe
     private const float NoHit = -300, Lowest = -250;
 
     /// <summary>The surfaces under (x, z) that a probe of <paramref name="kind"/> finds, with <paramref name="current"/> as the zone set its gate tests.</summary>
-    public static ZoneProbeHits Probe(WorldNode world, float x, float z, ZoneSet current, ZoneProbeKind kind = ZoneProbeKind.Point, float top = Top)
+    /// <remarks>Work exhaustion throws <see cref="InvalidDataException"/>; it never returns incomplete hits as a complete probe. Full describes only the engine's hit buffer.</remarks>
+    public static ZoneProbeHits Probe(WorldNode world, float x, float z, ZoneSet current, ZoneProbeKind kind = ZoneProbeKind.Point, float top = Top, CancellationToken token = default)
+        => Probe(world, x, z, current, kind, top, token, ProbeWorkBudget.MaximumProbeWork);
+    internal static ZoneProbeHits Probe(WorldNode world, float x, float z, ZoneSet current, ZoneProbeKind kind, float top, CancellationToken token, long maximumWork)
     {
+        try { return ProbeCore(world, x, z, current, kind, top, token, maximumWork); }
+        catch (ProbeWorkLimitException ex) { throw new InvalidDataException(ex.Message, ex); }
+    }
+    private static ZoneProbeHits ProbeCore(WorldNode world, float x, float z, ZoneSet current, ZoneProbeKind kind, float top, CancellationToken token, long maximumWork)
+    {
+        token.ThrowIfCancellationRequested();
         if (world.Class != WorldNodeClass.World) throw new ArgumentException("A world node is required.", nameof(world));
         int columns = world.PayloadInt(0x78), rows = world.PayloadInt(0x7C);
         int column = Cell(((double)x - world.PayloadFloat(0x34)) * world.PayloadFloat(0x64));
         int row = Cell(((double)z - world.PayloadFloat(0x38)) * world.PayloadFloat(0x68));
-        Search search = new(x, z, top, current, kind);
+        Search search = new(x, z, top, current, kind, token, new(maximumWork, token, "The zone probe exceeded its bounded node or polygon-work budget; no complete result is available."));
         WorldArea? area = null; bool inGrid = false;
         if (column >= 0 && column < columns && row >= 0 && row < rows) { area = Area(column, row); inGrid = true; }
         else if (world.PayloadInt(0x50) != 0)
@@ -121,9 +130,9 @@ public static class ZoneProbe
     /// own added while there is room for three, replace them, unless the hit has none, the result names zone 0xFF, or
     /// nothing was hit: then the previous zones stay.
     /// </summary>
-    public static ZoneSet CameraZones(WorldNode world, Vector3 eye, ZoneSet previous, ZoneSet player, bool skipWater = false)
+    public static ZoneSet CameraZones(WorldNode world, Vector3 eye, ZoneSet previous, ZoneSet player, bool skipWater = false, CancellationToken token = default)
     {
-        var probe = Probe(world, eye.X, eye.Z, previous);
+        var probe = Probe(world, eye.X, eye.Z, previous, token: token);
         if (probe.Hits.Count == 0) return previous;
         var hit = probe.Hits[Select(probe.Hits, eye.Y, CameraWindow, skipWater).Index].Zones;
         if (hit.Count == 0) return previous;
@@ -140,9 +149,9 @@ public static class ZoneProbe
     /// node the vehicle stands on. Without a hit the zones stay and the root zone becomes 0xFF (any).
     /// </summary>
     /// <param name="window">How far above the sample the ground may lie: min(1 − vertical speed × tick, 4) while moving.</param>
-    public static (ZoneSet Zones, byte RootZone) VehicleZones(WorldNode world, Vector3 sample, ZoneSet previous, float window, bool skipWater = false)
+    public static (ZoneSet Zones, byte RootZone) VehicleZones(WorldNode world, Vector3 sample, ZoneSet previous, float window, bool skipWater = false, CancellationToken token = default)
     {
-        var probe = Probe(world, sample.X, sample.Z, previous, ZoneProbeKind.Vehicle);
+        var probe = Probe(world, sample.X, sample.Z, previous, ZoneProbeKind.Vehicle, token: token);
         if (probe.Hits.Count == 0) return (previous, 0xFF);
         var hit = probe.Hits[Select(probe.Hits, sample.Y, window, skipWater).Index];
         return (hit.Zones, TopLevel(hit.Node) is { } top ? (byte)top.Zone : hit.Zones.Id0);
@@ -153,9 +162,9 @@ public static class ZoneProbe
     /// more than 4 units above the spawn point, skipping water until the amphibious mode is unlocked. Without ground they
     /// stay cleared (every zone) and the root zone is 0xFF. Mission start then gives the camera the local player's zones.
     /// </summary>
-    public static (ZoneSet Zones, byte RootZone) SpawnZones(WorldNode world, Vector3 position, bool amphibious)
+    public static (ZoneSet Zones, byte RootZone) SpawnZones(WorldNode world, Vector3 position, bool amphibious, CancellationToken token = default)
     {
-        var probe = Probe(world, position.X, position.Z, ZoneSet.Cleared);
+        var probe = Probe(world, position.X, position.Z, ZoneSet.Cleared, token: token);
         if (probe.Hits.Count == 0) return (ZoneSet.Cleared, 0xFF);
         var hit = probe.Hits[Select(probe.Hits, position.Y, SpawnWindow, !amphibious).Index];
         return (hit.Zones, TopLevel(hit.Node) is { } top ? (byte)top.Zone : hit.Zones.Id0);
@@ -166,9 +175,9 @@ public static class ZoneProbe
     /// FindBestPickCandidateBelowPoint 0x443c70): no gate, from the eye down, the highest hit (at equal height one with
     /// zones); a hit without zones keeps the previous ones and no hit clears them, so every zone is drawn.
     /// </summary>
-    public static ZoneSet ViewZones(WorldNode world, Vector3 eye, ZoneSet previous)
+    public static ZoneSet ViewZones(WorldNode world, Vector3 eye, ZoneSet previous, CancellationToken token = default)
     {
-        var hits = Probe(world, eye.X, eye.Z, ZoneSet.Cleared, ZoneProbeKind.Point, eye.Y).Hits;
+        var hits = Probe(world, eye.X, eye.Z, ZoneSet.Cleared, ZoneProbeKind.Point, eye.Y, token).Hits;
         if (hits.Count == 0) return ZoneSet.Cleared;
         var best = hits[0];
         foreach (var hit in hits.Skip(1))
@@ -190,12 +199,12 @@ public static class ZoneProbe
 
     /// <summary>
     /// The most one probe visits: nodes (once per path, as the engine walks a node several parents share) and the vertices
-    /// it places. A world with every node in the probe's cell stays far below; a malformed one (a cycle, or nodes shared
-    /// along exponentially many paths) is refused beyond it.
+    /// it places. Node and polygon-corner work also shares a per-probe allowance, including repeated model instances.
+    /// Cycles and worlds shared along too many paths are refused rather than returning incomplete results.
     /// </summary>
     public const int MaximumVisits = 16 * GameZWorld.MaximumNodeCapacity, MaximumVertices = 64 * 1024 * 1024;
 
-    private sealed class Search(float x, float z, float top, ZoneSet current, ZoneProbeKind kind)
+    private sealed class Search(float x, float z, float top, ZoneSet current, ZoneProbeKind kind, CancellationToken token, ProbeWorkBudget work)
     {
         public float X = x, Z = z;
         public List<ZoneHit> Hits { get; } = [];
@@ -211,9 +220,11 @@ public static class ZoneProbe
         /// </summary>
         public void Visit(WorldNode top, int siblings)
         {
+            token.ThrowIfCancellationRequested();
             Stack<(WorldNode Node, int Siblings, Matrix4x4 Parent, int Depth)> pending = new([(top, siblings, Matrix4x4.Identity, 0)]);
             while (pending.TryPop(out var item))
             {
+                work.Take(1);
                 var (node, count, parent, depth) = item;
                 if ((node.Flags & ActiveFlag) == 0 || (node.Flags & AltitudeFlag) == 0) continue;
                 if ((node.Flags & GateFlag) != 0 && !current.Allows((byte)node.Zone)) continue;
@@ -245,7 +256,12 @@ public static class ZoneProbe
                         break;
                     default: continue;
                 }
-                for (int i = node.Children.Count - 1; i >= 0; i--) pending.Push((node.Children[i], node.Children.Count, matrix, depth + 1));
+                if (node.Children.Count > MaximumVisits - visits - pending.Count) throw new InvalidDataException($"The probe would visit more than {MaximumVisits:N0} nodes; the world shares nodes along too many paths.");
+                for (int i = node.Children.Count - 1; i >= 0; i--)
+                {
+                    token.ThrowIfCancellationRequested();
+                    pending.Push((node.Children[i], node.Children.Count, matrix, depth + 1));
+                }
             }
         }
 
@@ -263,16 +279,26 @@ public static class ZoneProbe
             if ((this.vertices += model.Vertices.Count) > MaximumVertices) throw new InvalidDataException($"The probe would place more than {MaximumVertices:N0} vertices; the world shares models along too many paths.");
             var vertices = model.Vertices.ToArray();
             if ((model.Flags & 0x08) != 0 && model.MorphFactor != 0)
-                for (int i = 0; i < Math.Min(model.Morphs.Count, vertices.Length); i++) vertices[i] += model.Morphs[i] * model.MorphFactor;
-            if (!matrix.IsIdentity) for (int i = 0; i < vertices.Length; i++) vertices[i] = Vector3.Transform(vertices[i], matrix);
+                for (int i = 0; i < Math.Min(model.Morphs.Count, vertices.Length); i++) { token.ThrowIfCancellationRequested(); vertices[i] += model.Morphs[i] * model.MorphFactor; }
+            if (!matrix.IsIdentity) for (int i = 0; i < vertices.Length; i++) { token.ThrowIfCancellationRequested(); vertices[i] = Vector3.Transform(vertices[i], matrix); }
             foreach (var polygon in model.Polygons)
             {
-                if (polygon.Vertices.Length < 3 || polygon.Vertices.Any(v => v < 0 || v >= vertices.Length)) continue;
-                var points = polygon.Vertices.Select(v => vertices[v]).ToArray();
-                var normal = Vector3.Normalize(Vector3.Cross(points[1] - points[0], points[2] - points[0]));
+                // Charge before index validation and edge scans, including malformed/degenerate polygons and no-hit models.
+                work.Take(1L + polygon.Vertices.Length);
+                if (polygon.Vertices.Length < 3) continue;
+                bool valid = true;
+                for (int i = 0; i < polygon.Vertices.Length; i++)
+                {
+                    if ((i & 1023) == 0) token.ThrowIfCancellationRequested();
+                    if (polygon.Vertices[i] < 0 || polygon.Vertices[i] >= vertices.Length) { valid = false; break; }
+                }
+                if (!valid) continue;
+                var indices = polygon.Vertices;
+                var origin = vertices[indices[0]];
+                var normal = Vector3.Normalize(Vector3.Cross(vertices[indices[1]] - origin, vertices[indices[2]] - origin));
                 if (kind == ZoneProbeKind.Vehicle && !(normal.Y > 0)) continue;
-                if (!Holds(points)) continue;
-                float height = normal.Y == 0 ? points[0].Y : points[0].Y - ((X - points[0].X) * normal.X + (Z - points[0].Z) * normal.Z) / normal.Y;
+                if (!Holds(vertices, indices)) continue;
+                float height = normal.Y == 0 ? origin.Y : origin.Y - ((X - origin.X) * normal.X + (Z - origin.Z) * normal.Z) / normal.Y;
                 if (!(height <= top)) continue;
                 // The vehicle's buffer drops a surface found once it holds 32 (AddFaceToPlayerProbeSampleBuckets, 0x484b70).
                 if (kind == ZoneProbeKind.Vehicle && Hits.Count >= MaximumHits) { Full = true; return; }
@@ -282,11 +308,12 @@ public static class ZoneProbe
         }
 
         /// <summary>TryGetPolygonHitAtQueryXZ (0x4856d0): every edge keeps the point on its inner side.</summary>
-        private bool Holds(Vector3[] points)
+        private bool Holds(Vector3[] vertices, int[] indices)
         {
-            for (int i = 0; i < points.Length; i++)
+            for (int i = 0; i < indices.Length; i++)
             {
-                var previous = points[i == 0 ? points.Length - 1 : i - 1]; var currentPoint = points[i];
+                if ((i & 1023) == 0) token.ThrowIfCancellationRequested();
+                var previous = vertices[indices[i == 0 ? indices.Length - 1 : i - 1]]; var currentPoint = vertices[indices[i]];
                 double edge = ((double)X - previous.X) * ((double)currentPoint.Z - previous.Z) + ((double)Z - previous.Z) * ((double)previous.X - currentPoint.X);
                 if (edge <= -EdgeTolerance) return false;
             }

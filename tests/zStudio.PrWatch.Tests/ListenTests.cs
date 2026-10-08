@@ -72,11 +72,33 @@ public sealed class ListenTests
     {
         using var fixture = new ClaudeFixture(); fixture.Save(fixture.NewState());
         var request = Comment(1, "conversation") with { Informational = true };
-        var source = new ScriptedSource(Observe(request));
-        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token); cancel.CancelAfter(TimeSpan.FromMilliseconds(400));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new WatchService(fixture.Store, source, new FakeQueue(), new SteppedTime()).ListenAsync(cancel.Token));
+        // The next ReadAsync cannot begin until the preceding poll's state was saved. Four completed polls also
+        // span the normal 45-second settle window if the comment is accidentally treated as review feedback.
+        var source = new PollingBarrierSource(Observe(request), completedPolls: 4);
+        var queue = new FakeQueue(); var clock = new SteppedTime(); var started = clock.GetUtcNow();
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var listening = new WatchService(fixture.Store, source, queue, clock).ListenAsync(cancel.Token);
+        try
+        {
+            // A mistaken notice (or another early exit) fails immediately instead of hanging at the barrier.
+            Assert.Same(source.Waiting, await Task.WhenAny(source.Waiting, listening).WaitAsync(Token));
+            var observed = fixture.Store.Load()!;
+            Assert.Equal(5, source.Reads);
+            Assert.Equal(started.AddMinutes(3), observed.LastSuccess);
+            Assert.Equal(observed.LastSuccess, observed.Heartbeat);
+            Assert.Equal(Head, observed.ObservedHead);
+            Assert.True(CommandRunner.Alive(observed.WorkerPid, observed.WorkerStartTicks));
+            Assert.Empty(observed.Notices); Assert.True(observed.CommentsArmed);
+        }
+        finally
+        {
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listening);
+        }
         var state = fixture.Store.Load()!;
-        Assert.Empty(state.Notices); Assert.True(state.CommentsArmed); Assert.True(source.Reads >= 2);
+        Assert.Empty(state.Notices); Assert.True(state.CommentsArmed); Assert.True(state.Active);
+        Assert.Equal(0, queue.Adds);
+        Assert.Equal(0, state.WorkerPid); Assert.Equal(0, state.WorkerStartTicks);
     }
 
     [Fact]
@@ -131,6 +153,23 @@ public sealed class ListenTests
         public int Reads => Volatile.Read(ref reads);
         public Task<Observation> ReadAsync(string repository, int pr, CancellationToken token)
         { int index = Interlocked.Increment(ref reads) - 1; return Task.FromResult(script[Math.Min(index, script.Length - 1)]); }
+    }
+    /// <summary>Blocks the next read after a known number of complete service polls, until the test cancels.</summary>
+    private sealed class PollingBarrierSource(Observation observation, int completedPolls) : IPrSource
+    {
+        private int reads;
+        private readonly TaskCompletionSource waiting = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Reads => Volatile.Read(ref reads);
+        public Task Waiting => waiting.Task;
+        public async Task<Observation> ReadAsync(string repository, int pr, CancellationToken token)
+        {
+            if (Interlocked.Increment(ref reads) > completedPolls)
+            {
+                waiting.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            return observation;
+        }
     }
     /// <summary>Deterministic time: each delay advances the clock by exactly its due time and completes at once, so settle
     /// windows count polls rather than depending on how long real file I/O takes on the test machine.</summary>

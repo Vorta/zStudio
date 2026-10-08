@@ -3,6 +3,7 @@ namespace Recoil.Zbd.Core.Sources;
 /// <summary>Read the opened file, never a length checked on a different path lookup.</summary>
 public static class SourceRead
 {
+    internal delegate void Admission(ReadOnlySpan<byte> prefix, long length);
     // File/Directory.Exists hide access and I/O failures as false. Protection and dependency scans need
     // evidence of absence; only the two not-found results establish it.
     internal static bool FileExists(string path) => Attributes(path) is { } attributes && !attributes.HasFlag(FileAttributes.Directory);
@@ -32,7 +33,7 @@ public static class SourceRead
         await using FileStream stream = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
         return await AllAsync(stream, path, maximum, token).ConfigureAwait(false);
     }
-    private static async Task<byte[]> AllAsync(FileStream stream, string path, long maximum, CancellationToken token)
+    internal static async Task<byte[]> AllAsync(Stream stream, string path, long maximum, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         int length = Length(stream, maximum, path);
@@ -48,6 +49,37 @@ public static class SourceRead
     {
         using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 0, FileOptions.SequentialScan);
         return All(stream, maximum, path, token);
+    }
+
+    /// <summary>Apply a caller's raw and structural allowances through the opened handle before allocating its payload.</summary>
+    public static byte[] All(string path, Worlds.ProjectReadLimits limits, CancellationToken token = default) =>
+        limits.RequiresPrefix ? AllAdmitted(path, limits.MaximumBytes, limits.CheckPrefix, token) : All(path, limits.MaximumBytes, token);
+
+    internal static byte[] All(Stream stream, Worlds.ProjectReadLimits limits, string name, CancellationToken token) =>
+        limits.RequiresPrefix ? AllAdmitted(stream, limits.MaximumBytes, name, limits.CheckPrefix, token) : All(stream, limits.MaximumBytes, name, token);
+
+    internal static byte[] AllAdmitted(string path, long maximum, Admission admission, CancellationToken token, Action<Stream>? verify = null)
+    {
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 0, FileOptions.SequentialScan);
+        return AllAdmitted(stream, maximum, path, admission, token, verify);
+    }
+
+    internal static byte[] AllAdmitted(Stream stream, long maximum, string name, Admission admission, CancellationToken token, Action<Stream>? verify = null)
+    {
+        token.ThrowIfCancellationRequested();
+        int length = Length(stream, maximum, name);
+        Span<byte> prefix = stackalloc byte[Math.Min(20, length)];
+        stream.ReadExactly(prefix);
+        token.ThrowIfCancellationRequested();
+        admission(prefix, length);
+        token.ThrowIfCancellationRequested();
+        stream.Position = 0;
+        // Prepared dependencies are hashed only after the held payload has passed its typed admission.
+        verify?.Invoke(stream);
+        token.ThrowIfCancellationRequested();
+        if (stream.Length != length) throw new IOException($"{JsonData.ShownText(name)} changed while it was read; try again.");
+        stream.Position = 0;
+        return All(stream, maximum, name, token);
     }
 
     internal static byte[] All(Stream stream, long maximum, string name, CancellationToken token = default)

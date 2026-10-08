@@ -43,7 +43,7 @@ public sealed class ZrdTextSyntax
     }
 
     /// <summary>Parses a Latin-1 source file, refusing one larger than <see cref="SourceProject.MaximumSourceTextBytes"/> before it is decoded.</summary>
-    public static ZrdTextSyntax Parse(ReadOnlySpan<byte> bytes, CancellationToken token = default) => Parse(ZrdText.Decode(bytes), token);
+    public static ZrdTextSyntax Parse(ReadOnlySpan<byte> bytes, CancellationToken token = default) => Parse(ZrdText.Decode(bytes, token), token);
 
     /// <summary>The Latin-1 bytes of a source text, the inverse of <see cref="Parse(ReadOnlySpan{byte}, CancellationToken)"/>.</summary>
     public static byte[] Encode(string text)

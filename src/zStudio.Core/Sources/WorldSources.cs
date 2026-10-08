@@ -24,6 +24,7 @@ internal static partial class WorldSources
 {
     [System.Text.RegularExpressions.GeneratedRegex(@"^data/m(\d+)/", System.Text.RegularExpressions.RegexOptions.CultureInvariant)] private static partial System.Text.RegularExpressions.Regex MissionFolder();
     public const string CommonModels = "data/common/models", CommonEffectsModels = "data/common/effects/models", EffectsModels = "data/effects/models";
+    internal const long MaximumReferenceVisits = 4_194_304;
     internal sealed record MissionWorld(int Mission, GameZWorld World);
     internal sealed record Output(string Path, byte[] Bytes);
     /// <summary>A file to write: its content roots, the zone they inherit and the missions that use it.</summary>
@@ -64,10 +65,20 @@ internal static partial class WorldSources
     public static List<Output> Reconstruct(IReadOnlyList<MissionWorld> missions, Func<string, IReadOnlyList<IReadOnlyList<string>>?> scripts,
         Func<int, string, string?> texturePath, IReadOnlySet<string> textureFiles, Func<string, int> addressing, List<string> notes, CancellationToken token,
         Func<string, TextureTransparency?>? transparency = null, long maximumOutputBytes = ReconstructionBudget.MaximumBytes,
-        long maximumTraceUnits = ScriptTraceBudget.MaximumUnits)
+        long maximumTraceUnits = ScriptTraceBudget.MaximumUnits, long maximumOperandReferences = ScriptOperandBudget.MaximumReferences,
+        long maximumReferenceVisits = MaximumReferenceVisits, long maximumPlacementUnits = WorldCopyBudget.MaximumUnits)
     {
+        if (maximumReferenceVisits is < 0 or > MaximumReferenceVisits) throw new ArgumentOutOfRangeException(nameof(maximumReferenceVisits));
+        long remainingReferenceVisits = maximumReferenceVisits;
         ReconstructionBudget outputBudget = new(maximumOutputBytes);
-        ScriptTraceBudget traceBudget = new(maximumTraceUnits);
+        WorldCopyBudget placement = new(maximumPlacementUnits, token);
+        long MaximumKey<T>(IEnumerable<T> values, Func<T, long> length)
+        {
+            long maximum = 0;
+            foreach (var value in values) { token.ThrowIfCancellationRequested(); maximum = Math.Max(maximum, length(value)); }
+            return maximum;
+        }
+        ScriptTraceBudget traceBudget = new(maximumTraceUnits, maximumOperandReferences: maximumOperandReferences);
         BoundedDiagnostics diagnostics = new(notes);
         // The missions that run each script: a model a mission's own script loads belongs to that mission.
         Dictionary<string, SortedSet<int>> scriptMissions = new(StringComparer.OrdinalIgnoreCase);
@@ -76,7 +87,7 @@ internal static partial class WorldSources
         Dictionary<WorldNode, (Unit Unit, int Mission)> referenceOf = new(ReferenceEqualityComparer.Instance);
         // Each part's file by the name its references share (mN_NN.flt, unique to its mission).
         Dictionary<string, Unit> partUnits = new(StringComparer.OrdinalIgnoreCase);
-        List<(int Mission, LoadedModel Load, string Hash)> traced = [];
+        List<(int Mission, LoadedModel Load, string Stem, string Hash)> traced = [];
         Dictionary<(string Folder, string Stem, string Hash), Unit> loadUnits = [];
         HashSet<WorldNode> roots = new(ReferenceEqualityComparer.Instance);
         HashSet<(WorldNode, int)> visited = [];
@@ -102,7 +113,7 @@ internal static partial class WorldSources
         foreach (var mission in missions)
         {
             token.ThrowIfCancellationRequested();
-            var trace = ScriptTrace.Trace(scripts, $"m{mission.Mission}.gs", notes, traceBudget, diagnostics);
+            var trace = ScriptTrace.Trace(scripts, $"m{mission.Mission}.gs", notes, traceBudget, diagnostics, token);
             foreach (var instruction in trace)
             {
                 if (!scriptMissions.TryGetValue(instruction.Script, out var runs)) scriptMissions[instruction.Script] = runs = [];
@@ -171,7 +182,7 @@ internal static partial class WorldSources
                 if (path == 0) secondPaths.Remove(reference); else secondPaths[reference] = path;
             }
             // A root's flags are the file's only when the script left them alone, so they are not part of its identity.
-            foreach (var load in decomposed) traced.Add((mission, load, Hash(load.Content, 0xFF)));
+            foreach (var load in decomposed) traced.Add((mission, load, Stem(load.File), Hash(load.Content, 0xFF)));
         }
         // A reference to a file: not a load's root, nor a group the build deleted unless it holds a part (such a group may
         // keep the name of a later cache, such as phone.flt in 1999 m6).
@@ -179,23 +190,39 @@ internal static partial class WorldSources
         // A file's references in record order, not looking inside their content.
         List<WorldNode> OwnReferences(IReadOnlyList<WorldNode> records)
         {
-            List<WorldNode> found = [];
-            void Walk(WorldNode node) { if (Reference(node)) { found.Add(node); return; } foreach (var child in node.Children) Walk(child); }
+            List<WorldNode> found = []; int visits = 0;
+            void Walk(WorldNode node)
+            {
+                ReferenceVisit(ref visits);
+                if (Reference(node)) { found.Add(node); return; }
+                foreach (var child in node.Children) Walk(child);
+            }
             foreach (var record in records) Walk(record);
             return found;
         }
         // The database's model references in record order, not looking inside its parts' content.
         List<WorldNode> DatabaseReferences(IReadOnlyList<WorldNode> records)
         {
-            List<WorldNode> found = [];
+            List<WorldNode> found = []; int visits = 0;
             void Walk(WorldNode node)
             {
+                ReferenceVisit(ref visits);
                 if (PartMembers(node) is { } content) { foreach (var child in node.Children) if (!content.Contains(child)) Walk(child); return; }
                 if (Reference(node)) { found.Add(node); return; }
                 foreach (var child in node.Children) Walk(child);
             }
             foreach (var record in records) Walk(record);
             return found;
+        }
+        void ReferenceVisit(ref int visits)
+        {
+            token.ThrowIfCancellationRequested();
+            // These walks count occurrences in authored order, not distinct nodes: repeated references carry
+            // separate cache-path meaning. Bound the expansion before traversing/copying it, including inference
+            // fallbacks, and share the allowance across all missions and files in this reconstruction.
+            if (visits >= WorldGltf.MaximumExportedNodes || remainingReferenceVisits == 0)
+                throw new InvalidDataException("Reconstructed model references exceed the expanded reference traversal allowance. Reduce shared-node paths or split the source operation into fewer missions.");
+            visits++; remainingReferenceVisits--;
         }
         void Visit(WorldNode node, int mission, IReadOnlyList<string> textureDirectories)
         {
@@ -237,25 +264,45 @@ internal static partial class WorldSources
         // Loaded files are found through the model directories. A file goes where its script pointed them; otherwise a
         // file every mission running a shared script loads identically goes to common, and the rest to each mission.
         HashSet<string> taken = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> nextSuffix = new(StringComparer.OrdinalIgnoreCase);
         List<(int Mission, LoadedModel Load, Unit Unit)> loads = [];
+        // Sharing is a fact about all loads of one stem by one script, not a scan to repeat for every load.
+        // Keep the original identity rules: normalized stems compare ordinally, script paths without case,
+        // and only non-database loads with one content hash across several missions may share a file.
+        var sharedLoads = traced.Where(t => !t.Load.Database).GroupBy(t => t.Stem, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.GroupBy(t => t.Load.Instruction.Script, StringComparer.OrdinalIgnoreCase)
+                .Where(s => s.Select(t => t.Hash).Distinct(StringComparer.Ordinal).Take(2).Count() == 1
+                    && s.Select(t => t.Mission).Distinct().Take(2).Count() > 1)
+                .Select(s => s.Key).ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.Ordinal);
+        HashSet<(string Folder, string Stem)> placedNames = [];
         // Loads whose folder is known come first, so a load without one can use an identical file its search finds.
-        foreach (var (mission, load, hash) in traced.OrderBy(t => t.Load.Database || t.Load.Instruction.ScriptModelDirectory != null ? 0 : 1))
+        foreach (var (mission, load, stem, hash) in traced.OrderBy(t => t.Load.Database || t.Load.Instruction.ScriptModelDirectory != null ? 0 : 1))
         {
-            string stem = Stem(load.File), script = load.Instruction.Script;
-            var sameScript = traced.Where(t => !t.Load.Database && Stem(t.Load.File) == stem && t.Load.Instruction.Script.Equals(script, StringComparison.OrdinalIgnoreCase)).ToList();
+            token.ThrowIfCancellationRequested();
+            string script = load.Instruction.Script;
             bool shared = !load.Database && scriptMissions.TryGetValue(script, out var runs) && runs.Count > 1
-                && sameScript.Select(t => t.Hash).Distinct().Count() == 1 && sameScript.Select(t => t.Mission).Distinct().Count() > 1;
+                && sharedLoads.TryGetValue(stem, out var sharingScripts) && sharingScripts.Contains(script);
             string? found = load.Database || load.Instruction.ScriptModelDirectory != null ? null
-                : load.Instruction.ModelDirectories.FirstOrDefault(d => loadUnits.Keys.Any(k => k.Folder == d && k.Stem == stem));
+                : load.Instruction.ModelDirectories.FirstOrDefault(d => placedNames.Contains((d, stem)));
             string folder = load.Database ? $"data/m{mission}/models"
                 : load.Instruction.ScriptModelDirectory ?? (found != null && loadUnits.ContainsKey((found, stem, hash)) ? found : shared ? CommonModels : $"data/m{mission}/models");
             var key = (folder, stem, hash);
             if (!loadUnits.TryGetValue(key, out var unit)) loadUnits[key] = unit = new(stem, hash, load.Content, 0xFF) { Folder = folder, TextureDirectories = load.Instruction.TextureDirectories };
+            placedNames.Add((folder, stem));
             if (!load.RootEdited) unit.LoadRoot ??= load.Root;
             unit.Missions.Add(mission); loads.Add((mission, load, unit));
         }
+        // Relocation decisions query by stem/folder, and retarget only the occurrences of the moved units.
+        // Do not scan every unrelated file and load for each vehicle or effect.
+        var unitsByStem = loadUnits.Values.GroupBy(u => u.Stem, StringComparer.Ordinal).ToDictionary(g => g.Key,
+            g => g.GroupBy(u => u.Folder!, StringComparer.OrdinalIgnoreCase).ToDictionary(f => f.Key,
+                f => f.ToHashSet(), StringComparer.OrdinalIgnoreCase), StringComparer.Ordinal);
+        var loadIndices = loads.Select((load, index) => (load.Unit, Index: index)).GroupBy(l => l.Unit)
+            .ToDictionary(g => g.Key, g => g.Select(l => l.Index).ToList());
         ShareVehicles();
         GatherEffects();
+        HashSet<Unit> pickupUnits = [.. loads.Where(l => WorldGltf.IsPickupName(l.Load.NodeName)).Select(l => l.Unit)];
+        placement.Sort(loadUnits.Count, MaximumKey(loadUnits.Values, u => (long)u.Folder!.Length + u.Stem.Length + 12));
         foreach (var unit in loadUnits.Values.OrderBy(u => u.Folder, StringComparer.Ordinal).ThenBy(u => u.Stem, StringComparer.Ordinal).ThenBy(u => u.Missions.Min))
             Place(unit, unit.Folder!);
         // The names loads find their files by, in the folders each searches up to its own file's: a reference's copy (found
@@ -265,7 +312,7 @@ internal static partial class WorldSources
         foreach (var (_, load, unit) in loads)
             foreach (string directory in load.Instruction.ModelDirectories)
             {
-                reserved.Add($"{directory}/{Stem(load.File)}.gltf");
+                reserved.Add(placement.Path(directory, Stem(load.File)));
                 if (directory.Equals(unit.Folder, StringComparison.OrdinalIgnoreCase)) break;
             }
 
@@ -274,48 +321,67 @@ internal static partial class WorldSources
         Dictionary<Unit, List<Unit>> referenced = new(ReferenceEqualityComparer.Instance);
         List<Unit> Referenced(Unit owner)
         {
+            placement.Reserve(0, 1);
             if (referenced.TryGetValue(owner, out var list)) return list;
+            placement.Reserve(128L + 32L * owner.Content.Count);
             list = []; HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance); HashSet<Unit> units = new(ReferenceEqualityComparer.Instance);
             Stack<WorldNode> pending = new(owner.Content);
             while (pending.Count > 0)
             {
+                placement.Reserve(0, 1);
                 var node = pending.Pop();
+                placement.Reserve(64);
                 if (!seen.Add(node)) continue;
                 if (referenceOf.TryGetValue(node, out var r))
                 {
+                    placement.Reserve(64);
                     if (units.Add(r.Unit)) list.Add(r.Unit);
                     // A reference to a part keeps records of its own in the referencing file.
-                    if (PartMembers(node) is { } content) foreach (var child in node.Children.Where(c => !content.Contains(c))) pending.Push(child);
+                    if (PartMembers(node) is { } content) foreach (var child in node.Children)
+                    {
+                        placement.Reserve(0, 1);
+                        if (!content.Contains(child)) { placement.Reserve(16); pending.Push(child); }
+                    }
                     continue;
                 }
+                placement.Reserve(16L * node.Children.Count, node.Children.Count);
                 foreach (var child in node.Children) pending.Push(child);
             }
             return referenced[owner] = list;
         }
         Dictionary<(Unit Unit, string Folder), IReadOnlyList<string>> copies = [];
-        Queue<(Unit Unit, string Folder, IReadOnlyList<string> Textures)> spread = new();
+        Queue<(Unit Unit, string Folder)> spread = new();
+        void QueueCopy(Unit unit, string folder, IReadOnlyList<string> textures)
+        {
+            placement.Lookup(folder);
+            if (copies.ContainsKey((unit, folder))) return;
+            placement.Pair(folder);
+            // First enqueue is also the first dequeue in the original FIFO: keep its texture context.
+            copies.Add((unit, folder), textures);
+            spread.Enqueue((unit, folder));
+        }
+        placement.Sort(loadUnits.Count, MaximumKey(loadUnits.Values, u => (long)u.Path!.Length));
         foreach (var unit in loadUnits.Values.OrderBy(u => u.Path, StringComparer.Ordinal))
-            foreach (var r in Referenced(unit)) spread.Enqueue((r, unit.Folder!, unit.TextureDirectories));
+            foreach (var r in Referenced(unit)) QueueCopy(r, unit.Folder!, unit.TextureDirectories);
         while (spread.Count > 0)
         {
             token.ThrowIfCancellationRequested();
-            var (unit, folder, textures) = spread.Dequeue();
-            if (!copies.TryAdd((unit, folder), textures)) continue;
-            foreach (var r in Referenced(unit)) spread.Enqueue((r, folder, textures));
+            var (unit, folder) = spread.Dequeue();
+            foreach (var r in Referenced(unit)) QueueCopy(r, folder, copies[(unit, folder)]);
         }
         Dictionary<(Unit Unit, string Folder), string> copyPaths = [];
+        placement.Sort(copies.Count, MaximumKey(copies.Keys, c => (long)c.Folder.Length + c.Unit.Stem.Length + c.Unit.Hash.Length));
         foreach (var (unit, folder) in copies.Keys.OrderBy(c => c.Folder, StringComparer.Ordinal).ThenBy(c => c.Unit.Stem, StringComparer.Ordinal).ThenBy(c => c.Unit.Hash, StringComparer.Ordinal))
         {
+            placement.Lookup(folder);
             // A file the folder already holds for a load with the same content serves the reference too.
             if (loadUnits.TryGetValue((folder, unit.Stem, unit.Hash), out var same)) { copyPaths[(unit, folder)] = same.Path!; continue; }
-            string path = $"{folder}/{unit.Stem}.gltf";
-            for (int i = 2; reserved.Contains(path) || !taken.Add(path); i++) path = $"{folder}/{unit.Stem}_{i}.gltf";
-            copyPaths[(unit, folder)] = path;
+            copyPaths[(unit, folder)] = ClaimPath(folder, unit.Stem, reserved);
         }
         // Each load finds its own file among every file written.
         foreach (var (mission, load, unit) in loads)
         {
-            string? resolved = load.Instruction.ModelDirectories.Select(d => $"{d}/{Stem(load.File)}.gltf").FirstOrDefault(taken.Contains);
+            string? resolved = load.Instruction.ModelDirectories.Select(d => placement.Path(d, Stem(load.File))).FirstOrDefault(taken.Contains);
             if (resolved == null) diagnostics.Add($"m{mission}: {load.File} is written to {unit.Path}, which the build does not search when it loads {load.NodeName}.");
             else if (!resolved.Equals(unit.Path, StringComparison.OrdinalIgnoreCase)) diagnostics.Add($"m{mission}: {load.File} ({load.NodeName}) resolves to {resolved}, not to its own version {unit.Path}.");
         }
@@ -361,13 +427,17 @@ internal static partial class WorldSources
         void MoveIfFound(IReadOnlyList<Unit> units, string folder, Dictionary<Unit, List<LoadedModel>> loadsOf)
         {
             string stem = units[0].Stem;
-            if (loadUnits.Keys.Any(k => k.Stem == stem && k.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase))) return;
+            var namedFolders = unitsByStem[stem];
+            if (namedFolders.ContainsKey(folder)) return;
             HashSet<Unit> moving = [.. units];
             bool Finds(LoadedModel load)
             {
-                int index = load.Instruction.ModelDirectories.ToList().FindIndex(d => d.Equals(folder, StringComparison.OrdinalIgnoreCase));
-                return index >= 0 && !load.Instruction.ModelDirectories.Take(index).Any(d =>
-                    loadUnits.Any(u => u.Key.Stem == stem && u.Key.Folder.Equals(d, StringComparison.OrdinalIgnoreCase) && !moving.Contains(u.Value)));
+                foreach (string directory in load.Instruction.ModelDirectories)
+                {
+                    if (directory.Equals(folder, StringComparison.OrdinalIgnoreCase)) return true;
+                    if (namedFolders.TryGetValue(directory, out var existing) && existing.Any(u => !moving.Contains(u))) return false;
+                }
+                return false;
             }
             if (!units.SelectMany(u => loadsOf[u]).All(Finds)) return;
             var first = units.MinBy(u => u.Missions.Min)!;
@@ -375,22 +445,49 @@ internal static partial class WorldSources
             {
                 Folder = folder, TextureDirectories = first.TextureDirectories, LoadRoot = units.Select(u => u.LoadRoot).FirstOrDefault(r => r != null),
             };
-            foreach (var unit in units) { moved.Missions.UnionWith(unit.Missions); loadUnits.Remove((unit.Folder!, stem, unit.Hash)); }
+            List<int> indices = [];
+            foreach (var unit in units)
+            {
+                moved.Missions.UnionWith(unit.Missions); loadUnits.Remove((unit.Folder!, stem, unit.Hash));
+                var existing = namedFolders[unit.Folder!]; existing.Remove(unit);
+                if (existing.Count == 0) namedFolders.Remove(unit.Folder!);
+                foreach (int index in loadIndices[unit]) { loads[index] = (loads[index].Mission, loads[index].Load, moved); indices.Add(index); }
+                loadIndices.Remove(unit);
+            }
             loadUnits[(folder, stem, moved.Hash)] = moved;
-            for (int i = 0; i < loads.Count; i++) if (moving.Contains(loads[i].Unit)) loads[i] = (loads[i].Mission, loads[i].Load, moved);
+            namedFolders[folder] = [moved]; loadIndices[moved] = indices;
         }
         void Place(Unit unit, string folder)
         {
-            string path = $"{folder}/{unit.Stem}.gltf";
-            for (int i = 2; !taken.Add(path); i++) path = $"{folder}/{unit.Stem}_{i}.gltf";
-            unit.Folder = folder; unit.Path = path;
+            unit.Folder = folder; unit.Path = ClaimPath(folder, unit.Stem, null);
+        }
+        string ClaimPath(string folder, string stem, HashSet<string>? reservedPaths)
+        {
+            string original = placement.Path(folder, stem), path = original;
+            int suffix = nextSuffix.GetValueOrDefault(original, 2);
+            while (reservedPaths?.Contains(path) == true || !taken.Add(path))
+            {
+                token.ThrowIfCancellationRequested();
+                path = placement.Path(folder, stem, suffix++);
+            }
+            // Taken and reserved names only grow while allocating paths, so an earlier rejected suffix
+            // cannot become available later. Every candidate still checks all authored and generated names.
+            nextSuffix[original] = suffix;
+            return path;
         }
 
         List<Output> outputs = [];
+        // Logical files and second-path cache identities have already been assigned above. Only the backing
+        // geometry is deduplicated below; each mission keeps the original logical readings and their zone words.
+        Dictionary<string, string> geometryPaths = new(StringComparer.Ordinal);
+        Dictionary<int, List<SourceMapZoneAsset>> mapAssets = [];
+        placement.Sort(loadUnits.Count, MaximumKey(loadUnits.Values, u => (long)u.Path!.Length));
         foreach (var unit in loadUnits.Values.OrderBy(u => u.Path, StringComparer.Ordinal))
             Write(unit, unit.Folder!, unit.Path!, unit.TextureDirectories, unit.Missions.Min, unit.LoadRoot);
+        placement.Sort(copyPaths.Count, MaximumKey(copyPaths.Values, p => (long)p.Length));
         foreach (var ((unit, folder), path) in copyPaths.OrderBy(c => c.Value, StringComparer.Ordinal))
         {
+            placement.Lookup(folder);
             if (loadUnits.TryGetValue((folder, unit.Stem, unit.Hash), out var same) && same.Path == path) continue;
             // A copy in a mission's folder takes that mission's textures; one in a shared folder the first mission's.
             var match = MissionFolder().Match(folder);
@@ -399,7 +496,7 @@ internal static partial class WorldSources
         void Write(Unit unit, string folder, string path, IReadOnlyList<string> textureDirectories, int mission, WorldNode? loadRoot)
         {
             token.ThrowIfCancellationRequested();
-            var doc = WorldGltf.Export(unit.Content, unit.Zone, new()
+            var zoned = WorldGltf.ExportZoned(unit.Content, unit.Zone, new()
             {
                 Token = token,
                 Texture = t =>
@@ -413,14 +510,58 @@ internal static partial class WorldSources
                 Content = n => parts.TryGetValue(n, out var c) ? c : null,
                 Group = groups.Contains,
             }, loadRoot);
+            placement.Reserve(256L + 16L * zoned.Profile.Nodes.Count + 32L * zoned.Profile.MeshPolygons.Count);
+            foreach (var mesh in zoned.Profile.MeshPolygons) placement.Reserve(4L * mesh.Count);
+            foreach (var reference in zoned.References) placement.Reserve(128L + 8L * (path.Length + reference.Value.Length));
+            var doc = zoned.Geometry;
+            // Image URIs are relative to the physical geometry file. Compare their project identities when
+            // choosing a shared file, then retain the winning document's original relative spelling.
+            var materials = doc.AllNodes().Where(n => n.Mesh != null).SelectMany(n => n.Mesh!.Primitives)
+                .Select(p => p.Material).OfType<GltfMaterial>().Distinct<GltfMaterial>(ReferenceEqualityComparer.Instance).ToArray();
+            var images = materials.Where(m => m.ImageUri != null).Select(m => (Material: m, Uri: m.ImageUri!)).ToArray();
+            string geometryHash;
+            byte[] canonicalJson, bin;
+            try
+            {
+                foreach (var image in images) image.Material.ImageUri = WorldAssembler.Relative(path, image.Uri);
+                (canonicalJson, bin) = doc.Write("geometry.bin", token);
+                CheckJsonLength(canonicalJson);
+                using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                digest.AppendData(canonicalJson); digest.AppendData(bin);
+                geometryHash = Convert.ToHexString(digest.GetHashAndReset()) + (pickupUnits.Contains(unit) ? ":pickup" : "");
+            }
+            finally { foreach (var image in images) image.Material.ImageUri = image.Uri; }
+            bool firstGeometry = !geometryPaths.TryGetValue(geometryHash, out string? physical);
+            if (firstGeometry) geometryPaths.Add(geometryHash, physical = path);
+            string geometryPath = physical!;
+            placement.Reserve(256L + 4L * path.Length + 4L * geometryPath.Length + 96L * zoned.References.Count);
+            var bindings = zoned.References.Select(r => new SourceMapZoneReference(r.Key, WorldAssembler.Relative(path, r.Value), r.Value)).ToArray();
+            var asset = new SourceMapZoneAsset(path, geometryPath, zoned.Profile, bindings);
+            var mapFolder = MissionFolder().Match(folder);
+            IEnumerable<int> users = mapFolder.Success ? [int.Parse(mapFolder.Groups[1].Value)] : unit.Missions;
+            foreach (int user in users)
+            {
+                if (!mapAssets.TryGetValue(user, out var entries)) mapAssets[user] = entries = [];
+                placement.Reserve(16); entries.Add(asset);
+            }
+            if (!firstGeometry) return;
             string stem = System.IO.Path.GetFileNameWithoutExtension(path);
-            var (json, bin) = doc.Write(stem + ".bin", token);
-            CheckJsonLength(json);
+            // Reuse the already serialized geometry and binary. A second glTF export would rebuild every
+            // accessor and copy every geometry buffer merely to change relative image/buffer URIs.
+            var root = (JsonObject)JsonNode.Parse(canonicalJson)!;
+            if (root["buffers"] is JsonArray buffers)
+                foreach (var buffer in buffers.OfType<JsonObject>()) buffer["uri"] = Uri.EscapeDataString(stem + ".bin");
+            if (root["images"] is JsonArray storedImages)
+                foreach (var image in storedImages.OfType<JsonObject>())
+                {
+                    token.ThrowIfCancellationRequested();
+                    string target = Uri.UnescapeDataString(image["uri"]!.GetValue<string>());
+                    image["uri"] = Uri.EscapeDataString(RelativeUri(folder, target)).Replace("%2F", "/");
+                }
             // Viewers show transparent textures and a pickup's collision volume hidden as the game does; builds read the same values.
-            var root = (JsonObject)JsonNode.Parse(json)!;
-            bool pickup = loads.Any(l => ReferenceEquals(l.Unit, unit) && WorldGltf.IsPickupName(l.Load.NodeName));
-            if (WorldGltf.ApplyPresentation(root, uri => transparency?.Invoke(WorldAssembler.Relative(path, uri)), pickup))
-                json = GltfJson.Write(root, indented: true, token);
+            bool pickup = pickupUnits.Contains(unit);
+            WorldGltf.ApplyPresentation(root, uri => transparency?.Invoke(WorldAssembler.Relative(path, uri)), pickup);
+            byte[] json = GltfJson.Write(root, indented: true, token);
             CheckJsonLength(json);
             // Re-open exactly the bytes being published through the source reader, including its aggregate metadata,
             // accessor, hierarchy and buffer contracts. Only this document's emitted binary can resolve here;
@@ -431,6 +572,14 @@ internal static partial class WorldSources
             outputs.Add(new(path, json));
             outputs.Add(new($"{folder}/{stem}.bin", bin));
         }
+        foreach (var (mission, assets) in mapAssets.OrderBy(m => m.Key))
+        {
+            token.ThrowIfCancellationRequested();
+            byte[] json = new SourceMapZones(assets).Write(token);
+            outputBudget.Retain(json.LongLength);
+            outputs.Add(new(SourceMapZones.PathForMission($"m{mission}"), json));
+        }
+        token.ThrowIfCancellationRequested();
         return outputs;
     }
 

@@ -103,8 +103,10 @@ public partial class MainWindow
         return doc;
     }
     /// <remarks>With <paramref name="committing"/>, drafts whose commit is running (and called this) do not count.</remarks>
-    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null)
+    private void RequireNoDrafts(DocumentModel? doc = null, bool committing = false, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null)
     {
+        if (HasZoneDraft && zoneDraft != committingZones && (doc == null || zoneDraft!.Document == doc))
+            throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before continuing.");
         // Resource/content edits elsewhere refresh the shown preview, whose scene-card draft would otherwise need a modal decision mid-request.
         if (HasInspectionDraft && inspectionDraft != committingCard && (doc == null || inspectionDraft!.DraftDocument == doc || doc != shownDocument && inspectionDraft.DraftDocument == shownDocument && (doc.ResourceEdits != null || doc.ContentEdits != null)))
             throw new StudioCommandException("pending_drafts", "Resolve the scene card draft explicitly before continuing.");
@@ -112,8 +114,15 @@ public partial class MainWindow
             throw new StudioCommandException("pending_drafts", "Unfinished GUI input is retained. Inspect and explicitly resolve drafts before continuing.");
         if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "A pickup drag is in progress.");
     }
-    private static object DocumentState(DocumentModel d) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, d.PickupsLocked, game = d.PreviewDocument.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, d.LastSavedCopy, sourceWorld = SourceWorldState(d),
-        contentEdits = d.ContentEdits == null ? null : new { d.IsContentMirror, files = d.ContentEdits.Documents.Select(doc => new { doc.Path, destination = d.ContentEdits.TargetPath(doc.Path) }).ToArray() } };
+    private static object DocumentState(DocumentModel d) => DocumentState(d, includeContentDetails: true);
+    internal static object DocumentState(DocumentModel d, bool includeContentDetails) => new { id = d.SessionId, d.Path, d.Revision, d.IsDirty, d.IsStale, d.PickupsLocked, game = d.PreviewDocument.Game.ToString(), format = d.Document.Probe, assetCount = d.Assets.Count, selected = d.SelectedAsset?.Record.Id, d.LastSavedCopy, sourceWorld = SourceWorldState(d),
+        contentEdits = ContentState(d, includeContentDetails) };
+    private static object? ContentState(DocumentModel d, bool includeDetails)
+    {
+        if (d.ContentEdits == null) return null;
+        var files = FileResultPreview.Content(d.ContentEdits, includeDetails: includeDetails);
+        return new { d.IsContentMirror, files = files.Values, fileCount = files.Count, filesTruncated = files.Truncated };
+    }
     private void Register(StudioCommands registry, string name, string description, bool mutates, StudioParameter[] parameters, Func<JsonObject, CancellationToken, Task<StudioResult>> action)
     {
         registry.Add(new("zstudio_" + name, description, mutates, parameters, async (args, token) =>
@@ -139,13 +148,21 @@ public partial class MainWindow
     private StudioCommands CreateCommands()
     {
         StudioCommands registry = new();
-        Register(registry, "state", "Read the visible workspace, document identities, revisions and current preview.", false, [], _ => Result(new
+        Register(registry, "state", "Read the visible workspace and page document identities/revisions, preserving complete paths. Offset defaults to 0; limit defaults to 64, maximum 64. Documents have a 1 MiB pre-projection metadata allowance, so a page may be shorter; follow nextOffset, with total and offset. A single unsupported oversized row returns too_large. Status is a 512-character preview with statusTruncated. Source document workspace summaries contain counts and undo/redo state; read source_changes for the shared dirty-file and history details. Global state contentEdits summaries return fileCount with empty files and filesTruncated; per-document command results preview at most 64 file paths/targets of 512 characters, with per-row PathTruncated/destinationTruncated.", false,
+            [new("offset", "integer", "Zero-based document offset; default 0.", Minimum: 0, Maximum: int.MaxValue), new("limit", "integer", "Document page size 1–64; default 64. Follow nextOffset for shorter metadata-bounded pages.", Minimum: 1, Maximum: 64)], a =>
         {
-            version = typeof(MainWindow).Assembly.GetName().Version?.ToString(), ViewModel.HasRoot, ViewModel.RootPath, ViewModel.Status, ViewModel.IsBusy,
-            documents = ViewModel.Documents.Select(DocumentState).ToArray(), activeDocument = ViewModel.SelectedDocument?.SessionId,
-            preview = previewId, selectedAsset = shownAsset?.Id, animationTime = animation?.CurrentFrame?.Time, animationPlaying = animation?.IsPlaying,
-            pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft
-        }));
+            var page = StateDocumentPage.Select(ViewModel.Documents, Int(a, "offset"), Int(a, "limit", 64));
+            // The root is an identity, so refuse an unsupported envelope rather than clip it.
+            if (6L * (ViewModel.RootPath.Length + (long)(shownAsset?.Id.File.Length ?? 0)) > StateDocumentPage.MaximumBytes)
+                throw new StudioCommandException("too_large", "The workspace identities exceed the supported state metadata size.");
+            return Result(new
+            {
+                version = typeof(MainWindow).Assembly.GetName().Version?.ToString(), ViewModel.HasRoot, ViewModel.RootPath, Status = ViewModel.Status.Length <= 512 ? ViewModel.Status : Bounded(ViewModel.Status, 511), statusTruncated = ViewModel.Status.Length > 512, ViewModel.IsBusy,
+                documents = page.Documents.Select(d => DocumentState(d, includeContentDetails: false)).ToArray(), total = page.Total, offset = page.Offset, nextOffset = page.NextOffset, activeDocument = ViewModel.SelectedDocument?.SessionId,
+                preview = previewId, selectedAsset = shownAsset?.Id, animationTime = animation?.CurrentFrame?.Time, animationPlaying = animation?.IsPlaying,
+                pendingPropertiesDrafts = propertiesWindow?.HasPendingDrafts == true, pendingPreviewDrafts = animation?.HasAutomationDrafts == true, pendingSceneDrafts = HasInspectionDraft
+            });
+        });
         Register(registry, "capabilities", "Read all capability schemas. Unsupported formats remain read-only; MCP does not add binary patching.", false, [], _ => new(registry.Describe()));
         RegisterWorkspaceCommands(registry);
         RegisterPreviewCommands(registry);
@@ -162,7 +179,7 @@ public partial class MainWindow
         RegisterSourceWorldCommands(registry);
         RegisterSourceObjectCommands(registry);
         RegisterSourceBlenderCommands(registry);
-        RegisterSourceRecoveryCommands(registry); RegisterSourceTerrainCommands(registry);
+        RegisterSourceRecoveryCommands(registry); RegisterSourceTerrainCommands(registry); RegisterSourceZoneCommands(registry);
         RegisterWorldCompareCommands(registry);
         return registry;
     }

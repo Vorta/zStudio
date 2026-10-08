@@ -27,20 +27,26 @@ public sealed class ModelEditSession
     public ModelEditSession(ZbdDocument world) { Current = new(world, new Dictionary<string,ZbdDocument>(StringComparer.OrdinalIgnoreCase)); saved[world.Path] = (world.Path, world.Bytes.ToArray(), false); observedStamps[world.Path] = world.Stamp; }
     internal Action<SealedFile, string, bool> PublishFile { get; set; } = static (file, target, replace) => file.MoveTo(target, replace);
     public bool HasExternalChanges() => observedStamps.Any(p => FileStamp.Read(p.Key) != p.Value);
-    public async Task<ModelEditSnapshot> PrepareAsync(ModelImportBatch batch, AssetResolver resolver, CancellationToken token = default)
+    public Task<ModelEditSnapshot> PrepareAsync(ModelImportBatch batch, AssetResolver resolver, CancellationToken token = default) => PrepareAsync(batch, resolver, FormatRegistry.MaximumDocumentBytes, token);
+    internal async Task<ModelEditSnapshot> PrepareAsync(ModelImportBatch batch, AssetResolver resolver, long maximumTextureBytes, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        EditBufferBudget budget = new(maximumTextureBytes);
         var baseline = Current;
         if (!Convert.ToHexString(SHA256.HashData(baseline.World.Bytes.Span)).Equals(batch.SourceSha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The replacement manifest does not match this GameZ snapshot. Export a fresh bundle and verify model indices.");
-        var paths = resolver.TexturePacks(baseline.World.Path).Where(p => Path.GetDirectoryName(p)!.Equals(Path.GetDirectoryName(baseline.World.Path), StringComparison.OrdinalIgnoreCase)).ToArray();
+        string? sourceDirectory = Path.GetDirectoryName(baseline.World.Path);
+        var paths = resolver.TexturePacks(baseline.World.Path, token).Where(p => Path.GetDirectoryName(p)!.Equals(sourceDirectory, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (paths.Length == 0) throw new InvalidDataException("No mission texture packs found; replacement requires every local variant.");
         Dictionary<string,ZbdDocument> textures = new(StringComparer.OrdinalIgnoreCase), baselines = new(StringComparer.OrdinalIgnoreCase);
         foreach (string path in paths)
         {
-            var source = baseline.Textures.TryGetValue(path, out var edited) ? edited : await resolver.OpenCachedAsync(path, token);
+            token.ThrowIfCancellationRequested();
+            var source = baseline.Textures.TryGetValue(path, out var edited) ? edited : await resolver.OpenCachedAsync(path, budget.Remaining, token);
+            budget.Document(source);
             baselines[path] = source;
             textures[path] = await Task.Run(() => FormatRegistry.Default.OpenBytes(path,
-                TexturePackWriter.Append(source, batch.TextureName, batch.Texture, token), source.Stamp, token), token);
+                TexturePackWriter.Append(source, batch.TextureName, batch.Texture, budget.Remaining, token), source.Stamp, token), token);
+            budget.Document(textures[path]);
         }
         var world = await Task.Run(() => FormatRegistry.Default.OpenBytes(baseline.World.Path,
             ModelReplacementWriter.Replace(baseline.World, batch.Models, batch.TextureName, token), baseline.World.Stamp, token), token);
@@ -73,7 +79,7 @@ public sealed class ModelEditSession
         var documents = Documents.ToDictionary(d => d.Path, StringComparer.OrdinalIgnoreCase);
         var targets = documents.Keys.ToDictionary(path => path, path => destinationDirectory == null ? saved[path].Target : Path.Combine(Path.GetFullPath(destinationDirectory), Path.GetFileName(path)), StringComparer.OrdinalIgnoreCase);
         BeforeEdit?.Invoke(documents.Keys.Concat(saved.Values.Select(s => s.Target)).Concat(targets.Values));
-        saving = true; List<(ZbdDocument Doc,string Target,string Temp,bool Replace)> staged = []; List<string> completed = [], errors = [];
+        saving = true; List<(ZbdDocument Doc,string Target,SealedFile File,bool Replace)> staged = []; List<string> completed = [], errors = [];
         using DirectoryLease directories = new();
         try
         {
@@ -89,10 +95,9 @@ public sealed class ModelEditSession
                 else if (File.Exists(target)) throw new IOException($"Save As requires new files: {target}");
                 if (replace && doc.Bytes.Span.SequenceEqual(prior.Bytes)) continue;
                 string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                staged.Add((doc,target,temp,replace));
-                await using (FileStream stream = directories.OpenFile(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
-                { await stream.WriteAsync(doc.Bytes,token); await stream.FlushAsync(token); stream.Flush(true); }
-                byte[] readback = await Sources.SourceRead.AllAsync(temp, doc.Bytes.Length, directories, token);
+                var file = await SealedFile.CreateAsync(temp, doc.Bytes, directories, token);
+                staged.Add((doc,target,file,replace));
+                byte[] readback = await file.ReadAllAsync(doc.Bytes.Length, token);
                 if (!doc.Bytes.Span.SequenceEqual(readback)) throw new IOException("Model save byte verification failed.");
                 var parsed = await Task.Run(() => FormatRegistry.Default.OpenBytes(target, readback, token:token), token);
                 if (parsed.Diagnostics.Any(d => d.Severity == "Error") || parsed.Assets.Count != doc.Assets.Count) throw new InvalidDataException("Model save shared-reader verification failed.");
@@ -110,10 +115,9 @@ public sealed class ModelEditSession
                 try
                 {
                     token.ThrowIfCancellationRequested(); ValidateDestination(item.Target);
-                    // Held from its check against the verified bytes until it is in place.
-                    using SealedFile file = VerifiedDocumentSave.Seal(item.Temp, item.Doc.Bytes, directories);
                     if (item.Replace) { var prior = saved[item.Doc.Path]; await CheckExternalAsync(prior.Target, prior.Bytes, token, directories); }
-                    PublishFile(file, item.Target, item.Replace);
+                    PublishFile(item.File, item.Target, item.Replace);
+                    item.File.Dispose();
                     string previousTarget = saved[item.Doc.Path].Target;
                     saved[item.Doc.Path] = (item.Target,item.Doc.Bytes.ToArray(), false);
                     observedStamps.Remove(previousTarget);
@@ -125,7 +129,7 @@ public sealed class ModelEditSession
         }
         finally
         {
-            foreach (var item in staged) { try { directories.DeleteFile(item.Temp); } catch (IOException) { } }
+            foreach (var item in staged) item.File.Dispose();
             saving = false; Changed?.Invoke();
         }
     }

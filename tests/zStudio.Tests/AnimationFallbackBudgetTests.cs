@@ -31,7 +31,7 @@ public sealed class AnimationFallbackBudgetTests
         Assert.All(parsed, track => Assert.Equal(33_001, track.Keys.Count));
         files.Data[path] = output.Bytes;
         var rebuilt = AnimationCompiler.Compile(files, root, nodes, Token);
-        Assert.Null(AnimationComparer.Difference(original.Package.Entries[1], rebuilt.Package.Entries[1]));
+        Assert.Null(AnimationComparer.Difference(original.Package.Entries[1], rebuilt.Package.Entries[1], TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -76,6 +76,7 @@ public sealed class AnimationFallbackBudgetTests
     {
         public Dictionary<string, byte[]> Data { get; } = data;
         public bool Exists(string path) => Data.ContainsKey(path);
-        public byte[] Read(string path, CancellationToken token) => Data[path];
+        public byte[] Read(string path, CancellationToken token) => Read(path, token, ProjectReadLimits.Document);
+        public byte[] Read(string path, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] bytes = Data[path]; limits.Validate(bytes); return bytes; }
     }
 }

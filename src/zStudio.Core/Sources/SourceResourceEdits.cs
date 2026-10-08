@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Worlds;
 
 namespace Recoil.Zbd.Core.Sources;
 
@@ -21,7 +22,18 @@ public static class SourceResourceEdits
     /// (the workspace's accepted content). Every edit must fall on a scalar node of a member built from a project source, and
     /// that source must still compile to the member's payload; otherwise nothing is returned and the call throws.
     /// </summary>
+    /// <remarks>This callback supplies already-owned bytes. File-backed providers use the overload receiving read limits.</remarks>
     public static IReadOnlyList<(string Relative, byte[] Content)> SourceChanges(ReadOnlyMemory<byte> builtArchive, IEnumerable<ScalarEdit> edits, Func<string, byte[]?> readSource, CancellationToken token = default)
+        => SourceChanges(builtArchive, edits, (path, limits) =>
+        {
+            byte[]? bytes = readSource(path);
+            if (bytes != null) limits.Validate(bytes);
+            return bytes;
+        }, token);
+
+    /// <summary>File-backed sources must apply <see cref="ProjectReadLimits"/> before reading, hashing or cloning their payload.</summary>
+    public static IReadOnlyList<(string Relative, byte[] Content)> SourceChanges(ReadOnlyMemory<byte> builtArchive, IEnumerable<ScalarEdit> edits,
+        Func<string, ProjectReadLimits, byte[]?> readSource, CancellationToken token = default)
     {
         var members = ArchiveSources.Read(builtArchive);
         Dictionary<int, List<ScalarEdit>> byMember = [];
@@ -35,11 +47,15 @@ public static class SourceResourceEdits
             list.Add(edit with { Offset = edit.Offset - member.Offset });
         }
         List<(string, byte[])> changes = [];
+        long remainingInput = FormatRegistry.MaximumDocumentBytes;
         foreach (var (index, list) in byMember.OrderBy(p => p.Key))
         {
             var member = members[index];
             string relative = SourcePath(member);
-            byte[] source = readSource(relative) ?? throw new InvalidDataException($"{relative}, the source of archive member {member.Name}, does not exist; rebuild the world.");
+            ProjectReadLimits limits = ProjectReadLimits.Resource(remainingInput);
+            byte[] source = readSource(relative, limits) ?? throw new InvalidDataException($"{relative}, the source of archive member {member.Name}, does not exist; rebuild the world.");
+            limits.Validate(source);
+            remainingInput -= source.LongLength;
             changes.Add((relative, Apply(source, member.Payload, list, $"{relative} (member {member.Name})", token)));
         }
         return changes;
@@ -61,6 +77,8 @@ public static class SourceResourceEdits
     /// </summary>
     public static byte[] Apply(byte[] source, ReadOnlyMemory<byte> payload, IReadOnlyList<ScalarEdit> edits, string name, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
+        ProjectReadLimits.Resource().Validate(source);
         var compiled = ZrdDecoder.Read(payload, token);
         Dictionary<long, ZrdNode> builtNodes = [];
         Index(compiled, builtNodes);

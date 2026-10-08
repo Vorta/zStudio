@@ -46,6 +46,9 @@ internal sealed class BoundedDiagnostics
     internal BoundedDiagnostics WithContext(string source, string? kind = null, string? name = null) => new(storage, source, kind, name);
     internal IReadOnlyList<string> Messages => storage.Messages;
     internal List<string> Snapshot() => [.. storage.Messages];
+    // A diagnostic forwarded from another bounded stage is a complete message, not an authored operand.
+    // Retain its useful explanation while still reserving aggregate work and bounding it defensively.
+    internal readonly record struct PreparedMessage(string Text);
 
     private bool Reserve()
     {
@@ -101,6 +104,8 @@ internal sealed class BoundedDiagnostics
         public void AppendLiteral(string text) => Append(text);
         // Bound original authored strings before the builder sees them; lookup identities are never modified.
         public void AppendFormatted(string? value) => Append(JsonData.ShownText(value ?? "", 192));
+        public void AppendFormatted(PreparedMessage value) => Append(value.Text.Length <= MaximumMessageCharacters
+            ? value.Text : JsonData.ShownText(value.Text, MaximumMessageCharacters - 1));
         public void AppendFormatted(DirectorySummary value) => Append(FormatDirectories(value.Paths));
         public void AppendFormatted(int value) => Append(value.ToString(CultureInfo.InvariantCulture));
         private void Append(string text)

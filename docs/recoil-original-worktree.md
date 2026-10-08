@@ -422,7 +422,7 @@ The file dates of the 1999 release survived with a constant 9-hour shift: each o
 | 4 Dec, 9 Dec | m9 archive and the common archive, packed in `E:\RecoilFull` (the others in `D:\battlesportdev`) | those archives |
 | 7 Jan 1999 | `image.zbd` | — |
 
-The release is therefore a mix of runs: reloading a mission rewrote its world and animations but not its resource archive. No script a shipped world ran is newer than the world, so worlds and scripts agree. Five archived animation definitions do not: their archives were packed before the definitions the animations were compiled from were saved.
+The release is therefore a mix of runs: reloading a mission rewrote its world and animations but not its resource archive. No script a shipped world ran is newer than the world, so worlds and scripts agree. Five archived animation definitions do not: their text is an older version than the definitions used to compile the shipped animations. Archive packing dates alone do not establish that ordering: the 1999 common archive was repacked on 9 December but retains the same gen_vtol text already shipped on 31 October, before the compiled-from definition's 4 November date.
 
 | Definition | Archived text packed | `anim.zbd` compiled from a version saved | What the newer version changed |
 | --- | --- | --- | --- |

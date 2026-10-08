@@ -15,12 +15,22 @@ public sealed class SourcePreviewCache : IDisposable
     private readonly HashSet<string> issued = new(StringComparer.OrdinalIgnoreCase), pendingRemoval = new(StringComparer.OrdinalIgnoreCase);
     private readonly FileStream lockFile;
     private readonly string root;
+    private readonly int maximumCleanupEntries;
+    private readonly long maximumCleanupPathUnits;
+    private readonly Action? cleanupVisited;
     private int generation, builds;
     private bool disposed, closed;
     public string Folder { get; }
 
     public SourcePreviewCache(string projectRoot, CancellationToken token = default)
+        : this(projectRoot, token, SourceProject.MaximumScannedEntries, InventoryBudget.MaximumUnits) { }
+
+    internal SourcePreviewCache(string projectRoot, CancellationToken token, int maximumCleanupEntries,
+        long maximumCleanupPathUnits, Action? cleanupVisited = null)
     {
+        this.maximumCleanupEntries = maximumCleanupEntries;
+        this.maximumCleanupPathUnits = maximumCleanupPathUnits;
+        this.cleanupVisited = cleanupVisited;
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectRoot));
         string? created = null;
         try
@@ -46,7 +56,7 @@ public sealed class SourcePreviewCache : IDisposable
         }
         catch
         {
-            if (created != null) TryDelete(created);
+            if (created != null) BestEffortDelete(created);
             directories.Dispose(); buildGate.Dispose(); shutdown.Dispose();
             throw;
         }
@@ -113,30 +123,53 @@ public sealed class SourcePreviewCache : IDisposable
     }
     private void DrainRemovals()
     {
-        foreach (string path in pendingRemoval) TryDelete(path);
-        pendingRemoval.Clear();
+        CleanupBudget budget = NewCleanupBudget();
+        // HashSet permits removing the current member during enumeration. Failed paths remain retryable.
+        try
+        {
+            foreach (string path in pendingRemoval)
+                if (TryDelete(path, budget)) pendingRemoval.Remove(path);
+        }
+        catch (CleanupCapacityException) { }
     }
-    private void TryDelete(string path)
+    private CleanupBudget NewCleanupBudget(CancellationToken token = default, bool observe = false)
+        => new(maximumCleanupEntries, maximumCleanupPathUnits, token, observe ? cleanupVisited : null);
+
+    private void BestEffortDelete(string path)
     {
-        try { directories.DeleteTree(path, SourceProject.MaximumScannedEntries); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        try { TryDelete(path, NewCleanupBudget()); }
+        catch (CleanupCapacityException) { }
+    }
+
+    private bool TryDelete(string path, CleanupBudget budget)
+    {
+        try
+        {
+            budget.Visit(path.Length);
+            directories.DeleteTree(path, budget.Visit, budget.Token);
+            return true;
+        }
+        catch (CleanupCapacityException) { throw; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
     }
     private void RemoveAbandoned(string previews, CancellationToken token)
     {
-        SourceProject.ScanBudget budget = new(SourceProject.MaximumScannedEntries, maximum => new IOException($"The preview cache holds more than {maximum:N0} entries."), token);
+        CleanupBudget budget = NewCleanupBudget(token, observe: true);
         DateTime before = DateTime.UtcNow.AddMinutes(-1);
         try
         {
+            budget.Visit(previews.Length);
             foreach (var entry in directories.Entries(previews, token))
             {
-                budget.Visit();
+                budget.Visit((long)previews.Length + entry.Name.Length + 1);
                 if (!entry.Attributes.HasFlag(FileAttributes.Directory) || entry.Attributes.HasFlag(FileAttributes.ReparsePoint) || entry.CreationTimeUtc >= before) continue;
                 string path = Path.Combine(previews, entry.Name);
                 // A live sibling owns its own lifetime. Do not retain its directory merely because we inspected its
                 // lock: that would prevent its final empty-folder removal until this session also closes.
                 bool active;
+                budget.Path((long)path.Length + 6);
                 using (DirectoryLease probe = new()) active = probe.Exists(Path.Combine(path, ".lock"));
-                if (!active) TryDelete(path);
+                if (!active) TryDelete(path, budget);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
@@ -155,7 +188,25 @@ public sealed class SourcePreviewCache : IDisposable
     {
         if (closed) return;
         closed = true;
-        try { lockFile.Dispose(); TryDelete(Folder); }
+        try { lockFile.Dispose(); BestEffortDelete(Folder); }
         finally { directories.Dispose(); buildGate.Dispose(); shutdown.Dispose(); }
+    }
+
+    private sealed class CleanupCapacityException() : IOException;
+
+    private sealed class CleanupBudget(int maximumEntries, long maximumPathUnits, CancellationToken token, Action? visited)
+    {
+        private readonly SourceProject.ScanBudget scan = new(maximumEntries, _ => new CleanupCapacityException(), token, new InventoryBudget(maximumPathUnits));
+        internal CancellationToken Token => token;
+        internal void Path(long characters)
+        {
+            try { scan.Path(characters); }
+            catch (InventoryCapacityException) { throw new CleanupCapacityException(); }
+        }
+        internal void Visit(long characters)
+        {
+            scan.Visit(); Path(characters);
+            visited?.Invoke(); token.ThrowIfCancellationRequested();
+        }
     }
 }

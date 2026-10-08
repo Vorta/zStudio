@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -67,27 +68,127 @@ public sealed record TerrainAttributes
     internal static readonly string[] Keys = ["zones", "nodeZone", "nodeGate", "collision", "standable", "craters", "soil", "priority", "flags"];
 
     /// <summary>
-    /// Attributes of a recipe being read (<see cref="TerrainRecipe.Parse"/>): an unknown key is refused before any value is
-    /// read, as <see cref="FromJson(JsonNode?, string, TerrainAttributes?)"/> refuses it, so only the known keys become nodes.
+    /// Attributes of a recipe being read (<see cref="TerrainRecipe.Parse"/>): admit known keys, value shapes and scalar
+    /// representations before any value becomes a JsonNode. The ordinary patch reader shares this admission.
     /// </summary>
     internal static TerrainAttributes FromJson(JsonElement? element, string what)
     {
         if (element is not { } e) return None;
-        if (e.ValueKind != JsonValueKind.Object) throw new InvalidDataException($"{what} must be an object.");
-        foreach (var property in e.EnumerateObject())
-            if (!Keys.Contains(property.Name)) throw new InvalidDataException($"{what} has an unknown attribute {JsonData.ShownText(property.Name)} (known: {string.Join(", ", Keys)}).");
-        return FromJson(JsonObject.Create(e), what);
+        AdmitObject(e, what);
+        return ReadAttributes(JsonObject.Create(e)!, what, null);
     }
 
     /// <summary>
     /// Attributes from JSON (<c>{ "zones": [1], "craters": "blocked", … }</c>); problems start with <paramref name="what"/>.
     /// With <paramref name="patch"/>, the result starts from <paramref name="patch"/>'s values: keys present replace them and
     /// a null value removes the override, so the layers before show through again.
+    /// Flags retain hexadecimal word semantics within a 256-character spelling; enumeration strings use their grammar's length.
     /// </summary>
     public static TerrainAttributes FromJson(JsonNode? node, string what, TerrainAttributes? patch = null)
+        => FromJson(node, what, patch, JsonData.UnderlyingElement);
+
+    internal static TerrainAttributes FromJson(JsonNode? node, string what, TerrainAttributes? patch,
+        Func<JsonNode, JsonElement?>? underlying)
     {
         if (node is null) return patch ?? None;
-        var o = node as JsonObject ?? throw Error("must be an object");
+        if (node is not JsonObject o) throw new InvalidDataException($"{what} must be an object.");
+        // Even Count/first-child access materializes every child of a parsed JsonObject/JsonArray.
+        // Use the same isolated runtime accessor as bounded inspection, failing closed when unavailable.
+        if (Underlying(o) is { } element) AdmitObject(element, what);
+        else
+            foreach (var (key, value) in o)
+            {
+                if (!Keys.Contains(key)) throw Unknown(what, JsonData.ShownText(key));
+                AdmitNode(key, value);
+            }
+        return ReadAttributes(o, what, patch);
+
+        JsonElement? Underlying(JsonNode value)
+        {
+            try { if (underlying != null) return underlying(value); }
+            catch (Exception error) when (error is MemberAccessException or InvalidOperationException or NotSupportedException) { }
+            throw new InvalidDataException($"{what} cannot safely inspect parsed terrain attributes on this runtime.");
+        }
+        void AdmitNode(string key, JsonNode? value)
+        {
+            if (value is null) return;
+            if (value is JsonValue scalar)
+            {
+                if (scalar.TryGetValue<JsonElement>(out var parsed)) AdmitValue(key, parsed, what);
+                else if (scalar.TryGetValue<string>(out var text) && text.Length > StringLimit(key)) throw Representation(what, key);
+                return; // Already owned CLR scalars are interpreted only by the shared semantic reader below.
+            }
+            if (key != "zones" || value is not JsonArray array) throw Shape(what, key);
+            if (Underlying(array) is { } parsedArray) AdmitValue(key, parsedArray, what);
+            else
+            {
+                if (array.Count is < 1 or > 3) throw Shape(what, key);
+                foreach (var child in array)
+                {
+                    if (child is not JsonValue number) throw Shape(what, key);
+                    if (number.TryGetValue<JsonElement>(out var parsed)) AdmitNumber(parsed, what, key);
+                }
+            }
+        }
+    }
+
+    private const int MaximumScalarCharacters = 256;
+    private static int StringLimit(string key) => key switch
+    {
+        "zones" => 3, "nodeZone" => 4, "craters" => 7, "soil" => 9, "flags" => MaximumScalarCharacters, _ => 0,
+    };
+    private static InvalidDataException Shape(string what, string key) => new($"{what} {key} has an unsupported JSON shape or cardinality.");
+    private static InvalidDataException Representation(string what, string key) => new($"{what} {key} exceeds its supported scalar representation; shorten its spelling (flags allow at most {MaximumScalarCharacters} characters).");
+    private static InvalidDataException Unknown(string what, string shown) => new($"{what} has an unknown attribute {shown} (known: {string.Join(", ", Keys)}).");
+
+    private static void AdmitObject(JsonElement element, string what)
+    {
+        if (element.ValueKind != JsonValueKind.Object) throw new InvalidDataException($"{what} must be an object.");
+        int seen = 0;
+        foreach (var property in element.EnumerateObject())
+        {
+            int index = -1;
+            for (int i = 0; i < Keys.Length; i++) if (property.NameEquals(Keys[i])) { index = i; break; }
+            if (index < 0)
+            {
+                var raw = JsonMarshal.GetRawUtf8PropertyName(property);
+                throw Unknown(what, raw.Length > 6 * JsonData.ShownCharacters ? "…" : JsonData.ShownText(property.Name));
+            }
+            if ((seen & (1 << index)) != 0) throw new InvalidDataException($"{what} gives {Keys[index]} twice in one object.");
+            seen |= 1 << index;
+            AdmitValue(Keys[index], property.Value, what);
+        }
+    }
+    private static void AdmitValue(string key, JsonElement value, string what)
+    {
+        if (value.ValueKind == JsonValueKind.Null) return;
+        if (key == "zones" && value.ValueKind == JsonValueKind.Array)
+        {
+            if (value.GetArrayLength() is < 1 or > 3) throw Shape(what, key);
+            foreach (var child in value.EnumerateArray()) AdmitNumber(child, what, key);
+            return;
+        }
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            int limit = StringLimit(key);
+            if (limit == 0) throw Shape(what, key);
+            // Bound the escaped form before GetString; decoded lengths are checked before node materialization.
+            if (JsonMarshal.GetRawUtf8Value(value).Length > 6L * limit + 2 || value.GetString()!.Length > limit)
+                throw Representation(what, key);
+            return;
+        }
+        if (key is "nodeZone" or "soil" or "priority") { AdmitNumber(value, what, key); return; }
+        if ((key is "nodeGate" or "collision" or "standable") && (value.ValueKind is JsonValueKind.True or JsonValueKind.False)) return;
+        throw Shape(what, key);
+    }
+    private static void AdmitNumber(JsonElement value, string what, string key)
+    {
+        if (value.ValueKind != JsonValueKind.Number) throw Shape(what, key);
+        if (JsonMarshal.GetRawUtf8Value(value).Length > MaximumScalarCharacters) throw Representation(what, key);
+    }
+
+    private static TerrainAttributes ReadAttributes(JsonObject o, string what, TerrainAttributes? patch)
+    {
         foreach (var key in o.Select(p => p.Key))
             if (!Keys.Contains(key)) throw Error($"has an unknown attribute {JsonData.ShownText(key)} (known: {string.Join(", ", Keys)})");
         var a = patch ?? None;
@@ -290,10 +391,12 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
         }
         string Path(JsonElement? node, string what)
         {
-            string text = Text(node, what).Replace('\\', '/');
+            string text = Text(node, what);
+            if (text.Length is 0 or > 260) throw Error($"{what} must be a relative file path of at most 260 characters");
+            text = text.Replace('\\', '/');
             // Relative to the recipe: leading ".." steps, then plain names (the project boundary is checked where it is read).
             var parts = text.Split('/').SkipWhile(p => p == "..").ToArray();
-            if (text.Length is 0 or > 260 || text.Contains(':') || parts.Length == 0 || parts.Any(p => p is "" or "." or ".."))
+            if (text.Contains(':') || parts.Length == 0 || parts.Any(p => p is "" or "." or ".."))
                 throw Error($"{what} must be a relative file path");
             return text;
         }
@@ -334,9 +437,9 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
     }
 
     /// <summary>Where a value of a recipe stands, which says what the keys of an object there are.</summary>
-    private enum Part : byte { Value, Unknown, Root, SurfaceList, Surface, Attributes, RegionList, Region, Shape, PolygonList, Polygon, HoleList, Ring }
+    private enum Part : byte { Value, Unknown, Root, SurfaceList, Surface, SurfaceModel, Attributes, RegionList, Region, Shape, PolygonList, Polygon, HoleList, Ring }
     private static readonly (string Key, Part Part)[] RootKeys = [("format", Part.Value), ("version", Part.Value), ("compiler", Part.Value), ("surfaces", Part.SurfaceList), ("defaults", Part.Attributes), ("regions", Part.RegionList)];
-    private static readonly (string Key, Part Part)[] SurfaceKeys = [("id", Part.Value), ("model", Part.Value), ("node", Part.Value), ("defaults", Part.Attributes)];
+    private static readonly (string Key, Part Part)[] SurfaceKeys = [("id", Part.Value), ("model", Part.SurfaceModel), ("node", Part.Value), ("defaults", Part.Attributes)];
     private static readonly (string Key, Part Part)[] AttributeKeys = [.. TerrainAttributes.Keys.Select(k => (k, Part.Value))];
     private static readonly (string Key, Part Part)[] RegionKeys = [("name", Part.Value), ("surfaces", Part.Value), ("shape", Part.Shape), ("set", Part.Attributes)];
     private static readonly (string Key, Part Part)[] ShapeKeys = [("plane", Part.Value), ("minY", Part.Value), ("maxY", Part.Value), ("polygons", Part.PolygonList)];
@@ -397,6 +500,10 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
                 // A value: what its place makes it.
                 Part part = depth == 0 ? Part.Root : lists[depth - 1] ? EntryOf(parts[depth - 1]) : keyed;
                 if (part == Part.Unknown) Unknown();
+                // One UTF-16 character needs at most six JSON bytes (a Unicode escape). Reject oversized path
+                // tokens before the document/string allocations; Read then checks the exact decoded length.
+                if (part == Part.SurfaceModel && token == JsonTokenType.String && reader.ValueSpan.Length > 260 * 6)
+                    throw new InvalidDataException($"{source} surface model must be a relative file path of at most 260 characters.");
                 if (token is JsonTokenType.StartObject or JsonTokenType.StartArray)
                 {
                     bool list = token == JsonTokenType.StartArray;

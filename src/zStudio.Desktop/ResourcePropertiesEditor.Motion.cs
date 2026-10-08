@@ -28,9 +28,7 @@ public sealed partial class ResourcePropertiesEditor
         string Format(params float[] values) => string.Join(", ", values.Select(v => v.ToString("R", CultureInfo.InvariantCulture)));
         float[] Parse(string value, int count)
         {
-            var components = value.Split(',').Select(v => float.Parse(v.Trim(), CultureInfo.InvariantCulture)).ToArray();
-            if (components.Length != count || components.Any(v => !float.IsFinite(v))) throw new InvalidDataException($"Enter {count} finite components.");
-            return components;
+            return ComponentText.ParseFinite(value, count, commaOnly: true);
         }
         MotionFrame Current() => Motion!.Parts[motionPart].Frames[motionFrame];
         Task Apply(string action, MotionFrame? value = null, float? time = null) => motionEdit?.Invoke(action, motionPart, motionFrame, value, time) ?? throw new InvalidDataException("Motion editing is unavailable.");

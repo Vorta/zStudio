@@ -7,7 +7,7 @@ public sealed record PickupPlacementSaveResult(IReadOnlyList<string> SavedPaths,
 
 public sealed partial class PickupPlacementEditSession
 {
-    private sealed record StagedArchive(string Source, ArchiveState Archive, string Destination, string Temporary, byte[] Bytes, bool Replace);
+    private sealed record StagedArchive(string Source, ArchiveState Archive, string Destination, SealedFile File, byte[] Bytes, bool Replace);
     /// <summary>
     /// Puts a staged archive in place. It stays held against writes and renames from its check against the verified bytes
     /// until it is in place (<see cref="VerifiedDocumentSave.Seal"/>); a replaced archive is kept as the backup when one is given.
@@ -65,11 +65,10 @@ public sealed partial class PickupPlacementEditSession
                 await Task.Run(() => Verify(source, bytes, token), token);
                 string directory = Path.GetDirectoryName(destination)!;
                 string temporary = Path.Combine(directory, ".zstudio-pickups-" + Guid.NewGuid().ToString("N") + ".tmp");
-                // Register before writing so failed/canceled writes are cleaned up too.
-                staged.Add(new(source, archive, destination, temporary, bytes, replace));
-                await using (FileStream stream = directories.OpenFile(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
-                { await stream.WriteAsync(bytes, token); await stream.FlushAsync(token); stream.Flush(true); }
-                byte[] reopened = await Sources.SourceRead.AllAsync(temporary, bytes.Length, directories, token);
+                // Creation owns failed-write cleanup; retain that same identity through verification and publication.
+                var file = await SealedFile.CreateAsync(temporary, bytes, directories, token);
+                staged.Add(new(source, archive, destination, file, bytes, replace));
+                byte[] reopened = await file.ReadAllAsync(bytes.Length, token);
                 if (!EqualBytes(bytes, reopened)) throw new IOException($"Written pickup archive verification failed: {destination}");
                 await Task.Run(() => Verify(source, reopened, token), token);
             }
@@ -83,20 +82,20 @@ public sealed partial class PickupPlacementEditSession
                 {
                     token.ThrowIfCancellationRequested();
                     ValidateDestination(output.Destination);
-                    using SealedFile file = VerifiedDocumentSave.Seal(output.Temporary, output.Bytes, directories);
                     if (output.Replace)
                     {
                         await CheckBaselineAsync(output.Archive, token, directories);
                         string? backup = createBackup ? output.Destination + "." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8] + ".bak" : null;
-                        PublishFile(file, output.Destination, true, backup);
+                        PublishFile(output.File, output.Destination, true, backup);
                     }
-                    else PublishFile(file, output.Destination, false, null);
+                    else PublishFile(output.File, output.Destination, false, null);
+                    output.File.Dispose();
                     output.Archive.Target = output.Destination; output.Archive.SavedBytes = output.Bytes;
                     output.Archive.PendingCopy = false;
                     output.Archive.Stamp = FileStamp.ReadHolding(output.Destination, output.Bytes, directories);
                     if (output.Destination.Equals(output.Archive.Original.Path, StringComparison.OrdinalIgnoreCase)) output.Archive.SourceStamp = output.Archive.Stamp;
-                    foreach (var source in positions.Keys.Where(s => s.ArchivePath == output.Source))
-                    { savedPositions[source] = positions[source]; savedRotations[source] = rotations[source]; }
+                    foreach (var entry in EntriesForArchive(output.Source, exact: true))
+                    { var source = entry.Record.Source; savedPositions[source] = positions[source]; savedRotations[source] = rotations[source]; }
                     saved.Add(output.Destination);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
@@ -109,9 +108,7 @@ public sealed partial class PickupPlacementEditSession
         }
         finally
         {
-            foreach (var output in staged)
-                try { directories.DeleteFile(output.Temporary); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { diagnostics.Add($"Could not remove save temporary {output.Temporary}: {ex.Message}"); }
+            foreach (var output in staged) output.File.Dispose();
             saving = false; Changed?.Invoke();
         }
     }
@@ -120,7 +117,7 @@ public sealed partial class PickupPlacementEditSession
         var original = archives[source].Original;
         if (bytes.Length != original.Bytes.Length) throw new InvalidDataException("Pickup patch changed the archive length.");
         HashSet<int> permitted = [];
-        foreach (var entry in entries.Values.Where(e => e.Record.Source.ArchivePath == source))
+        foreach (var entry in EntriesForArchive(source, exact: true))
             foreach (var scalar in Scalars(entry))
                 if (scalar.Value != scalar.Original)
                     for (int i = 0; i < 8; i++) permitted.Add(scalar.Offset + i);
@@ -128,7 +125,7 @@ public sealed partial class PickupPlacementEditSession
             if (bytes[i] != original.Bytes.Span[i] && !permitted.Contains(i)) throw new InvalidDataException($"Pickup patch changed unrelated byte 0x{i:X}.");
         var reopened = FormatRegistry.Default.OpenBytes(original.Path, bytes, token: token);
         if (reopened.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("Saved pickup archive could not be parsed completely.");
-        foreach (var entry in entries.Values.Where(e => e.Record.Source.ArchivePath == source))
+        foreach (var entry in EntriesForArchive(source, exact: true))
             foreach (var expected in Scalars(entry))
             {
                 var scalar = ZrdDecoder.Read(reopened.Slice(expected.Offset, 8), token);

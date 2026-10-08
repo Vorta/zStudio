@@ -61,31 +61,31 @@ public sealed class ZoneProbeTests
     {
         // A floor and a deck stacked in one node, the floor stored first.
         var world = World(Node("stack", Surface, (0, Zones(1)), (10, Zones(2))));
-        var point = ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared);
+        var point = ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken);
         Assert.Equal([0f], point.Hits.Select(h => h.Height));
-        var vehicle = ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle);
+        var vehicle = ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken);
         Assert.Equal([0f, 10f], vehicle.Hits.Select(h => h.Height));
         // So a camera over the deck takes the floor's zones; a vehicle on the deck the deck's.
-        Assert.Equal(Set(1), ZoneProbe.CameraZones(world, new(100, 20, 100), Set(9), ZoneSet.Cleared));
-        Assert.Equal(Set(2), ZoneProbe.VehicleZones(world, new(100, 10.5f, 100), ZoneSet.Cleared, 1).Zones);
+        Assert.Equal(Set(1), ZoneProbe.CameraZones(world, new(100, 20, 100), Set(9), ZoneSet.Cleared, token: TestContext.Current.CancellationToken));
+        Assert.Equal(Set(2), ZoneProbe.VehicleZones(world, new(100, 10.5f, 100), ZoneSet.Cleared, 1, token: TestContext.Current.CancellationToken).Zones);
         // As separate nodes, both probes see both surfaces, and the camera takes the deck.
         var separate = World(Node("floor", Surface, (0, Zones(1))), Node("deck", Surface, (10, Zones(2))));
-        Assert.Equal(Set(2), ZoneProbe.CameraZones(separate, new(100, 20, 100), Set(9), ZoneSet.Cleared));
+        Assert.Equal(Set(2), ZoneProbe.CameraZones(separate, new(100, 20, 100), Set(9), ZoneSet.Cleared, token: TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public void ProbesStartAt500AndSeeOnlyActiveAltitudeSurfacesFacingUp()
     {
         var high = World(Node("roof", Surface, (499, Zones(1)), (501, Zones(2))));
-        Assert.Equal([499f], ZoneProbe.Probe(high, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle).Hits.Select(h => h.Height));
-        Assert.Empty(ZoneProbe.Probe(World(Node("roof", Surface, (501, Zones(2)))), 100, 100, ZoneSet.Cleared).Hits);
-        Assert.Empty(ZoneProbe.Probe(World(Node("wall", Surface & ~0x08u, (0, Zones(1)))), 100, 100, ZoneSet.Cleared).Hits);
-        Assert.Empty(ZoneProbe.Probe(World(Node("off", Surface & ~0x04u, (0, Zones(1)))), 100, 100, ZoneSet.Cleared).Hits);
+        Assert.Equal([499f], ZoneProbe.Probe(high, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken).Hits.Select(h => h.Height));
+        Assert.Empty(ZoneProbe.Probe(World(Node("roof", Surface, (501, Zones(2)))), 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
+        Assert.Empty(ZoneProbe.Probe(World(Node("wall", Surface & ~0x08u, (0, Zones(1)))), 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
+        Assert.Empty(ZoneProbe.Probe(World(Node("off", Surface & ~0x04u, (0, Zones(1)))), 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
         // A polygon wound the other way faces down and holds no point.
         var down = Node("ceiling", Surface, (0, Zones(1)));
         down.Model!.Polygons[0].Vertices = [3, 2, 1, 0];
-        Assert.Empty(ZoneProbe.Probe(World(down), 100, 100, ZoneSet.Cleared).Hits);
-        Assert.Empty(ZoneProbe.Probe(World(Node("ceiling", Surface, (0, Zones(1)))), 300, 100, ZoneSet.Cleared).Hits);
+        Assert.Empty(ZoneProbe.Probe(World(down), 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
+        Assert.Empty(ZoneProbe.Probe(World(Node("ceiling", Surface, (0, Zones(1)))), 300, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
     }
 
     [Fact]
@@ -93,44 +93,44 @@ public sealed class ZoneProbeTests
     {
         var gated = Node("cave", Surface | ZoneProbe.GateFlag, (0, Zones(3))); gated.Zone = 3;
         var world = World(gated);
-        Assert.Empty(ZoneProbe.Probe(world, 100, 100, Set(1)).Hits);
-        Assert.Single(ZoneProbe.Probe(world, 100, 100, Set(1, 3)).Hits);
-        Assert.Single(ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared).Hits);
+        Assert.Empty(ZoneProbe.Probe(world, 100, 100, Set(1), token: TestContext.Current.CancellationToken).Hits);
+        Assert.Single(ZoneProbe.Probe(world, 100, 100, Set(1, 3), token: TestContext.Current.CancellationToken).Hits);
+        Assert.Single(ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
         // Without the gate the zone is not tested.
         var open = Node("cave", Surface, (0, Zones(3))); open.Zone = 3;
-        Assert.Single(ZoneProbe.Probe(World(open), 100, 100, Set(1)).Hits);
+        Assert.Single(ZoneProbe.Probe(World(open), 100, 100, Set(1), token: TestContext.Current.CancellationToken).Hits);
         // The camera's gate is its previous zones: once outside, it does not find the gated surface.
-        Assert.Equal(Set(1), ZoneProbe.CameraZones(world, new(100, 5, 100), Set(1), ZoneSet.Cleared));
-        Assert.Equal(Set(3), ZoneProbe.CameraZones(world, new(100, 5, 100), Set(3), ZoneSet.Cleared));
+        Assert.Equal(Set(1), ZoneProbe.CameraZones(world, new(100, 5, 100), Set(1), ZoneSet.Cleared, token: TestContext.Current.CancellationToken));
+        Assert.Equal(Set(3), ZoneProbe.CameraZones(world, new(100, 5, 100), Set(3), ZoneSet.Cleared, token: TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public void CameraZonesAddThePlayersAndKeepTheLastValidSet()
     {
         Vector3 eye = new(100, 5, 100);
-        Assert.Equal(Set(1, 2), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1)))), eye, Set(9), Set(2)));
-        Assert.Equal(Set(1, 2, 3), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1, 2, 3)))), eye, Set(9), Set(4)));
-        Assert.Equal(Set(1), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1)))), eye, Set(9), Set(1)));
+        Assert.Equal(Set(1, 2), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1)))), eye, Set(9), Set(2), token: TestContext.Current.CancellationToken));
+        Assert.Equal(Set(1, 2, 3), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1, 2, 3)))), eye, Set(9), Set(4), token: TestContext.Current.CancellationToken));
+        Assert.Equal(Set(1), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1)))), eye, Set(9), Set(1), token: TestContext.Current.CancellationToken));
         // No information, an "any" zone, or nothing under the camera: the previous zones stay.
-        Assert.Equal(Set(9), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones()))), eye, Set(9), Set(2)));
-        Assert.Equal(Set(9), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(0xFF)))), eye, Set(9), Set(2)));
-        Assert.Equal(Set(9), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1)))), eye, Set(9), Set(0xFF)));
-        Assert.Equal(Set(9), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1)))), new(300, 5, 100), Set(9), Set(2)));
+        Assert.Equal(Set(9), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones()))), eye, Set(9), Set(2), token: TestContext.Current.CancellationToken));
+        Assert.Equal(Set(9), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(0xFF)))), eye, Set(9), Set(2), token: TestContext.Current.CancellationToken));
+        Assert.Equal(Set(9), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1)))), eye, Set(9), Set(0xFF), token: TestContext.Current.CancellationToken));
+        Assert.Equal(Set(9), ZoneProbe.CameraZones(World(Node("g", Surface, (0, Zones(1)))), new(300, 5, 100), Set(9), Set(2), token: TestContext.Current.CancellationToken));
         // With nothing at or below the camera, the first surface found counts.
-        Assert.Equal(Set(1), ZoneProbe.CameraZones(World(Node("g", Surface, (50, Zones(1)), (60, Zones(2)))), eye, Set(9), ZoneSet.Cleared));
+        Assert.Equal(Set(1), ZoneProbe.CameraZones(World(Node("g", Surface, (50, Zones(1)), (60, Zones(2)))), eye, Set(9), ZoneSet.Cleared, token: TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public void VehicleZonesFollowTheGroundEvenWithoutInformation()
     {
         var ground = Node("ground", Surface, (0, Zones(4))); ground.Zone = 7;
-        var (zones, root) = ZoneProbe.VehicleZones(World(ground), new(100, 0.5f, 100), Set(1), 1);
+        var (zones, root) = ZoneProbe.VehicleZones(World(ground), new(100, 0.5f, 100), Set(1), 1, token: TestContext.Current.CancellationToken);
         Assert.Equal(Set(4), zones); Assert.Equal(7, root);
         // A polygon without zones clears the vehicle's (it then passes every test); no ground keeps them, with root 0xFF.
-        Assert.Equal(ZoneSet.Cleared, ZoneProbe.VehicleZones(World(Node("g", Surface, (0, Zones()))), new(100, 0.5f, 100), Set(1), 1).Zones);
-        Assert.Equal((Set(1), (byte)0xFF), ZoneProbe.VehicleZones(World(ground), new(300, 0.5f, 100), Set(1), 1));
+        Assert.Equal(ZoneSet.Cleared, ZoneProbe.VehicleZones(World(Node("g", Surface, (0, Zones()))), new(100, 0.5f, 100), Set(1), 1, token: TestContext.Current.CancellationToken).Zones);
+        Assert.Equal((Set(1), (byte)0xFF), ZoneProbe.VehicleZones(World(ground), new(300, 0.5f, 100), Set(1), 1, token: TestContext.Current.CancellationToken));
         // Spawning starts from no zones and looks up to 4 units above the spawn point.
-        Assert.Equal(Set(4), ZoneProbe.SpawnZones(World(Node("g", Surface, (3, Zones(4)))), new(100, 0, 100), true).Zones);
+        Assert.Equal(Set(4), ZoneProbe.SpawnZones(World(Node("g", Surface, (3, Zones(4)))), new(100, 0, 100), true, token: TestContext.Current.CancellationToken).Zones);
     }
 
     [Fact]
@@ -139,15 +139,15 @@ public sealed class ZoneProbeTests
         var water = Node("water", Surface, (20, Zones(1)));
         water.Model!.Polygons[0].Material!.Soil = ZoneProbe.WaterSoil;
         var world = World(Node("seabed", Surface, (0, Zones(14))), water);
-        var hits = ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle).Hits;
+        var hits = ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken).Hits;
         Assert.Equal(20f, hits[ZoneProbe.Select(hits, 25, 1, false).Index].Height);
         Assert.Equal(0f, hits[ZoneProbe.Select(hits, 25, 1, true).Index].Height);
         Assert.Equal(0f, hits[ZoneProbe.Select(hits, 10, 1, false).Index].Height);
         // Nothing reachable: hit 0 and the nearest height.
         Assert.Equal((0, 0f), ZoneProbe.Select(hits, -50, 1, false));
         // An amphibious-locked spawn skips the water too.
-        Assert.Equal(Set(14), ZoneProbe.SpawnZones(world, new(100, 25, 100), false).Zones);
-        Assert.Equal(Set(1), ZoneProbe.SpawnZones(world, new(100, 25, 100), true).Zones);
+        Assert.Equal(Set(14), ZoneProbe.SpawnZones(world, new(100, 25, 100), false, token: TestContext.Current.CancellationToken).Zones);
+        Assert.Equal(Set(1), ZoneProbe.SpawnZones(world, new(100, 25, 100), true, token: TestContext.Current.CancellationToken).Zones);
     }
 
     [Fact]
@@ -158,18 +158,18 @@ public sealed class ZoneProbeTests
         sky.Model!.Vertices.Clear(); sky.Model.Vertices.AddRange([new(-500, 0, -500), new(-500, 0, 1000), new(1000, 0, 1000), new(1000, 0, -500)]);
         var world = World(sky);
         Assert.Contains(world.Children, n => n.Name == "sky");
-        Assert.Single(ZoneProbe.Probe(world, 600, 100, ZoneSet.Cleared).Hits);
-        Assert.Empty(ZoneProbe.Probe(world, 600, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle).Hits);
-        Assert.Single(ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle).Hits);
+        Assert.Single(ZoneProbe.Probe(world, 600, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
+        Assert.Empty(ZoneProbe.Probe(world, 600, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken).Hits);
+        Assert.Single(ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken).Hits);
     }
 
     [Fact]
     public void ProbesHoldAtMost32SurfacesAndSkipFarLodBands()
     {
         var nodes = Enumerable.Range(0, 33).Select(i => Node($"layer{i}", Surface, (i, Zones(1)))).ToArray();
-        var point = ZoneProbe.Probe(World(nodes), 100, 100, ZoneSet.Cleared);
+        var point = ZoneProbe.Probe(World(nodes), 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken);
         Assert.True(point.Full); Assert.Equal(32, point.Hits.Count);
-        var stack = ZoneProbe.Probe(World(Node("stack", Surface, [.. Enumerable.Range(0, 33).Select(i => ((float)i, Zones(1)))])), 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle);
+        var stack = ZoneProbe.Probe(World(Node("stack", Surface, [.. Enumerable.Range(0, 33).Select(i => ((float)i, Zones(1)))])), 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken);
         Assert.True(stack.Full); Assert.Equal(32, stack.Hits.Count);
         // A LOD group is searched only when its band starts at the viewer.
         WorldNode near = new("near", WorldNodeClass.Lod) { Flags = Surface }, far = new("far", WorldNodeClass.Lod) { Flags = Surface };
@@ -179,15 +179,15 @@ public sealed class ZoneProbeTests
             var child = Node($"{lod.Name}-ground", Surface, (0, Zones(zone)));
             lod.Children.Add(child); child.Parents.Add(lod);
         }
-        Assert.Equal([Set(1)], ZoneProbe.Probe(World(near, far), 100, 100, ZoneSet.Cleared).Hits.Select(h => h.Zones));
+        Assert.Equal([Set(1)], ZoneProbe.Probe(World(near, far), 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits.Select(h => h.Zones));
     }
 
     [Fact]
     public void ARendererWithoutTheGamesZonesProbesFromTheEye()
     {
         var world = World(Node("floor", Surface, (0, Zones(1))), Node("roof", Surface, (30, Zones(2))));
-        Assert.Equal(Set(1), ZoneProbe.ViewZones(world, new(100, 20, 100), Set(9)));
-        Assert.Equal(Set(2), ZoneProbe.ViewZones(world, new(100, 40, 100), Set(9)));
-        Assert.Equal(ZoneSet.Cleared, ZoneProbe.ViewZones(world, new(300, 40, 100), Set(9)));
+        Assert.Equal(Set(1), ZoneProbe.ViewZones(world, new(100, 20, 100), Set(9), token: TestContext.Current.CancellationToken));
+        Assert.Equal(Set(2), ZoneProbe.ViewZones(world, new(100, 40, 100), Set(9), token: TestContext.Current.CancellationToken));
+        Assert.Equal(ZoneSet.Cleared, ZoneProbe.ViewZones(world, new(300, 40, 100), Set(9), token: TestContext.Current.CancellationToken));
     }
 }

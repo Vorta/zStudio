@@ -69,7 +69,7 @@ public sealed partial class AnimationTests
         var launch = AnimationCatalog.Create(24); launch.SetText(12,"child",20); launch.Threshold = .1f; parent.Sequences[0].Events.Add(launch);
         AnimationPlayer player = new(context,0); var after = player.EvaluateForTest(1.1); Assert.Equal(42, Assert.Single(after.Nodes).Transform.M41);
         player.EvaluateForTest(.05,true); Assert.Equal(after.Nodes,player.EvaluateForTest(1.1,true).Nodes);
-        player.Reset(); Assert.Equal(0,Assert.Single(player.Frame().Nodes).Transform.M41);
+        player.Reset(TestContext.Current.CancellationToken); Assert.Equal(0,Assert.Single(player.Frame(TestContext.Current.CancellationToken).Nodes).Transform.M41);
     }
     [Fact]
     public void CopiedAnimationRootsRemainDistinctFromTheWorldActor()
@@ -87,7 +87,7 @@ public sealed partial class AnimationTests
         context.Mission = BuildMission(context.World,null,Arr(Str("animated_01"),Spawn(9,2,7,0)),Arr(Str("animated"),Arr()),null);
         int root = context.Mission.Actors[0].Root; context.RootOverrides[0] = root;
         Assert.Equal(root, context.ResolveNode(context.Package.Entries[0],1));
-        var pose = Assert.Single(new AnimationPlayer(context,0).Frame().Nodes);
+        var pose = Assert.Single(new AnimationPlayer(context,0).Frame(TestContext.Current.CancellationToken).Nodes);
         Assert.Equal(root,pose.SourceNode); Assert.Equal(new Vector3(9,2,7),pose.Transform.Translation);
     }
     [Fact]
@@ -136,7 +136,7 @@ public sealed partial class AnimationTests
         var context=MissionFixture(); var motion=MissionEntry(1,"later_motion","animated"); var position=AnimationCatalog.Create(7); position.SetShort(28,1); position.SetVector(16,new(100,0,0)); motion.Sequences[0].Events.Add(position); context.Package.Entries.Add(motion);
         context.Mission=BuildMission(context.World,context.Package,null,null,null);
         Assert.Contains(0,context.Mission.DormantRoots);
-        var frame=new AnimationPlayer(context,0).Frame(); Assert.True(Assert.Single(frame.Nodes).Visible);
+        var frame=new AnimationPlayer(context,0).Frame(TestContext.Current.CancellationToken); Assert.True(Assert.Single(frame.Nodes).Visible);
         Assert.Contains(frame.Diagnostics,n=>n.Contains("individual preview"));
         Assert.Empty(SceneBuilder.Assemble(context.Scene,token:TestContext.Current.CancellationToken).Placements);
     }

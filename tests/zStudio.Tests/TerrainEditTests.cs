@@ -101,7 +101,7 @@ public sealed class TerrainEditTests
         Assert.Throws<InvalidDataException>(() => SourceTerrain.Create(workspace, "data/m1/models/m1.gltf", "data/m1/models/m1.gltf", ["ground"], token: Token));
         var created = SourceTerrain.Create(workspace, "data/m1/models/m1.gltf", "data/m1/models/terrain/hills.gltf", ["land"], token: Token);
         Assert.Equal(["data/m1/models/m1.gltf", "data/m1/models/terrain/hills.terrain.json"], workspace.DirtyFiles);
-        Assert.Equal(["data/m1/models/terrain/hills.terrain.json"], SourceTerrain.Recipes(workspace));
+        Assert.Equal(["data/m1/models/terrain/hills.terrain.json"], SourceTerrain.Recipes(workspace, Token));
         var marker = JsonNode.Parse(workspace.Read("data/m1/models/m1.gltf", Token)!)!["nodes"]!.AsArray().Last()!;
         Assert.Equal("terrain/hills.terrain.json", marker["extras"]!["recoil"]!["terrain"]!.GetValue<string>());
         Assert.Equal("hills.gltf", SourceTerrain.Read(workspace, "data/m1/models/terrain/hills.terrain.json", Token).Surfaces.Single().Model);
@@ -117,6 +117,6 @@ public sealed class TerrainEditTests
         Assert.Null(SourceTerrain.Edit(workspace, "data/m1/models/terrain/hills.terrain.json", "Nothing", r => r, Token));
         workspace.Undo(); workspace.Undo(); workspace.Undo();
         Assert.False(workspace.IsDirty);
-        Assert.Empty(SourceTerrain.Recipes(workspace));
+        Assert.Empty(SourceTerrain.Recipes(workspace, Token));
     }
 }

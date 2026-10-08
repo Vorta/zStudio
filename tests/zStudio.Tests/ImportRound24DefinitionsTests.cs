@@ -13,7 +13,8 @@ public sealed class ImportRound24DefinitionsTests
     private sealed class Files(Dictionary<string, byte[]> files) : IProjectFiles
     {
         public bool Exists(string relative) => files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) => files[relative];
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = files[relative]; limits.Validate(result); return result; }
     }
 
     [Theory]

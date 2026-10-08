@@ -98,8 +98,7 @@ internal sealed class SourceObjectPropertiesEditor : SourcePropertiesEditor
                 Input(form, name, written, _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: SourceObjectEdits.PropertyCommands[name] + $" · {JsonData.ShownText(writer.Script, 256)} line {writer.Line}",
                     asyncCommit: async text =>
                     {
-                        string[] args = text.Split([' ', ',', '\t'], StringSplitOptions.RemoveEmptyEntries);
-                        if (args.Length == 0) throw new FormatException("Enter the command's arguments.");
+                        string[] args = ComponentText.BoundedTokens(text, " ,\t", 1, 8, 64, "Give 1–8 arguments of up to 64 characters.");
                         if (string.Join(" ", args) != written) await command(name, args);
                     });
             }
@@ -124,11 +123,18 @@ internal sealed class SourceObjectPropertiesEditor : SourcePropertiesEditor
             Input(form, label, on ? "on" : "off", _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "on or off",
                 asyncCommit: async text =>
                 {
-                    bool value = text.Trim().ToLowerInvariant() switch { "on" or "true" or "1" => true, "off" or "false" or "0" => false, _ => throw new FormatException("Enter on or off.") };
+                    bool value = FlagValue(text);
                     if (value != on) await flag(bit, value);
                 });
         }
         RaiseChanged();
+    }
+    private static bool FlagValue(string text)
+    {
+        var value = text.AsSpan().Trim();
+        if (value.Equals("on", StringComparison.OrdinalIgnoreCase) || value.Equals("true", StringComparison.OrdinalIgnoreCase) || value.SequenceEqual("1")) return true;
+        if (value.Equals("off", StringComparison.OrdinalIgnoreCase) || value.Equals("false", StringComparison.OrdinalIgnoreCase) || value.SequenceEqual("0")) return false;
+        throw new FormatException("Enter on or off.");
     }
     private void Vector(StackPanel form, string label, Vector3 value, Func<Vector3, ObjectTransform> with)
     {

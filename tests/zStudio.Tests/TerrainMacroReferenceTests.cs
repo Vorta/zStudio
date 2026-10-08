@@ -119,14 +119,16 @@ public sealed class TerrainMacroReferenceTests
     }
 
     [Fact]
-    public void ExecutedOperandWorkIsBoundedEvenWhenNamesAreRepeated()
+    public void SharedExecutionWorkBoundsTerrainReferencesEvenWhenNamesAreRepeated()
     {
         using SourceWorldFixture fixture = new();
         fixture.Write(Entry, string.Concat(Enumerable.Repeat("source child.gw\n", 80)));
         fixture.Write("gamegen/child.gw", "FindNode " + new string('x', 1_000_000) + "\n");
         SourceWorkspace workspace = new(fixture.Project);
         var error = Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.References(workspace, [Entry], Entry, Token));
-        Assert.Contains("executed-operand work budget", error.Message);
+        // The shared trace charges commands and their operands before expansion; it must refuse before terrain's
+        // later reference visitor would consume its own operand-only allowance.
+        Assert.Contains("aggregate executed operand storage or text work limit", error.Message);
         Assert.False(workspace.IsDirty);
     }
 
@@ -155,6 +157,7 @@ public sealed class TerrainMacroReferenceTests
     private sealed class Files(SourceWorkspace workspace) : IProjectFiles
     {
         public bool Exists(string relative) => workspace.Exists(relative);
-        public byte[] Read(string relative, CancellationToken token) => workspace.Read(relative, token) ?? throw new FileNotFoundException(relative);
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); return workspace.Read(relative, token, limits) ?? throw new FileNotFoundException(relative); }
     }
 }

@@ -16,7 +16,7 @@ public sealed class McpLazyConnectorTests
         int connections = 0;
         await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => false, async client =>
         {
-            Assert.Equal(105, (await client.ListToolsAsync()).Count);
+            Assert.Equal(107, (await client.ListToolsAsync()).Count);
             Assert.Equal(2, (await client.ListResourcesAsync()).Count);
             Assert.False((await client.CallToolAsync("zstudio_capabilities")).IsError);
             Assert.Single((await client.ReadResourceAsync("zstudio://capabilities")).Contents);
@@ -89,6 +89,34 @@ public sealed class McpLazyConnectorTests
                 var result = await client.CallToolAsync("zstudio_export", new Dictionary<string, object?>
                 {
                     ["document"] = Guid.NewGuid().ToString(), ["destination"] = "unused", ["assets"] = JsonNode.Parse(assets)
+                });
+                Assert.True(result.IsError);
+                Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());
+            }
+            Assert.Equal(0, connections);
+        });
+    }
+
+    [Fact]
+    public async Task MalformedTerrainCoordinatesAndPolygonRingsAreRejectedBeforeConnecting()
+    {
+        int connections = 0;
+        await WithConnector(_ => { connections++; throw new Exception("Must not connect"); }, () => true, async client =>
+        {
+            foreach (var (key, json) in new (string, string)[]
+            {
+                ("path", "[[\"bad\"]]"), ("path", "[[0]]"), ("path", "[[0,0,0]]"),
+                ("path", "[[0,null]]"), ("path", "[[0,1000001]]"),
+                ("polygons", "[{}]"), ("polygons", "[{\"outer\":[]}]"),
+                ("polygons", "[{\"outer\":[[0,0],[1,0],[0,1]],\"holes\":[[[0,0]]]}]"),
+                ("polygons", "[{\"outer\":[[0,0],[1,0],[0,1]],\"holes\":[[[0,0],[1,0],[\"bad\",1]]]}]"),
+                ("polygons", "[{\"outer\":[[0,0],[1,0],[0,1]],\"extra\":true}]")
+            })
+            {
+                var result = await client.CallToolAsync("zstudio_source_terrain_edit", new Dictionary<string, object?>
+                {
+                    ["document"] = Guid.NewGuid().ToString(), ["revision"] = 0, ["recipe"] = "data/m1/terrain.terrain.json",
+                    ["action"] = "paint", ["region"] = "road", ["radius"] = 1, [key] = JsonNode.Parse(json)
                 });
                 Assert.True(result.IsError);
                 Assert.Equal("invalid_argument", result.StructuredContent!.Value.GetProperty("code").GetString());

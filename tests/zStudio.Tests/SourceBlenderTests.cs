@@ -15,6 +15,34 @@ public sealed class SourceBlenderTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private const string Model = "data/m1/models/m1.gltf";
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MapOwnedAssignmentsSurviveTransformsAndRefuseUnmappedTopologyEvenWhenForced(bool force)
+    {
+        using SourceWorldFixture fixture = new();
+        SourceWorkspace workspace = new(fixture.Project);
+        var document = WorldAssembler.ReadModel(workspace.Read(Model, Token)!, Model,
+            (path, _) => workspace.Read(path, Token)!, Token);
+        var profile = WorldGltf.CaptureZoneProfile(document, token: Token);
+        byte[] map = new SourceMapZones([new(Model, Model, profile, [])]).Write(Token);
+        const string manifest = "data/m1/meta/zones.json";
+        fixture.Write(manifest, map);
+        var checkout = SourceBlender.Checkout(workspace, Model, Token);
+        string renamed = Export(checkout, "renamed-zone-model", g => Rename(g, "changed_identity"));
+        var error = Assert.Throws<InvalidDataException>(() => SourceBlender.PlanUpdate(workspace, checkout, renamed, force, Token));
+        Assert.Contains("topology", error.Message);
+        Assert.False(workspace.IsDirty); Assert.False(workspace.CanUndo);
+        string moved = Export(checkout, "moved-zone-model", g => g["nodes"]![0]!["translation"] = new JsonArray(7f, 0f, 0f));
+        var plan = SourceBlender.PlanUpdate(workspace, checkout, moved, force, Token);
+        Apply(workspace, plan);
+        var updated = WorldAssembler.ReadModel(workspace.Read(Model, Token)!, Model,
+            (path, _) => workspace.Read(path, Token)!, Token);
+        WorldGltf.ValidateZoneProfile(updated, profile, Token);
+        Assert.Equal(map, workspace.Read(manifest, Token));
+        workspace.Undo(); Assert.False(workspace.IsDirty);
+    }
+
     [Fact]
     public void RemovingOneOfTwoSameNamedNodesWarnsBeforeAccepting()
     {

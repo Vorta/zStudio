@@ -91,9 +91,8 @@ public static partial class SourceWorlds
         if (!IsLoadable(Path.GetFileNameWithoutExtension(model))) throw new InvalidDataException($"Scripts load models by a name of 1–{MaximumNameLength} letters, digits, '_', '-' or '.'; rename {Path.GetFileName(model)} first.");
         string folder = Path.GetDirectoryName(model)!.Replace('\\', '/');
         if (!IsScriptFolder(folder)) throw new InvalidDataException($"Scripts cannot name the folder {folder} (spaces, commas, '#', '%' or ';'); move the model first.");
-        // LoadGameGen finds name.gltf before name.glb in a folder.
-        if (model.EndsWith(".glb", StringComparison.OrdinalIgnoreCase) && File.Exists(Path.ChangeExtension(path, ".gltf")))
-            throw new InvalidDataException($"{folder} also holds {Path.GetFileNameWithoutExtension(model)}.gltf, which scripts load instead of {Path.GetFileName(model)}.");
+        // ScriptLines names the chosen extension explicitly. The shared WorldAssembler resolver honors that
+        // extension; its .gltf-before-.glb preference applies only to bare names and legacy .flt operands.
         if (!NodeName().IsMatch(addition.Name)) throw new InvalidDataException($"Node names need 1–{MaximumNameLength} letters, digits, '_', '-' or '.'.");
         if (addition.Position is { } p && !(Finite(p.X) && Finite(p.Y) && Finite(p.Z))) throw new InvalidDataException($"Positions need finite coordinates within ±{MaximumCoordinate:N0}.");
         if (!float.IsFinite(addition.Heading) || Math.Abs(addition.Heading) > 360) throw new InvalidDataException("The heading needs −360 to 360 degrees.");
@@ -125,20 +124,35 @@ public static partial class SourceWorlds
     /// <paramref name="script"/> (a world script's bytes) with the lines of each addition inserted before the line that
     /// writes the world. Everything else, including line endings, is kept.
     /// </summary>
-    public static byte[] InsertIntoScript(ReadOnlySpan<byte> script, IEnumerable<SourceModelAddition> additions, string name = "the world script")
+    public static byte[] InsertIntoScript(ReadOnlySpan<byte> script, IEnumerable<SourceModelAddition> additions, string name = "the world script") => InsertIntoScript(script, additions, name, CancellationToken.None);
+    internal static byte[] InsertIntoScript(ReadOnlySpan<byte> script, IEnumerable<SourceModelAddition> additions, string name, CancellationToken token)
     {
-        string text = GameGenScriptText.Decode(script);
-        var lines = additions.SelectMany(ScriptLines).ToArray();
-        if (lines.Length == 0) return script.ToArray();
-        GameGenScriptText.CheckBounds(text);
+        string text = GameGenScriptText.Decode(script, token);
+        List<string> lines = [];
+        foreach (var addition in additions) { token.ThrowIfCancellationRequested(); lines.AddRange(ScriptLines(addition)); }
+        token.ThrowIfCancellationRequested();
+        if (lines.Count == 0)
+        {
+            byte[] unchanged = script.ToArray();
+            token.ThrowIfCancellationRequested();
+            return unchanged;
+        }
+        GameGenScriptText.CheckBounds(text, token);
         string newline = text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
         int start = 0;
         while (start <= text.Length)
         {
-            int end = text.IndexOf('\n', start); if (end < 0) end = text.Length;
-            var tokens = GameGenScriptText.TokenizeLine(text[start..end].TrimEnd('\r'));
+            int end = SourceTextScan.Find(text, '\n', start, text.Length, token); if (end < 0) end = text.Length;
+            int tokenEnd = end;
+            while (tokenEnd > start && text[tokenEnd - 1] == '\r') { if ((tokenEnd & 4095) == 0) token.ThrowIfCancellationRequested(); tokenEnd--; }
+            List<string> tokens = [];
+            GameGenScriptText.TokenizeLine(text, start, tokenEnd, tokens, null, token);
             if (tokens.Count > 0 && ScriptCommands.Core(tokens[0]) == "GameZWriteZBDFile")
-                return Encoding.Latin1.GetBytes(text[..start] + string.Concat(lines.Select(l => l + newline)) + text[start..]);
+            {
+                byte[] result = Encoding.Latin1.GetBytes(text[..start] + string.Concat(lines.Select(l => l + newline)) + text[start..]);
+                token.ThrowIfCancellationRequested();
+                return result;
+            }
             if (tokens.Count > 0 && ScriptConditions.IsQuit(tokens[0])) break;
             start = end + 1;
         }
@@ -151,6 +165,8 @@ public static partial class SourceWorlds
     /// </summary>
     public static byte[] AddDefinitionFiles(ReadOnlySpan<byte> definitions, IEnumerable<string> files, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
+        ProjectReadLimits.Resource().Validate(definitions);
         bool text = ZrdText.LooksLikeText(definitions);
         ZrdTextSyntax? syntax = null; ZrdNode tree;
         try { if (text) { syntax = ZrdTextSyntax.Parse(definitions, token); tree = syntax.Root; } else tree = ZrdDecoder.Read(definitions.ToArray(), token); }
@@ -228,11 +244,30 @@ public static partial class SourceWorlds
     /// does not list yet: the animations a model brought from another mission needs, such as an enemy's destruction.
     /// </summary>
     public static IReadOnlyList<SourceDefinitionFile> DefinitionsFor(string projectRoot, string mission, string root, IReadOnlyDictionary<string, byte[]>? overlay = null, CancellationToken token = default)
+        => DefinitionsFor(projectRoot, mission, root, overlay, AnimationDefinitionSet.MaximumSourceBytes, 16L << 20, token);
+
+    internal static IReadOnlyList<SourceDefinitionFile> DefinitionsFor(string projectRoot, string mission, string root,
+        IReadOnlyDictionary<string, byte[]>? overlay, long maximumInputBytes, long maximumResultBytes, CancellationToken token,
+        long maximumProbeWork = 64L << 20)
     {
-        DiskFiles files = new(projectRoot, overlay);
+        if (maximumInputBytes < 0 || maximumResultBytes < 0) throw new ArgumentOutOfRangeException(nameof(maximumInputBytes));
+        DefinitionDiscoveryFiles files = new(projectRoot, overlay, maximumInputBytes, maximumProbeWork, token);
+        long resultBytes = 0;
+        void Retain(string value)
+        {
+            token.ThrowIfCancellationRequested();
+            // Charge full identities and collection/index/final-array overhead before retaining them. Shared files
+            // and names are charged only on insertion, but every source read is charged before decoding below.
+            long bytes = 128L + 2L * value.Length;
+            if (bytes > maximumResultBytes - resultBytes)
+                throw new IOException("Animation definition discovery exceeds its retained-result allowance. Reduce the definitions or split the source project.");
+            resultBytes += bytes;
+        }
         HashSet<string> own = new(StringComparer.OrdinalIgnoreCase);
         string ownRoot = SourceBuilder.AnimationRoot(mission);
-        if (files.Exists(ownRoot)) own.UnionWith(AnimationDefinitionSet.Load(files, ownRoot, token).Files);
+        if (files.Exists(ownRoot))
+            foreach (string file in AnimationDefinitionSet.Load(files, ownRoot, token).Files)
+                if (!own.Contains(file)) { Retain(file); own.Add(file); }
         Dictionary<string, (SortedSet<string> Animations, SortedSet<string> Missions)> found = new(StringComparer.OrdinalIgnoreCase);
         // Listed as any scan of the project is: bounded, and given up when canceled.
         foreach (string other in SourceProject.MissionFolders(projectRoot, token).Select(m => m.ToLowerInvariant()).Where(m => !m.Equals(mission, StringComparison.OrdinalIgnoreCase)))
@@ -245,38 +280,96 @@ public static partial class SourceWorlds
             catch (InvalidDataException) { continue; }
             foreach (var definition in set.Definitions)
             {
+                token.ThrowIfCancellationRequested();
                 if (own.Contains(definition.File)) continue;
                 bool binds;
                 try { binds = AnimationCompiler.Roots(definition.Item, [root], _ => { }, token).Any(r => r.Root == root); }
                 catch (InvalidDataException) { continue; }
                 if (!binds) continue;
-                if (!found.TryGetValue(definition.File, out var entry)) found[definition.File] = entry = (new(StringComparer.Ordinal), new(StringComparer.OrdinalIgnoreCase));
-                entry.Animations.Add(definition.Item.Item("ANIMATION_NAME")?.Text() is { Length: > 0 } name ? name : root);
-                entry.Missions.Add(other);
+                if (!found.TryGetValue(definition.File, out var entry))
+                {
+                    Retain(definition.File);
+                    found[definition.File] = entry = (new(StringComparer.Ordinal), new(StringComparer.OrdinalIgnoreCase));
+                }
+                string animation = definition.Item.Item("ANIMATION_NAME")?.Text() is { Length: > 0 } name ? name : root;
+                if (!entry.Animations.Contains(animation)) { Retain(animation); entry.Animations.Add(animation); }
+                if (!entry.Missions.Contains(other)) { Retain(other); entry.Missions.Add(other); }
             }
         }
         return found.OrderBy(f => f.Key, StringComparer.OrdinalIgnoreCase).Select(f => new SourceDefinitionFile(f.Key, [.. f.Value.Animations], [.. f.Value.Missions.OrderBy(m => int.Parse(m.AsSpan(1)))])).ToArray();
     }
 
+    /// <summary>One discovery allowance spans the selected mission and every other mission, including repeated reads.</summary>
+    private sealed class DefinitionDiscoveryFiles(string projectRoot, IReadOnlyDictionary<string, byte[]>? overlay,
+        long remainingBytes, long remainingProbeWork, CancellationToken cancellation) : IProjectFiles
+    {
+        private readonly DiskFiles presence = new(projectRoot, overlay);
+        private int reads;
+        private Action<long>? reservePrefix;
+        public bool Exists(string relative)
+        {
+            // Missing files consume no read allowance. Charge every candidate before path normalization,
+            // link checks and filesystem probing, across all missions and their separate loaders.
+            ReserveProbeWork(128L + 4L * relative.Length);
+            return presence.Exists(relative, reservePrefix ??= ReserveProbeWork);
+        }
+        private void ReserveProbeWork(long work)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (work > remainingProbeWork)
+                throw new IOException("Animation definition discovery exceeds its aggregate directory lookup work allowance. Reduce search paths or missing definition references.");
+            remainingProbeWork -= work;
+        }
+        public byte[] Read(string relative, CancellationToken token)
+            => Read(relative, token, ProjectReadLimits.Document);
+
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
+        {
+            token.ThrowIfCancellationRequested();
+            SourceProject.RequireSource(relative);
+            if (++reads > AnimationDefinitionSet.MaximumFileReads) throw Limit();
+            limits = limits.WithMaximum(Math.Min(remainingBytes, SourceProject.MaximumSourceTextBytes));
+            byte[] bytes;
+            if (overlay?.TryGetValue(relative, out var pending) == true)
+            {
+                try { limits.Validate(pending); } catch (InvalidDataException ex) { throw Limit(ex); }
+                bytes = pending;
+            }
+            else
+            {
+                SourceProject.RejectNestedLinks(projectRoot, relative, reservePrefix ??= ReserveProbeWork);
+                try { bytes = SourceRead.All(SourceProject.Resolve(projectRoot, relative), limits, token); }
+                catch (InvalidDataException ex) { throw Limit(ex); }
+            }
+            remainingBytes -= bytes.Length;
+            return bytes;
+        }
+        // Capacity is not malformed syntax: DefinitionsFor must refuse rather than skip a partially inspected mission.
+        private static IOException Limit(Exception? inner = null) => new("Animation definition discovery exceeds its aggregate source allowance or a definition file's size limit. Reduce the definitions or split the source project.", inner);
+    }
+
     /// <summary>The project on disk with some files replaced by pending content; links are refused.</summary>
     internal sealed class DiskFiles(string root, IReadOnlyDictionary<string, byte[]>? overlay) : IProjectFiles
     {
-        public bool Exists(string relative)
+        public bool Exists(string relative) => Exists(relative, null);
+        internal bool Exists(string relative, Action<long>? reservePathWork)
         {
             SourceProject.RequireSource(relative);
             if (overlay?.ContainsKey(relative) == true) return true;
-            SourceProject.RejectNestedLinks(root, relative);
+            SourceProject.RejectNestedLinks(root, relative, reservePathWork);
             return SourceRead.FileExists(SourceProject.Resolve(root, relative));
         }
         public byte[] Read(string relative, CancellationToken token)
+            => Read(relative, token, ProjectReadLimits.Document);
+
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
         {
             SourceProject.RequireSource(relative);
             token.ThrowIfCancellationRequested();
-            if (overlay?.TryGetValue(relative, out var bytes) == true) return bytes;
+            if (overlay?.TryGetValue(relative, out var bytes) == true) { limits.Validate(bytes); return bytes; }
             SourceProject.RejectNestedLinks(root, relative);
             string path = SourceProject.Resolve(root, relative);
-            if (new FileInfo(path).Length > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} exceeds 512 MiB.");
-            return SourceRead.All(path, FormatRegistry.MaximumDocumentBytes, token);
+            return SourceRead.All(path, limits, token);
         }
     }
 
@@ -341,11 +434,10 @@ public static partial class SourceWorlds
             directories.Hold(destination);
             if (directories.Entries(destination, token).Any()) throw new IOException($"The preview folder {destination} is not empty.");
         }
-        // The build's view of the project starts before planning, as an export's does (see SourceBuilder.ExportAsync): each file
-        // is read once, and the plan and every file read must be unchanged when the build is returned, so the world shown, and
-        // the stamps that later tell it is stale, are one state of the project. A file another program changes meanwhile fails
-        // the build rather than show a world assembled partly from the old file and partly from newer ones.
-        SourceBuilder.Snapshot snapshot = new(root, overlay, relative => new SourceFileChangedException($"{relative} changed on disk while the {mission} world was building; the build was not shown. Try again.", [relative]));
+        // The build's view starts before planning, as an export's does (see SourceBuilder.ExportAsync). Reads may repeat;
+        // the snapshot checks captured content digests and rechecks the plan and dependencies before returning the build.
+        // A detected external change refuses publication rather than showing a world assembled from different file states.
+        SourceBuilder.Snapshot snapshot = new(root, overlay, relative => new SourceFileChangedException($"{relative} changed on disk while the {mission} world was building; the build was not shown. Try again.", [relative]), inventoryToken: token);
         var selected = await Task.Run(() => PreviewPlan(root, mission, snapshot, token), token).ConfigureAwait(false);
         if (!selected.Any(p => p.Family == "world")) throw new InvalidDataException($"The project has no world script for {mission} ({SourceBuilder.WorldScript(mission)}) or no glTF models.");
         List<SourceExportResult> results = []; Animation.AnimationPackage? animations = null;
@@ -435,11 +527,12 @@ public static partial class SourceWorlds
     /// mission's texture folders changed, after planning): the plan is made again and must give the same outputs, each with the
     /// same inputs and pack (see <see cref="SourceBuilder.SamePlan"/>).
     /// </summary>
-    private static void CheckPreviewPlanUnchanged(string root, string mission, SourceBuilder.Snapshot snapshot, IReadOnlyList<SourceOutputPlan> built, CancellationToken token)
+    internal static void CheckPreviewPlanUnchanged(string root, string mission, SourceBuilder.Snapshot snapshot, IReadOnlyList<SourceOutputPlan> built, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         SourceOutputPlan[] now;
         try { now = PreviewPlan(root, mission, snapshot, token); }
+        catch (InventoryCapacityException) { throw; }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new SourceFileChangedException($"The project changed while the {mission} world was building; the build was not shown. Try again. ({ex.Message})", []); }
         if (now.Length == built.Count && built.Zip(now).All(p => SourceBuilder.SamePlan(p.First, p.Second))) return;
@@ -460,21 +553,25 @@ public static partial class SourceWorlds
     /// mission's animation list (<c>data/mN/zrdr/anim.zad</c>). The world must then be built to check it (see <see cref="CheckAdditions"/>).
     /// </summary>
     public static SourceTransaction AddModel(SourceWorkspace workspace, string mission, SourceWorldAddition addition, CancellationToken token = default)
+        => AddModel(workspace, mission, addition, token, SourceProject.MaximumSourceTextBytes);
+
+    internal static SourceTransaction AddModel(SourceWorkspace workspace, string mission, SourceWorldAddition addition, CancellationToken token, long maximumSourceBytes)
     {
         if (!MissionName().IsMatch(mission)) throw new InvalidDataException($"'{mission}' is not a mission folder name.");
         mission = mission.ToLowerInvariant();
         Validate(workspace.Root, addition.Model);
         string scriptPath = SourceBuilder.WorldScript(mission), definitionsPath = SourceBuilder.AnimationRoot(mission);
-        byte[] script = workspace.Read(scriptPath, token) ?? throw new InvalidDataException($"The project has no world script {scriptPath}.");
-        List<(string, byte[]?)> changes = [(scriptPath, InsertIntoScript(script, [addition.Model], scriptPath))];
+        byte[] script = workspace.Read(scriptPath, token, ProjectReadLimits.Text(maximumSourceBytes)) ?? throw new InvalidDataException($"The project has no world script {scriptPath}.");
+        List<(string, byte[]?)> changes = [(scriptPath, InsertIntoScript(script, [addition.Model], scriptPath, token))];
+        if (AdditionZones(workspace, mission, addition.Model.Model, token) is { } zones) changes.Add(zones);
         if (addition.DefinitionFiles.Count > 0)
         {
             foreach (string file in addition.DefinitionFiles)
             {
                 if (!file.StartsWith(SourceProject.DataFolder + "/", StringComparison.OrdinalIgnoreCase) || !file.EndsWith(AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"'{file}' is not a definition file ({AnimationDefinitionSet.Extension}) in the data folder.");
-                if (!workspace.Exists(file)) throw new InvalidDataException($"The definition file {file} does not exist.");
+                if (!workspace.Exists(file, token)) throw new InvalidDataException($"The definition file {file} does not exist.");
             }
-            byte[] definitions = workspace.Read(definitionsPath, token) ?? throw new InvalidDataException($"The project has no {definitionsPath} to list animation definitions in.");
+            byte[] definitions = workspace.Read(definitionsPath, token, ProjectReadLimits.Resource(Math.Min(maximumSourceBytes, SourceProject.MaximumSourceTextBytes))) ?? throw new InvalidDataException($"The project has no {definitionsPath} to list animation definitions in.");
             changes.Add((definitionsPath, AddDefinitionFiles(definitions, addition.DefinitionFiles, token)));
         }
         return workspace.Apply($"Add {addition.Model.Name}", changes, token) ?? throw new InvalidDataException("Adding the model changed no source file.");

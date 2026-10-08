@@ -102,7 +102,7 @@ public sealed class ReconstructionPlanningReviewFixTests
         byte[] archive = await File.ReadAllBytesAsync(Path.Combine(destination, "zrdr.zbd"), Token);
         var member = Assert.Single(ArchiveSources.Read(archive));
         var two = Assert.Single(Nodes(ZrdDecoder.Read(member.Payload, Token)), n => n.Kind == ZrdKind.Float && BitConverter.UInt32BitsToSingle(n.Bits) == 2f);
-        var change = Assert.Single(SourceResourceEdits.SourceChanges(archive, [new(member.Offset + two.SourceOffset, SourceResourceEdits.Float(7.5f))], r => File.ReadAllBytes(fixture.Path(r)), Token));
+        var change = Assert.Single(SourceResourceEdits.SourceChanges(archive, [new(member.Offset + two.SourceOffset, SourceResourceEdits.Float(7.5f))], (r, limits) => SourceRead.All(fixture.Path(r), limits, Token), Token));
         Assert.Equal(shared, change.Relative);
         Assert.Contains("7.5", Encoding.Latin1.GetString(change.Content), StringComparison.Ordinal);
 

@@ -39,6 +39,7 @@ public sealed partial class AnimationCompiler
     private readonly CancellationToken token;
     private readonly long maximumBytes;
     private readonly long maximumExpansionWork;
+    private readonly AnimationCompileWork keyframeWork;
     private long bytes, expansionWork;
     // Four maximum-sized fallback scripts, at 256 conservatively estimated bytes per retained key.
     internal const int MaximumScriptKeys = 4 * AnimationScript.MaximumTotalKeys;
@@ -49,10 +50,11 @@ public sealed partial class AnimationCompiler
     private void Warn(string message) => diagnostics.Add($"{message}");
     private void Reject(string message) { engineRejection ??= message; Warn(message); }
 
-    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token, long maximumExpansionWork)
+    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token, long maximumExpansionWork, AnimationCompileWork keyframeWork)
     {
         this.definitions = definitions; roots = new(worldNodes, token); this.token = token; this.maximumBytes = maximumBytes;
         this.maximumExpansionWork = maximumExpansionWork;
+        this.keyframeWork = keyframeWork;
         nodeSet = worldNodes == null ? null : new(worldNodes, StringComparer.Ordinal);
         effectSet = effects == null ? null : new(effects, StringComparer.Ordinal);
     }
@@ -73,10 +75,12 @@ public sealed partial class AnimationCompiler
         => Compile(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token);
 
     internal static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
-        long maximumExpansionWork = MaximumExpansionWork)
+        long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
+        Action? keyframeWorkAdmitted = null)
     {
         var set = AnimationDefinitionSet.Load(files, root, token);
-        AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork);
+        AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
+            new(token, maximumKeyframeWork, keyframeWorkAdmitted));
         foreach (var w in set.Warnings) compiler.Warn(w);
         var package = compiler.Build();
         byte[] bytes = AnimationWriter.Write(package, token);
@@ -154,25 +158,29 @@ public sealed partial class AnimationCompiler
         private readonly SiAnimationScript.Script? si;
         private readonly Dictionary<string, List<AnimationScript.Key>> objects = new(StringComparer.Ordinal);
         private readonly List<AnimationScript.Key>? loose;
-        public Script(string path, byte[] bytes, CancellationToken token, Action reserveKey)
+        private readonly CancellationToken token;
+        private readonly AnimationCompileWork work;
+        public Script(string path, byte[] bytes, CancellationToken token, Action reserveKey, AnimationCompileWork work)
         {
+            this.token = token;
+            this.work = work;
             Path = path;
-            if (SiAnimationScript.Recognize(bytes)) { si = SiAnimationScript.Parse(bytes, path); return; }
+            if (SiAnimationScript.Recognize(bytes, token)) { si = SiAnimationScript.Parse(bytes, path, token); return; }
             var tracks = AnimationScript.Parse(bytes, path, token, reserveKey);
             foreach (var (name, keys) in tracks) if (name != null) objects[name] = keys;
             loose = tracks.Count == 1 && tracks[0].Object == null ? tracks[0].Keys : null;
         }
         /// <summary>Whether the script moves a node of this name (an SI script lists it; a keyframe-format script has its OBJECT section or no sections).</summary>
-        public bool Moves(string name) => si?.Has(name) ?? (objects.ContainsKey(name) || loose != null);
+        public bool Moves(string name) => si != null ? si.Track(name, token, work) != null : objects.ContainsKey(name) || loose != null;
         /// <summary>The node's keyframes at <paramref name="frameRate"/> frames per second.</summary>
         public List<AnimationKeyframe> Compile(string name, float frameRate, string source, CancellationToken token) => si != null
-            ? SiAnimationScript.Compile(si, name, frameRate, source)
-            : AnimationScript.Compile(objects.GetValueOrDefault(name) ?? loose!, frameRate, source, token);
+            ? SiAnimationScript.Compile(si, name, frameRate, source, token, work)
+            : AnimationScript.Compile(objects.GetValueOrDefault(name) ?? loose!, frameRate, source, token, work);
     }
     private Script? ReadScript(string name, string from)
     {
         if (scripts.TryGetValue((name, from), out var cached)) return cached;
-        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, file.Bytes, token, ReserveKey) : null;
+        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, file.Bytes, token, ReserveKey, keyframeWork) : null;
         scripts[(name, from)] = script;
         return script;
 

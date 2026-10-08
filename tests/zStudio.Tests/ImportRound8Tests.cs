@@ -139,9 +139,9 @@ public sealed class ImportRound8Tests
         Assert.Throws<InvalidDataException>(() => Import(doc));
         Assert.Null(WorldGltf.StatedZone(JsonNode.Parse("""{"zone":3.000000000000000000001}""")));
         var root = JsonNode.Parse("""{"nodes":[{"extras":{"recoil":{"instance":1}}},{"extras":{"recoil":{"instance":1.0000000000000000000001}}}]}""")!.AsObject();
-        Assert.Equal([0], GltfNodeEdits.InstanceCopies(root, 0));
+        Assert.Equal([0], GltfNodeEdits.InstanceCopies(root, 0, Token));
         root["nodes"]![1]!["extras"]!["recoil"]!["instance"] = JsonNode.Parse("1e0");
-        Assert.Equal([0, 1], GltfNodeEdits.InstanceCopies(root, 0));
+        Assert.Equal([0, 1], GltfNodeEdits.InstanceCopies(root, 0, Token));
     }
 
     [Theory]

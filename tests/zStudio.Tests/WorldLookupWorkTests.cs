@@ -14,7 +14,8 @@ public sealed class WorldLookupWorkTests
     {
         private readonly byte[] bytes = Encoding.ASCII.GetBytes(script);
         public bool Exists(string relative) => relative == "gamegen/m1.gs";
-        public byte[] Read(string relative, CancellationToken token) => bytes;
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = bytes; limits.Validate(result); return result; }
     }
     private static string Finish(string text) => text + "\nGameZWriteZBDFile ../m1/gamez.zbd\n";
     private static string Nodes(int count) => "NewWorld world\n" + string.Concat(Enumerable.Range(0, count).Select(i => $"NewObject3D node{i}\n"));

@@ -59,13 +59,48 @@ public sealed partial class SourcePublisher
     /// folders (each). <see cref="SourceProject.MaximumScannedEntries"/>, as for any scan of the project; smaller in tests.
     /// </summary>
     internal int ScanLimit { get; init; } = SourceProject.MaximumScannedEntries;
+    // Canonical paths and held-parent probes expand ancestor prefixes. Charge the complete batch before
+    // those copies, including already-existing folders, repeated missing parents and recovery journals.
+    internal long PlanningPathBytesLimit { get; init; } = 128L * 1024 * 1024;
+    internal long InventoryLimit { get; init; } = InventoryBudget.MaximumUnits;
+    internal long CleanupInventoryLimit { get; init; } = InventoryBudget.MaximumUnits;
+
+    /// <summary>Shared admission for source paths before canonicalization, ancestor probes or recovery cleanup.</summary>
+    internal sealed class PathWorkBudget(int rootCharacters, long maximum, CancellationToken token)
+    {
+        private long remaining = maximum;
+
+        internal void Reserve(string relative)
+        {
+            token.ThrowIfCancellationRequested();
+            long components = 1;
+            for (int i = 0; i < relative.Length; i++)
+            {
+                if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
+                if (relative[i] == '/') components++;
+            }
+            Reserve(relative.Length, components);
+        }
+
+        // Cold manifest admission counts decoded characters/slashes without constructing the path string.
+        internal void Reserve(long relativeCharacters, long components)
+        {
+            token.ThrowIfCancellationRequested();
+            long characters = rootCharacters + relativeCharacters + 1;
+            // UTF-16 prefixes, component arrays and repeated canonical/baseline probes. This is
+            // conservative work accounting, not a promise about the allocator's exact totals.
+            if (characters > remaining / 16 / components)
+                throw new InvalidDataException("The source paths' combined depth and count exceed their planning budget; use shallower folders or fewer files together.");
+            remaining -= 16 * characters * components;
+        }
+    }
 
     /// <summary>A publisher for the source project at <paramref name="projectRoot"/>; nothing is written until a save or recovery.</summary>
     public SourcePublisher(string projectRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
         root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectRoot));
-        if (!SourceProject.IsProject(root)) throw new DirectoryNotFoundException($"{root} is not a source project; it needs both a data and a gamegen folder.");
+        if (!SourceProject.IsProject(root)) throw new DirectoryNotFoundException($"{JsonData.ShownText(root, 256)} is not a source project; it needs both a data and a gamegen folder.");
         SourceProject.RejectLinkedProject(root);
     }
 
@@ -73,6 +108,8 @@ public sealed partial class SourcePublisher
 
     /// <summary>Test hook called before each step with its name and file index (-1 for steps of the whole save); it may throw to simulate a failure, or <see cref="Crash"/> to simulate the process ending.</summary>
     internal Action<string, int>? Fault { get; set; }
+    /// <summary>Deterministic cancellation barrier inside recursive cleanup, independent of transaction steps.</summary>
+    internal Action? CleanupVisiting { get; set; }
     /// <summary>Thrown by <see cref="Fault"/> to stand for the end of the process: nothing after it runs, not even rollback or cleanup.</summary>
     internal sealed class Crash() : Exception("Simulated end of the zStudio process.");
     private void Step(string step, int index) => Fault?.Invoke(step, index);
@@ -101,13 +138,13 @@ public sealed partial class SourcePublisher
         Tidy(directories, token);
         if (Journals(directories, token).FirstOrDefault(j => !j.Committed && !j.RolledBack) is { } pending) throw Blocked(pending);
         string[] conflicts = [.. changes.Concat(checks).OrderBy(t => t.Order).Where(t => !Look(directories, t.Path, token, t.Expected).Is(t.Expected)).Select(t => t.Name)];
-        if (conflicts.Length > 0) throw new SourceConflictException($"{string.Join(", ", conflicts)} changed on disk since {(conflicts.Length == 1 ? "it was" : "they were")} read, or cannot be read now; nothing was saved. Reload to continue from the files on disk.", conflicts);
+        if (conflicts.Length > 0) throw ConflictingSources(conflicts);
         foreach (var change in changes)
         {
             try
             {
                 using FileStream file = directories.OpenFile(change.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                if (File.GetAttributes(file.SafeFileHandle).HasFlag(FileAttributes.ReadOnly)) throw new UnauthorizedAccessException($"{change.Name} is read-only; nothing was saved.");
+                if (File.GetAttributes(file.SafeFileHandle).HasFlag(FileAttributes.ReadOnly)) throw new UnauthorizedAccessException($"{JsonData.ShownText(change.Name, 256)} is read-only; nothing was saved.");
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { }
         }
@@ -212,12 +249,20 @@ public sealed partial class SourcePublisher
     private static SealedFile Seal(string staged, JournalDigest content, Target file, DirectoryLease directories)
     {
         try { return SealedFile.Open(staged, content, directories); }
-        catch (IOException ex) { throw new IOException($"The staged copy of {file.Name} was not installed: {ex.Message}", ex); }
+        catch (IOException ex) { throw new IOException($"The staged copy of {JsonData.ShownText(file.Name, 256)} was not installed: {JsonData.ShownText(ex.Message, 512)}", ex); }
     }
-    private static SourceConflictException ChangedDuringSave(Target file) => new($"{file.Name} changed on disk during the save; the save was undone. Reload to continue from the file on disk.", [file.Name]);
-    private static SourceConflictException CreatedDuringSave(Target file, Exception? inner = null) => new($"{file.Name} was created by another program during the save; it was not replaced, and the save was undone.", [file.Name], inner);
-    private static SourceRecoveryRequiredException Unfinished(string id, IReadOnlyList<string> files, Exception cause, IReadOnlyList<SourceRecoveryConflict>? conflicts = null) => new(
-        $"Saving failed ({cause.Message}) and could not be completely undone{(conflicts == null ? "" : ": " + string.Join("; ", conflicts.Select(c => $"{c.Relative} {c.Reason}")))}. " +
+    private static SourceConflictException ChangedDuringSave(Target file) => new($"{JsonData.ShownText(file.Name, 256)} changed on disk during the save; the save was undone. Reload to continue from the file on disk.", [file.Name]);
+    private static SourceConflictException CreatedDuringSave(Target file, Exception? inner = null) => new($"{JsonData.ShownText(file.Name, 256)} was created by another program during the save; it was not replaced, and the save was undone.", [file.Name], inner);
+    // Messages are presentation; the exceptions/results keep every full identity separately.
+    private static string ShownFiles(IReadOnlyCollection<string> files) => string.Join(", ", files.Take(8).Select(f => JsonData.ShownText(f, 256)))
+        + (files.Count > 8 ? $", … and {files.Count - 8:N0} more files" : "");
+    private static string ShownConflicts(IReadOnlyCollection<SourceRecoveryConflict> conflicts) => string.Join("; ", conflicts.Take(8)
+        .Select(c => $"{JsonData.ShownText(c.Relative, 256)} {JsonData.ShownText(c.Reason, 256)}"))
+        + (conflicts.Count > 8 ? $"; … and {conflicts.Count - 8:N0} more conflicts" : "");
+    internal static SourceConflictException ConflictingSources(IReadOnlyList<string> files) => new(
+        $"{ShownFiles(files)} changed on disk since {(files.Count == 1 ? "it was" : "they were")} read, or cannot be read now; nothing was saved. Reload to continue from the files on disk.", files);
+    internal static SourceRecoveryRequiredException Unfinished(string id, IReadOnlyList<string> files, Exception cause, IReadOnlyList<SourceRecoveryConflict>? conflicts = null) => new(
+        $"Saving failed ({JsonData.ShownText(cause.Message, 512)}) and could not be completely undone{(conflicts == null ? "" : ": " + ShownConflicts(conflicts))}. " +
         $"The save journal {RecoveryFolder}/{id} keeps the originals; roll the save back, complete it or abandon it before saving again.", id, files, cause);
     private static SourceRecoveryRequiredException Blocked(Journal pending) => new(
         $"The save \"{pending.Manifest.Description}\" ({pending.Id}) was interrupted. Roll it back, complete it or abandon it before saving again.",
@@ -228,21 +273,29 @@ public sealed partial class SourcePublisher
     {
         if (writes.Count == 0) throw new ArgumentException("A save needs at least one file.", nameof(writes));
         if (writes.Count > SourceProject.MaximumFiles) throw new ArgumentException($"A save can include at most {SourceProject.MaximumFiles:N0} files.", nameof(writes));
+        PathWorkBudget pathBudget = new(root.Length, PlanningPathBytesLimit, token);
+        foreach (SourceFileWrite? write in writes)
+        {
+            token.ThrowIfCancellationRequested();
+            if (write == null) throw new ArgumentException("A save entry is missing.", nameof(writes));
+            ArgumentNullException.ThrowIfNull(write.Relative, nameof(writes));
+            pathBudget.Reserve(write.Relative);
+        }
         HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase); List<Target> changes = [], checks = [];
         Dictionary<string, Dictionary<string, WorkingEntry>> listings = new(StringComparer.OrdinalIgnoreCase);
         // Each folder on the way to a written file is listed once; together the listings are a scan of the project like any other.
         SourceProject.ScanBudget budget = new(ScanLimit, maximum => new IOException(
             $"The folders this save writes into hold more than {maximum:N0} files and folders, far more than a source project needs. " +
-            $"Move files the build does not use (editor caches, backups, design files) out of the project's {SourceProject.DataFolder} and {SourceProject.GameGenFolder} folders, then save again."), token);
+            $"Move files the build does not use (editor caches, backups, design files) out of the project's {SourceProject.DataFolder} and {SourceProject.GameGenFolder} folders, then save again."), token, new(InventoryLimit));
         for (int i = 0; i < writes.Count; i++)
         {
             token.ThrowIfCancellationRequested();
             SourceFileWrite write = writes[i] ?? throw new ArgumentException($"Save entry {i} is missing.", nameof(writes));
             ArgumentNullException.ThrowIfNull(write.Relative, nameof(writes));
             string relative = Canonical(directories, write.Relative, listings, budget);
-            if (!seen.Add(relative)) throw new ArgumentException($"{write.Relative} is listed more than once in the save.", nameof(writes));
+            if (!seen.Add(relative)) throw new ArgumentException($"{JsonData.ShownText(write.Relative, 256)} is listed more than once in the save.", nameof(writes));
             string path = SourceProject.Resolve(root, relative);
-            if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException($"{write.Relative} is inside the protected zbd_1998/zbd_1999 folders; nothing was saved.");
+            if (PickupPlacementEditSession.IsProtectedPath(path)) throw new IOException($"{JsonData.ShownText(write.Relative, 256)} is inside the protected zbd_1998/zbd_1999 folders; nothing was saved.");
             SourceProject.RejectNestedLinks(root, relative);
             Target target = new(i, write.Relative, relative, path, JournalDigest.Of(write.Expected), JournalDigest.Of(write.Content), write.Content);
             (Same(write.Expected, write.Content) ? checks : changes).Add(target);
@@ -270,16 +323,16 @@ public sealed partial class SourcePublisher
                 {
                     entries = new(StringComparer.OrdinalIgnoreCase);
                     foreach (var info in WorkingEntries(directories, current, budget))
-                        if (entries.TryAdd(info.Name, info) && entries.Count > SourceProject.MaximumFiles) throw new IOException($"{current} has more than {SourceProject.MaximumFiles:N0} entries.");
+                        if (entries.TryAdd(info.Name, info) && entries.Count > SourceProject.MaximumFiles) throw new IOException($"{JsonData.ShownText(current, 256)} has more than {SourceProject.MaximumFiles:N0} entries.");
                     listings[current] = entries;
                 }
                 if (entries.TryGetValue(parts[i], out var entry))
                 {
-                    if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{entry.FullName} is a link; nothing was written through it.");
-                    if (i < parts.Length - 1 && !entry.IsDirectory) throw new InvalidDataException($"'{relative}' uses the file {entry.FullName} as a folder.");
+                    if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{JsonData.ShownText(entry.FullName, 256)} is a link; nothing was written through it.");
+                    if (i < parts.Length - 1 && !entry.IsDirectory) throw new InvalidDataException($"'{JsonData.ShownText(relative, 256)}' uses the file {JsonData.ShownText(entry.FullName, 256)} as a folder.");
                     parts[i] = entry.Name; next = Path.Combine(current, entry.Name);
                 }
-                else if (Exists(directories, next)) throw new InvalidDataException($"'{relative}' names an existing entry by another spelling (such as a short name); use its full name.");
+                else if (Exists(directories, next)) throw new InvalidDataException($"'{JsonData.ShownText(relative, 256)}' names an existing entry by another spelling (such as a short name); use its full name.");
                 else exists = false;
             }
             current = next;
@@ -293,11 +346,11 @@ public sealed partial class SourcePublisher
         string full = SourceProject.Resolve(root, relative);
         string[] parts = relative.Split('/');
         if (parts.Length < 2 || !(parts[0].Equals(SourceProject.DataFolder, StringComparison.OrdinalIgnoreCase) || parts[0].Equals(SourceProject.GameGenFolder, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidDataException($"'{relative}' is not a source file inside the {SourceProject.DataFolder} or {SourceProject.GameGenFolder} folder.");
+            throw new InvalidDataException($"'{JsonData.ShownText(relative, 256)}' is not a source file inside the {SourceProject.DataFolder} or {SourceProject.GameGenFolder} folder.");
         foreach (string part in parts)
             if (part.IndexOfAny(InvalidNameCharacters) >= 0 || DeviceName().IsMatch(part) || part.EndsWith('.') || part.EndsWith(' '))
-                throw new InvalidDataException($"'{relative}' contains the name '{part}', which Windows does not store as written.");
-        if (!SourceProject.Relative(root, full).Equals(relative, StringComparison.Ordinal)) throw new InvalidDataException($"'{relative}' is not a normalized relative path.");
+                throw new InvalidDataException($"'{JsonData.ShownText(relative, 256)}' contains the name '{JsonData.ShownText(part, 128)}', which Windows does not store as written.");
+        if (!SourceProject.Relative(root, full).Equals(relative, StringComparison.Ordinal)) throw new InvalidDataException($"'{JsonData.ShownText(relative, 256)}' is not a normalized relative path.");
     }
 
     [GeneratedRegex(@"^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9¹²³]|LPT[0-9¹²³])\s*(\..*)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
@@ -306,16 +359,25 @@ public sealed partial class SourcePublisher
     /// <summary>Folders a save creates for new files, outermost first; a rollback removes them again while they are empty.</summary>
     private string[] NewFolders(DirectoryLease directories, IEnumerable<Target> changes, CancellationToken token)
     {
-        List<string> folders = []; HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        List<string> folders = [];
+        HashSet<string> parents = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, bool> missingFolders = new(StringComparer.OrdinalIgnoreCase);
         long characters = 0;
         foreach (var change in changes.Where(c => c.Bytes != null))
         {
-            string[] parts = change.Relative.Split('/');
-            for (int n = 2; n < parts.Length; n++)
+            string parent = change.Relative[..change.Relative.LastIndexOf('/')];
+            if (!parents.Add(parent)) continue;
+            string[] parts = parent.Split('/'); bool missing = false;
+            for (int n = 2; n <= parts.Length; n++)
             {
                 token.ThrowIfCancellationRequested();
                 string folder = string.Join('/', parts[..n]);
-                if (seen.Add(folder) && !ExistingDirectory(directories, SourceProject.Resolve(root, folder)))
+                if (missingFolders.TryGetValue(folder, out bool knownMissing)) { missing = knownMissing; continue; }
+                // Once an ancestor is absent, its descendants are absent too. Reopening every missing
+                // prefix would itself rebuild the same parent chain for every depth.
+                missing = missing || !ExistingDirectory(directories, SourceProject.Resolve(root, folder));
+                missingFolders.Add(folder, missing);
+                if (missing)
                 {
                     if (folders.Count == JournalFoldersLimit) throw new InvalidDataException($"A save would create more than {JournalFoldersLimit:N0} folders; split it into smaller saves.");
                     characters += folder.Length;
@@ -358,7 +420,7 @@ public sealed partial class SourcePublisher
         try { return directories.OpenFile(Path.Combine(folder, LockName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
         catch (IOException ex) when (ex.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021)
             || ex.InnerException is System.ComponentModel.Win32Exception { NativeErrorCode: 32 or 33 })
-        { throw new IOException($"Another save or recovery is running for {root}; nothing was changed. Try again when it has finished.", ex); }
+        { throw new IOException($"Another save or recovery is running for {JsonData.ShownText(root, 256)}; nothing was changed. Try again when it has finished.", ex); }
     }
 
     private static string NewSaveId() => $"{DateTime.UtcNow:yyyyMMdd'T'HHmmssfff'Z'}-{Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(4))}";
@@ -429,7 +491,7 @@ public sealed partial class SourcePublisher
     /// there, a file is removed only while it still has the content the run wrote. The Stranded outcome remains understood
     /// by recovery callers for the former path-based move; this implementation never moves an unverified replacement.
     /// </summary>
-    internal static Moved MoveIfContent(string path, string destination, JournalDigest expected, DirectoryLease? captured = null)
+    internal static Moved MoveIfContent(string path, string destination, JournalDigest expected, DirectoryLease? captured = null, bool removeMoved = false)
     {
         using DirectoryLease? owned = captured == null ? new() : null;
         DirectoryLease directories = captured ?? owned!;
@@ -442,7 +504,13 @@ public sealed partial class SourcePublisher
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Moved.Unchanged; }
         // Rename the exact compared file through its held handle; neither its content nor its directory can redirect us.
-        using (file) file.MoveTo(destination);
+        using (file)
+        {
+            file.MoveTo(destination);
+            if (removeMoved)
+                try { file.DeleteHeld(); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Moved.Stranded; }
+        }
         return Moved.Done;
     }
 
@@ -459,27 +527,33 @@ public sealed partial class SourcePublisher
         CheckWorkingPath(path);
         using (FileStream stream = directories.OpenFile(path, FileMode.Create, FileAccess.Write, FileShare.None)) { stream.Write(bytes); stream.Flush(true); }
         using FileStream verify = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (!JournalDigest.OfContent(bytes).Matches(verify)) throw new IOException($"{path} did not read back as it was written; nothing was saved.");
+        if (!JournalDigest.OfContent(bytes).Matches(verify)) throw new IOException($"{JsonData.ShownText(path, 256)} did not read back as it was written; nothing was saved.");
     }
 
-    private void TryDelete(DirectoryLease directories, string folder)
+    private void TryDelete(DirectoryLease directories, string folder, InventoryBudget inventory, CancellationToken token = default)
     {
         try
         {
+            token.ThrowIfCancellationRequested();
             directories.Hold(folder);
-            SourceProject.ScanBudget budget = WorkingBudget(folder, default);
+            SourceProject.ScanBudget budget = WorkingBudget(folder, token, inventory);
+            budget.Rows(1);
             Stack<(string Path, bool Remove)> pending = new([(folder, false)]);
             while (pending.TryPop(out var next))
             {
+                CleanupVisiting?.Invoke();
+                token.ThrowIfCancellationRequested();
                 if (next.Remove) { directories.DeleteDirectory(next.Path); continue; }
-               directories.Hold(next.Path);
+                directories.Hold(next.Path);
                 pending.Push((next.Path, true));
                 // Finish enumeration before deleting entries, and bound unknown material in a damaged journal too.
-                var entries = directories.Entries(next.Path).Select(entry => { budget.Visit(); return entry; }).ToArray();
+                List<WorkingEntry> entries = [];
+                foreach (var entry in WorkingEntries(directories, next.Path, budget)) entries.Add(entry);
                 foreach (var entry in entries)
                 {
-                    string path = Path.Combine(next.Path, entry.Name);
-                    if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{path} is a link; journal cleanup left it alone.");
+                    token.ThrowIfCancellationRequested();
+                    string path = entry.FullName;
+                    if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{JsonData.ShownText(path, 256)} is a link; journal cleanup left it alone.");
                     if (entry.Attributes.HasFlag(FileAttributes.Directory)) pending.Push((path, false));
                     else directories.DeleteFile(path);
                 }
@@ -503,21 +577,24 @@ public sealed partial class SourcePublisher
         foreach (var entry in directories.Entries(folder))
         {
             budget.Visit();
+            budget.Path((long)folder.Length + 1 + entry.Name.Length);
             yield return new(entry.Name, Path.Combine(folder, entry.Name), entry.Attributes);
         }
     }
 
     /// <summary>Removes a journal and its staging folder, renaming the journal first so a partial deletion never leaves a journal that looks interrupted.</summary>
-    private void Discard(DirectoryLease directories, string id)
+    private void Discard(DirectoryLease directories, string id, InventoryBudget? inventory = null, CancellationToken token = default)
     {
+        inventory ??= new(CleanupInventoryLimit);
+        token.ThrowIfCancellationRequested();
         CheckJournalPaths(id);
         string journal = JournalPath(id);
-        TryDelete(directories, StagingPath(id));
+        TryDelete(directories, StagingPath(id), inventory, token);
         if (!ExistingDirectory(directories, journal)) return;
         string removed = journal + RemovedSuffix;
-        try { directories.Hold(journal); directories.MoveDirectory(journal, removed); }
+        try { token.ThrowIfCancellationRequested(); directories.Hold(journal); directories.MoveDirectory(journal, removed); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
-        TryDelete(directories, removed);
+        TryDelete(directories, removed, inventory, token);
     }
 
     private void CheckWorkingPath(string path) => SourceProject.RejectNestedLinks(root, SourceProject.Relative(root, path));
@@ -535,26 +612,33 @@ public sealed partial class SourcePublisher
     /// </summary>
     private void Tidy(DirectoryLease directories, CancellationToken token)
     {
+        // Cleanup is best effort and independent of the request's planning allowance. An exhausted pass
+        // leaves committed/.removed remnants for a fresh retry, without entering or obstructing Undo.
+        try { Tidy(directories, token, new(CleanupInventoryLimit)); }
+        catch (InventoryCapacityException) { }
+    }
+    private void Tidy(DirectoryLease directories, CancellationToken token, InventoryBudget inventory)
+    {
         string recovery = SourceProject.Resolve(root, RecoveryFolder);
-        foreach (var entry in WorkingEntries(directories, recovery, WorkingBudget(RecoveryFolder, token)))
+        foreach (var entry in WorkingEntries(directories, recovery, WorkingBudget(RecoveryFolder, token, inventory)))
         {
             if (!entry.IsDirectory || entry.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
             var directory = entry;
-            if (directory.Name.EndsWith(RemovedSuffix, StringComparison.Ordinal) && IsSaveId(directory.Name[..^RemovedSuffix.Length])) TryDelete(directories, directory.FullName);
+            if (directory.Name.EndsWith(RemovedSuffix, StringComparison.Ordinal) && IsSaveId(directory.Name[..^RemovedSuffix.Length])) TryDelete(directories, directory.FullName, inventory, token);
             else if (IsSaveId(directory.Name) && !Exists(directories, Path.Combine(directory.FullName, ManifestName))
-                && !HasFiles(directories, Path.Combine(directory.FullName, HeldFolder)) && !HasFiles(directories, Path.Combine(directory.FullName, TakenFolder))) TryDelete(directories, directory.FullName);
+                && !HasFiles(directories, Path.Combine(directory.FullName, HeldFolder)) && !HasFiles(directories, Path.Combine(directory.FullName, TakenFolder))) TryDelete(directories, directory.FullName, inventory, token);
         }
-        foreach (var journal in Journals(directories, token))
-            if (journal.Committed || journal.RolledBack && !HasFiles(directories, Path.Combine(JournalPath(journal.Id), HeldFolder))) Discard(directories, journal.Id);
+        foreach (var journal in Journals(directories, token, inventory))
+            if (journal.Committed || journal.RolledBack && !HasFiles(directories, Path.Combine(JournalPath(journal.Id), HeldFolder))) Discard(directories, journal.Id, inventory, token);
         string staging = SourceProject.Resolve(root, StagingFolder);
         if (ExistingDirectory(directories, staging)) // Lock() refused links on the way.
-            foreach (var entry in WorkingEntries(directories, staging, WorkingBudget(StagingFolder, token)))
-                if (entry.IsDirectory && !entry.Attributes.HasFlag(FileAttributes.ReparsePoint) && IsSaveId(entry.Name) && !ExistingDirectory(directories, JournalPath(entry.Name))) TryDelete(directories, entry.FullName);
+            foreach (var entry in WorkingEntries(directories, staging, WorkingBudget(StagingFolder, token, inventory)))
+                if (entry.IsDirectory && !entry.Attributes.HasFlag(FileAttributes.ReparsePoint) && IsSaveId(entry.Name) && !ExistingDirectory(directories, JournalPath(entry.Name))) TryDelete(directories, entry.FullName, inventory, token);
     }
     /// <summary>
     /// A listing of one of zStudio's own folders (<paramref name="folder"/>: recovery or staging), which holds a folder for each
     /// save at most: entries other programs put there count too, and <paramref name="token"/> is observed at each.
     /// </summary>
-    private SourceProject.ScanBudget WorkingBudget(string folder, CancellationToken token) => new(ScanLimit, maximum => new IOException(
-        $"{folder} holds more than {maximum:N0} files and folders, where zStudio keeps a folder for each unfinished save. Move what other programs put there out of it, then try again."), token);
+    private SourceProject.ScanBudget WorkingBudget(string folder, CancellationToken token, InventoryBudget? inventory = null) => new(ScanLimit, maximum => new IOException(
+        $"{folder} holds more than {maximum:N0} files and folders, where zStudio keeps a folder for each unfinished save. Move what other programs put there out of it, then try again."), token, inventory ?? new(InventoryLimit));
 }

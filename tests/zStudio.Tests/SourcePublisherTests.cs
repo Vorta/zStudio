@@ -221,11 +221,26 @@ public sealed partial class SourcePublisherTests
         }
         else Assert.Throws<SourceRecoveryRequiredException>(() => publisher.Publish(ScriptChange(project), "blocked", Token));
         bool rollBack = action == SourceRecoveryAction.RollBack && !found.Committed;
-        var result = publisher.Resolve(found.SaveId, found.Committed ? SourceRecoveryAction.Complete : action, Token);
+        // Preserve a bounded diagnostic for intermittent native cleanup refusals. The
+        // publisher intentionally catches those after source recovery has committed.
+        List<string> cleanupFailures = [];
+        int recoveryThread = Environment.CurrentManagedThreadId;
+        void CleanupException(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs args)
+        {
+            if (Environment.CurrentManagedThreadId == recoveryThread && cleanupFailures.Count < 8 &&
+                args.Exception is IOException or UnauthorizedAccessException &&
+                args.Exception.StackTrace?.Contains("SourcePublisher.TryDelete", StringComparison.Ordinal) == true)
+                cleanupFailures.Add($"0x{args.Exception.HResult:X8}: {args.Exception.Message[..Math.Min(512, args.Exception.Message.Length)]}");
+        }
+        SourceRecoveryResult result;
+        AppDomain.CurrentDomain.FirstChanceException += CleanupException;
+        try { result = publisher.Resolve(found.SaveId, found.Committed ? SourceRecoveryAction.Complete : action, Token); }
+        finally { AppDomain.CurrentDomain.FirstChanceException -= CleanupException; }
         Assert.True(result.Resolved); Assert.Empty(result.Conflicts);
         Assert.Equal(found.Files.Where(f => f.State != (rollBack ? State.Before : State.After)).Select(f => f.Relative), result.Changed);
         Assert.Equal(rollBack ? before : after, project.Sources());
-        Assert.Empty(project.Leftovers());
+        var leftovers = project.Leftovers();
+        if (leftovers.Length != 0) Assert.Fail($"Recovery left {leftovers.Length} working entries: {string.Join(", ", leftovers.Take(8))}. Cleanup refusals: {string.Join("; ", cleanupFailures)}");
         Assert.Empty(publisher.FindInterrupted(Token));
         publisher.Publish(ScriptChange(project), "next", Token);
     }

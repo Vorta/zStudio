@@ -26,8 +26,8 @@ public partial class MainWindow
             if (total >= offset && items.Count < limit && !full)
             {
                 long cost = maximumRowBytes?.Invoke(item) ?? 0;
-                if (cost > 1024 * 1024) throw new StudioCommandException("too_large", "A result row exceeds the supported page size.");
-                if (bytes + cost > 1024 * 1024 && items.Count > 0) full = true;
+                if (cost < 0 || cost > InspectionResultBudget.PageBytes) throw new StudioCommandException("too_large", "A result row exceeds the supported page size.");
+                if (bytes + cost > InspectionResultBudget.PageBytes && items.Count > 0) full = true;
                 else { items.Add(project == null ? item : project(item)); bytes += cost; }
             }
             total++;
@@ -133,7 +133,7 @@ public partial class MainWindow
             if (doc.IsDirty && !Flag(a, "discard") && !OtherSourceWorldOpen(doc)) throw new StudioCommandException("unsaved_changes", doc.SourceWorld != null ? "Save or explicitly discard the source project's edits; this is its last open world." : "Save or explicitly discard this document.");
             ViewModel.CloseResolved(doc); return Result(new { closed = doc.SessionId });
         });
-        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project on disk, keeping its pending edits unless gamegen/mN.gs or data/mN/zrdr/anim.zrd changed on disk.", [DocumentParameter, RevisionParameter], false, async (a, token) =>
+        RegisterJob(r, "reload_document", "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project's current sources and pending edits. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad).", [DocumentParameter, RevisionParameter], false, async (a, token) =>
         {
             var doc = TargetDocument(a, true); if (doc.IsDirty && doc.SourceWorld == null) throw new StudioCommandException("unsaved_changes", "Save or explicitly close with discard before reloading.");
             bool active = ViewModel.SelectedDocument == doc;
@@ -142,6 +142,9 @@ public partial class MainWindow
             try
             {
                 var next = await ViewModel.ReloadDocumentAsync(doc, doc.Revision, cancellationToken: token);
+                // Source rebuilding owns the publication boundary and its non-rollback preview completion.
+                // The original document's lifetime is already canceled; late request cancellation cannot retract it.
+                if (doc.SourceWorld != null) return Result(DocumentState(next));
                 if (active) await previewWork;
                 token.ThrowIfCancellationRequested();
                 if (next.IsDisposed || !ViewModel.Documents.Contains(next) || active && ViewModel.SelectedDocument != next)
@@ -161,7 +164,7 @@ public partial class MainWindow
             if (d.SourceWorld != null) return Result(DocumentState(await UndoSourceWorldAsync(d, Text(a, "action") == "redo", token)));
             UndoDocument(d, Text(a, "action") == "redo"); if (d.ContentEdits != null) await contentWork.WaitAsync(token); else if (d.ResourceEdits != null) await resourceWork.WaitAsync(token); else if (d.ModelEdits != null) await modelRefreshWork.WaitAsync(token); return Result(DocumentState(d));
         });
-        RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batches return saved paths and errors; state.contentEdits lists affected content paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files.",
+        RegisterJob(r, "save_document", "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files.",
             [DocumentParameter, RevisionParameter, P("destination", "string", "Full path of a new single-file Save As (animation, ZAR/ZRD, script or texture pack). Omit to save working files."), P("modelDirectory", "string", "Full path of the model Save As directory; all GameZ/texture destinations must be new. Omit for verified save to the working files."), new("destinations", "object", "Mission coordinate or texture batch source path to new Save As path map; cover every affected file.", AdditionalProperties: new("", "string", "New Save As full path for this source archive.")), P("backup", "boolean", "Mission coordinate backup preference; defaults to app setting.")], false, async (a, token) =>
         {
             var d = TargetDocument(a, true);
@@ -177,7 +180,8 @@ public partial class MainWindow
                     var written = await SaveSourceWorldAsync(d, token);
                     // The files were replaced: the job completes with them, even when MCP stops (and cancels it) meanwhile.
                     CommitRunningJob();
-                    return Result(new { document = DocumentState(d), written });
+                    var preview = FileResultPreview.Paths(written, written.Count);
+                    return Result(new { document = DocumentState(d), written = preview.Values, writtenCount = preview.Count, writtenTruncated = preview.Truncated });
                 }
                 if (d.ContentEdits != null)
                 {
@@ -187,7 +191,8 @@ public partial class MainWindow
                         if (targets != null) throw new StudioCommandException("invalid_argument", "Use destination or destinations, not both.");
                         targets = new(StringComparer.OrdinalIgnoreCase) { [d.Path] = destination };
                     }
-                    var result = await SaveContentAsync(d, targets, token); return Result(new { document = DocumentState(d), result });
+                    var result = await SaveContentAsync(d, targets, token);
+                    return Result(new { document = DocumentState(d), result = FileResultPreview.Saved(result.SavedPaths, result.Errors, result.RemainingPaths) });
                 }
                 if (d.ResourceEdits != null)
                 { await SaveResourcesAsync(d, destination is { Length: > 0 } path ? path : null, token); return Result(DocumentState(d)); }
@@ -200,12 +205,14 @@ public partial class MainWindow
                 if (d.ModelEdits?.IsDirty == true || d.ModelEdits != null && a.ContainsKey("modelDirectory"))
                 {
                     models = await SaveModelsAsync(d, modelDirectory is { Length: > 0 } directory ? directory : null, token);
-                    if (models.Errors.Count > 0 || d.PickupEdits?.IsDirty != true) return Result(new { document = DocumentState(d), models });
+                    if (models.Errors.Count > 0 || d.PickupEdits?.IsDirty != true)
+                        return Result(new { document = DocumentState(d), models = FileResultPreview.Saved(models.SavedPaths, models.Errors) });
                 }
                 if (d.PickupEdits is not { } edits) throw new StudioCommandException("unsupported", "This document has no accepted unsaved edits.");
                 var destinations = (a["destinations"] as JsonObject)?.ToDictionary(p => p.Key, p => p.Value?.GetValue<string>() ?? "", StringComparer.OrdinalIgnoreCase);
                 var saved = await SavePickupDestinationsAsync(d, destinations, Flag(a, "backup", ViewModel.Settings.CreateBackupOnSave), token);
-                return Result(new { document = DocumentState(d), result = saved, models });
+                return Result(new { document = DocumentState(d), result = FileResultPreview.Saved(saved.SavedPaths, saved.Errors),
+                    models = models == null ? null : FileResultPreview.Saved(models.SavedPaths, models.Errors) });
             }
             finally { IsEnabled = true; if (propertiesWindow != null) propertiesWindow.IsEnabled = true; }
         });

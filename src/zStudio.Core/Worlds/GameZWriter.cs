@@ -188,13 +188,15 @@ public static class GameZWriter
     }
 
     /// <summary>Slot contents in order: live nodes fill the slots freed slots do not occupy.</summary>
-    internal static List<object> SlotSequence(GameZWorld world)
+    internal static List<object> SlotSequence(GameZWorld world) => SlotSequence(world, CancellationToken.None);
+    private static List<object> SlotSequence(GameZWorld world, CancellationToken token)
     {
         List<object> slots = []; int live = 0;
         // The last freed slot, found once: freed slots above every live node are written up to it.
         int lastFreed = world.FreedSlots.Count > 0 ? world.FreedSlots.Keys.Max() : -1;
         while (live < world.Nodes.Count || slots.Count <= lastFreed)
         {
+            token.ThrowIfCancellationRequested();
             if (world.FreedSlots.TryGetValue(slots.Count, out var freed)) slots.Add(freed);
             else if (live < world.Nodes.Count) slots.Add(world.Nodes[live++]);
             else break;
@@ -203,10 +205,17 @@ public static class GameZWriter
     }
     /// <summary>Each live node's slot in the world file, which is the node's index in a scene read from the file.</summary>
     public static IReadOnlyDictionary<WorldNode, int> NodeSlots(GameZWorld world) => SlotIndices(world);
-    internal static Dictionary<WorldNode, int> SlotIndices(GameZWorld world)
+    public static IReadOnlyDictionary<WorldNode, int> NodeSlots(GameZWorld world, CancellationToken token) => SlotIndices(world, token);
+    internal static Dictionary<WorldNode, int> SlotIndices(GameZWorld world) => SlotIndices(world, CancellationToken.None);
+    private static Dictionary<WorldNode, int> SlotIndices(GameZWorld world, CancellationToken token)
     {
-        Dictionary<WorldNode, int> result = new(ReferenceEqualityComparer.Instance); var slots = SlotSequence(world);
-        for (int i = 0; i < slots.Count; i++) if (slots[i] is WorldNode node) result[node] = i;
+        token.ThrowIfCancellationRequested();
+        Dictionary<WorldNode, int> result = new(ReferenceEqualityComparer.Instance); var slots = SlotSequence(world, token);
+        for (int i = 0; i < slots.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            if (slots[i] is WorldNode node) result[node] = i;
+        }
         return result;
     }
 

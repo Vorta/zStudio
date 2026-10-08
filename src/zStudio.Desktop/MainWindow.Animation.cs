@@ -72,20 +72,35 @@ public partial class MainWindow
         }
         bool pickup = document.SourceWorld != null || document.ContentEdits != null || document.PickupEdits?.IsDirty == true || document.ResourceEdits != null || document.ModelEdits?.IsDirty == true; string saveLabel = pickup ? "Save" : "Save As…";
         animation?.Pause(); string choice = "Cancel";
-        StackPanel panel = new() { Margin = new(20) };
-        panel.Children.Add(new TextBlock { Text = $"Save changes to {document.Title.TrimEnd(' ', '*')}?", FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-        string detail = document.SourceWorld is { } project ? $"Save writes every changed file of the source project ({project.Workspace.DirtyFiles.Count}): {string.Join(", ", project.Workspace.DirtyFiles.Take(6))}{(project.Workspace.DirtyFiles.Count > 6 ? ", …" : "")}. Discard drops the project's unsaved edits."
-            : pickup ? "Save verifies changes before updating working files. Protected reference datasets require saving a copy elsewhere." : "Save As writes a new animation pack and preserves the original source.";
-        panel.Children.Add(new TextBlock { Text = detail, Margin = new(0,12,0,20), TextWrapping = TextWrapping.Wrap });
-        WrapPanel buttons = new() { HorizontalAlignment = HorizontalAlignment.Right }; panel.Children.Add(buttons);
-        Window dialog = new() { Owner = this, Title = "Unsaved changes", Width = 470, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = panel };
-        foreach (string label in new[] { saveLabel, "Discard", "Cancel" })
-        {
-            Button button = new() { Content = label, MinWidth = 95, Margin = new(4), Padding = new(10,7,10,7), IsCancel = label == "Cancel", IsDefault = label == saveLabel };
-            button.Click += (_, _) => { choice = label; dialog.Close(); }; buttons.Children.Add(button);
-        }
+        Window dialog = CreateUnsavedDialog(document, pickup, saveLabel, selected => choice = selected);
         dialog.ShowDialog();
         if (choice == "Discard" && document.SourceWorld is { } discarded) discardApprovedWorkspace = (discarded.Workspace, discarded.Workspace.Revision);
         return choice == "Discard" || choice == saveLabel && await SaveCurrentAsync(document);
+    }
+
+    internal Window CreateUnsavedDialog(DocumentModel document, bool pickup, string saveLabel, Action<string> selected, Size? available = null)
+    {
+        StackPanel panel = new();
+        panel.Children.Add(new TextBlock { Text = $"Save changes to {document.Title.TrimEnd(' ', '*')}?", FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        string detail = document.SourceWorld is { } project ? $"Save writes every changed file of the source project ({project.Workspace.DirtyFiles.Count}): {string.Join(", ", project.Workspace.DirtyFiles.Take(6).Select(path => Bounded(path, 256)))}{(project.Workspace.DirtyFiles.Count > 6 ? ", …" : "")}. Discard drops the project's unsaved edits."
+            : pickup ? "Save verifies changes before updating working files. Protected reference datasets require saving a copy elsewhere." : "Save As writes a new animation pack and preserves the original source.";
+        panel.Children.Add(new TextBlock { Text = detail, Margin = new(0,12,0,20), TextWrapping = TextWrapping.Wrap });
+        if (document.SourceWorld is { } source)
+        {
+            StackPanel paths = new();
+            foreach (string path in source.Workspace.DirtyFiles.Take(6))
+                paths.Children.Add(new TextBox { Text = path, IsReadOnly = true, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new(0, 2, 0, 2) });
+            panel.Children.Add(new Expander { Header = "Full source paths (first six)", Content = paths });
+        }
+        WrapPanel buttons = new() { HorizontalAlignment = HorizontalAlignment.Right, Margin = new(0, 12, 0, 0) };
+        Window dialog = new() { Owner = this, Title = "Unsaved changes", ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar = false, Content = DialogLayout.WithActions(panel, buttons, 20) };
+        DialogLayout.Constrain(dialog, new(470, 440), available);
+        foreach (string label in new[] { saveLabel, "Discard", "Cancel" })
+        {
+            Button button = new() { Content = label, MinWidth = 95, Margin = new(4), Padding = new(10,7,10,7), IsCancel = label == "Cancel", IsDefault = label == saveLabel };
+            button.Click += (_, _) => { selected(label); dialog.Close(); }; buttons.Children.Add(button);
+        }
+        return dialog;
     }
 }

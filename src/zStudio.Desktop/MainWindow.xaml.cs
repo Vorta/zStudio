@@ -175,11 +175,75 @@ public partial class MainWindow : Window
         if (!ready || e.PropertyName != nameof(MainViewModel.SelectedDocument)) return;
         var doc = ViewModel.SelectedDocument; if (doc == shownDocument) return;
         if (!ResolveInspectionDrafts() || animation?.ResolvePendingDrafts() == false) { ViewModel.SelectedDocument = shownDocument; return; }
+        CancelPreview(); // Release old-document interactions before worker discovery can yield.
+        foreach (UIElement element in new UIElement[] { ImageToolbar, ImageScroll, SceneToolbar, SceneHost, AnimationHost, AudioPanel, StructuredPanel, EventsTab }) element.Visibility = Visibility.Collapsed;
+        EmptyPreview.Visibility = Visibility.Visible; EmptyPreview.Text = "Loading preview…";
         shownDocument = doc; Workspace.Visibility = doc == null ? Visibility.Collapsed : Visibility.Visible; Welcome.Visibility = doc == null ? Visibility.Visible : Visibility.Collapsed;
+        // Publish the whole transition before starting any work: selection events must not replace its task
+        // with an asset-only preview while texture discovery is still pending.
+        TaskCompletionSource transition = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        pendingPreviewDocument = doc; pendingDocumentPreview = transition.Task; previewWork = transition.Task;
+        long generation = ++documentPreviewGeneration;
+        try { await PrepareDocumentPreviewAsync(doc, generation); transition.SetResult(); }
+        catch (Exception error) when (error is not (OutOfMemoryException or StackOverflowException))
+        {
+            // An accepted document remains open even if its presentation fails. Report here for GUI-only
+            // navigation too; command waiters observe the fault without retracting the document.
+            if (error is not OperationCanceledException && generation == documentPreviewGeneration && ViewModel.SelectedDocument == doc)
+                ViewModel.AddProblem("Preview unavailable: " + JsonData.ShownText(error.Message, 512), file: doc?.Path);
+            transition.TrySetException(error);
+        }
+        finally
+        {
+            if (ReferenceEquals(pendingDocumentPreview, transition.Task)) { pendingDocumentPreview = null; pendingPreviewDocument = null; }
+        }
+    }
+    private long documentPreviewGeneration;
+    private DocumentModel? pendingPreviewDocument;
+    private Task? pendingDocumentPreview;
+    private long preparingAssetGeneration;
+    private AssetRecord? preparingAsset;
+    private bool preparingAssetSuperseded;
+    internal Func<AssetResolver, string, CancellationToken, Task<string[]>> DiscoverTexturePacksAsync { get; set; } =
+        static (resolver, path, token) => Task.Run(() => resolver.TexturePacks(path, token), token).WaitAsync(token);
+    private async Task PrepareDocumentPreviewAsync(DocumentModel? doc, long generation)
+    {
+        if (doc != null)
+            doc.SelectedAsset ??= doc.Assets.FirstOrDefault(a => a.Record.Content is Recoil.Zbd.Core.Animation.AnimationEntry { RootName.Length: > 0 }) ?? doc.Assets.FirstOrDefault();
+        string[]? packs = null;
+        if (doc?.Document.Scene != null && ViewModel.Resolver is { } resolver)
+        {
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken, preview.Token);
+            try { packs = await DiscoverTexturePacksAsync(resolver, doc.Path, cancellation.Token); }
+            catch (OperationCanceledException) { return; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                if (generation == documentPreviewGeneration && !doc.IsDisposed && ViewModel.SelectedDocument == doc && shownDocument == doc)
+                    ViewModel.AddProblem("Texture variants: " + JsonData.ShownText(error.Message, 512), file: doc.Path);
+            }
+            if (cancellation.IsCancellationRequested || generation != documentPreviewGeneration || doc.IsDisposed || ViewModel.SelectedDocument != doc || shownDocument != doc) return;
+        }
+        if (generation != documentPreviewGeneration || ViewModel.SelectedDocument != doc || shownDocument != doc) return;
         updating = true;
-        TexturePackCombo.ItemsSource = doc?.Document.Scene != null ? ViewModel.Resolver?.TexturePacks(doc.Path).Select(p => new PackChoice(Path.GetFileName(p), p)).Prepend(new("Automatic texture variant", null)).ToArray() : null;
+        TexturePackCombo.ItemsSource = packs?.Select(p => new PackChoice(Path.GetFileName(p), p)).Prepend(new("Automatic texture variant", null)).ToArray();
         TexturePackCombo.DisplayMemberPath = nameof(PackChoice.Name); TexturePackCombo.SelectedIndex = 0; updating = false;
-        if (doc != null) { doc.SelectedAsset ??= doc.Assets.FirstOrDefault(a => a.Record.Content is Recoil.Zbd.Core.Animation.AnimationEntry { RootName.Length: > 0 }) ?? doc.Assets.FirstOrDefault(); await ShowAsset(doc, doc.SelectedAsset?.Record); }
+        if (doc != null)
+        {
+            AssetRecord? selected;
+            bool superseded;
+            do
+            {
+                selected = doc.SelectedAsset?.Record;
+                preparingAssetGeneration = generation; preparingAsset = selected; preparingAssetSuperseded = false;
+                try { await ShowAssetCore(doc, selected); }
+                finally
+                {
+                    superseded = preparingAssetGeneration == generation && preparingAssetSuperseded;
+                    if (preparingAssetGeneration == generation) { preparingAssetGeneration = 0; preparingAsset = null; }
+                }
+            }
+            while (generation == documentPreviewGeneration && !doc.IsDisposed && ViewModel.SelectedDocument == doc && (superseded || !ReferenceEquals(selected, doc.SelectedAsset?.Record)));
+        }
         else { CancelPreview(); shownAsset = null; ViewModel.Status = ViewModel.HasRoot ? $"{ViewModel.Files.Count:N0} files · choose a file to inspect" : "Ready"; }
     }
     private async void AssetSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -187,7 +251,21 @@ public partial class MainWindow : Window
         // A binding can realize a programmatic selection after its preview has already started. That is presentation
         // of the same snapshot, not another navigation request; do not cancel/reload the preview it is catching up with.
         if (ready && ViewModel.SelectedDocument is { } doc && AssetGrid.SelectedItem is AssetItem item && doc.Assets.Contains(item) &&
-            !IsShownAssetSnapshot(doc, item.Record)) await ShowAsset(doc, item.Record);
+            !IsShownAssetSnapshot(doc, item.Record))
+        {
+            var transition = pendingPreviewDocument == doc ? pendingDocumentPreview : null;
+            Task? work = null;
+            try { work = ShowAsset(doc, item.Record); await work; }
+            catch (OperationCanceledException) { }
+            catch (Exception error) when (error is not (OutOfMemoryException or StackOverflowException))
+            {
+                // DocumentChanged owns errors from the whole-document transition. AssetGrid can receive a deferred
+                // realization event for that same task, and an async-void handler must observe its fault rather than
+                // rethrow it through WPF. Avoid duplicating the bounded diagnostic already emitted by that transition.
+                if ((work == null || !ReferenceEquals(work, transition)) && !preview.IsCancellationRequested && !doc.IsDisposed && ViewModel.SelectedDocument == doc && shownDocument == doc)
+                    ViewModel.AddProblem("Preview unavailable: " + JsonData.ShownText(error.Message, 512), file: doc.Path);
+            }
+        }
     }
     private bool IsShownAssetSnapshot(DocumentModel doc, AssetRecord asset) => doc == shownDocument &&
         (ReferenceEquals(shownAsset, asset) || shownAsset?.Id == asset.Id && animation != null);
@@ -212,7 +290,17 @@ public partial class MainWindow : Window
         preview.Cancel(); preview.Dispose(); preview = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken); scene?.Clear(); StopAudio(); decoded = null; TextureImage.Source = null;
         RefreshSceneTree();
     }
-    private Task ShowAsset(DocumentModel doc, AssetRecord? asset) => previewWork = ShowAssetCore(doc, asset);
+    private Task ShowAsset(DocumentModel doc, AssetRecord? asset)
+    {
+        if (pendingPreviewDocument == doc && pendingDocumentPreview is { IsCompleted: false } pending)
+        {
+            // Discovery only defers selection; once an asset starts loading, preserve immediate supersession.
+            if (preparingAssetGeneration == documentPreviewGeneration && !ReferenceEquals(preparingAsset, asset))
+            { preparingAssetSuperseded = true; preview.Cancel(); }
+            return pending;
+        }
+        return previewWork = ShowAssetCore(doc, asset);
+    }
     private async Task ShowAssetCore(DocumentModel doc, AssetRecord? asset)
     {
         if (shutdownToken.IsCancellationRequested) return;
@@ -340,7 +428,8 @@ public partial class MainWindow : Window
                 ViewModel.SelectedDocument == doc && shownAsset?.Id == asset?.Id)
             {
                 using var recovery = PreviewOperation.Begin(CancellationToken.None);
-                await ShowAsset(doc, asset);
+                // This is the current transition's own recovery, not a new selection waiting for that transition.
+                await ShowAssetCore(doc, asset);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) { if (!token.IsCancellationRequested) { EmptyPreview.Text = "Preview unavailable: " + ex.Message; Report(ex); } }

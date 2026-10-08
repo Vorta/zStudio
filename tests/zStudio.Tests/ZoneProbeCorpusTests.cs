@@ -23,10 +23,10 @@ public sealed class ZoneProbeCorpusTests
             for (float x = x0 + 0.37f; x < x0 + width; x += 16)
                 for (float z = z0 - 0.29f; z > z0 + depth; z -= 16)
                 {
-                    var vehicle = ZoneProbe.Probe(root, x, z, ZoneSet.Cleared, ZoneProbeKind.Vehicle);
+                    var vehicle = ZoneProbe.Probe(root, x, z, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken);
                     // No point holds 32 surfaces, and no altitude surface lies above the probes' start.
-                    Assert.False(vehicle.Full || ZoneProbe.Probe(root, x, z, ZoneSet.Cleared).Full, $"{path} ({x}, {z})");
-                    Assert.Equal(vehicle.Hits.Count, ZoneProbe.Probe(root, x, z, ZoneSet.Cleared, ZoneProbeKind.Vehicle, float.MaxValue).Hits.Count);
+                    Assert.False(vehicle.Full || ZoneProbe.Probe(root, x, z, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Full, $"{path} ({x}, {z})");
+                    Assert.Equal(vehicle.Hits.Count, ZoneProbe.Probe(root, x, z, ZoneSet.Cleared, ZoneProbeKind.Vehicle, float.MaxValue, token: TestContext.Current.CancellationToken).Hits.Count);
                     if (vehicle.Hits.Count > 0) ground++;
                 }
             // Every mission has ground under a large part of its grid (the probe's winding and transforms find it).

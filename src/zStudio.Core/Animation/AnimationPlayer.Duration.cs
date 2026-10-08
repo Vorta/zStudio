@@ -23,7 +23,7 @@ public sealed partial class AnimationPlayer
     /// </summary>
     public AnimationDuration MeasureDuration(CancellationToken token = default)
     {
-        var probe = new AnimationPlayer(context, entryIndex, Seed, resetPhase)
+        var probe = new AnimationPlayer(context, entryIndex, Seed, resetPhase, token)
         {
             ConditionOverride = ConditionOverride, EffectLevel = EffectLevel,
             ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, PreviewHeight = PreviewHeight, measuringDuration = true

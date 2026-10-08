@@ -26,7 +26,7 @@ public sealed class SourceObjectStructureTests
         Target(workspace, mission, build, world, world.Nodes.Single(n => n.Name == name));
     private static SourceObjectTarget Target(SourceWorkspace workspace, string mission, SourceWorldBuild build, GameZWorld world, WorldNode picked)
     {
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
         foreach (var (node, slot) in slots) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
         return new(workspace, mission, world, SourceObjectEdits.ObjectOf(picked, provenance), provenance, build.Executions);
@@ -34,6 +34,91 @@ public sealed class SourceObjectStructureTests
     private static void Apply(SourceWorkspace workspace, SourceEditPlan plan) => Assert.NotNull(workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token));
     private static string Text(SourceWorkspace workspace, string path) => Encoding.Latin1.GetString(workspace.Read(path, Token)!);
     private static WorldNode WorldNode(GameZWorld world) => world.Nodes.Single(n => n.Class == WorldNodeClass.World);
+
+    [Fact]
+    public async Task CopyAndDeleteRemapEveryMapProfileWithTheGeometry()
+    {
+        using SourceWorldFixture fixture = new(); fixture.WriteTerrainDatabase();
+        const string database = "data/m1/models/m1.gltf";
+        var document = WorldAssembler.ReadModel(File.ReadAllBytes(fixture.Path(database)), database,
+            (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
+        var profile = WorldGltf.CaptureZoneProfile(document, token: Token);
+        var other = profile with { MeshPolygons = profile.MeshPolygons.Select(p => (IReadOnlyList<uint>)p.Select(_ => 0xFFFF0201u).ToArray()).ToArray() };
+        foreach (var (mission, values) in new[] { ("m1", profile), ("m2", other) })
+        {
+            string path = fixture.Path(SourceMapZones.PathForMission(mission)); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, new SourceMapZones([new(database, database, values, [])]).Write(Token));
+        }
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        var plan = SourceObjectEdits.PlanDuplicate(Target(workspace, "m1", build, world, "flat_a"), "new_ground", null, Token);
+        Assert.Equal(3, plan.Changes.Count);
+        Apply(workspace, plan);
+        var (_, copied) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal(copied.Nodes.Single(n => n.Name == "flat_a").Zone, copied.Nodes.Single(n => n.Name == "new_ground").Zone);
+        Assert.Equal(copied.Nodes.Single(n => n.Name == "flat_a").Model!.Polygons.Select(p => p.Zone), copied.Nodes.Single(n => n.Name == "new_ground").Model!.Polygons.Select(p => p.Zone));
+        var map2 = SourceMapZones.Parse(workspace.Read(SourceMapZones.PathForMission("m2"), Token)!, Token);
+        Assert.All(map2.Assets[0].Profile.MeshPolygons.SelectMany(x => x), word => Assert.Equal(0xFFFF0201u, word));
+        workspace.Undo(); Assert.False(workspace.IsDirty);
+        Apply(workspace, SourceObjectEdits.PlanDelete(Target(workspace, "m1", build, world, "flat_a"), Token));
+        var (_, deleted) = await BuildAsync(fixture, workspace, "m1");
+        Assert.DoesNotContain(deleted.Nodes, n => n.Name == "flat_a");
+        Assert.Contains(deleted.Nodes, n => n.Name == "flat_b");
+        workspace.Undo(); Assert.False(workspace.IsDirty);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemovingFirstNeutralInstanceHolderKeepsItsInheritedZone(bool editedChild)
+    {
+        using SourceWorldFixture fixture = new(); fixture.WriteSharedDatabase();
+        const string database = "data/m1/models/m1.gltf", manifest = "data/m1/meta/zones.json";
+        var json = JsonNode.Parse(File.ReadAllBytes(fixture.Path(database)))!.AsObject();
+        foreach (var node in json["nodes"]!.AsArray())
+        {
+            var fields = node!["extras"]?[WorldGltf.Key] as JsonObject;
+            string name = node["name"]!.GetValue<string>();
+            if (name is "sgate1" or "sgate2")
+            {
+                node["extras"] ??= new JsonObject(); node["extras"]![WorldGltf.Key] ??= new JsonObject();
+                node["extras"]![WorldGltf.Key]!["zone"] = name == "sgate1" ? 20 : 60;
+            }
+            else { fields?.Remove("zone"); fields?.Remove("zoneWord"); }
+        }
+        byte[] bytes = Recoil.Zbd.Core.Gltf.GltfJson.Write(json, false, Token);
+        var document = WorldAssembler.ReadModel(bytes, database, (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
+        var profile = WorldGltf.CaptureZoneProfile(document, token: Token);
+        if (editedChild)
+        {
+            // A map edit targets the compiled first definition. Later, inactive copies retain
+            // their original profiles, so promoting one must retain the edited child's value.
+            var ordered = document.AllNodes().Distinct().ToArray();
+            var assignments = profile.Nodes.ToArray();
+            int firstGate = Array.FindIndex(ordered, n => WorldGltf.EngineName(n) == "gate");
+            assignments[firstGate] = new(77, false);
+            profile = profile with { Nodes = assignments };
+        }
+        foreach (var node in json["nodes"]!.AsArray())
+        {
+            if (node?["extras"]?[WorldGltf.Key] is not JsonObject fields) continue;
+            fields.Remove("zone"); fields.Remove("zoneWord");
+        }
+        fixture.Write(database, json.ToJsonString());
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Path(manifest))!);
+        File.WriteAllBytes(fixture.Path(manifest), new SourceMapZones([new(database, database, profile, [])]).Write(Token));
+        SourceWorkspace workspace = new(fixture.Project);
+        var (build, world) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal(editedChild ? 77u : 20u, world.Nodes.Single(n => n.Name == "gate").Zone);
+        int gateSlot = build.Provenance.Single(p => p.Value.ModelNodeName == "gate").Key;
+        Assert.False(SourceObjectEdits.FlagSettable(build.Provenance[gateSlot], WorldGltf.ZoneGate));
+        Assert.Contains("map zone editor", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanFlag(workspace, "gate", build.Provenance[gateSlot], build.Executions, WorldGltf.ZoneGate, true, Token)).Message);
+        Assert.True(SourceZoneEdits.Inspect(workspace, build, [new(gateSlot)], token: Token).RequiresSharedScope);
+        Assert.Throws<InvalidDataException>(() => SourceZoneEdits.PlanAssignments(workspace, build, [new(gateSlot)], new(NodeZone: 8), false, Token));
+        Apply(workspace, SourceObjectEdits.PlanDelete(Target(workspace, "m1", build, world, "sgate1"), Token));
+        var (_, after) = await BuildAsync(fixture, workspace, "m1");
+        Assert.Equal(editedChild ? 77u : 20u, after.Nodes.Single(n => n.Name == "gate").Zone);
+    }
 
     [Fact]
     public async Task NodesSeveralParentsShareAreNotEditedThroughOneCopy()
@@ -144,7 +229,7 @@ public sealed class SourceObjectStructureTests
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
         Assert.Null(SourceObjectEdits.TargetChange(build, build));
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         var grounds = world.Nodes.Where(n => n.Name == "ground").ToList();
         var flagged = grounds.Single(g => build.Provenance[slots[g]].Applied.Count > 0);
         var plain = grounds.Single(g => !ReferenceEquals(g, flagged));
@@ -178,7 +263,7 @@ public sealed class SourceObjectStructureTests
         fixture.Write("gamegen/m1.gs", Encoding.Latin1.GetString(File.ReadAllBytes(fixture.Path("gamegen/m1.gs"))).Replace("# no vehicles", "FindNode lid\r\nObject3DTranslate 1.0 2.0 3.0", StringComparison.Ordinal));
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace, "m1");
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         var plain = world.Nodes.Where(n => n.Name == "lid").Select(lid => build.Provenance[slots[lid]]).Single(p => p.Applied.Count == 0);
         Assert.NotEmpty(SourceObjectEdits.PlanTransform(workspace, "lid", plain, build.Executions, new(Vector3.Zero, new(0, 30, 0), Vector3.One), Token, "m1", null,
             SourceObjectEdits.CopiesOf(plain, build.Provenance.Values)).Changes);
@@ -203,7 +288,7 @@ public sealed class SourceObjectStructureTests
             Assert.Contains("(Object3DScale) acts on lid", Assert.Throws<InvalidDataException>(() => SourceObjectEdits.PlanDuplicate(target, "crate2", null, Token)).Message);
         }
         // One copy's lid is scaled by the script and the other's is not, so the refusal for that crate comes from the other copy.
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         Assert.Equal([0, 1], world.Nodes.Where(n => n.Name == "lid").Select(lid => build.Provenance[slots[lid]].Applied.Count).Order());
         // Moving the unscaled copy's lid edits the part's node too, so the other copy's script scale would stop applying.
         var plain = world.Nodes.Where(n => n.Name == "lid").Select(lid => build.Provenance[slots[lid]]).Single(p => p.Applied.Count == 0);
@@ -352,9 +437,9 @@ public sealed class SourceObjectStructureTests
                       {"name":"bar","rotation":[{{q.X:R}},{{q.Y:R}},{{q.Z:R}},{{q.W:R}}],"translation":[{{far:R}},40,{{far * 0.7f:R}}]},
                       {"name":"horizon"}]}
                     """)!.AsObject();
-                try { GltfNodeEdits.Reparent(root, 1, 0); }
+                try { GltfNodeEdits.Reparent(root, 1, 0, token: Token); }
                 catch (InvalidDataException) { refused++; continue; }
-                var placed = GltfNodeEdits.World(root, 1);
+                var placed = GltfNodeEdits.World(root, 1, Token);
                 Assert.True(placed.Translation.Length() < 0.05f, $"{yaw}° at {far}: {placed.Translation}");
             }
         Assert.Equal(0, refused);
@@ -370,7 +455,7 @@ public sealed class SourceObjectStructureTests
               {"name":"b","matrix":[138.63388,21.302254,-73.82902,0,0.00066238473,-0.0006774366,0.0010483419,0,-3.7498612,-26.3116,-14.633194,0,0,0,0,1]},
               {"name":"c","translation":[100,20,30]}]}
             """)!.AsObject();
-        Assert.Contains("badly conditioned", Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 2, 1)).Message);
+        Assert.Contains("badly conditioned", Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 2, 1, token: Token)).Message);
         // A half turn reads as 180°, not atan2's −180°.
         Assert.Equal(new Vector3(0, 180, 180), ObjectTransform.Snap(new(0, -180, -180), angles: true));
     }
@@ -777,20 +862,24 @@ public sealed class SourceObjectStructureTests
         Assert.Equal(4, copy);
         Assert.Equal([0, 4, 3], root["scenes"]![0]!["nodes"]!.AsArray().Select(n => n!.GetValue<int>()));
         Assert.Equal([5, 6], root["nodes"]![4]!["children"]!.AsArray().Select(n => n!.GetValue<int>()));
-        Assert.Equal(5, root["nodes"]![6]!["extras"]!["recoil"]!["instance"]!.GetValue<long>());
+        long copiedInstance = root["nodes"]![6]!["extras"]!["recoil"]!["instance"]!.GetValue<long>();
+        Assert.InRange(copiedInstance, 1L, int.MaxValue);
+        Assert.NotEqual(4L, copiedInstance); // A fresh identity, even when a free hole precedes the highest authored marker.
+        Assert.Equal(4L, root["nodes"]![2]!["extras"]!["recoil"]!["instance"]!.GetValue<long>());
         // Removing a renumbers the rest, including the animation target.
         GltfNodeEdits.Remove(root, 0);
         Assert.Equal(["d", "a2", "b", "c"], root["nodes"]!.AsArray().Select(n => n!["name"]!.GetValue<string>()));
         Assert.Equal([1, 0], root["scenes"]![0]!["nodes"]!.AsArray().Select(n => n!.GetValue<int>()));
         Assert.Equal(0, root["animations"]![0]!["channels"]![0]!["target"]!["node"]!.GetValue<int>());
         Assert.Equal([2, 3], root["nodes"]![1]!["children"]!.AsArray().Select(n => n!.GetValue<int>()));
+        Assert.Equal(copiedInstance, root["nodes"]![3]!["extras"]!["recoil"]!["instance"]!.GetValue<long>());
         // An animated node cannot be removed; re-parenting keeps the world place.
         Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Remove(root, 0));
         root["nodes"]![1]!["translation"] = new JsonArray(10f, 0f, 0f);
-        GltfNodeEdits.Reparent(root, 2, 0);
-        Assert.Equal(new Vector3(11, 0, 0), GltfNodeEdits.World(root, 2).Translation);
+        GltfNodeEdits.Reparent(root, 2, 0, token: Token);
+        Assert.Equal(new Vector3(11, 0, 0), GltfNodeEdits.World(root, 2, Token).Translation);
         Assert.Equal(new Vector3(11, 0, 0), GltfNodeEdits.Local(root["nodes"]![2]!.AsObject()).Translation);
-        Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 1, 3));
+        Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 1, 3, token: Token));
     }
 
     [Fact]
@@ -837,15 +926,15 @@ public sealed class SourceObjectStructureTests
         root["scenes"]![0]!["nodes"]!.AsArray().Add(5);
         int? Zone(int node) => root["nodes"]![node]!["extras"]?["recoil"]?["zone"]?.GetValue<int>();
         // To the top it would take the database's 0xFF: it keeps zone 0, and so does its child.
-        GltfNodeEdits.Reparent(root, 1, null);
+        GltfNodeEdits.Reparent(root, 1, null, token: Token);
         Assert.Equal(0, Zone(1)); Assert.Null(Zone(3));
         // A root that took its zone from outside the file keeps the built one under a node with another zone.
-        GltfNodeEdits.Reparent(root, 4, 2, 0xFF);
+        GltfNodeEdits.Reparent(root, 4, 2, 0xFF, Token);
         Assert.Equal(0xFF, Zone(4));
         // Without the built zone (a part whose copies take different ones), a move that would replace it is refused.
-        Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 5, 2));
+        Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 5, 2, token: Token));
         // A node with a zone of its own keeps it unchanged.
-        GltfNodeEdits.Reparent(root, 2, 0);
+        GltfNodeEdits.Reparent(root, 2, 0, token: Token);
         Assert.Equal(3, Zone(2));
     }
 }

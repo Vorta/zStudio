@@ -103,7 +103,7 @@ A property shows its writers, the effective one, the edit targets available and 
 | AI vehicle placement | Its ordered record in the selected `aiv*.zrd` |
 | Pickup placement, amount, type, respawn | Its ordered record in `puppies*.zrd`, keeping linked difficulty variants and deduplicating fallback resources |
 | AI network or path | The network resource and the records referencing it; moving a node and changing links are separate operations |
-| Animation behaviour or keyframes | The definition `.zrd`, the `.zan` and the mission's `anim.zrd` list. A wildcard edit affects every expansion; isolating one is an explicit refactor. |
+| Animation behaviour or keyframes | The definition `.zad`, the `.zan` and the mission's `anim.zad` list. A wildcard edit affects every expansion; isolating one is an explicit refactor. |
 | Lights, fog, cameras | Their effective script commands; animated changes in animation definitions |
 | Texture cycles | The responsible `tex_fx*.gw` or effect definition |
 | Soils and polygon attributes | The material or primitive; a shared material offers an explicit fork |
@@ -515,8 +515,8 @@ healthy
 - **Animated textures become 3D parts:**
   - **Propellers** (a texture cycle on `props`) become a looping spin, written the way helicopter rotors are: `OBJECT_MOTION` with an `XYZ_ROTATION` rate and `LOOP_COUNT -1`.
   - **Starting the spin.** A vehicle entry in `vehicle.zrd` can name `start_anims ( name )`. The game starts that animation at the vehicle's root when it sets the vehicle up, for the player and for AI vehicles alike. The shipped amphibious enemy spins its radar this way (`radar_spin`).
-  - **Stopping it.** The death sequence stops the spin, as helicopter destruction stops its rotors.
-  - **Still to verify:** mode changes, saved-game restore and repeated spawns.
+  - **Death and respawn.** Keep the persistent loop parented under the healthy geometry, which death hides. Do not stop a cloned loop by animation name: that targets the base or first copy, and respawn does not rerun `start_anims`.
+  - **Still to verify:** the upgraded geometry and loops through mode changes, saved-game restore and repeated spawns.
   - **Tracks stay texture-scrolled.** The game scrolls them with speed, and nothing in the engine spins wheels with speed.
   - **The VTOL's heat shimmer** stays a texture effect.
   - Only the affected texture-cycle binding is replaced.

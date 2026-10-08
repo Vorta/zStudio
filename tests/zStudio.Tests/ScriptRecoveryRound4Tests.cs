@@ -40,18 +40,18 @@ public sealed class ScriptRecoveryRound4Tests
         foreach (string text in new[] { blank, short_ })
         {
             Assert.InRange(Refused(() => GameGenScriptText.Tokenize(text), "1,000,001 lines"), 0, Refusal);
-            Assert.InRange(Refused(() => GameGenScriptSyntax.Parse(text), "1,000,001 lines"), 0, Refusal);
+            Assert.InRange(Refused(() => GameGenScriptSyntax.Parse(text, TestContext.Current.CancellationToken), "1,000,001 lines"), 0, Refusal);
             // From bytes, only the decoded text is made.
             byte[] bytes = Encoding.Latin1.GetBytes(text);
-            Assert.InRange(Refused(() => GameGenScriptSyntax.Parse(bytes), "1,000,001 lines"), 0, Refusal + 2L * text.Length);
+            Assert.InRange(Refused(() => GameGenScriptSyntax.Parse(bytes, TestContext.Current.CancellationToken), "1,000,001 lines"), 0, Refusal + 2L * text.Length);
         }
         // A world script is refused before the model lines are inserted, and a build before it parses the script.
-        Refused(() => SourceWorlds.InsertIntoScript(Encoding.Latin1.GetBytes(short_), [new("data/m1/models/rock.gltf", "rock")]), "1,000,001 lines");
+        Refused(() => SourceWorlds.InsertIntoScript(Encoding.Latin1.GetBytes(short_), [new("data/m1/models/rock.gltf", "rock")], "the world script", TestContext.Current.CancellationToken), "1,000,001 lines");
         var files = new CountingFiles(new() { ["gamegen/m1.gs"] = Encoding.Latin1.GetBytes(short_) });
         Refused(() => new WorldAssembler(files, Token).Assemble("m1.gs"), "1,000,001 lines");
         // As many lines as a build can run instructions are read (a final newline starts no further line).
         Assert.Empty(GameGenScriptText.Tokenize(new string('\n', GameGenScriptText.MaximumLines)));
-        Assert.Equal(GameGenScriptText.MaximumLines, GameGenScriptSyntax.Parse(new string('\n', GameGenScriptText.MaximumLines)).Lines.Count);
+        Assert.Equal(GameGenScriptText.MaximumLines, GameGenScriptSyntax.Parse(new string('\n', GameGenScriptText.MaximumLines), TestContext.Current.CancellationToken).Lines.Count);
     }
 
     [Fact]
@@ -63,7 +63,7 @@ public sealed class ScriptRecoveryRound4Tests
         foreach (string text in new[] { commas, lines })
         {
             Assert.InRange(Refused(() => GameGenScriptText.Tokenize(text), "4,000,000 tokens"), 0, Refusal);
-            Assert.InRange(Refused(() => GameGenScriptSyntax.Parse(text), "4,000,000 tokens"), 0, Refusal);
+            Assert.InRange(Refused(() => GameGenScriptSyntax.Parse(text, TestContext.Current.CancellationToken), "4,000,000 tokens"), 0, Refusal);
         }
         // Exactly as many tokens are read.
         var line = Assert.Single(GameGenScriptText.Tokenize(new string(',', GameGenScriptText.MaximumTokens)));
@@ -106,7 +106,7 @@ public sealed class ScriptRecoveryRound4Tests
         {
             var expected = Reference(text);
             Assert.Equal(expected, GameGenScriptText.Tokenize(text));
-            var syntax = GameGenScriptSyntax.Parse(text);
+            var syntax = GameGenScriptSyntax.Parse(text, TestContext.Current.CancellationToken);
             Assert.Equal(expected, syntax.Lines.Where(l => l.IsInstruction).Select(l => l.Tokens));
             // Each token's place in the text is the token.
             foreach (var l in syntax.Lines)
@@ -134,10 +134,13 @@ public sealed class ScriptRecoveryRound4Tests
     {
         public Dictionary<string, int> Reads { get; } = new(StringComparer.OrdinalIgnoreCase);
         public bool Exists(string relative) => files.Keys.Any(k => k.Equals(relative, StringComparison.OrdinalIgnoreCase));
-        public byte[] Read(string relative, CancellationToken token)
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
         {
+            token.ThrowIfCancellationRequested();
             Reads[relative] = Reads.GetValueOrDefault(relative) + 1;
-            return files.First(f => f.Key.Equals(relative, StringComparison.OrdinalIgnoreCase)).Value;
+            byte[] result = files.First(f => f.Key.Equals(relative, StringComparison.OrdinalIgnoreCase)).Value;
+            limits.Validate(result); return result;
         }
     }
 

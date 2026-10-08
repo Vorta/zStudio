@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Security.Cryptography;
 
 namespace Recoil.Zbd.Core.Animation;
 
@@ -67,17 +66,9 @@ public static class AnimationWriter
         var reopened = AnimationPackage.Read(bytes, token);
         if (!bytes.AsSpan().SequenceEqual(Write(reopened, token))) throw new InvalidDataException("Animation save failed its round-trip check.");
         string directory = Path.GetDirectoryName(path)!; string temporary = Path.Combine(directory, ".animation-" + Guid.NewGuid().ToString("N") + ".tmp");
-        try
-        {
-            await using (FileStream stream = directories.OpenFile(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous | FileOptions.WriteThrough))
-            { await stream.WriteAsync(bytes, token).ConfigureAwait(false); await stream.FlushAsync(token).ConfigureAwait(false); }
-            byte[] check = await Sources.SourceRead.AllAsync(temporary, bytes.Length, directories, token).ConfigureAwait(false);
-            if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(bytes), SHA256.HashData(check))) throw new IOException("The written animation did not pass verification.");
-            token.ThrowIfCancellationRequested();
-            // Held from its check against the verified bytes until it is in place.
-            using (SealedFile staged = VerifiedDocumentSave.Seal(temporary, bytes, directories)) staged.MoveTo(path);
-        }
-        finally { directories.DeleteFile(temporary); }
+        using SealedFile staged = await SealedFile.CreateAsync(temporary, bytes, directories, token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        staged.MoveTo(path);
     }
     private static bool IsInside(string path, string root) => path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 }

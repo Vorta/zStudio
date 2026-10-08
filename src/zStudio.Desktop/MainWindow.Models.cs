@@ -16,11 +16,13 @@ public partial class MainWindow
         RegisterJob(r, "model_bundle_export", "Export all authored models under a node or an animation root as assembled and local OBJ/MTL/PNG files with stable indices, transforms and source fingerprint.",
             [.. AssetParameters, P("destination", "string", "Full path of an export folder outside the source tree.", true), new("rootNode", "integer", "Explicit GameZ root node, required for ambiguous animation roots.", Minimum: 0, Maximum: int.MaxValue), P("texturePack", "string", "Optional preferred texture pack.")], true,
             async (a, token) => Result(await ExportModelBundleAsync(TargetDocument(a), TargetAsset(TargetDocument(a), a), FullPath(a, "destination"), a.ContainsKey("rootNode") ? Int(a,"rootNode") : null, Text(a,"texturePack") is { Length: > 0 } pack ? pack : null, token)));
-        RegisterJob(r, "model_replace", "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document.",
+        RegisterJob(r, "model_replace", "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document. texturePacks previews at most 64 paths of 512 characters, with texturePackCount/texturePacksTruncated; all prepared packs remain part of the edit and save.",
             [DocumentParameter, RevisionParameter, P("manifest", "string", "Absolute replacement manifest JSON path.", true)], false, async (a, token) =>
             {
                 var doc = TargetDocument(a, true); await ReplaceModelsAsync(doc, FullPath(a, "manifest"), doc.Revision, token);
-                return Result(new { document = DocumentState(doc), totalModels = doc.ModelEdits!.Current.World.Scene!.Models.Count, texturePacks = doc.ModelEdits.Current.Textures.Keys.ToArray() });
+                var packs = FileResultPreview.Paths(doc.ModelEdits!.Current.Textures.Keys, doc.ModelEdits.Current.Textures.Count);
+                return Result(new { document = DocumentState(doc), totalModels = doc.ModelEdits.Current.World.Scene!.Models.Count,
+                    texturePacks = packs.Values, texturePackCount = packs.Count, texturePacksTruncated = packs.Truncated });
             });
     }
     private async Task<ModelBundleResult> ExportModelBundleAsync(DocumentModel doc, AssetRecord asset, string destination, int? explicitRoot, string? pack, CancellationToken token)
@@ -87,7 +89,7 @@ public partial class MainWindow
         foreach (string error in result.Errors) ViewModel.AddProblem(error, file: doc.Path);
         if (directory != null) doc.LastSavedCopy = Path.Combine(directory, Path.GetFileName(doc.Path));
         doc.IsStale = false;
-        ViewModel.Status = "Saved and verified: " + string.Join("; ", result.SavedPaths);
+        ViewModel.Status = $"Saved and verified {result.SavedPaths.Count} files";
         return result;
     }
     private async void ExportModelBundleClick(object sender, RoutedEventArgs e)

@@ -20,6 +20,16 @@ public sealed class SourceProjectCorpusTests
         try
         {
             var report = await SourceExtractor.ExtractAsync(corpus, project, token: Token);
+            if (Directory.Exists(Path.Combine(corpus, "m3")))
+            {
+                var zones = SourceMapZones.Parse(await File.ReadAllBytesAsync(Path.Combine(project, "data/m3/meta/zones.json"), Token), Token);
+                Assert.True(zones.TryGetAsset("data/m3/models/lturret.gltf", out var first));
+                Assert.True(zones.TryGetAsset("data/m3/models/lturret_2.gltf", out var second));
+                Assert.Equal(first.GeometryPath, second.GeometryPath);
+                Assert.False(first.Profile.MeshPolygons.SelectMany(p => p).SequenceEqual(second.Profile.MeshPolygons.SelectMany(p => p)));
+                Assert.True(File.Exists(SourceProject.Resolve(project, first.GeometryPath)));
+                Assert.False(File.Exists(Path.Combine(project, "data/m3/models/lturret_2.gltf")));
+            }
             // Animation definitions shipped in another version than the animations were compiled from are rebuilt from
             // them; nothing else is noted. Definitions that name a sequence twice compile as shipped (the last name).
             const string Rebuilt = " is not the version the shipped animations were compiled from; it was rebuilt from anim.zbd.";
@@ -82,7 +92,7 @@ public sealed class SourceProjectCorpusTests
                 var shipped = Recoil.Zbd.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(animations), Token);
                 var built = Recoil.Zbd.Core.Animation.AnimationPackage.Read(File.ReadAllBytes(Path.Combine(exported, Path.GetRelativePath(corpus, animations))), Token);
                 Assert.Equal(shipped.Entries.Select(e => e.Name), built.Entries.Select(e => e.Name));
-                Assert.All(Enumerable.Range(1, shipped.Entries.Count - 1), i => Assert.Null(Recoil.Zbd.Core.Animation.AnimationComparer.Difference(shipped.Entries[i], built.Entries[i])));
+                Assert.All(Enumerable.Range(1, shipped.Entries.Count - 1), i => Assert.Null(Recoil.Zbd.Core.Animation.AnimationComparer.Difference(shipped.Entries[i], built.Entries[i], Token)));
             }
             // Worlds rebuilt by their scripts have the shipped nodes, placements, flags, cells, models and textures; only the
             // grouping of coplanar triangles into polygons may differ, which draws the same surfaces.
@@ -129,7 +139,7 @@ public sealed class SourceProjectCorpusTests
             // Every keyframe script is the SI Animation Script the shipped keyframes came from.
             var scriptsWritten = Directory.GetFiles(Path.Combine(project, "data"), "*.zan", SearchOption.AllDirectories);
             Assert.NotEmpty(scriptsWritten);
-            Assert.All(scriptsWritten, s => Assert.True(Recoil.Zbd.Core.Animation.SiAnimationScript.Recognize(File.ReadAllBytes(s)), s));
+            Assert.All(scriptsWritten, s => Assert.True(Recoil.Zbd.Core.Animation.SiAnimationScript.Recognize(File.ReadAllBytes(s), TestContext.Current.CancellationToken), s));
             // The shipped files are stamped, so their scripts carry the DKit messages of their exporter.
             Assert.All(scriptsWritten, s => Assert.Contains("\r\nWarning, file version ", File.ReadAllText(s, System.Text.Encoding.Latin1)));
 
@@ -193,7 +203,7 @@ public sealed class SourceProjectCorpusTests
     {
         static HashSet<string> Users(GameZWorld w)
         {
-            var slots = GameZWriter.NodeSlots(w);
+            var slots = GameZWriter.NodeSlots(w, TestContext.Current.CancellationToken);
             return [.. w.Nodes.Where(n => n.Model != null).GroupBy(n => n.Model!, ReferenceEqualityComparer.Instance).Select(g => string.Join(",", g.Select(n => slots[n]).Order()))];
         }
         if (shipped.Models.Count != built.Models.Count) yield return $"{shipped.Models.Count} models shipped, {built.Models.Count} built";
@@ -205,7 +215,7 @@ public sealed class SourceProjectCorpusTests
     /// <summary>Slots that do not hold the same node in both worlds: its name, its parents' slots and its children's slots.</summary>
     private static IEnumerable<string> SlotDifferences(GameZWorld shipped, GameZWorld built)
     {
-        var a = GameZWriter.NodeSlots(shipped); var b = GameZWriter.NodeSlots(built);
+        var a = GameZWriter.NodeSlots(shipped, TestContext.Current.CancellationToken); var b = GameZWriter.NodeSlots(built, TestContext.Current.CancellationToken);
         var bySlot = b.ToDictionary(p => p.Value, p => p.Key);
         string Key(WorldNode n, IReadOnlyDictionary<WorldNode, int> s) => n.Name + "|" + string.Join(",", n.Parents.Select(p => s[p]).Order()) + "|" + string.Join(",", n.Children.Select(c => s[c]));
         if (a.Count != b.Count) yield return $"{a.Count} nodes shipped, {b.Count} built";
@@ -218,7 +228,7 @@ public sealed class SourceProjectCorpusTests
         Dictionary<WorldNode, WorldNode> counterpart = new(ReferenceEqualityComparer.Instance);
         void Walk(WorldComparisonNode n) { if (n.Expected is { } x && n.Actual is { } y) counterpart.TryAdd(x, y); foreach (var c in n.Children) Walk(c); }
         foreach (var root in WorldComparer.CompareTree(shipped, rebuilt, token: Token).Roots) Walk(root);
-        Dictionary<string, List<WorldNode>> ByName(GameZWorld w) { var slots = GameZWriter.NodeSlots(w); return w.Nodes.GroupBy(n => n.Name).ToDictionary(g => g.Key, g => g.OrderByDescending(n => slots[n]).ToList()); }
+        Dictionary<string, List<WorldNode>> ByName(GameZWorld w) { var slots = GameZWriter.NodeSlots(w, TestContext.Current.CancellationToken); return w.Nodes.GroupBy(n => n.Name).ToDictionary(g => g.Key, g => g.OrderByDescending(n => slots[n]).ToList()); }
         var a = ByName(shipped); var b = ByName(rebuilt);
         List<string> wrong = [];
         void Check(string what, WorldNode? x, WorldNode? y) { if (x == null ? y != null : !ReferenceEquals(counterpart.GetValueOrDefault(x), y)) wrong.Add($"{mission}: {what}"); }

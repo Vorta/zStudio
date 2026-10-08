@@ -27,11 +27,11 @@ public static partial class SourceProject
     public static string Resolve(string root, string relative)
     {
         if (string.IsNullOrWhiteSpace(relative) || System.IO.Path.IsPathRooted(relative) || relative.Contains('\\') || relative.Split('/').Any(p => p is "" or "." or ".."))
-            throw new InvalidDataException($"'{relative}' is not a relative path.");
+            throw new InvalidDataException($"'{JsonData.ShownText(relative ?? "", 256)}' is not a relative path.");
         string full = System.IO.Path.GetFullPath(System.IO.Path.Combine(root, relative));
         string prefix = System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(root));
         if (!System.IO.Path.EndsInDirectorySeparator(prefix)) prefix += System.IO.Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"'{relative}' escapes its folder.");
+        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"'{JsonData.ShownText(relative, 256)}' escapes its folder.");
         return full;
     }
     public static string Relative(string root, string path) => System.IO.Path.GetRelativePath(root, path).Replace('\\', '/');
@@ -75,28 +75,39 @@ public static partial class SourceProject
     /// Every file and folder visited counts towards <see cref="MaximumScannedEntries"/>, whether it is included or not, and
     /// <paramref name="token"/> is observed at each.
     /// </summary>
-    internal static IReadOnlyList<string> Files(string root, string folder, Func<string, bool> include, IReadOnlyCollection<string>? added = null, CancellationToken token = default)
-        => Files(root, folder, include, added, MaximumScannedEntries, token);
+    internal static IReadOnlyList<string> Files(string root, string folder, Func<string, bool> include, IReadOnlyCollection<string>? added = null, CancellationToken token = default,
+        InventoryBudget? inventory = null, Action<int>? retainPath = null)
+        => Files(root, folder, include, added, MaximumScannedEntries, token, inventory, retainPath);
     /// <param name="maximumEntries">The entries the scan may visit (<see cref="MaximumScannedEntries"/>; smaller in tests).</param>
-    internal static IReadOnlyList<string> Files(string root, string folder, Func<string, bool> include, IReadOnlyCollection<string>? added, int maximumEntries, CancellationToken token)
+    internal static IReadOnlyList<string> Files(string root, string folder, Func<string, bool> include, IReadOnlyCollection<string>? added, int maximumEntries, CancellationToken token,
+        InventoryBudget? inventory = null, Action<int>? retainPath = null)
     {
-        var files = DiskFiles(root, folder, include, maximumEntries, token);
+        inventory ??= new();
+        var files = DiskFiles(root, folder, include, maximumEntries, token, inventory, retainPath);
         if (added == null || added.Count == 0) return files;
         string prefix = folder.TrimEnd('/') + "/";
+        inventory.Rows(files.Count, token);
         HashSet<string> listed = new(files, StringComparer.OrdinalIgnoreCase);
         if (added.Count > maximumEntries) throw TooManyEntries(folder, maximumEntries);
-        foreach (string entry in added)
+        var pending = PendingInventory.Capture(added, inventory, token);
+        foreach (string entry in pending.Below(prefix, token))
         {
             token.ThrowIfCancellationRequested();
-            if (entry.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && include(System.IO.Path.GetFileName(entry)))
+            inventory.Inspect(entry.Length, token); // Bound the filename scan before looking back through the path.
+            var name = System.IO.Path.GetFileName(entry.AsSpan());
+            inventory.Path(name.Length, token); // Before allocating a leaf string for the existing predicate.
+            if (include(name.ToString()))
             {
-                listed.Add(entry);
+                inventory.Path(entry.Length, token); // Actual full-path hashing and retained result ownership.
+                if (!listed.Contains(entry)) { retainPath?.Invoke(entry.Length); listed.Add(entry); }
                 if (listed.Count > MaximumFiles) throw new IOException($"{folder} has more than {MaximumFiles:N0} files including pending sources.");
             }
         }
+        inventory.Rows(listed.Count, token);
         return listed.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
-    private static IReadOnlyList<string> DiskFiles(string root, string folder, Func<string, bool> include, int maximumEntries, CancellationToken token)
+    private static IReadOnlyList<string> DiskFiles(string root, string folder, Func<string, bool> include, int maximumEntries, CancellationToken token,
+        InventoryBudget inventory, Action<int>? retainPath)
     {
         string path = Resolve(root, folder);
         // The folders leading to the listed one must be regular too; enumeration below only sees their contents.
@@ -104,12 +115,21 @@ public static partial class SourceProject
         if (!SourceRead.DirectoryExists(path)) return [];
         List<string> files = [];
         // Counted before it is looked at: files the scan does not want (editor caches, backups) cost as much to visit.
-        foreach (var info in Entries(path, new ScanBudget(maximumEntries, maximum => TooManyEntries(folder, maximum), token), recurse: true))
+        string fullRoot = System.IO.Path.GetFullPath(root);
+        int prefixLength = System.IO.Path.TrimEndingDirectorySeparator(fullRoot).Length + (System.IO.Path.EndsInDirectorySeparator(fullRoot) && fullRoot == System.IO.Path.GetPathRoot(fullRoot) ? 0 : 1);
+        foreach (var info in Entries(path, new ScanBudget(maximumEntries, maximum => TooManyEntries(folder, maximum), token, inventory), recurse: true))
         {
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{info.FullName} is a link; source projects contain regular files.");
-            if (info is FileInfo file && include(file.Name)) files.Add(Relative(root, file.FullName));
+            if (info is FileInfo file && include(file.Name))
+            {
+                // Entries admits the full identity before retention. Reserve the consumer's narrower allowance
+                // before GetRelativePath/Replace constructs another string (all entries are below this root).
+                retainPath?.Invoke(file.FullName.Length - prefixLength);
+                files.Add(Relative(root, file.FullName));
+            }
             if (files.Count > MaximumFiles) throw new IOException($"{folder} has more than {MaximumFiles:N0} files.");
         }
+        inventory.Rows(files.Count, token);
         return files.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
     /// <summary>A scan that would visit more than <paramref name="maximum"/> files and folders, and what to do about it.</summary>
@@ -122,9 +142,13 @@ public static partial class SourceProject
     /// (<see cref="MaximumScannedEntries"/>, or less), beyond which <paramref name="refusal"/> says what to do. The token is
     /// observed at each entry, so a folder of millions of entries neither runs on unbounded nor ignores a cancellation.
     /// </summary>
-    internal sealed class ScanBudget(int maximum, Func<int, Exception> refusal, CancellationToken token)
+    internal sealed class ScanBudget(int maximum, Func<int, Exception> refusal, CancellationToken token, InventoryBudget? inventory = null)
     {
         private long visited;
+        internal CancellationToken Token => token;
+        internal InventoryBudget Inventory { get; } = inventory ?? new();
+        internal void Path(long characters) => Inventory.Path(characters, token);
+        internal void Rows(long count) => Inventory.Rows(count, token);
         public void Visit(long entries = 1)
         {
             token.ThrowIfCancellationRequested();
@@ -144,6 +168,9 @@ public static partial class SourceProject
         foreach (var info in new DirectoryInfo(path).EnumerateFileSystemInfos("*", options))
         {
             budget.Visit();
+            // The framework owns one OS-bounded transient entry. Admit its complete path before a caller
+            // retains it or constructs relative/normalized copies; ignored entries spend the same path work.
+            budget.Path(info.FullName.Length);
             yield return info;
         }
     }
@@ -152,15 +179,15 @@ public static partial class SourceProject
     internal static partial System.Text.RegularExpressions.Regex MissionName();
     /// <summary>
     /// The mission folders (<c>data/mN</c>) as the disk spells them, by mission number. Listing <c>data</c> is a scan like any
-    /// other (see <see cref="Files(string, string, Func{string, bool}, IReadOnlyCollection{string}?, CancellationToken)"/>):
+    /// other (see <see cref="Files(string, string, Func{string, bool}, IReadOnlyCollection{string}?, CancellationToken, InventoryBudget?, Action{int}?)"/>):
     /// every entry there counts towards <paramref name="maximumEntries"/>, whether it is a mission folder or not, and
     /// <paramref name="token"/> is observed at each. Links are listed like folders; the scans of what they hold refuse them.
     /// </summary>
-    internal static IReadOnlyList<string> MissionFolders(string root, CancellationToken token, int maximumEntries = MaximumScannedEntries)
+    internal static IReadOnlyList<string> MissionFolders(string root, CancellationToken token, int maximumEntries = MaximumScannedEntries, InventoryBudget? inventory = null)
     {
         string data = Resolve(root, DataFolder);
         if (!SourceRead.DirectoryExists(data)) return [];
-        return Entries(data, new ScanBudget(maximumEntries, maximum => TooManyEntries(DataFolder, maximum), token))
+        return Entries(data, new ScanBudget(maximumEntries, maximum => TooManyEntries(DataFolder, maximum), token, inventory))
             .Where(e => e is DirectoryInfo && MissionName().IsMatch(e.Name)).Select(e => e.Name).OrderBy(n => int.Parse(n.AsSpan(1))).ToArray();
     }
 
@@ -201,10 +228,19 @@ public static partial class SourceProject
     }
     /// <summary>Refuse links on the way from <paramref name="root"/> to a relative file, including the file itself; nothing is followed.</summary>
     public static void RejectNestedLinks(string root, string relative)
+        => RejectNestedLinks(root, relative, null);
+
+    internal static void RejectNestedLinks(string root, string relative, Action<long>? reservePathWork)
     {
+        // Validate the whole spelling before stopping at an absent ancestor: a later '..' or rooted component
+        // must not redirect a caller beyond the missing prefix after this check returns.
+        _ = Resolve(root, relative);
         string current = System.IO.Path.GetFullPath(root); var parts = relative.Split('/');
         for (int i = 0; i < parts.Length; i++)
         {
+            // A discovery may visit the same deep existing chain for many missing candidates. Its shared work
+            // allowance covers every actual prefix before constructing it; missing ancestors still end the walk.
+            reservePathWork?.Invoke(128L + 4L * (current.Length + parts[i].Length + 1));
             current = System.IO.Path.Combine(current, parts[i]);
             // FileInfo.Exists is false for directory links, including the last component (recovery/staging).
             // Attributes inspect either kind and also reject dangling links rather than following them later.
@@ -213,8 +249,10 @@ public static partial class SourceProject
                 if (File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint))
                     throw new IOException($"{current} is a link; nothing was written through it.");
             }
-            catch (FileNotFoundException) { }
-            catch (DirectoryNotFoundException) { }
+            // No descendant exists below an absent ancestor. Continuing would allocate/probe every growing
+            // prefix, making a deep missing search path quadratic. Other I/O/access failures still propagate.
+            catch (FileNotFoundException) { return; }
+            catch (DirectoryNotFoundException) { return; }
         }
     }
 }

@@ -109,7 +109,7 @@ public sealed class GameZVersion13Tests
         byte[] v15 = GameZWriter.Write(sample, Token), v13 = DemoWorldFixture.FromVersion15(v15);
         var original = sample.Nodes.Single(n => n.Name == "tower").CachedBounds;
         // Without its bounds flags the tower's stored boxes no longer explain its corners.
-        int slot = GameZWriter.NodeSlots(sample)[sample.Nodes.Single(n => n.Name == "tower")], nodeTable = BinaryPrimitives.ReadInt32LittleEndian(v13.AsSpan(32));
+        int slot = GameZWriter.NodeSlots(sample, TestContext.Current.CancellationToken)[sample.Nodes.Single(n => n.Name == "tower")], nodeTable = BinaryPrimitives.ReadInt32LittleEndian(v13.AsSpan(32));
         uint flags = BinaryPrimitives.ReadUInt32LittleEndian(v13.AsSpan(nodeTable + slot * 268 + 36));
         BinaryPrimitives.WriteUInt32LittleEndian(v13.AsSpan(nodeTable + slot * 268 + 36), flags & ~(WorldUpdate.ModelBoundsFlag | WorldUpdate.ChildBoundsFlag));
         var tower = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", v13, token: Token), Token).Nodes.Single(n => n.Name == "tower");

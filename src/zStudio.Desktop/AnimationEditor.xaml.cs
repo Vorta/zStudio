@@ -113,7 +113,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             var loaded = await document.GetAnimationContextAsync(resolver, token, worldPath, SelectedDifficulty);
             if (generation != contextGeneration || disposed) return; context = loaded; await ConfigureMissionsAsync(token);
             changing = true; Lod.ItemsSource = SceneLods.Choices(context.Lods.Count()); Lod.SelectedIndex = 0; changing = false;
-            token.ThrowIfCancellationRequested(); player = CreatePlayer(); frame = player.Frame();
+            token.ThrowIfCancellationRequested(); player = CreatePlayer(token: token); frame = player.Frame(token);
             await UpdateDurationAsync(token);
             if (generation != contextGeneration || disposed) return;
             // GUI presentation choices may change while initial meshes upload.
@@ -121,7 +121,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             while (true)
             {
                 bool includeLevel = ShowLevel.IsChecked == true, horizon = ShowHorizon.IsChecked == true;
-                int lod = player.LodLevel; frame = player.Frame();
+                int lod = player.LodLevel; frame = player.Frame(token);
                 await viewport.ShowAnimationAsync(context, frame, resolver, includeLevel, token, lod, horizon, lifetime.Token);
                 LoadingText.Text = "Preparing audio…";
                 await PrepareAudioAsync(token);
@@ -148,10 +148,19 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         { if (generation == contextGeneration && !disposed) { previewOperationFailure = ex.Message; pendingPlay = false; LoadingText.Text = ex.Message + "\nUse Scene → Choose GameZ… to choose the mission scene. Event editing is still available."; RecordPreviewError(ex.Message); } }
     }
-    private AnimationPlayer CreatePlayer(AnimationPreviewContext? source = null) => new(source ?? context!, entryIndex, appliedSeed, Phase.SelectedIndex == 1)
-    { ConditionOverride = Condition.SelectedIndex switch { 1 => true, 2 => false, _ => null }, ActivationStart = activationStart, ReferencePosition = activationTarget,
-        LodLevel = Math.Clamp(player?.LodLevel ?? 0, 0, Math.Max(0, (source ?? context!).Lods.Count() - 1)),
-        GroundPlaneEnabled = GroundCollision.IsChecked == true, PreviewHeight = appliedHeight };
+    private AnimationPlayer CreatePlayer(AnimationPreviewContext? source = null, CancellationToken token = default) => CapturePlayer(source ?? context!, token)();
+    private Func<AnimationPlayer> CapturePlayer(AnimationPreviewContext source, CancellationToken token)
+    {
+        // Only capture controls on the dispatcher; cold binding can then run in the owning request's worker.
+        int selectedEntry = entryIndex, seed = appliedSeed;
+        bool reset = Phase.SelectedIndex == 1, ground = GroundCollision.IsChecked == true;
+        bool? condition = Condition.SelectedIndex switch { 1 => true, 2 => false, _ => null };
+        var start = activationStart; var target = activationTarget; float height = appliedHeight;
+        int lod = Math.Clamp(player?.LodLevel ?? 0, 0, Math.Max(0, source.Lods.Count() - 1));
+        return () => new(source, selectedEntry, seed, reset, token)
+        { ConditionOverride = condition, ActivationStart = start, ReferencePosition = target,
+            LodLevel = lod, GroundPlaneEnabled = ground, PreviewHeight = height };
+    }
     private void SetPlaying(bool value)
     {
         playing = value;
@@ -211,7 +220,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
                 if (preservePlayhead && !customRange && seconds > range)
                     range = Math.Min(3600, seconds + (pendingPlay ? 5 : AnimationPlayer.StepSeconds));
                 double target = Math.Clamp(seconds, 0, range);
-                var nextPlayer = resetSimulation || player == null ? CreatePlayer(nextContext) : player;
+                var nextPlayer = resetSimulation || player == null ? CreatePlayer(nextContext, token) : player;
                 var nextFrame = await Task.Run(() => nextPlayer.AdvanceTo(target, true, token), token);
                 token.ThrowIfCancellationRequested();
                 if (refreshScene)
@@ -400,7 +409,17 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     {
         if (disposed || !ResolvePendingDrafts()) return;
         if (player == null || LoadingPanel.Visibility == Visibility.Visible || !PlayButton.IsEnabled) { pendingPlay = !pendingPlay; return; }
-        if (!playing && player.Time >= SeekSlider.Maximum) { player.Reset(); frame = player.Frame(); Render(); }
+        if (!playing && player.Time >= SeekSlider.Maximum)
+        {
+            try
+            {
+                var reset = CreatePlayer(token: lifetime.Token);
+                var resetFrame = reset.Frame(lifetime.Token);
+                player = reset; frame = resetFrame; Render();
+            }
+            catch (OperationCanceledException) { return; }
+            catch (IOException ex) { SetPlaying(false); previewOperationFailure = ex.Message; RecordPreviewError(ex.Message); return; }
+        }
         seeking?.Cancel(); SetPlaying(!playing);
     }
     private void StartPendingPlayback() { if (pendingPlay && !disposed && LoadingPanel.Visibility != Visibility.Visible && PlayButton.IsEnabled) { pendingPlay = false; TogglePlayback(); } }
@@ -443,8 +462,8 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     }
     private Task<AnimationDuration> MeasureDurationAsync(AnimationPreviewContext source, CancellationToken token)
     {
-        var measuring = CreatePlayer(source.Snapshot());
-        return Task.Run(() => measuring.MeasureDuration(token), token);
+        var create = CapturePlayer(source.Snapshot(), token);
+        return Task.Run(() => create().MeasureDuration(token), token);
     }
     private void ApplyRange(double seconds, bool retainInput = false)
     {
@@ -556,7 +575,7 @@ public partial class AnimationEditor : FieldEditor, IDisposable
             {
                 request.Token.ThrowIfCancellationRequested();
                 if (generation != lodGeneration || Lod.SelectedIndex != requested) return;
-                player.LodLevel = Math.Max(0, requested); frame = player.Frame();
+                player.LodLevel = Math.Max(0, requested); frame = player.Frame(request.Token);
             }
             finally { simulationGate.Release(); }
             if (ShowLevel.IsChecked == true) await LevelChangedAsync(sender, e);
@@ -567,9 +586,21 @@ public partial class AnimationEditor : FieldEditor, IDisposable
         {
             if (!disposed && generation == lodGeneration && Lod.SelectedIndex == requested)
             {
+                player.LodLevel = retained;
                 bool wasChanging = changing; changing = true;
                 try { Lod.SelectedIndex = Math.Clamp(retained, 0, Math.Max(0, Lod.Items.Count - 1)); }
                 finally { changing = wasChanging; }
+            }
+        }
+        catch (IOException ex)
+        {
+            if (!disposed && generation == lodGeneration && Lod.SelectedIndex == requested)
+            {
+                player.LodLevel = retained;
+                bool wasChanging = changing; changing = true;
+                try { Lod.SelectedIndex = Math.Clamp(retained, 0, Math.Max(0, Lod.Items.Count - 1)); }
+                finally { changing = wasChanging; }
+                SetPlaying(false); previewOperationFailure = ex.Message; RecordPreviewError(ex.Message);
             }
         }
     }
@@ -578,14 +609,26 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     private async void BindClick(object sender, RoutedEventArgs e)
     {
         if (context == null) return; SetPlaying(false);
+        var bindingContext = context;
         TextBox query = new() { Margin = new(8), ToolTip = "Filter scene nodes" }; ListBox list = new() { DisplayMemberPath = "Label", Margin = new(8), SelectionMode = SelectionMode.Single };
-        var choices = context.Scene.Nodes.Select(n => new NodeChoice(n.Index, $"#{n.Index} · {n.Name} ({n.Class})" + (context.Mission?.Actors.FirstOrDefault(a => a.Root == n.Index) is { } actor ? $" · {actor.PlacementSource} · {context.WorldTransform(n.Index).Translation}" : ""))).ToArray(); list.ItemsSource = choices.Where(c => c.Label.Contains(Entry.RootName, StringComparison.OrdinalIgnoreCase)).Take(500).ToArray();
-        query.TextChanged += (_, _) => list.ItemsSource = choices.Where(c => c.Label.Contains(query.Text, StringComparison.OrdinalIgnoreCase)).Take(500).ToArray();
+        AnimationRootChoices choices;
+        try
+        {
+            choices = new(bindingContext.Scene, bindingContext.Mission?.Actors ?? [], bindingContext.WorldTransform, lifetime.Token);
+            list.ItemsSource = choices.Page(Entry.RootName, lifetime.Token);
+        }
+        catch (OperationCanceledException) { return; }
+        query.TextChanged += (_, _) =>
+        {
+            if (disposed) return;
+            try { list.ItemsSource = choices.Page(query.Text, lifetime.Token); }
+            catch (OperationCanceledException) { }
+        };
         Button bind = new() { Content = "Bind selected root", Margin = new(8), IsDefault = true };
         DockPanel panel = new(); DockPanel.SetDock(query, Dock.Top); DockPanel.SetDock(bind, Dock.Bottom); panel.Children.Add(query); panel.Children.Add(bind); panel.Children.Add(list);
         Window dialog = new() { Owner = Window.GetWindow(this), Title = "Preview root binding · first 500 matches", Width = 520, Height = 600, Content = panel, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         bind.Click += (_, _) => { if (list.SelectedItem != null) dialog.DialogResult = true; };
-        if (dialog.ShowDialog() == true && list.SelectedItem is NodeChoice selected) { context.RootOverrides[entryIndex] = selected.Index; resetSimulation = true; await SeekAsync(0); if (frame != null) viewport.FrameAnimation(frame); Note("Preview root bound to " + selected.Label); }
+        if (dialog.ShowDialog() == true && !disposed && ReferenceEquals(context, bindingContext) && list.SelectedItem is AnimationRootChoices.Choice selected) { bindingContext.RootOverrides[entryIndex] = selected.Index; resetSimulation = true; await SeekAsync(0); if (frame != null) viewport.FrameAnimation(frame); Note("Preview root bound to " + selected.Label); }
     }
     private void Note(string text) { if (disposed) return; StatusChanged?.Invoke(text); Diagnostics.Text = text + "\n" + Diagnostics.Text; }
     public void Pause() { levelResume = false; pendingPlay = false; SetPlaying(false); }
@@ -595,5 +638,4 @@ public partial class AnimationEditor : FieldEditor, IDisposable
     }
     private sealed record SequenceChoice(Guid Id, string Label);
     private sealed record EventChoice(Guid Id, int Index, string Name, string Mode, string Threshold);
-    private sealed record NodeChoice(int Index, string Label);
 }

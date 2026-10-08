@@ -10,9 +10,9 @@ namespace Recoil.Zbd.Core.Sources;
 /// resource archives, but the keyframe scripts (<c>.zan</c>) they name were compiled away: each script event's
 /// keyframes become the track of its object in the named script, written where the file's source stamps say the
 /// original was (or beside its definition), as the SI Animation Script the original was (<see cref="SiScriptWriter"/>).
-/// Some shipped definitions changed after the animations were last compiled; a definition that does not compile to the
-/// shipped entries is replaced by the definition decompiled from them, so the sources rebuild the animations the game
-/// shipped.
+/// Some archived definitions are an older text version than the shipped compiled animations; a definition that does
+/// not compile to the shipped entries is replaced by the definition decompiled from them, so the sources rebuild the
+/// animations the game shipped.
 /// </summary>
 internal static class AnimationSources
 {
@@ -29,29 +29,34 @@ internal static class AnimationSources
     }
 
     /// <summary>All repair compilations share an allowance for repeated source decoding and compiled-package work.</summary>
-    private sealed class RepairWork(long maximum)
+    internal sealed class RepairWork(long maximum)
     {
         private long used;
+        internal long Remaining => maximum - used;
+        internal IOException Exceeded(Exception? inner = null) => new($"Animation reconstruction exceeds its {maximum:N0}-unit definition-repair work limit; reconstruct from the original game files or split the animation definitions into smaller missions.", inner);
         public void Charge(long count)
         {
             if (count < 0 || count > maximum - used)
-                throw new IOException($"Animation reconstruction exceeds its {maximum:N0}-unit definition-repair work limit; reconstruct from the original game files or split the animation definitions into smaller missions.");
+                throw Exceeded();
             used += count;
         }
     }
-    private sealed class RepairFiles(IProjectFiles files, RepairWork work) : IProjectFiles
+    internal sealed class RepairFiles(IProjectFiles files, RepairWork work) : IProjectFiles
     {
         public bool Exists(string relative) => files.Exists(relative);
-        public byte[] Read(string relative, CancellationToken token)
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
         {
-            byte[] bytes = files.Read(relative, token);
+            token.ThrowIfCancellationRequested();
+            byte[] bytes;
+            try { bytes = files.Read(relative, token, limits.WithMaximum(work.Remaining)); }
+            catch (InvalidDataException ex) when (work.Remaining < limits.MaximumBytes) { throw work.Exceeded(ex); }
             work.Charge(bytes.LongLength); // Before the compiler decodes/clones this source, on every compilation.
             return bytes;
         }
     }
 
     /// <summary>The files written so far over the project on disk.</summary>
-    private sealed class Overlay(IProjectFiles project, ReconstructionBudget budget) : IProjectFiles
+    internal sealed class Overlay(IProjectFiles project, ReconstructionBudget budget) : IProjectFiles
     {
         public Dictionary<string, byte[]> Written { get; } = new(StringComparer.OrdinalIgnoreCase);
         public void Write(string path, string text, Encoding encoding)
@@ -60,14 +65,22 @@ internal static class AnimationSources
             Written[path] = encoding.GetBytes(text);
         }
         public bool Exists(string relative) => Written.ContainsKey(relative) || project.Exists(relative);
-        public byte[] Read(string relative, CancellationToken token) => Written.TryGetValue(relative, out var bytes) ? bytes : project.Read(relative, token);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!Written.TryGetValue(relative, out var bytes)) return project.Read(relative, token, limits);
+            limits.Validate(bytes);
+            return bytes;
+        }
     }
 
     /// <param name="status">Told what is being done: each keyframe script as it starts being written (from worker threads),
     /// then each mission's check of its rebuilt animations.</param>
-    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token, Action<SourceStage, string>? status = null, long maximumRetainedBytes = ReconstructionBudget.MaximumBytes, long maximumRepairWork = MaximumRepairWork)
+    public static List<WorldSources.Output> Reconstruct(IReadOnlyList<MissionAnimation> missions, IProjectFiles project, List<string> notes, CancellationToken token, Action<SourceStage, string>? status = null, long maximumRetainedBytes = ReconstructionBudget.MaximumBytes, long maximumRepairWork = MaximumRepairWork,
+        int maximumDefinitionNodes = ZrdText.MaximumNodes)
     {
         ReconstructionBudget budget = new(maximumRetainedBytes);
+        AnimationDefinitionBudget definitionBudget = new(token, budget.Retain, maximumDefinitionNodes);
         RepairWork repairWork = new(maximumRepairWork);
         Overlay files = new(project, budget);
         HashSet<(string, int)> attempted = [];
@@ -98,7 +111,7 @@ internal static class AnimationSources
             HashSet<string> touched = new(StringComparer.OrdinalIgnoreCase); List<string> order = [];
             void Touch(string path) { if (touched.Add(path)) order.Add(path); }
             foreach (var (definition, digits, entry) in bindings)
-                foreach (var (item, ev) in ScriptEvents(definition.Item, entry))
+                foreach (var (item, ev) in ScriptEvents(definition.Item, entry, token))
                 {
                     string file = AnimationCompiler.Bind(item.TextOf("SCRIPT_FILENAME") ?? "", digits), target = AnimationCompiler.Bind(item.TextOf("NAME") ?? "", digits);
                     float rate = item.Item("SCRIPT_FRAME_RATE")?.Number() ?? 30;
@@ -110,10 +123,12 @@ internal static class AnimationSources
                     {
                         var keys = ev.Keyframes(token);
                         budget.Retain(256L * keys.Count); // Frame objects, copied channel data and their collection.
-                        frames = [.. keys]; track = AnimationScript.Decompile(frames, rate);
-                        if (track != null) budget.Retain(2L * track.Length);
+                        frames = [.. keys];
                     }
-                    catch (InvalidDataException) { frames = []; track = null; }
+                    catch (InvalidDataException) { frames = []; }
+                    // Decoding failures may omit a malformed track. Capacity refusal must abort reconstruction,
+                    // not masquerade as an off-grid track; the writer reserves its builder/string before allocation.
+                    track = AnimationScript.Decompile(frames, rate, token, SourceProject.MaximumSourceTextBytes, budget.Retain);
                     if (track == null) { notes.Add($"m{mission.Mission}: {entry.Name} moves {target} with keyframes that are not on the {rate}/s frame grid of {file}; the track was not reconstructed."); continue; }
                     string path = stamped.TryGetValue(file, out var stamp) ? stamp.Path : $"{Path.GetDirectoryName(definition.File)!.Replace('\\', '/')}/{file}";
                     // A stamp seen only by a later mission still dates a script written before.
@@ -137,8 +152,7 @@ internal static class AnimationSources
                 Parallel.For(0, order.Count, new ParallelOptions { CancellationToken = token, MaxDegreeOfParallelism = 4 }, i =>
                 {
                     status?.Invoke(SourceStage.Reconstructing, $"keyframe script {order[i]}");
-                    var result = WriteScript(order[i], scripts[order[i]], times.TryGetValue(order[i], out uint t) ? t : null, token);
-                    budget.Retain(2L * result.Text.Length);
+                    var result = WriteScript(order[i], scripts[order[i]], times.TryGetValue(order[i], out uint t) ? t : null, token, budget.Retain);
                     written[i] = result;
                 });
             }
@@ -154,7 +168,7 @@ internal static class AnimationSources
             }
 
             status?.Invoke(SourceStage.Validating, $"the m{mission.Mission} animations");
-            RepairDefinitions(mission, bindings, files, attempted, notes, repairWork, token);
+            RepairDefinitions(mission, bindings, files, attempted, notes, repairWork, definitionBudget, token);
         }
         notes.AddRange(noted.Select(path => scriptNotes[path]).OfType<string>());
         return files.Written.OrderBy(w => w.Key, StringComparer.Ordinal).Select(w => new WorldSources.Output(w.Key, w.Value)).ToList();
@@ -166,21 +180,22 @@ internal static class AnimationSources
     /// original's exporter wrote it, with the Softimage DKit messages of its date; scripts of other files (zStudio's
     /// exports carry no stamps) hold only their frames.
     /// </summary>
-    private static (string Text, string? Note) WriteScript(string path, ScriptTracks tracks, uint? time, CancellationToken token)
+    private static (string Text, string? Note) WriteScript(string path, ScriptTracks tracks, uint? time, CancellationToken token, Action<long> reserveText)
     {
         var objects = tracks.Ordered.Select(t => t.Object).ToList();
         var ordered = SourceOrder(objects).Select(name => tracks.ByObject[name]).ToList();
         SiScriptWriter.Layout layout = new(Version(time), !MessagesFollowFrames(path, time));
-        try { return (SiScriptWriter.Write([.. ordered.Select(t => new SiScriptWriter.Track(t.Object, t.Frames, t.Rate))], layout, token), null); }
+        try { return (SiScriptWriter.Write([.. ordered.Select(t => new SiScriptWriter.Track(t.Object, t.Frames, t.Rate))], layout, token, reserveText: reserveText), null); }
         catch (InvalidDataException ex)
         {
-            string text = AnimationScript.Write(tracks.Ordered.Select(t => (t.Object, t.Text)), token);
+            string text = AnimationScript.Write(tracks.Ordered.Select(t => (t.Object, t.Text)), token, reserveText);
             var parsed = AnimationScript.Parse(Encoding.Latin1.GetBytes(text), path, token);
+            AnimationCompileWork work = new(token);
             foreach (var track in tracks.Ordered)
             {
                 token.ThrowIfCancellationRequested();
                 var keys = AnimationScript.Track(parsed, track.Object) ?? throw new InvalidDataException($"{path}: a reconstructed track is missing.");
-                var compiled = AnimationScript.Compile(keys, track.Rate, path, token);
+                var compiled = AnimationScript.Compile(keys, track.Rate, path, token, work);
                 if (compiled.Count != track.Frames.Count || !compiled.Zip(track.Frames).All(pair => SiScriptWriter.Same(pair.First, pair.Second)))
                     throw new InvalidDataException($"{path}: the reconstructed keyframe script does not compile back exactly.");
             }
@@ -231,15 +246,22 @@ internal static class AnimationSources
     }
 
     /// <summary>The definition's script items paired with the entry's keyframe events, sequence by sequence.</summary>
-    private static IEnumerable<(AnimationItem Item, AnimationEvent Event)> ScriptEvents(AnimationItem definition, AnimationEntry entry)
+    private static IEnumerable<(AnimationItem Item, AnimationEvent Event)> ScriptEvents(AnimationItem definition, AnimationEntry entry, CancellationToken token)
     {
         List<IEnumerable<AnimationItem>> items = [definition.Item("RESET_STATE")?.Items ?? [], .. definition.All("SEQUENCE_DEFINITION").Select(s => s.Items)];
         var compiled = entry.AllSequences.ToList();
         for (int s = 0; s < items.Count && s < compiled.Count; s++)
         {
-            var events = compiled[s].Events.Where(e => e.Type == 12).ToList();
-            var scriptItems = items[s].Where(i => i.Key == "OBJECT_MOTION_SI_SCRIPT").ToList();
-            for (int k = 0; k < scriptItems.Count && k < events.Count; k++) yield return (scriptItems[k], events[k]);
+            token.ThrowIfCancellationRequested();
+            using var scriptItems = items[s].Where(i => i.Key == "OBJECT_MOTION_SI_SCRIPT").GetEnumerator();
+            if (!scriptItems.MoveNext()) continue;
+            foreach (var ev in compiled[s].Events)
+            {
+                token.ThrowIfCancellationRequested();
+                if (ev.Type != 12) continue;
+                yield return (scriptItems.Current, ev);
+                if (!scriptItems.MoveNext()) break;
+            }
         }
     }
 
@@ -248,7 +270,7 @@ internal static class AnimationSources
     /// A replacement is kept only when every entry it produces then compiles exactly.
     /// </summary>
     private static void RepairDefinitions(MissionAnimation mission, List<(AnimationDefinition Definition, string Digits, AnimationEntry Entry)> bindings,
-        Overlay files, HashSet<(string, int)> attempted, List<string> notes, RepairWork work, CancellationToken token)
+        Overlay files, HashSet<(string, int)> attempted, List<string> notes, RepairWork work, AnimationDefinitionBudget budget, CancellationToken token)
     {
         string root = SourceBuilder.AnimationRoot($"m{mission.Mission}");
         long packageWork = mission.Package.Prefix.LongLength + mission.Package.Tail.LongLength
@@ -266,7 +288,7 @@ internal static class AnimationSources
         try { built = Compile(); }
         catch (InvalidDataException ex) { notes.Add($"m{mission.Mission}: the reconstructed animations do not compile ({ex.Message})."); return; }
         if (built.Entries.Count != mission.Package.Entries.Count) { notes.Add($"m{mission.Mission}: the reconstructed animations compile to {built.Entries.Count - 1} entries, not {mission.Package.Entries.Count - 1}."); return; }
-        var differing = Enumerable.Range(1, bindings.Count).Where(i => AnimationComparer.Difference(mission.Package.Entries[i], built.Entries[i]) != null).ToList();
+        var differing = Enumerable.Range(1, bindings.Count).Where(i => AnimationComparer.Difference(mission.Package.Entries[i], built.Entries[i], token) != null).ToList();
         var definitionMembers = Enumerable.Range(1, bindings.Count).GroupBy(i => bindings[i - 1].Definition)
             .ToDictionary(g => g.Key, g => g.ToList());
         foreach (var group in differing.GroupBy(i => (bindings[i - 1].Definition.File, bindings[i - 1].Definition.Ordinal)))
@@ -283,22 +305,26 @@ internal static class AnimationSources
                 foreach (int i in members)
                 {
                     var (_, digits, entry) = bindings[i - 1];
-                    var candidate = Generalize(Decompile(definition.Item, entry), definition.Item, digits);
-                    string candidateText = ZrdText.Write(new ZrdNode(Guid.Empty, ZrdKind.Array, 0, "", [candidate]), token);
+                    var candidate = Generalize(Decompile(definition.Item, entry, budget, token), definition.Item, digits, budget);
+                    budget.Node();
+                    var candidateRoot = new ZrdNode(Guid.Empty, ZrdKind.Array, 0, "", [candidate]);
+                    budget.Text(candidateRoot);
+                    string candidateText = ZrdText.Write(candidateRoot, token, SourceProject.MaximumSourceTextBytes);
                     if (text != null && text != candidateText) throw new InvalidDataException("its animations decompile to different definitions");
                     text = candidateText; items = candidate;
                 }
             }
             catch (InvalidDataException ex) { notes.Add($"{definition.File}: {Name(definition)} does not compile to the shipped animation and could not be rebuilt from it ({ex.Message}); it was kept as shipped."); continue; }
-            byte[] original = files.Read(definition.File, token);
-            var tree = AnimationDefinitionSet.ReplaceDefinition(AnimationDefinitionSet.Read(files, definition.File, token), definition.Ordinal, items!);
-            files.Write(definition.File, ZrdText.Write(tree, token), Encoding.ASCII);
+            byte[] original = files.Read(definition.File, token, ProjectReadLimits.Resource(SourceProject.MaximumSourceTextBytes));
+            var tree = AnimationDefinitionSet.ReplaceDefinition(AnimationDefinitionSet.Read(files, definition.File, token), definition.Ordinal, items!, budget);
+            budget.Text(tree);
+            files.Write(definition.File, ZrdText.Write(tree, token, SourceProject.MaximumSourceTextBytes), Encoding.ASCII);
             string? remaining;
             try
             {
                 built = Compile();
                 remaining = built.Entries.Count != mission.Package.Entries.Count ? $"{built.Entries.Count - 1} animations"
-                    : members.Select(i => AnimationComparer.Difference(mission.Package.Entries[i], built.Entries[i])).FirstOrDefault(d => d != null);
+                    : members.Select(i => AnimationComparer.Difference(mission.Package.Entries[i], built.Entries[i], token)).FirstOrDefault(d => d != null);
             }
             catch (InvalidDataException ex) { remaining = ex.Message; }
             bool exact = remaining == null;
@@ -314,33 +340,46 @@ internal static class AnimationSources
     private static string Name(AnimationDefinition definition) => definition.Item.TextOf("ANIMATION_NAME") ?? definition.Item.TextOf("NAME") ?? "(unnamed)";
 
     /// <summary>The entry decompiled, its keyframe events naming the script items of the original definition.</summary>
-    private static ZrdNode Decompile(AnimationItem original, AnimationEntry entry)
+    private static ZrdNode Decompile(AnimationItem original, AnimationEntry entry, AnimationDefinitionBudget budget, CancellationToken token)
     {
         Dictionary<AnimationEvent, AnimationItem> pairs = new(ReferenceEqualityComparer.Instance);
-        foreach (var (item, ev) in ScriptEvents(original, entry)) pairs[ev] = item;
+        foreach (var (item, ev) in ScriptEvents(original, entry, token)) { budget.Reserve(128); pairs[ev] = item; }
         return AnimationDecompiler.Definition(entry, ev =>
         {
             if (!pairs.TryGetValue(ev, out var item)) throw new InvalidDataException("a keyframe event has no script in the definition");
             return (item.TextOf("SCRIPT_FILENAME") ?? throw new InvalidDataException("a script event names no file"), item.Item("SCRIPT_FRAME_RATE")?.Number() ?? 30);
-        });
+        }, budget);
     }
 
     /// <summary>
     /// A decompiled definition written like the original: names that the original gave as patterns go back to their
     /// patterns, and a NAME listing several roots keeps its list.
     /// </summary>
-    private static ZrdNode Generalize(ZrdNode items, AnimationItem original, string digits)
+    private static ZrdNode Generalize(ZrdNode items, AnimationItem original, string digits, AnimationDefinitionBudget budget)
     {
         HashSet<string> patterns = [];
-        void Collect(ZrdNode node) { if (node.Kind == ZrdKind.String && node.Text.Contains('*')) patterns.Add(node.Text); foreach (var c in node.Children) Collect(c); }
+        void Collect(ZrdNode node)
+        {
+            budget.Visit();
+            if (node.Kind == ZrdKind.String && node.Text.Contains('*') && !patterns.Contains(node.Text))
+            { budget.Reserve(128L + 2L * node.Text.Length); patterns.Add(node.Text); }
+            foreach (var c in node.Children) Collect(c);
+        }
         if (original.Values != null) Collect(original.Values);
         Dictionary<string, string> bound = new(StringComparer.Ordinal);
-        foreach (string pattern in patterns) bound.TryAdd(AnimationCompiler.Bind(pattern, digits), pattern);
-        ZrdNode Map(ZrdNode node) => node.Kind == ZrdKind.String && bound.TryGetValue(node.Text, out var pattern) ? node with { Text = pattern }
-            : node.Kind == ZrdKind.Array ? node with { Children = node.Children.Select(Map).ToArray() } : node;
+        foreach (string pattern in patterns) { budget.Reserve(128L + 4L * pattern.Length); bound.TryAdd(AnimationCompiler.Bind(pattern, digits), pattern); }
+        ZrdNode Map(ZrdNode node)
+        {
+            budget.Visit();
+            if (node.Kind == ZrdKind.String && bound.TryGetValue(node.Text, out var pattern)) { budget.Node(pattern.Length); return node with { Text = pattern }; }
+            if (node.Kind != ZrdKind.Array) return node;
+            budget.Node(); budget.CopyChildren(node.Children.Count);
+            return node with { Children = node.Children.Select(Map).ToArray() };
+        }
         var result = Map(items);
         if (original.Item("NAME") is { } name && name.Scalars.Count > 1 && name.Values != null)
         {
+            budget.Node(); budget.CopyChildren(result.Children.Count);
             var children = result.Children.ToList();
             int at = children.FindIndex(c => c.Kind == ZrdKind.String && c.Text == "NAME");
             if (at >= 0 && at + 1 < children.Count) children[at + 1] = name.Values;

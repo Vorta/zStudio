@@ -80,8 +80,8 @@ public sealed class LoaderReviewFixTests
         pylon.Flags |= ZoneProbe.BoundsFlag; pylon.CachedBounds = new(new(-1024, -1, -1024), new(1024, 1, 1024));
         foreach (var kind in new[] { ZoneProbeKind.Point, ZoneProbeKind.Vehicle })
         {
-            Assert.Equal([7f], ZoneProbe.Probe(world, 150, 200, ZoneSet.Cleared, kind).Hits.Select(h => h.Height));
-            Assert.Empty(ZoneProbe.Probe(world, 150, 400, ZoneSet.Cleared, kind).Hits);
+            Assert.Equal([7f], ZoneProbe.Probe(world, 150, 200, ZoneSet.Cleared, kind, token: TestContext.Current.CancellationToken).Hits.Select(h => h.Height));
+            Assert.Empty(ZoneProbe.Probe(world, 150, 400, ZoneSet.Cleared, kind, token: TestContext.Current.CancellationToken).Hits);
         }
     }
 
@@ -91,7 +91,8 @@ public sealed class LoaderReviewFixTests
     {
         public Dictionary<string, byte[]> Files { get; } = files;
         public bool Exists(string relative) => Files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) => Files[relative];
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative]; limits.Validate(result); return result; }
     }
 
     private static byte[] Script(int mission, string loads, string before = "") => Encoding.ASCII.GetBytes($"""
@@ -176,7 +177,7 @@ public sealed class LoaderReviewFixTests
     /// <summary>Each slot's class and name, freed slots by their kept name.</summary>
     private static List<string> Slots(GameZWorld world)
     {
-        var slots = GameZWriter.NodeSlots(world).ToDictionary(p => p.Value, p => p.Key);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken).ToDictionary(p => p.Value, p => p.Key);
         int count = Math.Max(slots.Count == 0 ? 0 : slots.Keys.Max() + 1, world.FreedSlots.Count == 0 ? 0 : world.FreedSlots.Keys.Max() + 1);
         return [.. Enumerable.Range(0, count).Select(s => slots.TryGetValue(s, out var n) ? $"{s}:{n.Class}:{n.Name}" : world.FreedSlots.ContainsKey(s) ? $"{s}:freed" : $"{s}:-")];
     }
@@ -208,7 +209,8 @@ public sealed class LoaderReviewFixTests
         // Every reference names the file again, so the rebuilt world caches it where the shipped one did.
         Assert.Contains(outputs, o => o.Path == "data/m1/models/empty.gltf");
         foreach (string file in new[] { "early", "m1", "lamp" })
-            Assert.Contains("empty.gltf", Encoding.UTF8.GetString(outputs.Single(o => o.Path == $"data/m1/models/{file}.gltf").Bytes));
+            Assert.Contains(SourceMapZones.Parse(outputs.Single(o => o.Path == "data/m1/meta/zones.json").Bytes, Token).Assets
+                .Single(a => a.LogicalPath == $"data/m1/models/{file}.gltf").References, r => r.Spelling == "empty.gltf");
         Assert.Equal(Slots(shipped(1)), Slots(Rebuild(files, outputs, 1)));
     }
 
@@ -234,7 +236,9 @@ public sealed class LoaderReviewFixTests
             outputs.Select(o => o.Path).Where(p => p.EndsWith(".gltf", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
         // The rod's file is the unchanged one; the build gives every copy that rod, and the script marks the second again.
         var rodNode = System.Text.Json.Nodes.JsonNode.Parse(outputs.Single(o => o.Path == "data/m1/models/r.gltf").Bytes)!["nodes"]!.AsArray().Single(n => (string?)n!["name"] == "rod")!;
-        Assert.Null(rodNode["extras"]?[WorldGltf.Key]?["flags"]);
+        Assert.Equal("0x00000018", (string?)rodNode["extras"]?[WorldGltf.Key]?["flags"]);
+        Assert.True(SourceMapZones.Parse(outputs.Single(o => o.Path == "data/m1/meta/zones.json").Bytes, Token).Assets
+            .Single(a => a.LogicalPath == "data/m1/models/r.gltf").Profile.Nodes[0].Gate);
         var rebuilt = Rebuild(files, outputs, 1);
         Assert.Equal(Slots(shipped(1)), Slots(rebuilt));
         Assert.Empty(WorldComparer.Compare(shipped(1), rebuilt));
@@ -260,16 +264,20 @@ public sealed class LoaderReviewFixTests
         fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "SetModelDirectory ..\\data\\common\\models\r\nLoadGameGen pu012.flt pu012", StringComparison.Ordinal));
         Assert.False(Hidden("data/m1/models/pu012.gltf"));
         Assert.True(Hidden("data/common/models/pu012.gltf"));
-        // A mission whose scripts the build refuses loads nothing: scripts sourcing each other too deep, or too often (8
-        // scripts each sourcing the next 16 times would run 16^8 times, hours of work; the checkout stops where the build
-        // does, after a million instructions, in about a second).
+        // A mission with an invalid include depth loads nothing. An exhausted operation-wide allowance must instead
+        // refuse checkout: skipping that mission would continue with an incomplete pickup classification.
         fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "source m1.gs\r\nLoadGameGen pu012.flt pu012", StringComparison.Ordinal));
         Assert.False(Hidden("data/m1/models/pu012.gltf"));
         for (int i = 1; i <= 8; i++) fixture.Write($"gamegen/l{i}.gw", i < 8 ? string.Concat(Enumerable.Repeat($"source l{i + 1}.gw\r\n", 16)) : "set x 1\r\n");
         fixture.Write("gamegen/m1.gs", script.Replace("# no vehicles", "LoadGameGen pu012.flt pu012\r\nsource l1.gw", StringComparison.Ordinal));
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        Assert.False(Hidden("data/m1/models/pu012.gltf"));
-        Assert.InRange(watch.ElapsedMilliseconds, 0, 180_000);
+        string[] beforeCheckouts = Directory.GetDirectories(fixture.Path(SourceBlender.ExportFolder)).Order(StringComparer.Ordinal).ToArray();
+        byte[] beforeModel = File.ReadAllBytes(fixture.Path("data/m1/models/pu012.gltf"));
+        // Eight scripts sourcing the next sixteen times exceed the operand allowance before a million instructions.
+        var error = Assert.Throws<InvalidDataException>(() => Hidden("data/m1/models/pu012.gltf"));
+        Assert.Contains("aggregate executed operand storage or text work limit", error.Message);
+        Assert.Equal(beforeCheckouts, Directory.GetDirectories(fixture.Path(SourceBlender.ExportFolder)).Order(StringComparer.Ordinal));
+        Assert.Equal(beforeModel, File.ReadAllBytes(fixture.Path("data/m1/models/pu012.gltf")));
+        Assert.False(workspace.IsDirty);
     }
 
     [Fact]

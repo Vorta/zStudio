@@ -6,7 +6,7 @@ namespace Recoil.Zbd.Core.Sources;
 /// <summary>What a reconstruction wrote. Game files whose family is not reconstructed yet are listed, not copied.</summary>
 public sealed record SourceReconstructionReport(string Project, int SourceFiles, IReadOnlyDictionary<string, int> Families, IReadOnlyList<string> NotReconstructed, IReadOnlyList<string> Notes);
 
-/// <summary>Reconstruct the original source tree (data/, gamegen/) from a shipped or exported RECOIL data folder.</summary>
+/// <summary>Reconstruct the original source tree (data/, gamegen/) from the original shipped RECOIL data files.</summary>
 public static class SourceExtractor
 {
     public const int MaximumFiles = 10_000;
@@ -290,11 +290,14 @@ public static class SourceExtractor
 
         internal bool Contains(string path) => files.ContainsKey(path);
         internal byte[] Read(string path, CancellationToken token)
+            => Read(path, token, Worlds.ProjectReadLimits.Document);
+
+        internal byte[] Read(string path, CancellationToken token, Worlds.ProjectReadLimits limits)
         {
             if (!files.TryGetValue(path, out var expected) || expected == null) throw ChangedDuringRun(path);
             using var input = directories.OpenFile(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             if (input.Length != expected.Length) throw ChangedDuringRun(path);
-            byte[] bytes = SourceRead.All(input, FormatRegistry.MaximumDocumentBytes, path, token);
+            byte[] bytes = SourceRead.All(input, limits, path, token);
             if (JournalDigest.OfContent(bytes) != expected) throw ChangedDuringRun(path);
             return bytes;
         }
@@ -314,10 +317,10 @@ public static class SourceExtractor
                 try
                 {
                     if (content == null) { if (Exists(path)) failed.Add(Display(path)); continue; }
-                    switch (SourcePublisher.MoveIfContent(path, holding, content, directories))
+                    switch (SourcePublisher.MoveIfContent(path, holding, content, directories, removeMoved: true))
                     {
-                        case SourcePublisher.Moved.Done: directories.DeleteFile(holding); break;
-                        case SourcePublisher.Moved.Stranded: changed.Add(Display(holding)); break;
+                        case SourcePublisher.Moved.Done: break;
+                        case SourcePublisher.Moved.Stranded: failed.Add(Display(holding)); break;
                         default: if (Exists(path)) changed.Add(Display(path)); break;
                     }
                 }
@@ -537,11 +540,12 @@ public static class SourceExtractor
 
     /// <summary>Shipped files in a stable order, relative with forward slashes, with their size and modification time. Links are refused.</summary>
     /// <param name="maximumEntries">The files and folders the listing may visit (<see cref="SourceProject.MaximumScannedEntries"/>; smaller in tests).</param>
-    internal static List<Input> Corpus(string root, CancellationToken token = default, int maximumEntries = SourceProject.MaximumScannedEntries)
+    internal static List<Input> Corpus(string root, CancellationToken token = default, int maximumEntries = SourceProject.MaximumScannedEntries,
+        long inventoryLimit = InventoryBudget.MaximumUnits)
     {
         List<Input> files = [];
         // Folders count too: a tree of empty folders costs as much to walk as one of files.
-        SourceProject.ScanBudget budget = new(maximumEntries, maximum => new IOException($"The game data folder holds more than {maximum:N0} files and folders; choose the folder that holds the game's ZBD files."), token);
+        SourceProject.ScanBudget budget = new(maximumEntries, maximum => new IOException($"The game data folder holds more than {maximum:N0} files and folders; choose the folder that holds the game's ZBD files."), token, new(inventoryLimit));
         foreach (var info in SourceProject.Entries(root, budget, recurse: true))
         {
             if (info.Attributes.HasFlag(FileAttributes.ReparsePoint)) throw new IOException($"{info.FullName} is a link; reconstruct from a folder of regular files.");
@@ -552,6 +556,7 @@ public static class SourceExtractor
             files.Add(new(file.FullName, Path.GetRelativePath(root, file.FullName).Replace('\\', '/'), file.Length, file.LastWriteTimeUtc));
             if (files.Count > MaximumFiles) throw new IOException($"The game data folder has more than {MaximumFiles:N0} files.");
         }
+        budget.Rows(files.Count);
         return files.OrderBy(f => f.Relative, StringComparer.OrdinalIgnoreCase).ThenBy(f => f.Relative, StringComparer.Ordinal).ToList();
     }
 
@@ -806,6 +811,10 @@ public static class SourceExtractor
             public byte[] Read(string relative, CancellationToken token)
             {
                 return writes.Read(SourceProject.Resolve(root, relative), token);
+            }
+            public byte[] Read(string relative, CancellationToken token, Worlds.ProjectReadLimits limits)
+            {
+                return writes.Read(SourceProject.Resolve(root, relative), token, limits);
             }
         }
         /// <summary>A mission is multiplayer when its load script sources the shared multiplayer vehicle (support\bftmulti.gw).</summary>

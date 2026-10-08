@@ -227,14 +227,17 @@ public sealed class ScanTerrainRound7Tests
     {
         using (Project project = new())
         {
-            // Two hundred pieces lie on each other: two hundred surfaces with the same two megabytes of values, read back once
-            // (their overlaps take about 70 MB to find; reading the values back for each surface takes 400 MB more).
+            // Two hundred stacked surfaces would copy these two megabytes of values into400MB of output JSON.
+            // Planning must still read the shared values only once, then refuse before producing that output.
             JsonObject values = new() { ["flags"] = 2, ["note"] = new string('x', 2 << 20) };
-            var (plan, allocated) = Measured(Database(project, 200, values, flat: true));
+            var workspace = Database(project, 200, values, flat: true);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            var failure = Assert.Throws<InvalidDataException>(() => SourceTerrainConversion.Plan(workspace, Database1, NoReferences, Token));
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.True(allocated < 160L * 1024 * 1024, $"Planning allocated {allocated:N0} bytes.");
-            Assert.Equal(200, plan.Groups.Count);
-            Assert.All(plan.Groups, g => { Assert.Single(g.Nodes); Assert.True(JsonNode.DeepEquals(values, g.ModelValues)); });
-            Assert.Equal(Enumerable.Range(0, 200), plan.Groups.Select(g => g.Nodes[0]));
+            Assert.Contains("expanded JSON", failure.Message);
+            Assert.False(workspace.IsDirty);
+            Assert.Equal(0, workspace.Revision);
         }
         using (Project project = new())
         {

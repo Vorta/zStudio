@@ -43,9 +43,8 @@ internal static class Mw3MissionMcpChecks
             await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             await pipe.ConnectAsync(deadline.Token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: deadline.Token);
-            var page = await Call("scene_nodes", new() { ["preview"] = preview, ["query"] = "actor_1", ["limit"] = 200 });
-            Assert.Equal(200, page["total"]!.GetValue<int>()); Assert.Equal(200, page["items"]!.AsArray().Count);
-            foreach (var row in page["items"]!.AsArray())
+            var rows = await AllActors();
+            foreach (var row in rows)
             {
                 Assert.Equal(prefix, row!["Name"]!.GetValue<string>());
                 Assert.Equal(prefix, row["actor"]!["Name"]!.GetValue<string>());
@@ -92,8 +91,8 @@ internal static class Mw3MissionMcpChecks
             // and pinned Properties, before anything is serialized to the pipe.
             foreach (var item in mission.Actors)
                 mission.Scene.Nodes[item.Root].Metadata["large_fixture"] = new string('\u0001', 32768);
-            page = await Call("scene_nodes", new() { ["preview"] = preview, ["query"] = "actor_1", ["limit"] = 200 });
-            Assert.All(page["items"]!.AsArray(), row => Assert.True(row!["Metadata"]!["inspection_truncated"]!.GetValue<bool>()));
+            rows = await AllActors();
+            Assert.All(rows, row => Assert.True(row["Metadata"]!["inspection_truncated"]!.GetValue<bool>()));
             properties = await Call("scene_properties", new() { ["preview"] = preview, ["node"] = actor.Root, ["open"] = true });
             Assert.True(properties["Metadata"]!["inspection_truncated"]!.GetValue<bool>());
             pinned = await Call("properties_state", new());
@@ -101,6 +100,31 @@ internal static class Mw3MissionMcpChecks
             selected = await Call("scene_selection", new() { ["preview"] = preview, ["action"] = "select", ["node"] = actor.Root });
             Assert.True(selected["inspection_truncated"]!.GetValue<bool>());
             Assert.Equal(fixture.ReaderBytes, await File.ReadAllBytesAsync(fixture.ReaderPath, deadline.Token));
+
+            async Task<List<JsonNode>> AllActors()
+            {
+                List<JsonNode> rows = [];
+                int offset = 0;
+                while (true)
+                {
+                    var page = await Call("scene_nodes", new() { ["preview"] = preview, ["query"] = "actor_1", ["limit"] = 200, ["offset"] = offset });
+                    Assert.Equal(200, page["total"]!.GetValue<int>());
+                    Assert.Equal(offset, page["offset"]!.GetValue<int>());
+                    var items = page["items"]!.AsArray();
+                    Assert.InRange(items.Count, 1, 200);
+                    foreach (var item in items)
+                    {
+                        Assert.Equal(rows.Count, item!["actor"]!["CoordinateSource"]!["RecordIndex"]!.GetValue<int>());
+                        rows.Add(item);
+                    }
+                    if (page["nextOffset"] == null) break;
+                    int next = page["nextOffset"]!.GetValue<int>();
+                    Assert.Equal(offset + items.Count, next);
+                    offset = next;
+                }
+                Assert.Equal(200, rows.Count);
+                return rows;
+            }
 
             async Task<JsonNode> Call(string command, JsonObject arguments)
             {

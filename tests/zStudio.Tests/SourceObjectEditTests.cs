@@ -150,17 +150,17 @@ public sealed class SourceObjectEditTests
     public void ScriptTokensAndLinesChangeLosslessly()
     {
         string text = "# header\r\nset a 1\r\n  LoadGameGen x.flt x   # trailing\r\nObject3DTranslate 1.0,2.0 3.0\r\nQuit\r\n";
-        var syntax = GameGenScriptSyntax.Parse(text);
+        var syntax = GameGenScriptSyntax.Parse(text, TestContext.Current.CancellationToken);
         Assert.Equal("\r\n", syntax.Newline);
         Assert.Equal(["Object3DTranslate", "1.0", "2.0", "3.0"], syntax.Line(4).Tokens);
-        string replaced = syntax.ReplaceTokens(4, new Dictionary<int, string> { [1] = "7.5", [3] = "-1.0" });
+        string replaced = syntax.ReplaceTokens(4, new Dictionary<int, string> { [1] = "7.5", [3] = "-1.0" }, TestContext.Current.CancellationToken);
         Assert.Equal(text.Replace("1.0,2.0 3.0", "7.5,2.0 -1.0"), replaced);
-        string inserted = GameGenScriptSyntax.Parse(replaced).InsertLines(4, [["Object3DRotate", "0.0", "90.0", "0.0"]]);
+        string inserted = GameGenScriptSyntax.Parse(replaced, TestContext.Current.CancellationToken).InsertLines(4, [["Object3DRotate", "0.0", "90.0", "0.0"]], TestContext.Current.CancellationToken);
         Assert.Contains("# trailing\r\nObject3DRotate 0.0 90.0 0.0\r\nObject3DTranslate", inserted);
-        Assert.StartsWith("#   LoadGameGen", GameGenScriptSyntax.Parse(text).CommentOut(3)[(text.IndexOf("  LoadGameGen", StringComparison.Ordinal))..]);
-        Assert.Throws<InvalidDataException>(() => syntax.ReplaceTokens(4, new Dictionary<int, string> { [1] = "two words" }));
-        Assert.Throws<InvalidDataException>(() => syntax.ReplaceTokens(1, new Dictionary<int, string> { [0] = "x" }));
+        Assert.StartsWith("#   LoadGameGen", GameGenScriptSyntax.Parse(text, TestContext.Current.CancellationToken).CommentOut(3, TestContext.Current.CancellationToken)[(text.IndexOf("  LoadGameGen", StringComparison.Ordinal))..]);
+        Assert.Throws<InvalidDataException>(() => syntax.ReplaceTokens(4, new Dictionary<int, string> { [1] = "two words" }, TestContext.Current.CancellationToken));
+        Assert.Throws<InvalidDataException>(() => syntax.ReplaceTokens(1, new Dictionary<int, string> { [0] = "x" }, TestContext.Current.CancellationToken));
         // A file without a final newline gets one before an appended line.
-        Assert.Equal("Quit\nNewWorld w\n", GameGenScriptSyntax.Parse("Quit").InsertLines(2, [["NewWorld", "w"]]).Replace("\r\n", "\n"));
+        Assert.Equal("Quit\nNewWorld w\n", GameGenScriptSyntax.Parse("Quit", TestContext.Current.CancellationToken).InsertLines(2, [["NewWorld", "w"]], TestContext.Current.CancellationToken).Replace("\r\n", "\n"));
     }
 }

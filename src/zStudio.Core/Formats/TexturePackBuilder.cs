@@ -106,16 +106,21 @@ public static class TexturePackBuilder
     /// <summary><see cref="BuildFromSources(IReadOnlyList{PackSource}, TexturePackVariant, CancellationToken)"/> keeping at most <paramref name="retainedBytes"/> of decoded textures.</summary>
     internal static TexturePackBuild BuildFromSources(IReadOnlyList<PackSource> textures, TexturePackVariant variant, long retainedBytes, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         if (textures.Count > MaximumRecords) throw new InvalidDataException($"A texture pack holds at most {MaximumRecords:N0} textures.");
-        List<string> warnings = [];
+        BoundedDiagnostics warnings = new();
         var ordered = textures.OrderBy(t => t.SortKey, StringComparer.Ordinal).ThenBy(t => t.Name, StringComparer.Ordinal).ToArray();
         foreach (var t in ordered)
         {
+            token.ThrowIfCancellationRequested();
             TexturePackWriter.ValidateTextureName(t.Name);
             if (t.Width < 1 || t.Height < 1) throw new InvalidDataException($"{t.Name}: invalid image.");
         }
         foreach (var duplicate in ordered.GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+        {
+            token.ThrowIfCancellationRequested();
             warnings.Add($"{duplicate.Key} appears {duplicate.Count()} times; the engine uses the first ({duplicate.First().SortKey}).");
+        }
         bool threeD = variant.Kind != TexturePackKind.Interface;
         var modes = new TextureTransparency[ordered.Length];
         bool Paletted(int i) => variant.Kind == TexturePackKind.Software && !ordered[i].Direct;
@@ -189,7 +194,10 @@ public static class TexturePackBuilder
         }
         FormatRegistry.ValidateDocumentSize(output.Length);
         byte[] bytes = output.Length == output.Capacity ? output.GetBuffer() : output.ToArray();
-        return new(bytes, stored, pages.Count, warnings) { FullSizeBytes = fullSize };
+        var messages = warnings.Snapshot();
+        // Result consumers preview only the first few warnings. Keep an aggregate omission visible there too.
+        if (messages.Remove(BoundedDiagnostics.OmissionNotice)) messages.Insert(0, BoundedDiagnostics.OmissionNotice);
+        return new(bytes, stored, pages.Count, messages) { FullSizeBytes = fullSize };
     }
 
     /// <summary>Decodes a texture's master, which must have the size its source gave.</summary>
@@ -231,8 +239,8 @@ public static class TexturePackBuilder
             : variant.BudgetBytes is { } budget ? $"Give the pack a budget below {FormatRegistry.MaximumDocumentBytes >> 20} MiB (it has {budget >> 20} MiB) in its build profile"
             : "Give the pack a budget or a smaller largest side in a build profile, or use fewer or smaller textures";
         var largest = Enumerable.Range(0, sizes.Length).OrderByDescending(i => (long)sizes[i].Width * sizes[i].Height).ThenBy(i => i).Take(8)
-            .Select(i => $"{ordered[i].Name} ({sizes[i].Width} × {sizes[i].Height}{(ordered[i].File is { } file ? $", {file}" : "")})");
-        throw new InvalidDataException($"{variant.FileName} would take {(texelsOnly ? "at least " : "")}{(total + (1 << 20) - 1) >> 20} MiB with its textures at the sizes it stores, "
+            .Select(i => $"{ordered[i].Name} ({sizes[i].Width} × {sizes[i].Height}{(ordered[i].File is { } file ? $", {JsonData.ShownText(file, 192)}" : "")})");
+        throw new InvalidDataException($"{JsonData.ShownText(variant.FileName, 128)} would take {(texelsOnly ? "at least " : "")}{(total + (1 << 20) - 1) >> 20} MiB with its textures at the sizes it stores, "
             + $"more than the {FormatRegistry.MaximumDocumentBytes >> 20} MiB a pack file can hold. {advice}. The largest it stores: {string.Join(", ", largest)}.");
     }
 
@@ -266,7 +274,7 @@ public static class TexturePackBuilder
     /// Halves textures in rounds, each round halving the longer axis of every texture still above the minimum (largest
     /// cost first), until the pack fits. Every texture keeps its share of detail; the result is deterministic.
     /// </summary>
-    private static void Fit((int Width, int Height)[] sizes, Func<int, int, int, long> cost, long budget, TexturePackVariant variant, CancellationToken token, List<string> warnings)
+    private static void Fit((int Width, int Height)[] sizes, Func<int, int, int, long> cost, long budget, TexturePackVariant variant, CancellationToken token, BoundedDiagnostics warnings)
     {
         long total = 0; for (int i = 0; i < sizes.Length; i++) total += cost(i, sizes[i].Width, sizes[i].Height);
         while (total > budget)

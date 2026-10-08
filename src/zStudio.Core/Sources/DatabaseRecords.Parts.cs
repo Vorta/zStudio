@@ -304,7 +304,7 @@ internal static partial class DatabaseRecords
                 Content[reference] = [.. reference.Children];
             }
             try { Records(Root, order[0]); }
-            catch (InvalidDataException) { return false; }
+            catch (InvalidDataException) when (!retainedBudget.Exhausted) { return false; }
             return at >= order.Count - 1;
         }
 
@@ -401,8 +401,26 @@ internal static partial class DatabaseRecords
                 if (InOrder(node).ToList() is var made && !made.SequenceEqual(node.Children)) { node.Children.Clear(); node.Children.AddRange(made); }
         }
 
-        private bool HasReference(WorldNode node) => WorldAssembler.Subtree(node).Any(isModelReference);
-        private bool DeletedUnder(int x, int ancestor) { while (deletedParent.TryGetValue(x, out int p)) { if (p == ancestor) return true; x = p; } return false; }
+        private bool HasReference(WorldNode node)
+        {
+            CandidateWork();
+            foreach (var child in WorldAssembler.Subtree(node))
+            {
+                CandidateWork();
+                if (isModelReference(child)) return true;
+            }
+            return false;
+        }
+        private bool DeletedUnder(int x, int ancestor)
+        {
+            while (true)
+            {
+                CandidateWork();
+                if (!deletedParent.TryGetValue(x, out int p)) return false;
+                if (p == ancestor) return true;
+                x = p;
+            }
+        }
 
         /// <summary>Whether a copy of the part <paramref name="reference"/> refers to follows its next record <paramref name="next"/>.</summary>
         private bool CopyStarts(WorldNode next, int reference)
@@ -543,7 +561,7 @@ internal static partial class DatabaseRecords
                     Content[node] = node.Children.ToList();
                     if (Pops(reference.Name, content, out var trial, out var freedOrder) && FreesNext(freedOrder, exact: true))
                     {
-                        var own = reference.Children.Where(c => !content.Contains(c)).ToList();
+                        var own = OwnRecords(reference, content);
                         reference.Children.Clear(); reference.Children.AddRange(content); reference.Children.AddRange(own);
                         table = trial;
                         return true;
@@ -658,6 +676,21 @@ internal static partial class DatabaseRecords
             }
         }
         private IReadOnlyList<WorldNode> ContentOf(WorldNode node) => Content.TryGetValue(node, out var content) ? content : isModelReference(node) && !Made.ContainsKey(node) ? node.Children : [];
+
+        // A candidate's content may change after a successful trim/pop, so keep this membership index local.
+        // Preserve the reference's child order and duplicate occurrences; names do not identify copied records.
+        private List<WorldNode> OwnRecords(WorldNode reference, IReadOnlyList<WorldNode> content)
+        {
+            HashSet<WorldNode> copied = new(ReferenceEqualityComparer.Instance);
+            foreach (var node in content) { CandidateWork(); copied.Add(node); }
+            List<WorldNode> own = [];
+            foreach (var child in reference.Children)
+            {
+                CandidateWork();
+                if (!copied.Contains(child)) own.Add(child);
+            }
+            return own;
+        }
         /// <summary>
         /// Whether the loader caches what the node references: a part, or a model reference, also one to a file without nodes
         /// (no content, but a cache and a copy all the same, as the build has it).
@@ -671,18 +704,30 @@ internal static partial class DatabaseRecords
         {
             // A walk passing over records made before the fresh slots: their references were among the first (those not
             // inside another reference's content).
-            HashSet<WorldNode>? held = prefixReference == null && tolerant ? new(live.Values.Where(isModelReference).SelectMany(o => o.Children), ReferenceEqualityComparer.Instance) : null;
-            List<WorldNode> found = prefixReference != null ? [prefixReference] : held != null ? [.. live.Where(p => !position.ContainsKey(p.Key) && isModelReference(p.Value) && !held.Contains(p.Value)).OrderBy(p => p.Key).Select(p => p.Value)] : [];
+            HashSet<WorldNode>? held = null;
+            if (prefixReference == null && tolerant)
+            {
+                held = new(ReferenceEqualityComparer.Instance);
+                foreach (var node in live.Values)
+                {
+                    CandidateWork();
+                    if (isModelReference(node)) foreach (var child in node.Children) { CandidateWork(); held.Add(child); }
+                }
+            }
+            List<WorldNode> found = prefixReference != null ? [prefixReference] : held != null ? [.. live.Where(p =>
+            {
+                CandidateWork(2); // Filtering plus a retained/sorted candidate, before enumeration builds the list.
+                return !position.ContainsKey(p.Key) && isModelReference(p.Value) && !held.Contains(p.Value);
+            }).OrderBy(p => p.Key).Select(p => p.Value)] : [];
             HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
             void Walk(WorldNode node)
             {
-                token.ThrowIfCancellationRequested();
+                CandidateWork();
                 if (!seen.Add(node)) return;
                 if (Content.TryGetValue(node, out var content))
                 {
                     found.Add(node);
-                    HashSet<WorldNode> inner = new(content, ReferenceEqualityComparer.Instance);
-                    foreach (var child in node.Children.Where(c => !inner.Contains(c))) Walk(child);
+                    foreach (var child in OwnRecords(node, content)) Walk(child);
                     return;
                 }
                 if (!Made.ContainsKey(node) && isModelReference(node)) { found.Add(node); return; }
@@ -835,14 +880,36 @@ internal static partial class DatabaseRecords
             Dictionary<WorldNode, WorldNode> original = new(ReferenceEqualityComparer.Instance);
             // Each node's content once, as a set: asked per child, a wide part would cost its width for every child.
             Dictionary<WorldNode, HashSet<WorldNode>> contents = new(ReferenceEqualityComparer.Instance);
-            HashSet<WorldNode> ContentSet(WorldNode node) => contents.TryGetValue(node, out var found) ? found : contents[node] = new(ContentOf(node), ReferenceEqualityComparer.Instance);
+            Dictionary<WorldNode, IReadOnlyList<WorldNode>> copies = new(ReferenceEqualityComparer.Instance);
+            HashSet<WorldNode> ContentSet(WorldNode node)
+            {
+                if (contents.TryGetValue(node, out var found)) return found;
+                CandidateWork();
+                found = new(ReferenceEqualityComparer.Instance);
+                foreach (var child in ContentOf(node)) { CandidateWork(); found.Add(child); }
+                return contents[node] = found;
+            }
+            IReadOnlyList<WorldNode> CopyContent(WorldNode node)
+            {
+                if (copies.TryGetValue(node, out var found)) return found;
+                CandidateWork();
+                List<WorldNode> content = [];
+                if (original.TryGetValue(node, out var source))
+                    foreach (var child in node.Children)
+                    {
+                        CandidateWork();
+                        if (original.TryGetValue(child, out var childSource) && ContentSet(source).Contains(childSource)) content.Add(child);
+                    }
+                // This cache replay never changes child/content membership. Repeated loader callbacks can reuse it.
+                return copies[node] = content;
+            }
             var load = budget.Load();
             var root = OriginalLoader.Mirror(name, content, original, ContentOf, token, load);
             OriginalLoader.Load(root, root.Children.ToList(), root.Children.ToList(), new()
             {
                 Allocate = n => taken[n] = table.Take(),
                 Free = n => table.Push(taken[n]),
-                Content = m => original.TryGetValue(m, out var o) ? [.. m.Children.Where(c => original.TryGetValue(c, out var oc) && ContentSet(o).Contains(oc))] : [],
+                Content = CopyContent,
                 File = m => original.TryGetValue(m, out var o) ? Key(o) : m.Name,
                 IsReference = m => original.TryGetValue(m, out var o) && Cached(o),
                 Token = token, Mirrored = load,
@@ -958,7 +1025,7 @@ internal static partial class DatabaseRecords
                 if (Content.TryGetValue(reference, out var partContent) && Pops(reference.Name, partContent, out var popped, out var poppedOrder) && FreesNext(poppedOrder, exact: true))
                 {
                     // The part's own records follow its content in the reference.
-                    var own = reference.Children.Where(c => !partContent.Contains(c)).ToList();
+                    var own = OwnRecords(reference, partContent);
                     reference.Children.Clear(); reference.Children.AddRange(partContent); reference.Children.AddRange(own);
                     table = popped; cached.Add(key); lastTrigger = i; continue;
                 }
@@ -1024,12 +1091,13 @@ internal static partial class DatabaseRecords
             WorldNode? holder = Made.ContainsKey(next) ? null : HolderOf(next);
             if (!Made.ContainsKey(next) && holder == null) return false;
             // The part's own records follow its content in the reference.
-            var own = reference.Children.Where(c => !content.Contains(c)).ToList();
+            var own = OwnRecords(reference, content);
             // The copy's records in order, each with the list that holds it; the plain objects it ends with may have been made
             // after it, even where the copy's last groups held them (they closed before them).
             List<(WorldNode Node, List<WorldNode> In)> items = [];
             void Items(List<WorldNode> list)
             {
+                CandidateWork(1 + 2 * list.Count); // Snapshot and retained candidate entries, before either grows.
                 foreach (var node in list.ToList())
                 {
                     items.Add((node, list));
@@ -1041,8 +1109,9 @@ internal static partial class DatabaseRecords
             while (trailing < items.Count && items[^(trailing + 1)] is var (last, _) && !Made.ContainsKey(last) && !HasReference(last)) trailing++;
             for (int cut = 1; cut <= trailing; cut++)
             {
+                CandidateWork(1 + cut);
                 var moved = items.Skip(items.Count - cut).ToList();
-                foreach (var (node, list) in moved) list.Remove(node);
+                foreach (var (node, list) in moved) RemoveCandidate(list, node);
                 var trial = table.Clone();
                 bool fits = FreesNext(Cache(reference.Name, content, trial), exact: true);
                 if (fits) table = trial;
@@ -1058,6 +1127,7 @@ internal static partial class DatabaseRecords
                     return true;
                 }
                 // Put them back where they were, in order.
+                CandidateWork(1 + 2 * moved.Count);
                 foreach (var group in moved.GroupBy(m => m.In)) group.Key.AddRange(group.Select(m => m.Node));
             }
             return false;
@@ -1075,10 +1145,11 @@ internal static partial class DatabaseRecords
             var content = Content[reference];
             WorldNode? next = nextRecord.GetValueOrDefault(reference);
             WorldNode? holder = next == null || Made.ContainsKey(next) ? null : HolderOf(next);
-            var own = reference.Children.Where(c => !content.Contains(c)).ToList();
+            var own = OwnRecords(reference, content);
             List<(WorldNode Node, List<WorldNode> In)> items = [];
             void Items(List<WorldNode> list)
             {
+                CandidateWork(1 + 2 * list.Count);
                 foreach (var node in list.ToList())
                 {
                     items.Add((node, list));
@@ -1091,8 +1162,9 @@ internal static partial class DatabaseRecords
                 while (trailing < items.Count && items[^(trailing + 1)] is var (last, _) && !Made.ContainsKey(last) && !HasReference(last)) trailing++;
             for (int cut = 0; cut <= trailing; cut++)
             {
+                CandidateWork(1 + cut);
                 var moved = items.Skip(items.Count - cut).ToList();
-                foreach (var (node, list) in moved) list.Remove(node);
+                foreach (var (node, list) in moved) RemoveCandidate(list, node);
                 List<WorldNode?> paths = [null, .. OwnReferences(content).GroupBy(r => r.Name.ToLowerInvariant()).Where(g => g.Count() > 1).SelectMany(g => ByOwnModels(g.Skip(1), c => g.TakeWhile(e => e != c)))];
                 foreach (var path in paths)
                 {
@@ -1111,6 +1183,7 @@ internal static partial class DatabaseRecords
                     }
                     if (path != null) SecondPaths.Remove(path);
                 }
+                CandidateWork(1 + 2 * moved.Count);
                 foreach (var group in moved.GroupBy(m => m.In)) group.Key.AddRange(group.Select(m => m.Node));
             }
             return false;
@@ -1136,18 +1209,20 @@ internal static partial class DatabaseRecords
         private WorldNode? Immediate(WorldNode failing)
         {
             Dictionary<WorldNode, WorldNode> up = new(ReferenceEqualityComparer.Instance);
-            void Up(WorldNode n) { foreach (var c in n.Children) { up[c] = n; Up(c); } }
+            void Up(WorldNode n) { CandidateWork(); foreach (var c in n.Children) { up[c] = n; Up(c); } }
             Up(Root);
             List<WorldNode> chain = [];
-            for (var q = failing; up.TryGetValue(q, out var p) && p != Root; q = p) if (Made.ContainsKey(p)) chain.Insert(0, p);
+            for (var q = failing; up.TryGetValue(q, out var p) && p != Root; q = p) { CandidateWork(); if (Made.ContainsKey(p)) chain.Insert(0, p); }
             if (Made.ContainsKey(failing)) chain.Add(failing);
             foreach (var group in chain)
             {
+                CandidateWork();
                 int groupSlot = Made[group], from = position[groupSlot];
-                int spanEnd = from; void Span(int x) { spanEnd = Math.Max(spanEnd, position[x]); foreach (var c in deletedChildren.GetValueOrDefault(x, [])) Span(c); }
+                int spanEnd = from; void Span(int x) { CandidateWork(); spanEnd = Math.Max(spanEnd, position[x]); foreach (var c in deletedChildren.GetValueOrDefault(x, [])) Span(c); }
                 Span(groupSlot);
                 foreach (int end in deletedChildren[groupSlot].Skip(1).Select(c => position[c] - 1).Append(spanEnd))
                 {
+                    CandidateWork();
                     var items = Range(from + 1, end);
                     if (items.Count == 0) continue;
                     var trial = table.Clone();
@@ -1164,7 +1239,13 @@ internal static partial class DatabaseRecords
                     HashSet<WorldNode> stale = new(Made.Where(p => inRange.Contains(p.Value) && !fresh.Contains(p.Key)).Select(p => p.Key), ReferenceEqualityComparer.Instance);
                     bool InRange(WorldNode c) => stale.Contains(c) || (!Made.ContainsKey(c) && slot.TryGetValue(c, out int cs) && inRange.Contains(cs));
                     var own = group.Children.Where(c => !InRange(c)).ToList();
-                    void Strip(WorldNode n) { n.Children.RemoveAll(c => InRange(c) && !items.Contains(c)); foreach (var c in n.Children) if (Made.ContainsKey(c) && !fresh.Contains(c)) Strip(c); }
+                    HashSet<WorldNode> itemSet = new(ReferenceEqualityComparer.Instance);
+                    foreach (var item in items) { CandidateWork(); itemSet.Add(item); }
+                    void Strip(WorldNode n)
+                    {
+                        n.Children.RemoveAll(c => { CandidateWork(); return InRange(c) && !itemSet.Contains(c); });
+                        foreach (var c in n.Children) if (Made.ContainsKey(c) && !fresh.Contains(c)) Strip(c);
+                    }
                     Strip(Root);
                     foreach (var x in stale) { Made.Remove(x); Content.Remove(x); nextRecord.Remove(x); }
                     group.Children.Clear(); group.Children.AddRange(items); group.Children.AddRange(own);
@@ -1183,13 +1264,22 @@ internal static partial class DatabaseRecords
             List<WorldNode> items = [];
             for (int z = from; z <= to; z++)
             {
+                CandidateWork();
                 int x = order[z];
                 if (top.TryGetValue(x, out var o))
                 {
                     WorldNode? holder = null;
-                    for (int y = z - 1; y >= from && holder == null; y--) if (made.TryGetValue(order[y], out var open) && Open(order[y], z)) holder = open;
+                    for (int y = z - 1; y >= from && holder == null; y--)
+                    {
+                        // A wide run without a deleted group scans every earlier allocation. Charge even misses,
+                        // before probing: the next cache replay's node allowance cannot bound this triangular work.
+                        CandidateWork();
+                        if (made.TryGetValue(order[y], out var open) && Open(order[y], z)) holder = open;
+                    }
                     if (holder == null) items.Add(o); else holder.Children.Add(o);
-                    z += WorldAssembler.Subtree(o).Count() - 1;
+                    int count = 0;
+                    foreach (var _ in WorldAssembler.Subtree(o)) { CandidateWork(); count++; }
+                    z += count - 1;
                 }
                 else if (freed.Contains(x))
                 {
@@ -1200,13 +1290,30 @@ internal static partial class DatabaseRecords
             return items;
         }
 
+        private void RemoveCandidate(List<WorldNode> list, WorldNode node)
+        {
+            // Removal searches by identity then shifts the suffix. Charge both before List performs either scan.
+            CandidateWork(1 + 2 * list.Count);
+            list.Remove(node);
+        }
+
+        private void CandidateWork(int units = 1)
+        {
+            token.ThrowIfCancellationRequested();
+            retainedBudget.Take(units);
+        }
+
         private bool Open(int group, int z)
         {
             int last = position[group];
-            void Last(int q) { last = Math.Max(last, position[q]); foreach (var c in deletedChildren.GetValueOrDefault(q, [])) Last(c); }
+            void Last(int q) { CandidateWork(); last = Math.Max(last, position[q]); foreach (var c in deletedChildren.GetValueOrDefault(q, [])) Last(c); }
             Last(group);
             if (z < last) return true;
-            for (int q = last + 1; q < z; q++) if (freed.Contains(order[q]) && !DeletedUnder(order[q], group)) return false;
+            for (int q = last + 1; q < z; q++)
+            {
+                CandidateWork();
+                if (freed.Contains(order[q]) && !DeletedUnder(order[q], group)) return false;
+            }
             return true;
         }
 

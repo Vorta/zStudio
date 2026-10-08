@@ -25,7 +25,7 @@ public sealed class AnimationConnectorAttributeTests
         else
         {
             Assert.Contains(result.Warnings, warning => warning.Contains("from_pos was ignored.", StringComparison.Ordinal));
-            Assert.Null(AnimationComparer.Difference(baseline.Package.Entries[1], result.Package.Entries[1]));
+            Assert.Null(AnimationComparer.Difference(baseline.Package.Entries[1], result.Package.Entries[1], TestContext.Current.CancellationToken));
         }
     }
 
@@ -39,6 +39,7 @@ public sealed class AnimationConnectorAttributeTests
     private sealed class Files(byte[] bytes) : IProjectFiles
     {
         public bool Exists(string path) => true;
-        public byte[] Read(string path, CancellationToken token) => bytes;
+        public byte[] Read(string path, CancellationToken token) => Read(path, token, ProjectReadLimits.Document);
+        public byte[] Read(string path, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); limits.Validate(bytes); return bytes; }
     }
 }

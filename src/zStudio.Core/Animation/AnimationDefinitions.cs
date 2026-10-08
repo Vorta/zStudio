@@ -129,11 +129,16 @@ public sealed class AnimationDefinitionSet
     /// <summary>Total definition and keyframe input per compilation, including repeated reads, before parsing/retention.</summary>
     public const long MaximumSourceBytes = 64L * 1024 * 1024;
     public const int MaximumSourceNodes = ZrdText.MaximumNodes;
+    /// <summary>Aggregate search-path normalization, retained-index overhead and file-candidate construction work.</summary>
+    public const long MaximumPathWork = 64L * 1024 * 1024;
     private int reads;
     private long sourceBytes;
     private int sourceNodes;
     private readonly long maximumSourceBytes;
     private readonly int maximumSourceNodes;
+    private readonly long maximumPathWork;
+    private long pathWork;
+    private readonly HashSet<string> searchFolders = new(StringComparer.OrdinalIgnoreCase);
     public float Gravity { get; private set; } = -9.8f;
     /// <summary>Project folders searched for bare definition and keyframe script names, in order.</summary>
     public List<string> SearchPath { get; } = [];
@@ -145,16 +150,21 @@ public sealed class AnimationDefinitionSet
     private readonly IProjectFiles files;
     private readonly CancellationToken token;
 
-    private AnimationDefinitionSet(IProjectFiles files, CancellationToken token, long maximumSourceBytes, int maximumSourceNodes)
-    { this.files = files; this.token = token; this.maximumSourceBytes = maximumSourceBytes; this.maximumSourceNodes = maximumSourceNodes; }
+    private AnimationDefinitionSet(IProjectFiles files, CancellationToken token, long maximumSourceBytes, int maximumSourceNodes, long maximumPathWork)
+    {
+        this.files = files; this.token = token; this.maximumSourceNodes = maximumSourceNodes;
+        this.maximumSourceBytes = maximumSourceBytes is >= 0 and <= MaximumSourceBytes ? maximumSourceBytes : throw new ArgumentOutOfRangeException(nameof(maximumSourceBytes));
+        this.maximumPathWork = maximumPathWork is >= 0 and <= MaximumPathWork ? maximumPathWork : throw new ArgumentOutOfRangeException(nameof(maximumPathWork));
+    }
 
     /// <summary>Reads the definitions reachable from <paramref name="root"/> (a project path).</summary>
     public static AnimationDefinitionSet Load(IProjectFiles files, string root, CancellationToken token = default)
         => Load(files, root, MaximumSourceBytes, MaximumSourceNodes, token);
 
-    internal static AnimationDefinitionSet Load(IProjectFiles files, string root, long maximumSourceBytes, int maximumSourceNodes, CancellationToken token)
+    internal static AnimationDefinitionSet Load(IProjectFiles files, string root, long maximumSourceBytes, int maximumSourceNodes, CancellationToken token,
+        long maximumPathWork = MaximumPathWork)
     {
-        AnimationDefinitionSet set = new(files, token, maximumSourceBytes, maximumSourceNodes);
+        AnimationDefinitionSet set = new(files, token, maximumSourceBytes, maximumSourceNodes, maximumPathWork);
         set.Read(root, 0, true);
         return set;
     }
@@ -168,17 +178,18 @@ public sealed class AnimationDefinitionSet
         var document = Parse(path); int ordinal = 0;
         foreach (var top in AnimationItem.Parse(document, path).Where(i => i.Key == "ANIMATION_DEFINITIONS"))
             foreach (var item in top.Items)
+            {
+                token.ThrowIfCancellationRequested();
                 switch (item.Key)
                 {
                     case "GRAVITY" when root: Gravity = item.Number(); break;
                     case "ANIMATION_PATH" when root:
-                        foreach (string part in item.Text().Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                            if (!part.Contains('\0') && WorldAssembler.ProjectPath(part) is { } folder) { if (!SearchPath.Contains(folder, StringComparer.OrdinalIgnoreCase)) SearchPath.Add(folder); }
-                            else Warn($"{JsonData.ShownText(path)}: ANIMATION_PATH folder '{JsonData.ShownText(part).Replace('\0', '?')}' is outside the project and is not searched.");
+                        AddSearchPaths(item.Text(), path);
                         break;
                     case "ANIMATION_LIST":
                         foreach (var entry in item.Items)
                         {
+                            token.ThrowIfCancellationRequested();
                             if (entry.Key == "ANIMATION_DEFINITION_FILE")
                             {
                                 // The original compiler skipped files that did not exist (they have no source stamp).
@@ -194,6 +205,35 @@ public sealed class AnimationDefinitionSet
                         }
                         break;
                 }
+            }
+    }
+
+    private void ReservePathWork(long units)
+    {
+        token.ThrowIfCancellationRequested();
+        if (units > maximumPathWork - pathWork)
+            throw new InvalidDataException("Animation search paths exceed the aggregate directory and file lookup work limit. Reduce ANIMATION_PATH folders or repeated definition/keyframe lookups.");
+        pathWork += units;
+    }
+
+    private void AddSearchPaths(string value, string path)
+    {
+        // Reserve the scan before splitting; enumerate spans so a delimiter-heavy operand never allocates a
+        // complete substring array. The per-part charge bounds normalization, hashing and retained index entries.
+        ReservePathWork(value.Length);
+        foreach (var range in value.AsSpan().Split(';'))
+        {
+            token.ThrowIfCancellationRequested();
+            var part = value.AsSpan()[range].Trim();
+            if (part.IsEmpty) continue;
+            ReservePathWork(64L + 4L * part.Length);
+            string text = part.ToString();
+            if (!part.Contains('\0') && WorldAssembler.ProjectPath(text) is { } folder)
+            {
+                if (searchFolders.Add(folder)) SearchPath.Add(folder);
+            }
+            else Warn($"{JsonData.ShownText(path)}: ANIMATION_PATH folder '{JsonData.ShownText(text).Replace('\0', '?')}' is outside the project and is not searched.");
+        }
     }
 
     private ZrdNode Parse(string path)
@@ -211,7 +251,14 @@ public sealed class AnimationDefinitionSet
 
     private byte[] ReadSource(string path)
     {
-        byte[] bytes = files.Read(path, token);
+        token.ThrowIfCancellationRequested();
+        // Definitions may be text or compiled zReader data, but both have this source's 16 MiB cap.
+        long remaining = maximumSourceBytes - sourceBytes;
+        var limits = ProjectReadLimits.Resource(Math.Min(SourceProject.MaximumSourceTextBytes, remaining));
+        byte[] bytes;
+        try { bytes = files.Read(path, token, limits); }
+        catch (InvalidDataException ex) when (remaining < SourceProject.MaximumSourceTextBytes)
+        { throw new InvalidDataException($"{JsonData.ShownText(path)}: animation definitions and keyframe scripts together exceed {maximumSourceBytes:N0} bytes; split the mission's animation sources.", ex); }
         if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"{path} exceeds {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB.");
         if ((sourceBytes += bytes.Length) > maximumSourceBytes)
             throw new InvalidDataException($"{path}: animation definitions and keyframe scripts together exceed {maximumSourceBytes:N0} bytes; split the mission's animation sources.");
@@ -220,7 +267,7 @@ public sealed class AnimationDefinitionSet
 
     /// <summary>A definition file's zReader tree as stored (text or compiled).</summary>
     public static ZrdNode Read(IProjectFiles files, string path, CancellationToken token)
-        => ReadBytes(files.Read(path, token), path, token);
+        => ReadBytes(files.Read(path, token, ProjectReadLimits.Resource(SourceProject.MaximumSourceTextBytes)), path, token);
 
     private static ZrdNode ReadBytes(byte[] bytes, string path, CancellationToken token)
     {
@@ -297,7 +344,10 @@ public sealed class AnimationDefinitionSet
     /// <paramref name="root"/> (a file's tree) with its <paramref name="ordinal"/>-th animation definition's items
     /// replaced by <paramref name="items"/>.
     /// </summary>
-    public static ZrdNode ReplaceDefinition(ZrdNode root, int ordinal, ZrdNode items)
+    public static ZrdNode ReplaceDefinition(ZrdNode root, int ordinal, ZrdNode items, CancellationToken token = default)
+        => ReplaceDefinition(root, ordinal, items, new AnimationDefinitionBudget(token));
+
+    internal static ZrdNode ReplaceDefinition(ZrdNode root, int ordinal, ZrdNode items, AnimationDefinitionBudget budget)
     {
         int seen = 0; bool done = false;
         var result = Walk(root, 0);
@@ -305,10 +355,13 @@ public sealed class AnimationDefinitionSet
         return result;
         ZrdNode Walk(ZrdNode node, int level)
         {
+            budget.Visit();
             if (node.Kind != ZrdKind.Array || level > 8) return node;
+            budget.CopyChildren(node.Children.Count);
             var children = node.Children.ToList(); bool changed = false;
             for (int i = 0; i < children.Count; i++)
             {
+                budget.Visit();
                 if (children[i].Kind == ZrdKind.String && i + 1 < children.Count && children[i + 1].Kind == ZrdKind.Array)
                 {
                     string key = children[i].Text;
@@ -321,7 +374,9 @@ public sealed class AnimationDefinitionSet
                 }
                 else if (children[i].Kind == ZrdKind.Array && level == 0) { var next = Walk(children[i], 0); if (!ReferenceEquals(next, children[i])) { children[i] = next; changed = true; } }
             }
-            return changed ? node with { Children = children } : node;
+            if (!changed) return node;
+            budget.Node();
+            return node with { Children = children };
         }
     }
 
@@ -332,6 +387,7 @@ public sealed class AnimationDefinitionSet
     /// </summary>
     public string? Resolve(string name, string from)
     {
+        ReservePathWork(1L + 8L * name.Length + from.Length);
         if (name.Contains('\0')) throw new InvalidDataException($"{JsonData.ShownText(from)}: '{JsonData.ShownText(name).Replace('\0', '?')}' is not a file name.");
         string normalized = name.Replace('\\', '/');
         if (normalized.Contains('/'))
@@ -339,12 +395,28 @@ public sealed class AnimationDefinitionSet
             // The shipped root definitions doubled some separators; the file system ignores empty segments.
             while (normalized.Contains("//")) normalized = normalized.Replace("//", "/");
             string? project = WorldAssembler.ProjectPath(normalized);
-            if (project != null && files.Exists(project)) return project;
+            if (project != null && Exists(project)) return project;
             normalized = normalized[(normalized.LastIndexOf('/') + 1)..];
         }
         if (normalized.Length == 0 || normalized.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new InvalidDataException($"{JsonData.ShownText(from)}: '{JsonData.ShownText(name)}' is not a file name.");
         string beside = Path.GetDirectoryName(from)!.Replace('\\', '/');
-        return new[] { beside }.Concat(SearchPath).Select(folder => $"{folder}/{normalized}").FirstOrDefault(files.Exists);
+        // SearchPath remains the public ordered list: callers may edit it after loading. Do not replace its
+        // resolution order with the load-time deduplication index, or cache mutable file-existence answers.
+        foreach (string folder in new[] { beside }.Concat(SearchPath))
+        {
+            ReservePathWork(64L + 2L * (folder.Length + (long)normalized.Length + 1));
+            string candidate = $"{folder}/{normalized}";
+            if (Exists(candidate)) return candidate;
+        }
+        return null;
+
+        bool Exists(string candidate)
+        {
+            token.ThrowIfCancellationRequested();
+            bool exists = files.Exists(candidate);
+            token.ThrowIfCancellationRequested();
+            return exists;
+        }
     }
 
     /// <summary>A keyframe script's bytes (resolved like definition files, and limited like every text source), recorded as an input.</summary>

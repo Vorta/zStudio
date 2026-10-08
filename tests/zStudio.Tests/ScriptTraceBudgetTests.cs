@@ -16,14 +16,14 @@ public sealed class ScriptTraceBudgetTests
     {
         var lines = Lines("SetModelDirectory ../data/a\nSetTextureDirectory ../data/t\nSetModelDirectory ../data/b");
         ScriptTraceBudget exact = new(16);
-        var trace = ScriptTrace.Trace(_ => lines, "m1.gs", [], exact);
+        var trace = ScriptTrace.Trace(_ => lines, "m1.gs", [], exact, token: Token);
         Assert.Equal(16, exact.UsedUnits);
         Assert.Equal(["data/a"], trace[0].ModelDirectories);
         Assert.Empty(trace[0].TextureDirectories);
         Assert.Equal(["data/t"], trace[1].TextureDirectories);
         Assert.Equal(["data/b", "data/a"], trace[2].ModelDirectories);
         ScriptTraceBudget shortBudget = new(15);
-        Assert.Contains("directory history", Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(_ => lines, "m1.gs", [], shortBudget)).Message);
+        Assert.Contains("directory history", Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(_ => lines, "m1.gs", [], shortBudget, token: Token)).Message);
         Assert.True(shortBudget.Exhausted);
         Assert.Equal(10, shortBudget.UsedUnits); // The rejected copy was never reserved.
     }
@@ -37,7 +37,7 @@ public sealed class ScriptTraceBudgetTests
             ["child.gs"] = Lines("NewObject3D before\nSetModelDirectory ../data/a;../data/b\nSetTextureDirectory outside-project\nNewObject3D after")
         };
         ScriptTraceBudget budget = new(6);
-        var trace = ScriptTrace.Trace(n => scripts.GetValueOrDefault(n), "m1.gs", [], budget);
+        var trace = ScriptTrace.Trace(n => scripts.GetValueOrDefault(n), "m1.gs", [], budget, token: Token);
         Assert.Equal(6, budget.UsedUnits);
         Assert.All(trace, step => Assert.Same(trace[0].ModelDirectories, step.ModelDirectories));
         Assert.Null(trace[1].ScriptModelDirectory);
@@ -53,7 +53,7 @@ public sealed class ScriptTraceBudgetTests
     {
         var lines = Lines($"{command} ../data/a;../data/b\n{command} ../data/a");
         ScriptTraceBudget budget = new(12);
-        var trace = ScriptTrace.Trace(_ => lines, "m1.gs", [], budget);
+        var trace = ScriptTrace.Trace(_ => lines, "m1.gs", [], budget, token: Token);
         IReadOnlyList<string> View(int index) => command == "SetModelDirectory" ? trace[index].ModelDirectories : trace[index].TextureDirectories;
         Assert.Equal(["data/b", "data/a"], View(0));
         Assert.Equal(["data/a", "data/b"], View(1));
@@ -70,8 +70,8 @@ public sealed class ScriptTraceBudgetTests
             ["child.gs"] = Lines("SetTextureDirectory ../data/t")
         };
         ScriptTraceBudget budget = new(15);
-        Assert.Equal(2, ScriptTrace.Trace(n => scripts.GetValueOrDefault(n), "m1.gs", [], budget).Count);
-        Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(n => scripts.GetValueOrDefault(n), "m1.gs", [], budget));
+        Assert.Equal(2, ScriptTrace.Trace(n => scripts.GetValueOrDefault(n), "m1.gs", [], budget, token: Token).Count);
+        Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(n => scripts.GetValueOrDefault(n), "m1.gs", [], budget, token: Token));
         Assert.Equal(15, budget.UsedUnits);
         Assert.True(budget.Exhausted);
     }
@@ -131,7 +131,7 @@ public sealed class ScriptTraceBudgetTests
         string operand = string.Join(';', Enumerable.Range(0, 32_000).Select(i => $"../data/d{i}"));
         IReadOnlyList<IReadOnlyList<string>> lines = [new[] { command, operand }];
         ScriptTraceBudget budget = new();
-        var error = Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(_ => lines, "m1.gs", [], budget));
+        var error = Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(_ => lines, "m1.gs", [], budget, token: Token));
         Assert.Contains("directory search-path work", error.Message);
         Assert.True(budget.Work.Exhausted);
         Assert.True(budget.Exhausted);
@@ -144,14 +144,14 @@ public sealed class ScriptTraceBudgetTests
         string oversized = new(';', 1_000_000);
         ScriptTraceBudget noWork = new(maximumWorkUnits: 0);
         long before = GC.GetAllocatedBytesForCurrentThread();
-        Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(_ => [new[] { "SetModelDirectory", oversized }], "m1.gs", [], noWork));
+        Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(_ => [new[] { "SetModelDirectory", oversized }], "m1.gs", [], noWork, token: Token));
         Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 32_768);
         Assert.Equal(0, noWork.Work.UsedUnits);
 
         var lines = Lines("SetModelDirectory outside-project\n");
         ScriptTraceBudget shared = new(maximumWorkUnits: 100);
-        ScriptTrace.Trace(_ => lines, "first.gs", [], shared);
-        Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(_ => lines, "second.gs", [], shared));
+        ScriptTrace.Trace(_ => lines, "first.gs", [], shared, token: Token);
+        Assert.Throws<InvalidDataException>(() => ScriptTrace.Trace(_ => lines, "second.gs", [], shared, token: Token));
         Assert.True(shared.Exhausted);
     }
 
@@ -168,14 +168,16 @@ public sealed class ScriptTraceBudgetTests
     [Fact]
     public void MissingScriptNotesBoundOperandsBeforeFormattingAcrossMissionTraces()
     {
-        string missing = new('x', 1_000_000);
+        // Keep the diagnostic-cap fixture below the separate executed-operand work allowance. Each operand still
+        // greatly exceeds the displayed representation, so this exercises pre-formatting bounds and deduplication.
+        string missing = new('x', 10_000);
         IReadOnlyList<IReadOnlyList<string>> lines = [.. Enumerable.Repeat<IReadOnlyList<string>>(new[] { "source", missing }, 100)];
         List<string> notes = [];
         BoundedDiagnostics diagnostics = new(notes);
         ScriptTraceBudget budget = new();
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 12; i++)
-            ScriptTrace.Trace(n => n == "main.gs" ? lines : null, "main.gs", notes, budget, diagnostics);
+            ScriptTrace.Trace(n => n == "main.gs" ? lines : null, "main.gs", notes, budget, diagnostics, Token);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.InRange(allocated, 0, 8L << 20);
         Assert.Equal(2, notes.Count);

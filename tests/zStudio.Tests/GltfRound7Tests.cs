@@ -9,8 +9,8 @@ using Xunit;
 namespace Recoil.Zbd.Tests;
 
 /// <summary>
-/// glTF data laid out where the specification places it (strides of 4 to 252 bytes in steps of 4 that hold an element and
-/// fit the view, offsets at multiples of the component size, vertex attribute elements on 4-byte boundaries, no stride for
+/// glTF data laid out where the specification places it (strides of 4 to 252 bytes in steps of 4 that hold an element,
+/// occupied spans that fit the view, offsets at multiples of the component size, vertex attribute elements on 4-byte boundaries, no stride for
 /// indices) and texture wrap modes RECOIL can store: repeat or clamp, never mirrored repeat or a mode glTF does not define.
 /// </summary>
 public sealed class GltfRound7Tests
@@ -100,19 +100,18 @@ public sealed class GltfRound7Tests
     }
 
     [Theory]
-    // glTF has a stated stride be a multiple of 4 from 4 to 252 bytes, no longer than its view: these were read from offsets
+    // glTF has a stated stride be a multiple of 4 from 4 to 252 bytes that holds an element: these were read from offsets
     // that other readers refuse (a byte normal every 3 bytes, a short texture coordinate pair every 5).
     [InlineData("NORMAL", 5120, "VEC3", true, 3, "007F00" + "007F00" + "007F00", "byte stride of 3")]
     [InlineData("TEXCOORD_0", 5122, "VEC2", false, 5, "0000040000" + "0000040000" + "04000400", "byte stride of 5")]
     [InlineData("POSITION", 5126, "VEC3", false, 14, "000000000000000000000000" + "0000" + "0000803F00000000000000000000" + "000000000000803F00000000", "byte stride of 14")]
-    // A stride of 16 for one 12-byte position, in a 12-byte view: no element lies past the view, but the stride does.
-    [InlineData("POSITION", 5126, "VEC3", false, 16, "000000000000000000000000", "byte stride of 16")]
-    public void AStatedStrideMustBeAMultipleOfFourThatFitsTheView(string use, int componentType, string type, bool normalized, int stride, string hex, string message)
+    [InlineData("POSITION", 5126, "VEC3", false, 8, "000000000000000000000000000000000000000000000000000000000000000000000000000000", "byte stride of 8")]
+    [InlineData("NORMAL", 5120, "VEC3", true, 0, "007F0000007F0000007F00", "byte stride of 0")]
+    [InlineData("NORMAL", 5120, "VEC3", true, 256, "007F0000007F0000007F00", "byte stride of 256")]
+    public void AStatedStrideMustBeAnAllowedMultipleOfFourThatHoldsAnElement(string use, int componentType, string type, bool normalized, int stride, string hex, string message)
     {
         Model model = new();
-        int count = use == "POSITION" && stride == 16 ? 1 : 3;
-        Use(model, use, model.Accessor(hex, componentType, type, count, normalized, stride));
-        if (count == 1) model.Primitive["indices"] = model.Accessor("000000", 5121, "SCALAR", 3);
+        Use(model, use, model.Accessor(hex, componentType, type, 3, normalized, stride));
         var refused = model.Refused();
         Assert.Contains(message, refused.Message);
         Assert.Contains("glTF needs a multiple of 4 from 4 to 252", refused.Message);

@@ -16,18 +16,30 @@ namespace Recoil.Zbd.Desktop;
 public partial class MainWindow
 {
     /// <summary>The built world read once per document, for current transforms and flags.</summary>
-    private sealed record SourceWorldModelEntry(GameZWorld World, IReadOnlyDictionary<int, WorldNode> Slots)
-    {
-        public IReadOnlyDictionary<WorldNode, WorldNodeProvenance>? Provenance { get; set; }
-    }
+    private sealed record SourceWorldModelEntry(GameZWorld World, IReadOnlyDictionary<int, WorldNode> Slots,
+        IReadOnlyDictionary<WorldNode, WorldNodeProvenance> Provenance);
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<DocumentModel, SourceWorldModelEntry> sourceWorldModels = new();
+    // The callback is an instance-local deterministic preparation boundary, never a UI callback.
+    internal Action<CancellationToken>? PreparingSourceWorldModel { get; set; }
+    private static SourceWorldModelEntry PrepareSourceWorldModel(Recoil.Zbd.Core.ZbdDocument document, SourceWorldBuild build, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var world = GameZWorldReader.FromDocument(document, token);
+        Dictionary<int, WorldNode> slots = [];
+        Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
+        foreach (var (node, slot) in GameZWriter.NodeSlots(world, token))
+        {
+            token.ThrowIfCancellationRequested();
+            slots.Add(slot, node);
+            if (build.Provenance.TryGetValue(slot, out var origin)) provenance.Add(node, origin);
+        }
+        token.ThrowIfCancellationRequested();
+        return new(world, slots, provenance);
+    }
     private SourceWorldModelEntry SourceWorldModel(DocumentModel doc)
     {
         if (sourceWorldModels.TryGetValue(doc, out var cached)) return cached;
-        var world = GameZWorldReader.FromDocument(doc.Document, doc.Lifetime.Token);
-        SourceWorldModelEntry model = new(world, GameZWriter.NodeSlots(world).ToDictionary(p => p.Value, p => p.Key));
-        sourceWorldModels.AddOrUpdate(doc, model);
-        return model;
+        throw new StudioCommandException("context_changed", "The source world's prepared object model is unavailable. Reopen the world.");
     }
 
     /// <summary>A resource editor may not change a project file the source workspace holds unsaved edits of; the edits would conflict on save.</summary>
@@ -80,14 +92,7 @@ public partial class MainWindow
     }
     /// <summary>The provenance of the shown world's nodes, by node.</summary>
     private IReadOnlyDictionary<WorldNode, WorldNodeProvenance> SourceWorldProvenance(DocumentModel doc)
-    {
-        var model = SourceWorldModel(doc);
-        if (model.Provenance is { } cached) return cached;
-        Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
-        if (doc.SourceBuild is { } build) foreach (var (slot, node) in model.Slots) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
-        model.Provenance = provenance;
-        return provenance;
-    }
+        => SourceWorldModel(doc).Provenance;
     /// <summary>The object a structural edit of a shown node applies to, with the world and provenance it is checked against.</summary>
     private SourceObjectTarget SourceObjectTargetFor(DocumentModel doc, int node, SourceWorkspace workspace)
     {
@@ -139,7 +144,8 @@ public partial class MainWindow
         {
             var planned = plan(SourceObjectTargetFor(doc, node, workspace), ct);
             additions.AddRange(planned.Additions); notes.AddRange(planned.Notes);
-            gltfOnly = planned.Changes.Count > 0 && planned.Changes.All(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase));
+            gltfOnly = planned.Changes.Any(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) &&
+                planned.Changes.All(c => c.Relative.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || c.Relative.EndsWith("/meta/zones.json", StringComparison.OrdinalIgnoreCase));
             return workspace.Apply(planned.Label, planned.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct);
         }, token, additions, verifyTargets: () => keepsNodes && gltfOnly, notes: notes);
     }
@@ -172,10 +178,10 @@ public partial class MainWindow
     /// of a part the mission database references several times, the one in the copy <paramref name="copyKey"/> names (the
     /// original's, <see cref="SourceObjectEdits.CopyKey"/>) first, then the newest.
     /// </summary>
-    private static List<int> SourceCopiesNamed(DocumentModel doc, string name, string? copyKey)
+    private List<int> SourceCopiesNamed(DocumentModel doc, string name, string? copyKey)
     {
         if (doc.SourceBuild is not { } build) return [];
-        List<int> copies = [.. GameZWriter.NodeSlots(GameZWorldReader.FromDocument(doc.Document, doc.Lifetime.Token)).Where(p => p.Key.Name == name).Select(p => p.Value).OrderDescending()];
+        List<int> copies = [.. SourceWorldModel(doc).Slots.Where(p => p.Value.Name == name).Select(p => p.Key).OrderDescending()];
         int same = copies.FindIndex(c => copyKey != null && build.Provenance.TryGetValue(c, out var p) && SourceObjectEdits.CopyKey(p) == copyKey);
         if (same > 0) { int first = copies[same]; copies.RemoveAt(same); copies.Insert(0, first); }
         return copies;

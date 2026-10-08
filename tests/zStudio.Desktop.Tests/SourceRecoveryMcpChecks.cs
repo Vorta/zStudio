@@ -31,6 +31,7 @@ internal static class SourceRecoveryMcpChecks
         SemaphoreSlim entered = new(0), proceed = new(0);
         try
         {
+            await SourceRecoveryDialogChecks.Run(main);
             await using var host = new LocalMcpHost(main.Commands, "test");
             await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly); await pipe.ConnectAsync(token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
@@ -97,7 +98,13 @@ internal static class SourceRecoveryMcpChecks
             var budgetFolders = new List<string>();
             try
             {
-                string prefix = "data/" + string.Join('/', Enumerable.Repeat(new string('\u0401', 100), 20));
+                // Two long components still exceed the 256-character preview and expand as JSON escapes, while
+                // all 32*64 rows together fit the ordinary 128 MiB path-work admission. Deep-path refusal has separate
+                // Core coverage; this fixture exercises the maximum successful inspection page, not that refusal.
+                string prefix = "data/" + string.Join('/', Enumerable.Repeat(new string('\u0401', 190), 2));
+                string longestRelative = $"{prefix}/31-63.zrd";
+                long pathWork = 32L * 64 * 16 * (fixture.Project.Length + longestRelative.Length + 1) * 4;
+                Assert.InRange(pathWork, 1L, 128L * 1024 * 1024);
                 for (int j = 0; j < 32; j++)
                 {
                     string id = $"20260101T000000000Z-{j:x8}";
@@ -115,12 +122,16 @@ internal static class SourceRecoveryMcpChecks
                 }
                 var page = await Call("source_recovery", new());
                 Assert.Equal(32, page["saveCount"]!.GetValue<int>());
+                Assert.Equal(32, page["saves"]!.AsArray().Count);
                 foreach (var save in page["saves"]!.AsArray())
                 {
                     Assert.Equal(64, save!["fileCount"]!.GetValue<int>());
+                    Assert.Equal(64, save["files"]!.AsArray().Count);
                     Assert.All(save["files"]!.AsArray(), row => { Assert.True(row!["fileTruncated"]!.GetValue<bool>()); Assert.InRange(row["file"]!.GetValue<string>().Length, 1, 257); });
                 }
-                Assert.InRange(Encoding.UTF8.GetByteCount(page.ToJsonString()), 1, 4 * 1024 * 1024);
+                string pageJson = page.ToJsonString();
+                Assert.Contains("\\u0401", pageJson);
+                Assert.InRange(Encoding.UTF8.GetByteCount(pageJson), 1, 4 * 1024 * 1024);
             }
             finally { foreach (string folder in budgetFolders) Directory.Delete(folder, true); }
 

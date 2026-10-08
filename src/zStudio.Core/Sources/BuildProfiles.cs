@@ -225,11 +225,12 @@ public static class BuildProfiles
     /// </summary>
     public static IReadOnlyList<string> ShadowingPacks(string destination, string mission, IReadOnlyCollection<string> built, CancellationToken token = default)
         => ShadowingPacks(destination, mission, built, SourceProject.MaximumScannedEntries, token);
-    internal static IReadOnlyList<string> ShadowingPacks(string destination, string mission, IReadOnlyCollection<string> built, int maximumEntries, CancellationToken token)
+    internal static IReadOnlyList<string> ShadowingPacks(string destination, string mission, IReadOnlyCollection<string> built, int maximumEntries, CancellationToken token,
+        InventoryBudget? inventory = null)
     {
         string folder = Path.Combine(destination, mission);
         if (!Directory.Exists(folder)) return [];
-        SourceProject.ScanBudget budget = new(maximumEntries, maximum => new IOException($"{folder} holds more than {maximum:N0} files and folders."), token);
+        SourceProject.ScanBudget budget = new(maximumEntries, maximum => new IOException($"{folder} holds more than {maximum:N0} files and folders."), token, inventory);
         // Software packs too: the software renderer opens texture<N> or texturemax by its option, whatever the export built.
         return SourceProject.Entries(folder, budget).OfType<FileInfo>().Select(f => f.Name)
             .Where(f => f.Contains("texture", StringComparison.OrdinalIgnoreCase) && f.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase))

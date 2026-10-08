@@ -1,5 +1,7 @@
 # ZAR archive and ZRD editing
 
+Opening and reloading prepare resource syntax, compiled trees and baseline hashes on a cancellable worker before publishing the document. Cancellation, navigation changes or preparation failures retain the previously accepted document. GUI and MCP use this same preparation and publication path.
+
 ZAR containers and typed ZRD resources now have shared GUI/MCP editors. These are the first two priorities toward a complete ZBD editor. They do not make every other ZBD format editable.
 
 ## Archive members
@@ -13,6 +15,8 @@ ZAR containers and typed ZRD resources now have shared GUI/MCP editors. These ar
 6. **Save** verifies and atomically replaces the working file. **Save As** requires a new file and makes it the destination for subsequent saves. Reference datasets `zbd_1998` and `zbd_1999` require a copy elsewhere. The Properties window and MCP state identify the save destination; the open document retains its original source context.
 
 Unchanged payload bytes, original payload padding, and untouched directory metadata are retained. Changed/new payloads are appended before the rebuilt directory. Deleting a member removes its directory entry but does not compact the original payload region. A no-op serialization is byte-identical. Archives remain subject to the 512 MiB document limit.
+
+Adding or replacing a member compiles recognized zReader source text before archiving it. Such text is limited to 16 MiB, checked before reading its complete payload. Recognition uses the destination member's name and the shared structural format probe, including the archive trailer; the selected input file's extension does not override the member's identity. Binary and raw inputs retain their existing document allowance and format validation. A refused import leaves the archive, history and input file unchanged.
 
 Members that share one payload range reuse its immutable decoded tree; edits still belong to each member UUID and never change another alias. An incomplete embedded ZRD is shown as raw data with a warning, allowing archive replacement/deletion to repair it. Standalone ZRD must pass the complete bounded decoder before editing or saving is enabled; malformed files retain raw inspection and an error diagnostic.
 

@@ -4,7 +4,12 @@ using Recoil.Zbd.Core.Worlds;
 namespace Recoil.Zbd.Core.Terrain;
 
 /// <summary>A corner of terrain geometry in world space.</summary>
-public readonly record struct TerrainCorner(Vector3 Position, Vector3 Normal, Vector2 Uv);
+public readonly record struct TerrainCorner(Vector3 Position, Vector3 Normal, Vector2 Uv)
+{
+    // Generated normals stay in the original triangle's linear field until output. Normalizing an intermediate
+    // cut would change the direction produced by later cuts; authored corners retain their stored values.
+    internal bool Interpolated { get; init; }
+}
 /// <summary>
 /// A polygon of a terrain surface (an engine polygon as the model stores it, or a triangle), with the index of its
 /// material in the compile's material list. Polygons the splitter does not cut are kept as they are.
@@ -147,6 +152,8 @@ public static class TerrainCompiler
         public required State State;
         /// <summary>Whether a line cuts the polygon into two; a polygon that is not convex is cut as its fan.</summary>
         public bool Convex = true;
+        /// <summary>The corners still describe an authored fan, whose first corner and interpolation must remain unchanged.</summary>
+        public bool AuthoredFan;
         public (Vector3 Min, Vector3 Max) Bounds()
         {
             Vector3 min = new(float.MaxValue), max = new(float.MinValue);
@@ -332,6 +339,7 @@ public static class TerrainCompiler
                 Surface = surface, Material = face.Material, Corners = [.. corners],
                 Edges = [.. corners.Select((c, i) => SourceEdge(c.Position, corners[(i + 1) % corners.Count].Position))], State = state,
                 Convex = corners.Count == 3 || Convex(corners),
+                AuthoredFan = true,
             });
             static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
         }
@@ -466,7 +474,9 @@ public static class TerrainCompiler
                 negative |= side[i] < 0; positive |= side[i] > 0;
             }
             if (!negative || !positive) return [part];
-            if (!part.Convex) return Fan(part).SelectMany(p => Both(p, line)).ToList();
+            // Even a convex authored polygon can carry a non-affine UV mapping. Cutting it as one polygon would
+            // introduce another fan's diagonals and interpolate unrelated corners. Clip its original triangles.
+            if (!part.Convex || part.AuthoredFan && n > 3) return Fan(part).SelectMany(p => Both(p, line)).ToList();
             ChargeCorners(n + 4); // The two sides together have n original corners and two copies of each cut.
             // The polygon's points in order: its corners, with a cut point on each edge the line crosses.
             List<(TerrainCorner Corner, int Side, int Edge, double T)> points = [];
@@ -548,7 +558,7 @@ public static class TerrainCompiler
         {
             float f = (float)Math.Clamp(s, 0, 1);
             var normal = Vector3.Lerp(a.Normal, b.Normal, f);
-            return new(position, normal.LengthSquared() > 0 ? Vector3.Normalize(normal) : normal, Vector2.Lerp(a.Uv, b.Uv, f));
+            return new(position, normal, Vector2.Lerp(a.Uv, b.Uv, f)) { Interpolated = true };
         }
 
         /// <summary>Inserts into every edge the points other parts put on its segment, so no part ends at another's edge.</summary>
@@ -621,7 +631,7 @@ public static class TerrainCompiler
                     perCell[(key.Surface, key.Row, key.Column)] = index;
                     string cell = key.Column < 0 ? "out" : $"{key.Column:D2}x{key.Row:D2}";
                     string name = Name(label, surfaces[key.Surface].Surface.Id, key.Surface, cell, index);
-                    var polygons = group.Select(p => new TerrainPolygonOutput(p.Material, Ordered(p.Corners), p.State.Zones?.Word ?? materials[p.Material].ZoneWord, p.State.Soil, p.State.Priority)).ToArray();
+                    var polygons = group.Select(p => new TerrainPolygonOutput(p.Material, OutputCorners(p), p.State.Zones?.Word ?? materials[p.Material].ZoneWord, p.State.Soil, p.State.Priority)).ToArray();
                     pieces.Add(new(name, key.Surface, key.Column, key.Row, carried, zone, polygons));
                 }
             }
@@ -663,7 +673,23 @@ public static class TerrainCompiler
                 }
             return Math.Max(vertices.Count, normals.Count);
         }
-        /// <summary>The corners starting where the first three are not on one line, which engine polygons need for their plane.</summary>
+        /// <summary>Preserves authored fans and normalizes generated corner normals only after every cut and junction repair.</summary>
+        private static TerrainCorner[] OutputCorners(Part part)
+        {
+            TerrainCorner[] corners = part.AuthoredFan ? [.. part.Corners] : Ordered(part.Corners);
+            for (int i = 0; i < corners.Length; i++)
+            {
+                var corner = corners[i];
+                if (!corner.Interpolated) continue;
+                var normal = corner.Normal;
+                double length = Math.Sqrt((double)normal.X * normal.X + (double)normal.Y * normal.Y + (double)normal.Z * normal.Z);
+                if (length > 0) normal = new((float)(normal.X / length), (float)(normal.Y / length), (float)(normal.Z / length));
+                corners[i] = corner with { Normal = normal, Interpolated = false };
+            }
+            return corners;
+        }
+
+        /// <summary>A derived convex piece of one triangle, starting where the first three are not on one line. Authored fans must retain their first corner.</summary>
         private static TerrainCorner[] Ordered(List<TerrainCorner> corners)
         {
             int n = corners.Count;

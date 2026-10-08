@@ -17,6 +17,8 @@ public sealed record TerrainConversionSurface(string Id, uint Flags, int Zone, I
 {
     /// <summary>The pieces' model values (lighting, scrolling), which the surface's mesh carries.</summary>
     public JsonObject? ModelValues { get; init; }
+    /// <summary>The pieces' Object3D appearance, including inactive alpha/color values and retained flags.</summary>
+    public JsonObject? Appearance { get; init; }
 }
 /// <summary>What converting a mission database's pieces to editable terrain would do.</summary>
 public sealed record TerrainConversionPlan(string Database, string Surfaces, string Recipe, IReadOnlyList<TerrainConversionSurface> Groups, IReadOnlyList<TerrainConversionKept> Kept)
@@ -28,8 +30,8 @@ public sealed record TerrainConversionPlan(string Database, string Surfaces, str
 /// Convert to editable terrain: the mission database's untransformed mesh pieces become surfaces of a terrain recipe.
 /// Pieces whose node attributes match merge into one surface, unless they overlap in plan view (the altitude probe
 /// takes the first polygon of a node, so stacked sheets stay separate surfaces). Each surface keeps its pieces'
-/// polygons, UVs, normals and materials (with their polygon zones and soils) exactly, and the recipe gives it the
-/// pieces' exact node flags and zone. Pieces inside the database's groups (which the build deletes) count too; the parts
+/// polygons, UVs, normals and materials (with their polygon zones and soils) exactly, together with their Object3D
+/// appearance; the recipe gives it the pieces' exact node flags and zone. Pieces inside the database's groups (which the build deletes) count too; the parts
 /// of the database in files of their own stay, since every copy of a part shares its file. Objects stay as they are:
 /// the horizon and other landmarks, transformed nodes or nodes with children, references, shared nodes, and any piece
 /// a script, resource or animation names (or matches by wildcard).
@@ -59,13 +61,22 @@ public static partial class SourceTerrainConversion
     public static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) References(SourceWorkspace workspace, IEnumerable<string> files, CancellationToken token = default)
         => ReferencesCore(workspace, files, null, token);
 
+    internal static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) References(SourceWorkspace workspace, IEnumerable<string> files,
+        CancellationToken token, long maximumInputBytes)
+        => ReferencesCore(workspace, files, null, token, maximumInputBytes);
+
     /// <summary>Includes the executed operands of the exact world entry script, with shared macros across sourced files.</summary>
     public static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) References(SourceWorkspace workspace, IEnumerable<string> files,
         string entryScript, CancellationToken token = default) => ReferencesCore(workspace, files, entryScript, token);
 
+    internal static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) References(SourceWorkspace workspace, IEnumerable<string> files,
+        string entryScript, CancellationToken token, long maximumInputBytes) => ReferencesCore(workspace, files, entryScript, token, maximumInputBytes);
+
     private static (HashSet<string> Names, IReadOnlyList<Regex> Patterns) ReferencesCore(SourceWorkspace workspace,
-        IEnumerable<string> files, string? entryScript, CancellationToken token)
+        IEnumerable<string> files, string? entryScript, CancellationToken token,
+        long maximumInputBytes = FormatRegistry.MaximumDocumentBytes)
     {
+        if (maximumInputBytes is < 0 or > FormatRegistry.MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumInputBytes));
         HashSet<string> names = new(StringComparer.Ordinal), wildcards = new(StringComparer.Ordinal); List<Regex> patterns = [];
         // Looked up by span, so a word already kept (most of them) is not copied again.
         var knownNames = names.GetAlternateLookup<ReadOnlySpan<char>>();
@@ -73,17 +84,21 @@ public static partial class SourceTerrainConversion
         long nameCharacters = 0, patternCharacters = 0;
         Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> scripts = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> needsContext = new(StringComparer.OrdinalIgnoreCase);
-        long scriptBytes = 0, scriptTokens = 0, operandWork = 0;
+        long inputBytes = 0, scriptBytes = 0, scriptTokens = 0, operandWork = 0;
+        HashSet<string> inspected = new(StringComparer.OrdinalIgnoreCase);
         string reading = "";
         foreach (string input in files)
         {
             token.ThrowIfCancellationRequested();
             string file = SourceWorkspace.Normalize(input);
+            if (!inspected.Add(file)) continue;
             reading = file;
             bool resource = file.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase) || file.EndsWith(Animation.AnimationDefinitionSet.Extension, StringComparison.OrdinalIgnoreCase);
             bool keyframes = file.EndsWith(".zan", StringComparison.OrdinalIgnoreCase);
             if (!(resource || keyframes || file.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".gw", StringComparison.OrdinalIgnoreCase))) continue;
-            if (workspace.Read(file, token) is not { } bytes) continue;
+            var limits = resource ? ProjectReadLimits.Resource() : ProjectReadLimits.Text(keyframes
+                ? SourceProject.MaximumSourceTextBytes : WorldAssembler.MaximumScriptSourceBytes - scriptBytes);
+            if (ReadInput(file, limits) is not { } bytes) continue;
             // Every word, and also a resource's strings whole (names may hold spaces) and a script's tokens (names may hold
             // other characters): more names only keep more pieces as objects.
             if (resource && !ZrdText.LooksLikeText(bytes))
@@ -95,7 +110,7 @@ public static partial class SourceTerrainConversion
                 {
                     // Not readable as zReader data: its words, as for any text, within the same limit.
                     if (bytes.Length > SourceProject.MaximumSourceTextBytes) throw new InvalidDataException($"{file} is not valid zReader data ({ex.Message}), so the names it holds are unknown.", ex);
-                    Words(Encoding.Latin1.GetString(bytes));
+                    Words(GameGenScriptText.Decode(bytes, token));
                     continue;
                 }
                 foreach (string text in InOrder(tree)) { token.ThrowIfCancellationRequested(); Words(text); }
@@ -104,7 +119,7 @@ public static partial class SourceTerrainConversion
             }
             if (bytes.Length > SourceProject.MaximumSourceTextBytes)
                 throw new InvalidDataException($"{file} exceeds {SourceProject.MaximumSourceTextBytes / (1024 * 1024)} MiB, the most a text source may hold, so the names it mentions are unknown.");
-            string source = Encoding.Latin1.GetString(bytes);
+            string source = GameGenScriptText.Decode(bytes, token);
             Words(source);
             if (resource)
             {
@@ -129,14 +144,15 @@ public static partial class SourceTerrainConversion
             string entry = SourceWorkspace.Normalize(entryScript);
             if (!entry.StartsWith("gamegen/", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Terrain reference discovery needs the world's entry script under gamegen/.");
-            ScriptTrace.Visit(LoadScript, entry["gamegen/".Length..], Executed, token, stopAtWorldWrite: false);
+            ScriptTraceBudget traceBudget = new();
+            ScriptTrace.Visit(LoadScript, entry["gamegen/".Length..], Executed, token, stopAtWorldWrite: false, budget: traceBudget);
             // A mission's archive-mode load script is a separate, known entry point. Its macros do not inherit
             // the build's state. Dependencies also contain the whole interp.zbd inventory, including other
             // missions and unused fragments: those retain literal protection above, but are not execution
             // dependencies of this world. Only these roots and the scripts they source provide macro context.
             string runtime = WorldLookups.LoadScript(Path.GetFileNameWithoutExtension(entry));
             if (scripts.ContainsKey(runtime))
-                ScriptTrace.Visit(LoadScript, runtime["gamegen/".Length..], Executed, token, stopAtWorldWrite: false);
+                ScriptTrace.Visit(LoadScript, runtime["gamegen/".Length..], Executed, token, stopAtWorldWrite: false, budget: traceBudget);
         }
         else if (needsContext.Count > 0)
             throw new InvalidDataException("Terrain reference discovery needs the world's entry script to resolve macros and sourced scripts; terrain conversion is refused without that execution context.");
@@ -161,9 +177,20 @@ public static partial class SourceTerrainConversion
             token.ThrowIfCancellationRequested();
             string file = "gamegen/" + name.Replace('\\', '/');
             if (scripts.TryGetValue(file, out var cached)) return cached;
-            byte[] bytes = workspace.Read(file, token, SourceProject.MaximumSourceTextBytes)
+            byte[] bytes = ReadInput(file, ProjectReadLimits.Text(WorldAssembler.MaximumScriptSourceBytes - scriptBytes))
                 ?? throw new InvalidDataException($"The script {JsonData.ShownText(file)} is unavailable; terrain references cannot be established, so conversion is refused.");
-            return ReadScript(file, bytes, GameGenScriptText.Decode(bytes));
+            return ReadScript(file, bytes, GameGenScriptText.Decode(bytes, token));
+        }
+        byte[]? ReadInput(string file, ProjectReadLimits limits)
+        {
+            // Name retention cannot bound files containing only whitespace or repeated words. Charge every actual
+            // read before it allocates/decodes, including compiled resources and sourced scripts outside the inventory.
+            byte[]? bytes;
+            try { bytes = workspace.Read(file, token, limits.WithMaximum(maximumInputBytes - inputBytes)); }
+            catch (InvalidDataException ex)
+            { throw new InvalidDataException($"{file}: terrain reference inputs cannot be read within their per-file and combined {maximumInputBytes:N0}-byte allowance: {ex.Message}", ex); }
+            if (bytes != null) inputBytes += bytes.LongLength;
+            return bytes;
         }
         IReadOnlyList<IReadOnlyList<string>> ReadScript(string file, byte[] bytes, string source)
         {
@@ -173,10 +200,22 @@ public static partial class SourceTerrainConversion
             scriptBytes += bytes.Length;
             if ((scriptTokens += GameGenScriptText.CountTokens(source, token)) > GameGenScriptText.MaximumTokens)
                 throw new InvalidDataException("Terrain reference discovery's script sources exceed four million tokens.");
-            var lines = GameGenScriptText.Tokenize(source);
-            if (lines.Any(line => ScriptConditions.IsSource(line[0]) || line.Any(ScriptConditions.HasMacro))) needsContext.Add(file);
+            var lines = GameGenScriptText.TokenizeCancellable(source, token);
+            if (NeedsContext(lines)) needsContext.Add(file);
             scripts.Add(file, lines);
             return lines;
+        }
+
+        bool NeedsContext(IReadOnlyList<IReadOnlyList<string>> lines)
+        {
+            foreach (var line in lines)
+            {
+                token.ThrowIfCancellationRequested();
+                if (ScriptConditions.IsSource(line[0])) return true;
+                foreach (string operand in line) { token.ThrowIfCancellationRequested(); if (ScriptConditions.HasMacro(operand)) return true; }
+            }
+            token.ThrowIfCancellationRequested();
+            return false;
         }
 
         void Words(string text) { foreach (var m in Word().EnumerateMatches(text)) Add(text.AsSpan(m.Index, m.Length)); }
@@ -219,8 +258,13 @@ public static partial class SourceTerrainConversion
 
     /// <summary>Plans converting <paramref name="database"/>'s pieces; names in <paramref name="references"/> stay objects.</summary>
     public static TerrainConversionPlan Plan(SourceWorkspace workspace, string database, (HashSet<string> Names, IReadOnlyList<Regex> Patterns) references, CancellationToken token = default)
+        => Plan(workspace, database, references, TerrainConversionSerializationBudget.Limits.Default, token);
+
+    internal static TerrainConversionPlan Plan(SourceWorkspace workspace, string database, (HashSet<string> Names, IReadOnlyList<Regex> Patterns) references,
+        TerrainConversionSerializationBudget.Limits limits, CancellationToken token)
     {
         var (root, doc) = Read(workspace, database, token);
+        ConversionZones.Read(workspace, database, root, doc, token)?.ApplyPlanningValues(token);
         TerrainConversionGeometry geometry = new(token);
         long patternWork = 0;
         Regex? MatchingPattern(string name)
@@ -238,7 +282,7 @@ public static partial class SourceTerrainConversion
         string stem = database[(database.LastIndexOf('/') + 1)..database.LastIndexOf('.')];
         string folder = database[..database.LastIndexOf('/')];
         string surfaces = $"{folder}/{stem}_terrain.gltf", recipe = $"{folder}/{stem}_terrain{TerrainRecipe.Extension}", buffer = $"{folder}/{stem}_terrain.bin";
-        if (workspace.Exists(surfaces) || workspace.Exists(recipe) || workspace.Exists(buffer)) throw new InvalidDataException($"{surfaces}, {buffer} or {recipe} already exists; the database was converted before.");
+        if (workspace.Exists(surfaces, token) || workspace.Exists(recipe, token) || workspace.Exists(buffer, token)) throw new InvalidDataException($"{surfaces}, {buffer} or {recipe} already exists; the database was converted before.");
         var json = (JsonArray)root["nodes"]!;
         List<TerrainConversionKept> kept = []; HashSet<string> shared = new(StringComparer.Ordinal);
         // Many pieces may share one mesh (a valid file may hold 200,000 nodes using one), and its model values may be large:
@@ -246,7 +290,9 @@ public static partial class SourceTerrainConversion
         // in the group keys (the same written values, the same number), never once per piece.
         Dictionary<GltfMesh, MeshFacts> facts = new(ReferenceEqualityComparer.Instance);
         Dictionary<string, int> valueNumbers = new(StringComparer.Ordinal); List<string> valueTexts = [];
-        Dictionary<(uint Flags, int Zone, int Values), List<GltfNode>> groups = [];
+        Dictionary<string, int> appearanceNumbers = new(StringComparer.Ordinal) { [""] = 0 };
+        List<JsonObject?> appearances = [null];
+        Dictionary<(uint Flags, int Zone, int Values, int Appearance), List<GltfNode>> groups = [];
         foreach (var (node, inherited) in Members(doc.Roots, 0xFF))
         {
             token.ThrowIfCancellationRequested();
@@ -258,7 +304,7 @@ public static partial class SourceTerrainConversion
             string? reason = extras?["terrain"] != null ? "terrain marker"
                 : mesh == null ? "no mesh of its own"
                 : node.Children.Count > 0 ? "has children"
-                : extras?["ref"] != null ? "references a model file"
+                : extras?["ref"] != null || extras?[WorldGltf.ZoneReference] != null ? "references a model file"
                 : extras?["instance"] != null ? "shared by several parents"
                 : extras?["class"] is JsonValue c && c.ToString() == "lod" ? "level-of-detail node"
                 : node.Matrix is { } m && !m.IsIdentity ? "placed with a transform"
@@ -277,14 +323,22 @@ public static partial class SourceTerrainConversion
                 if (!valueNumbers.TryGetValue(text, out number)) { valueNumbers[text] = number = valueTexts.Count; valueTexts.Add(text); }
                 mesh.ValuesNumber = number;
             }
-            var key = (Flags(extras), zone, number);
+            _ = WorldGltf.Appearance(extras, database);
+            var appearance = extras?["appearance"] as JsonObject;
+            string appearanceText = appearance?.ToJsonString() ?? "";
+            if (!appearanceNumbers.TryGetValue(appearanceText, out int appearanceNumber))
+            {
+                appearanceNumbers[appearanceText] = appearanceNumber = appearances.Count;
+                appearances.Add(appearance);
+            }
+            var key = (Flags(extras), zone, number, appearanceNumber);
             if (!groups.TryGetValue(key, out var list)) groups[key] = list = [];
             list.Add(node);
         }
-        if (groups.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need at least {groups.Count} surfaces (different flags, zones or model values), more than a recipe's {TerrainRecipe.MaximumSurfaces}.");
+        if (groups.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need at least {groups.Count} surfaces (different flags, zones, appearance or model values), more than a recipe's {TerrainRecipe.MaximumSurfaces}.");
         // Within a group, pieces that overlap in plan view go to different surfaces (first fit, in root order).
         List<TerrainConversionSurface> result = [];
-        foreach (var ((flags, zone, number), nodes) in groups.OrderBy(g => g.Key.Zone).ThenBy(g => g.Key.Flags).ThenBy(g => valueTexts[g.Key.Values], StringComparer.Ordinal))
+        foreach (var ((flags, zone, number, appearanceNumber), nodes) in groups.OrderBy(g => g.Key.Zone).ThenBy(g => g.Key.Flags).ThenBy(g => valueTexts[g.Key.Values], StringComparer.Ordinal).ThenBy(g => g.Key.Appearance))
         {
             string values = valueTexts[number];
             List<(List<GltfNode> Members, HashSet<TerrainConversionGeometry.Sheet> Areas)> layers = [];
@@ -296,20 +350,22 @@ public static partial class SourceTerrainConversion
                 var area = mesh.Area ??= geometry.Read(node.Mesh!);
                 var layer = layers.FirstOrDefault(l => !l.Areas.Any(other => geometry.Overlaps(other, area)));
                 if (layer.Members == null && result.Count + layers.Count >= TerrainRecipe.MaximumSurfaces)
-                    throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, model values, or stacked sheets).");
+                    throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, appearance, model values, or stacked sheets).");
                 if (layer.Members == null) layers.Add(([node], new(ReferenceEqualityComparer.Instance) { area }));
                 else { layer.Members.Add(node); layer.Areas.Add(area); }
             }
-            if (result.Count + layers.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, model values, or stacked sheets).");
+            if (result.Count + layers.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, appearance, model values, or stacked sheets).");
             // Pieces with model values of their own (an unlit or scrolling surface) are a surface of their own, named by a short hash of the values.
             string model = values.Length == 0 ? "" : "_m" + SourceProject.Sha256(Encoding.UTF8.GetBytes(values))[..6];
             // Read back once for the group: its stacked sheets carry the same values, which applying the plan copies into each surface.
             JsonObject? modelValues = values.Length == 0 ? null : JsonNode.Parse(values) as JsonObject;
             for (int k = 0; k < layers.Count; k++)
-                result.Add(new($"z{(zone == 0xFF ? "any" : zone.ToString(System.Globalization.CultureInfo.InvariantCulture))}_{flags:x8}{model}" + (layers.Count > 1 ? $"_{k + 1}" : ""), flags, zone, [.. layers[k].Members.Select(n => n.Index)])
-                { ModelValues = modelValues });
+                result.Add(new($"z{(zone == 0xFF ? "any" : zone.ToString(System.Globalization.CultureInfo.InvariantCulture))}_{flags:x8}{model}" + (appearanceNumber == 0 ? "" : $"_a{appearanceNumber}") + (layers.Count > 1 ? $"_{k + 1}" : ""), flags, zone, [.. layers[k].Members.Select(n => n.Index)])
+                { ModelValues = modelValues, Appearance = appearances[appearanceNumber] });
         }
-        return new(database, surfaces, recipe, result, kept);
+        TerrainConversionPlan plan = new(database, surfaces, recipe, result, kept);
+        TerrainConversionSerializationBudget.Check(plan, doc.AllNodes().Where(n => n.Index >= 0).ToDictionary(n => n.Index), limits, token);
+        return plan;
 
         // The database's objects: its roots and, in their place, what its groups hold (a part's reference holds the
         // database's own records; the part's objects are in its file), with the zone each inherits (the roots' 0xFF).
@@ -322,7 +378,7 @@ public static partial class SourceTerrainConversion
                 // A group several parents share is written once per parent and imported from its first copy alone: its
                 // pieces would be converted once per copy, and the copies would no longer agree.
                 if (extras?["instance"] != null) { if (shared.Add(extras["instance"]!.ToJsonString())) kept.Add(new(WorldGltf.EngineName(node), "a group several parents share")); continue; }
-                if (extras?["ref"] != null) kept.Add(new(WorldGltf.EngineName(node), "a part of the mission database in a file of its own"));
+                if (extras?["ref"] != null || extras?[WorldGltf.ZoneReference] != null) kept.Add(new(WorldGltf.EngineName(node), "a part of the mission database in a file of its own"));
                 foreach (var member in Members(node.Children, Zone(extras, inherited))) yield return member;
             }
         }
@@ -330,10 +386,15 @@ public static partial class SourceTerrainConversion
 
     /// <summary>Applies a plan as one change: the surfaces file, the recipe, and the database without the pieces and with the marker in the first piece's place.</summary>
     public static SourceTransaction Apply(SourceWorkspace workspace, TerrainConversionPlan plan, CancellationToken token = default)
+        => Apply(workspace, plan, TerrainConversionSerializationBudget.Limits.Default, token);
+
+    internal static SourceTransaction Apply(SourceWorkspace workspace, TerrainConversionPlan plan, TerrainConversionSerializationBudget.Limits limits, CancellationToken token)
     {
         if (plan.Groups.Count == 0) throw new InvalidDataException("No piece of the mission database can become terrain.");
         var (root, doc) = Read(workspace, plan.Database, token);
+        var zones = ConversionZones.Read(workspace, plan.Database, root, doc, token);
         var byIndex = doc.AllNodes().Where(n => n.Index >= 0).ToDictionary(n => n.Index);
+        TerrainConversionSerializationBudget.Check(plan, byIndex, limits, token);
         // The surfaces: one node per surface whose mesh holds its pieces' primitives as they were.
         GltfDocument surfaces = new();
         foreach (var group in plan.Groups)
@@ -344,7 +405,8 @@ public static partial class SourceTerrainConversion
                 if (!byIndex.TryGetValue(index, out var node) || node.Mesh == null) throw new InvalidDataException($"{plan.Database} changed since the conversion was planned.");
                 mesh.Primitives.AddRange(node.Mesh.Primitives);
             }
-            surfaces.Roots.Add(new GltfNode { Name = group.Id, Mesh = mesh });
+            surfaces.Roots.Add(new GltfNode { Name = group.Id, Mesh = mesh,
+                Extras = group.Appearance == null ? null : new JsonObject { [WorldGltf.Key] = new JsonObject { ["appearance"] = group.Appearance.DeepClone() } } });
         }
         string binary = plan.Surfaces[(plan.Surfaces.LastIndexOf('/') + 1)..^".gltf".Length] + ".bin";
         var (json, bin) = surfaces.Write(binary, token);
@@ -369,10 +431,12 @@ public static partial class SourceTerrainConversion
         // Removal renumbers the scene's list into a new array.
         ((JsonArray)((JsonArray)root["scenes"]!)[sceneIndex]!["nodes"]!).Insert(place, nodes.Count - 1);
         byte[] database = GltfJson.Write(root, indented: false, token);
-        _ = GltfDocument.Read(database, uri => workspace.Read(WorldAssembler.Relative(plan.Database, uri), token)
-            ?? throw new InvalidDataException($"{plan.Database}: buffer {JsonData.ShownText(uri)} is unavailable."), token);
+        var updated = WorldAssembler.ReadModel(database, plan.Database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
+            ?? throw new InvalidDataException($"{plan.Database}: buffer {JsonData.ShownText(path)} is unavailable."), token);
+        List<(string, byte[]?)> changes = [(plan.Surfaces, json), ($"{folder}/{binary}", bin), (plan.Recipe, TerrainRecipe.Parse(recipe.Write(), plan.Recipe).Write()), (plan.Database, database)];
+        if (zones != null) changes.Add(zones.Update(root, updated, plan.Surfaces, surfaces, plan.Groups, byIndex, token));
         return workspace.Apply($"Convert {Path.GetFileName(plan.Database)} to editable terrain",
-            [(plan.Surfaces, json), ($"{folder}/{binary}", bin), (plan.Recipe, TerrainRecipe.Parse(recipe.Write(), plan.Recipe).Write()), (plan.Database, database)], token)
+            changes, token)
             ?? throw new InvalidDataException("The conversion changed nothing.");
     }
 
@@ -381,7 +445,8 @@ public static partial class SourceTerrainConversion
         database = SourceWorkspace.Normalize(database);
         if (!database.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{database} must be a .gltf file to convert.");
         byte[] bytes = workspace.Read(database, token, SourceTerrain.MaximumDatabaseJsonBytes) ?? throw new InvalidDataException($"The project has no {database}.");
-        var doc = GltfDocument.Read(bytes, uri => workspace.Read(WorldAssembler.Relative(database, uri), token) ?? throw new InvalidDataException($"{database} names {JsonData.ShownText(uri)}, which does not exist."), token);
+        var doc = WorldAssembler.ReadModel(bytes, database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
+            ?? throw new InvalidDataException($"{database}: buffer {JsonData.ShownText(path)} is unavailable."), token);
         JsonObject root;
         try { root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 256 }) as JsonObject ?? throw new InvalidDataException($"{database} is not a JSON object."); }
         catch (JsonException ex) { throw new InvalidDataException($"{database} is not valid JSON: {ex.Message}", ex); }

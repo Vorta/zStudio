@@ -24,7 +24,8 @@ public sealed class TextureEditSession : ContentEditSession
         {
         var selected = before.Documents[SourcePath].Assets.SingleOrDefault(a => a.Index == index) ?? throw new InvalidDataException("Texture no longer exists.");
         List<TextureTargetCandidate> results = [];
-        var paths = resolver.TexturePacks(SourcePath).Where(p => !aliases.Contains(p) && Path.GetDirectoryName(p)!.Equals(Path.GetDirectoryName(SourcePath), StringComparison.OrdinalIgnoreCase)).ToArray();
+        string sourceDirectory = Path.GetDirectoryName(SourcePath)!;
+        var paths = resolver.TexturePacks(SourcePath, token).Where(p => !aliases.Contains(p) && Path.GetDirectoryName(p)!.Equals(sourceDirectory, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (paths.Length > 64) throw new InvalidDataException("Discovery supports at most 64 sibling packs. Select explicit targets instead.");
         foreach (string path in paths)
         {
@@ -43,10 +44,15 @@ public sealed class TextureEditSession : ContentEditSession
         return results;
         }, token);
     }
-    public async Task<PreparedContentEdit> PrepareAsync(string pngPath, int? index, string name, IReadOnlyList<TextureTarget>? targets,
-        AssetResolver resolver, CancellationToken token = default)
+    public Task<PreparedContentEdit> PrepareAsync(string pngPath, int? index, string name, IReadOnlyList<TextureTarget>? targets,
+        AssetResolver resolver, CancellationToken token = default) => PrepareAsync(pngPath, index, name, targets, resolver, FormatRegistry.MaximumDocumentBytes, token);
+    internal async Task<PreparedContentEdit> PrepareAsync(string pngPath, int? index, string name, IReadOnlyList<TextureTarget>? targets,
+        AssetResolver resolver, long maximumSourceBytes, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         var before = Current; var packs = new Dictionary<string, TexturePackEdit>((IReadOnlyDictionary<string, TexturePackEdit>)before.State, StringComparer.OrdinalIgnoreCase);
+        EditBufferBudget sources = new(maximumSourceBytes);
+        foreach (var pack in packs.Values) { token.ThrowIfCancellationRequested(); sources.Document(pack.Source); }
         using var input = new FileStream(pngPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         if (input.Length > MaximumPngBytes) throw new InvalidDataException("PNG input exceeds 16 MiB.");
         byte[] png = new byte[(int)input.Length]; await input.ReadExactlyAsync(png, token);
@@ -63,7 +69,8 @@ public sealed class TextureEditSession : ContentEditSession
             if (!Path.GetDirectoryName(target.Path)!.Equals(Path.GetDirectoryName(SourcePath), StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Variant targets must be sibling mission texture packs.");
             if (!packs.ContainsKey(target.Path))
             {
-                var doc = await resolver.OpenCachedAsync(target.Path, token);
+                var doc = await resolver.OpenCachedAsync(target.Path, sources.Remaining, token);
+                sources.Document(doc);
                 if (doc.Probe.Family != FormatFamily.TexturePack || doc.Probe.Version != 1 || doc.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact v1 texture pack is required: " + target.Path);
                 packs[target.Path] = new(doc, new Dictionary<int, TexturePayload>(), []); baselines[target.Path] = doc;
                 if (packs.Values.Sum(p => (long)p.Source.Bytes.Length) > FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException("Texture batch exceeds 512 MiB.");

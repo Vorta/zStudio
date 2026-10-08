@@ -188,10 +188,10 @@ public sealed class SourceWorkspaceTests : IDisposable
         Assert.Null(workspace.Apply("same", [("gamegen/m1.gs", workspace.Read("gamegen/m1.gs", Token))], Token));
         // New files can be created; deleting a file the disk holds is not supported yet.
         Assert.NotNull(workspace.Apply("new", [("data/m1/zrdr/new.zrd", Bytes("( 1 )\n"))], Token));
-        Assert.True(workspace.Exists("data/m1/zrdr/new.zrd"));
+        Assert.True(workspace.Exists("data/m1/zrdr/new.zrd", Token));
         Assert.Throws<NotSupportedException>(() => workspace.Apply("delete", [("gamegen/m1.gs", null)], Token));
         workspace.Undo();
-        Assert.False(workspace.Exists("data/m1/zrdr/new.zrd")); Assert.False(workspace.IsDirty);
+        Assert.False(workspace.Exists("data/m1/zrdr/new.zrd", Token)); Assert.False(workspace.IsDirty);
         Assert.Equal("new", workspace.RedoLabel);
     }
 

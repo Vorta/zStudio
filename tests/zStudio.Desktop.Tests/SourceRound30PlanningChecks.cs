@@ -87,7 +87,7 @@ internal static class SourceRound30PlanningChecks
             {
                 var world = GameZWorldReader.FromDocument(doc.Document, token);
                 var hull = Assert.Single(world.Nodes, n => n.Name == "hull");
-                int node = GameZWriter.NodeSlots(world)[hull];
+                int node = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[hull];
                 var requested = ObjectTransform.Of(hull) with { Position = new Vector3(2, 0, 0) };
                 var method = typeof(MainWindow).GetMethod("MoveSourceObjectAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 Task<DocumentModel> GuiEdit() => (Task<DocumentModel>)method.Invoke(main, [doc, node, requested, token])!;

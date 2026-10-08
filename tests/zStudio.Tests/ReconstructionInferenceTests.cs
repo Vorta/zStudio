@@ -19,7 +19,8 @@ public sealed class ReconstructionInferenceTests
     {
         public Dictionary<string, byte[]> Files { get; } = files;
         public bool Exists(string relative) => Files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) => Files[relative];
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative]; limits.Validate(result); return result; }
     }
 
     private static string Script(int mission, string loads, string before = "") => $"""
@@ -97,7 +98,7 @@ public sealed class ReconstructionInferenceTests
     /// <summary>Each slot's class and name, freed slots by their kept name.</summary>
     private static List<string> Slots(GameZWorld world)
     {
-        var slots = GameZWriter.NodeSlots(world).ToDictionary(p => p.Value, p => p.Key);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken).ToDictionary(p => p.Value, p => p.Key);
         int count = Math.Max(slots.Count == 0 ? 0 : slots.Keys.Max() + 1, world.FreedSlots.Count == 0 ? 0 : world.FreedSlots.Keys.Max() + 1);
         return [.. Enumerable.Range(0, count).Select(s => slots.TryGetValue(s, out var n) ? $"{s}:{n.Class}:{n.Name}" : world.FreedSlots.ContainsKey(s) ? $"{s}:freed" : $"{s}:-")];
     }
@@ -157,10 +158,11 @@ public sealed class ReconstructionInferenceTests
         }
         var (outputs, notes, shipped) = Reconstruct(files, 1, 2);
         Assert.Empty(notes);
-        string Text(string path) => Encoding.UTF8.GetString(outputs.Single(o => o.Path == path).Bytes);
-        Assert.Contains("./r.gltf", Text("data/m1/models/x.gltf"));
-        Assert.DoesNotContain("./r.gltf", Text("data/m2/models/x.gltf"));
-        Assert.DoesNotContain("./r.gltf", Text("data/common/models/x.gltf"));
+        string[] References(int mission, string path) => SourceMapZones.Parse(outputs.Single(o => o.Path == $"data/m{mission}/meta/zones.json").Bytes, Token)
+            .Assets.Single(a => a.LogicalPath == path).References.Select(r => r.Spelling).ToArray();
+        Assert.Contains("./r.gltf", References(1, "data/m1/models/x.gltf"));
+        Assert.DoesNotContain("./r.gltf", References(2, "data/m2/models/x.gltf"));
+        Assert.DoesNotContain("./r.gltf", References(1, "data/common/models/x.gltf"));
         for (int m = 1; m <= 2; m++) Assert.Equal(Slots(shipped(m)), Slots(Rebuild(files, outputs, m)));
     }
 
@@ -182,8 +184,8 @@ public sealed class ReconstructionInferenceTests
 
         var (outputs, notes, shipped) = Reconstruct(files, 1);
         Assert.Empty(notes);
-        string f = Encoding.UTF8.GetString(outputs.Single(o => o.Path == "data/m1/models/f.gltf").Bytes);
-        Assert.Equal(2, f.Split("./r.gltf").Length - 1);
+        var f = SourceMapZones.Parse(outputs.Single(o => o.Path == "data/m1/meta/zones.json").Bytes, Token).Assets.Single(a => a.LogicalPath == "data/m1/models/f.gltf");
+        Assert.Equal(2, f.References.Count(r => r.Spelling == "./r.gltf"));
         var rebuilt = Rebuild(files, outputs, 1);
         Assert.Equal(Slots(shipped(1)), Slots(rebuilt));
         Assert.Equal(ModelUsers(shipped(1)), ModelUsers(rebuilt));
@@ -192,7 +194,7 @@ public sealed class ReconstructionInferenceTests
     /// <summary>The slots of the nodes sharing each model.</summary>
     private static List<string> ModelUsers(GameZWorld world)
     {
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         return [.. world.Nodes.Where(n => n.Model != null).GroupBy(n => n.Model!, ReferenceEqualityComparer.Instance).Select(g => string.Join(",", g.Select(n => slots[n]).Order())).Order(StringComparer.Ordinal)];
     }
 

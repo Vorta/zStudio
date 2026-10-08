@@ -65,7 +65,7 @@ public partial class MainWindow
         doc.IsStale = false;
         foreach (var error in result.Errors) ViewModel.AddProblem(error, file: doc.Path);
         await RefreshContentDependentsAsync(doc);
-        ViewModel.Status = result.Errors.Count == 0 ? "Saved and verified " + string.Join("; ", result.SavedPaths) : "Some files were saved; see Problems for the remaining file.";
+        ViewModel.Status = result.Errors.Count == 0 ? $"Saved and verified {result.SavedPaths.Count} files" : "Some files were saved; see Problems for the remaining file.";
         return result;
     }
     private async Task<bool> SaveContentDocumentAsync(DocumentModel doc, bool saveAs)
@@ -137,14 +137,15 @@ public partial class MainWindow
                 var targets = await TextureSession(d).DiscoverTargetsAsync(Int(a,"index"), ViewModel.Resolver!, token);
                 CheckResourceContext(d, revision); return Result(new { d.Revision, targets = Page(targets, a, t => t.Path + " " + t.Name).Data });
             });
-        RegisterJob(r, "texture_import", "Replace a texture from RGB/RGBA PNG (16 MiB; up to 4096×4096), or add a named texture when index is omitted. Replacement dimensions must match the selected record. Explicit sibling targets retain their dimensions, using premultiplied-alpha resampling and private palettes for indexed records. One undo step owns the complete batch.",
+        RegisterJob(r, "texture_import", "Replace a texture from RGB/RGBA PNG (16 MiB; up to 4096×4096), or add a named texture when index is omitted. Replacement dimensions must match the selected record. Explicit sibling targets retain their dimensions, using premultiplied-alpha resampling and private palettes for indexed records. One undo step owns the complete batch. Results preview at most 64 files with fileCount/filesTruncated; Path/destination keep 512 characters with PathTruncated/destinationTruncated. Each file includes at most 4 diagnostics of 256 characters with diagnosticCount/diagnosticsTruncated and MessageTruncated. All affected files remain owned and saved.",
             [DocumentParameter, RevisionParameter, P("path","string","Full path of the PNG input.",true), new("index","integer","Texture to replace; omit to add.",Minimum:0,Maximum:4095), P("name","string","New texture name, required when adding."), new("targets","array","Optional explicit replacement targets, including the selected record; one per sibling pack, maximum 64.",Items:new("","object","Target identity.",Properties:[P("path","string","Full texture pack path, as texture_targets returns it.",true),new("index","integer","Record index.",true,Minimum:0,Maximum:4095)]),MinItems:1,MaxItems:64)], false,
             async (a, token) =>
             {
                 var d = TargetDocument(a, true); var edits = TextureSession(d); string png = FullPath(a, "path");
                 var targets = (a["targets"] as JsonArray)?.Select(n => new TextureTarget(FullPath((JsonObject)n!, "path"), Int((JsonObject)n!,"index"))).ToArray();
                 await ApplyContentAsync(d, ct => edits.PrepareAsync(png, a.ContainsKey("index") ? Int(a,"index") : null, Text(a,"name"), targets, ViewModel.Resolver!, ct), d.Revision, token);
-                return Result(new { document = DocumentState(d), files = edits.Documents.Select(x => new { x.Path, destination = edits.TargetPath(x.Path), diagnostics = x.Diagnostics.Take(32) }) });
+                var files = FileResultPreview.Content(edits, diagnostics: true);
+                return Result(new { document = DocumentState(d), files = files.Values, fileCount = files.Count, filesTruncated = files.Truncated });
             });
         Register(r, "script_records", "Page scripts in stored order, or instructions of one script. UUIDs survive edits and undo. Token previews are capped at 64 characters and 16 tokens; source offsets refer to original bytes.", false,
             [DocumentParameter, P("script","string","Optional script UUID to list instructions."), .. PageParameters], a =>

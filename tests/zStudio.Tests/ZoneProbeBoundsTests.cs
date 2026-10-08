@@ -58,15 +58,15 @@ public sealed class ZoneProbeBoundsTests
         // The clamp flag set on a world whose grid has no cell: the engine has no edge cell to move the point into.
         var world = World([], Node("sky", quads: (-500, 0, -500, 1500)));
         world.SetPayloadInt(0x78, 0); world.SetPayloadInt(0x7C, 0); world.SetPayloadInt(0x50, 1);
-        Assert.Single(ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared).Hits);
-        Assert.Single(ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle).Hits);
+        Assert.Single(ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
+        Assert.Single(ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken).Hits);
         // Coordinates the engine's conversion puts outside every grid (huge, infinite, not a number) find nothing.
         foreach (float x in new[] { 3e38f, float.PositiveInfinity, float.NaN, -3e38f })
             foreach (int cells in new[] { 0, 2 })
             {
                 world.SetPayloadInt(0x78, cells); world.SetPayloadInt(0x7C, cells);
-                Assert.Empty(ZoneProbe.Probe(world, x, 100, ZoneSet.Cleared).Hits);
-                Assert.Empty(ZoneProbe.Probe(world, x, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle).Hits);
+                Assert.Empty(ZoneProbe.Probe(world, x, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
+                Assert.Empty(ZoneProbe.Probe(world, x, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken).Hits);
             }
         // A cell number beyond 32 bits is −2³¹ to the engine's (int)floor(), so a clamped probe searches the first column,
         // not the last (cells this small move the point by nothing).
@@ -74,7 +74,7 @@ public sealed class ZoneProbeBoundsTests
         var tiny = World([ground]);
         Assert.Equal((0, 1), (ground.GridColumn, ground.GridRow));
         tiny.SetPayloadInt(0x50, 1); tiny.SetPayloadFloat(0x64, 1e30f); tiny.SetPayloadFloat(0x54, 1e-20f);
-        Assert.Single(ZoneProbe.Probe(tiny, 100, 100, ZoneSet.Cleared).Hits);
+        Assert.Single(ZoneProbe.Probe(tiny, 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
     }
 
     [Fact]
@@ -84,16 +84,16 @@ public sealed class ZoneProbeBoundsTests
         WorldNode a = Node("a"), b = Node("b");
         var world = World([], a);
         Boxed(a); Link(a, b); Link(b, a);
-        Assert.Contains("cyclic", Assert.Throws<InvalidDataException>(() => ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared)).Message);
+        Assert.Contains("cyclic", Assert.Throws<InvalidDataException>(() => ZoneProbe.Probe(world, 100, 100, ZoneSet.Cleared, token: TestContext.Current.CancellationToken)).Message);
         // Each node lists the next twice: 2^22 paths to the last one, all inside the boxes that let the walk through.
         List<WorldNode> chain = [Node("level0")];
         for (int level = 1; level <= 22; level++) { var next = Node($"level{level}"); Link(chain[^1], next); Link(chain[^1], next); chain.Add(next); }
         var deep = World([], chain[0]);
         chain.ForEach(Boxed);
-        Assert.Contains("visit more than", Assert.Throws<InvalidDataException>(() => ZoneProbe.Probe(deep, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle)).Message);
+        Assert.Contains("visit more than", Assert.Throws<InvalidDataException>(() => ZoneProbe.Probe(deep, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken)).Message);
         // With a model of 100 corners on every node, the vertices it would place run out first.
         foreach (var node in chain) node.Model = Node("", quads: [.. Enumerable.Range(0, 25).Select(i => (0f, -1f - i, 0f, 200f))]).Model;
-        Assert.Contains("place more than", Assert.Throws<InvalidDataException>(() => ZoneProbe.Probe(deep, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle)).Message);
+        Assert.Contains("place more than", Assert.Throws<InvalidDataException>(() => ZoneProbe.Probe(deep, 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken)).Message);
     }
 
     [Fact]
@@ -101,11 +101,11 @@ public sealed class ZoneProbeBoundsTests
     {
         // 32 surfaces below y = 500 fill the buffer; one above it is passed over, not dropped.
         var stack = Node("stack", quads: [.. Enumerable.Range(0, 32).Select(i => (0f, (float)i, 0f, 200f)), (0f, 600f, 0f, 200f)]);
-        var full = ZoneProbe.Probe(World([stack]), 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle);
+        var full = ZoneProbe.Probe(World([stack]), 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken);
         Assert.Equal(32, full.Hits.Count); Assert.False(full.Full);
         // One more surface below the probe is dropped, and that fills the buffer.
         Polygon(stack.Model!, 0, 40, 0, 200);
-        Assert.True(ZoneProbe.Probe(World([stack]), 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle).Full);
+        Assert.True(ZoneProbe.Probe(World([stack]), 100, 100, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken).Full);
     }
 
     [Fact]
@@ -120,9 +120,9 @@ public sealed class ZoneProbeBoundsTests
             Boxed(holder);
             Link(holder, Node("deck", quads: (0, 7, 0, 200)));
             var world = World([Node("ground", quads: (0, 0, 0, 50))], holder);
-            Assert.Equal([7f], ZoneProbe.Probe(world, 150, 200, ZoneSet.Cleared).Hits.Select(h => h.Height));
-            Assert.Equal([7f], ZoneProbe.Probe(world, 150, 200, ZoneSet.Cleared, ZoneProbeKind.Vehicle).Hits.Select(h => h.Height));
-            Assert.Empty(ZoneProbe.Probe(world, 150, 50, ZoneSet.Cleared).Hits);
+            Assert.Equal([7f], ZoneProbe.Probe(world, 150, 200, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits.Select(h => h.Height));
+            Assert.Equal([7f], ZoneProbe.Probe(world, 150, 200, ZoneSet.Cleared, ZoneProbeKind.Vehicle, token: TestContext.Current.CancellationToken).Hits.Select(h => h.Height));
+            Assert.Empty(ZoneProbe.Probe(world, 150, 50, ZoneSet.Cleared, token: TestContext.Current.CancellationToken).Hits);
         }
     }
 }

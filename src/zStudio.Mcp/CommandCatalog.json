@@ -1,9 +1,30 @@
 [
   {
     "Name": "zstudio_state",
-    "Description": "Read the visible workspace, document identities, revisions and current preview.",
+    "Description": "Read the visible workspace and page document identities/revisions, preserving complete paths. Offset defaults to 0; limit defaults to 64, maximum 64. Documents have a 1 MiB pre-projection metadata allowance, so a page may be shorter; follow nextOffset, with total and offset. A single unsupported oversized row returns too_large. Status is a 512-character preview with statusTruncated. Source document workspace summaries contain counts and undo/redo state; read source_changes for the shared dirty-file and history details. Global state contentEdits summaries return fileCount with empty files and filesTruncated; per-document command results preview at most 64 file paths/targets of 512 characters, with per-row PathTruncated/destinationTruncated.",
     "Mutates": false,
-    "Parameters": []
+    "Parameters": [
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based document offset; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Document page size 1\u201364; default 64. Follow nextOffset for shorter metadata-bounded pages.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 64
+      }
+    ]
   },
   {
     "Name": "zstudio_capabilities",
@@ -390,7 +411,7 @@
   },
   {
     "Name": "zstudio_reload_document",
-    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project on disk, keeping its pending edits unless gamegen/mN.gs or data/mN/zrdr/anim.zrd changed on disk. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Stage and reparse a clean document before replacing it, using the current model/resource Save As destination. An already-open destination, failure or pre-publication cancellation retains the document and preview. Dirty documents must first be saved or explicitly closed. A source world instead rebuilds from the project\u0027s current sources and pending edits. External changes to any dirty workspace source cause a conflict, including scripts, models, resources and animation definitions (.zad). Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -451,7 +472,7 @@
   },
   {
     "Name": "zstudio_save_document",
-    "Description": "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batches return saved paths and errors; state.contentEdits lists affected content paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Verified save: animations require a NEW destination outside the source root; pickup/AI/tank coordinates save owning archives or explicit new destinations; model edits save all texture variants before GameZ; ZAR/ZRD, script and texture saves verify and atomically replace each working destination or create new Save As files. Batch results preview at most 64 saved/remaining paths and 32 errors, each at most 512 characters, with SavedPathCount/SavedPathsTruncated, RemainingPathCount/RemainingPathsTruncated and ErrorCount/ErrorsTruncated. Source saves return written with writtenCount/writtenTruncated under the same path bound. All files are still saved; truncated previews are not full path identities. Global state.contentEdits reports fileCount with empty files/filesTruncated; per-document command results preview affected paths and targets. Partial content/coordinate Save As retains every requested destination; ordinary Save retries unpublished copies without overwriting existing files. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -747,7 +768,7 @@
   },
   {
     "Name": "zstudio_preview_state",
-    "Description": "Read active preview options, camera and playback state.",
+    "Description": "Read active preview options, camera and playback state. texturePacks retains full choice names and paths on a bounded page (offset/limit, default 100, maximum 200); follow texturePackNextOffset and texturePackCount. Long or escaped paths shorten the page.",
     "Mutates": false,
     "Parameters": [
       {
@@ -757,6 +778,26 @@
         "Required": true,
         "Choices": null,
         "Properties": null
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Zero-based texture-pack choice offset; default 0.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      },
+      {
+        "Name": "limit",
+        "Type": "integer",
+        "Description": "Texture-pack page size, 1\u2013200; default 100.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 1,
+        "Maximum": 200
       }
     ]
   },
@@ -990,7 +1031,7 @@
   },
   {
     "Name": "zstudio_scene_nodes",
-    "Description": "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.",
+    "Description": "List active assembled scene nodes by index (motion previews include only the selected assembly), including instance metadata (64 JSON nodes/1024 text characters per row, inspection_truncated when shortened). Full actor/source identities are retained; long or escaped text shortens pages, so follow nextOffset. MW3 actor labels/query matching use 128-character prefixes; actor NameCharacters/NameTruncated disclose shortening. Full authored data remains available through JSON export.",
     "Mutates": false,
     "Parameters": [
       {
@@ -1070,7 +1111,7 @@
   },
   {
     "Name": "zstudio_scene_options",
-    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Set static model/world options: lod(integer), difficulty(Easy/Medium/Hard; RECOIL only, MW3 uses missions), textures/wireframe/bounds/horizon(boolean), texturePack(path or empty for automatic), highlight(none/nonDefaultSoils/canModify/clipTo/zones), aiNodes/aiThroughGeometry(boolean), aiNetwork(all or ID with aiSnapshot). Highlights and AI are Whole world only. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3233,7 +3274,7 @@
   },
   {
     "Name": "zstudio_pickups",
-    "Description": "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Load/list all authored mission pickup placements and owning archive identities, including difficulty counterparts. Full identities are retained; long or escaped paths shorten pages, so follow nextOffset. Combined query text is bounded before copying; omit query and page if that allowance is exceeded. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -3527,7 +3568,7 @@
   },
   {
     "Name": "zstudio_model_replace",
-    "Description": "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Validate an explicit version-1 OBJ/PNG replacement manifest, then accept the entire batch as one document undo step. Model indices and source SHA-256 must match. Shared file ownership is acquired before acceptance; conflicting writers leave the document unchanged. Saves use save_document. texturePacks previews at most 64 paths of 512 characters, with texturePackCount/texturePacksTruncated; all prepared packs remain part of the edit and save. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -4458,7 +4499,7 @@
   },
   {
     "Name": "zstudio_texture_import",
-    "Description": "Replace a texture from RGB/RGBA PNG (16 MiB; up to 4096\u00D74096), or add a named texture when index is omitted. Replacement dimensions must match the selected record. Explicit sibling targets retain their dimensions, using premultiplied-alpha resampling and private palettes for indexed records. One undo step owns the complete batch. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Replace a texture from RGB/RGBA PNG (16 MiB; up to 4096\u00D74096), or add a named texture when index is omitted. Replacement dimensions must match the selected record. Explicit sibling targets retain their dimensions, using premultiplied-alpha resampling and private palettes for indexed records. One undo step owns the complete batch. Results preview at most 64 files with fileCount/filesTruncated; Path/destination keep 512 characters with PathTruncated/destinationTruncated. Each file includes at most 4 diagnostics of 256 characters with diagnosticCount/diagnosticsTruncated and MessageTruncated. All affected files remain owned and saved. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5018,7 +5059,7 @@
   },
   {
     "Name": "zstudio_source_world_models",
-    "Description": "List the glTF models of the open source project that a world script can load (every .gltf/.glb under data with a loadable name), paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset.",
+    "Description": "List the glTF models of the open source project that a world script can load (every .gltf/.glb under data with a loadable name), paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5104,7 +5145,7 @@
   },
   {
     "Name": "zstudio_source_world_add_model",
-    "Description": "Add a project model to a source world as one undoable change of the project\u0027s workspace: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (an animation bound to a node, attachment or effect this world lacks), returns build_failed and is taken back, as is one canceled before the rebuilt world is shown. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Description": "Add a project model to a source world as one undoable change of the project\u0027s workspace: its folder\u0027s SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (an animation bound to a node, attachment or effect this world lacks), returns build_failed and is taken back, as is one canceled before the replacement document is published to the workspace. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths. Returns an operation ID; use zstudio_operation to await/read the result.",
     "Mutates": true,
     "Parameters": [
       {
@@ -5192,7 +5233,7 @@
         "Items": {
           "Name": "",
           "Type": "string",
-          "Description": "Project path of a definition file (.zad).",
+          "Description": "Complete project path of a definition file (.zad), as discovery lists it.",
           "Required": false,
           "Choices": null,
           "Properties": null
@@ -5203,7 +5244,7 @@
   },
   {
     "Name": "zstudio_source_changes",
-    "Description": "Describe the open source project\u0027s unsaved edits: the files save_document would write, the shared edit history (newest last, with undone steps marked) and, for one file, its working text beside the file on disk as a bounded line diff. Workspace and history path summaries keep 256 characters, with pathsTruncated flags; full source identities are retained internally.",
+    "Description": "Describe the open source project\u0027s unsaved edits: the files save_document would write, the shared edit history (newest last, with undone steps marked) and, for one file, its working text beside the file on disk as a bounded line diff. Diff rows reserve the workspace envelope within a 2 MiB presentation allowance and use at most 1 MiB; Truncated discloses omitted rows while ChangedLines retains the full count (-1 when comparison is bounded). Each line keeps 400 characters plus an ellipsis with TextTruncated. Workspace and history path summaries keep 256 characters, with pathsTruncated flags; full source identities are retained internally and diff.File remains complete. A project, save or edit change during inspection returns context_changed; retry for the current revision.",
     "Mutates": false,
     "Parameters": [
       {
@@ -5621,7 +5662,7 @@
   },
   {
     "Name": "zstudio_source_recovery",
-    "Description": "List the open source project\u0027s interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved.",
+    "Description": "List the open source project\u0027s interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved. A project replacement during inspection returns context_changed; retry for the current project.",
     "Mutates": false,
     "Parameters": []
   },
@@ -5827,10 +5868,22 @@
         "Items": {
           "Name": "",
           "Type": "array",
-          "Description": "[x, z].",
+          "Description": "Exactly [x, z].",
           "Required": false,
           "Choices": null,
-          "Properties": null
+          "Properties": null,
+          "Items": {
+            "Name": "",
+            "Type": "number",
+            "Description": "Finite world coordinate.",
+            "Required": false,
+            "Choices": null,
+            "Properties": null,
+            "NumberMinimum": -1000000,
+            "NumberMaximum": 1000000
+          },
+          "MinItems": 2,
+          "MaxItems": 2
         },
         "MinItems": 1,
         "MaxItems": 10000
@@ -5856,7 +5909,77 @@
           "Description": "A polygon.",
           "Required": false,
           "Choices": null,
-          "Properties": null
+          "Properties": [
+            {
+              "Name": "outer",
+              "Type": "array",
+              "Description": "A ring of at least three [x, z] points.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Items": {
+                "Name": "",
+                "Type": "array",
+                "Description": "Exactly [x, z].",
+                "Required": false,
+                "Choices": null,
+                "Properties": null,
+                "Items": {
+                  "Name": "",
+                  "Type": "number",
+                  "Description": "Finite world coordinate.",
+                  "Required": false,
+                  "Choices": null,
+                  "Properties": null,
+                  "NumberMinimum": -1000000,
+                  "NumberMaximum": 1000000
+                },
+                "MinItems": 2,
+                "MaxItems": 2
+              },
+              "MinItems": 3,
+              "MaxItems": 200000
+            },
+            {
+              "Name": "holes",
+              "Type": "array",
+              "Description": "Optional hole rings.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "Items": {
+                "Name": "",
+                "Type": "array",
+                "Description": "A ring of at least three [x, z] points.",
+                "Required": false,
+                "Choices": null,
+                "Properties": null,
+                "Items": {
+                  "Name": "",
+                  "Type": "array",
+                  "Description": "Exactly [x, z].",
+                  "Required": false,
+                  "Choices": null,
+                  "Properties": null,
+                  "Items": {
+                    "Name": "",
+                    "Type": "number",
+                    "Description": "Finite world coordinate.",
+                    "Required": false,
+                    "Choices": null,
+                    "Properties": null,
+                    "NumberMinimum": -1000000,
+                    "NumberMaximum": 1000000
+                  },
+                  "MinItems": 2,
+                  "MaxItems": 2
+                },
+                "MinItems": 3,
+                "MaxItems": 200000
+              },
+              "MaxItems": 333333
+            }
+          ]
         },
         "MaxItems": 1024
       }
@@ -5959,6 +6082,221 @@
         "Required": false,
         "Choices": null,
         "Properties": null
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_zones",
+    "Description": "Inspect the map zone catalog and pinned draft. Zone assignments live in data/mN/meta/zones.json; model geometry is shared. Optional exact targets return a bounded profile/scope page.",
+    "Mutates": false,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "targets",
+        "Type": "array",
+        "Description": "Exact source scene nodes and, for faces, original model polygon indices.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Source zone target.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "node",
+              "Type": "integer",
+              "Description": "Scene node index.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 0,
+              "Maximum": 2147483647
+            },
+            {
+              "Name": "polygon",
+              "Type": "integer",
+              "Description": "Source model polygon index; omit for object.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 0,
+              "Maximum": 2147483647
+            }
+          ]
+        },
+        "MaxItems": 4096
+      },
+      {
+        "Name": "offset",
+        "Type": "integer",
+        "Description": "Target page offset.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 2147483647
+      }
+    ]
+  },
+  {
+    "Name": "zstudio_source_zone_draft",
+    "Description": "Open, edit, paint or apply the shared zone draft. begin opens Properties; set configures faces/objects, ordered zones, gate and shared scope; add supplies exact node/polygon targets; paint toggles the explicit GUI brush; apply accepts one undoable edit; cancel discards. Every action after begin requires the current draftToken. Geometry is unchanged by zone-only edits. Returns an operation ID; use zstudio_operation to await/read the result.",
+    "Mutates": true,
+    "Parameters": [
+      {
+        "Name": "document",
+        "Type": "string",
+        "Description": "Document lifetime ID from zstudio_state.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "revision",
+        "Type": "integer",
+        "Description": "Expected current document revision. Read before editing.",
+        "Required": true,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 9223372036854775807
+      },
+      {
+        "Name": "action",
+        "Type": "string",
+        "Description": "Draft operation.",
+        "Required": true,
+        "Choices": [
+          "begin",
+          "set",
+          "add",
+          "paint",
+          "apply",
+          "cancel",
+          "label"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "draftToken",
+        "Type": "string",
+        "Description": "Current draft token from source_zones.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "faces",
+        "Type": "boolean",
+        "Description": "True for polygon faces, false for object zones.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "zones",
+        "Type": "array",
+        "Description": "Zero to three ordered face zone IDs; objects accept one ID or an empty list to keep their current zone; 255 means Any.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "integer",
+          "Description": "Zone ID.",
+          "Required": false,
+          "Choices": null,
+          "Properties": null,
+          "Minimum": 0,
+          "Maximum": 255
+        },
+        "MaxItems": 3
+      },
+      {
+        "Name": "gate",
+        "Type": "string",
+        "Description": "Object altitude-probe gate: keep retains each object\u0027s value; on/off explicitly set it.",
+        "Required": false,
+        "Choices": [
+          "keep",
+          "on",
+          "off"
+        ],
+        "Properties": null
+      },
+      {
+        "Name": "zoneId",
+        "Type": "integer",
+        "Description": "Zone ID to name with action label.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Minimum": 0,
+        "Maximum": 255
+      },
+      {
+        "Name": "label",
+        "Type": "string",
+        "Description": "Zone name of 1\u2013256 characters for action label; 255 must remain Any.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "sharedScope",
+        "Type": "boolean",
+        "Description": "Explicitly permit every use of selected logical model/mesh in this map.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null
+      },
+      {
+        "Name": "targets",
+        "Type": "array",
+        "Description": "Exact source scene nodes and, for faces, original model polygon indices.",
+        "Required": false,
+        "Choices": null,
+        "Properties": null,
+        "Items": {
+          "Name": "",
+          "Type": "object",
+          "Description": "Source zone target.",
+          "Required": false,
+          "Choices": null,
+          "Properties": [
+            {
+              "Name": "node",
+              "Type": "integer",
+              "Description": "Scene node index.",
+              "Required": true,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 0,
+              "Maximum": 2147483647
+            },
+            {
+              "Name": "polygon",
+              "Type": "integer",
+              "Description": "Source model polygon index; omit for object.",
+              "Required": false,
+              "Choices": null,
+              "Properties": null,
+              "Minimum": 0,
+              "Maximum": 2147483647
+            }
+          ]
+        },
+        "MaxItems": 4096
       }
     ]
   },

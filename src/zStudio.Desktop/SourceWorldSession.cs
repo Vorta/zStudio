@@ -46,11 +46,11 @@ internal sealed class SourceWorldSession : IDisposable
     private readonly SourcePreviewCache cache;
     public bool IsDisposed { get; private set; }
 
-    /// <param name="token">Observed while the folders of ended sessions are looked for (see <see cref="SourceWorlds.AbandonedBuilds"/>).</param>
+    /// <param name="token">Observed before checking script presence and while the folders of ended sessions are looked for (see <see cref="SourceWorlds.AbandonedBuilds"/>).</param>
     public SourceWorldSession(SourceWorkspace workspace, string mission, CancellationToken token = default)
     {
         Workspace = workspace; Mission = mission.ToLowerInvariant();
-        if (workspace.Read(ScriptPath) == null) throw new InvalidDataException($"The project has no world script {ScriptPath}.");
+        if (!workspace.Exists(ScriptPath, token)) throw new InvalidDataException($"The project has no world script {ScriptPath}.");
         cache = new(Root, token);
     }
 

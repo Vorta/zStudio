@@ -19,18 +19,21 @@ public partial class MainWindow
     private TerrainBrushState? terrainBrush;
 
     private static SourceWorldSession SourceWorldOf(DocumentModel doc) => doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
-    /// <summary>The project's recipes, those this world's pieces came from first.</summary>
-    private static IReadOnlyList<string> TerrainRecipesOf(DocumentModel doc) => TerrainRecipes(SourceWorldOf(doc).Workspace, UsedTerrainRecipes(doc));
     /// <summary>The recipes this world's pieces came from.</summary>
     private static string[] UsedTerrainRecipes(DocumentModel doc) =>
         doc.SourceBuild?.Provenance.Values.Select(p => p.Terrain).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
-    /// <summary>The project's recipes, <paramref name="used"/> first; it lists the project's files, so it may run off the UI thread.</summary>
-    private static IReadOnlyList<string> TerrainRecipes(SourceWorkspace workspace, string[] used)
+    /// <summary>Shared cancellable recipe inventory; callers run it on their preparation/inspection worker.</summary>
+    internal Func<SourceWorkspace, CancellationToken, IReadOnlyList<string>> TerrainRecipeFiles { get; set; } = SourceTerrain.Recipes;
+    /// <summary>The project's recipes, <paramref name="used"/> first; runs on the caller's worker.</summary>
+    private static IReadOnlyList<string> TerrainRecipes(SourceWorkspace workspace, string[] used, CancellationToken token,
+        Func<SourceWorkspace, CancellationToken, IReadOnlyList<string>> read)
     {
         IReadOnlyList<string> all;
-        try { all = SourceTerrain.Recipes(workspace); }
+        try { all = read(workspace, token); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-        return [.. used, .. all.Where(r => !used.Contains(r, StringComparer.OrdinalIgnoreCase))];
+        token.ThrowIfCancellationRequested();
+        var included = used.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return [.. used, .. all.Where(r => !included.Contains(r))];
     }
     /// <summary>The mission database the world was built from: the glTF file its database nodes came from.</summary>
     private static string MissionDatabase(DocumentModel doc)
@@ -48,7 +51,8 @@ public partial class MainWindow
     /// <summary>Changes a recipe as one undoable change and rebuilds the world; recipe edits read the current recipe, not the build, so they work in a world built before another's edit.</summary>
     private Task<DocumentModel> EditTerrainAsync(DocumentModel doc, string recipe, string label, Func<TerrainRecipe, TerrainRecipe> change, CancellationToken token) =>
         PrepareSourceWorldEditAsync(doc, label, (w, ct) => SourceTerrain.Edit(w, recipe, label, change, ct), token, fromBuild: false);
-    private Task<DocumentModel> CreateTerrainAsync(DocumentModel doc, string model, IReadOnlyList<string> nodes, string? recipe, CancellationToken token)
+    internal sealed record TerrainCreation(DocumentModel Document, string Recipe, JsonNode Recipes);
+    internal async Task<TerrainCreation> CreateTerrainAsync(DocumentModel doc, string model, IReadOnlyList<string> nodes, string? recipe, CancellationToken token)
     {
         string database = MissionDatabase(doc);
         string file = model.Replace('\\', '/');
@@ -57,7 +61,11 @@ public partial class MainWindow
             && doc.SourceBuild?.Provenance.Values.Any(p => string.Equals(p.ModelFile, file, StringComparison.OrdinalIgnoreCase) || string.Equals(p.LoadedFile, file, StringComparison.OrdinalIgnoreCase)) == true)
             throw new StudioCommandException("unsupported", $"{file} is already loaded into this world as an object; terrain from it would add its geometry a second time. Use a file the world does not load.");
         var existingRecipes = UsedTerrainRecipes(doc);
-        return PrepareSourceWorldEditAsync(doc, $"Creating terrain from {Path.GetFileName(model)}", (w, ct) =>
+        var workspace = SourceWorldOf(doc).Workspace;
+        var readFiles = TerrainRecipeFiles;
+        string createdRecipe = "";
+        JsonNode? usedPage = null, unusedPage = null;
+        var next = await PrepareSourceWorldEditAsync(doc, $"Creating terrain from {Path.GetFileName(model)}", (w, ct) =>
         {
             foreach (string existing in existingRecipes)
             {
@@ -68,8 +76,32 @@ public partial class MainWindow
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", $"{existing} could not be read ({ex.Message}); try again."); }
                 if (uses) throw new StudioCommandException("unsupported", $"{file} is already a surface file of {existing}; another terrain from it would add its geometry a second time.");
             }
-            return SourceTerrain.Create(w, database, model, nodes, recipe, ct);
+            var transaction = SourceTerrain.Create(w, database, model, nodes, recipe, ct);
+            createdRecipe = transaction.Files.Single(f => f.Relative.EndsWith(TerrainRecipe.Extension, StringComparison.OrdinalIgnoreCase)).Relative;
+            // Listing is observational: using the prepared workspace would turn every unrelated recipe into a
+            // held presence dependency. The shared preparation guard and final revision check cover this snapshot.
+            var files = TerrainRecipes(workspace, [], ct, readFiles);
+            // Reserve/project both possible orders before acceptance. A surface that emits no pieces is listed,
+            // but is not a used recipe. After publication only the frozen build's provenance chooses the page.
+            unusedPage = TerrainCreationPage(files, existingRecipes, createdRecipe, false, ct);
+            usedPage = TerrainCreationPage(files, existingRecipes, createdRecipe, true, ct);
+            return transaction;
         }, token, fromBuild: false);
+        bool used = next.SourceBuild?.Provenance.Values.Any(p => string.Equals(p.Terrain, createdRecipe, StringComparison.OrdinalIgnoreCase)) == true;
+        return new(next, createdRecipe, (used ? usedPage : unusedPage)!);
+    }
+    internal static JsonNode TerrainCreationPage(IReadOnlyList<string> files, string[] used, string created, bool createdIsUsed, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var first = used.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (createdIsUsed) first.Add(created);
+        var all = files.Append(created).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase);
+        return Page(Rows(), new JsonObject { ["limit"] = 64 }, maximumRowBytes: p => 32 + 6L * p.Length).Data;
+        IEnumerable<string> Rows()
+        {
+            foreach (string path in first.Order(StringComparer.OrdinalIgnoreCase)) { token.ThrowIfCancellationRequested(); yield return path; }
+            foreach (string path in all) { token.ThrowIfCancellationRequested(); if (!first.Contains(path)) yield return path; }
+        }
     }
     private Task<DocumentModel> PaintTerrainAsync(DocumentModel doc, string recipe, string region, IReadOnlyList<Vector2> path, float radius, bool add, CancellationToken token)
     {
@@ -294,9 +326,11 @@ public partial class MainWindow
         if (meshes.Count == 0) throw new StudioCommandException("invalid_argument", $"{model} has no meshes.");
         TerrainCreateDialog dialog = new(model, meshes) { Owner = this };
         if (dialog.ShowDialog() != true) return;
-        var next = await CreateTerrainAsync(doc, model, dialog.Chosen, null, CancellationToken.None);
-        string recipe = model[..model.LastIndexOf('.')] + TerrainRecipe.Extension;
-        if (!next.IsDisposed) await ShowTerrainPropertiesAsync(next, recipe, null, null, null);
+        var created = await CreateTerrainAsync(doc, model, dialog.Chosen, null, CancellationToken.None);
+        if (!created.Document.IsDisposed)
+            try { await ShowTerrainPropertiesAsync(created.Document, created.Recipe, null, null, null); }
+            catch (Exception ex) when (ex is StudioCommandException or IOException or UnauthorizedAccessException or OperationCanceledException)
+            { ViewModel.Status = Bounded($"Terrain was created, but Properties could not be opened: {ex.Message}"); }
     });
 
     // ---------------------------------------------------------------- MCP
@@ -310,6 +344,9 @@ public partial class MainWindow
             var session = SourceWorldOf(d); var workspace = session.Workspace; var used = UsedTerrainRecipes(d);
             long workspaceRevision = workspace.ContentRevision;
             var readRecipe = TerrainRecipeReader;
+            var readFiles = TerrainRecipeFiles;
+            using var inspection = CancellationTokenSource.CreateLinkedTokenSource(token, d.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
+            var inspectionToken = inspection.Token;
             void VerifyCurrent()
             {
                 token.ThrowIfCancellationRequested();
@@ -323,13 +360,13 @@ public partial class MainWindow
                 int offset = Int(a, "offset");
                 var page = await Task.Run(() =>
                 {
-                    var listed = TerrainRecipes(workspace, used);
+                    var listed = TerrainRecipes(workspace, used, inspectionToken, readFiles);
                     return TerrainRecipePage(listed, offset, path =>
                     {
-                        var recipe = readRecipe(workspace, path, token);
+                        var recipe = readRecipe(workspace, path, inspectionToken);
                         return (recipe.Surfaces.Count, recipe.Regions.Count);
-                    }, path => pieces.GetValueOrDefault(path)?.Count ?? 0, token);
-                }, token);
+                    }, path => pieces.GetValueOrDefault(path)?.Count ?? 0, inspectionToken);
+                }, inspectionToken);
                 VerifyCurrent();
                 var data = page.Data.AsObject();
                 var rows = data["items"]; data.Remove("items"); data["recipes"] = rows;
@@ -346,16 +383,16 @@ public partial class MainWindow
             {
                 (parsed, areas) = await Task.Run(() =>
                 {
-                    var recipe = readRecipe(workspace, path, token);
+                    var recipe = readRecipe(workspace, path, inspectionToken);
                     Dictionary<TerrainShape, TerrainArea> measured = new(ReferenceEqualityComparer.Instance);
                     // Compute only the requested page and selected region, once per shape, away from the dispatcher.
                     foreach (var region in recipe.Regions.Skip(regionOffset).Take(64).Concat(recipe.Regions.Where(r => r.Name == selectedName)))
                     {
-                        token.ThrowIfCancellationRequested();
+                        inspectionToken.ThrowIfCancellationRequested();
                         if (region.Shape is { } value && !measured.ContainsKey(value)) measured.Add(value, TerrainShapes.InspectArea(value.Polygons));
                     }
                     return (recipe, measured);
-                }, token);
+                }, inspectionToken);
             }
             catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
             VerifyCurrent();
@@ -409,9 +446,10 @@ public partial class MainWindow
              P("wholeSurfaces", "boolean", "add_region/update_region: the region covers its whole surfaces (no shape)."),
              new("index", "integer", "add_region/move_region: the region's place in the order.", Minimum: 0, Maximum: TerrainRecipe.MaximumRegions),
              P("mode", "string", "paint: paint adds the stroke's area to the region, erase removes it.", false, ["paint", "erase"]),
-             new("path", "array", "paint: the stroke's points as [x, z] pairs (a single point is a disc).", Items: new("", "array", "[x, z]."), MinItems: 1, MaxItems: 10_000),
+             new("path", "array", "paint: the stroke's points as [x, z] pairs (a single point is a disc).", Items: TerrainPointParameter(), MinItems: 1, MaxItems: 10_000),
              new("radius", "number", "paint: the brush radius in world units with path."),
-             new("polygons", "array", "paint: polygons instead of a path, each { outer: [[x, z]…], holes: [[[x, z]…]] }.", Items: new("", "object", "A polygon."), MaxItems: TerrainRecipe.MaximumPolygons)], true,
+             new("polygons", "array", "paint: polygons instead of a path, each { outer: [[x, z]…], holes: [[[x, z]…]] }.", Items: new("", "object", "A polygon.", Properties:
+                [TerrainRingParameter("outer", required: true), new("holes", "array", "Optional hole rings.", Items: TerrainRingParameter(""), MaxItems: TerrainRecipe.MaximumPoints / 3)]), MaxItems: TerrainRecipe.MaximumPolygons)], true,
             async (a, token) =>
             {
                 var d = TargetDocument(a, true);
@@ -528,11 +566,16 @@ public partial class MainWindow
             {
                 var d = TargetDocument(a, true);
                 var nodes = (a["surfaces"] as JsonArray)!.Select(v => v!.GetValue<string>()).ToArray();
-                var next = await CreateTerrainAsync(d, Text(a, "model"), nodes, a["recipe"] is null ? null : Text(a, "recipe"), token);
-                var recipes = Page(TerrainRecipesOf(next), new JsonObject { ["limit"] = 64 }, maximumRowBytes: p => 32 + 6L * p.Length).Data;
-                return Result(new { document = DocumentState(next), recipes = recipes["items"]!.DeepClone(), recipeCount = recipes["total"]!.GetValue<int>(), nextRecipeOffset = recipes["nextOffset"]?.GetValue<int>() });
+                var created = await CreateTerrainAsync(d, Text(a, "model"), nodes, a["recipe"] is null ? null : Text(a, "recipe"), token);
+                CommitRunningJob();
+                var recipes = created.Recipes;
+                return Result(new { document = DocumentState(created.Document), recipes = recipes["items"]!.DeepClone(), recipeCount = recipes["total"]!.GetValue<int>(), nextRecipeOffset = recipes["nextOffset"]?.GetValue<int>() });
             });
     }
+    private static StudioParameter TerrainPointParameter() => new("", "array", "Exactly [x, z].",
+        Items: new("", "number", "Finite world coordinate.", NumberMinimum: -TerrainRecipe.MaximumCoordinate, NumberMaximum: TerrainRecipe.MaximumCoordinate), MinItems: 2, MaxItems: 2);
+    private static StudioParameter TerrainRingParameter(string name, bool required = false) => new(name, "array", "A ring of at least three [x, z] points.", required,
+        Items: TerrainPointParameter(), MinItems: 3, MaxItems: TerrainRecipe.MaximumRingPoints);
     /// <summary>Only counts survive reading each recipe; large paths shorten the page before any recipe is parsed.</summary>
     internal static StudioResult TerrainRecipePage(IEnumerable<string> paths, int offset, Func<string, (int Surfaces, int Regions)> read, Func<string, int> pieces, CancellationToken token) =>
         Page(paths, new JsonObject { ["offset"] = offset, ["limit"] = 64 }, project: path =>

@@ -28,6 +28,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
     private readonly Dictionary<MeshGeometryModel3D, ScenePlacement[]> placements = [];
     private readonly Dictionary<MeshGeometryModel3D, ScenePlacement[]> visiblePlacements = [];
     private readonly Dictionary<DiffuseMaterial, TextureModel> textureMaps = [];
+    private readonly TextureMemoryBudget textureMemory = new();
+    private PreviewTextureCache? previewTextures;
     private DefaultEffectsManager? effects;
     private SortingGroupModel3D? sceneAlphaGroup;
     private Vector3 sceneMin = new(float.PositiveInfinity), sceneMax = new(float.NegativeInfinity);
@@ -81,6 +83,11 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         int current = ++generation;
         if (asset.Kind == AssetKind.World) mission ??= await MissionSceneLoader.LoadAsync(doc, resolver, token: token);
         GameScene scene = (asset.Kind == AssetKind.World ? mission?.Scene : null) ?? doc.Scene ?? throw new InvalidDataException("No scene data.");
+        var candidateTextures = new PreviewTextureCache(textureMemory, resolver.BeginTextureLookup(doc.Path, pack), asset.Kind == AssetKind.World);
+        using var textureUse = candidateTextures.Retain();
+        bool publishedTextures = false;
+        try
+        {
         ScenePacket packet = await Task.Run(async () =>
         {
             SceneView view = SceneBuilder.ForAsset(scene, asset, lod, token);
@@ -95,23 +102,30 @@ public sealed partial class SceneViewport : UserControl, IDisposable
             List<Diagnostic> notes = [.. view.Diagnostics, .. mission?.Diagnostics.Select(n => new Diagnostic("Warning", n)) ?? [], .. mission?.AiNetworks.Diagnostics ?? []]; Dictionary<int, IReadOnlyList<MeshPart>> geometry = [];
             foreach (int index in view.Placements.Select(p => p.ModelIndex).Distinct()) geometry[index] = GeometryBuilder.Build(scene.Models[index], notes, token);
             Dictionary<int, DecodedImage> textures = [];
+            HashSet<int> alphaTextures = []; Dictionary<int, byte[]> masks = [];
+            int textureNotes = 0;
             foreach (int index in geometry.Values.SelectMany(p => p).Select(p => p.MaterialIndex).Distinct())
             {
                 if (index < 0 || index >= scene.Materials.Count) continue;
                 int texture = scene.Materials[index].Int("texture_index", -1); if (texture < 0 || texture >= scene.Textures.Count) continue;
                 if (textures.ContainsKey(texture)) continue;
                 string name = scene.Textures[texture].Text("name");
-                var resolved = await resolver.ResolveTextureAsync(doc.Path, name, pack, token).ConfigureAwait(false);
-                if (resolved != null) { textures[texture] = TextureDecoder.Decode(resolved.Document, resolved.Asset, token); if (resolved.Ambiguous) notes.Add(new("Warning", $"Multiple textures named {name}; using record {resolved.Asset.Index}.")); }
-                else notes.Add(new("Warning", $"Missing texture: {name}"));
+                var resolved = await candidateTextures.GetAsync(name, token).ConfigureAwait(false);
+                if (resolved != null)
+                {
+                    textures[texture] = resolved.Image;
+                    if (resolved.Alpha) alphaTextures.Add(texture);
+                    if (resolved.WhiteAlphaMask != null) masks[texture] = resolved.WhiteAlphaMask;
+                    if (resolved.Ambiguous && textureNotes++ < 32) notes.Add(new("Warning", $"Multiple textures named {PreviewTextureCache.Label(name)}; using record {resolved.RecordIndex}."));
+                }
+                else if (textureNotes++ < 32) notes.Add(new("Warning", $"Missing texture: {PreviewTextureCache.Label(name)}"));
             }
-            HashSet<int> alphaTextures = textures.Where(p => HasAlpha(p.Value)).Select(p => p.Key).ToHashSet();
-            var masks = asset.Kind == AssetKind.World
-                ? alphaTextures.ToDictionary(i => i, i => WhiteAlphaMask(textures[i], token)) : [];
+            if (textureNotes > 32) notes.Add(new("Warning", $"{textureNotes - 32} additional texture notices omitted."));
             return new ScenePacket(view, geometry, textures, alphaTextures, masks, notes);
         }, token);
         token.ThrowIfCancellationRequested(); if (current != generation) return;
-        ClearMeshes(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects; QueueRenderSize();
+        ClearMeshes(); AttachEffects(); QueueRenderSize();
+        previewTextures = candidateTextures; publishedTextures = true;
         Mission = mission; PreviewScene = scene; InspectionSourcePath = doc.Path;
         if (asset.Kind == AssetKind.World) SetAiNetworks(mission?.AiNetworks ?? AiNetworkSnapshot.Empty);
         if (asset.Kind == AssetKind.World) ConfigureHorizon(scene);
@@ -119,10 +133,13 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         Dictionary<(int Material, bool Horizon, bool Colors), DiffuseMaterial> materials = [];
         Dictionary<MeshPart, MeshGeometry3D> geometries = [];
         Dictionary<int, TextureModel> alphaMasks = [];
+        Dictionary<byte[], TextureModel> maskModels = [];
+        Dictionary<DecodedImage, TextureModel> textureModels = [];
         foreach (var (index, bytes) in packet.AlphaMasks)
         {
             var image = packet.Textures[index];
-            alphaMasks[index] = new TextureModel(bytes, SharpDX.DXGI.Format.R8G8B8A8_UNorm, image.Width, image.Height);
+            if (!maskModels.TryGetValue(bytes, out var mask)) maskModels[bytes] = mask = new TextureModel(bytes, SharpDX.DXGI.Format.R8G8B8A8_UNorm, image.Width, image.Height);
+            alphaMasks[index] = mask;
         }
         int created = 0;
         foreach (var group in packet.View.Placements.GroupBy(p => (Model: p.ModelIndex, Horizon: IsHorizon(p.NodeIndex),
@@ -141,7 +158,8 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     if (packet.Textures.TryGetValue(textureIndex, out var image))
                     {
                         // Display decoded texture colors without additive preview lighting.
-                        material.DiffuseMap = new TextureModel(image.Rgba, SharpDX.DXGI.Format.R8G8B8A8_UNorm, image.Width, image.Height);
+                        if (!textureModels.TryGetValue(image, out var map)) textureModels[image] = map = new TextureModel(image.Rgba, SharpDX.DXGI.Format.R8G8B8A8_UNorm, image.Width, image.Height);
+                        material.DiffuseMap = map;
                         material.EnableUnLit = true;
                         textureMaps[material] = material.DiffuseMap;
                     }
@@ -177,6 +195,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
                     };
                     meshes.Add(mesh); placements[mesh] = visiblePlacements[mesh] = batch;
                     RegisterInspectionMesh(mesh, part.MaterialIndex);
+                    inspectionPolygons[mesh] = part.VertexPolygons;
                     if (asset.Kind == AssetKind.World)
                     {
                         JsonMaterial(scene, part.MaterialIndex, out _, out int texture);
@@ -212,6 +231,15 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         PreviewDiagnostics = packet.Notes.ToArray();
         PreviewSummary = $"{packet.View.Placements.Count:N0} instance{(packet.View.Placements.Count == 1 ? "" : "s")} · {meshes.Count:N0} mesh batch{(meshes.Count == 1 ? "" : "es")}";
         Information?.Invoke(PreviewSummary + $" · {packet.Notes.Count} preview notes" + (packet.Notes.Count > 0 ? "\n" + string.Join('\n', packet.Notes.Select(d => d.Message).Distinct().Take(30)) : ""));
+        }
+        catch
+        {
+            // A failed upload can already own materials. Remove those references
+            // before releasing the cache; a newer publication owns its own cleanup.
+            if (publishedTextures && current == generation && ReferenceEquals(previewTextures, candidateTextures)) Clear();
+            throw;
+        }
+        finally { if (!publishedTextures) candidateTextures.Dispose(); }
     }
     private static void JsonMaterial(GameScene scene, int index, out Color4 color, out int texture)
     {
@@ -337,6 +365,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         sceneAlphaGroup = null;
         sceneMin = new(float.PositiveInfinity); sceneMax = new(float.NegativeInfinity);
         viewport.Items.Clear(); foreach (var mesh in meshes) mesh.Dispose(); foreach (var box in bounds) box.Dispose(); bounds.Clear(); meshes.Clear(); placements.Clear(); visiblePlacements.Clear(); textureMaps.Clear();
+        previewTextures?.Dispose(); previewTextures = null;
     }
     public void Clear() { generation++; ClearMeshes(); }
     public System.Windows.Media.Imaging.BitmapSource RenderImage(int width, int height, bool preserveAspect = false)
@@ -351,7 +380,7 @@ public sealed partial class SceneViewport : UserControl, IDisposable
         var scaled = new System.Windows.Media.Imaging.TransformedBitmap(image, new ScaleTransform(scaleX, scaleY));
         scaled.Freeze(); return scaled;
     }
+    private void AttachEffects() => PreviewResourceLifetime.Attach(ref effects, PreviewMaterials.CreateEffects, manager => viewport.EffectsManager = manager);
     public void Dispose() { if (disposed) return; disposed = true; renderResize?.Abort(); Clear(); AttachNavigationWindow(null); viewport.Dispose(); effects?.Dispose(); effects = null; GC.SuppressFinalize(this); }
-    private static bool HasAlpha(DecodedImage image) { for (int i = 3; i < image.Rgba.Length; i += 4) if (image.Rgba[i] != 255) return true; return false; }
     private sealed record ScenePacket(SceneView View, Dictionary<int, IReadOnlyList<MeshPart>> Geometry, Dictionary<int, DecodedImage> Textures, HashSet<int> AlphaTextures, Dictionary<int, byte[]> AlphaMasks, List<Diagnostic> Notes);
 }

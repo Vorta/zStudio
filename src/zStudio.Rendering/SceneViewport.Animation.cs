@@ -25,8 +25,17 @@ public sealed partial class SceneViewport
     private CancellationToken animationToken;
     private readonly Dictionary<long, AnimatedMesh[]> animatedMeshes = [];
     private readonly Dictionary<int, IReadOnlyList<MeshPart>> animationGeometry = [];
-    private readonly Dictionary<string, (TextureModel Texture, bool Alpha)> animationTextures = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, Task> animationTextureLoads = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AnimationTextureSlot> animationTextureSlots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AnimationTextureSlot> animationTextureReferences = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<IReadOnlyList<string>, Dictionary<string, AnimationTextureSlot?>> animationTextureCycles = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<DecodedImage, TextureModel> animationTextureModels = [];
+    private readonly Dictionary<int, (string? Name, AnimationTextureSlot? Slot)> animationBaseTextures = [];
+    private long animationTextureNameUnits;
+    private long animationTextureLookupUnits;
+    private long animationTextureCycleMembers, animationTextureCycleMemberVisits;
+    internal long MaximumAnimationTextureCycleMembers { get; set; } = 1_000_000;
+    private bool animationTextureLimitReported;
+    private int animationTextureNotices;
     private readonly HashSet<int> replacedNodes = [];
     private Vector3 levelMin, levelMax;
     private AnimationFrame? animationFrame;
@@ -37,10 +46,13 @@ public sealed partial class SceneViewport
 
     public async Task ShowAnimationAsync(AnimationPreviewContext context, AnimationFrame frame, AssetResolver resolver, bool includeLevel, CancellationToken token, int lod = 0, bool showHorizon = true, CancellationToken? previewLifetime = null)
     {
+        int expectedGeneration = generation + 1;
         if (includeLevel)
             await ShowAsync(context.World, context.World.Assets.First(a => a.Kind == AssetKind.World), resolver, null, lod, token, showHorizon, context.Mission);
-        else { Clear(); effects ??= PreviewMaterials.CreateEffects(); viewport.EffectsManager = effects; QueueRenderSize(); }
+        else { Clear(); AttachEffects(); QueueRenderSize(); }
         token.ThrowIfCancellationRequested();
+        if (generation != expectedGeneration) return;
+        previewTextures ??= new PreviewTextureCache(textureMemory, resolver.BeginTextureLookup(context.World.Path), masks: false);
         animationContext = context; animationResolver = resolver; animationToken = token;
         Mission = context.Mission; PreviewScene = context.Scene; InspectionNodes = context.InspectionNodes; InspectionSourcePath = context.World.Path; horizonEnabled = showHorizon; ConfigureHorizon(context.Scene);
         // Helix 3.1.2's OIT paths drop the unlit DiffuseMaterial effect cards.
@@ -51,10 +63,10 @@ public sealed partial class SceneViewport
         levelMin = sceneMin; levelMax = sceneMax;
         // Spawned effect cards can change on their first visible tick. Prepare the
         // template maps before enabling playback, as with bound material cycles.
-        foreach (string name in context.Effects.Values.SelectMany(e => e.Textures).Distinct(StringComparer.OrdinalIgnoreCase)) QueueAnimationTexture(name);
+        foreach (string name in context.Effects.Values.SelectMany(e => e.Textures)) QueueAnimationTexture(name);
         UpdateAnimationFrame(frame);
-        await Task.WhenAll(animationTextureLoads.Values.ToArray());
-        token.ThrowIfCancellationRequested(); UpdateAnimationFrame(frame);
+        await Task.WhenAll(animationTextureSlots.Values.Select(slot => slot.Load).ToArray());
+        token.ThrowIfCancellationRequested(); if (generation != expectedGeneration) return; UpdateAnimationFrame(frame);
         animationToken = previewLifetime ?? token;
         if (includeLevel) FrameAll(); else FrameAnimation(frame);
     }
@@ -97,6 +109,7 @@ public sealed partial class SceneViewport
                     material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
                     var mesh = new MeshGeometryModel3D { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, IsThrowingShadow = false, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
                     RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
+                    inspectionPolygons[mesh] = part.VertexPolygons;
                     int source = pose.SourceNode; mesh.MouseDown3D += (_, e) =>
                     {
                         if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: System.Windows.Input.MouseButtonEventArgs { ChangedButton: System.Windows.Input.MouseButton.Left } })
@@ -124,18 +137,40 @@ public sealed partial class SceneViewport
                     item.Morph = pose.Morph;
                 }
                 JsonMaterial(scene, item.Part.MaterialIndex, out var color, out int textureIndex);
-                string? textureName = pose.Texture ?? (textureIndex >= 0 && textureIndex < scene.Textures.Count ? scene.Textures[textureIndex].Text("name") : null);
+                string? textureName;
+                AnimationTextureSlot? textureSlot;
                 if (pose.Texture == null && animationContext.MaterialCycles.TryGetValue(item.Part.MaterialIndex, out var cycle))
                 {
-                    foreach (string name in cycle.Textures) QueueAnimationTexture(name);
+                    var prepared = PrepareAnimationTextureCycle(cycle.Textures);
                     textureName = cycle.At(pose.CycleTime, pose.Variant);
+                    // At returns a stored member reference. Both this lookup and
+                    // prepared-cycle identity lookup are independent of name length.
+                    textureSlot = textureName == null ? null : prepared?.GetValueOrDefault(textureName);
                 }
+                else if (pose.Texture is { } authoredTexture) { textureName = authoredTexture; textureSlot = QueueAnimationTexture(authoredTexture); }
+                else if (textureIndex >= 0 && textureIndex < scene.Textures.Count)
+                {
+                    if (!animationBaseTextures.TryGetValue(textureIndex, out var prepared))
+                    {
+                        // Parsed JSON strings may decode on every GetValue call. Freeze each selected
+                        // source name once before frames or shared meshes repeatedly request it.
+                        if (animationBaseTextures.Count >= 8192)
+                        { AnimationTextureLimit("Animation base texture reference allowance reached."); textureName = ""; textureSlot = null; }
+                        else
+                        {
+                            textureName = scene.Textures[textureIndex].Text("name");
+                            textureSlot = textureName == null ? null : QueueAnimationTexture(textureName);
+                            animationBaseTextures.Add(textureIndex, (textureSlot == null && textureName != null ? "" : textureName, textureSlot));
+                        }
+                    }
+                    else { textureName = prepared.Name; textureSlot = prepared.Slot; }
+                }
+                else { textureName = null; textureSlot = null; }
                 bool alphaTexture = false;
                 TextureModel? diffuseMap = null;
                 if (textureName != null)
                 {
-                    QueueAnimationTexture(textureName);
-                    if (animationTextures.TryGetValue(textureName, out var texture)) { diffuseMap = texture.Texture; alphaTexture = texture.Alpha; }
+                    if (textureSlot?.Texture is { } texture) { diffuseMap = texture; alphaTexture = textureSlot.Alpha; }
                     else item.Mesh.Visibility = Visibility.Collapsed;
                 }
                 item.Material.DiffuseMap = diffuseMap;
@@ -235,27 +270,75 @@ public sealed partial class SceneViewport
     {
         TryFrame("asset", manual: false);
     }
-    private void QueueAnimationTexture(string name)
+    private Dictionary<string, AnimationTextureSlot?>? PrepareAnimationTextureCycle(IReadOnlyList<string> names)
     {
-        if (animationTextureLoads.ContainsKey(name) || animationContext == null || animationResolver == null) return;
-        int current = generation; var context = animationContext; var resolver = animationResolver; var token = animationToken;
-        animationTextureLoads[name] = Load();
+        if (animationTextureCycles.TryGetValue(names, out var prepared)) return prepared;
+        // Reserve the entire first traversal before allocating a map or reading
+        // members. Rejected cycles do constant work per later frame/mesh.
+        if (animationTextureCycles.Count >= 4096 || names.Count > MaximumAnimationTextureCycleMembers - animationTextureCycleMembers)
+        { AnimationTextureLimit("Animation texture cycle preparation allowance reached."); return null; }
+        animationTextureCycleMembers += names.Count;
+        prepared = new(ReferenceEqualityComparer.Instance);
+        for (int i = 0; i < names.Count; i++)
+        {
+            animationToken.ThrowIfCancellationRequested(); animationTextureCycleMemberVisits++;
+            string name = names[i];
+            if (!prepared.ContainsKey(name)) prepared.Add(name, QueueAnimationTexture(name));
+        }
+        animationTextureCycles.Add(names, prepared); return prepared;
+    }
+    private AnimationTextureSlot? QueueAnimationTexture(string name)
+    {
+        if (animationContext == null || animationResolver == null || previewTextures == null) return null;
+        // Accepted authored references return the live slot directly. Publication
+        // and every later frame read that slot without another content hash.
+        if (animationTextureReferences.TryGetValue(name, out var slot)) return slot;
+        if (animationTextureReferences.Count >= 8192)
+        { AnimationTextureLimit("Animation texture reference allowance reached."); return null; }
+        // Unfamiliar string instances still need ordinal deduplication. Bound that
+        // comparison separately before hashing. An operand exceeding the remaining
+        // comparison allowance spends neither that allowance nor retained capacity.
+        if (name.Length + 1L > 1_000_000 - animationTextureLookupUnits)
+        { AnimationTextureLimit("Animation texture name comparison allowance reached."); return null; }
+        animationTextureLookupUnits += name.Length + 1L;
+        if (animationTextureSlots.TryGetValue(name, out slot)) { animationTextureReferences.Add(name, slot); return slot; }
+        if (animationTextureSlots.Count >= 4096 || name.Length + 1L > 1_000_000 - animationTextureNameUnits)
+        { AnimationTextureLimit("Animation texture request limit reached (4096 names / 1,000,000 retained name characters)."); return null; }
+        animationTextureNameUnits += name.Length + 1L;
+        slot = new(); animationTextureSlots.Add(name, slot); animationTextureReferences.Add(name, slot);
+        int current = generation; var cache = previewTextures; var token = animationToken;
+        var use = cache.Retain();
+        slot.Load = Load(); return slot;
         async Task Load()
         {
             try
             {
-                var decoded = await Task.Run(async () =>
-                {
-                    var match = await resolver.ResolveTextureAsync(context.World.Path, name, null, token).ConfigureAwait(false);
-                    return match == null ? null : TextureDecoder.Decode(match.Document, match.Asset, token);
-                }, token);
+                var decoded = await Task.Run(() => cache.GetAsync(name, token), token);
                 if (current != generation || token.IsCancellationRequested) return;
-                if (decoded != null) { animationTextures[name] = (new TextureModel(decoded.Rgba, SharpDX.DXGI.Format.R8G8B8A8_UNorm, decoded.Width, decoded.Height), HasAlpha(decoded)); if (animationFrame != null) UpdateAnimationFrame(animationFrame, false, animationEffectLighting); }
-                else Information?.Invoke("Missing animation texture: " + name);
+                if (decoded != null)
+                {
+                    var image = decoded.Image;
+                    if (!animationTextureModels.TryGetValue(image, out var map)) animationTextureModels[image] = map = new TextureModel(image.Rgba, SharpDX.DXGI.Format.R8G8B8A8_UNorm, image.Width, image.Height);
+                    slot.Texture = map; slot.Alpha = decoded.Alpha;
+                    if (animationFrame != null) UpdateAnimationFrame(animationFrame, false, animationEffectLighting);
+                }
+                else TextureNotice("Missing animation texture: ", name);
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) when (ex is System.IO.IOException or InvalidDataException or UnauthorizedAccessException) { if (current == generation) Information?.Invoke("Animation texture: " + ex.Message); }
+            catch (ObjectDisposedException) when (current != generation || disposed) { }
+            catch (Exception ex) when (ex is System.IO.IOException or InvalidDataException or UnauthorizedAccessException) { if (current == generation) TextureNotice("Animation texture: ", ex.Message); }
+            finally { use.Dispose(); }
         }
+        void TextureNotice(string prefix, string detail)
+        {
+            if (animationTextureNotices < 32) { animationTextureNotices++; Information?.Invoke(prefix + PreviewTextureCache.Label(detail)); }
+            else if (animationTextureNotices == 32) { animationTextureNotices++; Information?.Invoke("Additional animation texture notices omitted."); }
+        }
+    }
+    private void AnimationTextureLimit(string message)
+    {
+        if (animationTextureLimitReported) return;
+        animationTextureLimitReported = true; Information?.Invoke(message);
     }
     private void IncludeBounds(IEnumerable<Vector3> positions, Matrix4x4 transform)
     {
@@ -275,7 +358,16 @@ public sealed partial class SceneViewport
     {
         foreach (var items in animatedMeshes.Values) foreach (var item in items) item.Mesh.Dispose();
         if (animationGroup != null) { animationGroup.Children.Clear(); animationGroup.Dispose(); animationGroup = null; viewport.OITRenderMode = previousTransparency; }
-        animatedMeshes.Clear(); animationGeometry.Clear(); animationTextures.Clear(); animationTextureLoads.Clear(); replacedNodes.Clear(); animationContext = null; animationResolver = null; animationFrame = null;
+        animatedMeshes.Clear(); animationGeometry.Clear(); animationTextureSlots.Clear(); replacedNodes.Clear(); animationContext = null; animationResolver = null; animationFrame = null;
+        animationTextureModels.Clear(); animationTextureReferences.Clear(); animationTextureCycles.Clear(); animationTextureNameUnits = 0; animationTextureLookupUnits = 0;
+        animationBaseTextures.Clear();
+        animationTextureCycleMembers = animationTextureCycleMemberVisits = 0; animationTextureLimitReported = false; animationTextureNotices = 0;
+    }
+    private sealed class AnimationTextureSlot
+    {
+        internal Task Load { get; set; } = Task.CompletedTask;
+        internal TextureModel? Texture { get; set; }
+        internal bool Alpha { get; set; }
     }
     private sealed class AnimatedMesh(MeshGeometryModel3D mesh, DiffuseMaterial material, MeshPart part)
     {

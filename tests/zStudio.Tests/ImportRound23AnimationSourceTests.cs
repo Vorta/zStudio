@@ -28,7 +28,7 @@ public sealed class ImportRound23AnimationSourceTests
         Assert.Contains(notes, n => n.Contains("earlier animation at 10"));
         files.Files[Script] = output.Bytes;
         var rebuilt = AnimationCompiler.Compile(files, Root, world, Token).Package;
-        Assert.Null(AnimationComparer.Difference(shipped.Entries[1], rebuilt.Entries[1]));
+        Assert.Null(AnimationComparer.Difference(shipped.Entries[1], rebuilt.Entries[1], TestContext.Current.CancellationToken));
 
         static string Event(string name, int rate) => $"OBJECT_MOTION_SI_SCRIPT ( NAME ( {name} ) SCRIPT_FRAME_RATE ( {rate} ) SCRIPT_FILENAME ( shared.zan ) ) ";
     }
@@ -54,7 +54,7 @@ public sealed class ImportRound23AnimationSourceTests
         var rebuilt = AnimationCompiler.Compile(files, Root, world, Token).Package;
         Assert.Equal(shipped.Entries.Count, rebuilt.Entries.Count);
         for (int i = 1; i < shipped.Entries.Count; i++)
-            Assert.Null(AnimationComparer.Difference(shipped.Entries[i], rebuilt.Entries[i]));
+            Assert.Null(AnimationComparer.Difference(shipped.Entries[i], rebuilt.Entries[i], TestContext.Current.CancellationToken));
     }
 
     private static MemoryFiles Definitions(string definitions) => new(new(StringComparer.Ordinal)
@@ -66,6 +66,7 @@ public sealed class ImportRound23AnimationSourceTests
     {
         public Dictionary<string, byte[]> Files { get; } = files;
         public bool Exists(string relative) => Files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) { token.ThrowIfCancellationRequested(); return Files[relative]; }
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative]; limits.Validate(result); return result; }
     }
 }

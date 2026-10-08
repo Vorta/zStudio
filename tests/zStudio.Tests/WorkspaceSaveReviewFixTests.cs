@@ -165,8 +165,14 @@ public sealed class WorkspaceSaveReviewFixTests : IDisposable
         for (int i = count - 1; i >= 0; i--) { folders.Add($"data/s{i:D5}"); folders.Add($"data/s{i:D5}/a"); folders.Add($"data/s{i:D5}/a/b"); }
         File.WriteAllText(path, manifest.ToJsonString());
 
+        // Isolate folder-membership validation: the production path-work allowance now refuses this
+        // unusually large batch first. Admit its exact shallow-path cost in this algorithm regression;
+        // SourceRecoveryPathBudgetTests separately exercises the unchanged production admission rule.
+        long PathWork(string relative) => 16L * (root.Length + relative.Length + 1) * (relative.Count(c => c == '/') + 1);
+        long pathWork = files.Sum(f => PathWork(f!["relative"]!.GetValue<string>())) + folders.Sum(f => PathWork(f!.GetValue<string>()));
         // A save reads every journal twice (cleaning up, then looking for one that blocks it): this one is valid and blocks it.
-        var saving = Task.Run(() => Assert.Throws<SourceRecoveryRequiredException>(() => new SourcePublisher(root).Publish([new(Script, Text("load m1\n"), Text("load m2\n"))], "blocked", Token)), Token);
+        var saving = Task.Run(() => Assert.Throws<SourceRecoveryRequiredException>(() => new SourcePublisher(root) { PlanningPathBytesLimit = pathWork }
+            .Publish([new(Script, Text("load m1\n"), Text("load m2\n"))], "blocked", Token)), Token);
         SourceRecoveryRequiredException blocked;
         // Comparing every folder with every file took minutes; the check takes well under a second.
         try { blocked = await saving.WaitAsync(TimeSpan.FromSeconds(60), Token); }

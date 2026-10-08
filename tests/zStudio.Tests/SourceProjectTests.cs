@@ -92,7 +92,7 @@ public sealed class SourceProjectTests
         Assert.Equal(["ai.zrd", "frcgate.zrd"], mission.Assets.Select(a => a.Name));
         var shipped = Open(Path.Combine(fixture.Corpus, "m1", "zrdr.zbd"));
         Assert.Equal(Member(shipped, "ai.zrd"), Member(mission, "ai.zrd")); Assert.Equal(Member(shipped, "frcgate.zrd"), Member(mission, "frcgate.zrd"));
-        // Archive records name each member's source, so exported files reconstruct into the same folders.
+        // Archive records retain each member's authored source path; exports are not reconstruction inputs.
         var members = ArchiveSources.Read(File.ReadAllBytes(Path.Combine(exported, "m1", "zrdr.zbd")));
         Assert.Equal(["data\\m1\\zrdr\\ai.zrd", "data\\m1\\zrdr\\envmodels\\frcgate.zrd"], members.Select(m => m.SourceField));
 

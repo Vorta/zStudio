@@ -62,8 +62,10 @@ public sealed class ImportRound20Tests
 
     private sealed class Files(string text) : IProjectFiles
     {
+        private readonly byte[] ownedInput = Encoding.UTF8.GetBytes(text);
         public bool Exists(string relative) => relative == "gamegen/test.gs";
-        public byte[] Read(string relative,CancellationToken token) => Encoding.UTF8.GetBytes(text);
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = ownedInput; limits.Validate(result); return result; }
     }
 
     [Theory]

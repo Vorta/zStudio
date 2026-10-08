@@ -32,6 +32,7 @@ internal static class ExportSafetyMcpChecks
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
             await LateCancelChecks(main, token);
             await RelativePathChecks(main, Job, token);
+            await SourceResourceOperationChecks.Run(main, Job, token);
             await ExportChoiceContextChecks(main, token);
             await TextureFailureAndMissingInputChecks(main, Job, token);
             await RejectedAnimationChecks(main, Job, token);

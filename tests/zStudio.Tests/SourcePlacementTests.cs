@@ -65,7 +65,7 @@ public sealed class SourcePlacementTests
         var writes = session.ScalarWrites(after);
         // Only X differs from the stored values, once per linked record.
         Assert.Equal(2, writes.Count); Assert.All(writes, w => Assert.Equal(20.25f, w.Value));
-        var changes = SourceResourceEdits.SourceChanges(session.ArchiveBytes(writes[0].ArchivePath), writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))), r => workspace.Read(r, Token), Token);
+        var changes = SourceResourceEdits.SourceChanges(session.ArchiveBytes(writes[0].ArchivePath), writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))), (r, limits) => workspace.Read(r, Token, limits), Token);
         Assert.Equal(["data/m1/zrdr/puppies.zrd", "data/m1/zrdr/puppies_easy.zrd"], changes.Select(c => c.Relative).Order(StringComparer.Ordinal));
         // Each file differs from its source only where the edited token was: comments, spacing and other values stay.
         string defaultAfter = Encoding.Latin1.GetString(changes.Single(c => c.Relative.EndsWith("puppies.zrd")).Content);
@@ -93,7 +93,7 @@ public sealed class SourcePlacementTests
         var nanite = session.Records.Single(r => r.Type == "NANITE" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
         var after = session.PreviewTransform(nanite, new(new(100, 0, -100), new(0, 3.1415927f, 0)));
         var writes = session.ScalarWrites(after);
-        var changes = SourceResourceEdits.SourceChanges(session.ArchiveBytes(writes[0].ArchivePath), writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))), r => workspace.Read(r, Token), Token);
+        var changes = SourceResourceEdits.SourceChanges(session.ArchiveBytes(writes[0].ArchivePath), writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))), (r, limits) => workspace.Read(r, Token, limits), Token);
         Assert.Equal(Default.Replace("( 0.0 1.5707964 0.0 )", "( 0.0 3.1415927 0.0 )"), Encoding.Latin1.GetString(changes.Single(c => c.Relative.EndsWith("puppies.zrd")).Content));
     }
 
@@ -107,7 +107,7 @@ public sealed class SourcePlacementTests
         var writes = session.ScalarWrites(session.PreviewTransform(ammo, session.Transform(ammo) with { Position = new(1, 2, 3) }));
         // The default list gains a record after the build: its tree no longer matches the built member.
         workspace.Apply("Add record", [("data/m1/zrdr/puppies.zrd", Encoding.Latin1.GetBytes(Default.Replace("\n)", "\n  ( NANITE 1 ( 0.0 0.0 0.0 ) ( 0.0 0.0 0.0 ) 1.0 )\n)")))], Token);
-        var refused = Assert.Throws<InvalidDataException>(() => SourceResourceEdits.SourceChanges(session.ArchiveBytes(writes[0].ArchivePath), writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))), r => workspace.Read(r, Token), Token));
+        var refused = Assert.Throws<InvalidDataException>(() => SourceResourceEdits.SourceChanges(session.ArchiveBytes(writes[0].ArchivePath), writes.Select(w => new SourceResourceEdits.ScalarEdit(w.Offset, SourceResourceEdits.Float(w.Value))), (r, limits) => workspace.Read(r, Token, limits), Token));
         Assert.Contains("rebuild", refused.Message);
     }
 

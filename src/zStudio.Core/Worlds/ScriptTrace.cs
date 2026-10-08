@@ -9,14 +9,16 @@ namespace Recoil.Zbd.Core.Worlds;
 public sealed record TracedInstruction(string Script, string Command, IReadOnlyList<string> Args, IReadOnlyList<string> ModelDirectories, string? ScriptModelDirectory, IReadOnlyList<string> TextureDirectories);
 
 /// <summary>One operation's retained model and texture directory history, charged before an array is copied.</summary>
-internal sealed class ScriptTraceBudget(long maximumUnits = ScriptTraceBudget.MaximumUnits, long maximumWorkUnits = DirectoryWorkBudget.MaximumUnits)
+internal sealed class ScriptTraceBudget(long maximumUnits = ScriptTraceBudget.MaximumUnits, long maximumWorkUnits = DirectoryWorkBudget.MaximumUnits,
+    long maximumOperandReferences = ScriptOperandBudget.MaximumReferences, long maximumOperandCharacters = ScriptOperandBudget.MaximumCharacters)
 {
     internal const long MaximumUnits = 4_194_304;
     private readonly long maximum = maximumUnits is >= 0 and <= MaximumUnits ? maximumUnits : throw new ArgumentOutOfRangeException(nameof(maximumUnits));
     internal long UsedUnits { get; private set; }
     private bool snapshotsExhausted;
     internal DirectoryWorkBudget Work { get; } = new(maximumWorkUnits);
-    internal bool Exhausted => snapshotsExhausted || Work.Exhausted;
+    internal ScriptOperandBudget Operands { get; } = new(maximumOperandReferences, maximumOperandCharacters);
+    internal bool Exhausted => snapshotsExhausted || Work.Exhausted || Operands.Exhausted;
 
     internal void ReserveSnapshot(int count)
     {
@@ -66,16 +68,32 @@ internal sealed class ScriptConditions
     /// A longer result would overrun the engine's buffer, and repeated self-references would otherwise grow without bound.
     /// </summary>
     public static string Expand(string token, IReadOnlyDictionary<string, string> macros)
+        => Expand(token, macros, null);
+
+    internal static string Expand(string token, IReadOnlyDictionary<string, string> macros, Action<long>? reserveCharacters)
     {
         if (!token.Contains('%')) return token;
+        reserveCharacters?.Invoke(32);
         System.Text.StringBuilder text = new();
         for (int i = 0; i < token.Length; i++)
         {
             int end = token[i] == '%' ? token.IndexOf('%', i + 1) : -1;
-            if (end > i) { text.Append(macros.GetValueOrDefault(token[(i + 1)..end]) ?? ""); i = end; } else text.Append(token[i]);
-            if (text.Length > MaximumExpansion) throw new InvalidDataException($"A macro expands '{token[..Math.Min(token.Length, 64)]}' past {MaximumExpansion} characters.");
+            if (end > i)
+            {
+                reserveCharacters?.Invoke(end - i - 1L); // Macro-key substring, before copying it.
+                string value = macros.GetValueOrDefault(token[(i + 1)..end]) ?? "";
+                Check(text, token, value.Length, reserveCharacters); text.Append(value); i = end;
+            }
+            else { Check(text, token, 1, reserveCharacters); text.Append(token[i]); }
         }
+        reserveCharacters?.Invoke(text.Length);
         return text.ToString();
+
+        static void Check(System.Text.StringBuilder text, string token, int count, Action<long>? reserveCharacters)
+        {
+            if (count > MaximumExpansion - text.Length) throw new InvalidDataException($"A macro expands '{token[..Math.Min(token.Length, 64)]}' past {MaximumExpansion} characters.");
+            reserveCharacters?.Invoke(2L * count); // Growing builder storage, before Append.
+        }
     }
 
     private static bool Evaluate(IReadOnlyList<string> tokens, IReadOnlyDictionary<string, string> macros)
@@ -112,13 +130,13 @@ public static class ScriptTrace
         => Trace(script, entry, notes, new ScriptTraceBudget());
 
     internal static List<TracedInstruction> Trace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry, List<string> notes, ScriptTraceBudget budget,
-        BoundedDiagnostics? diagnostics = null)
-        => RunTrace(script, entry, notes, budget, diagnostics, null, true, default);
+        BoundedDiagnostics? diagnostics = null, CancellationToken token = default)
+        => RunTrace(script, entry, notes, budget, diagnostics, null, true, token);
 
     /// <summary>Observe executed operands without retaining instruction history, optionally including post-write scripts.</summary>
     internal static void Visit(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
-        Action<TracedInstruction> inspect, CancellationToken token, bool stopAtWorldWrite = true)
-        => RunTrace(script, entry, [], new(), null, inspect, stopAtWorldWrite, token);
+        Action<TracedInstruction> inspect, CancellationToken token, bool stopAtWorldWrite = true, ScriptTraceBudget? budget = null)
+        => RunTrace(script, entry, [], budget ?? new(), null, inspect, stopAtWorldWrite, token);
 
     private static List<TracedInstruction> RunTrace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
         List<string> notes, ScriptTraceBudget budget, BoundedDiagnostics? diagnostics, Action<TracedInstruction>? inspect,
@@ -148,9 +166,10 @@ public static class ScriptTrace
                 token.ThrowIfCancellationRequested();
                 if (written) return;
                 if (++instructions > WorldAssembler.MaximumInstructions) throw new InvalidDataException("The scripts run too many instructions.");
+                budget.Operands.Inspect(line, token);
                 string command = line[0];
                 if (!conditions.Runs(line, variables)) continue;
-                string[] args = line.Skip(1).Select(Expand).ToArray();
+                string[] args = budget.Operands.Expand(line, variables, token);
                 if (ScriptConditions.IsQuit(command)) return;
                 if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; }
                 else if (ScriptConditions.IsSource(command)) { if (args.Length > 0) Run(args[0], depth + 1); continue; }
@@ -178,6 +197,5 @@ public static class ScriptTrace
             budget.ReserveSnapshot(current.Count);
             return current.ToArray();
         }
-        string Expand(string token) => ScriptConditions.Expand(token, variables);
     }
 }

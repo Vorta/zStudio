@@ -116,7 +116,7 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
             Input(form, "Surfaces", string.Join(", ", chosen.Surfaces), _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: $"empty for all ({string.Join(", ", recipe.Surfaces.Select(s => s.Id))})",
                 asyncCommit: async text =>
                 {
-                    string[] ids = text.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries);
+                    string[] ids = ComponentText.BoundedTokens(text, ", ", 0, TerrainRecipe.MaximumSurfaces, 32, "List at most 256 complete surface IDs of up to 32 characters each; empty selects all surfaces.");
                     if (!ids.SequenceEqual(chosen.Surfaces)) await actions.UpdateRegion(chosen.Name, r => r with { Surfaces = ids });
                 });
             Attributes(form, $"Region {chosen.Name}", chosen.Set, change => actions.UpdateRegion(chosen.Name, r => r with { Set = change(r.Set) }));
@@ -131,6 +131,7 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
             Input(form, "Brush radius", radius.ToString("R", CultureInfo.InvariantCulture), _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: "world units",
                 asyncCommit: text =>
                 {
+                    ComponentText.CheckNumeric(text);
                     if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) || !float.IsFinite(value) || value < 0.01f || value > 100_000) throw new FormatException("Enter a radius from 0.01 to 100,000.");
                     // The radius is remembered; it changes a running brush but turns none on.
                     lastRadius = value;
@@ -161,8 +162,7 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
             Input(form, $"{what}: {label}", text, _ => throw new InvalidOperationException("Use the asynchronous edit."), hint: hint,
                 asyncCommit: async input =>
                 {
-                    input = input.Trim();
-                    if (input == text) return;
+                    if (input.AsSpan().Trim().SequenceEqual(text)) return;
                     var patch = new JsonObject { [key] = Value(key, input) };
                     TerrainAttributes.FromJson(patch, what, current);
                     await apply(layer => TerrainAttributes.FromJson(patch, what, layer));
@@ -179,17 +179,24 @@ internal sealed class TerrainPropertiesEditor : SourcePropertiesEditor
     /// <summary>Typed text as the recipe's JSON value: empty is null (no override).</summary>
     private static JsonNode? Value(string key, string text)
     {
-        if (text.Length == 0) return null;
+        var value = text.AsSpan().Trim();
+        if (value.Length == 0) return null;
         switch (key)
         {
             case "zones":
-                if (text.Equals("any", StringComparison.OrdinalIgnoreCase)) return "any";
-                return new JsonArray(text.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries).Select(t => int.TryParse(t, NumberStyles.None, CultureInfo.InvariantCulture, out int z) ? (JsonNode?)z : throw new FormatException("Zones are numbers 0–254, or any.")).ToArray());
+                if (value.Equals("any", StringComparison.OrdinalIgnoreCase)) return "any";
+                string[] zones = ComponentText.BoundedTokens(value, " ,", 0, 3, ComponentText.MaximumNumericCharacters, "Zones are one to three numbers 0–254, or any.");
+                return new JsonArray(zones.Select(t => int.TryParse(t, NumberStyles.None, CultureInfo.InvariantCulture, out int z) ? (JsonNode?)z : throw new FormatException("Zones are numbers 0–254, or any.")).ToArray());
             case "nodeGate" or "collision" or "standable":
-                return text.ToLowerInvariant() switch { "on" or "true" or "yes" => true, "off" or "false" or "no" => false, _ => throw new FormatException("Enter on or off.") };
+                if (value.Equals("on", StringComparison.OrdinalIgnoreCase) || value.Equals("true", StringComparison.OrdinalIgnoreCase) || value.Equals("yes", StringComparison.OrdinalIgnoreCase)) return true;
+                if (value.Equals("off", StringComparison.OrdinalIgnoreCase) || value.Equals("false", StringComparison.OrdinalIgnoreCase) || value.Equals("no", StringComparison.OrdinalIgnoreCase)) return false;
+                throw new FormatException("Enter on or off.");
             case "nodeZone" or "soil" or "priority":
-                return int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int n) ? n : text.ToLowerInvariant();
-            default: return text.ToLowerInvariant().StartsWith("0x", StringComparison.Ordinal) ? text : text.ToLowerInvariant();
+                if (value.Length > ComponentText.MaximumNumericCharacters) throw new FormatException("Use a short numeric value or the named setting.");
+                return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int n) ? n : value.ToString().ToLowerInvariant();
+            default:
+                if (value.Length > ComponentText.MaximumNumericCharacters) throw new FormatException("Use a short numeric value or the named setting.");
+                return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value.ToString() : value.ToString().ToLowerInvariant();
         }
     }
 }

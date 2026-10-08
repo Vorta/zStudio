@@ -7,11 +7,15 @@ internal sealed class LookupWorkBudget(long maximum = LookupWorkBudget.MaximumUn
     private readonly long limit = maximum is >= 0 and <= MaximumUnits ? maximum : throw new ArgumentOutOfRangeException(nameof(maximum));
     private readonly Dictionary<WorldNode, string> names = new(ReferenceEqualityComparer.Instance);
     internal long UsedUnits { get; private set; }
+    internal bool Exhausted { get; private set; }
     internal void Reserve(long units)
     {
         token.ThrowIfCancellationRequested();
-        if (units > limit - UsedUnits)
+        if (Exhausted || units > limit - UsedUnits)
+        {
+            Exhausted = true;
             throw new InvalidDataException("The world requires too much repeated node lookup work. Simplify repeated name lookups or split the mission into smaller models.");
+        }
         UsedUnits += units;
     }
     internal bool Matches(WorldNode node, string name)
@@ -29,12 +33,13 @@ internal sealed class LookupWorkBudget(long maximum = LookupWorkBudget.MaximumUn
     internal WorldNode? FindSub(WorldNode node, string name, bool firstChildFirst = false)
         => Subtree([node], firstChildFirst).FirstOrDefault(next => Matches(next, name));
 
-    internal IEnumerable<WorldNode> Subtree(IEnumerable<WorldNode> roots, bool firstChildFirst = false)
+    internal IEnumerable<WorldNode> Subtree(IEnumerable<WorldNode> roots, bool firstChildFirst = false, Action<long>? reserveTraversal = null)
     {
         HashSet<WorldNode> seen = new(ReferenceEqualityComparer.Instance);
         Stack<WorldNode> pending = new();
         foreach (var root in roots)
         {
+            reserveTraversal?.Invoke(1);
             pending.Push(root);
             while (pending.TryPop(out var next))
             {
@@ -42,6 +47,7 @@ internal sealed class LookupWorkBudget(long maximum = LookupWorkBudget.MaximumUn
                 if (!seen.Add(next)) continue;
                 yield return next;
                 Reserve(next.Children.Count);
+                reserveTraversal?.Invoke(next.Children.Count);
                 if (firstChildFirst)
                     for (int i = next.Children.Count - 1; i >= 0; i--) pending.Push(next.Children[i]);
                 else

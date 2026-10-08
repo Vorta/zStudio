@@ -54,9 +54,15 @@ public sealed class TerrainConversionCorpusTests
             // Every piece fits the engine's limits and its cell.
             Assert.All(nodesB, n => Assert.True(n.Model!.Vertices.Count <= 921 && n.Model.Normals.Count <= 921, $"{n.Name}: {n.Model.Vertices.Count} vertices"));
             var report = TerrainProbe.Compare(nodesA, nodesB, 4, Token);
+            Assert.True(report.Complete, $"{mission}: {report.Limitation ?? "The altitude comparison did not complete."}");
+            Assert.True(report.Samples > 0, $"{mission}: the altitude comparison took no samples.");
+            Assert.True(report.Hits > 0, $"{mission}: the altitude comparison sampled no original terrain hits.");
             output?.WriteLine($"{mission}: {report.Samples} samples, {report.Hits} hits, {report.Mismatches} differ, {report.HeightOnly} differ only in height (at most {report.MaximumHeightDifference})");
             // As the engine searches: only the point's cell and the world's own list.
             var cells = TerrainProbe.Compare(nodesA, nodesB, 4, Token, worldA.Nodes.First(n => n.Class == WorldNodeClass.World));
+            Assert.True(cells.Complete, $"{mission} by cell: {cells.Limitation ?? "The altitude comparison did not complete."}");
+            Assert.True(cells.Samples > 0, $"{mission}: the cell comparison took no samples.");
+            Assert.True(cells.Hits > 0, $"{mission}: the cell comparison sampled no original terrain hits.");
             output?.WriteLine($"{mission} by cell: {cells.Mismatches} differ, {cells.Revealed} newly found along cell edges");
             foreach (string example in cells.Examples) output?.WriteLine("  cell: " + example);
             Assert.Equal(0, cells.Mismatches);
@@ -80,7 +86,6 @@ public sealed class TerrainConversionCorpusTests
                             output?.WriteLine($"  before {node.Name}: {string.Join(" ", v.Select(p => p.ToString("R", System.Globalization.CultureInfo.InvariantCulture)))}");
                     }
             }
-            Assert.True(report.Hits > 0);
             Assert.Equal(0, report.Mismatches);
         }
         finally { try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch (IOException) { } }
@@ -97,7 +102,7 @@ public sealed class TerrainConversionCorpusTests
     private static async Task<(GameZWorld World, List<WorldNode> Nodes)> Read(SourceWorldBuild build, Func<WorldNodeProvenance, bool> select)
     {
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         return (world, world.Nodes.Where(n => slots.TryGetValue(n, out int slot) && build.Provenance.TryGetValue(slot, out var p) && select(p)).ToList());
     }
 }

@@ -37,10 +37,10 @@ public static class WorldDecomposer
         => DecomposeAll(world, trace, notes, token, new BoundedDiagnostics(notes));
 
     internal static WorldDecomposition DecomposeAll(GameZWorld world, IReadOnlyList<TracedInstruction> trace, List<string> notes, CancellationToken token,
-        BoundedDiagnostics diagnostics)
+        BoundedDiagnostics diagnostics, LookupWorkBudget? work = null)
     {
         token.ThrowIfCancellationRequested();
-        LookupWorkBudget lookupWork = new(token: token);
+        LookupWorkBudget lookupWork = work ?? new(token: token);
         var root = world.Nodes.FirstOrDefault(n => n.Class == WorldNodeClass.World) ?? throw new InvalidDataException("The world has no world node.");
         // Work on a plain graph: the world's cells hold children the same way its own list does.
         FlattenAreas(root, token);
@@ -108,6 +108,19 @@ public static class WorldDecomposer
 
         // 3. The edits, resolved in order.
         List<Edit> edits = []; HashSet<WorldNode> editedRoots = new(ReferenceEqualityComparer.Instance);
+        Dictionary<WorldNode, HashSet<WorldNode>> originalParents = new(ReferenceEqualityComparer.Instance);
+        bool HadParent(WorldNode child, WorldNode parent)
+        {
+            lookupWork.Reserve(1);
+            if (!originalParents.TryGetValue(child, out var parents))
+            {
+                lookupWork.Reserve(32L * child.Parents.Count + 64);
+                parents = new(ReferenceEqualityComparer.Instance);
+                foreach (var item in child.Parents) { token.ThrowIfCancellationRequested(); parents.Add(item); }
+                originalParents.Add(child, parents);
+            }
+            return parents.Contains(parent);
+        }
         WorldNode? current = null; string? currentName = null;
         for (int i = 0; i < trace.Count; i++)
         {
@@ -128,13 +141,16 @@ public static class WorldDecomposer
                         break;
                     }
                 case "NodeSetDescription":
-                    if (current != null && currentName != null && currentName != Arg(step, 0)) edits.Add(new Renamed(current, currentName));
+                    if (current != null && currentName != null && currentName != Arg(step, 0))
+                    { lookupWork.Reserve(64); edits.Add(new Renamed(current, currentName)); }
                     currentName = Arg(step, 0); break;
                 case "AddChild":
-                    if (current != null && Newest(Arg(step, 0), i) is { } child && child.Parents.Contains(current)) edits.Add(new Added(current, child));
+                    if (current != null && Newest(Arg(step, 0), i) is { } child && HadParent(child, current))
+                    { lookupWork.Reserve(64); edits.Add(new Added(current, child)); }
                     break;
                 case "DeleteChild":
-                    if (current != null && Newest(Arg(step, 0), i, preferDetached: true) is { } removed && !removed.Parents.Contains(current)) edits.Add(new Removed(current, removed));
+                    if (current != null && Newest(Arg(step, 0), i, preferDetached: true) is { } removed && !HadParent(removed, current))
+                    { lookupWork.Reserve(64); edits.Add(new Removed(current, removed)); }
                     break;
                 default:
                     if (FlagCommands.Contains(step.Command) && current != null && claimed.Contains(current)) editedRoots.Add(current);
@@ -142,20 +158,39 @@ public static class WorldDecomposer
             }
         }
         // 4. Undo in reverse order.
+        Dictionary<List<WorldNode>, OrderedWorldLinks> links = new(ReferenceEqualityComparer.Instance);
+        OrderedWorldLinks Links(List<WorldNode> list)
+        {
+            if (!links.TryGetValue(list, out var result))
+            {
+                lookupWork.Reserve(64);
+                links.Add(list, result = new(list, lookupWork, token));
+            }
+            return result;
+        }
         for (int i = edits.Count - 1; i >= 0; i--)
+        {
+            token.ThrowIfCancellationRequested();
+            lookupWork.Reserve(1);
             switch (edits[i])
             {
-                case Added(var parent, var child): parent.Children.Remove(child); child.Parents.Remove(parent); break;
+                case Added(var parent, var child): Links(parent.Children).RemoveFirst(child); Links(child.Parents).RemoveFirst(parent); break;
                 // The engine's removal keeps the other children in order and the world does not record where the child was;
                 // in the shipped tank and morph-LOD scripts (morfUtil.gw) the removed children were the first ones, as the
                 // slots the original build gave them show (the corpus test compares every mission's slots with the shipped ones).
-                case Removed(var parent, var child): if (!parent.Children.Contains(child)) { parent.Children.Insert(0, child); child.Parents.Add(parent); } break;
+                case Removed(var parent, var child):
+                    if (Links(parent.Children).PrependIfAbsent(child)) Links(child.Parents).Append(parent);
+                    break;
                 case Renamed(var node, var from): node.Name = from; break;
             }
+        }
+        // Each original adjacency list is copied once, retaining exact duplicate and reciprocal ordering.
+        foreach (var pair in links) pair.Value.CopyTo(pair.Key);
 
         List<LoadedModel> result = [];
         for (int i = 0; i < trace.Count; i++)
         {
+            token.ThrowIfCancellationRequested();
             var step = trace[i]; if (step.Command != "LoadGameGen") continue;
             string file = Arg(step, 0), name = Arg(step, 1);
             if (i == databaseStep) result.Add(new(file, name, step, true, null, root.Children.ToList(), false) { Step = i });

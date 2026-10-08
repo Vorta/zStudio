@@ -22,7 +22,8 @@ public sealed class ImportRound22FormatTests
     private sealed class Files(Dictionary<string, byte[]> files) : IProjectFiles
     {
         public bool Exists(string relative) => files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) => files[relative];
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = files[relative]; limits.Validate(result); return result; }
     }
     private static WorldAssembler Assembler(string script, string? model = null, string? part = null)
     {
@@ -214,7 +215,7 @@ public sealed class ImportRound22FormatTests
         var world = assembler.Assemble("test.gs");
         var replacement = Assert.Single(world.Nodes);
         Assert.Equal("replacement", replacement.Name);
-        Assert.Equal(count - 1, GameZWriter.NodeSlots(world)[replacement]);
+        Assert.Equal(count - 1, GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[replacement]);
         Assert.Equal(count - 1, world.FreedSlots.Count);
         Assert.Empty(assembler.Warnings);
     }

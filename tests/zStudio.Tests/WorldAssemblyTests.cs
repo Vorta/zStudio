@@ -17,7 +17,8 @@ public sealed class WorldAssemblyTests
     {
         public Dictionary<string, byte[]> Files { get; } = files;
         public bool Exists(string relative) => Files.ContainsKey(relative);
-        public byte[] Read(string relative, CancellationToken token) => Files[relative];
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); byte[] result = Files[relative]; limits.Validate(result); return result; }
     }
 
     private const string Script = """
@@ -157,7 +158,7 @@ public sealed class WorldAssemblyTests
         string crateJson = Encoding.UTF8.GetString(outputs.Single(o => o.Path == "data/common/models/crate.gltf").Bytes);
         Assert.Contains("\"alphaMode\": \"BLEND\"", crateJson); Assert.DoesNotContain("~hidden", crateJson);
         Assert.Contains("\"alphaMode\": \"BLEND\"", Encoding.UTF8.GetString(outputs.Single(o => o.Path == "data/m1/models/m1.gltf").Bytes));
-        Assert.Equal(["data/common/models/crate.bin", "data/common/models/crate.gltf", "data/m1/models/m1.bin", "data/m1/models/m1.gltf"], outputs.Select(o => o.Path).Order(StringComparer.Ordinal));
+        Assert.Equal(["data/common/models/crate.bin", "data/common/models/crate.gltf", "data/m1/meta/zones.json", "data/m1/models/m1.bin", "data/m1/models/m1.gltf"], outputs.Select(o => o.Path).Order(StringComparer.Ordinal));
         MemoryFiles rebuilt = new(new(StringComparer.Ordinal) { ["gamegen/m1.gs"] = project.Files["gamegen/m1.gs"], ["data/m1/textures/rock.png"] = [0] });
         foreach (var output in outputs) rebuilt.Files[output.Path] = output.Bytes;
         WorldAssembler again = new(rebuilt, Token);
@@ -214,7 +215,9 @@ public sealed class WorldAssemblyTests
             (_, _) => null, new HashSet<string>(), _ => 0, notes, Token);
         Assert.Empty(notes);
         Assert.Equal(["data/common/effects/models/spark.gltf", "data/common/models/tank.gltf", "data/m1/models/m1.gltf", "data/m2/models/m2.gltf", "data/m3/models/bft/tank.gltf", "data/m3/models/m3.gltf"],
-            outputs.Select(o => o.Path).Where(p => p.EndsWith(".gltf", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
+            outputs.Where(o => o.Path.EndsWith("/meta/zones.json", StringComparison.Ordinal))
+                .SelectMany(o => SourceMapZones.Parse(o.Bytes, Token).Assets).Select(a => a.LogicalPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal));
         MemoryFiles rebuilt = new(files.Where(f => f.Key.StartsWith("gamegen/", StringComparison.Ordinal)).ToDictionary(f => f.Key, f => f.Value, StringComparer.Ordinal));
         foreach (var output in outputs) rebuilt.Files[output.Path] = output.Bytes;
         for (int m = 1; m <= 3; m++)
@@ -435,7 +438,7 @@ public sealed class WorldAssemblyTests
         var lamp = world.Nodes.Single(n => n.Name == "lamp");
         Assert.True(assembler.Provenance[lamp].Database); Assert.False(assembler.Provenance[lamp].Part);
         // A model named by a second path is cached a second time: two more slots than when both name it alike.
-        int Slots(GameZWorld w) => GameZWriter.NodeSlots(w).Values.Max();
+        int Slots(GameZWorld w) => GameZWriter.NodeSlots(w, TestContext.Current.CancellationToken).Values.Max();
         var (alike, _) = Build("box.gltf");
         Assert.Equal(Slots(alike) + 2, Slots(world));
         // Copies of one cache share its models; a second path's cache and the part's own reading of the file have their own.

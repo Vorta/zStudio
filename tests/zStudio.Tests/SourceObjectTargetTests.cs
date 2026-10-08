@@ -101,7 +101,7 @@ public sealed class SourceObjectTargetTests
         fixture.Write("data/m1/models/m1.gltf", Encoding.UTF8.GetBytes(gltf.ToJsonString()));
         SourceWorkspace workspace = new(fixture.Project);
         var (build, world) = await BuildAsync(fixture, workspace);
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         var grounds = world.Nodes.Where(n => n.Name == "ground").ToList();
         var flagged = grounds.Single(g => build.Provenance[slots[g]].Applied.Count > 0);
         Apply(workspace, SourceObjectEdits.PlanReparent(Target(workspace, build, world, grounds.Single(g => !ReferenceEquals(g, flagged))), flagged, Token));
@@ -125,10 +125,10 @@ public sealed class SourceObjectTargetTests
     private static SourceObjectTarget Target(SourceWorkspace workspace, SourceWorldBuild build, GameZWorld world, WorldNode picked)
     {
         Dictionary<WorldNode, WorldNodeProvenance> provenance = new(ReferenceEqualityComparer.Instance);
-        foreach (var (node, slot) in GameZWriter.NodeSlots(world)) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
+        foreach (var (node, slot) in GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)) if (build.Provenance.TryGetValue(slot, out var origin)) provenance[node] = origin;
         return new(workspace, "m1", world, SourceObjectEdits.ObjectOf(picked, provenance), provenance, build.Executions);
     }
-    private static WorldNodeProvenance Origin(SourceWorldBuild build, GameZWorld world, string name) => build.Provenance[GameZWriter.NodeSlots(world)[world.Nodes.Single(n => n.Name == name)]];
+    private static WorldNodeProvenance Origin(SourceWorldBuild build, GameZWorld world, string name) => build.Provenance[GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[world.Nodes.Single(n => n.Name == name)]];
     private static void Apply(SourceWorkspace workspace, SourceEditPlan plan) => Assert.NotNull(workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), Token));
     private static void Script(SourceWorldFixture fixture, string line, string replacement)
     {

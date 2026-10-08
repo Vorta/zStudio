@@ -124,7 +124,7 @@ public sealed class NameLookupTests
         var package = new AnimationPackage { Prefix = [], Tail = [] };
         package.Entries.AddRange([Entry(0, ""), hit, first, second]);
         var lookups = WorldLookups.Resolve("m1", world, package, [], Token);
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         var attachment = Assert.Single(lookups, l => l.Kind == SourceLookup.AnimationAttachment);
         Assert.Equal(("wall", "anim1", 2, slots[highest]), (attachment.Name, attachment.Source, attachment.Candidates, attachment.Slot));
         Assert.Equal("the attachment wall of animation anim1", WorldLookups.Describe(attachment));

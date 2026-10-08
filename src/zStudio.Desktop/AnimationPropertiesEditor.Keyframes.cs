@@ -77,7 +77,7 @@ public sealed partial class AnimationPropertiesEditor
                     string quaternion = string.Join(", ", Enumerable.Range(0,4).Select(n => segment.F32(offset + n * 4).ToEditorText()));
                     Input(contents, "Rotation base W, X, Y, Z", quaternion, text => EditKeyframes("Edit rotation base", list =>
                     {
-                        float[] values = text.Split([',',' '],StringSplitOptions.RemoveEmptyEntries).Select(s => float.Parse(s,CultureInfo.InvariantCulture)).ToArray();
+                        float[] values = ComponentText.ParseFinite(text, 4);
                         if (values.Length != 4 || values.Any(v => !float.IsFinite(v)) || values.Sum(v => v * v) < 1e-12f) throw new InvalidDataException("Enter a finite, nonzero quaternion: W, X, Y, Z.");
                         for (int n = 0; n < 4; n++) list[index].SetFloat(list[index].ChannelOffset(c) + n * 4, values[n]);
                     }),getter: () => string.Join(", ",Enumerable.Range(0,4).Select(n => CurrentSegment(index).F32(CurrentSegment(index).ChannelOffset(c) + n * 4).ToEditorText())),components:["W","X","Y","Z"]);

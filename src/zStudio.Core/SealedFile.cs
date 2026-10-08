@@ -24,8 +24,116 @@ internal sealed partial class SealedFile : IDisposable
     private readonly FileStream? stream;
     private readonly DirectoryLease directories;
     private readonly bool ownsDirectories;
+    private bool deleteOnDispose, disposed;
+    private int moves;
+
+    internal sealed record Ownership(string Path, DirectoryLease.FileIdentity? Identity, JournalDigest Content);
+
+    /// <summary>Releases a created file for use, retaining a compact identity/content receipt for conditional cleanup.</summary>
+    internal Ownership RetainCreated()
+    {
+        if (!deleteOnDispose || disposed) throw new InvalidOperationException("Only an owned created file can be retained.");
+        var receipt = new Ownership(path, handle == null ? null : DirectoryLease.Identity(handle, path), Digest());
+        deleteOnDispose = false; return receipt;
+    }
+
+    internal static void DeleteOwned(Ownership receipt, DirectoryLease directories)
+    {
+        if (receipt.Identity == null) return;
+        using var file = Open(receipt.Path, receipt.Content, directories);
+        if (DirectoryLease.Identity(file.handle!, receipt.Path) != receipt.Identity.Value) return;
+        file.DeleteHeld();
+    }
+
+    /// <summary>Deletes only the held identity. Callers must already have established its ownership/content.</summary>
+    internal void DeleteHeld()
+    {
+        if (handle == null) throw new IOException("The cleanup file was retained because this platform cannot delete through its held identity.");
+        DirectoryLease.Delete(handle, path); deleteOnDispose = false;
+    }
 
     private SealedFile(string path, SafeFileHandle? handle, FileStream? stream, DirectoryLease directories, bool ownsDirectories) { this.path = path; this.handle = handle; this.stream = stream; this.directories = directories; this.ownsDirectories = ownsDirectories; }
+
+    /// <summary>Creates, writes and verifies a temporary through one owned handle. An unpublished file is cleaned by that handle.</summary>
+    internal static async Task<SealedFile> CreateAsync(string path, ReadOnlyMemory<byte> bytes, DirectoryLease directories, CancellationToken token, Action? afterWrite = null)
+    {
+        token.ThrowIfCancellationRequested();
+        var file = CreateEmpty(path, directories, asynchronous: true);
+        try
+        {
+            await file.stream!.WriteAsync(bytes, token).ConfigureAwait(false);
+            afterWrite?.Invoke();
+            await file.stream.FlushAsync(token).ConfigureAwait(false); file.stream.Flush(true);
+            if (file.stream.Length != bytes.Length) throw new IOException("The written file did not pass verification.");
+            file.stream.Position = 0;
+            byte[] buffer = ArrayPool<byte>.Shared.Rent(65536);
+            try
+            {
+                int offset = 0;
+                while (offset < bytes.Length)
+                {
+                    token.ThrowIfCancellationRequested();
+                    int read = await file.stream.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, bytes.Length - offset)), token).ConfigureAwait(false);
+                    if (read == 0 || !buffer.AsSpan(0, read).SequenceEqual(bytes.Span.Slice(offset, read)))
+                        throw new IOException("The written file did not pass verification.");
+                    offset += read;
+                }
+            }
+            finally { ArrayPool<byte>.Shared.Return(buffer); }
+            token.ThrowIfCancellationRequested(); file.RequireRegular();
+            return file;
+        }
+        catch { file.Dispose(); throw; }
+    }
+
+    internal static SealedFile Create(string path, ReadOnlyMemory<byte> bytes, DirectoryLease directories)
+    {
+        var file = CreateEmpty(path, directories, asynchronous: false);
+        try
+        {
+            file.stream!.Write(bytes.Span); file.stream.Flush(true);
+            if (!file.Has(JournalDigest.OfContent(bytes.Span))) throw new IOException("The written file did not pass verification.");
+            file.RequireRegular(); return file;
+        }
+        catch { file.Dispose(); throw; }
+    }
+
+    private static SealedFile CreateEmpty(string path, DirectoryLease directories, bool asynchronous)
+    {
+        path = Path.GetFullPath(path); directories.Parent(path);
+        FileOptions options = FileOptions.WriteThrough | (asynchronous ? FileOptions.Asynchronous : FileOptions.None);
+        SafeFileHandle? created = null;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+                created = directories.FileHandle(path, GenericRead | 0x40000000 /* GENERIC_WRITE */ | Delete | WriteAttributes, FileShare.Read, FileMode.CreateNew, options);
+            // Callers already supply complete memory or copy in blocks, then flush and verify immediately.
+            // A private 64 KiB FileStream buffer would be allocated even for each one-byte checkout member.
+            // Disable that redundant buffer; the same handle, durable flush and readback checks still own the file.
+            FileStream output = created == null ? new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, 1, options)
+                : new(created, FileAccess.ReadWrite, 1, asynchronous);
+            return new(path, created, output, directories, false) { deleteOnDispose = true };
+        }
+        catch
+        {
+            if (created != null)
+            {
+                try { DirectoryLease.Delete(created, path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                created.Dispose();
+            }
+            throw;
+        }
+    }
+
+    /// <summary>Reads the already owned, verified file; never resolves its temporary pathname again.</summary>
+    internal async Task<byte[]> ReadAllAsync(int expectedLength, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (stream == null || stream.Length != expectedLength) throw new IOException("The staged file length changed.");
+        byte[] bytes = new byte[expectedLength]; stream.Position = 0;
+        await stream.ReadExactlyAsync(bytes, token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested(); return bytes;
+    }
 
     /// <summary>
     /// Holds <paramref name="path"/> and checks that it has <paramref name="expected"/>. Throws <see cref="IOException"/>,
@@ -74,7 +182,7 @@ internal sealed partial class SealedFile : IDisposable
     {
         destination = Path.GetFullPath(destination);
         directories.Parent(destination);
-        if (handle == null) { File.Move(path, destination, replace); return; }
+        if (handle == null) { File.Move(path, destination, replace); deleteOnDispose = false; moves++; return; }
         // What the replaced file keeps under File.Replace: its attributes, creation time and explicit access rules.
         var kept = replace && OperatingSystem.IsWindows() && directories.Exists(destination) ? Kept.Of(destination, directories) : null;
         RequireRegular();
@@ -82,6 +190,7 @@ internal sealed partial class SealedFile : IDisposable
         if (error != 0)
             throw new IOException(error is AlreadyExists or FileExists ? $"{destination} already exists."
                 : $"{path} could not be moved to {destination}: {new Win32Exception(error).Message}", new Win32Exception(error));
+        deleteOnDispose = false; moves++;
         if (kept != null && OperatingSystem.IsWindows()) kept.Apply(handle);
     }
 
@@ -161,26 +270,33 @@ internal sealed partial class SealedFile : IDisposable
     /// Puts the held file in place of <paramref name="destination"/> in one step. With <paramref name="backup"/> (a new file)
     /// the replaced file is copied there first; the copy is removed again when the held file cannot take its place.
     /// </summary>
-    public void Replace(string destination, string? backup)
+    public void Replace(string destination, string? backup, Action? beforePublish = null)
     {
         RequireRegular();
         directories.Parent(destination);
         if (backup != null) directories.Parent(backup);
-        if (backup != null)
+        using SealedFile? copy = backup == null ? null : CreateEmpty(backup, directories, asynchronous: false);
+        if (copy != null)
         {
             using FileStream source = directories.OpenFile(destination, FileMode.Open, FileAccess.Read, FileShare.Read);
-            using FileStream copy = directories.OpenFile(backup, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            source.CopyTo(copy); copy.Flush(true);
+            source.CopyTo(copy.stream!); copy.stream!.Flush(true);
         }
-        try { MoveTo(destination, replace: true); }
-        catch when (backup != null)
-        {
-            try { directories.DeleteFile(backup); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            throw;
-        }
+        int before = moves;
+        try { beforePublish?.Invoke(); MoveTo(destination, replace: true); }
+        finally { if (copy != null && moves != before) copy.deleteOnDispose = false; }
     }
 
-    public void Dispose() { handle?.Dispose(); stream?.Dispose(); if (ownsDirectories) directories.Dispose(); }
+    public void Dispose()
+    {
+        if (disposed) return; disposed = true;
+        // An open Unix descriptor does not own its pathname. Leave an unpublished remnant there rather than unlinking
+        // an unrelated replacement. Windows deletes the created identity, even after its old name is reused.
+        if (deleteOnDispose && handle != null)
+            try { DirectoryLease.Delete(handle, path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        try { stream?.Dispose(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        finally { handle?.Dispose(); if (ownsDirectories) directories.Dispose(); }
+    }
 
     private void RequireRegular()
     {

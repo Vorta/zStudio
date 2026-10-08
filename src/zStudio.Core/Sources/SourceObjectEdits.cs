@@ -40,8 +40,9 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
             bool same = true;
             for (int i = 0; i < 4 && same; i++)
             {
-                float length = MathF.Sqrt(m[i, 0] * m[i, 0] + m[i, 1] * m[i, 1] + m[i, 2] * m[i, 2]);
-                for (int j = 0; j < 3 && same; j++) same = MathF.Abs(composed[i, j] - m[i, j]) <= 1e-4f * length + 1e-6f;
+                double length = Length(new(m[i, 0], m[i, 1], m[i, 2]));
+                for (int j = 0; j < 3 && same; j++) same = float.IsFinite(composed[i, j]) && float.IsFinite(m[i, j])
+                    && Math.Abs((double)composed[i, j] - m[i, j]) <= 1e-4 * length + 1e-6;
             }
             if (same) return stored;
         }
@@ -69,11 +70,15 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
     /// </summary>
     public static ObjectTransform FromMatrix(Matrix4x4 m)
     {
+        Finite(m);
         Vector3 x = new(m.M11, m.M12, m.M13), y = new(m.M21, m.M22, m.M23), z = new(m.M31, m.M32, m.M33);
-        Vector3 scale = new(x.Length(), y.Length(), z.Length());
+        Vector3 scale = new(WorldNumbers.Finite((float)Length(x)), WorldNumbers.Finite((float)Length(y)), WorldNumbers.Finite((float)Length(z)));
         if (scale.X == 0 || scale.Y == 0 || scale.Z == 0) return new(m.Translation, Vector3.Zero, scale);
-        if (Vector3.Dot(Vector3.Cross(x, y), z) < 0) scale.X = -scale.X;
         x /= scale.X; y /= scale.Y; z /= scale.Z;
+        // Test handedness after normalization: the determinant of finite authored axes can overflow float arithmetic.
+        double determinant = ((double)x.Y * y.Z - (double)x.Z * y.Y) * z.X
+            + ((double)x.Z * y.X - (double)x.X * y.Z) * z.Y + ((double)x.X * y.Y - (double)x.Y * y.X) * z.Z;
+        if (determinant < 0) { scale.X = -scale.X; x = -x; }
         // Rows of Rz·Rx·Ry (see Matrix): the Z axis gives pitch (atan2 keeps it precise near ±90°, where asin loses digits)
         // and yaw. Roll is fitted to them: R·(Rx·Ry)ᵀ is Rz, read from the whole rotation, so the noise of the
         // cos(pitch)-scaled elements near ±90° does not build up over edits. At ±90° yaw and roll turn about one axis and the
@@ -88,6 +93,11 @@ public readonly record struct ObjectTransform(Vector3 Position, Vector3 Rotation
         float rz = MathF.Atan2(roll.M12, roll.M11);
         const float degrees = 180f / MathF.PI;
         return new(m.Translation, new Vector3(rx, ry, rz) * degrees, scale);
+    }
+    internal static double Length(Vector3 v) => Math.Sqrt((double)v.X * v.X + (double)v.Y * v.Y + (double)v.Z * v.Z);
+    internal static void Finite(Matrix4x4 m)
+    {
+        for (int row = 0; row < 4; row++) for (int column = 0; column < 4; column++) WorldNumbers.Finite(m[row, column]);
     }
 }
 
@@ -150,6 +160,7 @@ public static class SourceObjectEdits
     public static SourceEditPlan PlanTransform(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, ObjectTransform requested, CancellationToken token = default, string? mission = null, ObjectTransform? current = null,
         IEnumerable<WorldNodeProvenance>? copies = null, GameZWorld? world = null, SourceInstruction? write = null)
     {
+        SourceScriptInspection inspection = new(workspace, token);
         Generated(origin, nodeName);
         string label = $"Move {nodeName}";
         bool position = current is not { } c || Differs(requested.Position, c.Position);
@@ -194,7 +205,7 @@ public static class SourceObjectEdits
             string? own = mission == null ? null : SourceBuilder.WorldScript(mission);
             // (A line taking its values from a macro cannot change in place: the value is set after it instead.)
             bool Here(string command) => own != null && origin.Writers.GetValueOrDefault(command) is { } w && w.Script.Equals(own, StringComparison.OrdinalIgnoreCase) && !w.Tokens.Skip(1).Any(t => t.Contains('%'));
-            if (InThisMission(workspace, nodeName, label, writers.Select(w => w.Script).Append(anchor.Script), Lines(translateOnly: false, Here), executions, token, mission, world, write, edit =>
+            if (InThisMission(workspace, nodeName, label, writers.Select(w => w.Script).Append(anchor.Script), Lines(translateOnly: false, Here), executions, token, mission, world, write, inspection, edit =>
                 {
                     if (position && Here("Object3DTranslate")) edit.Set(origin.Writers["Object3DTranslate"], "Object3DTranslate", requested.Position, Vector3.Zero, origin.Writers["Object3DTranslate"], current?.Position);
                     if (rotation && Here("Object3DRotate")) edit.Set(origin.Writers["Object3DRotate"], "Object3DRotate", requested.RotationDegrees, Vector3.Zero, origin.Writers["Object3DRotate"], current?.RotationDegrees);
@@ -202,7 +213,7 @@ public static class SourceObjectEdits
                 }) is { } mine) return mine;
             if (writers.Select(w => w.Script).Append(anchor.Script).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
                 throw new InvalidDataException($"{nodeName}'s transform is set in several scripts; edit them in the scripts directly.");
-            ScriptEdit edit = new(workspace, anchor.Script, executions, token, mission);
+            ScriptEdit edit = new(workspace, anchor.Script, executions, token, mission, inspection);
             // Shown as the scripts store them (ObjectTransform.Of), each value changes alone; components the request keeps
             // keep their tokens.
             if (position) edit.Set(origin.Writers.GetValueOrDefault("Object3DTranslate"), "Object3DTranslate", requested.Position, Vector3.Zero, anchor, current?.Position);
@@ -219,19 +230,19 @@ public static class SourceObjectEdits
         bool gltfPosition = position && translate == null;
         // Other missions load the file too (a model of data/common/models): a script setting the node's transform in such a
         // load would start or stop applying there just the same.
-        if ((rotation || scale || gltfPosition) && mission != null && TransformElsewhere(workspace, mission, origin, nodeName, token) is { } elsewhere)
+        if ((rotation || scale || gltfPosition) && mission != null && TransformElsewhere(workspace, mission, origin, nodeName, token, inspection: inspection) is { } elsewhere)
             throw new InvalidDataException($"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}) {(elsewhere.Certain ? "sets" : "may set")} the transform of {nodeName} where {elsewhere.Mission} loads {origin.ModelFile}"
                 + $"{(elsewhere.Certain ? "" : " (it finds a node of that name once the file is loaded)")}, which a change of the file's node would make start or stop applying there; edit those instructions in the scripts first.");
         List<(string Relative, byte[] Content)> changes = []; List<string> notes = []; List<string> places = [];
         if (position && translate != null)
         {
-            if (InThisMission(workspace, nodeName, label, [translate.Script], Lines(translateOnly: true), executions, token, mission, world, write) is { } mine)
+            if (InThisMission(workspace, nodeName, label, [translate.Script], Lines(translateOnly: true), executions, token, mission, world, write, inspection) is { } mine)
             {
                 changes.AddRange(mine.Changes); notes.AddRange(mine.Notes); places.Add(mine.Target);
             }
             else
             {
-                ScriptEdit edit = new(workspace, translate.Script, executions, token, mission);
+                ScriptEdit edit = new(workspace, translate.Script, executions, token, mission, inspection);
                 edit.Set(translate, "Object3DTranslate", requested.Position, Vector3.Zero, translate, current?.Position);
                 changes.AddRange(edit.Changes()); notes.AddRange(edit.Notes); places.Add($"{translate.Script} line {translate.Line}");
             }
@@ -251,6 +262,7 @@ public static class SourceObjectEdits
                 // Values a decomposition leaves a hair off (89.99999°, a scale of 0.99999994) are written as meant.
                 if (rotation || scale) { m = new ObjectTransform(requested.Position, ObjectTransform.Snap(requested.RotationDegrees, angles: true), ObjectTransform.Snap(requested.Scale, angles: false)).Matrix(); m.Translation = local.Translation; }
                 if (gltfPosition) m.Translation = requested.Position;
+                ObjectTransform.Finite(m);
                 if (m.IsIdentity && scriptBasis)
                     throw new InvalidDataException($"An identity transform would let {nodeName}'s script Object3DRotate or Object3DScale apply again; change those instructions instead.");
                 // A move keeps the authored basis as written; anything else writes the new transform.
@@ -271,16 +283,19 @@ public static class SourceObjectEdits
     public static SourceEditPlan PlanFlag(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, uint bit, bool on, CancellationToken token = default, string? mission = null,
         IEnumerable<WorldNodeProvenance>? copies = null, GameZWorld? world = null, SourceInstruction? write = null)
     {
+        SourceScriptInspection inspection = new(workspace, token);
         Generated(origin, nodeName);
         if (System.Numerics.BitOperations.PopCount(bit) != 1 || (bit & WorldGltf.CarriedFlags) == 0) throw new InvalidDataException($"0x{bit:X} is not one node flag a source can set.");
+        if (bit == WorldGltf.ZoneGate && origin.ZoneManifest != null)
+            throw new InvalidDataException("This object's altitude-probe gate belongs to its map zone assignments. Use the map zone editor to choose its shared scope and change the gate.");
         string label = $"{(on ? "Set" : "Clear")} flag 0x{bit:X} of {nodeName}";
         string value = on ? "on" : "off";
         if (FlagCommands.TryGetValue(bit, out string? command) && origin.Writers.TryGetValue(command, out var writer))
         {
             // A flag command sets one bit of the current node, so a later one decides it: set in a script other missions run
             // too (weapons.gw's templates), this mission sets it again before writing its world.
-            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, value]], executions, token, mission, world, write) is { } mine) return mine;
-            ScriptEdit edit = new(workspace, writer.Script, executions, token, mission);
+            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, value]], executions, token, mission, world, write, inspection) is { } mine) return mine;
+            ScriptEdit edit = new(workspace, writer.Script, executions, token, mission, inspection);
             edit.Replace(writer, new() { [1] = value });
             return new(label, edit.Changes(), $"{writer.Script} line {writer.Line}", edit.Notes);
         }
@@ -302,11 +317,11 @@ public static class SourceObjectEdits
         }
         if (command == null) throw new InvalidDataException($"No script command sets flag 0x{bit:X}; {nodeName} was created by a script.");
         var anchor = origin.Created ?? throw new InvalidDataException($"{nodeName} was neither loaded from a model nor created by a script instruction.");
-        return Insert(workspace, nodeName, anchor, [command, value], label, executions, token, mission, world, write);
+        return Insert(workspace, nodeName, anchor, [command, value], label, executions, token, mission, world, write, inspection);
     }
     /// <summary>Whether a source can set flag <paramref name="bit"/> of the node <paramref name="origin"/> describes: a glTF node carries each, a script sets those a command sets.</summary>
     public static bool FlagSettable(WorldNodeProvenance origin, uint bit) =>
-        origin.Terrain == null && System.Numerics.BitOperations.PopCount(bit) == 1 && (bit & WorldGltf.CarriedFlags) != 0 && (origin.ModelFile != null || FlagCommands.ContainsKey(bit));
+        origin.Terrain == null && !(bit == WorldGltf.ZoneGate && origin.ZoneManifest != null) && System.Numerics.BitOperations.PopCount(bit) == 1 && (bit & WorldGltf.CarriedFlags) != 0 && (origin.ModelFile != null || FlagCommands.ContainsKey(bit));
 
     /// <summary>
     /// A plan that sets the arguments of one property command (WorldSetFogColor, LightSetDiffuse, …) of a node a script made:
@@ -319,29 +334,30 @@ public static class SourceObjectEdits
     public static SourceEditPlan PlanCommand(SourceWorkspace workspace, string nodeName, WorldNodeProvenance origin, IReadOnlyDictionary<(string Script, int Line), int> executions, string command, IReadOnlyList<string> args, CancellationToken token = default, string? mission = null,
         GameZWorld? world = null, SourceInstruction? write = null)
     {
+        SourceScriptInspection inspection = new(workspace, token);
         Generated(origin, nodeName);
         if (args.Count == 0) throw new InvalidDataException($"{command} needs arguments.");
         string label = $"{command} on {nodeName}";
         if (origin.Writers.TryGetValue(command, out var writer))
         {
             // Property commands set their values outright: set in a shared script, this mission sets them again at the end.
-            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, .. args]], executions, token, mission, world, write) is { } mine) return mine;
-            ScriptEdit edit = new(workspace, writer.Script, executions, token, mission);
+            if (InThisMission(workspace, nodeName, label, [writer.Script], [[command, .. args]], executions, token, mission, world, write, inspection) is { } mine) return mine;
+            ScriptEdit edit = new(workspace, writer.Script, executions, token, mission, inspection);
             if (writer.Tokens.Count - 1 != args.Count) edit.ReplaceLine(writer, [command, .. args]);
             else edit.Replace(writer, args.Select((a, i) => (Index: i + 1, Value: a)).ToDictionary(p => p.Index, p => p.Value));
             return new(label, edit.Changes(), $"{writer.Script} line {writer.Line}", edit.Notes);
         }
         var anchor = origin.Created ?? throw new InvalidDataException($"No instruction sets {command} for {nodeName}, and no script created it.");
-        return Insert(workspace, nodeName, anchor, [command, .. args], label, executions, token, mission, world, write);
+        return Insert(workspace, nodeName, anchor, [command, .. args], label, executions, token, mission, world, write, inspection);
     }
     /// <summary>
     /// Adds an instruction right after the one that created a node; when other missions run that script too, before this
     /// mission's world is written instead, after a FindNode of the node (see <see cref="PlanCommand"/>).
     /// </summary>
-    private static SourceEditPlan Insert(SourceWorkspace workspace, string nodeName, SourceInstruction anchor, IReadOnlyList<string> tokens, string label, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write)
+    private static SourceEditPlan Insert(SourceWorkspace workspace, string nodeName, SourceInstruction anchor, IReadOnlyList<string> tokens, string label, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write, SourceScriptInspection inspection)
     {
-        if (InThisMission(workspace, nodeName, label, [anchor.Script], [tokens], executions, token, mission, world, write) is { } mine) return mine;
-        ScriptEdit insert = new(workspace, anchor.Script, executions, token, mission);
+        if (InThisMission(workspace, nodeName, label, [anchor.Script], [tokens], executions, token, mission, world, write, inspection) is { } mine) return mine;
+        ScriptEdit insert = new(workspace, anchor.Script, executions, token, mission, inspection);
         insert.Insert(anchor, tokens);
         return new(label, insert.Changes(), $"{anchor.Script} line {anchor.Line}", insert.Notes);
     }
@@ -354,7 +370,7 @@ public static class SourceObjectEdits
     /// this mission. FindNode finds the newest node of a name, so the name must be the only one in the world. Null when no
     /// such script is shared (the edit changes the scripts as usual); refused when one is but the lines cannot be placed.
     /// </summary>
-    private static SourceEditPlan? InThisMission(SourceWorkspace workspace, string nodeName, string label, IEnumerable<string> scripts, IReadOnlyList<IReadOnlyList<string>> lines, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write, Action<ScriptEdit>? inPlace = null)
+    private static SourceEditPlan? InThisMission(SourceWorkspace workspace, string nodeName, string label, IEnumerable<string> scripts, IReadOnlyList<IReadOnlyList<string>> lines, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, GameZWorld? world, SourceInstruction? write, SourceScriptInspection inspection, Action<ScriptEdit>? inPlace = null)
     {
         if (mission == null || world == null) return null;
         string own = SourceBuilder.WorldScript(mission);
@@ -363,7 +379,7 @@ public static class SourceObjectEdits
         {
             // This mission's world script changes as usual (refused there when another mission runs it too).
             if (script.Equals(own, StringComparison.OrdinalIgnoreCase)) continue;
-            others = [.. MissionsRunning(workspace, script, mission, token)];
+            others = [.. MissionsRunning(workspace, script, mission, token, inspection)];
             if (others.Length > 0) { shared = script; break; }
         }
         if (shared == null) return null;
@@ -375,7 +391,7 @@ public static class SourceObjectEdits
         if (lines.Count > 0 && count != 1)
             throw new InvalidDataException($"{shared} also runs in {missions}, so the value would be set in {own} before the world is written, where FindNode finds the node by name; {(nodeName.Length == 0 ? "the node has no name" : $"{count} nodes are named {nodeName}")}. Edit it in the scripts directly.");
         if (lines.Count == 0 && inPlace == null) return new(label, [], nodeName, []);
-        ScriptEdit end = new(workspace, own, executions, token, mission);
+        ScriptEdit end = new(workspace, own, executions, token, mission, inspection);
         // Values this mission's world script already sets change where they are (see inPlace).
         inPlace?.Invoke(end);
         if (lines.Count > 0) end.InsertBeforeWrite([["FindNode", Token(nodeName)], .. lines], write);
@@ -409,6 +425,7 @@ public static class SourceObjectEdits
     /// </summary>
     public static SourceEditPlan PlanDelete(SourceObjectTarget target, CancellationToken token = default)
     {
+        SourceScriptInspection inspection = new(target.Workspace, token);
         var node = target.Node; var origin = target.Origin;
         Generated(origin, node.Name);
         string label = $"Delete {node.Name}";
@@ -422,7 +439,8 @@ public static class SourceObjectEdits
             // (also one attaching it to a second parent). A node the file shares leaves every parent with its copies.
             RefuseUsers(target, FileSubtree(target, node, origin, token), node.Name, "deleted");
             // Taking out the node holding a shared node's first copy makes the build read the next copy, whose zone it keeps.
-            return GltfFile(target.Workspace, origin, label, (root, copies) => GltfNodeEdits.Remove(root, copies), token, notes, loadZone: mark => BuiltInstanceZone(target, origin.ModelFile, mark));
+            var zones = new InstanceZoneLookup(target.Provenance, origin.ModelFile, token);
+            return GltfFile(target.Workspace, origin, label, (root, copies, _) => GltfNodeEdits.Remove(root, copies, token), token, notes, loadZone: zones.Find);
         }
         if (node.Parents.Count > 1) throw new InvalidDataException($"{node.Name} has several parents (a shared node); delete it in its source directly.");
         var created = Created(target, ["LoadGameGen", "NewObject3D"], "deleted");
@@ -452,10 +470,10 @@ public static class SourceObjectEdits
         // DeleteTree before the world is written would free its nodes, but their slots would stay in the world's node table
         // (as freed slots with their names) where a world that never made it numbers the later nodes from them.
         foreach (string script in instructions.Select(i => i.Script).Distinct(StringComparer.OrdinalIgnoreCase))
-            if (MissionsRunning(target.Workspace, script, target.Mission, token) is { Count: > 0 } others)
+            if (MissionsRunning(target.Workspace, script, target.Mission, token, inspection) is { Count: > 0 } others)
                 throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Count > 6 ? $" and {others.Count - 6} more" : "")}: taking its lines out would delete {node.Name} there too, "
                     + $"and no line of this mission deletes it exactly (a DeleteTree before the world is written would leave its nodes' slots in the world's node table, which a world that never made it numbers differently). Delete it in the scripts directly.");
-        ScriptEdits edits = new(target, token);
+        ScriptEdits edits = new(target, token, inspection);
         foreach (var instruction in instructions) edits[instruction.Script].Comment(instruction);
         return new(label, edits.Changes(), $"{created.Script} line {created.Line}", notes);
     }
@@ -475,6 +493,7 @@ public static class SourceObjectEdits
     /// </remarks>
     public static SourceEditPlan PlanDuplicate(SourceObjectTarget target, string name, ObjectTransform? transform, CancellationToken token = default, bool keepBasis = false)
     {
+        SourceScriptInspection inspection = new(target.Workspace, token);
         var node = target.Node; var origin = target.Origin;
         Generated(origin, node.Name);
         CheckName(name);
@@ -527,15 +546,16 @@ public static class SourceObjectEdits
             if (origin.Part && copies > 1) copyNotes.Add($"The mission database copies {origin.ModelFile} {copies} times, so the world gets {copies} nodes named {name}.");
             foreach (var i in origin.Applied.Where(i => !TransformCommands.Contains(i.Command) && !FlagCommands.Values.Contains(i.Command) && i.Command is not ("NodeSetLighting" or "FindSubNode")))
                 copyDiagnostics.Add($"{i.Script} line {i.Line} ({i.Command}) acts on {node.Name} by name; the copy does not get it.");
-            uint? LoadZone(long mark) => BuiltInstanceZone(target, origin.ModelFile, mark);
-            return GltfFile(target.Workspace, origin, label, (root, copies) =>
+            var builtZones = new InstanceZoneLookup(target.Provenance, origin.ModelFile, token);
+            uint? LoadZone(long mark) => builtZones.Find(mark);
+            return GltfFile(target.Workspace, origin, label, (root, copies, hierarchy) =>
             {
                 var zones = GltfNodeEdits.InstanceZones(root, token).ToDictionary(z => z.Mark, z => z.Zone);
                 // Beside the node in every copy of an instance holding it, as copies of one new instance where it is one.
                 Dictionary<long, long> instances = [];
-                foreach (int each in copies)
+                foreach (int copy in GltfNodeEdits.Duplicate(root, copies, name, instances, token, null, copiedNodes: hierarchy.CopiedNodes))
                 {
-                    int copy = GltfNodeEdits.Duplicate(root, each, name, instances);
+                    token.ThrowIfCancellationRequested();
                     var copied = (JsonObject)root["nodes"]![copy]!;
                     if (local is { } m) GltfNodeEdits.SetLocal(copied, m);
                     if (flags) ((JsonObject)copied["extras"]![WorldGltf.Key]!)["flags"] = $"0x{node.Flags & WorldGltf.CarriedFlags:X8}";
@@ -546,7 +566,7 @@ public static class SourceObjectEdits
             }, token, copyNotes, loadZone: LoadZone);
         }
         var created = Created(target, ["LoadGameGen"], "copied");
-        string file = origin.LoadedFile ?? throw new InvalidDataException($"{node.Name}'s LoadGameGen found no model file.");
+        string file = origin.LogicalLoadedFile ?? origin.LoadedFile ?? throw new InvalidDataException($"{node.Name}'s LoadGameGen found no model file.");
         // The copy repeats the instructions on the object itself; those that change its parts (also parts a script put
         // elsewhere) would not be repeated.
         RefuseUsers(target, Own(target, node, created).Concat(Subtree(node)).Where(n => !ReferenceEquals(n, node)), node.Name, "copied");
@@ -568,7 +588,7 @@ public static class SourceObjectEdits
             if (placed.Scale != Vector3.One) lines.Add(["Object3DScale", Number(placed.Scale.X), Number(placed.Scale.Y), Number(placed.Scale.Z)]);
         }
         lines.Add(["FindNode", parent.Name]); lines.Add(["AddChild", name]);
-        ScriptEdit edit = new(target.Workspace, SourceBuilder.WorldScript(target.Mission), target.Executions, token, target.Mission);
+        ScriptEdit edit = new(target.Workspace, SourceBuilder.WorldScript(target.Mission), target.Executions, token, target.Mission, inspection);
         edit.InsertBeforeWrite(lines, target.Write);
         return new(label, edit.Changes(), $"{SourceBuilder.WorldScript(target.Mission)}, before the world is written", notes)
         {
@@ -584,6 +604,7 @@ public static class SourceObjectEdits
     /// </summary>
     public static SourceEditPlan PlanReparent(SourceObjectTarget target, WorldNode? parent, CancellationToken token = default)
     {
+        SourceScriptInspection inspection = new(target.Workspace, token);
         var node = target.Node; var origin = target.Origin;
         Generated(origin, node.Name);
         if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod)) throw new InvalidDataException($"{node.Name} is a {node.Class} node; only objects can move to another parent here.");
@@ -651,26 +672,27 @@ public static class SourceObjectEdits
                 throw new InvalidDataException($"{instruction.Script} line {instruction.Line} (NodeSetLighting) lights everything below {on.Name}, so {node.Name} would be lit differently {(lit.ContainsKey(changed) ? $"away from {on.Name}" : $"under {on.Name}")}; move it in the scripts directly.");
             }
             bool topReached = !origin.Part || OutsideFile(node, InFile)?.Class == WorldNodeClass.World;
-            var plan = GltfFile(target.Workspace, origin, label, (root, _) =>
+            var builtZones = new InstanceZoneLookup(target.Provenance, origin.ModelFile, token);
+            var plan = GltfFile(target.Workspace, origin, label, (root, _, hierarchy) =>
             {
                 // Moved into an instance (whose other holders a script may have taken out of the world, so that it does not
                 // show as shared there), it would stand in the first copy only.
-                if (into is int i && GltfNodeEdits.InstanceCopies(root, i).Count > 1)
+                if (into is int i && GltfNodeEdits.InstanceCopies(hierarchy, i).Count > 1)
                     throw new InvalidDataException($"{parent!.Name} is {(Marked((JsonObject)root["nodes"]![i]!) ? "" : "inside ")}a node {origin.ModelFile} places under several parents (an instance), so {node.Name} would stand in one copy only; choose another parent.");
                 // A level-of-detail node has no transform of its own (the importer reads none): it stands where its parent
                 // is. Compared in the file, which places every copy of a part alike (a part's top is where its references are).
-                if (node.Class == WorldNodeClass.Lod && !SamePlace(GltfNodeEdits.Parent(root, origin.ModelNode) is int from ? GltfNodeEdits.World(root, from) : Matrix4x4.Identity, into is int to ? GltfNodeEdits.World(root, to) : Matrix4x4.Identity))
+                if (node.Class == WorldNodeClass.Lod && !SamePlace(hierarchy.Parent(origin.ModelNode) is int from ? hierarchy.World(from) : Matrix4x4.Identity, into is int to ? hierarchy.World(to) : Matrix4x4.Identity))
                     throw new InvalidDataException($"{node.Name} is a level-of-detail node, which stands where its parent is; it cannot keep its place {(parent != null ? $"under {parent.Name}" : origin.Part ? $"at the top of {Path.GetFileName(origin.ModelFile)}" : "under the world")}, which is elsewhere.");
-                GltfNodeEdits.Reparent(root, origin.ModelNode, into, zone);
+                GltfNodeEdits.Reparent(hierarchy, origin.ModelNode, into, zone);
                 // A group the build reaches from the file's top (through groups) is deleted with the database, its objects
                 // joining the world: the build refuses one with geometry or a transform.
-                if (GroupsReached(root, origin.ModelNode, topReached).Where(g => !EmptyGroup((JsonObject)root["nodes"]![g]!)).Select(g => (int?)g).FirstOrDefault() is int full)
+                if (GroupsReached(root, origin.ModelNode, topReached, token).Where(g => !EmptyGroup((JsonObject)root["nodes"]![g]!)).Select(g => (int?)g).FirstOrDefault() is int full)
                     throw new InvalidDataException($"{(full == origin.ModelNode ? node.Name : $"Group {JsonData.Shown(((JsonObject)root["nodes"]![full]!)["name"], asText: true)} below {node.Name}")} is a group of the mission database with geometry or a transform{(full == origin.ModelNode ? " where it stands now" : "")}; {(into is null ? "at the top" : $"under {parent!.Name}")} the build would delete it and its objects would join the world, so move its objects instead.");
             }, token, [.. notes, into != null ? $"{node.Name} moves with {parent!.Name} from now on."
                     : origin.Part ? $"{node.Name} becomes a root of {origin.ModelFile}, under each of the mission database's references to it."
                     : $"{node.Name} becomes a root of the mission database, which joins the world and its grid."], everyCopy: false,
                 // A move of a node holding a shared node's copy can make the build read another copy first, whose zone it keeps.
-                loadZone: mark => BuiltInstanceZone(target, origin.ModelFile, mark));
+                loadZone: builtZones.Find);
             // Nothing to change is no edit: say where it already is rather than report a move.
             if (plan.Changes.Count == 0)
                 throw new InvalidDataException(into != null ? $"{node.Name} is already under {parent!.Name}." : origin.Part ? $"{node.Name} is already a root of {origin.ModelFile}." : $"{node.Name} is already a root of the mission database.");
@@ -695,7 +717,7 @@ public static class SourceObjectEdits
         // world script attaches it anew.
         if (TransformCommands.Where(origin.Writers.ContainsKey).Select(c => origin.Writers[c]).FirstOrDefault(w => !w.Script.Equals(created.Script, StringComparison.OrdinalIgnoreCase)) is { } elsewhere)
             throw new InvalidDataException($"{elsewhere.Script} line {elsewhere.Line} ({elsewhere.Command}) sets {node.Name}'s transform outside {created.Script}, which created it; move it in the scripts directly.");
-        ScriptEdits edits = new(target, token);
+        ScriptEdits edits = new(target, token, inspection);
         foreach (var instruction in attached) edits[instruction.Script].Comment(instruction);
         var edit = edits[created.Script];
         // Keep the world placement: the local transform becomes the old world transform relative to the new parent. With
@@ -756,21 +778,23 @@ public static class SourceObjectEdits
     /// it from the file's top through groups (<paramref name="topReached"/>: the file's top is reached, as the database's is
     /// and a part's is when its reference is): the build deletes those with the database, and their objects join the world.
     /// </summary>
-    private static IEnumerable<int> GroupsReached(JsonObject root, int index, bool topReached)
+    private static IEnumerable<int> GroupsReached(JsonObject root, int index, bool topReached, CancellationToken token)
     {
         var nodes = (JsonArray)root["nodes"]!;
         bool Group(int i) => ((nodes[i] as JsonObject)?["extras"] as JsonObject)?[WorldGltf.Key] is JsonObject engine && engine["group"] is JsonValue value
             && (value.TryGetValue(out bool flag) ? flag : value.TryGetValue(out double number) && number == 1);
         if (!topReached || !Group(index)) yield break;
+        // Reparent has already changed adjacency: a new phase must never reuse its old parent index.
+        var hierarchy = new GltfNodeEdits.Hierarchy(root, token);
         int depth = 0;
-        for (int? at = GltfNodeEdits.Parent(root, index); at is int i; at = GltfNodeEdits.Parent(root, i))
+        for (int? at = hierarchy.Parent(index); at is int i; at = hierarchy.Parent(i))
             if (!Group(i) || ++depth > GltfDocument.MaximumDepth) yield break;
         Stack<int> pending = new([index]);
         while (pending.TryPop(out int group))
         {
+            token.ThrowIfCancellationRequested();
             yield return group;
-            foreach (var child in (nodes[group] as JsonObject)?["children"] as JsonArray ?? [])
-                if (GltfInteger.OptionalInt32(child, "child") is int c && c >= 0 && c < nodes.Count && Group(c)) pending.Push(c);
+            foreach (int child in hierarchy.Children(group)) if (Group(child)) pending.Push(child);
         }
     }
     /// <summary>Whether a group can be deleted with the database, its objects keeping their places: no geometry, no level of detail, no transform.</summary>
@@ -855,7 +879,7 @@ public static class SourceObjectEdits
         try { GltfDocument.ValidateJsonText(bytes, token); root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }) as JsonObject; }
         catch (JsonException) { return built; }
         if (root?["nodes"] is not JsonArray nodes || origin.ModelNode < 0 || origin.ModelNode >= nodes.Count) return built;
-        var indices = GltfNodeEdits.Descendants(root, origin.ModelNode);
+        var indices = GltfNodeEdits.Descendants(root, origin.ModelNode, token);
         return built.Concat(target.Provenance.Where(p => indices.Contains(p.Value.ModelNode) && string.Equals(p.Value.ModelFile, file, StringComparison.OrdinalIgnoreCase)).Select(p => p.Key))
             .Distinct(ReferenceEqualityComparer.Instance).Cast<WorldNode>();
     }
@@ -992,6 +1016,7 @@ public static class SourceObjectEdits
         var originsByNode = provenance.Where(p => string.Equals(p.ModelFile, model, StringComparison.OrdinalIgnoreCase)).ToLookup(p => p.ModelNode);
         List<string> notes = []; int traced = 0, untraced = 0;
         ScriptTraceBudget traceBudget = new();
+        SourceScriptInspection inspection = new(workspace, token);
         foreach (var group in was.Select((n, i) => (n, i)).GroupBy(p => p.n.Name, StringComparer.Ordinal))
         {
             var later = byName[group.Key].ToList(); int occurrence = 0;
@@ -1008,7 +1033,7 @@ public static class SourceObjectEdits
                 if (reason == null && traced++ >= 64) { untraced++; continue; }
                 // A model this world does not load is still found where other missions load it.
                 var origin = origins.FirstOrDefault() ?? new WorldNodeProvenance { ModelFile = model, ModelNode = index, ModelNodeName = node.Name };
-                if (reason == null && TransformElsewhere(workspace, mission, origin, node.Name, token, traceBudget) is { } elsewhere)
+                if (reason == null && TransformElsewhere(workspace, mission, origin, node.Name, token, traceBudget, inspection) is { } elsewhere)
                     reason = $"{elsewhere.Instruction.Script} line {elsewhere.Instruction.Line} ({elsewhere.Instruction.Command}, where {elsewhere.Mission} loads the file)";
                 if (reason != null) notes.Add($"{node.Name} {change} in the export, so {reason} {(node.Authored ? "starts" : "stops")} turning or scaling it.");
             }
@@ -1027,28 +1052,12 @@ public static class SourceObjectEdits
     /// own transform instructions are skipped: they run in this mission too, and the edit is planned with them.
     /// Missing files remain missing; a file that cannot be read refuses the edit because its uses cannot be inspected.
     /// </summary>
-    internal static (string Mission, SourceInstruction Instruction, bool Certain)? TransformElsewhere(SourceWorkspace workspace, string mission, WorldNodeProvenance origin, string nodeName, CancellationToken token, ScriptTraceBudget? traceBudget = null)
+    internal static (string Mission, SourceInstruction Instruction, bool Certain)? TransformElsewhere(SourceWorkspace workspace, string mission, WorldNodeProvenance origin, string nodeName, CancellationToken token, ScriptTraceBudget? traceBudget = null, SourceScriptInspection? inspection = null)
     {
         if (origin.ModelFile is not { } file) return null;
         traceBudget ??= new();
-        Dictionary<string, byte[]?> files = new(StringComparer.OrdinalIgnoreCase);
-        ReconstructionBudget retained = new();
-        Dictionary<string, GameGenScriptSyntax> parsedScripts = new(StringComparer.OrdinalIgnoreCase);
-        long scriptBytes = 0;
-        byte[]? Read(string path)
-        {
-            if (files.TryGetValue(path, out var bytes)) return bytes;
-            try { bytes = workspace.Read(path, token); }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
-            {
-                // A failed read is not evidence that another mission does not use this model. In particular,
-                // a temporarily locked script/reference may apply transforms as soon as its lock is released.
-                // Use IOException so the malformed-mission catch below cannot turn incomplete inspection into absence.
-                throw new IOException($"Cannot check the other missions' transforms because {JsonData.ShownText(path)} could not be read. Close programs locking it or restore access, then retry the edit.", ex);
-            }
-            if (bytes != null) retained.Retain(bytes.LongLength);
-            return files[path] = bytes;
-        }
+        inspection ??= new(workspace, token);
+        byte[]? Read(string path) => inspection.ReadModel(path);
         // The names the build gives the node: its engine name in the file, and the one this world shows.
         HashSet<string> names = new(StringComparer.Ordinal) { nodeName };
         if (Parse(Read(file))?["nodes"] is JsonArray fileNodes && origin.ModelNode >= 0 && origin.ModelNode < fileNodes.Count && fileNodes[origin.ModelNode] is JsonObject edited)
@@ -1077,10 +1086,11 @@ public static class SourceObjectEdits
             return holds[path] = found;
         }
 
-        var worlds = SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase), token: token)
-            .Where(p => p.Count(c => c == '/') == 1).Order(StringComparer.OrdinalIgnoreCase);
+        inspection.ReserveWork(inspection.Worlds().Count);
+        var worlds = inspection.Worlds().Order(StringComparer.OrdinalIgnoreCase);
         foreach (string world in worlds)
         {
+            inspection.ReserveWork(world.Length + 1L);
             string other = Path.GetFileNameWithoutExtension(world).ToLowerInvariant();
             if (other.Equals(mission, StringComparison.OrdinalIgnoreCase)) continue;
             try { if (Trace(world) is { } hit) return (other, hit.Instruction, hit.Certain); }
@@ -1120,23 +1130,18 @@ public static class SourceObjectEdits
             {
                 // Scripts the build refuses (sourced this deep, or running this many instructions) build nothing.
                 if (depth > WorldAssembler.MaximumScriptDepth) throw new InvalidDataException($"Scripts source each other more than {WorldAssembler.MaximumScriptDepth} levels deep.");
-                if (Read(relative) is not { } bytes) return;
-                if (!parsedScripts.TryGetValue(relative, out var syntax))
-                {
-                    scriptBytes += bytes.LongLength;
-                    if (scriptBytes > SourceProject.MaximumSourceTextBytes)
-                        throw new IOException("Checking other missions' transforms exceeds the aggregate script input limit.");
-                    parsedScripts[relative] = syntax = GameGenScriptSyntax.Parse(bytes);
-                }
+                if (inspection.Read(relative) is not { } syntax) return;
                 foreach (var line in syntax.Lines)
                 {
                     if (written || hit != null) return;
+                    inspection.ReserveWork(line.Length + 1L);
                     if (!line.IsInstruction) continue;
                     token.ThrowIfCancellationRequested();
                     if (++run > WorldAssembler.MaximumInstructions) throw new InvalidDataException("The scripts run too many instructions.");
                     var raw = line.Tokens; string command = raw[0];
+                    traceBudget.Operands.Inspect(raw, token);
                     if (!conditions.Runs(raw, variables)) continue;
-                    string[] args = [.. raw.Skip(1).Select(t => ScriptConditions.Expand(t, variables))];
+                    string[] args = traceBudget.Operands.Expand(raw, variables, token);
                     string A(int i) => i < args.Length ? args[i] : "";
                     if (ScriptConditions.IsQuit(command)) return;
                     if (ScriptConditions.IsSet(command)) { if (args.Length > 0) variables[args[0]] = args.Length > 1 ? args[1] : ""; continue; }
@@ -1182,7 +1187,12 @@ public static class SourceObjectEdits
         JsonNode? Parse(byte[]? bytes)
         {
             if (bytes == null) return null;
-            try { return JsonNode.Parse(GltfDocument.ContainerJson(bytes, token, out _), documentOptions: new() { MaxDepth = 64 }); }
+            try
+            {
+                var json = GltfDocument.ContainerJson(bytes, token, out _);
+                inspection.ReserveWork(json.Length);
+                return JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 });
+            }
             catch (JsonException) { return null; }
         }
     }
@@ -1289,7 +1299,7 @@ public static class SourceObjectEdits
 
     /// <summary>A change of a glTF node's own values (its transform, its extras), made alike in every copy of an instance holding it.</summary>
     private static SourceEditPlan GltfEdit(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject> change, CancellationToken token, IReadOnlyList<string>? notes = null) =>
-        GltfFile(workspace, origin, label, (document, copies) =>
+        GltfFile(workspace, origin, label, (document, copies, _) =>
         {
             var nodes = (JsonArray)document["nodes"]!;
             var node = (JsonObject)nodes[copies[0]]!;
@@ -1337,7 +1347,7 @@ public static class SourceObjectEdits
     /// the zone it had onto every copy (see <see cref="KeepInstanceZones"/>); <paramref name="loadZone"/> gives the built
     /// zone of a shared node whose zone came from whatever loads the file.
     /// </remarks>
-    private static SourceEditPlan GltfFile(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject, IReadOnlyList<int>> change, CancellationToken token, IReadOnlyList<string> notes, bool everyCopy = true,
+    private static SourceEditPlan GltfFile(SourceWorkspace workspace, WorldNodeProvenance origin, string label, Action<JsonObject, IReadOnlyList<int>, GltfNodeEdits.Hierarchy> change, CancellationToken token, IReadOnlyList<string> notes, bool everyCopy = true,
         Func<long, uint?>? loadZone = null)
     {
         string file = origin.ModelFile!;
@@ -1345,8 +1355,8 @@ public static class SourceObjectEdits
         if (!file.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{file} is a binary glTF; save it as .gltf to edit its nodes here.");
         // A clean source can have changed after the shown build was checked. Validate its actual topology and metadata
         // before any editing helper traverses or clones it, as well as validating the final candidate below.
-        var checkedSource = GltfDocument.Read(bytes, uri => workspace.Read(WorldAssembler.Relative(file, uri), token)
-            ?? throw new InvalidDataException($"{file}: buffer {JsonData.ShownText(uri)} is unavailable."), token);
+        var checkedSource = WorldAssembler.ReadModel(bytes, file, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
+            ?? throw new InvalidDataException($"{file}: buffer {JsonData.ShownText(path)} is unavailable."), token);
         WorldGltf.ValidateSupported(checkedSource, file);
         JsonNode? root;
         try { GltfDocument.ValidateJsonText(bytes, token); root = JsonNode.Parse(bytes, documentOptions: new() { MaxDepth = 64 }); }
@@ -1356,7 +1366,11 @@ public static class SourceObjectEdits
         // The file may have changed since the build (another program, Blender): the node must still be the one built.
         if (origin.ModelNodeName != null && (node["name"] is JsonValue n && n.TryGetValue(out string? name) ? name : "") != origin.ModelNodeName)
             throw new InvalidDataException($"Node {origin.ModelNode} of {file} is no longer {origin.ModelNodeName}; reload the world before editing it.");
-        var copies = GltfNodeEdits.InstanceCopies(document, origin.ModelNode);
+        var hierarchy = new GltfNodeEdits.Hierarchy(document, token);
+        var zoneBindings = SourceMapZoneBindings.Read(workspace, file, checkedSource, token);
+        Dictionary<JsonNode, int> originalObjects = new(ReferenceEqualityComparer.Instance);
+        if (zoneBindings.Any) for (int i = 0; i < nodes.Count; i++) originalObjects.Add(nodes[i]!, i);
+        var copies = GltfNodeEdits.InstanceCopies(hierarchy, origin.ModelNode);
         string shown = origin.ModelNodeName is { Length: > 0 } named ? named : $"Node {origin.ModelNode}";
         if (copies.Count > 1 && !everyCopy)
             throw new InvalidDataException($"{shown} is {(Marked(node) ? "" : "inside ")}a node {file} places under several parents (an instance); move it in Blender instead.");
@@ -1365,21 +1379,24 @@ public static class SourceObjectEdits
         if (copies.Count > 1 && Shape(nodes, copies[0], 0) is var shape && copies.Skip(1).Any(c => !JsonNode.DeepEquals(Shape(nodes, c, 0), shape)))
             throw new InvalidDataException($"The copies of {shown} in the instance {file} places under several parents differ; make them alike in Blender first.");
         var zones = GltfNodeEdits.InstanceZones(document, token).ToDictionary(z => z.Mark, z => z.Zone);
-        change(document, copies);
+        change(document, copies, hierarchy);
+        hierarchy.Invalidate(); // Even value-only edits can invalidate cached local transforms.
         List<string> kept = [];
         KeepInstanceZones(document, file, zones, new Dictionary<long, long>(), loadZone, kept, token);
         // zStudio and Blender write glTF indented or minified; keep the file's style.
         bool indented = bytes.AsSpan(0, Math.Min(bytes.Length, 4096)).Contains((byte)'\n');
         byte[] content = GltfJson.Write(root, indented, token);
-        var updated = GltfDocument.Read(content, uri => workspace.Read(WorldAssembler.Relative(file, uri), token)
-            ?? throw new InvalidDataException($"{file}: buffer {JsonData.ShownText(uri)} is unavailable."), token);
+        var updated = WorldAssembler.ReadModel(content, file, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
+            ?? throw new InvalidDataException($"{file}: buffer {JsonData.ShownText(path)} is unavailable."), token);
         WorldGltf.ValidateSupported(updated, file);
         if (content.AsSpan().SequenceEqual(bytes)) return new(label, [], $"{file} node {origin.ModelNode}", notes);
         List<string> all = [.. notes, .. kept];
         if (copies.Count > 1) all.Add($"{file} holds {shown} in an instance it places under several parents: the change applies to each of its {copies.Count} copies.");
         if (!origin.Database) all.Add($"{file} is a model file: the change applies wherever it is loaded.");
         else if (origin.Part) all.Add($"{file} is a part of the mission database: the change applies to every copy of it the database references.");
-        return new(label, [(file, content)], $"{file} node {origin.ModelNode}", all);
+        List<(string Relative, byte[] Content)> changes = [(file, content)];
+        changes.AddRange(zoneBindings.Remap(checkedSource, updated, document, originalObjects, hierarchy.CopiedNodes, token));
+        return new(label, changes, $"{file} node {origin.ModelNode}", all);
     }
     /// <summary>
     /// Keeps the zones of the file's shared nodes through a change of its hierarchy. The build gives a shared node without a
@@ -1413,11 +1430,43 @@ public static class SourceObjectEdits
     /// The zone the build gave the shared node <paramref name="mark"/> of <paramref name="file"/>, when every copy of the file
     /// the world holds gave it the same (a part the database references from several zones may not).
     /// </summary>
-    private static uint? BuiltInstanceZone(SourceObjectTarget target, string file, long mark)
+    internal sealed class InstanceZoneLookup(IReadOnlyDictionary<WorldNode, WorldNodeProvenance> provenance, string file,
+        CancellationToken token, long maximumWork = LookupWorkBudget.MaximumUnits)
     {
-        var zones = target.Provenance.Where(p => p.Value.Instance is { Parent: null } place && place.Number == mark && string.Equals(p.Value.ModelFile, file, StringComparison.OrdinalIgnoreCase))
-            .Select(p => p.Key.Zone & 0xFF).Distinct().Take(2).ToList();
-        return zones.Count == 1 ? zones[0] : null;
+        private readonly LookupWorkBudget work = new(maximumWork, token);
+        private Dictionary<long, uint?>? zones;
+        internal long Used => work.UsedUnits;
+        private void Reserve(long amount)
+        {
+            try { work.Reserve(amount); }
+            catch (InvalidDataException error) when (work.Exhausted)
+            { throw new InvalidDataException("Preserving shared instance zones exceeds the edit's lookup allowance. Split the source model into smaller files before changing its hierarchy.", error); }
+        }
+        internal uint? Find(long mark)
+        {
+            Reserve(1);
+            if (zones == null)
+            {
+                // One edit can change the first-read copy of many marks. Build once, including every
+                // load of this file, so equal zones agree and differing zones remain ambiguous.
+                Dictionary<long, uint?> collected = [];
+                foreach (var (node, origin) in provenance)
+                {
+                    Reserve(1);
+                    if (origin.Instance is not { Parent: null } place || origin.ModelFile is not { } source) continue;
+                    Reserve(1L + Math.Min(source.Length, file.Length));
+                    if (!string.Equals(source, file, StringComparison.OrdinalIgnoreCase)) continue;
+                    Reserve(64); // Hash lookup, retained row and dictionary growth before insertion.
+                    uint zone = node.Zone & 0xFF;
+                    if (collected.TryGetValue(place.Number, out uint? previous))
+                    { if (previous != zone) collected[place.Number] = null; }
+                    else collected.Add(place.Number, zone);
+                }
+                token.ThrowIfCancellationRequested();
+                zones = collected; // A canceled/refused partial map is never reused.
+            }
+            return zones.GetValueOrDefault(mark);
+        }
     }
     private static JsonArray Array(params float[] values) => new(values.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());
     /// <summary>A scale of 0 flattens the object and leaves no rotation to read back, so it could not be turned or scaled again.</summary>
@@ -1434,9 +1483,12 @@ public static class SourceObjectEdits
     /// </summary>
     private static bool HasShear(Matrix4x4 m)
     {
+        ObjectTransform.Finite(m);
         Vector3 x = new(m.M11, m.M12, m.M13), y = new(m.M21, m.M22, m.M23), z = new(m.M31, m.M32, m.M33);
-        if (x.Length() < 1e-6f || y.Length() < 1e-6f || z.Length() < 1e-6f) return true;
-        static bool Skewed(Vector3 a, Vector3 b) => MathF.Abs(Vector3.Dot(a, b)) > 1e-4f * a.Length() * b.Length();
+        double xl = ObjectTransform.Length(x), yl = ObjectTransform.Length(y), zl = ObjectTransform.Length(z);
+        if (xl < 1e-6 || yl < 1e-6 || zl < 1e-6) return true;
+        static bool Skewed(Vector3 a, Vector3 b) => Math.Abs((double)a.X * b.X + (double)a.Y * b.Y + (double)a.Z * b.Z)
+            > 1e-4 * ObjectTransform.Length(a) * ObjectTransform.Length(b);
         return Skewed(x, y) || Skewed(y, z) || Skewed(x, z);
     }
     private static void Check(Vector3 v)
@@ -1464,7 +1516,7 @@ public static class SourceObjectEdits
     }
 
     /// <summary>Token replacements and inserted lines of one script, applied together: replacements first, then insertions from the bottom up.</summary>
-    private sealed class ScriptEdit(SourceWorkspace workspace, string script, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission = null)
+    private sealed class ScriptEdit(SourceWorkspace workspace, string script, IReadOnlyDictionary<(string Script, int Line), int> executions, CancellationToken token, string? mission, SourceScriptInspection inspection)
     {
         private readonly Dictionary<int, Dictionary<int, string>> replacements = [];
         private readonly Dictionary<int, List<IReadOnlyList<string>>> insertions = [];
@@ -1486,7 +1538,7 @@ public static class SourceObjectEdits
         {
             if (mission == null || sharedChecked) return;
             sharedChecked = true;
-            var others = MissionsRunning(workspace, script, mission, token);
+            var others = MissionsRunning(workspace, script, mission, token, inspection);
             if (others.Count > 0) throw new InvalidDataException($"{script} also runs in {string.Join(", ", others.Take(6))}{(others.Count > 6 ? $" and {others.Count - 6} more" : "")}; editing it would change those missions too. Edit it in the script directly.");
         }
         public void Replace(SourceInstruction instruction, Dictionary<int, string> values)
@@ -1545,7 +1597,7 @@ public static class SourceObjectEdits
         public IReadOnlyList<(string Relative, byte[] Content)> Changes()
         {
             string relative = script;
-            var syntax = GameGenScriptSyntax.Parse(workspace.Read(relative, token) ?? throw new InvalidDataException($"{relative} no longer exists."));
+            var syntax = inspection.Read(relative) ?? throw new InvalidDataException($"{relative} no longer exists.");
             // Line numbers come from the build; the lines must still be the instructions it ran.
             foreach (var (line, tokens) in expected)
                 if (line > syntax.Lines.Count || !syntax.Line(line).Tokens.SequenceEqual(tokens, StringComparer.Ordinal))
@@ -1554,9 +1606,9 @@ public static class SourceObjectEdits
             {
                 var current = syntax.Line(line);
                 if (!current.IsInstruction) throw new InvalidDataException($"{relative} line {line} changed since the world was built; rebuild it first.");
-                syntax = GameGenScriptSyntax.Parse(syntax.ReplaceTokens(line, values));
+                syntax = inspection.ParseEdit(syntax.ReplaceTokens(line, values, token));
             }
-            if (comments.Count > 0) syntax = GameGenScriptSyntax.Parse(syntax.CommentOut(comments));
+            if (comments.Count > 0) syntax = inspection.ParseEdit(syntax.CommentOut(comments, token));
             if (beforeWrite.Count > 0)
             {
                 int write = writeLine ?? syntax.Lines.FirstOrDefault(l => l.IsInstruction && ScriptCommands.Core(l.Tokens[0]) == "GameZWriteZBDFile")?.Number
@@ -1569,10 +1621,10 @@ public static class SourceObjectEdits
             var steps = insertions.Select(i => (Line: i.Key, Rewrite: false)).Concat(lines.Keys.Select(l => (Line: l, Rewrite: true))).OrderByDescending(s => s.Line).ThenByDescending(s => s.Rewrite);
             foreach (var (line, rewrite) in steps)
             {
-                if (!rewrite) { syntax = GameGenScriptSyntax.Parse(syntax.InsertLines(Math.Min(line, syntax.Lines.Count + 1), insertions[line])); continue; }
+                if (!rewrite) { syntax = inspection.ParseEdit(syntax.InsertLines(Math.Min(line, syntax.Lines.Count + 1), insertions[line], token)); continue; }
                 // A whole instruction rewritten: the old one becomes a comment and the new one follows it, keeping both readable.
-                syntax = GameGenScriptSyntax.Parse(syntax.InsertLines(line + 1, [lines[line]]));
-                syntax = GameGenScriptSyntax.Parse(syntax.CommentOut(line));
+                syntax = inspection.ParseEdit(syntax.InsertLines(line + 1, [lines[line]], token));
+                syntax = inspection.ParseEdit(syntax.CommentOut(line, token));
             }
             if (replacements.Count == 0 && lines.Count == 0 && insertions.Count == 0 && comments.Count == 0 && beforeWrite.Count == 0) return [];
             CheckShared();
@@ -1581,10 +1633,10 @@ public static class SourceObjectEdits
     }
 
     /// <summary>One edit of several scripts: a <see cref="ScriptEdit"/> per script, each checked (and refused when other missions run it) on its own.</summary>
-    private sealed class ScriptEdits(SourceObjectTarget target, CancellationToken token)
+    private sealed class ScriptEdits(SourceObjectTarget target, CancellationToken token, SourceScriptInspection inspection)
     {
         private readonly Dictionary<string, ScriptEdit> edits = new(StringComparer.OrdinalIgnoreCase);
-        public ScriptEdit this[string script] => edits.TryGetValue(script, out var edit) ? edit : edits[script] = new(target.Workspace, script, target.Executions, token, target.Mission);
+        public ScriptEdit this[string script] => edits.TryGetValue(script, out var edit) ? edit : edits[script] = new(target.Workspace, script, target.Executions, token, target.Mission, inspection);
         public IReadOnlyList<(string Relative, byte[] Content)> Changes() => [.. edits.Values.SelectMany(e => e.Changes())];
     }
 
@@ -1595,16 +1647,21 @@ public static class SourceObjectEdits
     /// scripts and <see cref="WorldAssembler.MaximumInstructions"/> source lines in all. Beyond that, or when another
     /// mission's scripts reach a source line naming its script with a macro (which only the build's run resolves) without
     /// reaching <paramref name="script"/>, the edit is refused with <see cref="InvalidDataException"/> rather than taken as
-    /// this mission's alone. A script the build cannot read (it refuses the build that runs it) runs in no mission that builds.
+    /// this mission's alone. Missing scripts cannot build; unreadable scripts and exhausted inspection budgets refuse the edit.
     /// </summary>
     internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, CancellationToken token) =>
-        MissionsRunning(workspace, script, mission, SourceProject.MaximumFiles, WorldAssembler.MaximumInstructions, token);
-    /// <param name="maximumScripts">The scripts the graph may name (<see cref="SourceProject.MaximumFiles"/>; smaller in tests).</param>
-    /// <param name="maximumSources">The source lines the graph may hold (<see cref="WorldAssembler.MaximumInstructions"/>; smaller in tests).</param>
-    internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, int maximumScripts, int maximumSources, CancellationToken token)
+        MissionsRunning(workspace, script, mission, token, new(workspace, token));
+
+    internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, CancellationToken token, SourceScriptInspection inspection) =>
+        MissionsRunning(workspace, script, mission, SourceProject.MaximumFiles, WorldAssembler.MaximumInstructions, token, inspection);
+
+    internal static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, int maximumScripts, int maximumSources, CancellationToken token) =>
+        MissionsRunning(workspace, script, mission, maximumScripts, maximumSources, token, new(workspace, token));
+
+    private static IReadOnlyList<string> MissionsRunning(SourceWorkspace workspace, string script, string mission, int maximumScripts, int maximumSources, CancellationToken token, SourceScriptInspection inspection)
     {
-        var worlds = SourceProject.Files(workspace.Root, SourceProject.GameGenFolder, n => System.Text.RegularExpressions.Regex.IsMatch(n, @"\Am\d+\.gs\z", System.Text.RegularExpressions.RegexOptions.IgnoreCase), token: token)
-            .Where(p => p.Count(c => c == '/') == 1 && !Path.GetFileNameWithoutExtension(p).Equals(mission, StringComparison.OrdinalIgnoreCase)).ToArray();
+        inspection.ReserveWork(inspection.Worlds().Count);
+        var worlds = inspection.Worlds().Where(p => !Path.GetFileNameWithoutExtension(p).Equals(mission, StringComparison.OrdinalIgnoreCase)).ToArray();
         // Every script the other worlds reach, read once: who sources it, and its first source line a macro names.
         Dictionary<string, List<string>> sourcedBy = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, (int Line, string Name)> macros = new(StringComparer.OrdinalIgnoreCase);
@@ -1613,15 +1670,16 @@ public static class SourceObjectEdits
         string Refused(string what) => $"The other missions' world scripts {what}, more than zStudio follows to tell whether they run {script}. Edit it in the scripts directly.";
         while (pending.TryDequeue(out var file))
         {
-            token.ThrowIfCancellationRequested();
+            inspection.ReserveWork(file.Length + 1L);
             // What the edited script sources does not decide whether a mission runs it.
             if (file.Equals(script, StringComparison.OrdinalIgnoreCase)) continue;
             GameGenScriptSyntax? syntax = null;
-            // A script the build cannot read (a path it refuses, or a file too large) fails every build that runs it.
-            try { if (workspace.Read(file, token) is { } bytes) syntax = GameGenScriptSyntax.Parse(bytes); }
+            // Malformed syntax cannot build; incomplete reads and inspection capacity failures must propagate.
+            try { syntax = inspection.Read(file); }
             catch (InvalidDataException) { }
             foreach (var line in syntax?.Lines ?? [])
             {
+                inspection.ReserveWork(line.Length + 1L);
                 if (!line.IsInstruction || line.Tokens.Count < 2 || !ScriptConditions.IsSource(line.Tokens[0])) continue;
                 token.ThrowIfCancellationRequested();
                 if (++sources > maximumSources) throw new InvalidDataException(Refused($"hold more than {maximumSources:N0} source lines"));
@@ -1656,11 +1714,12 @@ public static class SourceObjectEdits
         Dictionary<string, string> Reaching(IEnumerable<string> from)
         {
             Dictionary<string, string> reached = new(StringComparer.OrdinalIgnoreCase); Queue<string> next = new();
-            foreach (string start in from) if (reached.TryAdd(start, start)) next.Enqueue(start);
+            foreach (string start in from) { inspection.ReserveWork(start.Length + 1L); if (reached.TryAdd(start, start)) next.Enqueue(start); }
             while (next.TryDequeue(out var file))
             {
                 token.ThrowIfCancellationRequested();
-                foreach (string by in sourcedBy.GetValueOrDefault(file) ?? []) if (reached.TryAdd(by, reached[file])) next.Enqueue(by);
+                inspection.ReserveWork(file.Length + 1L);
+                foreach (string by in sourcedBy.GetValueOrDefault(file) ?? []) { inspection.ReserveWork(by.Length + 1L); if (reached.TryAdd(by, reached[file])) next.Enqueue(by); }
             }
             return reached;
         }

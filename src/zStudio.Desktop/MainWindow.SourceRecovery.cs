@@ -40,32 +40,20 @@ public partial class MainWindow
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return -2;
-            ViewModel.AddProblem(Bounded($"Source project recovery could not be checked: {ex.Message}"), "Error", root); return -1;
+            ViewModel.AddProblem(Bounded($"Source project recovery could not be checked: {Bounded(ex.Message, 512)}"), "Error", root); return -1;
         }
         if (generation != recoveryCheckGeneration || SourceProjectRoot != root) return -2;
         foreach (var old in ViewModel.Problems.Where(p => p.File == root && p.Message.StartsWith(RecoveryProblem, StringComparison.Ordinal)).ToArray()) ViewModel.Problems.Remove(old);
         if (cases.Count == 0) return 0;
         foreach (var c in cases)
-            ViewModel.AddProblem(Bounded($"{RecoveryProblem} ({c.SaveId}, {c.Description}): {string.Join(", ", c.Files.Take(8).Select(f => $"{f.Relative} is {f.State}"))}." + (c.Committed ? " It finished; only its journal remains to clean up (Tools → Resolve interrupted save, or zstudio_source_recovery_resolve complete)." : " Use Tools → Resolve interrupted save, or zstudio_source_recovery.")), c.Committed ? "Warning" : "Error", root);
+            ViewModel.AddProblem(Bounded($"{RecoveryProblem} ({c.SaveId}, {Bounded(c.Description, 256)}): {RecoveryFilesText(c.Files, detailed: false)}." + (c.Committed ? " It finished; only its journal remains to clean up (Tools → Resolve interrupted save, or zstudio_source_recovery_resolve complete)." : " Use Tools → Resolve interrupted save, or zstudio_source_recovery.")), c.Committed ? "Warning" : "Error", root);
         if (automationCloseRequested || !IsVisible) return cases.Count;
         foreach (var c in cases.Where(c => everySave || !c.Committed))
         {
             // Another check or another root took over: its own dialogs decide.
             if (generation != recoveryCheckGeneration || SourceProjectRoot != root) break;
-            string files = string.Join("\n", c.Files.Take(12).Select(f => $"{f.Relative}: {Describe(f.State)}{(f.HeldOriginal ? " (original kept)" : "")}"));
             string choice = "Later";
-            StackPanel panel = new() { Margin = new(20) };
-            panel.Children.Add(new TextBlock { Text = c.Committed ? "A save of this source project finished but was not cleaned up" : "A save of this source project was interrupted", FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-            panel.Children.Add(new TextBlock { Text = c.Committed
-                ? $"{c.Description} ({c.CreatedUtc.ToLocalTime():g}) wrote every file:\n{files}\n\nComplete removes its journal and the originals it kept. Keep files sets the journal aside instead."
-                : $"{c.Description} ({c.CreatedUtc.ToLocalTime():g}). The files are now:\n{files}\n\nRoll back restores the files as they were before the save. Complete finishes the save. Keep files leaves them as they are and sets the journal aside. Files changed by another program are never overwritten.", Margin = new(0, 12, 0, 20), TextWrapping = TextWrapping.Wrap });
-            WrapPanel buttons = new() { HorizontalAlignment = HorizontalAlignment.Right }; panel.Children.Add(buttons);
-            Window dialog = new() { Owner = this, Title = "Interrupted save", Width = 560, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = panel };
-            foreach (string label in c.Committed ? new[] { "Complete", "Keep files", "Later" } : new[] { "Roll back", "Complete", "Keep files", "Later" })
-            {
-                Button button = new() { Content = label, MinWidth = 95, Margin = new(4), Padding = new(10, 7, 10, 7), IsCancel = label == "Later" };
-                button.Click += (_, _) => { choice = label; dialog.Close(); }; buttons.Children.Add(button);
-            }
+            Window dialog = CreateSourceRecoveryDialog(c, selected => choice = selected);
             dialog.ShowDialog();
             if (choice == "Later") continue;
             var action = choice switch { "Roll back" => SourceRecoveryAction.RollBack, "Complete" => SourceRecoveryAction.Complete, _ => SourceRecoveryAction.Abandon };
@@ -75,19 +63,75 @@ public partial class MainWindow
                 var result = await ResolveSourceRecoveryAsync(root, c.SaveId, action, shutdownToken);
                 if (shutdownToken.IsCancellationRequested) break;
                 ViewModel.Status = result.Resolved ? "The interrupted save was resolved." : "The interrupted save still needs a decision.";
-                MessageBox.Show(this, result.Resolved ? $"Done: {result.Changed.Count} files changed." : $"Not finished: {string.Join("; ", result.Conflicts.Take(8).Select(x => $"{x.Relative}: {x.Reason}"))}", "Interrupted save", MessageBoxButton.OK, result.Resolved ? MessageBoxImage.Information : MessageBoxImage.Warning);
+                MessageBox.Show(this, result.Resolved ? $"Done: {result.Changed.Count} files changed." : $"Not finished: {RecoveryConflictsText(result.Conflicts)}", "Interrupted save", MessageBoxButton.OK, result.Resolved ? MessageBoxImage.Information : MessageBoxImage.Warning);
             }
             catch (StudioCommandException ex) { Report(ex); }
             // Closing (or another root) canceled it between two files; what it changed is in Problems.
             catch (OperationCanceledException) { break; }
         }
         return cases.Count;
+    }
+
+    /// <summary>Keep decisions outside the scrollable journal details, including on a small or scaled work area.</summary>
+    internal Window CreateSourceRecoveryDialog(SourceRecoveryCase recovery, Action<string> selected, Size? available = null)
+    {
+        Size work = available ?? RecoveryWorkArea();
+        double width = Math.Max(1, work.Width - 32), height = Math.Max(1, work.Height - 32);
+        Grid layout = new() { Margin = new(20) };
+        layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        layout.RowDefinitions.Add(new() { Height = new(1, GridUnitType.Star) });
+        layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
+        layout.Children.Add(new TextBlock { Text = recovery.Committed ? "A save of this source project finished but was not cleaned up" : "A save of this source project was interrupted",
+            FontSize = 17, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        string files = RecoveryFilesText(recovery.Files, detailed: true);
+        TextBlock details = new() { Text = recovery.Committed
+            ? $"{recovery.Description} ({recovery.CreatedUtc.ToLocalTime():g}) wrote every file:\n{files}\n\nComplete removes its journal and the originals it kept. Keep files sets the journal aside instead."
+            : $"{recovery.Description} ({recovery.CreatedUtc.ToLocalTime():g}). The files are now:\n{files}\n\nRoll back restores the files as they were before the save. Complete finishes the save. Keep files leaves them as they are and sets the journal aside. Files changed by another program are never overwritten.", TextWrapping = TextWrapping.Wrap };
+        ScrollViewer scroll = new() { Content = details, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Margin = new(0, 12, 0, 16) };
+        Grid.SetRow(scroll, 1); layout.Children.Add(scroll);
+        WrapPanel buttons = new() { HorizontalAlignment = HorizontalAlignment.Right };
+        Grid.SetRow(buttons, 2); layout.Children.Add(buttons);
+        Window dialog = new() { Owner = this, Title = "Interrupted save", Width = Math.Min(560, width), Height = Math.Min(520, height), MaxWidth = width, MaxHeight = height,
+            ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false, Content = layout };
+        foreach (string label in recovery.Committed ? new[] { "Complete", "Keep files", "Later" } : new[] { "Roll back", "Complete", "Keep files", "Later" })
+        {
+            Button button = new() { Content = label, MinWidth = 95, Margin = new(4), Padding = new(10, 7, 10, 7), IsCancel = label == "Later" };
+            button.Click += (_, _) => { selected(label); dialog.Close(); }; buttons.Children.Add(button);
+        }
+        return dialog;
+    }
+
+    private Size RecoveryWorkArea()
+    {
+        nint handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        var monitor = new MonitorBounds { Size = System.Runtime.InteropServices.Marshal.SizeOf<MonitorBounds>() };
+        if (handle != 0 && GetMonitorInfo(MonitorFromWindow(handle, 2), ref monitor))
+        {
+            var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(this);
+            return new((monitor.Work.Right - monitor.Work.Left) / dpi.DpiScaleX, (monitor.Work.Bottom - monitor.Work.Top) / dpi.DpiScaleY);
+        }
+        return SystemParameters.WorkArea.Size;
+    }
+
+    /// <summary>Presentation only: retain full recovery identities, and disclose omitted rows before the bounded summary.</summary>
+    internal static string RecoveryFilesText(IReadOnlyList<SourceRecoveryFile> files, bool detailed)
+    {
+        int limit = detailed ? 12 : 8;
+        string separator = detailed ? "\n" : ", ";
+        string count = $"{files.Count:N0} files" + (files.Count > limit ? $" ({files.Count - limit:N0} more not shown)" : "");
+        return count + ": " + string.Join(separator, files.Take(limit).Select(f => detailed
+            ? $"{Bounded(f.Relative, 256)}: {Describe(f.State)}{(f.HeldOriginal ? " (original kept)" : "")}" : $"{Bounded(f.Relative, 256)} is {f.State}"));
         static string Describe(SourceRecoveryFileState state) => state switch
         {
             SourceRecoveryFileState.Before => "as before the save", SourceRecoveryFileState.After => "as the save wrote it",
             SourceRecoveryFileState.Missing => "missing", _ => "changed by another program"
         };
     }
+
+    internal static string RecoveryConflictsText(IReadOnlyList<SourceRecoveryConflict> conflicts) =>
+        $"{conflicts.Count:N0} conflicts" + (conflicts.Count > 8 ? $" ({conflicts.Count - 8:N0} more not shown)" : "") + ": "
+        + string.Join("; ", conflicts.Take(8).Select(c => $"{Bounded(c.Relative, 256)}: {Bounded(c.Reason, 256)}"));
 
     /// <summary>The resolution of an interrupted save running off the UI thread; closing waits for it (canceled, it stops between two files).</summary>
     private Task sourceRecoveryWork = Task.CompletedTask;
@@ -115,7 +159,7 @@ public partial class MainWindow
                 // Only edits of the save's own files would be overtaken by resolving it.
                 var journal = await Task.Run(() => new SourcePublisher(root).SaveFiles(saveId), cancellation.Token);
                 if (workspace.DirtyFiles.Intersect(journal, StringComparer.OrdinalIgnoreCase).ToArray() is { Length: > 0 } overlap)
-                    throw new StudioCommandException("unsaved_changes", $"The project's unsaved edits change {string.Join(", ", overlap.Take(6))}, which the interrupted save also wrote; save or undo those edits first.");
+                    throw new StudioCommandException("unsaved_changes", $"The project's unsaved edits change {overlap.Length:N0} files{(overlap.Length > 6 ? $" ({overlap.Length - 6:N0} more not shown)" : "")}: {string.Join(", ", overlap.Take(6).Select(f => Bounded(f, 256)))}, which the interrupted save also wrote; save or undo those edits first.");
             }
             var resolve = ResolveSourceSave;
             var work = Task.Run(() => resolve(root, saveId, action, cancellation.Token), cancellation.Token);
@@ -135,13 +179,19 @@ public partial class MainWindow
 
     private void RegisterSourceRecoveryCommands(StudioCommands r)
     {
-        Register(r, "source_recovery", "List the open source project's interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved.", false, [], async (_, token) =>
+        Register(r, "source_recovery", "List the open source project's interrupted saves (journals in zstudio/recovery): each with its files and whether each now holds the content from before the save, the content the save wrote, is missing, or was changed by another program. Returns at most 32 saves with 64 files each and total counts; file paths keep 256 characters with fileTruncated. The scan bounds all journal manifests and logs together to 64 MiB and 50,000 file rows. A committed journal only needs cleaning up. While an uncommitted one exists, the project cannot be saved. A project replacement during inspection returns context_changed; retry for the current project.", false, [], async (_, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
+            long generation = ViewModel.WorkspaceGeneration;
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken, shutdownToken);
+            token = cancellation.Token;
+            var reading = SourceProjectReading;
             IReadOnlyList<SourceRecoveryCase> cases;
-            // Each file's state reads it whole: off the UI thread, observing the request's cancellation.
-            try { cases = await Task.Run(() => new SourcePublisher(root).FindInterrupted(token), token); }
+            // File hashing stays off the UI thread and stops when the request or its workspace ends.
+            try { cases = await Task.Run(() => { reading?.Invoke("source_recovery", token); return new SourcePublisher(root).FindInterrupted(token); }, token); }
+            catch (OperationCanceledException) { RequireSourceRead(root, generation, token); throw; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { throw new StudioCommandException("io_failed", ex.Message); }
+            RequireSourceRead(root, generation, token);
             return Result(new
             {
                 saves = cases.Take(32).Select(c => new

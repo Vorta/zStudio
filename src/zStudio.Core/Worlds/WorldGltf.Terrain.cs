@@ -25,29 +25,32 @@ public static partial class WorldGltf
         List<TerrainSurfaceGeometry> surfaces = [];
         List<TerrainMaterialInfo> infos = [];
         List<(WorldMaterial Material, int Priority, bool BackFace, bool Normals)> materials = [];
-        Dictionary<(string, GltfMaterial?), int> indices = [];
+        Dictionary<(string, GltfMaterial?, bool Normals, uint Zone), int> indices = [];
         // Model values (lighting, scrolling, display mode) are a surface mesh's, and every piece of the surface takes them.
-        List<(JsonObject? Values, float Morph, string Path)> models = [];
+        List<(JsonObject? Values, float Morph, string Path, JsonObject? NodeValues)> models = [];
         foreach (var surface in recipe.Surfaces)
         {
             context.Token.ThrowIfCancellationRequested();
             var (doc, path) = context.Reference(surface.Model, recipePath);
-            var matches = Placed(doc).Where(p => EngineName(p.Node) == surface.Node).Take(2).ToList();
-            if (matches.Count != 1) throw new InvalidDataException($"{recipePath}: surface {surface.Id} names node {surface.Node}, which {path} has {(matches.Count == 0 ? "no" : "more than one")} of.");
-            var (node, world) = matches[0];
+            var zones = BindZones(doc, path, context);
+            if (!context.TerrainPlacements(doc).TryGet(surface.Node, out var placement, out bool ambiguous))
+                throw new InvalidDataException($"{recipePath}: surface {surface.Id} names node {surface.Node}, which {path} has {(ambiguous ? "more than one" : "no")} of.");
+            var (node, world, inheritedAppearance, _, _, _) = placement;
+            CheckTerrainAppearance(node, inheritedAppearance, path);
             var mesh = node.Mesh ?? throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has no mesh.");
-            ValidateMesh(mesh, path);
+            ValidateMesh(mesh, path, context);
             var values = mesh.Extras?[Key] as JsonObject;
             if (values?["points"] is JsonArray { Count: > 0 }) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has point entries (lens flares), which terrain pieces cannot share; keep it an object.");
             if (values?["mode"] is JsonValue mode && !(mode.TryGetValue(out double m) && m == 0)) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) is a facade or point model (mode {JsonData.Shown(mode, asText: true)}); keep it an object.");
             if (mesh.Primitives.Any(p => p.Targets.Count > 0)) throw new InvalidDataException($"{recipePath}: surface {surface.Id} ({surface.Node} in {path}) has morph targets; terrain is static.");
-            models.Add((values, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path));
+            models.Add((values, mesh.Weights.Count > 0 ? mesh.Weights[0] : 0, path, node.Extras?[Key] as JsonObject));
             if (!FiniteMatrix(world) || !Matrix4x4.Invert(world, out var inverse) || !FiniteMatrix(inverse))
                 throw new InvalidDataException($"{recipePath}: surface {surface.Id} has a non-finite or singular derived transform.");
             var normalMatrix = Matrix4x4.Transpose(inverse);
             // A mirroring transform turns polygons over; reversed corners keep them facing as authored.
             bool mirrored = world.GetDeterminant() < 0;
             List<TerrainFace> faces = [];
+            int zonePolygon = 0;
             foreach (var primitive in mesh.Primitives)
             {
                 // Charge the triangle stream and any extra recorded polygon corners before Polygons builds its lists.
@@ -56,13 +59,8 @@ public static partial class WorldGltf
                 if (corners > maximumInputCorners - inputCorners)
                     throw new InvalidDataException($"{recipePath}: terrain input exceeds its {maximumInputCorners:N0}-corner geometry limit; reduce the surfaces or mesh detail.");
                 inputCorners += corners;
-                if (!indices.TryGetValue((path, primitive.Material), out int index))
-                {
-                    var (material, priority, backface, zone, stores) = ImportMaterial(primitive.Material, path, context);
-                    indices[(path, primitive.Material)] = index = materials.Count;
-                    materials.Add((material, priority, backface, stores ?? primitive.Normals.Count == primitive.Positions.Count));
-                    infos.Add(new(zone));
-                }
+                var (material, priority, backface, zone, stores) = ImportMaterial(primitive.Material, path, context);
+                bool storesNormals = stores ?? primitive.Normals.Count == primitive.Positions.Count;
                 bool normals = primitive.Normals.Count == primitive.Positions.Count, uvs = primitive.TexCoords.Count == primitive.Positions.Count;
                 TerrainCorner Corner(int i, Vector3 face)
                 {
@@ -73,8 +71,15 @@ public static partial class WorldGltf
                 }
                 // The engine polygons the file records (fans and listed polygons), so uncut polygons stay as they were.
                 int added = 0;
-                foreach (var listed in Polygons(primitive, materials[index].Material.Texture != null, context.PolygonWork))
+                foreach (var listed in zones != null ? zones.Polygons[primitive] : Polygons(primitive, material.Texture != null, context.PolygonWork))
                 {
+                    uint polygonZone = zones != null ? zones.Meshes[mesh][zonePolygon++] : zone;
+                    if (!indices.TryGetValue((path, primitive.Material, storesNormals, polygonZone), out int index))
+                    {
+                        indices[(path, primitive.Material, storesNormals, polygonZone)] = index = materials.Count;
+                        materials.Add((material, priority, backface, storesNormals));
+                        infos.Add(new(polygonZone));
+                    }
                     var polygon = listed;
                     if ((++added & 4095) == 0) context.Token.ThrowIfCancellationRequested();
                     Vector3 newell = Vector3.Zero;
@@ -116,7 +121,8 @@ public static partial class WorldGltf
                     source.Normals ? [.. polygon.Corners.Select(c => c.Normal)] : [], [], material, polygon.Priority ?? source.Priority, source.BackFace, polygon.ZoneWord));
             }
             node.Model = builder.Finish();
-            var (modelValues, morph, modelPath) = models[piece.Surface];
+            var (modelValues, morph, modelPath, nodeValues) = models[piece.Surface];
+            ApplyAppearance(node, nodeValues, modelPath);
             ApplyValues(node.Model, modelValues, morph, modelPath);
             context.AddModel(node.Model);
             context.TerrainPieceImported?.Invoke(node, recipePath, piece, recipe.Surfaces[piece.Surface].Id);
@@ -153,19 +159,15 @@ public static partial class WorldGltf
         return count;
     }
 
-    /// <summary>Every node of a document with its transform in the document's scene.</summary>
-    private static IEnumerable<(GltfNode Node, Matrix4x4 World)> Placed(GltfDocument doc)
+    internal static void CheckTerrainAppearance(GltfNode node, bool inheritedAppearance, string path)
     {
-        Stack<(GltfNode, Matrix4x4, int)> pending = new(doc.Roots.AsEnumerable().Reverse().Select(r => (r, Matrix4x4.Identity, 0)));
-        while (pending.TryPop(out var item))
-        {
-            var (node, parent, depth) = item;
-            if (depth > GltfDocument.MaximumDepth) throw new InvalidDataException("The glTF node hierarchy is too deep.");
-            var world = (node.Matrix ?? Matrix4x4.Identity) * parent;
-            yield return (node, world);
-            for (int i = node.Children.Count - 1; i >= 0; i--) pending.Push((node.Children[i], world, depth + 1));
-        }
+        _ = Appearance(node.Extras?[Key] as JsonObject, path);
+        // Pieces become independent roots. Keeping the leaf's stored alpha/color does not reproduce an
+        // ancestor's inherited override or unknown retained controls; preserve that hierarchy as objects.
+        if (inheritedAppearance)
+            throw new InvalidDataException($"{path}: terrain surface {JsonData.ShownText(EngineName(node))} has an ancestor with Object3D appearance; keep it an object, or move it to a root and explicitly author its appearance before creating terrain.");
     }
+
     /// <summary>The material with another soil, shared with an identical one the world already has.</summary>
     private static WorldMaterial SoilVariant(ImportContext context, WorldMaterial material, uint soil) => Shared(context, new()
     {

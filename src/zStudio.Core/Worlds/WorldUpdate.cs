@@ -18,18 +18,33 @@ public static class WorldUpdate
     /// Refuses a node graph with a cycle or a path longer than <see cref="MaximumDepth"/> (a world's cells count as its
     /// children), before anything walks it recursively. The check keeps its own stack and visits each node once.
     /// </summary>
-    public static void CheckHierarchy(IEnumerable<WorldNode> nodes)
+    public static void CheckHierarchy(IEnumerable<WorldNode> nodes) => CheckHierarchy(nodes, CancellationToken.None);
+    public static void CheckHierarchy(IEnumerable<WorldNode> nodes, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         HashSet<WorldNode> active = new(ReferenceEqualityComparer.Instance), done = new(ReferenceEqualityComparer.Instance);
         Dictionary<WorldNode, int> height = new(ReferenceEqualityComparer.Instance);
         Stack<(WorldNode Node, IReadOnlyList<WorldNode> Links, int Next)> path = new();
-        static IReadOnlyList<WorldNode> Links(WorldNode node) => node.Areas.Count == 0 ? node.Children : [.. node.Children, .. node.Areas.SelectMany(a => a.Nodes)];
+        IReadOnlyList<WorldNode> Links(WorldNode node)
+        {
+            if (node.Areas.Count == 0) return node.Children;
+            List<WorldNode> links = [];
+            foreach (var child in node.Children) { token.ThrowIfCancellationRequested(); links.Add(child); }
+            foreach (var area in node.Areas)
+            {
+                token.ThrowIfCancellationRequested();
+                foreach (var child in area.Nodes) { token.ThrowIfCancellationRequested(); links.Add(child); }
+            }
+            return links;
+        }
         foreach (var start in nodes)
         {
+            token.ThrowIfCancellationRequested();
             if (done.Contains(start)) continue;
             active.Add(start); path.Push((start, Links(start), 0));
             while (path.Count > 0)
             {
+                token.ThrowIfCancellationRequested();
                 var (node, links, next) = path.Pop();
                 if (next < links.Count)
                 {
@@ -42,7 +57,7 @@ public static class WorldUpdate
                     continue;
                 }
                 int levels = 1;
-                foreach (var child in links) levels = Math.Max(levels, height[child] + 1);
+                foreach (var child in links) { token.ThrowIfCancellationRequested(); levels = Math.Max(levels, height[child] + 1); }
                 if (levels > MaximumDepth) throw new InvalidDataException($"The node hierarchy is deeper than {MaximumDepth} levels.");
                 height[node] = levels; active.Remove(node); done.Add(node);
             }
@@ -186,7 +201,11 @@ public static class WorldUpdate
     /// rectangle and sphere; it resets the inclusion tolerance to an eighth of a cell, so a later tolerance command wins.
     /// </summary>
     public static void SetPartition(WorldNode world, float cellX, float cellZ)
+        => SetPartition(world, cellX, cellZ, null, default);
+
+    internal static void SetPartition(WorldNode world, float cellX, float cellZ, WorldCommandBudget? budget, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         // Every cell is allocated and written; the reader accepts at most 65,536 (retail worlds use at most 738).
         if (!float.IsFinite(cellX) || !float.IsFinite(cellZ) || cellX == 0 || cellZ == 0) throw new InvalidDataException($"World partition cells need a finite, nonzero size ({cellX} × {cellZ}).");
         // Area rectangles and partition lookup advance along +X and -Z; reversed axes invert their bounds.
@@ -199,20 +218,22 @@ public static class WorldUpdate
         WorldNumbers.Finite(1.0f / cellX); WorldNumbers.Finite(1.0f / cellZ);
         WorldNumbers.Finite(cellX * cellX + cellZ * cellZ);
         WorldNumbers.Finite(world.PayloadFloat(0x34) + world.PayloadFloat(0x3C)); WorldNumbers.Finite(world.PayloadFloat(0x38) + world.PayloadFloat(0x40));
+        float sizeX = world.PayloadFloat(0x3C), sizeZ = world.PayloadFloat(0x40), originX = world.PayloadFloat(0x34), originZ = world.PayloadFloat(0x38);
+        int columns = (int)(sizeX / cellX); if (columns * cellX < sizeX) columns++;
+        int rows = (int)(sizeZ / cellZ); if (rows * cellZ > sizeZ) rows++;
+        budget?.Reserve((long)columns * rows * WorldCommandBudget.PartitionCellBytes);
         world.SetPayloadFloat(0x54, cellX); world.SetPayloadFloat(0x58, cellZ);
         world.SetPayloadFloat(0x70, cellX * 0.125f); world.SetPayloadFloat(0x74, cellZ * -0.125f);
         world.SetPayloadFloat(0x5C, cellX * 0.5f); world.SetPayloadFloat(0x60, cellZ * 0.5f);
         world.SetPayloadFloat(0x64, 1.0f / cellX); world.SetPayloadFloat(0x68, 1.0f / cellZ);
         float range = cellX * cellX + cellZ * cellZ;
         world.SetPayloadFloat(0x6C, BitConverter.Int32BitsToSingle((BitConverter.SingleToInt32Bits(range) >> 1) + 0x1FC00000) * -0.5f);
-        float sizeX = world.PayloadFloat(0x3C), sizeZ = world.PayloadFloat(0x40), originX = world.PayloadFloat(0x34), originZ = world.PayloadFloat(0x38);
-        int columns = (int)(sizeX / cellX); if (columns * cellX < sizeX) columns++;
-        int rows = (int)(sizeZ / cellZ); if (rows * cellZ > sizeZ) rows++;
         world.SetPayloadInt(0x78, columns); world.SetPayloadInt(0x7C, rows);
         world.Areas.Clear();
         for (int row = 0; row < rows; row++)
             for (int col = 0; col < columns; col++)
             {
+                if ((col & 255) == 0) token.ThrowIfCancellationRequested();
                 WorldArea area = new(); var r = area.Record.AsSpan();
                 float minX = col * cellX + originX, minZ = row * cellZ + originZ;
                 WorldBox box = new(new(minX, 0, minZ + cellZ), new(minX + cellX, 0, minZ));
@@ -258,11 +279,15 @@ public static class WorldUpdate
     /// Landmarks (0x80) and nodes without bounds stay in the world's list.
     /// </summary>
     public static void Partition(WorldNode world, IEnumerable<WorldNode> children)
+        => Partition(world, children, parentsAttached: false);
+
+    internal static void Partition(WorldNode world, IEnumerable<WorldNode> children, bool parentsAttached)
     {
         if (world.Class != WorldNodeClass.World) throw new ArgumentException("A world node is required.", nameof(world));
         var g = ReadGrid(world);
         foreach (var area in world.Areas) area.Nodes.Clear();
         world.Children.Clear();
+        HashSet<WorldNode>? checkedParents = parentsAttached ? null : new(ReferenceEqualityComparer.Instance);
         foreach (var child in children)
         {
             (int col, int row) = (-1, -1);
@@ -274,7 +299,9 @@ public static class WorldUpdate
             if (col >= 0 && world.Areas[row * g.Columns + col].Nodes.Count < 0x7FFF) world.Areas[row * g.Columns + col].Nodes.Add(child);
             else { (col, row) = (-1, -1); world.Children.Add(child); }
             child.GridColumn = col; child.GridRow = row;
-            if (!child.Parents.Contains(world)) child.Parents.Add(world);
+            // Repeated occurrences are retained in cells/overflow, but parent membership needs checking only once.
+            // The assembler's live graph already appended every reciprocal parent occurrence before this pass.
+            if (checkedParents?.Add(child) == true && !child.Parents.Contains(world)) child.Parents.Add(world);
         }
         foreach (var area in world.Areas.Where(a => a.Nodes.Count > 0))
         {

@@ -11,7 +11,8 @@ public static partial class TexturePackWriter
 {
     public static void ValidateTextureName(string name)
     { if (name.Length is < 1 or > 31 || name.Any(c => c == 0 || c > 255)) throw new InvalidDataException("Texture names require 1–31 Latin-1 characters without NUL."); }
-    public static byte[] Write(TexturePackEdit edit, CancellationToken token = default)
+    public static byte[] Write(TexturePackEdit edit, CancellationToken token = default) => Write(edit, FormatRegistry.MaximumDocumentBytes, token);
+    internal static byte[] Write(TexturePackEdit edit, long maximumBytes, CancellationToken token)
     {
         var source = edit.Source; int count = source.Assets.Count, added = edit.Added.Count;
         if (source.Probe.Family != FormatFamily.TexturePack || source.Probe.Version != 1 || source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact v1 texture pack is required.");
@@ -19,6 +20,7 @@ public static partial class TexturePackWriter
         if (edit.Replacements.Keys.Any(i => i < 0 || i >= count)) throw new InvalidDataException("Replacement texture index is outside the pack.");
         long length = source.Bytes.Length + added * 40L + edit.Replacements.Values.Sum(p => (long)p.Bytes.Length) + edit.Added.Sum(p => (long)p.Bytes.Length);
         FormatRegistry.ValidateDocumentSize(length);
+        if (length > maximumBytes) throw new InvalidDataException("The replacement texture pack exceeds the remaining edit buffer budget.");
         int tableEnd = 24 + count * 40, shift = added * 40;
         byte[] bytes = new byte[(int)length]; source.Bytes.Span[..tableEnd].CopyTo(bytes);
         source.Bytes.Span[tableEnd..].CopyTo(bytes.AsSpan(tableEnd + shift));

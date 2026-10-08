@@ -39,7 +39,7 @@ public sealed class WorldReviewRegressionTests
     {
         var objects = new CountedSiObjects(Enumerable.Range(0, 500).Select(i =>
             ("object" + i, i * 2, new long[]?[] { [1_000_000, 1_000_000, 1_000_000], [0, 0, 0], [i, 0, 0] })).ToArray());
-        string text = SiScriptWriter.Text(objects, Enumerable.Range(0, 1000).ToList(), new(null));
+        string text = SiScriptWriter.Text(objects, Enumerable.Range(0, 1000).ToList(), new(null), TestContext.Current.CancellationToken);
         Assert.Equal(500, text.Split("Object: ").Length - 1);
         Assert.Contains("Frame: 999\r\nObject: object499\r\n", text);
         Assert.InRange(objects.Reads, 500, 5000);
@@ -60,7 +60,7 @@ public sealed class WorldReviewRegressionTests
         const string path = "gamegen/m1.gs";
         string text = "NewObject3D part\r\n" + string.Concat(Enumerable.Repeat("SetIntersectSurface on # keep this text\r\n", 300));
         fixture.Write(path, text);
-        var syntax = GameGenScriptSyntax.Parse(text);
+        var syntax = GameGenScriptSyntax.Parse(text, TestContext.Current.CancellationToken);
         SourceInstruction Instruction(GameGenScriptLine l) => new(path, l.Number, l.Tokens[0], l.Tokens, l.Tokens.Skip(1).ToArray());
         WorldNode root = new("world", WorldNodeClass.World), node = new("part", WorldNodeClass.Object3D);
         root.Children.Add(node); node.Parents.Add(root);
@@ -121,7 +121,18 @@ public sealed class WorldReviewRegressionTests
         Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 1024 * 1024);
         var complete = TerrainCompiler.Compile("test", recipe, [geometry], [new(0)], grid, TestContext.Current.CancellationToken);
         Assert.Equal(100, complete.Pieces.Count);
-        Assert.Equal(100, complete.Pieces.Sum(p => p.Polygons.Count));
+        // Preserving the authored fan splits cells along its diagonal, so polygon count need not equal cell count.
+        // Every cell must still contain exactly its original square unit of geometry.
+        Assert.All(complete.Pieces, piece => Assert.Equal(1.0, piece.Polygons.Sum(p =>
+        {
+            double twiceArea = 0;
+            for (int i = 0; i < p.Corners.Length; i++)
+            {
+                var a = p.Corners[i].Position; var b = p.Corners[(i + 1) % p.Corners.Length].Position;
+                twiceArea += (double)a.X * b.Z - (double)b.X * a.Z;
+            }
+            return Math.Abs(twiceArea) / 2;
+        }), 6));
     }
     [Fact]
     public void InferenceBoundaryRunsMatchTheSlotDefinitionWithoutRepeatedPrefixSets()
@@ -196,12 +207,34 @@ public sealed class WorldReviewRegressionTests
         Assert.Empty(WorldDecomposer.DecomposeAll(world, trace, [], TestContext.Current.CancellationToken).Loads);
         Assert.InRange(trace.Reads, 0, 100_000);
     }
+    [Fact]
+    public void TraceReadCounterDetectsRepeatedEnumerationAsWellAsIndexing()
+    {
+        CountedTrace trace = new(Enumerable.Repeat(new TracedInstruction("m1.gs", "ignored", ["absent"], [], null, []), 2000).ToArray());
+        // The rejected algorithm scans the whole trace once for each detached node.
+        int visited = 0;
+        for (int node = 0; node < 200; node++)
+            foreach (var instruction in trace)
+                if (instruction.Command == "ignored") visited++;
+        Assert.Equal(400_000, visited);
+        Assert.Equal(400_000, trace.Reads);
+        Assert.True(trace.Reads > 100_000);
+        _ = trace[0];
+        Assert.Equal(400_001, trace.Reads);
+        System.Collections.IEnumerator untyped = ((System.Collections.IEnumerable)trace).GetEnumerator();
+        Assert.True(untyped.MoveNext());
+        Assert.Equal(400_002, trace.Reads);
+        (untyped as IDisposable)?.Dispose();
+    }
     private sealed class CountedTrace(TracedInstruction[] items) : IReadOnlyList<TracedInstruction>
     {
         internal int Reads;
         public TracedInstruction this[int index] { get { Reads++; return items[index]; } }
         public int Count => items.Length;
-        public IEnumerator<TracedInstruction> GetEnumerator() => ((IEnumerable<TracedInstruction>)items).GetEnumerator();
+        public IEnumerator<TracedInstruction> GetEnumerator()
+        {
+            for (int i = 0; i < items.Length; i++) yield return this[i];
+        }
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
     [Fact]
@@ -222,7 +255,8 @@ public sealed class WorldReviewRegressionTests
         public Project() { Directory.CreateDirectory(Path.Combine(Root, "data")); Directory.CreateDirectory(Path.Combine(Root, "gamegen")); }
         public void Put(string path, string text) => File.WriteAllText(Path.Combine(Root, path), text);
         public bool Exists(string path) => File.Exists(Path.Combine(Root, path));
-        public byte[] Read(string path, CancellationToken token) => File.ReadAllBytes(Path.Combine(Root, path));
+        public byte[] Read(string path, CancellationToken token) => Read(path, token, ProjectReadLimits.Document);
+        public byte[] Read(string path, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); return Recoil.Zbd.Core.Sources.SourceRead.All(Path.Combine(Root, path), limits, token); }
         public void Dispose() => Directory.Delete(Root, true);
     }
 
@@ -292,9 +326,9 @@ public sealed class WorldReviewRegressionTests
     {
         var root = JsonNode.Parse("""{"asset":{"version":"2.0"},"nodes":[{"name":"moving"},{"name":"parent","extras":{"recoil":{"zone":2}}}],"scenes":[{"nodes":[0,1]}]}""")!.AsObject();
         string before = root.ToJsonString();
-        Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 0, 1));
+        Assert.Throws<InvalidDataException>(() => GltfNodeEdits.Reparent(root, 0, 1, token: Token));
         Assert.Equal(before, root.ToJsonString());
-        GltfNodeEdits.Reparent(root, 0, 1, 255);
+        GltfNodeEdits.Reparent(root, 0, 1, 255, Token);
         Assert.Equal(255, root["nodes"]![0]!["extras"]!["recoil"]!["zone"]!.GetValue<int>());
     }
 
@@ -336,8 +370,8 @@ public sealed class WorldReviewRegressionTests
             GameZWorld world = new(); world.Nodes.AddRange([root, ground]); world.Models.Add(builder.Model); world.Materials.Add(material); return world;
         }
         var before = Make([0, 10]); var after = Make([10, 0]);
-        Assert.Equal(0, Assert.Single(TerrainProbe.At([before.Nodes[1]], 5, 5)).Height);
-        Assert.Equal(10, Assert.Single(TerrainProbe.At([after.Nodes[1]], 5, 5)).Height);
+        Assert.Equal(0, Assert.Single(TerrainProbe.At([before.Nodes[1]], 5, 5, token: TestContext.Current.CancellationToken)).Height);
+        Assert.Equal(10, Assert.Single(TerrainProbe.At([after.Nodes[1]], 5, 5, token: TestContext.Current.CancellationToken)).Height);
         Assert.True(WorldComparer.CompareTree(before, after, token: Token).DifferenceCount > 0);
     }
 

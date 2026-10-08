@@ -50,6 +50,7 @@ public sealed class ImportRound23CopyIdentityTests
     private sealed class WorkspaceFiles(SourceWorkspace workspace) : IProjectFiles
     {
         public bool Exists(string relative) => workspace.Exists(relative);
-        public byte[] Read(string relative, CancellationToken token) => workspace.Read(relative, token) ?? throw new FileNotFoundException(relative);
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); return workspace.Read(relative, token, limits) ?? throw new FileNotFoundException(relative); }
     }
 }

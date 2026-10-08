@@ -19,6 +19,7 @@ public static class GameZWorldReader
 
     public static GameZWorld FromDocument(ZbdDocument doc, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         if (doc.Probe is not { Family: FormatFamily.GameZ, Version: 13 or 15 } || doc.Scene is not { } scene || doc.GameZLayout is not { } layout)
             throw new InvalidDataException("A RECOIL (version 13 or 15) GameZ world is required.");
         if (doc.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException(error.Message);
@@ -29,6 +30,7 @@ public static class GameZWorldReader
 
         for (int i = 0; i < scene.Textures.Count; i++)
         {
+            token.ThrowIfCancellationRequested();
             var entry = bytes.Slice(layout.TextureOffset + i * 36, 36);
             world.Textures.Add(new(scene.Textures[i].Text("name")) { NameField = entry.Slice(8, 20).ToArray(), State = BinaryPrimitives.ReadUInt32LittleEndian(entry[28..]) });
         }
@@ -69,14 +71,20 @@ public static class GameZWorldReader
             int points = (int)U(info[28..]); long pointVertices = data + 76L * points;
             for (int p = 0; p < points; p++)
             {
+                token.ThrowIfCancellationRequested();
                 byte[] record = bytes.Slice((int)(data + 76L * p), 76).ToArray(); int count = BinaryPrimitives.ReadInt32LittleEndian(record.AsSpan(12));
                 Vector3[] vertices = new Vector3[count];
-                for (int v = 0; v < count; v++) vertices[v] = Vec(bytes[(int)(pointVertices + 12L * v)..]);
+                for (int v = 0; v < count; v++)
+                {
+                    if ((v & 1023) == 0) token.ThrowIfCancellationRequested();
+                    vertices[v] = Vec(bytes[(int)(pointVertices + 12L * v)..]);
+                }
                 pointVertices += 12L * count; m.Points.Add(new() { Record = record, Vertices = vertices });
             }
             long polygons = pointVertices;
             for (int p = 0; p < model.Polygons.Length; p++)
             {
+                token.ThrowIfCancellationRequested();
                 var source = model.Polygons[p]; var record = bytes.Slice((int)(polygons + 28L * p), 28);
                 int material = source.MaterialIndex;
                 if (material < -1 || material >= world.Materials.Count)
@@ -130,10 +138,15 @@ public static class GameZWorldReader
             if (demo) node.CachedBounds = DemoCachedBounds(node, slot.Slice(DemoCorners, 96));
             live[i] = node; world.Nodes.Add(node);
         }
-        WorldNode Node(int index) => index >= 0 && index < live.Length && live[index] is { } n ? n : throw new InvalidDataException($"A reference names node slot {index}, which is not live.");
+        WorldNode Node(int index)
+        {
+            token.ThrowIfCancellationRequested();
+            return index >= 0 && index < live.Length && live[index] is { } n ? n : throw new InvalidDataException($"A reference names node slot {index}, which is not live.");
+        }
         WorldNode? Optional(int index) => index < 0 ? null : Node(index);
         for (int i = 0; i < scene.Nodes.Count; i++)
         {
+            token.ThrowIfCancellationRequested();
             if (live[i] is not { } node) continue;
             var source = scene.Nodes[i];
             foreach (int p in source.Parents) node.Parents.Add(Node(p));
@@ -155,6 +168,7 @@ public static class GameZWorldReader
                         foreach (var row in source.Data["partitions"] as JsonArray ?? [])
                             foreach (var cell in row as JsonArray ?? [])
                             {
+                                token.ThrowIfCancellationRequested();
                                 WorldArea a = new() { Record = bytes.Slice((int)area, 64).ToArray() };
                                 foreach (var index in cell!["node_indices"] as JsonArray ?? []) a.Nodes.Add(Node((int)JsonData.Integer(index)));
                                 node.Areas.Add(a); area += 64 + 4L * a.Nodes.Count;
@@ -164,7 +178,8 @@ public static class GameZWorldReader
             }
         }
         // The file's links can form any graph; everything that walks a world follows them recursively.
-        WorldUpdate.CheckHierarchy(world.Nodes);
+        WorldUpdate.CheckHierarchy(world.Nodes, token);
+        token.ThrowIfCancellationRequested();
         return world;
     }
 
@@ -189,7 +204,15 @@ public static class GameZWorldReader
             if (placed.All(c => corners.Any(s => Close(c, s))) && corners.All(s => placed.Any(c => Close(c, s)))) return candidate;
         }
         return matrix is { } local && Matrix4x4.Invert(local, out var inverse) ? WorldBox.Of(corners.Select(c => Vector3.Transform(c, inverse))) : WorldBox.Of(corners);
-        static bool Close(Vector3 a, Vector3 b) => Vector3.Distance(a, b) <= 1e-3f * (1 + Math.Max(a.Length(), b.Length()));
+        static bool Close(Vector3 a, Vector3 b)
+        {
+            // Finite large boxes must not compare equal because both float norms overflow to infinity.
+            if (!float.IsFinite(a.X) || !float.IsFinite(a.Y) || !float.IsFinite(a.Z)
+                || !float.IsFinite(b.X) || !float.IsFinite(b.Y) || !float.IsFinite(b.Z)) return false;
+            static double Length(double x, double y, double z) => Math.Sqrt(x * x + y * y + z * z);
+            return Length((double)a.X - b.X, (double)a.Y - b.Y, (double)a.Z - b.Z)
+                <= 1e-3 * (1 + Math.Max(Length(a.X, a.Y, a.Z), Length(b.X, b.Y, b.Z)));
+        }
     }
     /// <summary>A freed version-13 slot as a version-15 one: its name and links, its corners' extent as the box.</summary>
     private static byte[] Version15Slot(ReadOnlySpan<byte> slot)

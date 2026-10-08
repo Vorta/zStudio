@@ -23,7 +23,8 @@ internal static class WorldCompareMcpChecks
     private sealed class Disk(string root) : IProjectFiles
     {
         public bool Exists(string relative) => File.Exists(Path.Combine(root, relative));
-        public byte[] Read(string relative, CancellationToken token) => File.ReadAllBytes(Path.Combine(root, relative));
+        public byte[] Read(string relative, CancellationToken token) => Read(relative, token, ProjectReadLimits.Document);
+        public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { token.ThrowIfCancellationRequested(); return Recoil.Zbd.Core.Sources.SourceRead.All(Path.Combine(root, relative), limits, token); }
     }
 
     internal static async Task Run()

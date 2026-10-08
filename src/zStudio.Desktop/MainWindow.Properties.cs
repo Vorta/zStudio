@@ -42,8 +42,9 @@ public partial class MainWindow
             UndoRequested = UndoDocument,
             Editing = doc => { if (doc == shownDocument) animation?.Pause(); }
         };
-        window.Closed += (_, _) => { if (propertiesWindow == window) { propertiesWindow = null; ++propertyRequest; } };
+        window.Closed += (_, _) => { if (propertiesWindow == window) { CancelZoneDraft(close: true); propertiesWindow = null; ++propertyRequest; } };
         window.Retargeted += UpdateSourceInputBlock;
+        window.Closing += (_, e) => { if (!ResolveZoneDrafts(window.Document)) e.Cancel = true; };
         propertiesWindow = window; return window;
     }
     private static void PresentProperties(PropertiesWindow window, bool accepted)
@@ -53,8 +54,8 @@ public partial class MainWindow
         if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
         window.Activate();
     }
-    internal bool ResolvePropertiesDrafts(DocumentModel? doc = null) => ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts());
-    internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync());
+    internal bool ResolvePropertiesDrafts(DocumentModel? doc = null) => ResolveZoneDrafts(doc) && ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || propertiesWindow.ResolvePendingDrafts());
+    internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => ResolveZoneDrafts(doc) && ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync());
     private void UndoDocument(DocumentModel doc, bool redo)
     {
         doc = LiveDocument(doc);

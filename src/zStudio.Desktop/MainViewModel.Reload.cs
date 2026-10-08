@@ -13,7 +13,7 @@ public sealed partial class MainViewModel
     internal async Task<DocumentModel> ReloadDocumentAsync(DocumentModel original, long revision, bool discardAccepted = false, CancellationToken cancellationToken = default)
     {
         if (original.SourceWorld != null && ReloadSourceWorld is { } rebuild) return await rebuild(original, discardAccepted, cancellationToken);
-        long generation = ++navigationGeneration;
+        long generation = AdvanceNavigation();
         var selected = SelectedDocument;
         string reloadPath = original.ContentEdits?.TargetPath(original.Path) ?? original.ResourceEdits?.TargetPath ?? original.ModelEdits?.TargetPath(original.Path) ?? original.Path;
         using var request = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, original.Lifetime.Token, cancellationToken);
@@ -31,6 +31,7 @@ public sealed partial class MainViewModel
         Validate();
         Status = "Reloading " + Path.GetFileName(reloadPath) + "…";
         ZbdDocument loaded;
+        PreparedDocument prepared;
         try
         {
             loaded = await LoadDocumentAsync(reloadPath, request.Token).WaitAsync(request.Token);
@@ -39,6 +40,9 @@ public sealed partial class MainViewModel
                 original.Document.Probe.Recognition == Recognition.Supported && loaded.Probe.Recognition != Recognition.Supported ||
                 loaded.Diagnostics.Any(d => d.Severity == "Error" && d.Message.StartsWith("Parsing stopped:", StringComparison.Ordinal)))
                 throw new InvalidDataException("The replacement file could not be fully parsed. The existing document was retained.");
+            Validate();
+            prepared = await PrepareDocumentAsync(loaded, request.Token);
+            request.Token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         { throw new StudioCommandException("context_changed", "The document or workspace changed during reload."); }
@@ -46,7 +50,7 @@ public sealed partial class MainViewModel
         { throw new StudioCommandException("open_failed", "Could not reload; the existing document was retained. " + ex.Message); }
 
         Validate();
-        var replacement = new DocumentModel(loaded) { Query = original.Query, KindFilter = original.KindFilter };
+        var replacement = new DocumentModel(prepared) { Query = original.Query, KindFilter = original.KindFilter };
         replacement.AttachResolver(Resolver);
         var asset = original.SelectedAsset?.Record;
         replacement.SelectedAsset = asset == null ? null : replacement.Assets.FirstOrDefault(a => a.Record.Kind == asset.Kind && a.Record.Index == asset.Index);

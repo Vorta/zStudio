@@ -63,7 +63,7 @@ public sealed class ScriptScanRound6Tests
         var build = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "p-" + Guid.NewGuid().ToString("N")), workspace.Overlay(), token: Token);
         Assert.Null(build.Outputs.FirstOrDefault(o => o.Error != null)?.Error);
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
-        var origin = build.Provenance[GameZWriter.NodeSlots(world)[world.Nodes.Single(n => n.Class == WorldNodeClass.World)]];
+        var origin = build.Provenance[GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken)[world.Nodes.Single(n => n.Class == WorldNodeClass.World)]];
         Assert.Equal("gamegen/world.gw", origin.Created!.Script);
         // Fog inserted after NewWorld in world.gw would reach m2 too: refused, as for a mission sourcing it directly.
         Assert.Contains("also runs in m2", Message(() => SourceObjectEdits.PlanCommand(workspace, "world", origin, build.Executions, "WorldSetFogDensity", ["0.25"], Token, "m1")));

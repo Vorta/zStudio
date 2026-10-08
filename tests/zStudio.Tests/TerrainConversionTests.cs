@@ -14,6 +14,47 @@ public sealed class TerrainConversionTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NeutralGeometryConversionKeepsMapAssignmentsAndUndo(bool grouped)
+    {
+        using SourceWorldFixture fixture = new(); fixture.WriteTerrainDatabase(grouped);
+        const string database = "data/m1/models/m1.gltf", manifest = "data/m1/meta/zones.json";
+        SourceWorkspace workspace = new(fixture.Project);
+        var before = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "original"), workspace.Overlay(), token: Token);
+        byte[] bytes = File.ReadAllBytes(fixture.Path(database));
+        var document = WorldAssembler.ReadModel(bytes, database, (path, _) => File.ReadAllBytes(fixture.Path(path)), Token);
+        var profile = WorldGltf.CaptureZoneProfile(document, token: Token);
+        var json = JsonNode.Parse(bytes)!.AsObject();
+        foreach (var node in json["nodes"]!.AsArray())
+        {
+            if (node?["extras"]?["recoil"] is not JsonObject values) continue;
+            values.Remove("zone"); values.Remove("zoneWord");
+            if (values["flags"] is { } flags)
+                values["flags"] = $"0x{(Convert.ToUInt32(flags.GetValue<string>()[2..], 16) & ~WorldGltf.ZoneGate):X8}";
+        }
+        foreach (var material in json["materials"]!.AsArray())
+            (material?["extras"]?["recoil"] as JsonObject)?.Remove("zone");
+        fixture.Write(database, json.ToJsonString());
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.Path(manifest))!);
+        File.WriteAllBytes(fixture.Path(manifest), new SourceMapZones([new(database, database, profile, [])]).Write(Token));
+        workspace = new(fixture.Project);
+        var plan = SourceTerrainConversion.Plan(workspace, database, SourceTerrainConversion.References(workspace, before.Dependencies, "gamegen/m1.gs", Token), Token);
+        Assert.Equal(3, plan.Converted); Assert.All(plan.Groups, g => Assert.Equal(3, g.Zone));
+        SourceTerrainConversion.Apply(workspace, plan, Token);
+        Assert.Contains(manifest, workspace.DirtyFiles);
+        var map = SourceMapZones.Parse(workspace.Read(manifest, Token)!, Token);
+        Assert.Contains(map.Assets, a => a.LogicalPath == plan.Surfaces);
+        var after = await SourceWorlds.BuildPreviewAsync(fixture.Project, "m1", Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "converted"), workspace.Overlay(), token: Token);
+        var a = await Nodes(before, p => p.Database && p.ModelFile == database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode)));
+        var b = await Nodes(after, p => p.Terrain == plan.Recipe);
+        var report = TerrainProbe.Compare(a, b, 2, Token);
+        AssertCompared(report); Assert.True(report.Hits > 0); Assert.Equal(0, report.Mismatches);
+        workspace.Undo(); Assert.False(workspace.IsDirty);
+        Assert.Single(SourceMapZones.Parse(workspace.Read(manifest, Token)!, Token).Assets);
+    }
+
     [Fact]
     public async Task PiecesBecomeSurfacesAndTheProbeFindsTheSame()
     {
@@ -44,10 +85,11 @@ public sealed class TerrainConversionTests
         // flat_b straddles x = 256: two pieces of the first surface (one per cell), one of the second.
         Assert.Equal(3, b.Count);
         var report = TerrainProbe.Compare(a, b, 2, Token);
+        AssertCompared(report);
         Assert.True(report.Hits > 500);
         Assert.Equal(0, report.Mismatches); Assert.Equal(0, report.HeightOnly);
         // Over flat_a the probe finds both sheets, the upper one from the second surface.
-        var hits = TerrainProbe.At(b, 220, 320);
+        var hits = TerrainProbe.At(b, 220, 320, token: TestContext.Current.CancellationToken);
         Assert.Equal([0f, 10f], hits.Select(h => h.Height));
         workspace.Undo();
         Assert.False(workspace.IsDirty);
@@ -101,6 +143,7 @@ public sealed class TerrainConversionTests
         var a = await Nodes(before, p => p.Database && p.ModelFile == Database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode)));
         Assert.Equal(["flat_a", "flat_b", "flat_over"], a.Select(n => n.Name).Order());
         var report = TerrainProbe.Compare(a, await Nodes(after, p => p.Terrain == plan.Recipe), 2, Token);
+        AssertCompared(report);
         Assert.Equal(0, report.Mismatches); Assert.Equal(0, report.HeightOnly);
         Assert.Single(await Nodes(after, p => p.Part && p.ModelNodeName == "far"));
     }
@@ -143,13 +186,21 @@ public sealed class TerrainConversionTests
         Assert.NotEmpty(pieces);
         Assert.All(pieces, n => Assert.Equal(7u, n.Model!.Flags));
         var report = TerrainProbe.Compare(await Nodes(before, p => p.Database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode))), await Nodes(after, p => p.Terrain == plan.Recipe), 2, Token);
+        AssertCompared(report);
         Assert.Equal(0, report.Mismatches);
+    }
+
+    private static void AssertCompared(TerrainProbeReport report)
+    {
+        Assert.True(report.Complete, report.Limitation ?? "The terrain comparison did not complete.");
+        Assert.True(report.Samples > 0, "The terrain comparison took no samples.");
+        Assert.True(report.Hits > 0, "The terrain comparison sampled no original terrain hits.");
     }
 
     private static async Task<List<WorldNode>> Nodes(SourceWorldBuild build, Func<WorldNodeProvenance, bool> select)
     {
         var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", await File.ReadAllBytesAsync(build.WorldPath, Token), token: Token), Token);
-        var slots = GameZWriter.NodeSlots(world);
+        var slots = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken);
         return world.Nodes.Where(n => slots.TryGetValue(n, out int slot) && build.Provenance.TryGetValue(slot, out var p) && select(p)).ToList();
     }
 }

@@ -186,16 +186,16 @@ public sealed class SiAnimationScriptTests
     [Fact]
     public void ScriptsCompileChangedChannelsAndLeaveStillSegmentsOut()
     {
-        Assert.True(SiAnimationScript.Recognize(Encoding.ASCII.GetBytes("\r\n" + Gate)));
-        Assert.False(SiAnimationScript.Recognize("OBJECT door\nFRAME 0 POSITION 0 0 0\nFRAME 1"u8));
-        var script = SiAnimationScript.Parse(Encoding.ASCII.GetBytes(Gate.Replace("\n", "\r\n")), "gate.zan");
+        Assert.True(SiAnimationScript.Recognize(Encoding.ASCII.GetBytes("\r\n" + Gate), TestContext.Current.CancellationToken));
+        Assert.False(SiAnimationScript.Recognize("OBJECT door\nFRAME 0 POSITION 0 0 0\nFRAME 1"u8, TestContext.Current.CancellationToken));
+        var script = SiAnimationScript.Parse(Encoding.ASCII.GetBytes(Gate.Replace("\n", "\r\n")), "gate.zan", TestContext.Current.CancellationToken);
         Assert.Equal(["door", "lamp"], script.Objects);
-        var door = SiAnimationScript.Compile(script, "door", 10, "gate.zan");
+        var door = SiAnimationScript.Compile(script, "door", 10, "gate.zan", TestContext.Current.CancellationToken);
         // Frames 0-10 move everything (the first segment carries every channel), 10-20 holds (left out), 20-30 is the
         // last segment and carries every channel again.
         Assert.Equal([(7, 0f, 1f), (7, 2f, 3f)], door.Select(f => (f.Flags, f.Start, f.End)));
         Assert.Equal(4f, door[0].F32(door[0].ChannelOffset(0) + 20));
-        var lamp = SiAnimationScript.Compile(script, "lamp", 10, "gate.zan");
+        var lamp = SiAnimationScript.Compile(script, "lamp", 10, "gate.zan", TestContext.Current.CancellationToken);
         Assert.Equal([7, 7], lamp.Select(f => f.Flags));
         Assert.All(lamp, f => Assert.Equal(0f, f.F32(f.ChannelOffset(1) + 16)));
     }
@@ -213,7 +213,7 @@ public sealed class SiAnimationScriptTests
     [InlineData("Frame: 1\nObject: a\nScaling: 1 1 1\nRotation: 0 0 0\nTranslation: 0 0 0\nFRAMES: 2", "header")]
     public void MalformedScriptsAreRefusedWithTheirLine(string text, string message)
     {
-        var error = Assert.Throws<InvalidDataException>(() => SiAnimationScript.Parse(Encoding.ASCII.GetBytes(SiAnimationScript.Header + "\n" + text), "bad.zan"));
+        var error = Assert.Throws<InvalidDataException>(() => SiAnimationScript.Parse(Encoding.ASCII.GetBytes(SiAnimationScript.Header + "\n" + text), "bad.zan", TestContext.Current.CancellationToken));
         Assert.Contains(message, error.Message);
         Assert.StartsWith("bad.zan, line ", error.Message);
     }
@@ -221,9 +221,9 @@ public sealed class SiAnimationScriptTests
     [Fact]
     public void AnObjectNeedsTwoFramesAndAFrameRate()
     {
-        var one = SiAnimationScript.Parse(Encoding.ASCII.GetBytes(SiAnimationScript.Header + "\nFrame: 1\nObject: a\nScaling: 1 1 1\nRotation: 0 0 0\nTranslation: 0 0 0\nFrame: 1\nObject: a\nScaling: 1 1 1\nRotation: 0 0 0\nTranslation: 1 0 0"), "one.zan");
-        Assert.Contains("at least two frames", Assert.Throws<InvalidDataException>(() => SiAnimationScript.Compile(one, "a", 10, "one.zan")).Message);
-        Assert.Contains("SCRIPT_FRAME_RATE", Assert.Throws<InvalidDataException>(() => SiAnimationScript.Compile(one, "a", 0, "one.zan")).Message);
+        var one = SiAnimationScript.Parse(Encoding.ASCII.GetBytes(SiAnimationScript.Header + "\nFrame: 1\nObject: a\nScaling: 1 1 1\nRotation: 0 0 0\nTranslation: 0 0 0\nFrame: 1\nObject: a\nScaling: 1 1 1\nRotation: 0 0 0\nTranslation: 1 0 0"), "one.zan", TestContext.Current.CancellationToken);
+        Assert.Contains("at least two frames", Assert.Throws<InvalidDataException>(() => SiAnimationScript.Compile(one, "a", 10, "one.zan", TestContext.Current.CancellationToken)).Message);
+        Assert.Contains("SCRIPT_FRAME_RATE", Assert.Throws<InvalidDataException>(() => SiAnimationScript.Compile(one, "a", 0, "one.zan", TestContext.Current.CancellationToken)).Message);
     }
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
@@ -259,8 +259,8 @@ public sealed class SiAnimationScriptTests
 
     private static List<SiScriptWriter.Track> Tracks(string text, float rate)
     {
-        var script = SiAnimationScript.Parse(Encoding.ASCII.GetBytes(text), "flight.zan");
-        return [.. script.Objects.Select(o => new SiScriptWriter.Track(o, SiAnimationScript.Compile(script, o, rate, "flight.zan"), rate))];
+        var script = SiAnimationScript.Parse(Encoding.ASCII.GetBytes(text), "flight.zan", TestContext.Current.CancellationToken);
+        return [.. script.Objects.Select(o => new SiScriptWriter.Track(o, SiAnimationScript.Compile(script, o, rate, "flight.zan", TestContext.Current.CancellationToken), rate))];
     }
 
     [Fact]
@@ -268,10 +268,10 @@ public sealed class SiAnimationScriptTests
     {
         var tracks = Tracks(Flight, 15);
         string written = SiScriptWriter.Write(tracks, new("3.7", true), Token);
-        var again = SiAnimationScript.Parse(Encoding.Latin1.GetBytes(written), "again.zan");
+        var again = SiAnimationScript.Parse(Encoding.Latin1.GetBytes(written), "again.zan", TestContext.Current.CancellationToken);
         foreach (var track in tracks)
         {
-            var compiled = SiAnimationScript.Compile(again, track.Object, 15, "again.zan");
+            var compiled = SiAnimationScript.Compile(again, track.Object, 15, "again.zan", TestContext.Current.CancellationToken);
             Assert.Equal(track.Frames.Count, compiled.Count);
             Assert.All(compiled.Zip(track.Frames), p => Assert.True(SiScriptWriter.Same(p.First, p.Second)));
         }
@@ -341,8 +341,8 @@ public sealed class SiAnimationScriptTests
         Assert.Equal(0x80000000u, SiMath.Bits(tracks[0].Frames[0].F32(tracks[0].Frames[0].ChannelOffset(0) + 8)));
         string written = SiScriptWriter.Write(tracks, new(null), Token);
         Assert.Equal(3, written.Split("\r\n").Count(l => l == "Translation: 0.000000 0.000000 -0.000000"));
-        var again = SiAnimationScript.Parse(Encoding.Latin1.GetBytes(written), "again.zan");
-        var compiled = SiAnimationScript.Compile(again, "body", 10, "again.zan");
+        var again = SiAnimationScript.Parse(Encoding.Latin1.GetBytes(written), "again.zan", TestContext.Current.CancellationToken);
+        var compiled = SiAnimationScript.Compile(again, "body", 10, "again.zan", TestContext.Current.CancellationToken);
         Assert.All(compiled.Zip(tracks[0].Frames), p => Assert.True(SiScriptWriter.Same(p.First, p.Second)));
     }
 
@@ -350,13 +350,13 @@ public sealed class SiAnimationScriptTests
     public void ScriptsAreRecognisedAfterCommentsAndAByteOrderMark()
     {
         byte[] commented = Encoding.ASCII.GetBytes("# exported for the gate\n\n" + Flight);
-        Assert.True(SiAnimationScript.Recognize(commented));
-        Assert.Equal(["body", "rotor"], SiAnimationScript.Parse(commented, "a.zan").Objects);
+        Assert.True(SiAnimationScript.Recognize(commented, TestContext.Current.CancellationToken));
+        Assert.Equal(["body", "rotor"], SiAnimationScript.Parse(commented, "a.zan", TestContext.Current.CancellationToken).Objects);
         byte[] marked = [0xEF, 0xBB, 0xBF, .. Encoding.ASCII.GetBytes(Flight)];
-        Assert.True(SiAnimationScript.Recognize(marked));
-        Assert.Equal(["body", "rotor"], SiAnimationScript.Parse(marked, "b.zan").Objects);
+        Assert.True(SiAnimationScript.Recognize(marked, TestContext.Current.CancellationToken));
+        Assert.Equal(["body", "rotor"], SiAnimationScript.Parse(marked, "b.zan", TestContext.Current.CancellationToken).Objects);
         // zStudio's keyframe format starts with comments too, then OBJECT or FRAME lines.
-        Assert.False(SiAnimationScript.Recognize("# RECOIL keyframe script\nOBJECT door\nFRAME 0 POSITION 0 0 0\nFRAME 1"u8));
+        Assert.False(SiAnimationScript.Recognize("# RECOIL keyframe script\nOBJECT door\nFRAME 0 POSITION 0 0 0\nFRAME 1"u8, TestContext.Current.CancellationToken));
     }
 
     [Fact]

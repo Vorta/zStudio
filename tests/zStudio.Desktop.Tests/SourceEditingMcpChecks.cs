@@ -53,6 +53,49 @@ internal static class SourceEditingMcpChecks
             var pickups = await Job("pickups", new() { ["document"] = Id(doc) });
             var ammo = pickups["items"]!.AsArray().First(p => p!["Type"]!.GetValue<string>() == "HEMORTAR_AMMO" && p["source"]!["ResourceName"]!.GetValue<string>() == "PUPPIES.ZRD")!;
             await Call("pickup_lock", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["locked"] = false });
+            // Exercise the actual placement planner after an external resource grows beyond its text allowance.
+            // A bounded stream writes valid whitespace padding; the planner must refuse before reading it all.
+            string resourcePath = fixture.Path("data/m1/zrdr/puppies.zrd");
+            DateTime resourceStamp = File.GetLastWriteTimeUtc(resourcePath);
+            var placementSource = doc.PickupEdits!.Records.First(r => r.Type == "HEMORTAR_AMMO" && r.Source.ResourceName == "PUPPIES.ZRD").Source;
+            var planner = typeof(MainWindow).GetMethod("PlanSourcePlacement", BindingFlags.Static | BindingFlags.NonPublic)!;
+            var placement = new Recoil.Zbd.Core.PlacementTransform(new(20.25f, 8, -5), System.Numerics.Vector3.Zero);
+            long beforeRevision = doc.SourceWorld!.Workspace.Revision;
+            try
+            {
+                await Task.Run(() =>
+                {
+                    using (FileStream padding = new(resourcePath, FileMode.Create, FileAccess.Write, FileShare.None))
+                    {
+                        padding.Write(Encoding.ASCII.GetBytes(Default));
+                        byte[] spaces = new byte[64 * 1024]; Array.Fill(spaces, (byte)' ');
+                        while (padding.Length <= SourceProject.MaximumSourceTextBytes)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            padding.Write(spaces.AsSpan(0, (int)Math.Min(spaces.Length, SourceProject.MaximumSourceTextBytes + 1L - padding.Length)));
+                        }
+                    }
+                    byte[] beforeHash;
+                    using (var input = File.OpenRead(resourcePath)) beforeHash = System.Security.Cryptography.SHA256.HashData(input);
+                    long allocated = GC.GetAllocatedBytesForCurrentThread();
+                    var failure = Assert.Throws<TargetInvocationException>(() => planner.Invoke(null, [doc, doc.SourceWorld.Workspace, placementSource, placement, token]));
+                    allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+                    var refused = Assert.IsType<InvalidDataException>(failure.InnerException);
+                    Assert.Contains("Resource text exceeds", refused.Message, StringComparison.Ordinal);
+                    Assert.True(allocated < 4 * 1024 * 1024, $"Placement refusal allocated {allocated:N0} bytes before its text limit.");
+                    Assert.Equal(SourceProject.MaximumSourceTextBytes + 1L, new FileInfo(resourcePath).Length);
+                    using (var input = File.OpenRead(resourcePath)) Assert.Equal(beforeHash, System.Security.Cryptography.SHA256.HashData(input));
+                }, token);
+                Assert.Equal(beforeRevision, doc.SourceWorld.Workspace.Revision);
+                Assert.Empty(doc.SourceWorld.Workspace.History);
+                Assert.False(doc.SourceWorld.Workspace.IsDirty);
+            }
+            finally
+            {
+                await File.WriteAllTextAsync(resourcePath, Default, Encoding.ASCII, CancellationToken.None);
+                File.SetLastWriteTimeUtc(resourcePath, resourceStamp);
+            }
+            Assert.False(await Task.Run(() => doc.SourceInputsChanged(token), token));
             // Hold actual scene-card source preparation, then type newer GUI input: stale work must retain that draft.
             var scene = (Recoil.Zbd.Rendering.SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             scene.SetAiOptions(true, true, null);
@@ -68,7 +111,8 @@ internal static class SourceEditingMcpChecks
                 var apply = Call("scene_card", new() { ["preview"] = cardPreview, ["action"] = "apply", ["document"] = Id(doc), ["revision"] = doc.Revision, ["token"] = card.DraftToken }, error: true);
                 try
                 {
-                    await preparing.Task.WaitAsync(token);
+                    var first = await Task.WhenAny(preparing.Task, apply).WaitAsync(token);
+                    if (first == apply) Assert.Fail("Scene-card apply completed before reaching preparation: " + (await apply).ToJsonString());
                     card.SetDraft(card.DraftToken, ["2", "3", "4"], null, null, null);
                     proceed.Release();
                     Assert.Contains("draft_conflict", (await apply).GetValue<string>());

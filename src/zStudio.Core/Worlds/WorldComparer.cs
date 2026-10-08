@@ -144,7 +144,7 @@ public sealed class WorldComparison
 /// nodes it names), grid cell and model are compared, along with the world, its lights and the texture directory entries and variant links. A model
 /// compares every value it keeps: display mode and flags, scrolling, morph factor, point entries (lens flares), bounds and
 /// polygons, whose corners carry their positions, UVs, normals and morph deltas and whose materials all their fields. Node
-/// slots, stored pointers, runtime counters, child order and polygon order do not matter; <see cref="CompareTree"/> also
+/// slots, stored pointers, runtime counters and child order do not matter; polygon order is reported separately. <see cref="CompareTree"/> also
 /// reports the slots and which repeated names lookups would bind elsewhere.
 /// </summary>
 public static class WorldComparer
@@ -349,7 +349,7 @@ public static class WorldComparer
             return node;
         }
 
-        // The pair's own differences (a world root's: its class data only), all counted, described while the pair lists fewer
+        // The pair's own differences, all counted, described while the pair lists fewer
         // than MaximumNodeDifferences and the comparison has described fewer than MaximumDescribedText characters.
         (int Count, (string, string, string)[] Described) Differ(WorldNode a, WorldNode b, bool worldChild, bool root = false)
         {
@@ -512,7 +512,13 @@ public static class WorldComparer
     }
 
     /// <summary>A node's structure (class, polygon and child counts six levels down), its children's names and its rounded position.</summary>
-    internal static string PairKey(WorldNode node) => $"{new Memo(default).Structure(node):X16}|{Round(At(node))}";
+    internal static string PairKey(WorldNode node) => new PairKeyMemo(default).Key(node);
+    /// <summary>One immutable snapshot's pairing keys, sharing signatures across different roots of the same DAG.</summary>
+    internal sealed class PairKeyMemo(CancellationToken token, LookupWorkBudget? work = null)
+    {
+        private readonly Memo memo = new(token, work);
+        internal string Key(WorldNode node) => $"{memo.Structure(node):X16}|{Round(At(node))}";
+    }
     private static Vector3 At(WorldNode node) => node.Class == WorldNodeClass.Object3D && WorldUpdate.LocalMatrix(node) is { } m ? m.Translation : Vector3.Zero;
     /// <summary>Class data words a comparison skips: stored pointers and runtime counters.</summary>
     private static int[] Skipped(WorldNodeClass kind) => kind switch
@@ -527,8 +533,9 @@ public static class WorldComparer
     /// What a comparison works out once, however many places share it: each node's structure and contents, each model's
     /// polygons, each pair of models' differences and which copies are indistinguishable.
     /// </summary>
-    private sealed class Memo(CancellationToken token)
+    private sealed class Memo(CancellationToken token, LookupWorkBudget? signatureWork = null)
     {
+        private readonly LookupWorkBudget structureWork = signatureWork ?? new(token: token);
         public WorldTextureComparison.Directory? ExpectedTextures { get; init; }
         public WorldTextureComparison.Directory? ActualTextures { get; init; }
         public IReadOnlyDictionary<WorldNode, WorldNode>? Counterparts { get; set; }
@@ -538,6 +545,7 @@ public static class WorldComparer
         public CancellationToken Token => token;
         private readonly Dictionary<(WorldNode, int), ulong> signatures = [];
         private readonly Dictionary<WorldNode, ulong> structures = new(ReferenceEqualityComparer.Instance), identities = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<WorldNode, List<WorldNode>> overflowRepeats = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<(WorldModel, WorldTextureComparison.Directory?, bool), Polygon[]> polygons = [];
         private readonly Dictionary<WorldModel, Shape> shapes = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<WorldModel, ulong> models = new(ReferenceEqualityComparer.Instance);
@@ -564,14 +572,14 @@ public static class WorldComparer
         /// <summary>
         /// Whether two nodes themselves are the same as a comparison sees them, in the order it lists what differs: class;
         /// flags, zone and grid cell (a world member's); the transform, or the class data with the nodes it names (stored
-        /// pointers, slots and runtime counters skipped); the model's retained values; the number of children. A world root's:
-        /// its name and class data. With <paramref name="found"/>, every difference is added to it; without, the first ends the check.
+        /// pointers, slots and runtime counters skipped); the model's retained values; the number of children. The primary
+        /// world root's distinct members are compared through the tree/areas, with repeated overflow occurrences checked separately.
+        /// With <paramref name="found"/>, every difference is added to it; without, the first ends the check.
         /// </summary>
         public bool OwnSame(WorldNode a, WorldNode b, bool worldChild, bool root, Found? found)
         {
             bool same = true;
             if (a.Name != b.Name && Differs("name", a.Name, b.Name)) return false;
-            if (root) return ClassDataSame() && same;
             if (a.Class != b.Class) { Differs("class", a.Class, b.Class); return false; }
             uint carried = WorldGltf.CarriedFlags;
             if ((a.Flags & carried) != (b.Flags & carried) && Differs("flags.carried", $"{a.Flags & carried:X8}", $"{b.Flags & carried:X8}")) return false;
@@ -596,7 +604,8 @@ public static class WorldComparer
             // A model shared by many nodes is compared once.
             else if (a.Model != null && b.Model != null)
                 foreach (var (field, x, y) in ModelDifferences(a.Model, b.Model, found == null)) if (Differs(field, x, y)) return false;
-            if (a.Children.Count != b.Children.Count && Differs("children", new Listed(a.Children), new Listed(b.Children))) return false;
+            if (!root && (a.Children.Count != b.Children.Count || found != null && !MembersSame(a.Children, b.Children))
+                && Differs("children", ReferenceList(a.Children, true), ReferenceList(b.Children, false))) return false;
             // Class data last: a world's many cells must not crowd out the fields above.
             return (a.Class == WorldNodeClass.Object3D || ClassDataSame()) && same;
 
@@ -616,6 +625,11 @@ public static class WorldComparer
                         if (!ReferenceSame(x, y) && Differs(field, ReferenceLabel(x, true), ReferenceLabel(y, false))) return false;
                 if (a.Class == WorldNodeClass.Light && !ReferencesSame(a.AttachedWorlds, b.AttachedWorlds) && Differs("light.worlds", ReferenceList(a.AttachedWorlds, true), ReferenceList(b.AttachedWorlds, false))) return false;
                 if (a.Class != WorldNodeClass.World) return true;
+                // The tree already compares distinct members, and the areas below compare cell membership. Only
+                // additional overflow visits disappear from those views: compare them by established node identity.
+                // This does not duplicate area differences or turn one child also in an area into an extra visit.
+                if (found != null && !MembersSame(OverflowRepeats(a), OverflowRepeats(b))
+                    && Differs("world.overflowOccurrences", ReferenceList(a.Children, true), ReferenceList(b.Children, false))) return false;
                 if (!ReferencesSame(a.WorldLights, b.WorldLights) && Differs("world.lights", ReferenceList(a.WorldLights, true), ReferenceList(b.WorldLights, false))) return false;
                 if (!ReferencesSame(a.WorldSounds, b.WorldSounds) && Differs("world.sounds", ReferenceList(a.WorldSounds, true), ReferenceList(b.WorldSounds, false))) return false;
                 if (a.Areas.Count != b.Areas.Count) return !Differs("world.areas", a.Areas.Count, b.Areas.Count);
@@ -640,14 +654,28 @@ public static class WorldComparer
                 // cross-world counterpart map. Keep that semantic-copy check separate from stored reference identity.
                 if (found == null) return true;
                 Dictionary<WorldNode, int> counts = new(ReferenceEqualityComparer.Instance);
-                foreach (var node in y) counts[node] = counts.GetValueOrDefault(node) + 1;
+                foreach (var node in y) { Token.ThrowIfCancellationRequested(); counts[node] = counts.GetValueOrDefault(node) + 1; }
                 foreach (var node in x)
                 {
+                    Token.ThrowIfCancellationRequested();
                     if (MatchReference(node) is not { } mapped || !counts.TryGetValue(mapped, out int remaining) || remaining == 0) return false;
                     counts[mapped] = remaining - 1;
                 }
                 return true;
             }
+        }
+
+        private List<WorldNode> OverflowRepeats(WorldNode world)
+        {
+            if (overflowRepeats.TryGetValue(world, out var known)) return known;
+            List<WorldNode> repeats = [];
+            HashSet<WorldNode> present = new(ReferenceEqualityComparer.Instance);
+            foreach (var child in world.Children)
+            {
+                Token.ThrowIfCancellationRequested();
+                if (!present.Add(child)) repeats.Add(child);
+            }
+            return overflowRepeats[world] = repeats;
         }
 
         /// <summary>
@@ -690,15 +718,21 @@ public static class WorldComparer
         /// <summary>The node's class, polygon and child counts six levels down, and its children's names.</summary>
         public ulong Structure(WorldNode node)
         {
+            token.ThrowIfCancellationRequested(); structureWork.Reserve(1);
             if (structures.TryGetValue(node, out ulong known)) return known;
+            // Reserve the cache entry and complete direct-child pass before reading names or growing the cache.
+            structureWork.Reserve(1L + node.Children.Count);
             ulong hash = Signature(node, 0);
-            foreach (var child in node.Children) hash = Mix(hash, Text(child.Name));
+            foreach (var child in node.Children) { token.ThrowIfCancellationRequested(); hash = Mix(hash, Text(child.Name)); }
             return structures[node] = hash;
         }
         private ulong Signature(WorldNode node, int depth)
         {
+            token.ThrowIfCancellationRequested(); structureWork.Reserve(1);
             if (depth > 6) return 0;
             if (signatures.TryGetValue((node, depth), out ulong known)) return known;
+            // Depth is part of identity: a shared descendant may occur at different distances from different roots.
+            structureWork.Reserve(1L + node.Children.Count);
             ulong hash = Mix(Mix((ulong)node.Class, node.Model == null ? ulong.MaxValue : (ulong)node.Model.Polygons.Count), (ulong)node.Children.Count);
             foreach (var child in node.Children) hash = Mix(hash, Signature(child, depth + 1));
             return signatures[(node, depth)] = hash;

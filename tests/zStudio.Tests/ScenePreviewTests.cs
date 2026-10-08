@@ -33,13 +33,13 @@ public sealed class ScenePreviewTests
     public void AnimationLodChangesOnlyVisibilityAndSurvivesSeeking()
     {
         var context = Context(LodScene()); var player = new AnimationPlayer(context, 0);
-        Assert.Equal([3], player.Frame().Nodes.Where(n => n.Visible).Select(n => n.SourceNode));
+        Assert.Equal([3], player.Frame(TestContext.Current.CancellationToken).Nodes.Where(n => n.Visible).Select(n => n.SourceNode));
         player.LodLevel = 1;
         Assert.Equal([4], player.AdvanceTo(1, true, TestContext.Current.CancellationToken).Nodes.Where(n => n.Visible).Select(n => n.SourceNode));
         Assert.Equal([4], player.AdvanceTo(0, true, TestContext.Current.CancellationToken).Nodes.Where(n => n.Visible).Select(n => n.SourceNode));
-        Assert.Equal(2, player.Frame().Nodes.Count); // Inactive variants retain their simulation state.
+        Assert.Equal(2, player.Frame(TestContext.Current.CancellationToken).Nodes.Count); // Inactive variants retain their simulation state.
         player.LodLevel = 0;
-        Assert.Equal([3], player.Frame().Nodes.Where(n => n.Visible).Select(n => n.SourceNode));
+        Assert.Equal([3], player.Frame(TestContext.Current.CancellationToken).Nodes.Where(n => n.Visible).Select(n => n.SourceNode));
     }
     [Fact]
     public void TextureCyclesLoopClampReverseAndRespectVariantResets()

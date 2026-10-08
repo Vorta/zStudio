@@ -28,13 +28,13 @@ public sealed partial class PickupPlacementEditSession
     private sealed record Entry(PickupPlacementRecord Record, int[] Offsets, int[] RotationOffsets);
     // All mission coordinates share these archive baselines and one save transaction.
     // Pickup behavior remains in this session; AI/vehicle records use typed adapters.
-    private readonly Dictionary<MissionPickupSource, MissionCoordinateRecord> otherCoordinates = [];
+    private readonly Dictionary<MissionPickupSource, MissionCoordinateRecord> otherCoordinates;
     private sealed record Move(IReadOnlyDictionary<MissionPickupSource, PlacementTransform> Before, IReadOnlyDictionary<MissionPickupSource, PlacementTransform> After);
     private readonly Dictionary<string, ArchiveState> archives = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<MissionPickupSource, Entry> entries = [];
-    private readonly Dictionary<MissionPickupSource, Vector3> positions = [];
-    private readonly Dictionary<MissionPickupSource, Vector3> savedPositions = [];
-    private readonly Dictionary<MissionPickupSource, Vector3> rotations = [], savedRotations = [];
+    private readonly Dictionary<MissionPickupSource, Entry> entries;
+    private readonly Dictionary<MissionPickupSource, Vector3> positions;
+    private readonly Dictionary<MissionPickupSource, Vector3> savedPositions;
+    private readonly Dictionary<MissionPickupSource, Vector3> rotations, savedRotations;
     private readonly Stack<Move> undo = [], redo = [];
     private readonly PreviewNotes diagnostics = new();
     private readonly Dictionary<ZbdDocument, HashSet<AssetRecord>> overlappingMembers = [];
@@ -48,10 +48,10 @@ public sealed partial class PickupPlacementEditSession
     public event Action<IReadOnlyList<string>>? BeforeEdit;
     public IReadOnlyList<string> Diagnostics => diagnostics;
     public int DiagnosticCount => diagnostics.TotalCount;
-    public IReadOnlyList<PickupPlacementRecord> Records => entries.Values.Where(e => !otherCoordinates.ContainsKey(e.Record.Source)).Select(e => e.Record).ToArray();
+    public IReadOnlyList<PickupPlacementRecord> Records => IndexedRecords();
     public IReadOnlyList<MissionCoordinateRecord> OtherCoordinates => otherCoordinates.Values.ToArray();
     public bool IsDirty => archives.Keys.Any(IsArchiveDirty);
-    public bool IsArchiveDirty(string path) => archives[path].PendingCopy || positions.Any(p => p.Key.ArchivePath.Equals(path, StringComparison.OrdinalIgnoreCase) && (p.Value != savedPositions[p.Key] || rotations[p.Key] != savedRotations[p.Key]));
+    public bool IsArchiveDirty(string path) => archives[path].PendingCopy || EntriesForArchive(path).Any(e => positions[e.Record.Source] != savedPositions[e.Record.Source] || rotations[e.Record.Source] != savedRotations[e.Record.Source]);
     public bool CanUndo => !saving && undo.Count > 0;
     public bool CanRedo => !saving && redo.Count > 0;
     public IReadOnlyList<string> ArchivePaths => archives.Values.Select(a => a.Original.Path).ToArray();
@@ -70,6 +70,7 @@ public sealed partial class PickupPlacementEditSession
 
     public static async Task<PickupPlacementEditSession> LoadAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> found = new(StringComparer.OrdinalIgnoreCase);
         List<(ZbdDocument Archive, AssetRecord Asset)> coordinateResources = [];
         PreviewNotes notes = new();
@@ -77,7 +78,7 @@ public sealed partial class PickupPlacementEditSession
         bool mw3 = probe is { Family: FormatFamily.GameZ, Version: 27 };
         // Load the coordinate store once for every reader in this map. Preview selection
         // filters by archive identity; changing mission must never discard accepted history.
-        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver); HashSet<ZbdDocument> snapshots = new(ReferenceEqualityComparer.Instance);
+        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver, token); HashSet<ZbdDocument> snapshots = new(ReferenceEqualityComparer.Instance);
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();
@@ -129,6 +130,7 @@ public sealed partial class PickupPlacementEditSession
                     throw new InvalidDataException("Expected an ordered pickup placement list.");
                 var rows = root[0].Children;
                 if (!result.archives.ContainsKey(group.Key.Item1)) result.archives.Add(group.Key.Item1, new(doc));
+                string? memberIdentity = null;
                 for (int index = 0; index < rows.Count; index++)
                 {
                     token.ThrowIfCancellationRequested();
@@ -141,8 +143,9 @@ public sealed partial class PickupPlacementEditSession
                         var (position, offsets) = ReadVector(row[2], doc, asset);
                         var (rotation, rotationOffsets) = ReadVector(row[3], doc, asset);
                         _ = ReadNumber(row[4]);
-                        var source = new MissionPickupSource(group.Key.Item1, asset.Index, asset.Name.ToUpperInvariant(), index);
+                        var source = new MissionPickupSource(group.Key.Item1, asset.Index, memberIdentity ??= asset.Name.ToUpperInvariant(), index);
                         var record = new PickupPlacementRecord(source, type, position, rotation, group.Select(r => r.Difficulty).Distinct().Order().ToArray());
+                        result.sourceComparer.Register(source);
                         result.entries.Add(source, new(record, offsets, rotationOffsets)); result.positions.Add(source, position); result.savedPositions.Add(source, position);
                         result.rotations.Add(source, rotation); result.savedRotations.Add(source, rotation);
                     }
@@ -201,26 +204,14 @@ public sealed partial class PickupPlacementEditSession
     public PlacementRotationKind RotationKind(MissionPickupSource source) => entries[source].RotationOffsets.Length switch
     { 3 => PlacementRotationKind.EulerRadians, 1 => PlacementRotationKind.HeadingDegrees, _ => PlacementRotationKind.None };
     public PickupPlacementScope Scope(MissionPickupSource source)
-    {
-        if (otherCoordinates.TryGetValue(source, out var coordinate)) return CoordinateScope(coordinate);
-        var selected = entries[source].Record;
-        var same = Records.Where(r => r.Type == selected.Type && r.OriginalPosition == selected.OriginalPosition && r.Rotation == selected.Rotation).ToArray();
-        var groups = same.GroupBy(r => (r.Source.ArchivePath, r.Source.AssetIndex)).ToArray();
-        bool uniqueSource = groups.Single(g => g.Key == (source.ArchivePath, source.AssetIndex)).Count() == 1;
-        var matches = uniqueSource ? groups.Where(g => g.Count() == 1).Select(g => g.Single()).ToArray() : [selected];
-        var affected = matches.SelectMany(r => r.Difficulties).Distinct().Order().ToArray();
-        var skipped = Enum.GetValues<MissionDifficulty>().Except(affected).ToArray();
-        string description = "Applies to: " + string.Join(", ", affected);
-        if (skipped.Length > 0) description += ". Unmatched or ambiguous (unchanged): " + string.Join(", ", skipped);
-        return new(matches.Select(r => r.Source).ToArray(), description);
-    }
+        => IndexedScope(source);
     public bool MoveTo(MissionPickupSource source, Vector3 position) => TransformTo(source, Transform(source) with { Position = position });
     public bool TransformTo(MissionPickupSource source, PlacementTransform transform)
     {
         if (ReadOnlyReason is { } reason) throw new InvalidOperationException(reason);
         if (saving) throw new InvalidOperationException("Wait for the current save to finish.");
         var after = PreviewTransform(source, transform);
-        var before = after.Keys.ToDictionary(s => s, Transform);
+        var before = after.Keys.ToDictionary(s => s, Transform, sourceComparer);
         if (after.All(p => p.Value == before[p.Key])) return false;
         string[] affected = after.Keys.Select(s => s.ArchivePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         BeforeEdit?.Invoke(affected.Select(a => archives[a].Original.Path).ToArray());
@@ -245,8 +236,8 @@ public sealed partial class PickupPlacementEditSession
         Vector3 rotationDelta = transform.Rotation - rotations[source]; RequireFinite(rotationDelta);
         // A counterpart where the source is takes the requested values exactly: arithmetic on the delta would round them
         // apart, and the records would no longer match as counterparts.
-        var after = Scope(source).Sources.ToDictionary(s => s, s => s == source || positions[s] == positions[source] && rotations[s] == rotations[source] ? transform
-            : new PlacementTransform(positions[s] + delta, rotations[s] + rotationDelta));
+        var after = Scope(source).Sources.ToDictionary(s => s, s => sourceComparer.Equals(s, source) || positions[s] == positions[source] && rotations[s] == rotations[source] ? transform
+            : new PlacementTransform(positions[s] + delta, rotations[s] + rotationDelta), sourceComparer);
         foreach (var value in after.Values) { RequireFinite(value.Position); RequireFinite(value.Rotation); }
         return after;
     }
@@ -284,7 +275,7 @@ public sealed partial class PickupPlacementEditSession
     public byte[] EncodeArchive(string archivePath)
     {
         var archive = archives[archivePath]; byte[] output = archive.Original.Bytes.ToArray();
-        foreach (var entry in entries.Values.Where(e => e.Record.Source.ArchivePath.Equals(archivePath, StringComparison.OrdinalIgnoreCase)))
+        foreach (var entry in EntriesForArchive(archivePath))
         {
             foreach (var (offset, value, original) in Scalars(entry))
             {
@@ -311,7 +302,7 @@ public sealed partial class PickupPlacementEditSession
     public MissionPickupSource? MatchIn(MissionPickupSource source, MissionSceneContext mission)
     {
         if (!entries.ContainsKey(source)) return null;
-        var identities = Scope(source).Sources.ToHashSet();
+        var identities = Scope(source).Sources.ToHashSet(sourceComparer);
         var found = mission.Actors.Where(a => a.Pickup is { } p && identities.Contains(p.Source)).ToArray();
         return found.Length == 1 ? found[0].Pickup!.Source : null;
     }
@@ -355,7 +346,13 @@ public sealed partial class PickupPlacementEditSession
     public void RebaseUntouched(PickupPlacementEditSession fresh)
     {
         if (saving) throw new InvalidOperationException("Wait for the current save to finish.");
-        bool Untouched(MissionPickupSource s) => !touched.Contains(s.ArchivePath);
+        InvalidateMembership();
+        Dictionary<string, bool> untouched = new(ReferenceEqualityComparer.Instance);
+        bool Untouched(MissionPickupSource s)
+        {
+            if (!untouched.TryGetValue(s.ArchivePath, out bool value)) untouched.Add(s.ArchivePath, value = !touched.Contains(s.ArchivePath));
+            return value;
+        }
         foreach (var key in entries.Keys.Where(Untouched).ToArray())
         { entries.Remove(key); positions.Remove(key); savedPositions.Remove(key); rotations.Remove(key); savedRotations.Remove(key); otherCoordinates.Remove(key); }
         foreach (string key in archives.Keys.Where(k => !touched.Contains(k)).ToArray()) archives.Remove(key);
@@ -363,10 +360,12 @@ public sealed partial class PickupPlacementEditSession
         foreach (var (key, entry) in fresh.entries)
         {
             if (!Untouched(key)) continue;
+            sourceComparer.Register(key);
             entries[key] = entry; positions[key] = fresh.positions[key]; savedPositions[key] = fresh.savedPositions[key];
             rotations[key] = fresh.rotations[key]; savedRotations[key] = fresh.savedRotations[key];
             if (fresh.otherCoordinates.TryGetValue(key, out var coordinate)) otherCoordinates[key] = coordinate;
         }
+        sourceComparer.Reset(entries.Keys);
         overlappingMembers.Clear();
     }
 }
