@@ -17,7 +17,97 @@ public partial class MainWindow
 {
     /// <summary>The built world read once per document, for current transforms and flags.</summary>
     private sealed record SourceWorldModelEntry(GameZWorld World, IReadOnlyDictionary<int, WorldNode> Slots,
-        IReadOnlyDictionary<WorldNode, WorldNodeProvenance> Provenance);
+        IReadOnlyDictionary<WorldNode, WorldNodeProvenance> Provenance, SourceObjectIndex Sources);
+
+    // Full identities belong to one prepared world. UI scans compare group/copy ids;
+    // path hashing and lineage discovery happen off-thread, without joined/lowercased strings.
+    private readonly record struct SourceIdentity(byte Kind, string? Path, int Record)
+    {
+        public static SourceIdentity Of(int node, WorldNodeProvenance origin) => origin.ModelFile is { } file
+            ? new(1, file, origin.ModelNode) : origin.Created is { } created
+                ? new(2, created.Script, created.Line) : new(0, null, node);
+    }
+    private sealed class SourceIdentityComparer : IEqualityComparer<SourceIdentity>
+    {
+        public bool Equals(SourceIdentity x, SourceIdentity y) => x.Kind == y.Kind && x.Record == y.Record && StringComparer.OrdinalIgnoreCase.Equals(x.Path, y.Path);
+        public int GetHashCode(SourceIdentity value) => HashCode.Combine(value.Kind, value.Record, value.Path == null ? 0 : StringComparer.OrdinalIgnoreCase.GetHashCode(value.Path));
+    }
+    private readonly record struct CopyLink(int Parent, string? Model, int Node, string? Script, int? Line)
+    {
+        public static CopyLink Of(int parent, WorldNodeProvenance origin) => new(parent, origin.ModelFile, origin.ModelNode, origin.Load?.Script, origin.Load?.Line);
+    }
+    private sealed class CopyLinkComparer : IEqualityComparer<CopyLink>
+    {
+        public bool Equals(CopyLink x, CopyLink y) => x.Parent == y.Parent && x.Node == y.Node && x.Line == y.Line
+            && StringComparer.OrdinalIgnoreCase.Equals(x.Model, y.Model) && StringComparer.OrdinalIgnoreCase.Equals(x.Script, y.Script);
+        public int GetHashCode(CopyLink value) => HashCode.Combine(value.Parent, value.Node, value.Line,
+            value.Model == null ? 0 : StringComparer.OrdinalIgnoreCase.GetHashCode(value.Model),
+            value.Script == null ? 0 : StringComparer.OrdinalIgnoreCase.GetHashCode(value.Script));
+    }
+    private sealed class SourceObjectIndex
+    {
+        internal sealed class Group { public List<int> Slots { get; } = []; }
+        public Dictionary<WorldNode, Group> Groups { get; } = new(ReferenceEqualityComparer.Instance);
+        public Dictionary<WorldNode, int> Copies { get; } = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<SourceIdentity, Group> groups = new(new SourceIdentityComparer());
+        private readonly Dictionary<CopyLink, int> links = new(new CopyLinkComparer());
+
+        public SourceObjectIndex(IReadOnlyDictionary<int, WorldNode> slots, IReadOnlyDictionary<WorldNode, WorldNodeProvenance> provenance, CancellationToken token)
+        {
+            Dictionary<WorldNodeProvenance, (int Id, int Depth)> known = new(ReferenceEqualityComparer.Instance);
+            HashSet<WorldNodeProvenance> visiting = new(ReferenceEqualityComparer.Instance);
+            foreach (var (slot, node) in slots)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!provenance.TryGetValue(node, out var origin)) continue;
+                var key = SourceIdentity.Of(slot, origin);
+                if (!groups.TryGetValue(key, out var group)) groups.Add(key, group = new());
+                group.Slots.Add(slot); Groups.Add(node, group);
+                Copies.Add(node, Lineage(origin.ReferencedBy, 0).Id);
+            }
+            foreach (var group in groups.Values) { token.ThrowIfCancellationRequested(); group.Slots.Sort(); }
+
+            (int Id, int Depth) Lineage(WorldNodeProvenance? origin, int depth)
+            {
+                token.ThrowIfCancellationRequested();
+                if (origin == null) return (0, 0);
+                if (depth >= Recoil.Zbd.Core.Gltf.GltfDocument.MaximumDepth) throw BadLineage();
+                if (known.TryGetValue(origin, out var cached))
+                {
+                    if (depth + cached.Depth > Recoil.Zbd.Core.Gltf.GltfDocument.MaximumDepth) throw BadLineage();
+                    return cached;
+                }
+                if (!visiting.Add(origin)) throw BadLineage();
+                try
+                {
+                    var parent = Lineage(origin.ReferencedBy, depth + 1);
+                    var key = CopyLink.Of(parent.Id, origin);
+                    if (!links.TryGetValue(key, out int id)) links.Add(key, id = links.Count + 1);
+                    return known[origin] = (id, parent.Depth + 1);
+                }
+                finally { visiting.Remove(origin); }
+            }
+        }
+        public List<int> Matching(SourceIdentity identity) => groups.TryGetValue(identity, out var group) ? group.Slots : [];
+
+        // Resolve an origin from the preceding world against this world's links once;
+        // snapshot-local ids must never be compared across rebuilds.
+        public int? CopyOf(WorldNodeProvenance origin)
+        {
+            List<WorldNodeProvenance> chain = [];
+            HashSet<WorldNodeProvenance> seen = new(ReferenceEqualityComparer.Instance);
+            for (var by = origin.ReferencedBy; by != null; by = by.ReferencedBy)
+            {
+                if (!seen.Add(by) || seen.Count > Recoil.Zbd.Core.Gltf.GltfDocument.MaximumDepth) throw BadLineage();
+                chain.Add(by);
+            }
+            int id = 0;
+            for (int i = chain.Count - 1; i >= 0; i--)
+                if (!links.TryGetValue(CopyLink.Of(id, chain[i]), out id)) return null;
+            return id;
+        }
+        private static InvalidDataException BadLineage() => new($"The source reference lineage is cyclic or exceeds {Recoil.Zbd.Core.Gltf.GltfDocument.MaximumDepth} levels; rebuild the world before selecting a copy.");
+    }
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<DocumentModel, SourceWorldModelEntry> sourceWorldModels = new();
     // The callback is an instance-local deterministic preparation boundary, never a UI callback.
     internal Action<CancellationToken>? PreparingSourceWorldModel { get; set; }
@@ -34,7 +124,7 @@ public partial class MainWindow
             if (build.Provenance.TryGetValue(slot, out var origin)) provenance.Add(node, origin);
         }
         token.ThrowIfCancellationRequested();
-        return new(world, slots, provenance);
+        return new(world, slots, provenance, new(slots, provenance, token));
     }
     private SourceWorldModelEntry SourceWorldModel(DocumentModel doc)
     {
@@ -112,16 +202,18 @@ public partial class MainWindow
     /// </summary>
     private WorldNode SourceWorldNodeNamedNear(DocumentModel doc, string name, int? near)
     {
-        var matches = SourceWorldModel(doc).World.Nodes.Where(n => n.Name == name).ToList();
+        var model = SourceWorldModel(doc);
+        var matches = model.World.Nodes.Where(n => n.Name == name).ToList();
         if (matches.Count > 1)
         {
             var provenance = SourceWorldProvenance(doc);
-            var sources = matches.Select(n => provenance.TryGetValue(n, out var p) && p.Part && p.ModelFile != null ? $"{p.ModelFile.ToLowerInvariant()}#{p.ModelNode}" : null).Distinct().Take(2).ToList();
-            if (sources is [{ }])
+            var first = model.Sources.Groups.GetValueOrDefault(matches[0]);
+            if (first != null && matches.All(n => provenance.TryGetValue(n, out var p) && p.Part && p.ModelFile != null
+                && ReferenceEquals(model.Sources.Groups.GetValueOrDefault(n), first)))
             {
-                string? copy = near is int index && SourceWorldModel(doc).Slots.GetValueOrDefault(index) is { } moved && provenance.TryGetValue(SourceObjectEdits.ObjectOf(moved, provenance), out var origin)
-                    ? SourceObjectEdits.CopyKey(origin) : null;
-                return matches.FirstOrDefault(n => copy != null && SourceObjectEdits.CopyKey(provenance[n]) == copy) ?? matches[0];
+                int? copy = near is int index && model.Slots.GetValueOrDefault(index) is { } moved
+                    && model.Sources.Copies.TryGetValue(SourceObjectEdits.ObjectOf(moved, provenance), out int found) ? found : null;
+                return matches.FirstOrDefault(n => copy != null && model.Sources.Copies.GetValueOrDefault(n, -1) == copy) ?? matches[0];
             }
         }
         return matches.Count switch
@@ -175,24 +267,26 @@ public partial class MainWindow
     }
     /// <summary>
     /// The scene node indices of the nodes named <paramref name="name"/> in a rebuilt world, for following a copy: one per copy
-    /// of a part the mission database references several times, the one in the copy <paramref name="copyKey"/> names (the
+    /// of a part the mission database references several times, the one in the copy <paramref name="copyOrigin"/> names (the
     /// original's, <see cref="SourceObjectEdits.CopyKey"/>) first, then the newest.
     /// </summary>
-    private List<int> SourceCopiesNamed(DocumentModel doc, string name, string? copyKey)
+    private List<int> SourceCopiesNamed(DocumentModel doc, string name, WorldNodeProvenance? copyOrigin)
     {
-        if (doc.SourceBuild is not { } build) return [];
-        List<int> copies = [.. SourceWorldModel(doc).Slots.Where(p => p.Value.Name == name).Select(p => p.Key).OrderDescending()];
-        int same = copies.FindIndex(c => copyKey != null && build.Provenance.TryGetValue(c, out var p) && SourceObjectEdits.CopyKey(p) == copyKey);
+        if (doc.SourceBuild == null) return [];
+        var model = SourceWorldModel(doc);
+        int? preferred = copyOrigin == null ? null : model.Sources.CopyOf(copyOrigin);
+        List<int> copies = [.. model.Slots.Where(p => p.Value.Name == name).Select(p => p.Key).OrderDescending()];
+        int same = copies.FindIndex(c => preferred != null && model.Sources.Copies.GetValueOrDefault(model.Slots[c], -1) == preferred);
         if (same > 0) { int first = copies[same]; copies.RemoveAt(same); copies.Insert(0, first); }
         return copies;
     }
     /// <summary>Which copy of its file the object scene node <paramref name="node"/> belongs to is in (<see cref="SourceObjectEdits.CopyKey"/>), or null when unknown.</summary>
-    private string? SourceCopyKey(DocumentModel doc, int node)
+    private WorldNodeProvenance? SourceCopyOrigin(DocumentModel doc, int node)
     {
         try
         {
             var provenance = SourceWorldProvenance(doc);
-            return SourceWorldModel(doc).Slots.GetValueOrDefault(node) is { } built && provenance.TryGetValue(SourceObjectEdits.ObjectOf(built, provenance), out var origin) ? SourceObjectEdits.CopyKey(origin) : null;
+            return SourceWorldModel(doc).Slots.GetValueOrDefault(node) is { } built && provenance.TryGetValue(SourceObjectEdits.ObjectOf(built, provenance), out var origin) ? origin : null;
         }
         catch (InvalidDataException) { return null; }
     }
@@ -228,12 +322,13 @@ public partial class MainWindow
     }
 
     /// <summary>Opens Properties for a source world's object; after an edit it follows the object into the rebuilt world.</summary>
-    private async Task<bool> ShowSourceObjectPropertiesAsync(DocumentModel doc, int node)
+    private async Task<bool> ShowSourceObjectPropertiesAsync(DocumentModel doc, int node, CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         var state = DescribeSourceObject(doc, node);
         // A terrain piece is compiled from its recipe; Properties edits the recipe.
         if (state.Origin.Terrain is { } recipe)
-            return await ShowTerrainPropertiesAsync(doc, recipe, state.Origin.TerrainSurface, $"Piece {state.Name}: surface {state.Origin.TerrainSurface}, cell {state.Origin.TerrainCell.Column}, {state.Origin.TerrainCell.Row}", null);
+            return await ShowTerrainPropertiesAsync(doc, recipe, state.Origin.TerrainSurface, $"Piece {state.Name}: surface {state.Origin.TerrainSurface}, cell {state.Origin.TerrainCell.Column}, {state.Origin.TerrainCell.Row}", null, token);
         var window = GetPropertiesWindow();
         SourceObjectPropertiesEditor fields = new(state,
             transform => FollowSourceObjectAsync(doc, node, state, () => MoveSourceObjectAsync(doc, node, transform, CancellationToken.None)),
@@ -243,10 +338,10 @@ public partial class MainWindow
                 async name =>
                 {
                     var shownWindow = propertiesWindow;
-                    string? copyKey = SourceCopyKey(doc, node);
+                    var copyOrigin = SourceCopyOrigin(doc, node);
                     var next = await DuplicateSourceObjectAsync(doc, node, name, null, CancellationToken.None);
                     // A part's copy is made in every copy of the part: follow the one beside the object edited.
-                    if (!next.IsDisposed && SourceCopiesNamed(next, name, copyKey) is [int copy, ..] && FollowsProperties(shownWindow, next))
+                    if (!next.IsDisposed && SourceCopiesNamed(next, name, copyOrigin) is [int copy, ..] && FollowsProperties(shownWindow, next))
                         try { await ShowSourceObjectPropertiesAsync(next, copy); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
                 },
                 async () =>
@@ -266,13 +361,13 @@ public partial class MainWindow
     private async Task FollowSourceObjectAsync(DocumentModel doc, int edited, SourceObjectState state, Func<Task<DocumentModel>> edit)
     {
         var window = propertiesWindow;
-        int occurrence = Math.Max(0, Copies(doc.SourceBuild).IndexOf(edited));
+        var identity = SourceIdentity.Of(state.Node, state.Origin);
+        int occurrence = Math.Max(0, SourceWorldModel(doc).Sources.Matching(identity).IndexOf(edited));
         var next = await edit();
-        var copies = Copies(next.SourceBuild);
-        if (copies.Count > 0 && !next.IsDisposed && FollowsProperties(window, next))
+        if (next.IsDisposed || !FollowsProperties(window, next)) return;
+        var copies = SourceWorldModel(next).Sources.Matching(identity);
+        if (copies.Count > 0)
             try { await ShowSourceObjectPropertiesAsync(next, copies[Math.Min(occurrence, copies.Count - 1)]); } catch (StudioCommandException ex) { ViewModel.Status = ex.Message; }
-        List<int> Copies(SourceWorldBuild? build) => build == null ? [] :
-            [.. build.Provenance.Where(p => new SourceObjectState(p.Key, "", "", null, 0, p.Value, "", []).Identity == state.Identity).Select(p => p.Key).Order()];
     }
 
     /// <summary>
@@ -345,10 +440,10 @@ public partial class MainWindow
                     }
                     // Only a position: a copy in the database keeps the original's exact basis (and any mirroring).
                     bool keepBasis = moves && a["rotationDegrees"] is null && a["scale"] is null;
-                    string? copyKey = SourceCopyKey(d, node);
+                    var copyOrigin = SourceCopyOrigin(d, node);
                     next = await DuplicateSourceObjectAsync(d, node, name, placed, token, keepBasis);
                     // A part's copy is made in every copy of the part: copy is the one beside the object edited, copies all.
-                    var copies = SourceCopiesNamed(next, name, copyKey);
+                    var copies = SourceCopiesNamed(next, name, copyOrigin);
                     return Result(new { document = DocumentState(next), copy = copies.Count > 0 ? copies[0] : (int?)null, copies = copies.Take(256).ToArray() });
                 }
                 if (action == "delete") return Result(new { document = DocumentState(await DeleteSourceObjectAsync(d, node, token)) });

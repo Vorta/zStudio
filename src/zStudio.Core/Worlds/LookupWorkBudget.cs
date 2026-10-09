@@ -1,10 +1,18 @@
 namespace Recoil.Zbd.Core.Worlds;
 
 /// <summary>One operation's aggregate node comparisons and graph visits, reserved before scanning or allocating.</summary>
-internal sealed class LookupWorkBudget(long maximum = LookupWorkBudget.MaximumUnits, CancellationToken token = default)
+internal sealed class LookupWorkBudget(long maximum = LookupWorkBudget.MaximumUnits, CancellationToken token = default,
+    long ceiling = LookupWorkBudget.MaximumUnits)
 {
     internal const long MaximumUnits = 64L * 1024 * 1024;
-    private readonly long limit = maximum is >= 0 and <= MaximumUnits ? maximum : throw new ArgumentOutOfRangeException(nameof(maximum));
+    private const long MaximumCeiling = 96L * 1024 * 1024;
+    private readonly long limit = ValidateLimit(maximum, ceiling);
+    private static long ValidateLimit(long maximum, long ceiling)
+    {
+        if (ceiling is < 0 or > MaximumCeiling) throw new ArgumentOutOfRangeException(nameof(ceiling));
+        if (maximum < 0 || maximum > ceiling) throw new ArgumentOutOfRangeException(nameof(maximum));
+        return maximum;
+    }
     private readonly Dictionary<WorldNode, string> names = new(ReferenceEqualityComparer.Instance);
     internal long UsedUnits { get; private set; }
     internal bool Exhausted { get; private set; }

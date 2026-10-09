@@ -66,6 +66,28 @@ public sealed class WorldDecompositionWorkTests
     }
 
     [Fact]
+    public void AnInferredAncestorLinkIsRefusedWithoutChangingNamesLinksOrSlots()
+    {
+        var authored = ReadWorld();
+        var load = authored.Nodes[1]; var parent = authored.Nodes[2]; var child = authored.Nodes[3];
+        parent.Name = "after";
+        load.Children.Add(parent); parent.Parents.Add(load);
+        parent.Children.Add(child); child.Parents.Add(parent);
+        // Start from an admitted acyclic binary graph; the archived removal cannot establish that an absent
+        // ancestor edge ever existed. Reversal must refuse it without leaving a partial rename or a cycle.
+        var world = GameZWorldReader.FromDocument(FormatRegistry.Default.OpenBytes("gamez.zbd", GameZWriter.Write(authored, Token), token: Token), Token);
+        byte[] before = GameZWriter.Write(world, Token);
+        var error = Assert.Throws<InvalidDataException>(() => WorldDecomposer.DecomposeAll(world,
+            [Step("LoadGameGen", "loaded.flt", "loaded"), Step("FindSubNode", "before"), Step("NodeSetDescription", "after"),
+             Step("FindNode", "part1"), Step("DeleteChild", "loaded")], [], Token));
+        Assert.Contains("own ancestor", error.Message);
+        WorldUpdate.CheckHierarchy(world.Nodes, Token);
+        Assert.Equal(before, GameZWriter.Write(world, Token));
+        Assert.Equal(["after"], Assert.Single(WorldDecomposer.DecomposeAll(world,
+            [Step("LoadGameGen", "loaded.flt", "loaded")], [], Token).Loads).Content.Select(n => n.Name));
+    }
+
+    [Fact]
     public void IndexedOperationsMatchListOrderAndFirstDuplicateRemoval()
     {
         WorldNode a = new("same", WorldNodeClass.Object3D), b = new("same", WorldNodeClass.Object3D), c = new("c", WorldNodeClass.Object3D);
@@ -123,6 +145,9 @@ public sealed class WorldDecompositionWorkTests
         Step("LoadGameGen", "loaded.flt", "loaded"),
         Step("DeleteChild", "part0"), Step("DeleteChild", "part1"),
         Step("DeleteChild", "part2"), Step("DeleteChild", "part3"),
+        // The forward interpreter's DeleteChild of itself is a no-op. It must not manufacture a self-edge
+        // while undoing the four genuine removals, or change their original order and reciprocal parents.
+        Step("FindNode", "loaded"), Step("DeleteChild", "loaded"),
     ];
     private static TracedInstruction Step(string command, params string[] args) => new("m1.gs", command, args, [], null, []);
 }

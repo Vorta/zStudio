@@ -622,7 +622,8 @@ public static partial class WorldGltf
                     if (depth > 0) throw new InvalidDataException($"{path}: the terrain recipe {JsonData.Shown(recipe, asText: true)} must be a root of the mission database, not of a referenced file.");
                     roots.AddRange(ImportTerrain(Text(recipe, "terrain", path), path, context));
                 }
-                else roots.Add(ImportNode(root, path, reading, parentZone, context, instances, depth, zones: zones));
+                else roots.Add(ImportNode(root, path, reading, parentZone, context, instances, depth, zones: zones,
+                    terrainGroups: depth == 0 && context.Grid != null));
             }
             return roots;
         }
@@ -635,12 +636,12 @@ public static partial class WorldGltf
     /// <paramref name="depth"/> counts levels across external references, which continue the hierarchy; <paramref name="place"/>
     /// is the node's place in a shared node of its file, if it is inside one.
     /// </summary>
-    private static WorldNode ImportNode(GltfNode source, string path, string reading, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth, InstancePlace? place = null, BoundZones? zones = null)
+    private static WorldNode ImportNode(GltfNode source, string path, string reading, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth, InstancePlace? place = null, BoundZones? zones = null, bool terrainGroups = false)
     {
         if (depth >= GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the node hierarchy, with its external references, is deeper than {GltfDocument.MaximumDepth} levels.");
         context.Token.ThrowIfCancellationRequested();
         var extras = source.Extras?[Key] as JsonObject;
-        if (extras?["terrain"] != null) throw new InvalidDataException($"{path}: node {JsonData.ShownText(source.Name)} names a terrain recipe but is not a root of the mission database.");
+        if (extras?["terrain"] != null) throw new InvalidDataException($"{path}: node {JsonData.ShownText(source.Name)} names a terrain recipe outside the mission database's roots or transparent groups.");
         // Later copies of a shared node are the same node under another parent.
         long? mark = extras?["instance"] is { } marker ? Integer(marker, "instance", path) : null;
         if (mark is < 1 or > int.MaxValue) throw new InvalidDataException($"{path}: node {JsonData.ShownText(source.Name)} has an invalid instance number.");
@@ -703,8 +704,16 @@ public static partial class WorldGltf
         }
         // Inside a shared node each child's place is its name and how many earlier siblings have it (see InstancePlace).
         Dictionary<string, int>? named = place == null ? null : new(StringComparer.Ordinal);
+        bool terrainChildren = terrainGroups && IsTransparentTerrainGroup(source, path);
         for (int i = 0; i < source.Children.Count; i++)
         {
+            // Database groups disappear when their members attach to the world. Expanding a recipe in place
+            // preserves that attachment order; ordinary objects and referenced files cannot host markers.
+            if (terrainChildren && source.Children[i].Extras?[Key] is JsonObject terrain && terrain["terrain"] is { } recipe)
+            {
+                foreach (var child in ImportTerrain(Text(recipe, "terrain", path), path, context)) Link(child);
+                continue;
+            }
             InstancePlace? at = null;
             if (named != null)
             {
@@ -712,7 +721,7 @@ public static partial class WorldGltf
                 int occurrence = named.GetValueOrDefault(childName); named[childName] = occurrence + 1;
                 at = new(place!.Number, place, i, childName, occurrence);
             }
-            Link(ImportNode(source.Children[i], path, reading, zone, context, instances, depth + 1, at, zones));
+            Link(ImportNode(source.Children[i], path, reading, zone, context, instances, depth + 1, at, zones, terrainChildren));
         }
         return node;
         void Link(WorldNode child)
@@ -1074,6 +1083,15 @@ public static partial class WorldGltf
     /// them join the world. A group has no geometry and no transform of its own.
     /// </summary>
     public static bool IsGroup(GltfNode node, string path) => (node.Extras?[Key] as JsonObject)?["group"] is { } group && Flag(group, "group", path);
+
+    /// <summary>A database group whose removal cannot change a terrain marker's geometry or shared identity.</summary>
+    internal static bool IsTransparentTerrainGroup(GltfNode node, string path)
+    {
+        var extras = node.Extras?[Key] as JsonObject;
+        return IsGroup(node, path) && node.Mesh == null && (node.Matrix == null || node.Matrix.Value.IsIdentity)
+            && extras?["model"] == null && extras?["appearance"] == null && extras?["instance"] == null
+            && extras?["ref"] == null && extras?[ZoneReference] == null && extras?["class"] == null;
+    }
     /// <summary>The flags a load root takes from its file (scene extras), or null for the loader's default.</summary>
     public static uint? RootFlags(GltfDocument doc) => (doc.SceneExtras?[Key] as JsonObject)?["rootFlags"] is { } flags ? Hex(flags, "rootFlags", "the scene") & CarriedFlags : null;
     /// <summary>

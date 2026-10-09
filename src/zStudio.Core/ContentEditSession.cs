@@ -14,6 +14,7 @@ public abstract class ContentEditSession
     private readonly Dictionary<string, ZbdDocument> sources = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (string Path, ReadOnlyMemory<byte> Bytes, FileStamp Stamp, bool NeedsCreate)> saved = new(StringComparer.OrdinalIgnoreCase);
     private bool saving;
+    private readonly long maximumRetainedBytes, maximumConstructionBytes;
     public string SourcePath { get; }
     public ContentSnapshot Current { get; private set; }
     public IEnumerable<ZbdDocument> Documents => sources.Select(p => Current.Documents.TryGetValue(p.Key, out var doc) ? doc : p.Value);
@@ -49,21 +50,50 @@ public abstract class ContentEditSession
     // Verification and destination checks remain outside this publication seam. The staged file stays held against writes
     // and renames from its check against the verified bytes until it is in place (VerifiedDocumentSave.Seal).
     internal Action<SealedFile, string, bool> PublishFile { get; set; } = static (staged, target, createNew) => staged.MoveTo(target, replace: !createNew);
-    protected ContentEditSession(ZbdDocument source, object state)
+    protected ContentEditSession(ZbdDocument source, object state,
+        long maximumRetainedBytes = EditRetentionBudget.MaximumRetainedBytes, long maximumConstructionBytes = EditRetentionBudget.MaximumConstructionBytes)
     {
+        EditRetentionBudget.Limit(maximumRetainedBytes, EditRetentionBudget.MaximumRetainedBytes);
+        EditRetentionBudget.Limit(maximumConstructionBytes, EditRetentionBudget.MaximumConstructionBytes);
+        this.maximumRetainedBytes = maximumRetainedBytes; this.maximumConstructionBytes = maximumConstructionBytes;
         if (source.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact document is required for editing.");
         SourcePath = source.Path; sources[source.Path] = source; saved[source.Path] = (source.Path, source.Bytes, source.Stamp, false);
         Current = new(new Dictionary<string, ZbdDocument>(StringComparer.OrdinalIgnoreCase) { [source.Path] = source }, state);
+        _ = Retention(Current, [], CancellationToken.None);
     }
     public void Accept(PreparedContentEdit edit)
     {
         if (saving || !ReferenceEquals(edit.Before, Current)) throw new InvalidOperationException("The document changed while preparing the edit.");
         if (!edit.IdentityOrderChanged && edit.After.Documents.Count == Current.Documents.Count && edit.After.Documents.All(p => Current.Documents.TryGetValue(p.Key, out var previous) && p.Value.Bytes.Span.SequenceEqual(previous.Bytes.Span))) return;
         if (edit.After.Documents.Keys.Any(p => !sources.ContainsKey(p) && !edit.Baselines.ContainsKey(p))) throw new InvalidOperationException("Missing prepared baseline.");
+        var budget = Retention(edit.After, edit.Baselines.Values, CancellationToken.None);
+        EditRetentionBudget.Content(budget, Current, CancellationToken.None);
+        int keep = EditRetentionBudget.KeepNewest(undo, budget, (b, snapshot) => EditRetentionBudget.Content(b, snapshot, CancellationToken.None));
         BeforeEdit?.Invoke(edit.After.Documents.Keys.Concat(saved.Values.Select(s => s.Path)));
         foreach (var p in edit.Baselines)
             if (!sources.ContainsKey(p.Key)) { sources.Add(p.Key, p.Value); saved.Add(p.Key, (p.Key, p.Value.Bytes, p.Value.Stamp, false)); }
-        undo.Add(Current); Trim(undo); redo.Clear(); Current = edit.After; HasAcceptedEdits = true; Changed?.Invoke();
+        if (undo.Count > keep) undo.RemoveRange(0, undo.Count - keep);
+        undo.Add(Current); TrimRaw(undo); redo.Clear(); Current = edit.After; HasAcceptedEdits = true; Changed?.Invoke();
+    }
+    private RetainedDocumentBudget Retention(ContentSnapshot next, IEnumerable<ZbdDocument> baselines, CancellationToken token)
+    {
+        RetainedDocumentBudget budget = new(maximumRetainedBytes);
+        try
+        {
+            foreach (var source in sources.Values) EditRetentionBudget.Document(budget, source, token);
+            foreach (var baseline in saved.Values) budget.Bytes(baseline.Bytes, token);
+            foreach (var source in baselines) EditRetentionBudget.Document(budget, source, token);
+            EditRetentionBudget.Content(budget, next, token);
+            return budget;
+        }
+        catch (InvalidDataException) { throw EditRetentionBudget.Refusal(); }
+    }
+    protected void CheckConstruction(ContentSnapshot before, CancellationToken token, long added = 0)
+        => EditRetentionBudget.Construction(b => EditRetentionBudget.Content(b, before, token), maximumConstructionBytes, added);
+    protected PreparedContentEdit Admit(PreparedContentEdit edit, CancellationToken token)
+    {
+        _ = Retention(edit.After, edit.Baselines.Values, token);
+        return edit;
     }
     public void UndoRedo(bool forward)
     {
@@ -71,9 +101,9 @@ public abstract class ContentEditSession
         var from = forward ? redo : undo; var to = forward ? undo : redo;
         if (from.Count == 0) return;
         BeforeEdit?.Invoke(sources.Keys.Concat(saved.Values.Select(s => s.Path)));
-        to.Add(Current); Trim(to); Current = from[^1]; from.RemoveAt(from.Count - 1); Changed?.Invoke();
+        to.Add(Current); TrimRaw(to); Current = from[^1]; from.RemoveAt(from.Count - 1); Changed?.Invoke();
     }
-    private static void Trim(List<ContentSnapshot> history)
+    private static void TrimRaw(List<ContentSnapshot> history)
     {
         long size = history.Sum(s => s.Documents.Values.Sum(d => (long)d.Bytes.Length));
         while (history.Count > 1 && (history.Count > 128 || size > 256L * 1024 * 1024))

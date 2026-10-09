@@ -88,7 +88,7 @@ public sealed class ModelReplacementTests
         return (Box(116), Box(140), Box(164), header[100..116]);
     }
     [Fact]
-    public void ReplacementBoundsFollowRetailNodeRules()
+    public async Task ReplacementBoundsFollowRetailNodeRules()
     {
         var token = TestContext.Current.CancellationToken;
         var source = FormatRegistry.Default.OpenBytes("gamez.zbd",ModelFixture.GameZ(),token:token);
@@ -114,6 +114,45 @@ public sealed class ModelReplacementTests
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(flags),0x300);
         var noChildBounds = FormatRegistry.Default.OpenBytes("gamez.zbd",bytes,token:token);
         Assert.Throws<InvalidDataException>(()=>ModelReplacementWriter.Replace(noChildBounds,new Dictionary<int,ImportedMesh> { [1]=large },"new",token));
+
+        // A finite stored matrix and a supported mesh can still overflow when their
+        // bounds are combined. Exercise the actual prepared edit: refusal must not
+        // publish either the world or the texture already prepared before it.
+        byte[] transformed = ModelFixture.GameZ();
+        int childData = checked((int)source.GameZLayout!.NodeDataOffsets[1]);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(transformed.AsSpan(childData), 0);
+        for (int component = 0; component < 9; component += 4)
+            System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(transformed.AsSpan(childData + 48 + component * 4), 1e35f);
+        foreach (int box in new[] { 116, 164 })
+            for (int component = 0; component < 6; component++)
+                System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(transformed.AsSpan(source.GameZLayout.NodeOffset + box + component * 4), component < 3 ? -3e35f : 3e35f);
+        string folder = Path.Combine(Path.GetTempPath(), "zstudio-model-bounds-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string worldPath = Path.Combine(folder, "gamez.zbd"), texturePath = Path.Combine(folder, "texture2.zbd");
+            await File.WriteAllBytesAsync(worldPath, transformed, token);
+            await File.WriteAllBytesAsync(texturePath, ModelFixture.Texture(), token);
+            using AssetResolver resolver = new(folder);
+            var original = await resolver.OpenCachedAsync(worldPath, token);
+            var edits = new ModelEditSession(original); var before = edits.Current;
+            var overflowing = ModelFixture.Mesh with { Positions = [new(-100000, 0, 0), new(100000, 0, 0), new(0, 100000, 0)] };
+            var batch = new ModelImportBatch(Convert.ToHexString(SHA256.HashData(original.Bytes.Span)), "new", Image, new Dictionary<int, ImportedMesh> { [1] = overflowing });
+            var refusal = await Assert.ThrowsAsync<InvalidDataException>(() => edits.PrepareAsync(batch, resolver, token));
+            Assert.Contains("nonfinite node bounds", refusal.Message);
+            Assert.Same(before, edits.Current); Assert.False(edits.IsDirty); Assert.False(edits.CanUndo);
+            Assert.Equal(transformed, await File.ReadAllBytesAsync(worldPath, token));
+            Assert.Equal(ModelFixture.Texture(), await File.ReadAllBytesAsync(texturePath, token));
+
+            // Large finite transforms remain supported; only their nonfinite result
+            // is refused. A fresh preparation still grows the parent correctly.
+            var finite = ModelFixture.Mesh with { Positions = ModelFixture.Mesh.Positions.Select(p => p * 10).ToArray() };
+            var prepared = await edits.PrepareAsync(batch with { Models = new Dictionary<int, ImportedMesh> { [1] = finite } }, resolver, token);
+            Assert.All(NodeBounds(prepared.World, 0).Node, value => Assert.True(float.IsFinite(value)));
+            Assert.Equal(20 * 1e35f, NodeBounds(prepared.World, 0).Node[4]);
+            edits.Accept(prepared); Assert.Same(prepared, edits.Current); Assert.True(edits.IsDirty);
+        }
+        finally { Directory.Delete(folder, true); }
     }
     [Fact]
     public async Task ProtectedSourceSaveAsRetargetsAndUndoRestoresTheCopy()
@@ -217,6 +256,27 @@ public sealed class ModelReplacementTests
             string worldPath = Path.Combine(root,"gamez.zbd"), texturePath = Path.Combine(root,"texture2.zbd"); await File.WriteAllBytesAsync(worldPath,ModelFixture.GameZ(), cancellationToken: TestContext.Current.CancellationToken); await File.WriteAllBytesAsync(texturePath,ModelFixture.Texture(), cancellationToken: TestContext.Current.CancellationToken);
             using AssetResolver resolver = new(root); var doc = await resolver.OpenCachedAsync(worldPath,TestContext.Current.CancellationToken); var edits = new ModelEditSession(doc);
             var batch = new ModelImportBatch(Convert.ToHexString(SHA256.HashData(doc.Bytes.Span)),"shell_new",Image,new Dictionary<int,ImportedMesh> { [1] = ModelFixture.Mesh });
+            // A tiny replacement still retains the whole old texture pack. Use padding
+            // and a small allowance, not hundreds of large imports, to cover live prepared
+            // overlap, aggregate history refusal, and the separate save-baseline copy.
+            byte[] padded = new byte[512 * 1024]; ModelFixture.Texture().CopyTo(padded, 0);
+            await File.WriteAllBytesAsync(texturePath, padded, TestContext.Current.CancellationToken);
+            var bounded = new ModelEditSession(doc, 2L * 1024 * 1024, 4L * 1024 * 1024);
+            var first = await bounded.PrepareAsync(batch, resolver, TestContext.Current.CancellationToken);
+            await Assert.ThrowsAsync<InvalidDataException>(() => bounded.PrepareAsync(batch with { TextureName = "pending" }, resolver, TestContext.Current.CancellationToken));
+            Assert.Same(doc, bounded.Current.World); Assert.False(bounded.IsDirty); Assert.False(bounded.CanUndo);
+            bounded.Accept(first);
+            var accepted = bounded.Current;
+            var next = batch with { SourceSha256 = Convert.ToHexString(SHA256.HashData(accepted.World.Bytes.Span)), TextureName = "next" };
+            await Assert.ThrowsAsync<InvalidDataException>(() => bounded.PrepareAsync(next, resolver, TestContext.Current.CancellationToken));
+            Assert.Same(accepted, bounded.Current); Assert.True(bounded.CanUndo);
+            bounded.Undo(); Assert.Same(doc, bounded.Current.World); bounded.Redo(); Assert.Same(accepted, bounded.Current);
+            await Assert.ThrowsAsync<InvalidDataException>(() => bounded.SaveAsync(token: TestContext.Current.CancellationToken));
+            Assert.Equal(texturePath, bounded.TargetPath(texturePath)); Assert.True(bounded.IsDirty);
+            Assert.Equal(padded, await File.ReadAllBytesAsync(texturePath, TestContext.Current.CancellationToken));
+            Assert.Equal(ModelFixture.GameZ(), await File.ReadAllBytesAsync(worldPath, TestContext.Current.CancellationToken));
+            await File.WriteAllBytesAsync(texturePath, ModelFixture.Texture(), TestContext.Current.CancellationToken);
+            await resolver.InvalidateAsync([texturePath], TestContext.Current.CancellationToken);
             var prepared = await edits.PrepareAsync(batch,resolver, token: TestContext.Current.CancellationToken); Assert.False(edits.IsDirty); edits.Accept(prepared); Assert.True(edits.IsDirty);
             edits.Undo(); Assert.False(edits.IsDirty); edits.Redo(); Assert.True(edits.IsDirty);
             var saved = await edits.SaveAsync(token: TestContext.Current.CancellationToken); Assert.Empty(saved.Errors); Assert.Equal(2,saved.SavedPaths.Count); Assert.EndsWith("gamez.zbd",saved.SavedPaths[^1]); Assert.False(edits.IsDirty);

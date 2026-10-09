@@ -55,6 +55,24 @@ internal static class MotionBindingMcpChecks
                 var editor = Assert.IsType<MotionEditor>(typeof(MainWindow).GetField("motion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main));
                 string preview = ((Guid)typeof(MainWindow).GetField("previewId", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!).ToString();
                 await Job("motion_preview", new() { ["preview"] = preview, ["action"] = "assembly", ["memberIndex"] = Index(added) });
+                // A renderer admission refusal is a failed preview operation,
+                // not an unobserved timer task or a successfully displayed seek.
+                var acceptedLibrary = edits.Current; var acceptedMotion = motion.ResourceEdits!.Current;
+                editor.Viewport.MaximumRenderUnits = 0;
+                var refused = await Call("motion_preview", new() { ["preview"] = preview, ["action"] = "seek", ["seconds"] = .25 });
+                string refusedId = refused["id"]!.GetValue<string>();
+                while (refused["State"]!.GetValue<string>() is "queued" or "running")
+                { await Task.Delay(10, token); refused = await Call("operation", new() { ["id"] = refusedId }); }
+                Assert.Equal("failed", refused["State"]!.GetValue<string>());
+                Assert.Equal("context_changed", refused["result"]!["code"]!.GetValue<string>());
+                Assert.False(editor.IsPlaying); Assert.Null(editor.AssemblyMember); Assert.Equal(0, editor.Viewport.AnimationMeshCount);
+                var unavailable = await Job("motion_preview", new() { ["preview"] = preview, ["action"] = "state" });
+                Assert.Equal(0, unavailable["seconds"]!.GetValue<double>()); Assert.NotNull(unavailable["previewFailure"]);
+                Assert.Same(acceptedLibrary, edits.Current); Assert.Same(acceptedMotion, motion.ResourceEdits.Current);
+                editor.Seek(.5); Assert.False(await editor.PresentationWork);
+                Assert.Equal(0, State()["seconds"]!.GetValue<double>());
+                await Job("motion_preview", new() { ["preview"] = preview, ["action"] = "assembly", ["memberIndex"] = Index(added) });
+                Assert.Null(State()["previewFailure"]); Assert.True(editor.Viewport.AnimationMeshCount > 0);
                 // The resolver can return a frozen library after a newer resource revision was accepted.
                 var pendingEdit = await edits.PrepareArchiveAsync("rename", added, "during_load.flt", token: token);
                 var gate = (SemaphoreSlim)typeof(AssetResolver).GetField("gate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main.ViewModel.Resolver)!;

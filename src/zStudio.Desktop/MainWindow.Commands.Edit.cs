@@ -146,7 +146,7 @@ public partial class MainWindow
             if ((target == "properties" ? propertiesWindow?.Document : shownDocument) != d) throw new StudioCommandException("context_changed", "Draft owner changed.");
             var owner = DraftOwner(target) ?? throw new StudioCommandException("not_ready", "No field editor is open."); await owner.ResolveAutomationDraftsAsync(Text(a, "token"), Text(a, "action") == "apply");
             if (owner is AnimationEditor editor) await editor.AwaitOptionWorkAsync();
-            token.ThrowIfCancellationRequested();
+            ThrowIfSourceRequestCanceled(token);
             // Applying a source world's draft rebuilds the world: the result is the document that shows it now.
             var live = LiveDocument(d);
             if (live.IsDisposed || !ViewModel.Documents.Contains(live))

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Export;
 using Recoil.Zbd.Core.Formats;
 using Xunit;
 
@@ -60,22 +61,40 @@ public sealed class MotionArchiveBoundsTests
     [Fact]
     public void AliasedMotionMembersShareOneDecodedPayloadAndKeepDistinctRecords()
     {
+        var token = TestContext.Current.CancellationToken;
+        byte[] payload = Clip(33, 1);
+        // Warm the shared reader before measuring only the alias expansion, not first-use initialization.
+        _ = FormatRegistry.Default.OpenBytes("warm.zbd", ResourceEditingTests.Archive(("motion", payload)), token: token);
         using MemoryStream stream = new(); using BinaryWriter writer = new(stream);
-        writer.Write(4); writer.Write(1f); writer.Write(1000); writer.Write(1); writer.Write(-1f); writer.Write(1f);
-        writer.Write(4); writer.Write("body"u8); writer.Write(12);
-        for (int i = 0; i < 1001 * 3; i++) writer.Write(0f);
-        for (int i = 0; i < 1001; i++) { writer.Write(1f); writer.Write(0f); writer.Write(0f); writer.Write(0f); }
+        writer.Write(payload);
         int size = (int)stream.Length;
-        for (int i = 0; i < 64; i++)
+        const int aliases = 1024;
+        for (int i = 0; i < aliases; i++)
         {
             writer.Write(0); writer.Write(size);
             byte[] metadata = new byte[140]; Encoding.Latin1.GetBytes("motion_" + i).CopyTo(metadata, 0); writer.Write(metadata);
         }
-        writer.Write(1); writer.Write(64);
-        var doc = FormatRegistry.Default.OpenBytes("aliases.zbd", stream.ToArray(), token: TestContext.Current.CancellationToken);
-        Assert.Empty(doc.Diagnostics); Assert.Equal(64, doc.Assets.Count);
+        writer.Write(1); writer.Write(aliases);
+        byte[] source = stream.ToArray(); long before = GC.GetAllocatedBytesForCurrentThread();
+        var doc = FormatRegistry.Default.OpenBytes("aliases.zbd", source, token: token);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // One small shared payload must not materialize a 32-part JSON tree for every directory alias.
+        Assert.True(allocated < 16_000_000, $"Opening motion aliases allocated {allocated:N0} bytes.");
+        Assert.Empty(doc.Diagnostics); Assert.Equal(aliases, doc.Assets.Count);
         var clip = Assert.IsType<MotionClip>(doc.Assets[0].Content);
         Assert.All(doc.Assets, a => { Assert.Equal(AssetKind.Motion, a.Kind); Assert.Same(clip, a.Content); });
-        Assert.Equal(64, doc.Assets.Select(a => a.Id).Distinct().Count());
+        Assert.Equal(aliases, doc.Assets.Select(a => a.Id).Distinct().Count());
+        Assert.Equal(32, doc.Assets[0].Metadata["motion"]!["parts"]!.AsArray().Count);
+        Assert.InRange(doc.Assets.Sum(a => a.Metadata["motion"]!["parts"]!.AsArray().Count), 32, 4096);
+        var last = doc.Assets[^1];
+        Assert.Empty(last.Metadata["motion"]!["parts"]!.AsArray());
+        Assert.True(last.Metadata["motion"]!["parts_truncated"]!.GetValue<bool>());
+        Assert.Equal(33, last.Metadata["motion"]!["part_count"]!.GetValue<int>());
+        // An omitted ordinary preview still has full authored content and complete explicit JSON/raw export.
+        var complete = ExportService.AssetJson(doc, last, token)["properties"]!["motion"]!;
+        Assert.Equal(33, complete["parts"]!.AsArray().Count);
+        Assert.False(complete["parts_truncated"]!.GetValue<bool>());
+        Assert.Equal(payload, doc.Slice(last.Offset, last.Length).ToArray());
+        Assert.Equal(payload, clip.Write(token));
     }
 }

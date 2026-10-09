@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Sources;
 using Xunit;
 
@@ -5,6 +7,64 @@ namespace Recoil.Zbd.Tests;
 
 public sealed partial class SourcePublisherTests
 {
+    // Must-have: a persisted replacement length must be admitted before recovery reads bodies or moves sources,
+    // without disabling the alternate recovery actions that preserve an interrupted save's originals.
+    [Theory]
+    [InlineData("prepared", -1, SourceRecoveryAction.Abandon)]
+    [InlineData("install", 1, SourceRecoveryAction.RollBack)]
+    public void OversizedCompletionRefusesBeforeBodyReadsAndKeepsAlternateRecovery(string step, int index, SourceRecoveryAction next)
+    {
+        using Project project = new();
+        var original = project.Sources();
+        SourceFileWrite[] writes =
+        [
+            new(Ai, project.Read(Ai), Text("GRAVITY ( -4.9 )\n")),
+            .. ScriptChange(project),
+            new(Old, project.Read(Old), null),
+        ];
+        Assert.Throws<SourcePublisher.Crash>(() => Failing(project, step, index, () => new SourcePublisher.Crash())
+            .Publish(writes, "replacement admission", Token));
+        SourcePublisher publisher = new(project.Root);
+        string id = Assert.Single(publisher.FindInterrupted(Token)).SaveId;
+        string folder = project.Full($"zstudio/recovery/{id}"), manifestPath = Path.Combine(folder, "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllBytes(manifestPath))!;
+        manifest["files"]![1]!["content"]!["length"] = FormatRegistry.MaximumDocumentBytes + 1;
+        // An oversized expected/external original is still inspectable; it was never reached by this save.
+        manifest["files"]![2]!["expected"]!["length"] = FormatRegistry.MaximumDocumentBytes + 1;
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        var interrupted = project.Sources(); var history = JournalContents(folder);
+        var shown = Assert.Single(publisher.FindInterrupted(Token));
+        Assert.Equal(SourceRecoveryFileState.Other, shown.Files[2].State);
+        Assert.Equal([Ai, Script, Old], publisher.SaveFiles(id));
+        using (new FileStream(Path.Combine(folder, "after", "0.bin"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            // Even the first, small replacement must not be opened before the later oversized row is refused.
+            var refused = publisher.Resolve(id, SourceRecoveryAction.Complete, Token);
+            Assert.False(refused.Resolved); Assert.Empty(refused.Changed);
+            var conflict = Assert.Single(refused.Conflicts);
+            Assert.Equal(Script, conflict.Relative); Assert.Contains("512 MiB", conflict.Reason);
+        }
+        Assert.Equal(interrupted, project.Sources()); Assert.Equal(history, JournalContents(folder));
+
+        // The exact limit remains admitted. Its deliberately tiny body produces the ordinary content conflict,
+        // without allocating or creating a large file. Restore the oversized claims for alternate recovery.
+        manifest["files"]![1]!["content"]!["length"] = FormatRegistry.MaximumDocumentBytes;
+        manifest["files"]![2]!["expected"]!["length"] = writes[2].Expected!.LongLength;
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        var boundary = publisher.Resolve(id, SourceRecoveryAction.Complete, Token);
+        Assert.False(boundary.Resolved); Assert.Empty(boundary.Changed);
+        Assert.Contains("missing or damaged", Assert.Single(boundary.Conflicts).Reason);
+        manifest["files"]![1]!["content"]!["length"] = FormatRegistry.MaximumDocumentBytes + 1;
+        manifest["files"]![2]!["expected"]!["length"] = FormatRegistry.MaximumDocumentBytes + 1;
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        Assert.Equal(interrupted, project.Sources()); Assert.Equal(history, JournalContents(folder));
+
+        var recovered = publisher.Resolve(id, next, Token);
+        Assert.True(recovered.Resolved); Assert.Empty(recovered.Conflicts);
+        Assert.Equal(next == SourceRecoveryAction.RollBack ? original : interrupted, project.Sources());
+        Assert.Empty(publisher.FindInterrupted(Token));
+    }
+
     [Theory]
     [InlineData(SourceRecoveryAction.RollBack)]
     [InlineData(SourceRecoveryAction.Complete)]

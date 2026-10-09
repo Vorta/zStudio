@@ -6,24 +6,42 @@ namespace Recoil.Zbd.Core;
 public static class MotionLibrary
 {
     /// <param name="skipped">Receives bounded per-file failures; one unreadable archive does not hide the library.</param>
-    public static async Task<ZbdDocument> LoadAsync(string context, AssetResolver resolver, CancellationToken token = default, ICollection<string>? skipped = null)
+    public static Task<ZbdDocument> LoadAsync(string context, AssetResolver resolver, CancellationToken token = default, ICollection<string>? skipped = null)
+        => LoadAsync(context, resolver, new AssetReadBudget(), new CompiledInventory(token), token, skipped);
+    internal static async Task<ZbdDocument> LoadAsync(string context, AssetResolver resolver, AssetReadBudget reads,
+        CompiledInventory inventory, CancellationToken token, ICollection<string>? skipped = null)
     {
-        List<ZbdDocument> candidates = []; int failures = 0;
-        foreach (string path in resolver.ResourceDirectories(context).SelectMany(d => Directory.EnumerateFiles(d, "*.zbd")).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase))
+        reads.Check(); token.ThrowIfCancellationRequested();
+        ZbdDocument? candidate = null; int failures = 0;
+        List<string> paths = []; HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string directory in resolver.ResourceDirectories(context, inventory))
+            foreach (string path in inventory.Files(directory, sort: false))
+            {
+                inventory.Path(path.Length);
+                if (seen.Add(path)) { inventory.Rows(1); paths.Add(path); }
+            }
+        inventory.Sort(paths, StringComparer.OrdinalIgnoreCase.Compare, p => p);
+        foreach (string path in paths)
         {
             token.ThrowIfCancellationRequested();
+            ZbdDocument doc;
             try
             {
                 if (FormatRegistry.Probe(path).Family != FormatFamily.Archive) continue;
-                var doc = await resolver.OpenCachedAsync(path, token).ConfigureAwait(false);
-                if (doc.Scene != null && doc.Assets.Any(a => a.Content is MechAssembly)) candidates.Add(doc);
+                doc = await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, reads).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
-            { if (++failures <= 32) skipped?.Add($"{Path.GetFileName(path)}: {(ex.Message.Length > 512 ? ex.Message[..512] + "…" : ex.Message)}"); }
+            catch (Exception ex) when (!reads.Exhausted && (ex is InvalidDataException or IOException or UnauthorizedAccessException))
+            { if (++failures <= 32) skipped?.Add($"{Path.GetFileName(path)}: {(ex.Message.Length > 512 ? ex.Message[..512] + "…" : ex.Message)}"); continue; }
+            if (doc.Scene == null || !doc.Assets.Any(a => a.Content is MechAssembly)) continue;
+            // A second supported library proves ambiguity; later archives cannot make it unique.
+            // Keep this refusal outside the per-file catch and never retain an unbounded candidate list.
+            if (candidate != null) throw new InvalidDataException("Multiple mech libraries are available; use a root with one unambiguous library.");
+            candidate = doc;
         }
-        if (candidates.Count == 1) return candidates[0];
+        token.ThrowIfCancellationRequested();
+        if (candidate != null) return candidate;
         string unread = failures == 0 ? "" : $" {failures} archive(s) could not be read.";
-        throw new InvalidDataException((candidates.Count == 0 ? "No decoded mech library is available in this workspace." : "Multiple mech libraries are available; use a root with one unambiguous library.") + unread);
+        throw new InvalidDataException("No decoded mech library is available in this workspace." + unread);
     }
     public static int? SuggestedMember(string motionName, ZbdDocument library)
     {

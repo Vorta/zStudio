@@ -88,7 +88,51 @@ internal static class CompiledInventoryChecks
             var empty = FormatRegistry.Default.OpenBytes(file, File.ReadAllBytes(file), token: token);
             var members = new[] { "first.bin", "second.bin" }.Select(name => new ResourceMember(Guid.NewGuid(), null, name, new byte[] { 1 }, new byte[148])).ToArray();
             File.WriteAllBytes(file, ArchiveWriter.Write(empty, members, token));
+            string laterFile = Path.Combine(root, "zlast.zbd"); File.WriteAllBytes(laterFile, File.ReadAllBytes(file));
+            // Aggregate index admission preserves the file tree/direct opening and tells both GUI and commands
+            // that an absent match is not a complete-root answer. Narrow limits exercise production admission.
+            window.ViewModel.SearchIndexRowLimit = 3;
             await window.ViewModel.OpenRootAsync(root, token);
+            Assert.False(window.ViewModel.SearchIndexComplete);
+            Assert.Equal(3, window.ViewModel.SearchIndex("").Count());
+            var retained = Assert.Single(window.ViewModel.SearchIndex("zlast.zbd"));
+            Assert.Equal(new SearchHit(laterFile, AssetKind.Raw, 0, "first.bin"), retained);
+            Assert.Equal(2, window.ViewModel.Files.Count);
+            window.ViewModel.GlobalQuery = "unmatched";
+            Assert.Empty(window.ViewModel.SearchResults);
+            Assert.Contains("incomplete", ((TextBlock)window.FindName("SearchHint")).Text);
+            var search = (await window.Commands.ExecuteAsync("zstudio_search", new() { ["query"] = "unmatched" }, token)).Data;
+            Assert.False(search["indexComplete"]!.GetValue<bool>());
+            Assert.Contains("incomplete", search["indexNotice"]!.GetValue<string>());
+            Assert.Equal(0, search["total"]!.GetValue<int>());
+            Assert.True(window.ViewModel.Related(["second.bin"], "other.zbd").Truncated);
+            var direct = Assert.IsType<DocumentModel>(await window.ViewModel.OpenFileAsync(laterFile, token, activate: false));
+            Assert.Equal(2, direct.Assets.Count); window.ViewModel.Close(direct);
+
+            window.ViewModel.SearchIndexRowLimit = MainViewModel.MaximumIndexedAssets;
+            window.ViewModel.SearchIndexNameLimit = "first.bin".Length - 1;
+            await window.ViewModel.OpenRootAsync(root, token);
+            Assert.Empty(window.ViewModel.SearchIndex("")); Assert.False(window.ViewModel.SearchIndexComplete);
+            window.ViewModel.SearchIndexNameLimit = MainViewModel.MaximumIndexedNameCharacters;
+            await window.ViewModel.OpenRootAsync(root, token);
+            Assert.True(window.ViewModel.SearchIndexComplete); Assert.Empty(window.ViewModel.SearchIndexNotice);
+            search = (await window.Commands.ExecuteAsync("zstudio_search", new() { ["query"] = "second" }, token)).Data;
+            Assert.True(search["indexComplete"]!.GetValue<bool>()); Assert.Equal(2, search["total"]!.GetValue<int>());
+            // A negative query visits the entire index. Shared long file paths must not become
+            // a fresh directory string per member, even when no result reaches the page limit.
+            string longFile = "C:\\" + new string('x', 8_000) + "\\Mission\\archive.zbd";
+            var hits = Enumerable.Range(0, 2_048).Select(i => new SearchHit(longFile, AssetKind.Raw, i, "member.bin")).ToArray();
+            _ = MainViewModel.MatchSearch(hits, "not-present").Count();
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            int absent = MainViewModel.MatchSearch(hits, "not-present").Count();
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(0, absent); Assert.True(allocated < 128 * 1024, $"Negative search allocated {allocated:N0} bytes.");
+            Assert.Equal("Mission/archive.zbd", hits[0].Location);
+            Assert.Equal(hits, MainViewModel.MatchSearch(hits, "SION/ARCH"));
+            Assert.Equal(hits, MainViewModel.MatchSearch(hits, "MEMBER"));
+            Assert.Equal(hits, MainViewModel.MatchSearch(hits, ""));
+            using var searchCanceled = new CancellationTokenSource(); searchCanceled.Cancel();
+            Assert.ThrowsAny<OperationCanceledException>(() => MainViewModel.MatchSearch(hits, "not-present", searchCanceled.Token).Count());
             var load = window.ViewModel.LoadDocumentAsync;
             window.ViewModel.LoadDocumentAsync = async (path, ct) =>
             {

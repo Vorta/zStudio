@@ -425,9 +425,9 @@ public sealed class WorldAssemblyTests
         var (world, assembler) = Build("./box.gltf");
         Assert.Empty(assembler.Warnings);
         var root = world.Nodes.Single(n => n.Class == WorldNodeClass.World);
-        // The parts' objects join the world as they were made: the first part is copied after the next record, the second
-        // (whose reference has a record of its own) at once, before that record. Groups and part references are deleted.
-        string[] members = ["lamp", "crate", "post", "lamp2", "tower", "sign"];
+        // World attachment follows source traversal even though the first part's copy is allocated after lamp.
+        // The second part's content precedes its own sign record. Groups and part references are deleted.
+        string[] members = ["crate", "post", "lamp", "lamp2", "tower", "sign"];
         var cell = root.Areas.Single(a => a.Nodes.Any(n => n.Name == "lamp"));
         Assert.Equal(members, cell.Nodes.Where(c => members.Contains(c.Name)).Select(c => c.Name));
         Assert.DoesNotContain(world.Nodes, n => n.Name is "yard" or "m1_01.flt" or "m1_02.flt" or "placeholder");

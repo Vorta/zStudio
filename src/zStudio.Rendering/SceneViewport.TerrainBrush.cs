@@ -23,6 +23,8 @@ public sealed partial class SceneViewport
         get => terrainBrushActive;
         set
         {
+            if (value && ZonePaintActive)
+                throw new InvalidOperationException("Stop zone painting before painting terrain.");
             bool changed = terrainBrushActive != value;
             terrainBrushActive = value;
             if (!value) CancelTerrainStroke();

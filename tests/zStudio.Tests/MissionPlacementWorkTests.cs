@@ -42,15 +42,23 @@ public sealed class MissionPlacementWorkTests
     }
 
     [Fact]
-    public void SuccessfulCloneDescendantsEnterLiveIndexButCannotBecomeCloneSources()
+    public void NewestLiveCloneDescendantCanBeCopiedWithOriginalProvenance()
     {
-        var world = World(Node(0, "tank", children: [1]), Node(1, "turret", parents: [0]), Node(2, "world", "world"));
-        var result = Build(world, new(Token), Arr(Str("tank_01"), Spawn(1), Str("turret"), Spawn(2), Str("turret_01"), Spawn(3)), Vehicles("tank", "turret"));
-        Assert.Equal(new[] { 3, 4 }, result.Actors.Select(a => a.Root));
+        // Object3D copying skips its noncopyable world child; the live car descendant remains copyable.
+        var world = World(Node(0, "tank", children: [1, 2]), Node(1, "car", parents: [0]), Node(2, "world", "world"));
+        string[] before = Snapshot(world);
+        // A finite heading must not overflow while converting degrees to radians, leave an orphan clone,
+        // or prevent the next actor from using the newest live car (the first clone's descendant).
+        var first = Spawn(1); first["children"]![2] = Num(float.MaxValue);
+        var result = Build(world, new(Token), Arr(Str("tank_1"), first, Str("car_1"), Spawn(3)), Vehicles("tank", "car"));
+        Assert.Equal(new[] { 3, 5 }, result.Actors.Select(a => a.Root));
         Assert.Equal(new[] { 0, 1 }, result.Actors.Select(a => a.SourceRoot));
-        Assert.Equal(5, result.Scene.Nodes.Count);
-        Assert.Equal(2, SceneBuilder.LocalTransform(result.Scene.Nodes[4]).M41);
-        Assert.Contains(result.Diagnostics, d => d.Contains("Invalid or excessive mission hierarchy", StringComparison.Ordinal));
+        Assert.Equal(6, result.Scene.Nodes.Count); Assert.Equal(6, result.SourceNodes.Count);
+        Assert.Equal(new[] { 3, 5 }, result.Scene.Nodes[2].Children);
+        Assert.True(float.IsFinite(SceneBuilder.LocalTransform(result.Scene.Nodes[3]).GetDeterminant()));
+        Assert.Equal(3, SceneBuilder.LocalTransform(result.Scene.Nodes[5]).M41);
+        Assert.DoesNotContain(result.Diagnostics, d => d.StartsWith("Mission actor", StringComparison.Ordinal));
+        Assert.Equal(before, Snapshot(world));
     }
 
     [Fact]
@@ -143,22 +151,6 @@ public sealed class MissionPlacementWorkTests
         var actor = Assert.Single(result.Actors); Assert.Equal(3, actor.Root); Assert.Equal(1, actor.SourceRoot);
         Assert.Equal(4, result.Scene.Nodes.Count); Assert.Equal(4, result.SourceNodes.Count);
         Assert.Contains(result.Diagnostics, d => d.Contains("Cyclic", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void TemplateTraversingWorldSeesPendingEdgesBeforeTheFinalPublication()
-    {
-        var world = World(Node(0, "world", "world", parents: [2], children: [1]),
-            Node(1, "leaf", parents: [0]), Node(2, "tank", children: [0]));
-        string[] before = Snapshot(world); var budget = new MissionPlacementBudget(Token);
-        var result = Build(world, budget, Actors(2));
-        Assert.Equal(3, Assert.Single(result.Actors).Root);
-        Assert.Equal(6, result.Scene.Nodes.Count);
-        Assert.Equal(new[] { 1, 3 }, result.Scene.Nodes[0].Children);
-        Assert.Equal(1, budget.RootPublications);
-        Assert.Contains(result.Diagnostics, d => d.Contains("Invalid or excessive mission hierarchy", StringComparison.Ordinal));
-        // The second template walk sees the first new actor through the world; cloning new nodes remains refused.
-        Assert.Equal(before, Snapshot(world));
     }
 
     [Fact]

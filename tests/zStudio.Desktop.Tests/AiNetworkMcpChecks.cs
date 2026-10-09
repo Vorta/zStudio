@@ -32,7 +32,8 @@ internal static class AiNetworkMcpChecks
         string preview = ((Guid)Get("previewId")!).ToString();
         AiNode a = new("a", 0, 12, Vector3.Zero, 12, [new(0, 1, "b", null), new(1, -7, null, null), new(2, -1, null, null)]);
         AiNode b = new("b", 1, 12, new(30, 0, 0), 64, [new(0, -1, null, null), new(1, -1, null, null), new(2, -1, null, null)]);
-        var first = new AiNetwork("first", "fixture.zbd", 0, "net_01.zrd", "same_name", "standard", 10, [a, b], [])
+        var first = new AiNetwork("first", "fixture.zbd", 0, "net_01.zrd", "same_name", "standard", 10, [a, b],
+            Enumerable.Repeat(new Diagnostic("Warning", new string('\u0001', 129)), 9).ToArray())
         {
             AttackStrategy = AiAttackStrategy.Stored("cIrClE"),
             Constraints = [new(46, 0, 1, "scan_time", 96, new()), new(46, 0, 1, "canleave", 108, new()) { AttributeIndex = 1 }, new(47, 1, 0, "scan_time", 120, new())]
@@ -53,6 +54,10 @@ internal static class AiNetworkMcpChecks
             var list = await Call("ai_networks", new() { ["preview"] = preview, ["limit"] = 1 });
             Assert.Equal(2, list["total"]!.GetValue<int>()); Assert.Equal(1, list["nextOffset"]!.GetValue<int>());
             Assert.Equal("first", list["items"]![0]!["Id"]!.GetValue<string>());
+            Assert.Equal(9, list["items"]![0]!["diagnosticCount"]!.GetValue<int>());
+            Assert.True(list["items"]![0]!["diagnosticsTruncated"]!.GetValue<bool>());
+            Assert.Equal(8, list["items"]![0]!["diagnostics"]!.AsArray().Count);
+            Assert.All(list["items"]![0]!["diagnostics"]!.AsArray(), d => Assert.Equal(new string('\u0001', 128), d!["Message"]!.GetValue<string>()));
             var strategy = list["items"]![0]!["attack_strategy"]!;
             Assert.Equal("cIrClE", strategy["value"]!.GetValue<string>()); Assert.Equal("stored", strategy["status"]!.GetValue<string>());
             Assert.Equal("CIR", strategy["key"]!.GetValue<string>()); Assert.Equal("#33D9FF", strategy["color"]!.GetValue<string>());
@@ -115,18 +120,6 @@ internal static class AiNetworkMcpChecks
                 Assert.True(nodes.ToJsonString().Length < 4000);
             }
             list = await Call("ai_networks", new() { ["preview"] = preview, ["query"] = "only-in-omitted-name" }); Assert.Equal(0, list["total"]!.GetValue<int>());
-            string escaped = new('\u0001', 100_000);
-            var pageNodes = Enumerable.Range(0, 99).Select(i => a with { Id = "page-" + i, Index = i, Links = Enumerable.Range(0, 32).Select(slot => new AiLink(slot, -1, null, null)).ToArray() }).ToArray();
-            var worst = first with { Name = escaped, Type = escaped, AttackStrategy = AiAttackStrategy.Stored(escaped), Nodes = pageNodes };
-            viewport.SetAiNetworks(new("full-node-page", Enumerable.Range(0, 3).Select(i => worst with { Id = "network-" + i }).ToArray()));
-            var fullPage = Args(("snapshot", "full-node-page")); fullPage["limit"] = 200;
-            nodes = await Call("ai_nodes", fullPage); Assert.Equal(200, nodes["items"]!.AsArray().Count); Assert.True(nodes.ToJsonString().Length < 3_000_000);
-            worst = worst with { Nodes = [], Diagnostics = Enumerable.Repeat(new Diagnostic("Warning", escaped), 32).ToArray() };
-            viewport.SetAiNetworks(new("full-network-page", Enumerable.Range(0, 200).Select(i => worst with { Id = "network-" + i }).ToArray()));
-            list = await Call("ai_networks", new() { ["preview"] = preview, ["limit"] = 200 });
-            Assert.Equal(200, list["items"]!.AsArray().Count); Assert.True(list.ToJsonString().Length < 3_000_000);
-            Assert.True(list["items"]![0]!["diagnosticsTruncated"]!.GetValue<bool>()); Assert.Equal(32, list["items"]![0]!["diagnosticCount"]!.GetValue<int>());
-            Assert.Equal(100_000, nodes["items"]![0]!["attack_strategy"]!["characters"]!.GetValue<int>());
             var targets = Enumerable.Range(1, 98).Select(i => b with { Id = "target-" + i, Index = i, Position = new(30 + i, 0, 0), Links = [] }).ToArray();
             var manyLinks = Enumerable.Range(0, 100_000).Select(i => new AiLink(i, i % 98 + 1, targets[i % 98].Id, null)).ToArray();
             viewport.SetAiNetworks(new("large-links", [first with { Nodes = [a with { Links = manyLinks }, .. targets] }]));

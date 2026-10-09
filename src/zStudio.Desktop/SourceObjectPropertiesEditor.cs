@@ -15,8 +15,6 @@ internal sealed record SourceObjectState(int Node, string Name, string Class, Ob
     public string? Parent { get; init; }
     /// <summary>The object that deleting, copying and re-parenting this node apply to, when it is not this node (a loaded model's root).</summary>
     public string? Object { get; init; }
-    /// <summary>Identifies the object across rebuilds: its glTF node, or the instruction that created it.</summary>
-    public string Identity => Origin.ModelFile is { } file ? $"{file}#{Origin.ModelNode}" : Origin.Created is { } created ? $"{created.Script}:{created.Line}" : $"node:{Node}";
     public JsonObject Json()
     {
         JsonObject json = new() { ["node"] = Node, ["name"] = Name, ["class"] = Class, ["source"] = Source, ["flags"] = $"0x{Flags:X8}" };

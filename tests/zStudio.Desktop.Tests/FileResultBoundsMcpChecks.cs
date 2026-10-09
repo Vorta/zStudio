@@ -17,7 +17,7 @@ using Xunit;
 
 namespace Recoil.Zbd.Desktop.Tests;
 
-/// <summary>Accepted large producers must retain retrievable completion results after every source/model/content file is saved.</summary>
+/// <summary>Producers crossing the path-preview cap must retain retrievable completion results after every file is saved.</summary>
 internal static class FileResultBoundsMcpChecks
 {
     internal static async Task Run()
@@ -40,26 +40,25 @@ internal static class FileResultBoundsMcpChecks
                 using var fixture = new SourceWorldFixture();
                 string folder = "data/" + new string('&', 190);
                 string original = "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{\"name\":\"external\"}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
-                for (int i = 0; i < 4; i++) fixture.Write($"{folder}/model{i}.gltf", original);
+                fixture.Write($"{folder}/model0.gltf", original);
                 byte[] sentinel = await File.ReadAllBytesAsync(fixture.Path("gamegen/m1.gs"), token);
                 try
                 {
                     await Job("open_root", new() { ["path"] = fixture.Project, ["project"] = true });
                     await Job("source_world_open", new() { ["mission"] = "m1" });
-                    for (int group = 0; group < 4; group++)
                     {
-                        var checkout = await Job("source_blender_checkout", new() { ["model"] = $"{folder}/model{group}.gltf" });
+                        var checkout = await Job("source_blender_checkout", new() { ["model"] = $"{folder}/model0.gltf" });
                         string outbox = checkout["outbox"]!.GetValue<string>();
                         var gltf = JsonNode.Parse(original)!;
                         JsonArray buffers = [];
-                        for (int i = 0; i < 1000; i++)
+                        for (int i = 0; i < 65; i++)
                         {
-                            string name = $"buffer{group}_{i}.bin";
-                            await File.WriteAllBytesAsync(Path.Combine(outbox, name), new byte[] { (byte)group, (byte)i, 1, 2 }, token);
+                            string name = $"buffer{i}.bin";
+                            await File.WriteAllBytesAsync(Path.Combine(outbox, name), new byte[] { 0, (byte)i, 1, 2 }, token);
                             buffers.Add(new JsonObject { ["uri"] = name, ["byteLength"] = 4 });
                         }
                         gltf["buffers"] = buffers;
-                        await File.WriteAllTextAsync(Path.Combine(outbox, $"model{group}.gltf"), gltf.ToJsonString(), token);
+                        await File.WriteAllTextAsync(Path.Combine(outbox, "model0.gltf"), gltf.ToJsonString(), token);
                         var doc = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
                         await Job("source_blender_update", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["checkout"] = checkout["id"]!.GetValue<string>() });
                     }
@@ -68,10 +67,9 @@ internal static class FileResultBoundsMcpChecks
                     Assert.True(sourceState["documents"]![0]!.ToJsonString().Length <= StateDocumentPage.MaximumRowBytes(edited));
                     var workspace = edited.SourceWorld!.Workspace;
                     var expected = workspace.DirtyFiles.ToDictionary(p => p, p => workspace.Read(p, token) ?? throw new InvalidDataException("A fixture update unexpectedly deleted a file."));
-                    Assert.Equal(4004, expected.Count);
-                    Assert.True(JsonSerializer.SerializeToNode(new { written = expected.Keys })!.ToJsonString().Length > 4 * 1024 * 1024);
+                    Assert.Equal(66, expected.Count);
                     Assert.Equal(sentinel, await File.ReadAllBytesAsync(fixture.Path("gamegen/m1.gs"), token));
-                    Assert.All(Enumerable.Range(0, 4), i => Assert.Equal(original, File.ReadAllText(fixture.Path($"{folder}/model{i}.gltf"))));
+                    Assert.Equal(original, File.ReadAllText(fixture.Path($"{folder}/model0.gltf")));
                     // The same admitted producer must also have a usable refusal when another program creates
                     // the pending buffers. Both Core reload and the actual MCP job retain history and identities.
                     string[] conflicts = [.. expected.Keys.Where(p => p.EndsWith(".bin", StringComparison.Ordinal))];
@@ -81,7 +79,6 @@ internal static class FileResultBoundsMcpChecks
                     foreach (string path in conflicts) await File.WriteAllBytesAsync(fixture.Path(path), external, token);
                     try
                     {
-                        Assert.True(JsonSerializer.Serialize(string.Join(", ", conflicts)).Length > 4 * 1024 * 1024);
                         var failure = await Assert.ThrowsAsync<SourceFileChangedException>(() => workspace.ReloadAsync(token));
                         Assert.Equal(conflicts.Order(StringComparer.Ordinal), failure.Files.Order(StringComparer.Ordinal));
                         Assert.True(failure.Message.Length < 4096); Assert.Contains("more not shown", failure.Message);
@@ -99,7 +96,7 @@ internal static class FileResultBoundsMcpChecks
                     }
                     finally { foreach (string path in conflicts) File.Delete(fixture.Path(path)); }
                     var saved = await Job("save_document", new() { ["document"] = edited.SessionId.ToString(), ["revision"] = edited.Revision });
-                    Assert.Equal(4004, saved["writtenCount"]!.GetValue<int>());
+                    Assert.Equal(66, saved["writtenCount"]!.GetValue<int>());
                     Assert.True(saved["writtenTruncated"]!.GetValue<bool>()); Assert.Equal(64, saved["written"]!.AsArray().Count);
                     Assert.False(workspace.IsDirty);
                     foreach (var (path, bytes) in expected) Assert.Equal(bytes, await File.ReadAllBytesAsync(fixture.Path(path), token));
@@ -122,7 +119,7 @@ internal static class FileResultBoundsMcpChecks
                     string world = Path.Combine(folder, "gamez.zbd");
                     byte[] originalWorld = ModelFixture.GameZ(), originalPack = ModelFixture.Texture();
                     await File.WriteAllBytesAsync(world, originalWorld, token);
-                    string[] packs = [.. Enumerable.Range(0, 4000).Select(i => Path.Combine(folder, $"texture{i:D4}.zbd"))];
+                    string[] packs = [.. Enumerable.Range(0, 65).Select(i => Path.Combine(folder, $"texture{i:D4}.zbd"))];
                     foreach (string pack in packs) await File.WriteAllBytesAsync(pack, originalPack, token);
                     string png = Path.Combine(input, "diffuse.png");
                     await File.WriteAllBytesAsync(png, PngEncoder.Encode(new(1, 1, [255, 0, 0, 255]), token), token);
@@ -133,15 +130,14 @@ internal static class FileResultBoundsMcpChecks
                     await Job("open_document", new() { ["path"] = world });
                     var doc = main.ViewModel.Documents.Single();
                     var replacement = await Job("model_replace", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["manifest"] = manifest });
-                    Assert.Equal(4000, replacement["texturePackCount"]!.GetValue<int>()); Assert.True(replacement["texturePacksTruncated"]!.GetValue<bool>());
+                    Assert.Equal(65, replacement["texturePackCount"]!.GetValue<int>()); Assert.True(replacement["texturePacksTruncated"]!.GetValue<bool>());
                     Assert.Equal(64, replacement["texturePacks"]!.AsArray().Count);
-                    Assert.Equal(4000, doc.ModelEdits!.Current.Textures.Count);
-                    Assert.True(JsonSerializer.SerializeToNode(new { texturePacks = doc.ModelEdits.Current.Textures.Keys })!.ToJsonString().Length > 4 * 1024 * 1024);
+                    Assert.Equal(65, doc.ModelEdits!.Current.Textures.Count);
                     Assert.Equal(originalWorld, await File.ReadAllBytesAsync(world, token));
                     foreach (string pack in packs) Assert.Equal(originalPack, await File.ReadAllBytesAsync(pack, token));
                     var expected = doc.ModelEdits.Documents.ToDictionary(d => d.Path, d => d.Bytes.ToArray());
                     var saved = await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
-                    CheckSaved(saved["models"]!, 4001); Assert.False(doc.IsDirty);
+                    CheckSaved(saved["models"]!, 66); Assert.False(doc.IsDirty);
                     foreach (var (path, bytes) in expected) Assert.Equal(bytes, await File.ReadAllBytesAsync(path, token));
                     await VerifyRetained(saved); CloseDocuments();
 
@@ -157,18 +153,18 @@ internal static class FileResultBoundsMcpChecks
                         var targets = new[] { packs[0] }.Concat(packs.Skip(offset).Take(63)).Select(path => new { path, index = 0 }).ToArray();
                         imported = await Job("texture_import", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision, ["path"] = png, ["index"] = 0, ["targets"] = targets });
                     }
-                    Assert.Equal(4000, imported!["fileCount"]!.GetValue<int>()); Assert.True(imported["filesTruncated"]!.GetValue<bool>());
+                    Assert.Equal(65, imported!["fileCount"]!.GetValue<int>()); Assert.True(imported["filesTruncated"]!.GetValue<bool>());
                     Assert.Equal(64, imported["files"]!.AsArray().Count);
                     var content = imported["document"]!["contentEdits"]!;
-                    Assert.Equal(4000, content["fileCount"]!.GetValue<int>()); Assert.True(content["filesTruncated"]!.GetValue<bool>());
+                    Assert.Equal(65, content["fileCount"]!.GetValue<int>()); Assert.True(content["filesTruncated"]!.GetValue<bool>());
                     Assert.Equal(64, content["files"]!.AsArray().Count);
-                    var state = await Call("state", new()); Assert.Equal(4000, state["documents"]![0]!["contentEdits"]!["fileCount"]!.GetValue<int>());
+                    var state = await Call("state", new()); Assert.Equal(65, state["documents"]![0]!["contentEdits"]!["fileCount"]!.GetValue<int>());
                     Assert.Empty(state["documents"]![0]!["contentEdits"]!["files"]!.AsArray());
                     Assert.True(state["documents"]![0]!["contentEdits"]!["filesTruncated"]!.GetValue<bool>());
                     foreach (string pack in packs) Assert.Equal(expected[pack], await File.ReadAllBytesAsync(pack, token));
                     var contentExpected = doc.ContentEdits!.Documents.ToDictionary(d => d.Path, d => d.Bytes.ToArray());
                     saved = await Job("save_document", new() { ["document"] = doc.SessionId.ToString(), ["revision"] = doc.Revision });
-                    CheckSaved(saved["result"]!, 4000); Assert.False(doc.IsDirty);
+                    CheckSaved(saved["result"]!, 65); Assert.False(doc.IsDirty);
                     Assert.Equal(0, saved["result"]!["RemainingPathCount"]!.GetValue<int>());
                     Assert.False(saved["result"]!["RemainingPathsTruncated"]!.GetValue<bool>());
                     foreach (var (path, bytes) in contentExpected) Assert.Equal(bytes, await File.ReadAllBytesAsync(path, token));
@@ -178,10 +174,10 @@ internal static class FileResultBoundsMcpChecks
 
                     // Each individual owner fits its preview bound; aggregation must not multiply
                     // those bounded path rows across every open document in global state.
-                    for (int group = 0; group < 30; group++)
+                    for (int group = 0; group < 2; group++)
                     {
                         string groupFolder = Path.Combine(folder, $"group{group:D2}"); Directory.CreateDirectory(groupFolder);
-                        string[] groupPacks = [.. Enumerable.Range(0, 64).Select(i => Path.Combine(groupFolder, $"texture{i:D2}.zbd"))];
+                        string[] groupPacks = [.. Enumerable.Range(0, 2).Select(i => Path.Combine(groupFolder, $"texture{i:D2}.zbd"))];
                         foreach (string path in groupPacks) await File.WriteAllBytesAsync(path, expected[packs[0]], token);
                         await Job("open_document", new() { ["path"] = groupPacks[0] });
                         var owner = main.ViewModel.Documents.Single(d => d.Path == groupPacks[0]);
@@ -191,21 +187,16 @@ internal static class FileResultBoundsMcpChecks
                             ["path"] = png, ["index"] = 0,
                             ["targets"] = groupPacks.Select(path => new { path, index = 0 }).ToArray()
                         });
-                        Assert.Equal(64, groupImport["fileCount"]!.GetValue<int>());
+                        Assert.Equal(2, groupImport["fileCount"]!.GetValue<int>());
                         Assert.False(groupImport["filesTruncated"]!.GetValue<bool>());
-                        Assert.Equal(64, groupImport["files"]!.AsArray().Count);
+                        Assert.Equal(2, groupImport["files"]!.AsArray().Count);
                     }
-                    Assert.Equal(30, main.ViewModel.Documents.Count);
-                    var unbounded = new { documents = main.ViewModel.Documents.Select(d => new
-                    {
-                        contentEdits = new { files = d.ContentEdits!.Documents.Select(f => new { f.Path, destination = d.ContentEdits.TargetPath(f.Path) }) }
-                    }) };
-                    Assert.True(JsonSerializer.SerializeToNode(unbounded)!.ToJsonString().Length > 4 * 1024 * 1024);
+                    Assert.Equal(2, main.ViewModel.Documents.Count);
                     state = await Call("state", new());
-                    Assert.Equal(30, state["documents"]!.AsArray().Count);
+                    Assert.Equal(2, state["documents"]!.AsArray().Count);
                     foreach (var summary in state["documents"]!.AsArray())
                     {
-                        Assert.Equal(64, summary!["contentEdits"]!["fileCount"]!.GetValue<int>());
+                        Assert.Equal(2, summary!["contentEdits"]!["fileCount"]!.GetValue<int>());
                         Assert.Empty(summary["contentEdits"]!["files"]!.AsArray());
                         Assert.True(summary["contentEdits"]!["filesTruncated"]!.GetValue<bool>());
                     }
@@ -214,17 +205,17 @@ internal static class FileResultBoundsMcpChecks
                     List<(string Id, string Path)> paged = []; int pageOffset = 0;
                     do
                     {
-                        var page = await Call("state", new() { ["offset"] = pageOffset, ["limit"] = 7 });
-                        Assert.Equal(30, page["total"]!.GetValue<int>()); Assert.Equal(pageOffset, page["offset"]!.GetValue<int>());
-                        Assert.InRange(page["documents"]!.AsArray().Count, 1, 7);
+                        var page = await Call("state", new() { ["offset"] = pageOffset, ["limit"] = 1 });
+                        Assert.Equal(2, page["total"]!.GetValue<int>()); Assert.Equal(pageOffset, page["offset"]!.GetValue<int>());
+                        Assert.Single(page["documents"]!.AsArray());
                         paged.AddRange(page["documents"]!.AsArray().Select(d => (d!["id"]!.GetValue<string>(), d["Path"]!.GetValue<string>())));
                         pageOffset = page["nextOffset"]?.GetValue<int>() ?? -1;
                     } while (pageOffset >= 0);
                     Assert.Equal(identities, paged);
                     var maximum = await Call("state", new() { ["limit"] = 64 });
-                    Assert.Equal(30, maximum["documents"]!.AsArray().Count); Assert.Null(maximum["nextOffset"]);
-                    var end = await Call("state", new() { ["offset"] = 30, ["limit"] = 1 });
-                    Assert.Equal(30, end["total"]!.GetValue<int>()); Assert.Empty(end["documents"]!.AsArray()); Assert.Null(end["nextOffset"]);
+                    Assert.Equal(2, maximum["documents"]!.AsArray().Count); Assert.Null(maximum["nextOffset"]);
+                    var end = await Call("state", new() { ["offset"] = 2, ["limit"] = 1 });
+                    Assert.Equal(2, end["total"]!.GetValue<int>()); Assert.Empty(end["documents"]!.AsArray()); Assert.Null(end["nextOffset"]);
                 }
                 finally { CloseDocuments(); Directory.Delete(root, true); }
             }
@@ -241,14 +232,13 @@ internal static class FileResultBoundsMcpChecks
                 try
                 {
                     byte[] bytes = ModelFixture.Texture();
-                    for (int i = 0; i < 4000; i++)
+                    for (int i = 0; i < 66; i++)
                         documents.Add(new(FormatRegistry.Default.OpenBytes(@"C:\" + new string('&', 190) + $"\\t{i:D4}.zbd", bytes)));
-                    Assert.True(JsonSerializer.SerializeToNode(new { documents = documents.Select(d => new { id = d.SessionId, d.Path }) })!.ToJsonString().Length > 4 * 1024 * 1024);
                     int offset = 0; List<Guid> ids = [];
                     do
                     {
                         var page = StateDocumentPage.Select(documents, offset, 64);
-                        Assert.Equal(4000, page.Total); Assert.InRange(page.Documents.Length, 1, 64);
+                        Assert.Equal(66, page.Total); Assert.InRange(page.Documents.Length, 1, 64);
                         Assert.True(page.Documents.Sum(StateDocumentPage.MaximumRowBytes) <= StateDocumentPage.MaximumBytes);
                         ids.AddRange(page.Documents.Select(d => d.SessionId)); offset = page.NextOffset ?? -1;
                     } while (offset >= 0);

@@ -59,6 +59,15 @@ public sealed class AnimationEvent(byte[] bytes, long sourceOffset = -1) : Anima
     private AnimationKeyframe[]? playbackKeyframes;
     private long playbackVersion = -1;
     private long keyframeVersion = -1;
+    /// <summary>Count only already retained caches, including stale caches, without preparing a stream or frames.</summary>
+    internal void RetainedCaches(RetainedDocumentBudget budget, CancellationToken token)
+    {
+        keyframeStream?.Retained(budget, token);
+        if (keyframeError != null) budget.Text(keyframeError, token);
+        if (playbackKeyframes != null && budget.Object(playbackKeyframes, 32L + 8L * playbackKeyframes.Length, token))
+            foreach (var frame in playbackKeyframes)
+                if (budget.Object(frame, 128, token)) budget.Bytes(frame.Bytes, token);
+    }
     public Guid Id { get; init; } = Guid.NewGuid();
     public long SourceOffset { get; } = sourceOffset;
     public uint Version { get; init; } = 28;

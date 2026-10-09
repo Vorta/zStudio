@@ -96,12 +96,12 @@ public sealed partial class AnimationPreviewContext
         if (node < 0 || node >= Scene.Nodes.Count || Scene.Nodes[node].ModelIndex is not int model || model < 0 || model >= Scene.Models.Count) return null;
         return Scene.Models[model].Polygons.FirstOrDefault()?.MaterialIndex;
     }
-    private async Task LoadScriptCyclesAsync(string[] files, AssetResolver resolver, CancellationToken token)
+    private async Task LoadScriptCyclesAsync(string[] files, AssetResolver resolver, PreviewResourceBudget resources, CancellationToken token)
     {
         Dictionary<string, ScriptContent> scripts = new(StringComparer.OrdinalIgnoreCase);
         foreach (string file in files.Where(p => FormatRegistry.Probe(p).Family == FormatFamily.Scripts))
         {
-            var doc = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
+            var doc = await resources.OpenAsync(file, resolver, token).ConfigureAwait(false);
             foreach (var asset in doc.Assets) if (asset.Content is ScriptContent script) scripts.TryAdd(asset.Name.Replace('/', '\\'), script);
         }
         string mission = Path.GetFileName(Path.GetDirectoryName(World.Path)!);

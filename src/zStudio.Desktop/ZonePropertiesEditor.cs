@@ -52,7 +52,8 @@ internal sealed class ZonePropertiesEditor : SourcePropertiesEditor
         byte labelId = assigned.FirstOrDefault();
         Input(form, "Name zone ID", labelId.ToString(CultureInfo.InvariantCulture), text =>
         {
-            if (!byte.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out labelId)) throw new FormatException("Enter an ID from 0 to 255.");
+            if (!byte.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out byte parsedId)) throw new FormatException("Enter an ID from 0 to 255.");
+            labelId = parsedId;
         });
         Input(form, "Zone name", "", _ => throw new InvalidOperationException("Use the asynchronous edit."),
             asyncCommit: text => actions.Label(labelId, text), hint: "name an ID; catalog edits are separate undoable changes");

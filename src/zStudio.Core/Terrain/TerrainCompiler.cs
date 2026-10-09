@@ -544,6 +544,9 @@ public static class TerrainCompiler
                     next == null ? part.Edges[n - 1] : From(next, c[i + 1].Position),
                 ];
                 previous = next;
+                // A recorded fan may start with (or contain) a zero-area triangle. Keep advancing its diagonals,
+                // but do not emit an empty fragment that the model builder would legitimately discard.
+                if (ModelBuilder.Straight(c[0].Position, c[i].Position, c[i + 1].Position)) continue;
                 yield return new() { Surface = part.Surface, Material = part.Material, Corners = [c[0], c[i], c[i + 1]], Edges = edges, State = part.State };
             }
         }
@@ -638,7 +641,7 @@ public static class TerrainCompiler
             return pieces;
         }
 
-        /// <summary>Divides a group whose vertices or normals pass the budget at the median of its parts' centres, along its longer side.</summary>
+        /// <summary>Divides a group whose vertices or normals pass the budget, retaining polygon encounter order.</summary>
         private IEnumerable<List<Part>> Divide(List<Part> group)
         {
             Stack<List<Part>> pending = new([group]);
@@ -650,28 +653,38 @@ public static class TerrainCompiler
                 // Junction repair may give one polygon more corners than a model can hold. Split its fan before
                 // grouping, rather than treating a single polygon as indivisible and letting ModelBuilder discard it.
                 if (list.Count == 1) { pending.Push(Fan(list[0]).ToList()); continue; }
-                var centres = list.Select(p => p.Centroid()).ToArray();
-                float spanX = centres.Max(c => c.X) - centres.Min(c => c.X), spanZ = centres.Max(c => c.Z) - centres.Min(c => c.Z);
-                var order = Enumerable.Range(0, list.Count).OrderBy(i => spanX >= spanZ ? centres[i].X : centres[i].Z).ThenBy(i => spanX >= spanZ ? centres[i].Z : centres[i].X).ThenBy(i => i).ToArray();
-                int half = order.Length / 2;
+                int half = list.Count / 2;
+                // Spatial sorting would change precedence for overlapping faces. Contiguous halves may be less
+                // compact within their cell, but retain the same encounter order through any additional splits.
                 // Pushed second half first, so the first half is finished (and named) first.
-                pending.Push([.. order.Skip(half).Select(i => list[i])]);
-                pending.Push([.. order.Take(half).Select(i => list[i])]);
+                Tick(list.Count);
+                pending.Push(list.GetRange(half, list.Count - half));
+                pending.Push(list.GetRange(0, half));
             }
             return done;
         }
-        /// <summary>The larger of the distinct vertex and normal counts a group would store.</summary>
+        /// <summary>A conservative bound on the vertex and emitted-normal counts a group would store.</summary>
         private int Counts(List<Part> list)
         {
-            HashSet<(long, long, long)> vertices = [], normals = [];
+            // ModelBuilder can merge these exact values, never create additional ones. Rounded integer buckets
+            // are not its corner identity and can overflow for finite coordinates, hiding a required split.
+            HashSet<Vector3> vertices = [], normals = [];
             foreach (var part in list)
                 foreach (var c in part.Corners)
                 {
                     Tick();
-                    vertices.Add(((long)Math.Round(c.Position.X * 1000.0), (long)Math.Round(c.Position.Y * 1000.0), (long)Math.Round(c.Position.Z * 1000.0)));
-                    normals.Add(((long)Math.Round(c.Normal.X * 10000.0), (long)Math.Round(c.Normal.Y * 10000.0), (long)Math.Round(c.Normal.Z * 10000.0)));
+                    vertices.Add(c.Position);
+                    normals.Add(OutputNormal(c));
+                    if (vertices.Count > VertexBudget || normals.Count > VertexBudget) return VertexBudget + 1;
                 }
             return Math.Max(vertices.Count, normals.Count);
+        }
+        private static Vector3 OutputNormal(TerrainCorner corner)
+        {
+            var normal = corner.Normal;
+            if (!corner.Interpolated) return normal;
+            double length = Math.Sqrt((double)normal.X * normal.X + (double)normal.Y * normal.Y + (double)normal.Z * normal.Z);
+            return length > 0 ? new((float)(normal.X / length), (float)(normal.Y / length), (float)(normal.Z / length)) : normal;
         }
         /// <summary>Preserves authored fans and normalizes generated corner normals only after every cut and junction repair.</summary>
         private static TerrainCorner[] OutputCorners(Part part)
@@ -680,11 +693,7 @@ public static class TerrainCompiler
             for (int i = 0; i < corners.Length; i++)
             {
                 var corner = corners[i];
-                if (!corner.Interpolated) continue;
-                var normal = corner.Normal;
-                double length = Math.Sqrt((double)normal.X * normal.X + (double)normal.Y * normal.Y + (double)normal.Z * normal.Z);
-                if (length > 0) normal = new((float)(normal.X / length), (float)(normal.Y / length), (float)(normal.Z / length));
-                corners[i] = corner with { Normal = normal, Interpolated = false };
+                corners[i] = corner with { Normal = OutputNormal(corner), Interpolated = false };
             }
             return corners;
         }

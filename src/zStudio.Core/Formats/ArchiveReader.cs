@@ -4,6 +4,9 @@ namespace Recoil.Zbd.Core.Formats;
 
 internal sealed class ArchiveReader(long maximumTypedZrdBytes = ArchiveZrdBudget.MaximumAllocation) : IZbdFormatReader
 {
+    // Payload aliases share decoding, but each asset owns its JSON. Admit nested preview rows across the archive
+    // before creating them; the full typed clip remains available to paged inspection and explicit export.
+    private const int MaximumMotionPreviewParts = 4096;
     public FormatFamily Family => FormatFamily.Archive;
     public void Read(ZbdDocument doc, CancellationToken token)
     {
@@ -14,6 +17,7 @@ internal sealed class ArchiveReader(long maximumTypedZrdBytes = ArchiveZrdBudget
         ArchiveZrdBudget zrdBudget = new(maximumTypedZrdBytes);
         int limitedMembers = 0, omittedDiagnostics = 0; bool omittedError = false;
         long motionSamples = 0;
+        int motionPreviewParts = MaximumMotionPreviewParts;
         c.Seek((int)table);
         for (int i = 0; i < records; i++)
         {
@@ -47,7 +51,12 @@ internal sealed class ArchiveReader(long maximumTypedZrdBytes = ArchiveZrdBudget
                 else if (probe.Family == FormatFamily.Zrd && probe.Description != FormatRegistry.SourceZrdDescription) Diagnostic(new("Warning", $"Archive member {i} ({name}) is not a complete ZRD value; raw inspection and member replacement remain available.", i, offset));
                 if (motion != null) { kind = AssetKind.Motion; doc.Game = GameVariant.MechWarrior3; }
                 var a = doc.Add(kind, i, name, offset, size, new JsonObject { ["source_path"] = source, ["aux_value"] = (long)aux, ["source_filetime"] = time.ToString(System.Globalization.CultureInfo.InvariantCulture), ["record_raw"] = Convert.ToHexStringLower(doc.Bytes.Span.Slice((int)recStart, 148)) }, (object?)motion ?? tree);
-                if (motion != null) a.Metadata["motion"] = motion.ToJson(token: token);
+                if (motion != null)
+                {
+                    int shown = Math.Min(motion.Parts.Count, Math.Min(MotionClip.MaximumPreviewParts, motionPreviewParts));
+                    motionPreviewParts -= shown;
+                    a.Metadata["motion"] = motion.ToJsonPreview(shown, token);
+                }
                 if (zrdLimited) a.Metadata["typed_decode_limited"] = true;
                 a.Summary = $"{size:N0} bytes · {kind}";
             }

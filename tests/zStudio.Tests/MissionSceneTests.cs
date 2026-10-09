@@ -48,6 +48,32 @@ public sealed partial class AnimationTests
         Assert.Equal(99, SceneBuilder.LocalTransform(initial.Scene.Nodes[0]).M41);
         var started = BuildMission(context.World, context.Package, null, null, Arr(Str("NEW_GAME_START"), Str("setup")));
         Assert.Equal(new Vector3(12,3,4), SceneBuilder.LocalTransform(started.Scene.Nodes[0]).Translation);
+        // Nested startup lists retain their authored order, including repeated names. The final distinct
+        // animation must run after setup, without advancing either program beyond its immediate frontier.
+        var last = MissionEntry(2, "last", "animated");
+        var move = AnimationCatalog.Create(7); move.SetShort(28, 1); move.SetVector(16, new(31, 2, 1)); last.Sequences[0].Events.Add(move);
+        context.Package.Entries.Add(last); bytes = Pack(context.Package);
+        var nested = Arr(Arr(Str("NEW_GAME_START"), Arr(Str("setup"), Arr(Str("setup"), Str("last")))));
+        Assert.Equal(new Vector3(31, 2, 1), SceneBuilder.LocalTransform(BuildMission(context.World, context.Package, null, null, nested).Scene.Nodes[0]).Translation);
+
+        // Repeated matching ancestors used to enumerate every descendant before any operation admission.
+        // A small shared allowance exercises the actual Build path without a large allocation/time probe.
+        JsonNode leaves = Arr([.. Enumerable.Range(0, 128).Select(_ => (JsonNode)Str("missing")), Str("setup")]);
+        var token = TestContext.Current.CancellationToken;
+        Assert.Equal(new Vector3(12, 3, 4), SceneBuilder.LocalTransform(MissionSceneLoader.BuildWithBudget(context.World,
+            new MissionPlacementBudget(token, maximumWork: 32768), context.Package, null, null,
+            Arr(Str("NEW_GAME_START"), leaves.DeepClone()), token: token).Scene.Nodes[0]).Translation);
+        JsonNode overlapping = leaves;
+        for (int i = 0; i < 24; i++) overlapping = Arr(Str("NEW_GAME_START"), overlapping);
+        Assert.Throws<InvalidDataException>(() => MissionSceneLoader.BuildWithBudget(context.World,
+            new MissionPlacementBudget(token, maximumWork: 32768), context.Package, null, null, overlapping, token: token));
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(token);
+        int reservations = 0;
+        var canceledBudget = new MissionPlacementBudget(cancel.Token, reserved: () => { if (++reservations == 5000) cancel.Cancel(); });
+        Assert.ThrowsAny<OperationCanceledException>(() => MissionSceneLoader.BuildWithBudget(context.World,
+            canceledBudget, context.Package, null, null, overlapping, token: cancel.Token));
+        Assert.Equal(new Vector3(12, 3, 4), SceneBuilder.LocalTransform(BuildMission(context.World, context.Package, null, null,
+            Arr(Str("NEW_GAME_START"), Str("setup"))).Scene.Nodes[0]).Translation);
         Assert.Equal(bytes, Pack(context.Package)); Assert.Equal(Vector3.Zero, SceneBuilder.LocalTransform(context.Scene.Nodes[0]).Translation);
     }
     [Fact]

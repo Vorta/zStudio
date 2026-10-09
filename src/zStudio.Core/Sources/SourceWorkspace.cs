@@ -54,6 +54,10 @@ public sealed class SourceWorkspace
     /// <summary>The files each content change touched, by the <see cref="ContentRevision"/> it produced.</summary>
     private readonly List<(long Revision, string[] Files)> changeLog = [];
     private readonly Saver save;
+    private readonly long maximumRetainedBytes;
+    // A prepared fork shares these immutable arrays with its parent. They stay live there even when
+    // the fork replaces a baseline or trims history; do not pretend preparation released them.
+    private byte[][] parentContent = [];
     private readonly Lock gate = new();
     private int position;
     /// <summary>What the newest edit displaced (the redo steps after it, the oldest steps trimmed), until another step moves.</summary>
@@ -187,7 +191,7 @@ public sealed class SourceWorkspace
     public PreparedEdit BeginPreparedEdit()
     {
         if (IsSaving) throw new InvalidOperationException("Wait for the save to finish.");
-        var fork = new SourceWorkspace(Root, (_, _, _) => throw new InvalidOperationException("A prepared edit cannot save."))
+        var fork = new SourceWorkspace(Root, (_, _, _) => throw new InvalidOperationException("A prepared edit cannot save."), maximumRetainedBytes)
         { preparedReads = new(StringComparer.OrdinalIgnoreCase), preparedPresence = new(StringComparer.OrdinalIgnoreCase), nextId = nextId, position = position };
         lock (gate)
         {
@@ -195,6 +199,7 @@ public sealed class SourceWorkspace
             foreach (var pair in working) fork.working.Add(pair.Key, pair.Value);
             fork.dirtyFiles.UnionWith(dirtyFiles);
             fork.history.AddRange(history);
+            fork.parentContent = RetainedContent().Distinct<byte[]>(ReferenceEqualityComparer.Instance).ToArray();
         }
         return new(this, fork);
     }
@@ -239,8 +244,12 @@ public sealed class SourceWorkspace
         return transaction;
     }
 
-    public SourceWorkspace(string root, Saver? saver = null)
+    public SourceWorkspace(string root, Saver? saver = null) : this(root, saver, MaximumHistoryBytes) { }
+
+    internal SourceWorkspace(string root, Saver? saver, long maximumRetainedBytes)
     {
+        if (maximumRetainedBytes is < 0 or > MaximumHistoryBytes) throw new ArgumentOutOfRangeException(nameof(maximumRetainedBytes));
+        this.maximumRetainedBytes = maximumRetainedBytes;
         Root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         if (!SourceProject.IsProject(Root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         // Every later check of a file starts below Root; a linked root or ancestor would let edits and saves leave the folder.
@@ -276,6 +285,69 @@ public sealed class SourceWorkspace
 
     internal byte[]? ReadModel(string relative, CancellationToken token, long maximumBytes, int maximumJsonBytes)
         => Read(relative, token, ProjectReadLimits.Model(maximumBytes, maximumJsonBytes));
+
+    /// <summary>
+    /// Hash accepted replacement targets without allocating their old disk payloads. One operation admits
+    /// each path once (shared pending buffers once by identity), before hashing through its held handle.
+    /// </summary>
+    public IReadOnlyDictionary<string, string?> ReadEditHashes(IEnumerable<string> relatives, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        Dictionary<string, string?> result = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<byte[], string> pending = new(ReferenceEqualityComparer.Instance);
+        long remaining = maximumRetainedBytes;
+        foreach (string raw in relatives)
+        {
+            token.ThrowIfCancellationRequested();
+            string relative = Normalize(raw);
+            if (result.ContainsKey(relative)) continue;
+            CheckEditable(relative); CheckTrackedPresence(relative, token);
+            byte[]? content = null; Baseline? baseline = null; bool dirty;
+            lock (gate)
+            {
+                dirty = dirtyFiles.Contains(relative);
+                if (dirty) { content = working[relative]; baseline = baselines[relative]; }
+            }
+            if (dirty)
+            {
+                string? hash = null;
+                if (content != null && !pending.TryGetValue(content, out hash))
+                {
+                    Admit(content.LongLength); pending.Add(content, hash = SourceProject.Sha256(content));
+                }
+                preparedReads?.TryAdd(relative, baseline! with { Bytes = null });
+                result.Add(relative, hash); continue;
+            }
+            string path = SourceProject.Resolve(Root, relative);
+            SourceProject.RejectNestedLinks(Root, relative);
+            Baseline? frozen = null; preparedReads?.TryGetValue(relative, out frozen);
+            if (!SourceRead.FileExists(path))
+            {
+                if (frozen?.Stamp != null) Changed(relative);
+                preparedReads?.TryAdd(relative, new(null, null)); result.Add(relative, null); continue;
+            }
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            FileStamp Stamp() => new(stream.Length, File.GetLastWriteTimeUtc(stream.SafeFileHandle));
+            var stamp = Stamp();
+            Admit(stamp.Length); // Includes actual held length, before any payload read or digest work.
+            if (frozen != null && frozen.Stamp != stamp) Changed(relative);
+            var digest = JournalDigest.Of(stream, token);
+            if (digest.Length != stamp.Length || Stamp() != stamp) Changed(relative);
+            if (frozen != null && frozen.Sha256 != digest.Sha256) Changed(relative);
+            preparedReads?.TryAdd(relative, new(null, stamp) { Sha256 = digest.Sha256 });
+            result.Add(relative, digest.Sha256);
+        }
+        return result;
+
+        void Admit(long bytes)
+        {
+            token.ThrowIfCancellationRequested();
+            if (bytes < 0 || bytes > Formats.FormatRegistry.MaximumDocumentBytes || bytes > remaining)
+                throw RetainedContentLimit(maximumRetainedBytes);
+            remaining -= bytes;
+        }
+        static void Changed(string relative) => throw new SourceFileChangedException($"{relative} changed while the edit was prepared; try again.", [relative]);
+    }
 
     private byte[]? ReadCore(string relative, CancellationToken token, long maximumBytes, SourceRead.Admission? admission)
     {
@@ -365,6 +437,8 @@ public sealed class SourceWorkspace
         if (IsSaving) throw new InvalidOperationException("Wait for the save to finish.");
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
         List<SourceFileChange> files = []; HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        var allowance = ContentAllowance(token);
+        Dictionary<string, Baseline> refreshed = new(StringComparer.OrdinalIgnoreCase);
         foreach (var (raw, content) in changes)
         {
             token.ThrowIfCancellationRequested();
@@ -373,13 +447,25 @@ public sealed class SourceWorkspace
             CheckEditable(relative);
             if (EditGuard?.Invoke(relative) is { } refused) throw new InvalidDataException(refused);
             if (content != null && content.Length > Formats.FormatRegistry.MaximumDocumentBytes) throw new InvalidDataException($"{relative} would exceed 512 MiB.");
-            Refresh(relative, token);
-            byte[]? before; lock (gate) before = working.TryGetValue(relative, out var current) ? current : baselines[relative].Bytes;
+            allowance.Add(content);
+            var baseline = Refresh(relative, allowance, token);
+            byte[]? before;
+            lock (gate)
+            {
+                bool changed = !baselines.TryGetValue(relative, out var previous) || !ReferenceEquals(previous, baseline);
+                if (changed) refreshed.Add(relative, baseline);
+                before = !changed && working.TryGetValue(relative, out var current) ? current : baseline.Bytes;
+            }
             if (Same(before, content)) continue;
             // A build reads the overlay in place of the disk; a file the disk still holds cannot be hidden from it yet.
-            if (content == null && BaselineOf(relative).Bytes != null) throw new NotSupportedException($"Deleting {relative} from the project is not supported.");
+            if (content == null && baseline.Bytes != null) throw new NotSupportedException($"Deleting {relative} from the project is not supported.");
             files.Add(new(relative, before, content));
         }
+        token.ThrowIfCancellationRequested();
+        // Do not publish even clean baselines from a partially admitted transaction.
+        lock (gate)
+            foreach (var (relative, baseline) in refreshed)
+            { baselines[relative] = baseline; working.Remove(relative); dirtyFiles.Remove(relative); }
         if (files.Count == 0) return null;
         return Commit(label, files);
     }
@@ -434,6 +520,40 @@ public sealed class SourceWorkspace
     /// <summary>The most steps and bytes (before and after copies) the history keeps; the oldest steps go first.</summary>
     public const int MaximumHistory = 256;
     public const long MaximumHistoryBytes = 1024L * 1024 * 1024;
+    private static InvalidDataException RetainedContentLimit(long maximum) => new(
+        $"Source edits exceed the {maximum:N0}-byte retained-content allowance, including old files and undo history. Use smaller replacement files or save and reopen the project before retrying.");
+
+    private sealed class EditContentAllowance(long maximum, CancellationToken token)
+    {
+        private readonly HashSet<byte[]> held = new(ReferenceEqualityComparer.Instance);
+        private readonly long maximumBytes = maximum;
+        internal long Remaining { get; private set; } = maximum;
+        internal void Add(byte[]? bytes)
+        {
+            token.ThrowIfCancellationRequested();
+            if (bytes == null || held.Contains(bytes)) return;
+            if (bytes.LongLength > Remaining) throw RetainedContentLimit(maximumBytes);
+            Remaining -= bytes.LongLength; held.Add(bytes);
+        }
+    }
+    // Caller holds gate. History/rollback can reference the same immutable content many times.
+    private IEnumerable<byte[]> RetainedContent()
+    {
+        foreach (var bytes in parentContent) yield return bytes;
+        foreach (var baseline in baselines.Values) if (baseline.Bytes != null) yield return baseline.Bytes;
+        foreach (var bytes in working.Values) if (bytes != null) yield return bytes;
+        foreach (var transaction in history) foreach (var file in transaction.Files)
+        { if (file.Before != null) yield return file.Before; if (file.After != null) yield return file.After; }
+        if (displaced is { } previous)
+            foreach (var transaction in previous.Redo.Concat(previous.Trimmed)) foreach (var file in transaction.Files)
+            { if (file.Before != null) yield return file.Before; if (file.After != null) yield return file.After; }
+    }
+    private EditContentAllowance ContentAllowance(CancellationToken token)
+    {
+        EditContentAllowance allowance = new(maximumRetainedBytes, token);
+        lock (gate) foreach (var bytes in RetainedContent()) allowance.Add(bytes);
+        return allowance;
+    }
     private SourceTransaction[] Trim()
     {
         List<SourceTransaction> trimmed = [];
@@ -603,18 +723,22 @@ public sealed class SourceWorkspace
     }
 
     /// <summary>Reads a touched file's baseline once; a clean file that changed on disk since is re-read, a dirty one is a conflict.</summary>
-    private void Refresh(string relative, CancellationToken token)
+    private Baseline Refresh(string relative, EditContentAllowance allowance, CancellationToken token)
     {
         CheckTrackedPresence(relative, token);
         Baseline? baseline; lock (gate) baselines.TryGetValue(relative, out baseline);
-        if (baseline == null) { var read = ReadDisk(relative, token: token); lock (gate) baselines[relative] = read; return; }
-        if (Matches(relative, baseline, token)) { preparedReads?.TryAdd(relative, baseline with { Bytes = null }); return; }
+        if (baseline == null) return Read();
+        if (Matches(relative, baseline, token)) { preparedReads?.TryAdd(relative, baseline with { Bytes = null }); return baseline; }
         if (IsFileDirty(relative)) throw new SourceFileChangedException($"{relative} changed on disk while the workspace holds unsaved edits for it; save elsewhere or discard the edits first.", [relative]);
         // History steps of this file no longer describe it; keeping them would undo another program's edit.
         if (history.Any(t => t.Files.Any(f => f.Relative.Equals(relative, StringComparison.OrdinalIgnoreCase))))
             throw new SourceFileChangedException($"{relative} changed on disk since the workspace edited it; reload the project's worlds to continue from the file.", [relative]);
-        var fresh = ReadDisk(relative, token: token);
-        lock (gate) { baselines[relative] = fresh; working.Remove(relative); dirtyFiles.Remove(relative); }
+        return Read();
+        Baseline Read()
+        {
+            var read = ReadDisk(relative, Math.Min(Formats.FormatRegistry.MaximumDocumentBytes, allowance.Remaining), token);
+            allowance.Add(read.Bytes); return read;
+        }
     }
     private Baseline BaselineOf(string relative) { lock (gate) return baselines[relative]; }
     private bool Matches(string relative, Baseline baseline, CancellationToken token = default, bool verifyContent = true)

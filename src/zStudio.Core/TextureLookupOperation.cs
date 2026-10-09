@@ -15,22 +15,17 @@ public sealed class TextureLookupOperation
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, PackIndex> indexes = new(StringComparer.OrdinalIgnoreCase);
     private string[]? packs;
-    private long work, coldBytes;
+    private long work;
+    private readonly AssetReadBudget reads;
 
     internal TextureLookupOperation(AssetResolver resolver, string context, string? preferred,
-        long maximumWork = MaximumWork, long maximumColdReadBytes = MaximumColdReadBytes)
+        long maximumWork = MaximumWork, long maximumColdReadBytes = MaximumColdReadBytes,
+        long maximumDiscoveryBytes = MaximumColdReadBytes)
     {
         if (maximumWork < 0 || maximumColdReadBytes < 0) throw new ArgumentOutOfRangeException(nameof(maximumWork));
         this.resolver = resolver; this.context = context; this.preferred = preferred;
-        revision = resolver.SnapshotRevision; work = maximumWork; coldBytes = maximumColdReadBytes;
-    }
-
-    // Called only while both the operation gate and resolver's cold-read gate are held.
-    internal long AdmitColdRead(long bytes)
-    {
-        if (bytes < 0 || bytes > coldBytes)
-        { coldBytes = -1; throw new InvalidDataException("Texture lookup exceeds its 512 MiB cold-read allowance; use fewer texture packs."); }
-        coldBytes -= bytes; return bytes;
+        revision = resolver.SnapshotRevision; work = maximumWork;
+        reads = new(maximumDiscoveryBytes, maximumColdReadBytes);
     }
     private void Spend(long units, CancellationToken token)
     {
@@ -41,7 +36,7 @@ public sealed class TextureLookupOperation
     }
     private void CheckRevision()
     {
-        if (coldBytes < 0) throw new InvalidDataException("Texture lookup exhausted its cold-read allowance; start a new operation.");
+        reads.Check();
         if (revision != resolver.SnapshotRevision) throw new InvalidDataException("Texture sources changed during lookup; reload the preview or retry the export.");
     }
     public async Task<ResolvedTexture?> ResolveAsync(string name, CancellationToken token = default)
@@ -70,7 +65,7 @@ public sealed class TextureLookupOperation
                 ZbdDocument? document = null;
                 if (!indexes.TryGetValue(path, out var index))
                 {
-                    document = await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, this).ConfigureAwait(false);
+                    document = await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, reads).ConfigureAwait(false);
                     CheckRevision();
                     Dictionary<string, Match> names = new(StringComparer.OrdinalIgnoreCase);
                     for (int ordinal = 0; ordinal < document.Assets.Count; ordinal++)
@@ -89,7 +84,7 @@ public sealed class TextureLookupOperation
                     throw new InvalidDataException("A texture pack changed during lookup; reload the preview or retry the export.");
                 CheckRevision();
                 if (!index.Names.TryGetValue(key, out var found)) continue;
-                document ??= await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, this).ConfigureAwait(false);
+                document ??= await resolver.OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token, reads).ConfigureAwait(false);
                 CheckRevision();
                 if (document.Stamp != index.Stamp) throw new InvalidDataException("A texture pack changed during lookup; retry the operation.");
                 return new(document, document.Assets[found.Ordinal], found.Ambiguous);
@@ -100,4 +95,36 @@ public sealed class TextureLookupOperation
     }
     private sealed record Match(int Ordinal, bool Ambiguous);
     private sealed record PackIndex(FileStamp Stamp, Dictionary<string, Match> Names);
+}
+
+/// <summary>One discovery's raw input allowance, including borrowed snapshots and warm documents.
+/// Stores only paths and lengths, so its accounting cannot keep evicted raw buffers alive.</summary>
+internal sealed class AssetReadBudget(long maximumBytes = TextureLookupOperation.MaximumColdReadBytes,
+    long maximumColdBytes = TextureLookupOperation.MaximumColdReadBytes)
+{
+    private readonly Dictionary<string, long> documents = new(StringComparer.OrdinalIgnoreCase);
+    private long remaining = maximumBytes, coldRemaining = maximumColdBytes;
+    internal bool Exhausted => remaining < 0 || coldRemaining < 0;
+    internal void Check()
+    {
+        if (Exhausted)
+            throw new InvalidDataException("Asset discovery exhausted its byte allowance; use fewer resource files or start a new operation.");
+    }
+    internal void Document(string path, long bytes)
+    {
+        Check();
+        if (documents.TryGetValue(path, out long previous))
+        {
+            if (previous != bytes) { remaining = -1; Check(); }
+            return;
+        }
+        if (bytes < 0 || bytes > remaining) { remaining = -1; Check(); }
+        remaining -= bytes; documents.Add(path, bytes);
+    }
+    internal void ColdRead(long bytes)
+    {
+        Check();
+        if (bytes < 0 || bytes > coldRemaining) { coldRemaining = -1; Check(); }
+        coldRemaining -= bytes;
+    }
 }

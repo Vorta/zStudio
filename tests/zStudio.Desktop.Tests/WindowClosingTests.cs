@@ -17,6 +17,7 @@ public sealed class WindowClosingTests
     {
         // WPF permits one Application per process and requires its own STA dispatcher.
         TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        string phase = "window close lifecycle";
         Thread thread = new(() =>
         {
             string settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecoilZbdStudio", "settings.json");
@@ -42,6 +43,7 @@ public sealed class WindowClosingTests
                     await Check(["Discard", "Cancel"], 2, closes: false);
                     await Check(["Discard"], 1, closes: true, repeatClose: true);
                     await Check([], 0, closes: true);
+                    Volatile.Write(ref phase, "Properties, inspection and mission workspace");
                     await PropertiesWindowChecks.Run(app);
                     await McpWorkspaceChecks.Run(app);
                     await SceneInspectionInputChecks.Run();
@@ -57,6 +59,7 @@ public sealed class WindowClosingTests
                     await MissionSelectionChecks.RunWithoutReaders();
                     await MissionSelectionChecks.RunDeletedReaderAtStartup();
                     await MissionOwnershipChecks.Run();
+                    Volatile.Write(ref phase, "source project, recovery and model workflows");
                     await SourceProjectMcpChecks.Run();
                     await LinkedSourceProjectChecks.Run();
                     await ExportSafetyMcpChecks.Run();
@@ -73,6 +76,7 @@ public sealed class WindowClosingTests
                     await ScriptScanRound6McpChecks.Run();
                     await SourceTakeBackMcpChecks.Run();
                     await SourcePreviewChangeMcpChecks.Run();
+                    Volatile.Write(ref phase, "terrain, map zones and world editing");
                     await SourceTerrainMcpChecks.Run();
                     await SourceZoneMcpChecks.Run();
                     await SourceTerrainReferenceCapacityChecks.Run();
@@ -84,6 +88,7 @@ public sealed class WindowClosingTests
                     await DemoWorldMcpChecks.Run();
                     await LookupMcpChecks.Run();
                     await SourceObjectPlanMcpChecks.Run();
+                    Volatile.Write(ref phase, "navigation, lifecycle and content editing");
                     await ResponsiveNavigatorChecks.Run(app);
                     await WorldHighlightMcpChecks.Run();
                     await AiNetworkMcpChecks.Run();
@@ -100,6 +105,7 @@ public sealed class WindowClosingTests
                     await MotionMcpChecks.Run();
                     await MotionBindingMcpChecks.Run();
                     await MotionLibraryRefreshChecks.Run();
+                    Volatile.Write(ref phase, "animation, drafts and document preparation");
                     await AnimationFogChecks.Run();
                     await AnimationTextureQueueChecks.Run();
                     await ContentEditingMcpChecks.Run();
@@ -109,11 +115,13 @@ public sealed class WindowClosingTests
                     await AnimationMcpCancellationChecks.Run();
                     await ReloadChecks.Run();
                     await DocumentPreparationChecks.Run();
+                    Volatile.Write(ref phase, "compiled asset inventory");
                     await CompiledInventoryChecks.Run();
                 }
                 catch (Exception ex) { failure ??= ex; }
                 finally
                 {
+                    Volatile.Write(ref phase, "workspace shutdown and settings restoration");
                     foreach (Window window in app.Windows.Cast<Window>().ToArray())
                     {
                         if (window is MainWindow main)
@@ -211,10 +219,12 @@ public sealed class WindowClosingTests
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         // All workspace fixtures share one STA/Application and run serially.
-        // Allow the expanded suite (including large-input/race checks) to finish
-        // alongside corpus tests; individual operations retain their own deadlines.
-        // A hang guard, not a speed check: the chain takes about 1.5 minutes alone and over 3 on a loaded machine.
-        await completion.Task.WaitAsync(TimeSpan.FromMinutes(6), TestContext.Current.CancellationToken);
+        // CI runs test modules serially so Core allocation tests do not compete
+        // with this dispatcher/rendering chain. Individual operations retain
+        // their deadlines; this outer limit remains a hang guard.
+        try { await completion.Task.WaitAsync(TimeSpan.FromMinutes(6), TestContext.Current.CancellationToken); }
+        catch (TimeoutException ex) when (!completion.Task.IsCompleted)
+        { throw new TimeoutException($"Desktop workspace checks timed out during {Volatile.Read(ref phase)}.", ex); }
     }
 
     private static DocumentModel DirtyDocument(int index)

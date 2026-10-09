@@ -13,8 +13,7 @@ using Xunit;
 namespace Recoil.Zbd.Desktop.Tests;
 
 /// <summary>
-/// A comparison that pairs some copies in order, or runs out of copy checks, says so in the Compare worlds window and
-/// through MCP.
+/// A comparison that pairs some copies in order says so in the Compare worlds window and through MCP.
 /// </summary>
 internal static class WorldCompareBudgetChecks
 {
@@ -36,15 +35,12 @@ internal static class WorldCompareBudgetChecks
 
             var summary = await Job("world_compare", new() { ["retail"] = retail, ["rebuilt"] = rebuilt });
             Assert.True(summary["approximatePairing"]!.GetValue<bool>());
-            Assert.True(summary["wholeWorldLookupsUnchecked"]!.GetValue<int>() >= 1);
             // A read gives the same summary.
             var read = await Call("world_compare_tree", new() { ["context"] = summary["context"]!.GetValue<string>() });
-            Assert.Equal(summary["wholeWorldLookupsUnchecked"]!.GetValue<int>(), read["summary"]!["wholeWorldLookupsUnchecked"]!.GetValue<int>());
             Assert.True(read["summary"]!["approximatePairing"]!.GetValue<bool>());
             var window = (WorldCompareWindow)typeof(MainWindow).GetField("compareWindow", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
             string text = ((TextBlock)Find(window, c => c is TextBlock t && t.Text.Contains("Merged tree", StringComparison.Ordinal))).Text;
             Assert.Contains("paired in order", text);
-            Assert.Contains("not checked for an indistinguishable copy", text);
 
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments)
             {
@@ -69,42 +65,24 @@ internal static class WorldCompareBudgetChecks
         }
     }
 
-    private static WorldNode Node(string name, float x = 0, float trs = 0)
+    private static WorldNode Node(string name, float x = 0)
     {
         WorldNode node = new(name, WorldNodeClass.Object3D) { Flags = WorldGltf.DefaultCarried };
         node.SetPayloadInt(0, 0x20);
         float[] matrix = [1, 0, 0, 0, 1, 0, 0, 0, 1, x, 0, 0];
         for (int i = 0; i < matrix.Length; i++) node.SetPayloadFloat(0x30 + i * 4, matrix[i]);
-        node.SetPayloadFloat(0x18, trs);
         return node;
     }
     private static WorldNode Link(WorldNode parent, WorldNode child) { parent.Children.Add(child); child.Parents.Add(parent); return child; }
 
     /// <summary>
-    /// A pile of 1,500 rocks at one place, moved by 2 in the rebuilt world (more candidate pairs than a name pairs by
-    /// position); two crates of 1,500 slats that differ only in their class data, listed the other way round in the second
-    /// (more checks to tell apart than a comparison makes); and two barrels. The rebuilt world gives the highest slot of the
-    /// crates and of the barrels to the other copy.
+    /// A pile of 1,500 rocks at one place, moved by 2 in the rebuilt world: more candidate pairs than a name pairs by position.
     /// </summary>
     private static GameZWorld World(bool rebuilt)
     {
         GameZWorld world = new(); WorldNode root = new("world1", WorldNodeClass.World); world.Nodes.Add(root);
         var pile = Link(root, Node("pile")); world.Nodes.Add(pile);
         for (int i = 0; i < 1500; i++) world.Nodes.Add(Link(pile, Node("rock", rebuilt ? 2 : 0)));
-        List<WorldNode> crates = [];
-        for (int c = 0; c < 2; c++)
-        {
-            var crate = Link(root, Node("crate")); world.Nodes.Add(crate); crates.Add(crate);
-            foreach (int i in c == 0 ? Enumerable.Range(0, 1500) : Enumerable.Range(0, 1500).Reverse()) world.Nodes.Add(Link(crate, Node("slat", trs: i)));
-        }
-        WorldNode first = Link(root, Node("barrel", 5)), second = Link(root, Node("barrel", 5));
-        world.Nodes.Add(first); world.Nodes.Add(second);
-        if (rebuilt)
-            foreach (var (a, b) in new[] { (crates[0], crates[1]), (first, second) })
-            {
-                int i = world.Nodes.IndexOf(a), j = world.Nodes.IndexOf(b);
-                (world.Nodes[i], world.Nodes[j]) = (world.Nodes[j], world.Nodes[i]);
-            }
         return world;
     }
 

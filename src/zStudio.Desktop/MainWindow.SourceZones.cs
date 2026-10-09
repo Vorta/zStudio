@@ -75,14 +75,15 @@ public partial class MainWindow
     {
         var session = SourceWorldOf(document);
         if (!automation && !await ResolvePropertiesDraftsAsync()) return;
-        RequireNoDrafts(document);
+        // The zone editor and pinned Properties are shared across documents.
+        RequireNoDrafts();
         long revision = session.Workspace.ContentRevision;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         var catalog = await Task.Run(() => SourceZoneEdits.Catalog(session.Workspace, session.Mission, linked.Token), linked.Token);
         linked.Token.ThrowIfCancellationRequested();
         if (document.IsDisposed || session.Owner != document || revision != session.Workspace.ContentRevision)
             throw new StudioCommandException("context_changed", "The source world changed while opening zones.");
-        RequireNoDrafts(document);
+        RequireNoDrafts();
         CancelZoneDraft(close: true); zoneDraft = new(document); zoneCatalog = catalog;
         zoneDraft.Disposing = () => { if (zoneDraft?.Document == document) CancelZoneDraft(close: true); };
         document.Disposing += zoneDraft.Disposing;
@@ -114,8 +115,18 @@ public partial class MainWindow
         if (shownDocument != draft.Document || scene == null || shownAsset?.Kind != Recoil.Zbd.Core.AssetKind.World)
             throw new StudioCommandException("not_ready", "Show this source world's Whole world preview before painting.");
         if (draft.Document.PickupsLocked) throw new StudioCommandException("locked", "Unlock world editing before painting zones.");
-        scene.ZonePaintFaces = draft.Faces; scene.ZonePaintActive = !scene.ZonePaintActive;
+        bool on = !scene.ZonePaintActive;
+        if (on)
+        {
+            if (scene.IsFlyActive || scene.IsPickupDragging || scene.IsTerrainStroking)
+                throw new StudioCommandException("busy", "Finish the active navigation or editing gesture before painting zones.");
+            // Clear the retained terrain tool as well as its renderer flag, so preview refreshes
+            // cannot reactivate it underneath the zone tool. Its recipe and edits stay intact.
+            SetTerrainBrush(null);
+        }
+        scene.ZonePaintFaces = draft.Faces; scene.ZonePaintActive = on;
         scene.ZoneStrokeCompleted -= ZoneStrokeCompleted; scene.ZoneStrokeCompleted += ZoneStrokeCompleted;
+        ViewModel.Status = on ? "Painting map zones: drag over source objects or faces." : "Zone painting off.";
     }
     private void AddSelectedZoneTarget(ZoneDraft draft)
     {

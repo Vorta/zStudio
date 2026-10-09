@@ -31,7 +31,7 @@ public sealed class AnimationAudioTests
 
     [Theory]
     [InlineData(8, 22050, 1)]
-    [InlineData(16, 48000, 2)]
+    [InlineData(16, 96000, 2)] // Downsampling exercises input-rate-bounded read blocks; default fixtures cover 48 kHz.
     [InlineData(24, 44100, 2)]
     [InlineData(32, 11025, 1)]
     public void PredecodeNormalizesPcmWithoutChangingWaveBytes(int bits, int rate, int channels)
@@ -83,7 +83,10 @@ public sealed class AnimationAudioTests
         var context = Context(); context.Sounds["alias"] = context.Sounds["tone"] with { Name = "alias" };
         context.Package.Entries[0].Primary.Events.Add(SoundEvent("alias"));
         int decoded = 0; FakeOutput output = new();
-        await using AnimationAudio audio = new(() => output, (bytes, token) => { decoded++; return PreparedSound.Decode(bytes, token); });
+        // Essential aggregate regression: one normalized second fits, two distinct samples do not;
+        // names sharing the same WAV must still use one reservation and one decode.
+        await using AnimationAudio audio = new(() => output, (bytes, token) => { decoded++; return PreparedSound.Decode(bytes, token); }, maximumPreparedBytes: 400_000);
+        List<string> diagnostics = []; audio.Diagnostic += diagnostics.Add;
         await audio.PrepareAsync(context, 0, Token);
         Assert.True(audio.IsPrepared); Assert.Equal(1, decoded); Assert.Equal(1, audio.PreparedSoundCount);
         for (int i = 0; i < 100; i++)
@@ -93,6 +96,30 @@ public sealed class AnimationAudioTests
         await audio.PrepareAsync(context, 0, Token);
         Assert.Equal(1, decoded); Assert.Equal(1, output.Starts); Assert.Equal(0, output.Disposals);
         Assert.Equal(1, audio.OutputInitializations);
+
+        // Leave both an active voice and a queued voice when replacing the bank. A device need not
+        // call Read again to release old samples and make room for the next preparation.
+        audio.Update(Frame(0, Cue(1001)), context, true); Assert.Contains(output.Read(2), v => v != 0);
+        audio.Update(Frame(0, Cue(1001), Cue(1002)), context, true);
+        context.Sounds["replacement"] = new("replacement", "replacement.wav", false, Wave(8, 8000, 1));
+        context.Package.Entries[0].Primary.Events.Add(SoundEvent("replacement"));
+        await audio.PrepareAsync(context, 0, Token);
+        Assert.False(audio.IsPrepared); Assert.True(audio.Muted); Assert.Equal(0, audio.PreparedSoundCount);
+        Assert.Equal(1, decoded); // Refused before decoding even one additional sample.
+        Assert.Contains("decoded audio allowance", Assert.Single(diagnostics));
+        Assert.Equal(0, audio.VoiceCount);
+
+        context.Package.Entries[0].Primary.Events.Clear();
+        context.Package.Entries[0].Primary.Events.Add(SoundEvent("replacement"));
+        context.Sounds["alias"] = context.Sounds["replacement"] with { Name = "alias" };
+        context.Package.Entries[0].Primary.Events.Add(SoundEvent("alias"));
+        audio.Muted = false;
+        await audio.PrepareAsync(context, 0, Token);
+        Assert.True(audio.IsPrepared); Assert.Equal(1, audio.PreparedSoundCount); Assert.Equal(2, decoded);
+        Assert.All(output.Read(2), v => Assert.Equal(0, v)); // Neither old active nor queued voice survived.
+        audio.Update(Frame(0, Cue(1003) with { Name = "replacement" }), context, true);
+        Assert.Contains(output.Read(128), v => v != 0);
+        Assert.Equal(1, output.Starts); Assert.Equal(0, output.Disposals);
     }
 
     [Fact]

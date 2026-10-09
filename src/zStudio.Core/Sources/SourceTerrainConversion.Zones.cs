@@ -53,19 +53,23 @@ public static partial class SourceTerrainConversion
         }
 
         // Only the parsed planning view gains effective node fields. The authored glTF stays neutral.
-        internal void ApplyPlanningValues(CancellationToken token)
+        internal void ApplyPlanningValues(GltfDocument doc, CancellationToken token)
         {
-            foreach (var (node, zone) in nodeWords)
+            foreach (var node in doc.Roots) Apply(node, asset.Profile.LoadRoot?.Word & 255u ?? 255u);
+            void Apply(GltfNode node, uint inherited)
             {
                 token.ThrowIfCancellationRequested();
+                var zone = nodeWords[node];
+                uint effective = zone.Inherit ? zone.Word & ~255u | inherited : zone.Word;
                 node.Extras ??= new();
                 if (node.Extras[WorldGltf.Key] is not JsonObject extras)
                     node.Extras[WorldGltf.Key] = extras = new();
                 uint flags = Flags(extras);
                 extras["flags"] = $"0x{(zone.Gate ? flags | WorldGltf.ZoneGate : flags & ~WorldGltf.ZoneGate):X8}";
                 extras.Remove("zone"); extras.Remove("zoneWord");
-                if (!zone.Inherit) extras["zone"] = (int)(zone.Word & 255);
-                if ((zone.Word & ~255u) != 0) extras["zoneWord"] = $"0x{zone.Word:X8}";
+                extras["zone"] = (int)(effective & 255);
+                if ((effective & ~255u) != 0) extras["zoneWord"] = $"0x{effective:X8}";
+                foreach (var child in node.Children) Apply(child, effective & 255u);
             }
         }
 

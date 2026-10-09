@@ -290,6 +290,16 @@ public sealed partial class SourcePublisher
         string folder = JournalPath(journal.Id), staging = StagingPath(journal.Id); var files = journal.Manifest.Files;
         // Decide first: nothing changes unless every file can be finished.
         List<SourceRecoveryConflict> conflicts = [];
+        // Admission is specific to completing an uncommitted save. Keep even unsupported journals readable so
+        // inspection, rollback and abandon can preserve/restore originals, including files already moved aside.
+        // Check the whole batch before Blocker hashes any body or completion changes its first source file.
+        foreach (var file in files)
+        {
+            token.ThrowIfCancellationRequested();
+            if (file.Content is { Length: > Formats.FormatRegistry.MaximumDocumentBytes })
+                conflicts.Add(new(file.Relative, "cannot be completed because its new content exceeds the 512 MiB source-file limit; roll back or abandon the save instead"));
+        }
+        if (conflicts.Count > 0) return new([], conflicts, false);
         for (int i = 0; i < files.Count; i++)
         {
             token.ThrowIfCancellationRequested();
@@ -399,11 +409,12 @@ public sealed partial class SourcePublisher
     private byte[] NewContent(DirectoryLease directories, string journal, int index, JournalDigest content)
     {
         const string Damaged = "the save journal's copy of its new content is damaged.";
+        if (content.Length > Formats.FormatRegistry.MaximumDocumentBytes)
+            throw new InvalidDataException("its new content exceeds the 512 MiB source-file limit.");
         CheckWorkingPath(AfterPath(journal, index));
         directories.Parent(AfterPath(journal, index));
         using FileStream stream = directories.OpenFile(AfterPath(journal, index), FileMode.Open, FileAccess.Read, FileShare.Read);
         if (stream.Length != content.Length) throw new InvalidDataException(Damaged);
-        if (content.Length > Array.MaxLength) throw new InvalidDataException("its new content is larger than a source file can be.");
         byte[] bytes = new byte[content.Length]; stream.ReadExactly(bytes);
         if (JournalDigest.Of(bytes) != content) throw new InvalidDataException(Damaged);
         return bytes;

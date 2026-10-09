@@ -1,7 +1,9 @@
 using System.IO;
 using System.Numerics;
 using System.Text;
+using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core.Terrain;
+using Recoil.Zbd.Core.Worlds;
 using Xunit;
 
 namespace Recoil.Zbd.Tests;
@@ -149,6 +151,45 @@ public sealed class TerrainCompilerTests
             Assert.True(p.Polygons.SelectMany(q => q.Corners).Select(c => c.Position).Distinct().Count() <= TerrainCompiler.VertexBudget);
         });
         Assert.Equal(3200, result.Pieces.Sum(p => p.Polygons.Count));
+
+        // Finite FLOAT coordinates beyond the old scaled Int64 range must split too. Each triangle has area
+        // in YZ and three distinct vertices; the huge X values are exactly representable, with no cut required.
+        // Descending authored X order must survive the split instead of being replaced by spatial sorting.
+        foreach (bool huge in new[] { false, true })
+        {
+            GltfPrimitive primitive = new() { Material = new() };
+            for (int i = 0; i < 308; i++)
+            {
+                int position = 307 - i;
+                float x = huge ? MathF.ScaleB(1, 54) + position * MathF.ScaleB(1, 32) : 1024 + position * 4;
+                primitive.Positions.AddRange([new(x, 0, 0), new(x, 1, 0), new(x, 0, 1)]);
+                primitive.Normals.AddRange([Vector3.UnitX, Vector3.UnitX, Vector3.UnitX]);
+                primitive.Indices.AddRange([3 * i, 3 * i + 1, 3 * i + 2]);
+            }
+            GltfMesh mesh = new(); mesh.Primitives.Add(primitive);
+            GltfDocument document = new(); document.Roots.Add(new() { Name = "land", Mesh = mesh });
+            var (json, binary) = document.Write("surfaces.bin", Token);
+            var parsed = GltfDocument.Read(json, _ => binary, Token);
+            byte[] recipe = Recipe(TerrainAttributes.None).Write();
+            WorldGltf.ImportContext context = new()
+            {
+                World = new(), Reference = (_, _) => (parsed, "surfaces.gltf"),
+                ReadFile = (_, _) => (recipe, "surface.terrain.json"),
+                TextureName = (_, _, _) => "texture", Grid = () => Grid, Token = Token,
+            };
+            var nodes = WorldGltf.ImportTerrain("surface.terrain.json", "database.gltf", context, 10000);
+            Assert.Equal(2, nodes.Count);
+            Assert.Equal(308, nodes.Sum(n => n.Model!.Polygons.Count));
+            Assert.All(nodes, n =>
+            {
+                var model = Assert.IsType<WorldModel>(n.Model);
+                Assert.InRange(model.Vertices.Count, 1, ModelBuilder.MaximumVertices);
+                Assert.Equal(Vector3.UnitX, Assert.Single(model.Normals));
+                Assert.All(model.Polygons, p => Assert.Equal(p.Vertices.Length, p.Normals.Length));
+            });
+            Assert.Equal(primitive.Positions,
+                nodes.SelectMany(n => n.Model!.Polygons.SelectMany(p => p.Vertices.Select(v => n.Model!.Vertices[v]))));
+        }
     }
 
     [Fact]

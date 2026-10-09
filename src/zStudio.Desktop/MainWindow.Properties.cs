@@ -163,7 +163,7 @@ public partial class MainWindow
             return await OpenAssetPropertiesAsync(doc, asset, token, automation);
         ++propertyRequest;
         if (doc.SourceWorld != null && doc.SourceBuild?.Provenance.ContainsKey(node.Index) == true)
-            return await ShowSourceObjectPropertiesAsync(doc, node.Index) ? propertiesWindow : null;
+            return await ShowSourceObjectPropertiesAsync(doc, node.Index, token) ? propertiesWindow : null;
         var window = GetPropertiesWindow(); bool opened = window.SetReadOnly(doc, $"{node.Name} · node #{node.Index}", SceneTreeProperties(item));
         PresentProperties(window, opened); return opened ? window : null;
     }

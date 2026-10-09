@@ -17,6 +17,18 @@ public partial class MainWindow
     private StudioCommands? studioCommands;
     private readonly SemaphoreSlim automationGate = new(1);
     private Task? mcpStopTask;
+    // Only an accepted source-world replacement can suppress a direct request's late cancellation.
+    // Async-local ownership keeps unrelated GUI edits and concurrent read commands out of this result.
+    private sealed class DirectSourcePublication(CancellationToken token)
+    {
+        internal CancellationToken Token { get; } = token;
+        internal DocumentModel? Document;
+    }
+    private readonly AsyncLocal<DirectSourcePublication?> directSourcePublication = new();
+    private void ThrowIfSourceRequestCanceled(CancellationToken token)
+    {
+        if (directSourcePublication.Value?.Document == null) token.ThrowIfCancellationRequested();
+    }
     internal StudioCommands Commands => studioCommands ??= CreateCommands();
     internal void InitializeMcp()
     {
@@ -135,9 +147,15 @@ public partial class MainWindow
                     token.ThrowIfCancellationRequested();
                     if (mutates) RequireAutomationMutationAvailable();
                     using var scope = PreviewOperation.Begin(token);
-                    var result = await action(args, token);
-                    token.ThrowIfCancellationRequested();
-                    return result;
+                    var previous = directSourcePublication.Value;
+                    directSourcePublication.Value = new(token);
+                    try
+                    {
+                        var result = await action(args, token);
+                        ThrowIfSourceRequestCanceled(token);
+                        return result;
+                    }
+                    finally { directSourcePublication.Value = previous; }
                 }, System.Windows.Threading.DispatcherPriority.Normal, token).Task.Unwrap();
             }
             finally { if (mutates) automationGate.Release(); }

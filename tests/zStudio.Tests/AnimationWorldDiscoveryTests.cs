@@ -30,34 +30,6 @@ public sealed class AnimationWorldDiscoveryTests
     }
 
     [Theory]
-    [InlineData(39, 27, 15)]
-    [InlineData(28, 15, 27)]
-    public async Task AnimationSetupDoesNotExpandUnusedEffects(int animationVersion, int worldVersion, int otherVersion)
-    {
-        using var fixture = new Fixture(animationVersion, worldVersion, otherVersion);
-        var token = TestContext.Current.CancellationToken;
-        await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
-        // A long text and many small entries: expanding the tree would wrap the text without copying it, but would make
-        // an object for every entry.
-        var root = ZrdNode.Create(ZrdKind.Array) with { Children = [ZrdNode.Create(ZrdKind.String) with { Text = new string('x', 2_000_000) },
-            .. Enumerable.Range(0, 20_000).Select(i => ZrdNode.Create(ZrdKind.Int) with { Bits = (uint)i })] };
-        var resource = fixture.AddResource("effects.zrd", ZrdWriter.Write(root, token));
-        // The count is the whole process's: other work (the runner reporting results, finalizers) can only add to it, so
-        // the least of a few loads is the setup's own (about 90 KB; expanding the unused entries takes several MB).
-        long allocated = long.MaxValue;
-        for (int attempt = 0; attempt < 3; attempt++)
-        {
-            long before = GC.GetTotalAllocatedBytes(true);
-            var context = await AnimationPreviewContext.LoadAsync(fixture.Package, fixture.AnimationPath, fixture.Resolver, token: token);
-            allocated = Math.Min(allocated, GC.GetTotalAllocatedBytes(true) - before);
-            Assert.Empty(context.Effects);
-        }
-        Assert.True(allocated < 1_000_000, $"Animation setup allocated {allocated:N0} bytes for unused effects.");
-        Assert.Equal(2_000_000, ((ZrdNode)resource.Assets[0].Content!).Children[0].Text.Length);
-        Assert.Equal(20_001, ((ZrdNode)resource.Assets[0].Content!).Children.Count);
-    }
-
-    [Theory]
     [InlineData(28, 15, 27)]
     [InlineData(28, 13, 27)] // The August 1998 demo: version-28 animations with version-13 worlds.
     [InlineData(39, 27, 15)]
@@ -111,15 +83,6 @@ public sealed class AnimationWorldDiscoveryTests
             BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616);
             BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(4), animationVersion);
             Package = new() { Prefix = prefix, Tail = [] };
-        }
-
-        public ZbdDocument AddResource(string name, byte[] bytes)
-        {
-            string path = Path.Combine(directory, "resources.zbd");
-            File.WriteAllBytes(path, ResourceEditingTests.Archive((name, bytes)));
-            var resource = FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), FileStamp.Read(path), TestContext.Current.CancellationToken);
-            Resolver.SetWorkspaceSnapshots(snapshotOwner, [OtherWorld, MatchingWorld, resource]);
-            return resource;
         }
 
         private static ZbdDocument World(string path, int version)

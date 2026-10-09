@@ -45,6 +45,29 @@ internal static class SourceWorldMcpChecks
             Directory.Delete(Path.Combine(SourceWorlds.PreviewRoot(fixture.Project), "other"), true);
             var unknown = await Job("source_world_open", new() { ["mission"] = "m9" }, "failed"); Assert.Equal("invalid_argument", unknown["code"]!.GetValue<string>());
 
+            // Hold the first mission scan, before any source workspace or document is acquired. Even reopening
+            // the same path replaces its lifetime; the old GUI request must not adopt that new generation.
+            var readMissions = main.ReadSourceWorldMissionsAsync;
+            TaskCompletionSource scanEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<IReadOnlyList<string>> scanRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            CancellationToken scanToken = default;
+            main.ReadSourceWorldMissionsAsync = (_, ct) => { scanToken = ct; scanEntered.SetResult(); return scanRelease.Task; };
+            try
+            {
+                var opening = SourceTask<DocumentModel>("OpenSourceWorldAsync", "m1", token);
+                await scanEntered.Task.WaitAsync(token);
+                long generation = main.ViewModel.WorkspaceGeneration;
+                await main.ViewModel.OpenRootAsync(fixture.Project, token);
+                Assert.True(main.ViewModel.WorkspaceGeneration > generation); Assert.True(scanToken.IsCancellationRequested);
+                string status = main.ViewModel.Status;
+                scanRelease.SetResult(["m1", "m2"]); // Deliberately ignore cancellation to exercise the publication guard.
+                Assert.Equal("context_changed", (await Assert.ThrowsAsync<StudioCommandException>(() => opening)).Code);
+                Assert.Empty(main.ViewModel.Documents); Assert.Null(main.ViewModel.SelectedDocument);
+                Assert.Null(typeof(MainWindow).GetField("sourceWorkspace", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main));
+                Assert.Equal(status, main.ViewModel.Status);
+            }
+            finally { main.ReadSourceWorldMissionsAsync = readMissions; scanRelease.TrySetResult([]); }
+
             // Tools lists the project's worlds.
             typeof(MainWindow).GetMethod("ToolsMenuOpened", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [main, new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, main)]);
             var worlds = (MenuItem)main.FindName("SourceWorldMenu");
@@ -119,8 +142,8 @@ internal static class SourceWorldMcpChecks
             }
             Assert.False(placed.IsDisposed); Assert.Equal(2, placed.SourceWorld!.Workspace.UndoCount); Assert.False(placed.SourceWorld!.Workspace.CanRedo);
 
-            // While an edit rebuilds the world, nothing else edits or saves it: an edit it cannot be built with (here a
-            // malformed glTF) is withdrawn afterwards and never reaches the project.
+            // While an edit is prepared or rebuilds the world, nothing else edits or saves it: an edit it cannot
+            // be built with (here a malformed glTF) never reaches the project or changes accepted history.
             string scriptPath = fixture.Path("gamegen/m1.gs"); byte[] scriptBefore = await File.ReadAllBytesAsync(scriptPath, token);
             fixture.Write("data/m1/models/broken.gltf", "{");
             var failing = SourceTask<DocumentModel>("AddSourceModelAsync", placed, new SourceWorldAddition(new("data/m1/models/broken.gltf", "broken"), []), CancellationToken.None);

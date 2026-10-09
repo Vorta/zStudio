@@ -11,16 +11,16 @@ namespace Recoil.Zbd.Tests;
 
 /// <summary>
 /// Review fixes for name lookups and Compare worlds: children of a pair at many places are paired once and within one
-/// budget for the comparison, a comparison that runs out of copy checks says so, MechWarrior 3 keeps its own unresolved
+/// budget for the comparison, MechWarrior 3 keeps its own unresolved
 /// names as warnings, and an editor-chosen root binds its attach node as the game's loader binds one.
 /// </summary>
 public sealed class LookupCompareReviewFixTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    private static WorldNode Node(string name, Vector3? at = null, uint flags = 0)
+    private static WorldNode Node(string name, Vector3? at = null)
     {
-        WorldNode node = new(name, WorldNodeClass.Object3D) { Flags = WorldGltf.DefaultCarried | flags };
+        WorldNode node = new(name, WorldNodeClass.Object3D) { Flags = WorldGltf.DefaultCarried };
         node.SetPayloadInt(0, at == null ? 0x28 : 0x20);
         if (at is { } p)
         {
@@ -121,78 +121,6 @@ public sealed class LookupCompareReviewFixTests
         // Every child is still paired at every place.
         Assert.Equal(60, comparison.Roots[0].Children.Count);
         Assert.All(comparison.Roots[0].Children, row => Assert.All(row.Children, c => Assert.True(c.Expected != null && c.Actual != null)));
-    }
-
-    [Fact]
-    public void LookupChangesTheComparisonCannotConfirmSaySo()
-    {
-        // The crate a lookup finds becomes the copy whose 1,500 slats are listed the other way round: telling the two apart
-        // takes more checks than a comparison makes, so the change is reported as possible rather than certain.
-        GameZWorld Build(bool rebuilt)
-        {
-            WorldNode root = new("world1", WorldNodeClass.World);
-            List<WorldNode> crates = [];
-            for (int c = 0; c < 2; c++)
-            {
-                var crate = Link(root, Node("crate"));
-                foreach (int i in c == 0 ? Enumerable.Range(0, 1500) : Enumerable.Range(0, 1500).Reverse()) Link(crate, Node("slat", flags: (uint)i << 9));
-                crates.Add(crate);
-            }
-            var world = World(root);
-            if (rebuilt) { int i = world.Nodes.IndexOf(crates[0]), j = world.Nodes.IndexOf(crates[1]); (world.Nodes[i], world.Nodes[j]) = (world.Nodes[j], world.Nodes[i]); }
-            return world;
-        }
-        static SourceLookup Lookup(GameZWorld world, string fingerprint)
-        {
-            var top = GameZWriter.NodeSlots(world, TestContext.Current.CancellationToken).Where(p => p.Key.Name == "crate").MaxBy(p => p.Value);
-            return new("m1", SourceLookup.TextureEffect, "crate", "gamegen/support/tex_fxm1.gw", 2, top.Value, WorldLookups.Path(top.Key)) { Fingerprint = fingerprint };
-        }
-        GameZWorld before = Build(false), after = Build(true);
-        var comparison = WorldComparer.CompareTree(before, after, token: Token);
-        Assert.False(comparison.ApproximatePairing || comparison.PairingTruncated);
-        var change = Assert.Single(WorldLookups.Changes(before, [Lookup(before, "reversed")], after, [Lookup(after, "forward")], Token));
-        Assert.True(change.Uncertain);
-        Assert.Contains("possibly", WorldLookups.Describe(change));
-    }
-
-    [Fact]
-    public void CopyChecksThatRunOutAreReported()
-    {
-        // Two crates whose 1,500 slats differ only in their flags, listed the other way round in the second: telling the
-        // crates apart takes about 1.1 million checks, more than a comparison makes. The barrels after them are plain copies.
-        GameZWorld Build(bool rebuilt, bool crates)
-        {
-            WorldNode root = new("world1", WorldNodeClass.World);
-            List<WorldNode> pair = [];
-            if (crates)
-                for (int c = 0; c < 2; c++)
-                {
-                    var crate = Link(root, Node("crate"));
-                    foreach (int i in c == 0 ? Enumerable.Range(0, 1500) : Enumerable.Range(0, 1500).Reverse()) Link(crate, Node("slat", flags: (uint)i << 9));
-                    pair.Add(crate);
-                }
-            WorldNode first = Link(root, Node("barrel", new(5, 0, 0))), second = Link(root, Node("barrel", new(5, 0, 0)));
-            var world = World(root);
-            // The rebuilt world gives the highest slot of each name to the other copy.
-            if (rebuilt)
-                foreach (var (a, b) in pair.Count == 2 ? new[] { (pair[0], pair[1]), (first, second) } : [(first, second)])
-                {
-                    int i = world.Nodes.IndexOf(a), j = world.Nodes.IndexOf(b);
-                    (world.Nodes[i], world.Nodes[j]) = (world.Nodes[j], world.Nodes[i]);
-                }
-            return world;
-        }
-        var plain = WorldComparer.CompareTree(Build(false, false), Build(true, false), token: Token);
-        var barrel = Assert.Single(plain.Bindings, b => b.Name == "barrel");
-        Assert.True(barrel.Interchangeable && barrel.Same && !barrel.Unchecked);
-        Assert.Equal(0, plain.UncheckedBindings);
-
-        var comparison = WorldComparer.CompareTree(Build(false, true), Build(true, true), token: Token);
-        barrel = Assert.Single(comparison.Bindings, b => b.Name == "barrel");
-        Assert.False(barrel.Same);
-        Assert.True(barrel.Unchecked);
-        Assert.Equal(comparison.Bindings.Count(b => b.Unchecked), comparison.UncheckedBindings);
-        Assert.True(comparison.UncheckedBindings >= 1);
     }
 
     private static GameNode SceneNode(int index, string name, int[] parents, int[] children, string type = "object3d") =>

@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Sources;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Mcp;
 using Recoil.Zbd.Tests;
@@ -65,6 +66,7 @@ internal static class SourceProjectMcpChecks
             var single = (MenuItem)main.FindName("ExportSourceFileMenu");
             while (single.Items.Count != 6) { token.ThrowIfCancellationRequested(); await Task.Delay(10, token); }
             Assert.Equal(["zrdr.zbd", "interp.zbd", "soundsh.zbd", "soundsm.zbd", "soundsl.zbd", "m1/zrdr.zbd"], single.Items.Cast<MenuItem>().Select(i => ((TextBlock)i.Header).Text));
+            CheckOutputMenuPages();
             // Build profiles: the GUI's choice and source_status list the same profiles; source_export names the one it built with.
             var profiles = (MenuItem)main.FindName("SourceProfileMenu");
             while (profiles.Items.Count != 2) await Task.Delay(10, token);
@@ -286,6 +288,37 @@ internal static class SourceProjectMcpChecks
             return shown;
         }
     }
+    // Consequential regression: a valid source plan can hold thousands of outputs. Keep WPF publication bounded
+    // while the final output remains selectable through the same callback, including stale retained controls.
+    private static void CheckOutputMenuPages()
+    {
+        var plan = Enumerable.Range(1, 129).Select(i => new SourceOutputPlan($"m{i}/texture_max.zbd", "textures", [])).ToArray();
+        MenuItem menu = new(); bool current = true; string? selected = null;
+        MainWindow.FillSourceOutputMenu(menu, plan, () => current, path => selected = path);
+        MenuItem Item(string name) => menu.Items.Cast<MenuItem>().Single(i => System.Windows.Automation.AutomationProperties.GetName(i) == name);
+        void Click(MenuItem item) => item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.InRange(menu.Items.Count, 1, 67);
+        var first = Item("m1/texture_max.zbd"); var oldNext = Item("Next outputs");
+        Assert.IsType<TextBlock>(first.Header); // Underscores remain literal, and the full path is its identity.
+        Click(first); Assert.Equal(plan[0].Path, selected);
+        Assert.True(oldNext.StaysOpenOnClick);
+        Click(oldNext);
+        Assert.InRange(menu.Items.Count, 1, 67);
+        Assert.DoesNotContain(first, menu.Items.Cast<MenuItem>());
+        Assert.NotNull(Item("m65/texture_max.zbd"));
+        Click(Item("Next outputs"));
+        Assert.InRange(menu.Items.Count, 1, 67);
+        var last = Item("m129/texture_max.zbd"); Click(last); Assert.Equal(plan[^1].Path, selected);
+        Assert.DoesNotContain(menu.Items.Cast<MenuItem>(), i => System.Windows.Automation.AutomationProperties.GetName(i) == "Next outputs");
+        Click(Item("Previous outputs"));
+        Assert.NotNull(Item("m65/texture_max.zbd"));
+        var retained = menu.Items.Cast<MenuItem>().ToArray();
+        current = false;
+        Click(oldNext); Click(first);
+        Assert.Equal(retained, menu.Items.Cast<MenuItem>());
+        Assert.Equal(plan[^1].Path, selected);
+    }
+
     /// <summary>The Tools menu's visible entries as the menu shows them once opened ("-" for a separator).</summary>
     internal static string[] ToolsMenu(MainWindow main)
     {

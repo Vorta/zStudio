@@ -143,6 +143,7 @@ public partial class MainWindow
         ++sourceProfileMenuRequest; // A scan started before this choice must not replace its menu.
         if (profiles != null) FillSourceProfileMenu(root, profiles);
         else { SourceProfileMenu.Items.Clear(); SourceProfileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = menuError, MaxWidth = 420, TextWrapping = TextWrapping.Wrap }, IsEnabled = false }); }
+        _ = FillExportSourceFileMenuAsync(root);
         ViewModel.Status = $"Exports build the {profile.Name} profile.";
         return new { project = root, profile = profile.Name, usesDefault = profile.IsDefault };
     }
@@ -159,7 +160,10 @@ public partial class MainWindow
         cancellation.Token.ThrowIfCancellationRequested();
         if (generation != ViewModel.WorkspaceGeneration || sourceProfileChoice != choice) throw new StudioCommandException("context_changed", "The project or profile choice changed.");
         if (exists) return choice.Name;
-        sourceProfileChoice = null; return null;
+        sourceProfileChoice = null;
+        // Another pending output scan may still hold the removed choice and refuse its result.
+        _ = FillExportSourceFileMenuAsync(root);
+        return null;
     }
     /// <summary>A project's build profile, refused as an invalid argument when its files are malformed or the name is unknown.</summary>
     private static BuildProfile ResolveProfile(string root, string? name, CancellationToken token = default)
@@ -436,7 +440,12 @@ public partial class MainWindow
     {
         SourceProfileMenu.Items.Clear();
         // A chosen profile whose file was removed falls back to the default.
-        if (sourceProfileChoice is { } stale && stale.Root == root && !profiles.Any(p => p.Name.Equals(stale.Name, StringComparison.OrdinalIgnoreCase))) sourceProfileChoice = null;
+        if (sourceProfileChoice is { } stale && stale.Root == root && !profiles.Any(p => p.Name.Equals(stale.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            sourceProfileChoice = null;
+            // Refresh even when this scan wins the race with an output scan checking the removed profile.
+            _ = FillExportSourceFileMenuAsync(root);
+        }
         string chosen = sourceProfileChoice is { } choice && choice.Root == root ? choice.Name : profiles.Single(p => p.IsDefault).Name;
         foreach (var profile in profiles)
         {
@@ -470,26 +479,61 @@ public partial class MainWindow
     /// <summary>Lists the project's game files off the UI thread; a newer menu opening or root supersedes the listing.</summary>
     private async Task FillExportSourceFileMenuAsync(string root)
     {
-        long generation = ++sourceMenuGeneration;
+        long request = ++sourceMenuGeneration, generation = ViewModel.WorkspaceGeneration;
         ExportSourceFileMenu.Items.Clear();
         ExportSourceFileMenu.Items.Add(new MenuItem { Header = "Reading source project…", IsEnabled = false });
         IReadOnlyList<SourceOutputPlan>? plan = null; string? error = null;
         CancellationToken token = ViewModel.WorkspaceToken;
-        try { string? profile = await SourceProfileForAsync(root, token); plan = await Task.Run(() => SourceBuilder.Plan(root, null, BuildProfiles.Find(root, profile, token: token), token: token), token); }
+        var choice = sourceProfileChoice;
+        try
+        {
+            string? profile = await SourceProfileForAsync(root, token);
+            if (request != sourceMenuGeneration) return; // A removed-profile fallback already scheduled the replacement scan.
+            choice = sourceProfileChoice; // A removed choice may have fallen back to the default.
+            plan = await Task.Run(() => SourceBuilder.Plan(root, null, BuildProfiles.Find(root, profile, token: token), token: token), token);
+        }
         catch (OperationCanceledException) { return; }
         catch (StudioCommandException) { return; }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { error = ex.Message; }
-        if (generation != sourceMenuGeneration || SourceProjectRoot != root) return;
+        bool Current() => !token.IsCancellationRequested && !shutdownToken.IsCancellationRequested && request == sourceMenuGeneration &&
+            generation == ViewModel.WorkspaceGeneration && SourceProjectRoot == root && sourceProfileChoice == choice;
+        if (!Current()) return;
         ExportSourceFileMenu.Items.Clear();
-        if (plan == null || plan.Count == 0) { ExportSourceFileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = error ?? "Nothing to build yet" }, IsEnabled = false }); return; }
-        foreach (var output in plan)
+        if (plan == null || plan.Count == 0) { ExportSourceFileMenu.Items.Add(new MenuItem { Header = new TextBlock { Text = error == null ? "Nothing to build yet" : Bounded(error, 512) }, IsEnabled = false }); return; }
+        FillSourceOutputMenu(ExportSourceFileMenu, plan, Current, path => _ = RunUi(() => ExportSourceInteractiveAsync([path])));
+    }
+
+    /// <summary>At most 64 output controls, plus a count and two navigation controls; visited pages are replaced.</summary>
+    internal const int SourceOutputMenuPageSize = 64;
+    internal static void FillSourceOutputMenu(MenuItem menu, IReadOnlyList<SourceOutputPlan> plan, Func<bool> current, Action<string> export)
+    {
+        Show(0);
+        void Show(int offset)
         {
-            // Paths are literal text, not menu access-key labels.
-            MenuItem item = new() { Header = new TextBlock { Text = output.Path }, ToolTip = $"{output.Inputs.Count:N0} source files ({output.Family})" };
-            System.Windows.Automation.AutomationProperties.SetName(item, output.Path);
-            string path = output.Path;
-            item.Click += async (_, _) => await RunUi(() => ExportSourceInteractiveAsync([path]));
-            ExportSourceFileMenu.Items.Add(item);
+            if (!current()) return;
+            menu.Items.Clear();
+            int end = offset + Math.Min(SourceOutputMenuPageSize, plan.Count - offset);
+            if (plan.Count > SourceOutputMenuPageSize)
+                menu.Items.Add(new MenuItem { Header = new TextBlock { Text = $"Files {offset + 1:N0}–{end:N0} of {plan.Count:N0}" }, IsEnabled = false });
+            if (offset > 0) Navigation("Previous outputs", offset - SourceOutputMenuPageSize);
+            for (int index = offset; index < end; index++)
+            {
+                var output = plan[index];
+                // Paths remain complete literal identities, not menu access-key labels.
+                MenuItem item = new() { Header = new TextBlock { Text = output.Path }, ToolTip = $"{output.Inputs.Count:N0} source files ({output.Family})" };
+                System.Windows.Automation.AutomationProperties.SetName(item, output.Path);
+                string path = output.Path;
+                item.Click += (_, _) => { if (current()) export(path); };
+                menu.Items.Add(item);
+            }
+            if (end < plan.Count) Navigation("Next outputs", end);
+        }
+        void Navigation(string label, int offset)
+        {
+            MenuItem item = new() { Header = new TextBlock { Text = label }, StaysOpenOnClick = true };
+            System.Windows.Automation.AutomationProperties.SetName(item, label);
+            item.Click += (_, _) => Show(offset);
+            menu.Items.Add(item);
         }
     }
 }

@@ -50,7 +50,8 @@ public sealed partial class AnimationPlayer
     private Dictionary<long, AnimationLight> lights = [];
     private Dictionary<long, AnimationSoundCue> activeSounds = [];
     private readonly List<AnimationSoundCue> cues = [];
-    private readonly SortedDictionary<long, Checkpoint> checkpoints = [];
+    private SortedDictionary<long, Checkpoint> checkpoints = [];
+    private bool resetInitialized;
     private long ticks, nextId, traceOrdinal, traceDropped;
     private uint randomState;
     private int randomIndex;
@@ -89,7 +90,7 @@ public sealed partial class AnimationPlayer
     private AnimationPlayer(AnimationPreviewContext context, AnimationBindingOperation operation)
     {
         this.context = context; entryIndex = 0; Seed = 1; bindingOperation = operation; initializingScene = true;
-        operation.Reserve(64L * context.Package.Entries.Count); entryLookup = new(context.Package);
+        entryLookup = operation.EntryLookup();
         randomState = 1;
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
     }
@@ -105,27 +106,33 @@ public sealed partial class AnimationPlayer
     public void Reset() => Reset(default);
     public void Reset(CancellationToken token)
     {
+        if (resetInitialized) { ReplaceResetState(token); return; }
         using var binding = BeginBinding(token);
         // The GUI may reset a player after accepted edits; never retain an index of the previous entry names.
-        bindingOperation!.Reserve(64L * context.Package.Entries.Count);
-        entryLookup = new(context.Package);
+        entryLookup = bindingOperation!.EntryLookup();
+        InvalidateRetainedState();
         ticks = nextId = traceOrdinal = traceDropped = 0; previewIssues.Clear(); diagnosticContext = new(entryIndex); measuredEnd = 0; unavailableDuration = false; randomIndex = 0; randomState = unchecked((uint)Seed);
         for (int i = 0; i < randomTable.Length; i++) { randomState = unchecked(randomState * 214013 + 2531011); randomTable[i] = ((randomState >> 16) & 32767) / 32767f; }
         instances = []; sharedNodes = []; effects = []; trace = []; notes = []; foreach (string message in context.Diagnostics) AddNote(message, "Resource", "Unclassified"); lights = []; activeSounds = []; cues.Clear(); checkpoints.Clear();
         screenColor = screenWave = Vector4.Zero; fog = null;
         AddInstance(context.Package.Entries[entryIndex], null, null, resetPhase);
-        checkpoints[0] = CaptureCheckpoint();
+        RequireState(StateBytes(instances, sharedNodes) + CloneScratch(instances, sharedNodes));
+        checkpoints[0] = CaptureCheckpoint(token);
+        InvalidateRetainedState();
+        resetInitialized = true;
     }
-    public AnimationFrame Step(CancellationToken token = default) { cues.Clear(); Tick(token); return Frame(token); }
+    public AnimationFrame Step(CancellationToken token = default) { token.ThrowIfCancellationRequested(); cues.Clear(); Tick(token); return Frame(token); }
     public AnimationFrame AdvanceTo(double seconds, bool seeking = false, CancellationToken token = default)
     {
         if (!double.IsFinite(seconds) || seconds < 0 || seconds > 3600) throw new InvalidDataException("Preview time must be between zero and one hour.");
-        long target = (long)Math.Floor(seconds / StepSeconds + 1e-7); cues.Clear();
+        token.ThrowIfCancellationRequested();
+        long target = (long)Math.Floor(seconds / StepSeconds + 1e-7);
         if (target < ticks)
         {
             var closest = checkpoints.LastOrDefault(p => p.Key <= target);
-            if (closest.Value == null) Reset(token); else Restore(closest.Value);
+            if (closest.Value == null) Reset(token); else Restore(closest.Value, token);
         }
+        cues.Clear();
         while (ticks < target) { token.ThrowIfCancellationRequested(); Tick(token); }
         if (seeking) cues.Clear();
         return Frame(token);
@@ -133,6 +140,7 @@ public sealed partial class AnimationPlayer
     private void Tick(CancellationToken token)
     {
         using var binding = BeginBinding(token);
+        ReleaseReplacedSequences();
         token.ThrowIfCancellationRequested(); ticks++; dispatchBudget = 10000; screenColor = screenWave = Vector4.Zero;
         foreach (var instance in instances.ToArray())
         {
@@ -151,6 +159,7 @@ public sealed partial class AnimationPlayer
                 else { instance.StopDelay = instance.Entry.F32(164); if (instance.StopDelay == 0) BeginCleanup(instance); }
             }
         }
+        ReleaseReplacedSequences();
         // Landed debris remains above the solid preview plane during subsequent
         // shrink/sink stages and concurrent transform events, without new impacts.
         ConstrainSettledGround();
@@ -166,12 +175,9 @@ public sealed partial class AnimationPlayer
             if (!cue.Persistent && Time - cue.StartedAt >= context.Sounds[cue.Name].Duration)
                 activeSounds.Remove(id);
         // Keep completed root geometry as the final pose, but release nested instances.
-        instances.RemoveAll(i => i.Finished && i.Id != 1 && !instances.Any(p => p.Children.Values.Contains(i.Id)));
-        if (!measuringDuration && ticks % 60 == 0)
-        {
-            checkpoints[ticks] = CaptureCheckpoint(); int maximum = instances.Sum(i => i.Nodes.Count) > 10000 ? 2 : 8;
-            while (checkpoints.Count > maximum + 1) checkpoints.Remove(checkpoints.Keys.First(k => k != 0));
-        }
+        if (instances.RemoveAll(i => i.Finished && i.Id != 1 && !instances.Any(p => p.Children.Values.Contains(i.Id))) > 0)
+            InvalidateRetainedState();
+        if (!measuringDuration && ticks % 60 == 0) SaveCheckpoint(token);
     }
     private void Run(Instance instance, Sequence state, float step = (float)StepSeconds)
     {
@@ -191,6 +197,7 @@ public sealed partial class AnimationPlayer
             {
                 float clock = ev.StartMode switch { 1 => instance.Elapsed, 2 => state.Elapsed, _ => state.EventElapsed };
                 if (clock < ev.Threshold) return;
+                if (!AdmitState(WorkBytes(ev))) { Block(state, RetainedStateRefusal); return; }
                 state.EventElapsed = remaining; if (state.Cursor == 0) state.Elapsed = remaining;
                 state.Work = ev.Clone(); state.Child = -1; state.KeyOffset = 0; state.KeyTime = 0;
                 if (trace.Count >= 20000) { trace.RemoveRange(0, 10000); traceDropped += 10000; }
@@ -199,7 +206,7 @@ public sealed partial class AnimationPlayer
             }
             int result;
             try { result = Execute(instance, state, state.Work!, starting, ref remaining); }
-            catch (Exception ex) when (ex is InvalidDataException or ArgumentException or ArithmeticException or IndexOutOfRangeException)
+            catch (Exception ex) when (ex is InvalidDataException or StateLimitException or ArgumentException or ArithmeticException or IndexOutOfRangeException)
             { Block(state, $"{ev.Name}: {ex.Message}"); return; }
             if (result == 0) return; // Loop/reset explicitly changed the cursor and clocks.
             state.State = result;
@@ -230,7 +237,6 @@ public sealed partial class AnimationPlayer
         if (!initializingScene && shared && instances.Any(i => i.Entry.Index == entry.Index && i.Root == root && !i.Finished)) return null;
         var binding = context.Binding(entry, root, operation);
         if (boundRoot.HasValue && (started || binding != AnimationBinding.Loaded)) binding = AnimationBinding.Rebound;
-        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared };
         if (context.RebindDisables(entry, root, binding, operation))
             AddNote($"{entry.Name}: the game disables this animation bound at {context.Scene.Nodes[root].Name}, which lacks its attach node {entry.AttachName}; the preview runs it there.", "Support", "Information");
         var descendants = operation.Descendants(root, context.Scene.Nodes.Count);
@@ -248,10 +254,14 @@ public sealed partial class AnimationPlayer
                 foreach (int child in operation.Descendants(node, context.Scene.Nodes.Count))
                 { operation.Reserve(40); sourceNodes.Add(child); }
         }
+        // Admit the whole prospective instance before allocating Nodes/SavedNodes or changing shared poses.
+        AdmitInstance(sourceNodes, shared, primary ? 1 : entry.Sequences.Count);
+        operation.Reserve(256L * sourceNodes.Count + 32L * entry.Sequences.Count);
+        Instance instance = new() { Id = ++nextId, Entry = entry, Root = root, Binding = binding, Cleanup = primary, Shared = shared };
         foreach (int index in sourceNodes)
         {
             operation.Reserve(256L + context.Scene.Nodes[index].Parents.Length);
-            if (shared) { instance.Nodes[index] = SharedNode(index); continue; }
+            if (shared) { instance.Nodes[index] = SharedNode(index, admitted: true); continue; }
             var source = context.Scene.Nodes[index]; int parent = source.Parents.FirstOrDefault(p => sourceNodes.Contains(p), -1);
             var matrix = parent < 0 ? context.WorldTransform(index, operation) : SceneBuilder.LocalTransform(source);
             var node = new Node { Source = index, Parent = parent, Exact = matrix, Position = matrix.Translation, Scale = Vec(source.Data["scale"], Vector3.One), Euler = Vec(source.Data["rotate"]), Active = source.Class != "object3d" || (source.Metadata.UInt("flags") & 4) != 0, Alpha = source.Data.Float("opacity", 1), AlphaEnabled = (source.Data.UInt("flags") & 2) != 0 };
@@ -272,10 +282,10 @@ public sealed partial class AnimationPlayer
             { rootNode.PendingPlacement = false; AddNote("The selected actor has no recovered starting position; this individual preview uses its stored pose.", "Support", "Information"); }
             if (position is Vector3 p) { Position(rootNode, p); rootNode.Parent = -1; }
         }
-        operation.Reserve(256L * instance.Nodes.Count + 32L * entry.Sequences.Count);
-        instance.SavedNodes = instance.Nodes.ToDictionary(p => p.Key, p => p.Value.Clone());
-        instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s)).ToList();
+        instance.SavedNodes = instance.Nodes.ToDictionary(p => p.Key, p => { operation.Reserve(1); return p.Value.Clone(); });
+        instance.Sequences = (primary ? new[] { entry.Primary } : entry.Sequences.ToArray()).Select(s => new Sequence(s) { WorkChanged = AdjustRetainedWork }).ToList();
         instances.Add(instance);
+        InvalidateRetainedState();
         if (!initializingScene && entry.References[6].Count > 0) AddNote("Manual preview activation bypasses game activation prerequisites.", "Support", "Information");
         return instance;
     }
@@ -309,6 +319,7 @@ public sealed partial class AnimationPlayer
     private void BeginCleanup(Instance instance)
     {
         if (instance.Cleanup) { Finish(instance); return; }
+        RequireState(SequenceBytes);
         instance.StopDelay = -1; instance.Cleanup = true;
         if ((instance.Entry.U32(148) & 0x40) != 0)
             foreach (var tracked in instance.Entry.References[0])
@@ -325,7 +336,10 @@ public sealed partial class AnimationPlayer
                     node.GroundSupported = saved.GroundSupported;
                 }
             }
-        instance.Sequences = [new Sequence(instance.Entry.Primary)];
+        // The dispatch snapshot can still hold the replaced sequences until the frontier finishes.
+        retiredSequences.Add(instance.Sequences);
+        instance.Sequences = [new Sequence(instance.Entry.Primary) { WorkChanged = AdjustRetainedWork }];
+        InvalidateRetainedState();
         if (instance.Entry.Primary.Events.Count == 0) { measuredEnd = Math.Max(measuredEnd, Time - StepSeconds); Finish(instance); }
     }
     private void Finish(Instance instance)
@@ -429,8 +443,18 @@ public sealed partial class AnimationPlayer
         public float Elapsed, EventElapsed, LoopElapsed, KeyTime;
         public bool ObservedInfiniteLoop;
         public long Child = -1;
-        public AnimationEvent? Work;
-        public Sequence Clone() { var copy = (Sequence)MemberwiseClone(); copy.Work = Work?.Clone(); return copy; }
+        private AnimationEvent? work;
+        public Action<long>? WorkChanged;
+        public AnimationEvent? Work
+        {
+            get => work;
+            set { long delta = WorkBytes(value) - WorkBytes(work); work = value; WorkChanged?.Invoke(delta); }
+        }
+        public Sequence Clone(CancellationToken token, Action<long>? workChanged)
+        {
+            token.ThrowIfCancellationRequested(); var copy = (Sequence)MemberwiseClone();
+            copy.work = work?.Clone(token); copy.WorkChanged = workChanged; return copy;
+        }
         public void Reset() { Cursor = 0; State = Data.ResetMode; Elapsed = EventElapsed = 0; Work = null; }
     }
     private sealed class Instance
@@ -444,10 +468,11 @@ public sealed partial class AnimationPlayer
         public Dictionary<int, Node> Nodes = [], SavedNodes = [];
         public List<Sequence> Sequences = [];
         public Dictionary<int, long> Children = [];
-        public Instance Clone(Func<Node, Node>? cloneNode = null)
+        public Instance Clone(Func<Node, Node> cloneNode, CancellationToken token, Action<long>? workChanged = null)
         {
-            var copy = (Instance)MemberwiseClone(); copy.Nodes = Nodes.ToDictionary(p => p.Key, p => cloneNode?.Invoke(p.Value) ?? p.Value.Clone());
-            copy.SavedNodes = SavedNodes; copy.Sequences = Sequences.Select(s => s.Clone()).ToList(); copy.Children = new(Children); return copy;
+            token.ThrowIfCancellationRequested();
+            var copy = (Instance)MemberwiseClone(); copy.Nodes = Nodes.ToDictionary(p => p.Key, p => cloneNode(p.Value));
+            copy.SavedNodes = SavedNodes; copy.Sequences = Sequences.Select(s => s.Clone(token, workChanged)).ToList(); copy.Children = new(Children); return copy;
         }
     }
     private sealed class Effect
@@ -460,18 +485,29 @@ public sealed partial class AnimationPlayer
     }
     private sealed record Checkpoint(long Ticks, long NextId, int RandomIndex, List<Instance> Instances, Dictionary<int, Node> SharedNodes, List<Effect> Effects, List<AnimationTrace> Trace,
         HashSet<string> Notes, long TraceOrdinal, long TraceDropped, Dictionary<DiagnosticKey, AnimationPreviewDiagnostic> Issues, Dictionary<long, AnimationLight> Lights, Dictionary<long, AnimationSoundCue> Sounds, Vector4 Color, Vector4 Wave, AnimationFog? Fog);
-    private Checkpoint CaptureCheckpoint()
+    private Checkpoint CaptureCheckpoint(CancellationToken token)
     {
         Dictionary<Node, Node> copies = [];
-        Node Copy(Node n) { if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
-        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog);
+        Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
+        return new(ticks, nextId, randomIndex, instances.Select(i => i.Clone(Copy, token)).ToList(), sharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)), effects.Select(e => e.Clone()).ToList(), [.. trace], [.. notes], traceOrdinal, traceDropped, new(previewIssues), new(lights), new(activeSounds), screenColor, screenWave, fog);
     }
-    private void Restore(Checkpoint c)
+    private void Restore(Checkpoint c, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        if (!AdmitState(StateBytes(c.Instances, c.SharedNodes) + CloneScratch(c.Instances, c.SharedNodes), c)) throw new StateLimitException();
         Dictionary<Node, Node> copies = [];
-        Node Copy(Node n) { if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
-        ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = c.Instances.Select(i => i.Clone(Copy)).ToList(); sharedNodes = c.SharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value)); effects = c.Effects.Select(e => e.Clone()).ToList();
-        trace = [.. c.Trace]; notes = [.. c.Notes]; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = new(c.Issues); lights = new(c.Lights); activeSounds = new(c.Sounds); screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
+        Node Copy(Node n) { token.ThrowIfCancellationRequested(); if (!copies.TryGetValue(n, out var copy)) copies[n] = copy = n.Clone(); return copy; }
+        // Stage the complete replacement while the accepted state and checkpoint are still accounted.
+        var restored = c.Instances.Select(i => i.Clone(Copy, token, AdjustRetainedWork)).ToList();
+        var shared = c.SharedNodes.ToDictionary(p => p.Key, p => Copy(p.Value));
+        var restoredEffects = c.Effects.Select(e => e.Clone()).ToList();
+        var restoredTrace = new List<AnimationTrace>(c.Trace); var restoredNotes = new HashSet<string>(c.Notes);
+        var restoredIssues = new Dictionary<DiagnosticKey, AnimationPreviewDiagnostic>(c.Issues);
+        var restoredLights = new Dictionary<long, AnimationLight>(c.Lights); var restoredSounds = new Dictionary<long, AnimationSoundCue>(c.Sounds);
+        token.ThrowIfCancellationRequested();
+        ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = restored; sharedNodes = shared; effects = restoredEffects;
+        trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
+        retiredSequences.Clear(); InvalidateRetainedState();
     }
 }
 

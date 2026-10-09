@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Text;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Gltf;
 using Recoil.Zbd.Core.Sources;
 using Recoil.Zbd.Core.Worlds;
 using Xunit;
@@ -10,6 +11,95 @@ namespace Recoil.Zbd.Tests;
 
 public sealed class SourceWorldTests
 {
+    [Fact]
+    public void LogicalAliasesKeepDonorDependenciesAndRefuseConflictsBeforeEditing()
+    {
+        using SourceWorldFixture fixture = new();
+        const string alias = "data/m2/models/bft/alias.gltf", holder = "data/m2/models/holder.gltf", wrapper = "data/m2/models/wrapper.gltf";
+        var tank = GltfDocument.Read(File.ReadAllBytes(fixture.Path(fixture.Tank)),
+            uri => File.ReadAllBytes(fixture.Path(WorldAssembler.Relative(fixture.Tank, uri))), Token);
+        var profile = WorldGltf.CaptureZoneProfile(tank, token: Token);
+        SourceMapZoneAsset child = new(alias, fixture.Tank, profile, []);
+        GltfDocument document = new();
+        document.Roots.Add(new() { Extras = new System.Text.Json.Nodes.JsonObject
+            { [WorldGltf.Key] = new System.Text.Json.Nodes.JsonObject { [WorldGltf.ZoneReference] = true } } });
+        fixture.Write(holder, document.Write("holder.bin", Token).Json);
+        SourceMapZoneAsset parent = new(holder, holder, WorldGltf.CaptureZoneProfile(document, token: Token), [new(0, alias, "bft/./alias.gltf")]);
+        // The physical wrapper has no profile of its own; its raw URI still uses the donor's child binding.
+        var wrapperExtras = (System.Text.Json.Nodes.JsonObject)document.Roots[0].Extras![WorldGltf.Key]!;
+        wrapperExtras.Remove(WorldGltf.ZoneReference); wrapperExtras["ref"] = "bft/./alias.gltf";
+        fixture.Write(wrapper, document.Write("wrapper.bin", Token).Json);
+        fixture.Write(SourceMapZones.PathForMission("m2"), new SourceMapZones([parent, child]).Write(Token));
+        var different = profile with { Nodes = profile.Nodes.Select(n => n with { Word = 77 }).ToArray() };
+        fixture.Write(SourceMapZones.PathForMission("m1"), new SourceMapZones([child with { Profile = different }]).Write(Token));
+        SourceWorkspace workspace = new(fixture.Project);
+        Assert.False(File.Exists(fixture.Path(alias)));
+        Assert.Contains(SourceWorlds.Models(workspace, Token), m => m.Path == alias);
+        SourceWorlds.Validate(fixture.Project, new(alias, "copy"));
+        byte[] originalScript = File.ReadAllBytes(fixture.Path("gamegen/m1.gs"));
+        var addition = new SourceWorldAddition(new(holder, "copy"), []);
+        Assert.Contains("different geometry, zones or references", Assert.Throws<InvalidDataException>(() => SourceWorlds.AddModel(workspace, "m1", addition, Token)).Message);
+        var physicalAddition = new SourceWorldAddition(new(wrapper, "physical_copy"), []);
+        Assert.Contains("different geometry, zones or references", Assert.Throws<InvalidDataException>(() => SourceWorlds.AddModel(workspace, "m1", physicalAddition, Token)).Message);
+        Assert.False(workspace.IsDirty); Assert.False(workspace.CanUndo); Assert.Equal(0, workspace.Revision);
+        Assert.Equal(originalScript, File.ReadAllBytes(fixture.Path("gamegen/m1.gs")));
+
+        // A matching complete dependency is reusable; the spelling that controls loader caching survives.
+        fixture.Write(SourceMapZones.PathForMission("m1"), new SourceMapZones([child]).Write(Token));
+        SourceWorlds.AddModel(workspace, "m1", addition, Token);
+        var imported = SourceMapZones.Parse(workspace.Read(SourceMapZones.PathForMission("m1"), Token)!, Token);
+        Assert.True(imported.TryGetAsset(holder, out var binding));
+        Assert.Equal("bft/./alias.gltf", Assert.Single(binding.References).Spelling);
+        WorldAssembler assembler = new(new SourceWorlds.DiskFiles(fixture.Project, workspace.Overlay()), Token);
+        Assert.Contains(assembler.Assemble("m1.gs").Nodes, n => n.Name == "hull");
+        workspace.Undo(); Assert.False(workspace.IsDirty);
+        SourceWorlds.AddModel(workspace, "m1", physicalAddition, Token);
+        Assert.Equal(new[] { "gamegen/m1.gs" }, workspace.DirtyFiles);
+        WorldAssembler physicalBuild = new(new SourceWorlds.DiskFiles(fixture.Project, workspace.Overlay()), Token);
+        Assert.Contains(physicalBuild.Assemble("m1.gs").Nodes, n => n.Name == "hull");
+        workspace.Undo(); Assert.False(workspace.IsDirty);
+
+        // Import a manifest-only root into a map without that binding, then undo both files together.
+        File.Delete(fixture.Path(SourceMapZones.PathForMission("m1")));
+        SourceWorkspace fresh = new(fixture.Project);
+        SourceWorlds.AddModel(fresh, "m1", new(new(alias, "alias_copy"), []), Token);
+        Assert.Equal(2, Assert.Single(fresh.History).Files.Count);
+        WorldAssembler aliasBuild = new(new SourceWorlds.DiskFiles(fixture.Project, fresh.Overlay()), Token);
+        Assert.Contains(aliasBuild.Assemble("m1.gs").Nodes, n => n.Name == "hull");
+        fresh.Undo(); Assert.False(fresh.IsDirty);
+
+        // A common neutral model may have one valid donor while another mission has no binding at all.
+        const string commonHolder = "data/common/models/holder.gltf";
+        fixture.Write(commonHolder, File.ReadAllBytes(fixture.Path(holder)));
+        var commonParent = parent with { LogicalPath = commonHolder, GeometryPath = commonHolder,
+            References = [new(0, alias, "../../m2/models/bft/./alias.gltf")] };
+        fixture.Write(SourceMapZones.PathForMission("m2"), new SourceMapZones([parent, commonParent, child]).Write(Token));
+        SourceWorkspace common = new(fixture.Project);
+        SourceWorlds.AddModel(common, "m1", new(new(commonHolder, "common_copy"), []), Token);
+        var commonMap = SourceMapZones.Parse(common.Read(SourceMapZones.PathForMission("m1"), Token)!, Token);
+        Assert.True(commonMap.TryGetAsset(commonHolder, out var commonBinding));
+        Assert.Equal("../../m2/models/bft/./alias.gltf", Assert.Single(commonBinding.References).Spelling);
+        WorldAssembler commonBuild = new(new SourceWorlds.DiskFiles(fixture.Project, common.Overlay()), Token);
+        Assert.Contains(commonBuild.Assemble("m1.gs").Nodes, n => n.Name == "hull");
+        common.Undo(); Assert.False(common.IsDirty);
+
+        // Even an absent donor manifest means inline data, not permission to adopt a receiver override.
+        File.Delete(fixture.Path(SourceMapZones.PathForMission("m2")));
+        wrapperExtras["ref"] = "bft/tank.gltf";
+        fixture.Write(wrapper, document.Write("wrapper.bin", Token).Json);
+        fixture.Write(SourceMapZones.PathForMission("m1"), new SourceMapZones([new(fixture.Tank, fixture.Tank, different, [])]).Write(Token));
+        SourceWorkspace legacy = new(fixture.Project);
+        Assert.Contains("inline data", Assert.Throws<InvalidDataException>(() => SourceWorlds.AddModel(legacy, "m1", physicalAddition, Token)).Message);
+        Assert.False(legacy.IsDirty); Assert.False(legacy.CanUndo);
+        File.Delete(fixture.Path(SourceMapZones.PathForMission("m1")));
+        SourceWorlds.AddModel(legacy, "m1", physicalAddition, Token);
+        Assert.Equal(new[] { "gamegen/m1.gs" }, legacy.DirtyFiles);
+        Assert.Null(legacy.Read(SourceMapZones.PathForMission("m1"), Token));
+        WorldAssembler legacyBuild = new(new SourceWorlds.DiskFiles(fixture.Project, legacy.Overlay()), Token);
+        Assert.Contains(legacyBuild.Assemble("m1.gs").Nodes, n => n.Name == "hull");
+        legacy.Undo(); Assert.False(legacy.IsDirty);
+    }
+
     [Fact]
     public void ModelInsertionUsesTheBuildsCaseSensitivePrefixDispatch()
     {

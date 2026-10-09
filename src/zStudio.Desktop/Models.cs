@@ -406,7 +406,8 @@ public sealed record SearchHit(string File, AssetKind Kind, int Index, string Na
 {
     public string Identity => $"{Kind} #{Index}";
     public string Display => $"{Name} · {Kind} #{Index}";
-    public string Location => System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(File)) + "/" + System.IO.Path.GetFileName(File);
+    public string Location => string.Concat(System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(File.AsSpan())),
+        "/", System.IO.Path.GetFileName(File.AsSpan()));
 }
 public sealed record StudioProblem(string Severity, string Category, string Message, string? File = null, int? AssetIndex = null, long? Offset = null)
 {

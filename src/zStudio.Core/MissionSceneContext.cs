@@ -113,16 +113,22 @@ public static partial class MissionSceneLoader
     /// <param name="exactMission">Fail when the requested MW3 reader is unavailable instead of reporting a fallback.</param>
     public static async Task<MissionSceneContext> LoadAsync(ZbdDocument world, AssetResolver resolver, AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
         string? mission = null, bool exactMission = false)
+        => await LoadWithResourcesAsync(world, resolver, new PreviewResourceBudget(), package, token, difficulty, mission, exactMission).ConfigureAwait(false);
+
+    internal static async Task<MissionSceneContext> LoadWithResourcesAsync(ZbdDocument world, AssetResolver resolver, PreviewResourceBudget resourcesBudget,
+        AnimationPackage? package = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium,
+        string? mission = null, bool exactMission = false)
     {
         token.ThrowIfCancellationRequested();
-        if (world.Game == GameVariant.MechWarrior3) return await LoadMw3Async(world, resolver, mission ?? resolver.SelectedMission(world.Path), exactMission && mission != null, token).ConfigureAwait(false);
+        resourcesBudget.Retain(world, token);
+        if (world.Game == GameVariant.MechWarrior3) return await LoadMw3WithBudgetAsync(world, resolver, mission ?? resolver.SelectedMission(world.Path), exactMission && mission != null,
+            new MissionPlacementBudget(token), token, preview: resourcesBudget).ConfigureAwait(false);
         var requested = MissionLayoutSelection.For(difficulty);
         string directory = Path.GetDirectoryName(world.Path)!;
         CompiledInventory inventory = new(token);
         var files = ResourceFiles(world.Path, resolver, token, inventory);
         string key = difficulty + "|" + resolver.SnapshotRevision + "|" + inventory.Fingerprint(files) + (package == null ? "" : Convert.ToHexString(SHA256.HashData(AnimationWriter.Write(package, token))));
         var cache = Cache.GetOrCreateValue(world);
-        if (cache.TryGetValue(key, out var cached)) return cached;
         List<string> diagnostics = []; Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> resources = new(StringComparer.OrdinalIgnoreCase);
         List<(ZbdDocument Archive, AssetRecord Asset)> aiResources = [];
         foreach (string file in files)
@@ -132,19 +138,26 @@ public static partial class MissionSceneLoader
             try
             {
                 if (package == null && family == FormatFamily.Animation && Path.GetDirectoryName(file)!.Equals(directory, StringComparison.OrdinalIgnoreCase))
-                    package = (await resolver.OpenCachedAsync(file, token).ConfigureAwait(false)).Animations;
+                    package = (await resourcesBudget.OpenAsync(file, resolver, token).ConfigureAwait(false)).Animations;
                 if (family != FormatFamily.Archive) continue;
-                var archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
+                var archive = await resourcesBudget.OpenAsync(file, resolver, token).ConfigureAwait(false);
                 if (MissionSceneLoader.ParseError(archive) is { } parseError) diagnostics.Add($"Mission layout: {Path.GetFileName(file)}: {parseError}");
-                aiResources.AddRange(archive.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)).Select(a => (archive, a)));
+                foreach (var asset in archive.Assets.Where(a => MissionAiNetworks.IsCandidate(a.Name)))
+                {
+                    resourcesBudget.Member(asset.Length, token); // Read hashes even an undecoded/malformed member.
+                    if (asset.Content is ZrdNode tree) resourcesBudget.Interpret(tree, token);
+                    aiResources.Add((archive, asset));
+                }
                 foreach (var asset in archive.Assets.Where(a => a.Name.ToLowerInvariant() is "aiv.zrd" or "aiv_easy.zrd" or "aiv_hard.zrd" or "vehicle.zrd" or "vehicle_easy.zrd" or "vehicle_hard.zrd" or "startanims.zrd" or "ai.zrd" or "puppies.zrd" or "puppies_easy.zrd" or "puppies_hard.zrd"))
                 {
                     resources.TryAdd(asset.Name, (archive, asset));
                 }
             }
-            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (!resourcesBudget.Exhausted && (ex is InvalidDataException or IOException or UnauthorizedAccessException))
             { diagnostics.Add($"Mission layout: {Path.GetFileName(file)}: {ex.Message}"); }
         }
+        // A cached scene must not bypass the shared load's admission of its current dependencies.
+        if (cache.TryGetValue(key, out var cached)) return cached;
         string aivName = Select(requested.AivResource, "aiv.zrd"), vehicleName = Select(requested.VehicleResource, "vehicle.zrd");
         string pickupName = Select(requested.PickupResource, "puppies.zrd");
         var selection = new MissionLayoutSelection(difficulty, aivName, vehicleName, pickupName);
@@ -172,12 +185,14 @@ public static partial class MissionSceneLoader
             if (!resources.TryGetValue(name, out var resource)) return null;
             try
             {
-                var tree = ZrdDecoder.ReadAsset(resource.Archive, resource.Asset, token).ToJson(token);
+                var decoded = ZrdDecoder.ReadAsset(resource.Archive, resource.Asset, token);
+                resourcesBudget.Interpret(decoded, token);
+                var tree = decoded.ToJson(token);
                 if (name.StartsWith("puppies", StringComparison.Ordinal)) _ = PickupRecords(tree);
                 else if (name != "startanims.zrd") _ = Records(tree).ToArray();
                 return tree;
             }
-            catch (InvalidDataException ex) when (resource.Asset.Metadata["typed_decode_limited"]?.GetValue<bool>() == true)
+            catch (InvalidDataException ex) when (!resourcesBudget.Exhausted && resource.Asset.Metadata["typed_decode_limited"]?.GetValue<bool>() == true)
             {
                 // The archive deliberately kept this member raw. Do not decode it again or silently substitute a
                 // different difficulty's layout; the remaining preview stays available with an explicit omission.
@@ -195,7 +210,7 @@ public static partial class MissionSceneLoader
     internal static MissionSceneContext BuildWithBudget(ZbdDocument world, MissionPlacementBudget budget, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts,
         IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
         JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null,
-        long maximumBindingWork = Worlds.LookupWorkBudget.MaximumUnits)
+        long maximumBindingWork = AnimationBindingOperation.MaximumUnits)
     {
         selection ??= MissionLayoutSelection.For(MissionDifficulty.Medium);
         token.ThrowIfCancellationRequested();
@@ -233,7 +248,10 @@ public static partial class MissionSceneLoader
                 try
                 {
                     if (xyz.Count != 3) throw new InvalidDataException("Expected three spawn coordinates.");
-                    Vector3 position = new(Number(xyz[0]), Number(xyz[1]), Number(xyz[2])); float yaw = Number(data[2]) * MathF.PI / 180;
+                    Vector3 position = new(Number(xyz[0]), Number(xyz[1]), Number(xyz[2])); float heading = Number(data[2]);
+                    float yaw = (float)(heading * (Math.PI / 180));
+                    var pose = Matrix4x4.CreateRotationY(yaw) * Matrix4x4.CreateTranslation(position);
+                    ValidatePose(pose); // Refuse before a clone enters the live index or an existing root changes.
                     // CreateFromNamesAtPose (0x421ab0) looks both names up among all live nodes, the most recently created first
                     // (FindByTypeAndName, docs/engine-evidence.md), and uses what it finds as the vehicle whatever its class.
                     int root = placement.Live(name);
@@ -245,14 +263,14 @@ public static partial class MissionSceneLoader
                         root = CloneTree(template, name);
                     }
                     else if (scene.Nodes[root].Class != "object3d") throw new InvalidDataException($"The game places the {JsonData.ShownText(scene.Nodes[root].Class, 64)} node #{root} of this name as the vehicle, which the preview does not show.");
-                    SetPose(scene, root, Matrix4x4.CreateRotationY(yaw) * Matrix4x4.CreateTranslation(position));
+                    SetPose(scene, root, pose);
                     scene.Nodes[root].Metadata["flags"] = scene.Nodes[root].Metadata.UInt("flags") | 4;
                     budget.Take(scene.Nodes[root].Parents.Length);
                     if (!scene.Nodes[root].Parents.Contains(worldRoot)) scene.Nodes[root] = scene.Nodes[root] with { Parents = [worldRoot] };
                     placement.Attach(root, aiv: true); placement.Actor(root);
                     if (actorLabel == null) { budget.TextCopy(selection.AivResource.Length + 32L); actorLabel = $"{selection.AivResource} · {selection.Difficulty}"; }
                     positioned.Add(root); actors.Add(new(root, sources[root], name, actorLabel, CoordinateSource: CoordinateSource(recordIndex),
-                        PlacementPosition: position, PlacementRotation: new(0, Number(data[2]), 0)));
+                        PlacementPosition: position, PlacementRotation: new(0, heading, 0)));
                 }
                 catch (InvalidDataException ex) when (!budget.Exhausted) { placementNotes.Add($"Mission actor {name}: {ex.Message}"); }
             }
@@ -262,8 +280,7 @@ public static partial class MissionSceneLoader
         placement.PublishChildren();
         if (context != null)
         {
-            string[] startup = Pairs(starts).Where(p => p.Name == "NEW_GAME_START").SelectMany(p => Strings(p.Value)).ToArray();
-            Initialize(false, startup);
+            Initialize(false, Startup(starts, budget));
         }
         HashSet<int> dormant = [];
         if (context != null)
@@ -330,6 +347,9 @@ public static partial class MissionSceneLoader
 
         int CloneTree(int template, string name)
         {
+            // A later placement can copy the newest live descendant of an earlier clone. Only nodes made
+            // by this copy are out of bounds; original source ordinals continue through the sources map.
+            int before = scene.Nodes.Count;
             Dictionary<int, int> map = []; HashSet<int> path = []; Dictionary<int, List<int>> parents = [];
             int Copy(int index, int depth)
             {
@@ -338,8 +358,11 @@ public static partial class MissionSceneLoader
                 try
                 {
                     if (map.TryGetValue(index, out int existing)) return existing;
-                    if (index < 0 || index >= original.Nodes.Count || scene.Nodes.Count >= 200000) throw new InvalidDataException("Invalid or excessive mission hierarchy.");
-                    var source = scene.Nodes[index]; var explicitChildren = placement.Children(source); budget.Clone(source, explicitChildren.Count);
+                    if (index < 0 || index >= before || scene.Nodes.Count >= 200000) throw new InvalidDataException("Invalid or excessive mission hierarchy.");
+                    var source = scene.Nodes[index];
+                    // CopyNodeDispatch never copies these classes (docs/engine-evidence.md, Runtime capacity).
+                    if (source.Class is "light" or "sound" or "animate" or "sequence" or "switch" or "world") return -1;
+                    var explicitChildren = placement.Children(source); budget.Clone(source, explicitChildren.Count);
                     int id = scene.Nodes.Count; map[index] = id; sources.Add(sources[index]); parents.Add(id, []);
                     scene.Nodes.Add(source with { Index = id, Name = index == template ? name : source.Name, Parents = [], Children = [], Data = (JsonObject)source.Data.DeepClone(), Metadata = (JsonObject)source.Metadata.DeepClone() });
                     List<int> children = [];
@@ -347,7 +370,15 @@ public static partial class MissionSceneLoader
                     // stable Distinct can allocate. Keep the shared child semantics (including malformed input).
                     foreach (int originalChild in SceneBuilder.Children(source, explicitChildren))
                     {
-                        budget.Take(); int child = Copy(originalChild, depth + 1); children.Add(child);
+                        budget.Take(); int child = Copy(originalChild, depth + 1);
+                        if (child < 0)
+                        {
+                            // CopyObject3DNode skips null dispatch results; Camera/LOD abort their copy.
+                            // Roll back our unpublished copy instead of emulating the engine's leaked nodes.
+                            if (source.Class == "object3d") continue;
+                            throw new InvalidDataException($"The game cannot copy a {source.Class} template with a noncopyable child.");
+                        }
+                        children.Add(child);
                     }
                     budget.Take(children.Count);
                     scene.Nodes[id] = scene.Nodes[id] with { Children = children.ToArray() };
@@ -357,7 +388,6 @@ public static partial class MissionSceneLoader
                 }
                 finally { path.Remove(index); }
             }
-            int before = scene.Nodes.Count;
             try
             {
                 int root = Copy(template, 0);
@@ -375,7 +405,7 @@ public static partial class MissionSceneLoader
     }
     internal static void SetPose(GameScene scene, int index, Matrix4x4 m)
     {
-        if (!float.IsFinite(m.GetDeterminant()) || !float.IsFinite(m.M41) || !float.IsFinite(m.M42) || !float.IsFinite(m.M43)) throw new InvalidDataException("Nonfinite mission pose.");
+        ValidatePose(m);
         var data = scene.Nodes[index].Data; data["flags"] = data.UInt("flags") & ~8u;
         data["transform"] = new JsonArray(new[] { m.M11,m.M12,m.M13,m.M21,m.M22,m.M23,m.M31,m.M32,m.M33,m.M41,m.M42,m.M43 }.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray());
         Matrix4x4.Decompose(m, out var scale, out var rotation, out _); var euler = AnimationMath.ToEuler(rotation);
@@ -384,18 +414,80 @@ public static partial class MissionSceneLoader
         if (data.ContainsKey("translate")) data["translate"] = Vector(m.Translation);
         static JsonObject Vector(Vector3 v) => new() { ["x"] = v.X, ["y"] = v.Y, ["z"] = v.Z };
     }
+    private static void ValidatePose(Matrix4x4 m)
+    {
+        if (!float.IsFinite(m.GetDeterminant()) || !float.IsFinite(m.M41) || !float.IsFinite(m.M42) || !float.IsFinite(m.M43))
+            throw new InvalidDataException("Nonfinite mission pose.");
+    }
     private static float Number(JsonNode? n)
     { float value = JsonData.Scalar(n?["value"], float.NaN); if (!float.IsFinite(value)) throw new InvalidDataException("Nonfinite or missing spawn coordinate/heading."); return value; }
-    private static IEnumerable<string> Strings(JsonNode? node)
+    private static string[] Startup(JsonNode? node, MissionPlacementBudget budget)
     {
-        if (node.Text("type") == "string") yield return node.Text("value");
-        if (node?["children"] is JsonArray children) foreach (var child in children) foreach (string value in Strings(child)) yield return value;
+        // Direct Build callers can supply cold JsonNode containers. Admit their possible materialization
+        // before reading children; the same conservative metadata allowance also covers the output below.
+        budget.JsonCopy(node);
+        budget.Storage(96);
+        List<string> startup = [];
+        foreach (var pair in Pairs(node, budget))
+            if (pair.Name == "NEW_GAME_START")
+                foreach (string name in Strings(pair.Value, budget))
+                {
+                    // References, not copied strings: list growth/old backing plus the final array may overlap.
+                    budget.Storage(32);
+                    startup.Add(name);
+                }
+        budget.Take(startup.Count);
+        return startup.ToArray();
     }
-    private static IEnumerable<(string Name, JsonNode? Value)> Pairs(JsonNode? node)
+    private static IEnumerable<string> Strings(JsonNode? node, MissionPlacementBudget budget)
     {
-        if (node?["children"] is not JsonArray children) yield break;
-        for (int i = 0; i + 1 < children.Count; i++) if (children[i].Text("type") == "string") yield return (children[i].Text("value"), children[i + 1]);
-        foreach (var child in children) foreach (var pair in Pairs(child)) yield return pair;
+        foreach (var item in StartupNodes(node, budget))
+            if (item.Text("type") == "string")
+            {
+                string value = item.Text("value"); budget.Name(value);
+                yield return value;
+            }
+    }
+    private static IEnumerable<(string Name, JsonNode? Value)> Pairs(JsonNode? node, MissionPlacementBudget budget)
+    {
+        // Preserve the existing pair preorder: all adjacent string/next-sibling pairs at this level,
+        // then its children in order. Nested key strings and repeated names are not silently removed.
+        foreach (var item in StartupNodes(node, budget))
+            if (item?["children"] is JsonArray children)
+                for (int i = 0; i + 1 < children.Count; i++)
+                {
+                    budget.Take();
+                    if (children[i].Text("type") != "string") continue;
+                    string name = children[i].Text("value"); budget.Name(name);
+                    yield return (name, children[i + 1]);
+                }
+    }
+    private static IEnumerable<JsonNode?> StartupNodes(JsonNode? node, MissionPlacementBudget budget)
+    {
+        // An explicit stack avoids forwarding every yielded leaf through every recursive ancestor.
+        // Each visit and stack allocation is charged to the whole Build, including repeated matches.
+        budget.Storage(64);
+        Stack<(JsonArray Children, int Next)> parents = new();
+        while (true)
+        {
+            budget.Take();
+            yield return node;
+            if (node?["children"] is JsonArray { Count: > 0 } children)
+            {
+                budget.Storage(64);
+                parents.Push((children, 1)); node = children[0];
+                continue;
+            }
+            bool found = false;
+            while (parents.TryPop(out var parent))
+            {
+                budget.Take();
+                if (parent.Next >= parent.Children.Count) continue;
+                parents.Push((parent.Children, parent.Next + 1)); node = parent.Children[parent.Next];
+                found = true; break;
+            }
+            if (!found) yield break;
+        }
     }
     private static IEnumerable<(string Name, JsonNode? Value)> Records(JsonNode? node)
     {

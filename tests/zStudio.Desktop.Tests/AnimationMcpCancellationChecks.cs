@@ -18,6 +18,7 @@ internal static class AnimationMcpCancellationChecks
     internal static async Task Run()
     {
         await CheckReplayRefusal();
+        await CheckRenderRefusal();
         var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
         var entry = new AnimationEntry(new byte[308], 0, 0); package.Entries.Add(entry);
         var sound = AnimationCatalog.Create(2); sound.SetText(12, "retry"); sound.SetInt(52, 1); entry.Primary.Events.Add(sound);
@@ -223,6 +224,61 @@ internal static class AnimationMcpCancellationChecks
             var world = new ZbdDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 15, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
             return new() { Package = document.AnimationEdits!.Package, World = world };
         }
+    }
+
+    private static async Task CheckRenderRefusal()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
+        var entry = new AnimationEntry(new byte[308], 0, 0);
+        entry.SetText(32, "root"); entry.SetText(68, "root"); entry.SetFloat(164, -1); package.Entries.Add(entry);
+        var source = new ZbdDocument("render-refusal", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package };
+        using var document = new DocumentModel(source);
+        GameScene scene = new();
+        scene.Materials.Add(new() { ["alpha"] = 255, ["texture_index"] = -1 });
+        scene.Models.Add(new(0, [System.Numerics.Vector3.Zero, System.Numerics.Vector3.UnitX, System.Numerics.Vector3.UnitY], [], [], [new(0, 3, [0, 1, 2], [], [], [])], []));
+        scene.Nodes.Add(new(0, "root", "object3d", 0, [], [], new() { ["flags"] = 4 }, new() { ["flags"] = 8 }));
+        var world = new ZbdDocument("world", new(0, DateTime.MinValue), new(FormatFamily.GameZ, 27, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Scene = scene };
+        var context = new AnimationPreviewContext { Package = document.AnimationEdits!.Package, World = world };
+        var audio = new AnimationAudio(() => new SilentOutput());
+        using var resolver = new AssetResolver(Path.GetTempPath());
+        using var editor = new AnimationEditor(document, 0, resolver, token, null, audio);
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        void Set(string name, object value) => typeof(AnimationEditor).GetField(name, flags)!.SetValue(editor, value);
+        object? Get(string name) => typeof(AnimationEditor).GetField(name, flags)!.GetValue(editor);
+        try
+        {
+            ((System.Windows.Controls.Primitives.ToggleButton)editor.FindName("ShowLevel")).IsChecked = false;
+            var initial = new AnimationPlayer(context, 0); var initialFrame = initial.Frame(token);
+            await editor.Viewport.ShowAnimationAsync(context, initialFrame, resolver, false, token);
+            Set("context", context); Set("player", initial); Set("frame", initialFrame); Set("audioDirty", false);
+            Set("playbackTarget", .5); Set("pendingPlay", true);
+            ((FrameworkElement)editor.FindName("LoadingPanel")).Visibility = Visibility.Collapsed;
+            editor.Viewport.MaximumRenderUnits = 2;
+            // The actual timer callback advances simulation before the renderer refuses.
+            // It must not leave that rejected state available to later WPF callbacks.
+            typeof(AnimationEditor).GetMethod("Tick", flags)!.Invoke(editor, [null, EventArgs.Empty]);
+            Assert.True(initial.Time >= .5);
+            Assert.Null(Get("player")); Assert.Null(editor.CurrentFrame);
+            Assert.False(editor.IsPlaying); Assert.False((bool)Get("pendingPlay")!);
+            Assert.Null(editor.Viewport.PreviewScene); Assert.Equal(0, editor.Viewport.AnimationMeshCount);
+            Assert.Equal(0, ((Slider)editor.FindName("SeekSlider")).Value);
+            Assert.Null(((AnimationTimeline)editor.FindName("Timeline")).Frame);
+            Assert.Equal("Preview unavailable", ((TextBlock)editor.FindName("TimeLabel")).Text);
+            var lighting = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("Lighting"); lighting.IsChecked = lighting.IsChecked != true;
+            var follow = (System.Windows.Controls.Primitives.ToggleButton)editor.FindName("FollowCamera");
+            var error = await Assert.ThrowsAsync<StudioCommandException>(() => editor.SetPreviewOptionAsync("followCamera", JsonValue.Create(follow.IsChecked != true)!));
+            Assert.Equal("preview_unavailable", error.Code);
+            Assert.Null(editor.CurrentFrame); Assert.Equal(0, audio.OutputInitializations);
+            editor.Viewport.MaximumRenderUnits = 8;
+            await editor.TransportAsync("seek", 0);
+            var rebuilt = Assert.IsType<AnimationPlayer>(Get("player"));
+            Assert.NotSame(initial, rebuilt); var accepted = Assert.IsType<AnimationFrame>(editor.CurrentFrame);
+            Assert.Equal(rebuilt.Time, accepted.Time);
+            Assert.Equal(1, editor.Viewport.AnimationMeshCount);
+            Assert.Null(Get("previewOperationFailure")); Assert.False(editor.IsPlaying);
+        }
+        finally { editor.Pause(); await audio.DisposeAsync(); }
     }
 
     private sealed class SilentOutput : IAnimationAudioOutput

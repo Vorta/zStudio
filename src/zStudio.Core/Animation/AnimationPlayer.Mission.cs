@@ -16,9 +16,10 @@ public sealed partial class AnimationPlayer
         }
         return false;
     }
-    private Node SharedNode(int index)
+    private Node SharedNode(int index, bool admitted = false)
     {
         if (sharedNodes.TryGetValue(index, out var found)) return found;
+        if (!admitted) RequireState(NodeBytes + MapEntryBytes);
         var source = context.Scene.Nodes[index]; var matrix = SceneBuilder.LocalTransform(source);
         var node = new Node
         {
@@ -35,7 +36,11 @@ public sealed partial class AnimationPlayer
             if (Matrix4x4.Decompose(matrix, out var scale, out var rotation, out _))
             { node.Scale = scale; node.Rotation = rotation; node.Euler = AnimationMath.ToEuler(rotation); }
         }
-        sharedNodes[index] = node; return node;
+        sharedNodes[index] = node;
+        // This adds one current-state node and one map slot. Existing checkpoints own their own
+        // copies, so lazily walking ancestors must not rescan every sequence for every parent.
+        AdjustRetainedBytes(NodeBytes + MapEntryBytes);
+        return node;
     }
     private Node? ParentNode(Instance instance, int index) => index < 0 || index >= context.Scene.Nodes.Count ? null :
         instance.Nodes.TryGetValue(index, out var node) ? node : instance.Shared ? SharedNode(index) : null;
@@ -45,25 +50,26 @@ public sealed partial class AnimationPlayer
         AnimationBindingOperation? operation = null)
     {
         operation ??= new(context, token);
-        operation.Reserve(64L * context.Package.Entries.Count);
-        AnimationEntryLookup lookup = new(context.Package);
+        // Selection and the player belong to this same frontier. Invalidate before creating either lookup.
+        operation.Invalidate();
+        AnimationEntryLookup lookup = operation.EntryLookup();
         var entries = cleanup ? context.Package.Entries.Where(e => e.Index > 0 && e.Bytes[152] is not (2 or 5)).SelectMany(e =>
             ((e.U32(148) & 0x20) != 0 ? new[] { (Entry: e, Primary: true) } : []).Concat(e.Bytes[153] == 4 && e.Bytes[152] != 4 ? [(Entry: e, Primary: false)] : [])) :
             startup.Select(name => lookup.Find(name, token)).OfType<AnimationEntry>().Select(e => (Entry: e, Primary: false));
-        return ApplyInitialization(context, entries.Select(e => (e.Entry, e.Primary, (int?)null)), diagnostics, token, operation);
+        return ApplyInitialization(context, entries.Select(e => (e.Entry, e.Primary, (int?)null)), diagnostics, token, operation, reuseTopology: true);
     }
 
     internal static HashSet<int> ApplyInitialization(AnimationPreviewContext context,
         IEnumerable<(AnimationEntry Entry, bool Primary, int? Root)> entries, List<string> diagnostics, CancellationToken token,
-        AnimationBindingOperation? operation = null)
+        AnimationBindingOperation? operation = null, bool reuseTopology = false)
     {
         HashSet<int> positioned = [];
         if (context.Package.Entries.Count == 0) return positioned;
         operation ??= new(context, token);
         operation.Reserve(1);
-        // Another preparation phase may have changed same-count edges. Keep its cumulative allowance,
-        // but do not borrow topology/name results across separately invoked initialization frontiers.
-        operation.Invalidate();
+        // Another preparation phase may have changed same-count edges. The selector above and the
+        // turret phase explicitly share lookups after their own boundary invalidation.
+        if (!reuseTopology) operation.Invalidate();
         var player = new AnimationPlayer(context, operation);
         foreach (var (entry, primary, boundRoot) in entries)
         {
@@ -71,7 +77,7 @@ public sealed partial class AnimationPlayer
             operation.Reserve(1);
             int root = boundRoot ?? operation.Root(entry);
             if (root < 0 || root >= context.Scene.Nodes.Count) { diagnostics.Add($"Mission initialization: unresolved root for {entry.Name}."); continue; }
-            player.instances.Clear(); player.dispatchBudget = 10000;
+            player.instances.Clear(); player.InvalidateRetainedState(); player.dispatchBudget = 10000;
             player.AddInstance(entry, null, boundRoot, primary);
             HashSet<Sequence> visited = [];
             bool progress;
@@ -86,6 +92,7 @@ public sealed partial class AnimationPlayer
                             if (sequence.ObservedInfiniteLoop) player.AddNote($"{entry.Name}: zero-time initialization loop was bounded.");
                         }
             } while (progress && player.dispatchBudget > 0);
+            visited.Clear(); player.ReleaseReplacedSequences();
             foreach (var instance in player.instances.Where(i => i.Shared || (i.Entry.U32(148) & 0x8000) == 0))
                 foreach (var node in instance.Nodes.Values)
                 {

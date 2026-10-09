@@ -9,6 +9,7 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
 {
     private readonly Dictionary<string, GameGenScriptSyntax?> scripts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, byte[]?> models = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SourceMissionModels> missions = new(StringComparer.OrdinalIgnoreCase);
     private string[]? worlds;
     private long bytes, tokens, lines, work;
     internal long RetainedModelBytes { get; private set; }
@@ -48,6 +49,13 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
         return scripts[relative] = parsed;
     }
 
+    internal bool ModelExists(string relative)
+    {
+        try { return workspace.Exists(relative, token); }
+        catch (Exception ex) when (ex is not SourceFileChangedException && ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        { throw new IOException($"Cannot inspect the other missions' model references: {JsonData.ShownText(relative)} could not be read. Restore access, then retry the edit.", ex); }
+    }
+
     internal byte[]? ReadModel(string relative)
     {
         ReserveWork(relative.Length + 1L);
@@ -62,6 +70,23 @@ internal sealed class SourceScriptInspection(SourceWorkspace workspace, Cancella
         token.ThrowIfCancellationRequested();
         if (content != null) RetainedModelBytes += content.LongLength;
         return models[relative] = content;
+    }
+
+    internal SourceMissionModels MissionModels(string mission)
+    {
+        ReserveWork(mission.Length + 1L);
+        if (missions.TryGetValue(mission, out var known)) return known;
+        string path = SourceMapZones.PathForMission(mission);
+        try
+        {
+            byte[]? content = workspace.Read(path, token, Math.Min(SourceMapZones.MaximumBytes, maximumBytes - bytes));
+            if (content == null) return missions[mission] = new(null, token);
+            Reserve(ref bytes, content.LongLength, maximumBytes, "script and map input");
+            ReserveWork(content.LongLength);
+            return missions[mission] = new(SourceMapZones.Parse(content, token), token);
+        }
+        catch (Exception ex) when (ex is not SourceFileChangedException && ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        { throw new IOException($"Cannot inspect the other mission's model bindings: {JsonData.ShownText(path)} could not be read. Restore access or repair the map, then retry the edit.", ex); }
     }
 
     internal GameGenScriptSyntax ParseEdit(string text)

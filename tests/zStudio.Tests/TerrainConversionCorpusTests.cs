@@ -48,7 +48,8 @@ public sealed class TerrainConversionCorpusTests
             SourceTerrainConversion.Apply(workspace, plan, Token);
             var after = await SourceWorlds.BuildPreviewAsync(project, mission, Path.Combine(SourceWorlds.PreviewRoot(project), "after"), workspace.Overlay(), token: Token);
             var (worldA, nodesA) = await Read(before, p => p.ModelFile == database && p.Database && plan.Groups.Any(g => g.Nodes.Contains(p.ModelNode)));
-            var (worldB, nodesB) = await Read(after, p => p.Terrain == plan.Recipe);
+            var recipes = plan.Recipes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var (worldB, nodesB) = await Read(after, p => p.Terrain != null && recipes.Contains(p.Terrain));
             output?.WriteLine($"{mission}: {nodesA.Count} pieces before, {nodesB.Count} after; nodes {worldA.Nodes.Count} → {worldB.Nodes.Count}");
             Assert.Equal(nodesA.Count, plan.Converted);
             // Every piece fits the engine's limits and its cell.

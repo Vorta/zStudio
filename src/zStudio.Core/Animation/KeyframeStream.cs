@@ -43,6 +43,12 @@ internal sealed class KeyframeStream : IReadOnlyList<AnimationKeyframe>
     private KeyframeStream(byte[] bytes, int channelSize, int[] blocks, int count, int firstUnordered)
     { this.bytes = bytes; this.channelSize = channelSize; this.blocks = blocks; Count = count; FirstUnordered = firstUnordered; }
     internal KeyframeStream ForSnapshot(byte[] snapshot) => new(snapshot, channelSize, blocks, Count, FirstUnordered);
+    internal void Retained(RetainedDocumentBudget budget, CancellationToken token)
+    {
+        if (!budget.Object(this, 128, token)) return;
+        budget.Bytes(bytes, token);
+        budget.Object(blocks, 32L + 4L * blocks.Length, token);
+    }
     public KeyframeStream(byte[] bytes, uint version, CancellationToken token)
     {
         this.bytes = bytes; channelSize = version == 39 ? 76 : 28;

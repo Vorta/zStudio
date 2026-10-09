@@ -165,8 +165,12 @@ public sealed class WorldComparisonBoundsTests
             foreach (var crate in reversed ? new[] { turned, straight } : [straight, turned]) Link(root, crate);
             return World(root);
         }
-        var comparison = WorldComparer.CompareTree(Build(false), Build(true), token: Token);
-        Assert.Empty(comparison.Differences);
+        var expected = Build(false); var actual = Build(true);
+        var comparison = WorldComparer.CompareTree(expected, actual, token: Token);
+        // The encounter sequence changed, but each crate still pairs with its own retained rotation, not its new slot.
+        Assert.Equal("world.overflowOrder", Assert.Single(comparison.Differences).Field);
+        Assert.Same(actual.Nodes[2], comparison.Counterparts[expected.Nodes[1]]);
+        Assert.Same(actual.Nodes[1], comparison.Counterparts[expected.Nodes[2]]);
         Assert.Equal(0, comparison.Roots[0].ChangedBelow);
     }
 

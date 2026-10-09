@@ -4,14 +4,18 @@ namespace Recoil.Zbd.Core.Animation;
 
 /// <summary>One preparation/frontier's bounded, immutable-topology name and subtree queries.</summary>
 internal sealed class AnimationBindingOperation(AnimationPreviewContext context, CancellationToken token,
-    long maximum = LookupWorkBudget.MaximumUnits, Action<long>? reserved = null)
+    long maximum = AnimationBindingOperation.MaximumUnits, Action<long>? reserved = null)
 {
-    private readonly LookupWorkBudget work = new(maximum, token);
+    // Original m6 needs about64.64 Mi aggregate binding units after shared-index reuse.
+    // This scoped headroom does not change generic graph or explicit frame traversal allowances.
+    internal const long MaximumUnits = 96L * 1024 * 1024;
+    private readonly LookupWorkBudget work = new(maximum, token, ceiling: MaximumUnits);
     private readonly Dictionary<(int Root, int Limit), Subtree> subtrees = [];
     private readonly Dictionary<(int Limit, bool Live), Dictionary<string, List<int>>> globals = [];
     private readonly Dictionary<(AnimationEntry Entry, string Name, int Root, AnimationBinding Binding), int> resolved = [];
     private readonly Dictionary<AnimationEntry, int> roots = [];
     private int[]? positions;
+    private AnimationEntryLookup? entries;
     private GameScene? scene;
     private int count = -1;
     internal long Used => work.UsedUnits;
@@ -34,7 +38,18 @@ internal sealed class AnimationBindingOperation(AnimationPreviewContext context,
     internal void Invalidate()
     {
         Reserve((long)subtrees.EnsureCapacity(0) + globals.EnsureCapacity(0) + resolved.EnsureCapacity(0) + roots.EnsureCapacity(0));
-        subtrees.Clear(); globals.Clear(); resolved.Clear(); roots.Clear(); positions = null;
+        subtrees.Clear(); globals.Clear(); resolved.Clear(); roots.Clear(); positions = null; entries = null;
+    }
+    internal AnimationEntryLookup EntryLookup()
+    {
+        Refresh();
+        if (entries != null) return entries;
+        // Preserve the turret index's conservative fixed-name/map allowance when sharing with players.
+        Reserve(128L * context.Package.Entries.Count);
+        var lookup = new AnimationEntryLookup(context.Package);
+        // Build once with the operation token, including when a later child-name lookup has no token.
+        _ = lookup.Find("", token);
+        return entries = lookup;
     }
     internal int LoadedRoot(AnimationEntry entry)
     {

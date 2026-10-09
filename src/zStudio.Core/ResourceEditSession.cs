@@ -19,6 +19,7 @@ public sealed class ResourceEditSession
     private readonly ConcurrentDictionary<(Guid, ReadOnlyMemory<byte>), ZrdNode> trees = new();
     private ResourceSnapshot saved;
     private bool saving;
+    private readonly long maximumRetainedBytes, maximumConstructionBytes;
     /// <summary>The source text as opened: edits are written as the smallest change of it, keeping comments and layout.</summary>
     private readonly Sources.ZrdTextSyntax? syntax;
     public ResourceSnapshot Current { get; private set; }
@@ -38,13 +39,21 @@ public sealed class ResourceEditSession
     public event Action? BeforeEdit;
     public ResourceEditSession(ZbdDocument document) : this(document, CancellationToken.None) { }
     public ResourceEditSession(ZbdDocument document, CancellationToken token) : this(document, token, null) { }
-    internal ResourceEditSession(ZbdDocument document, CancellationToken token, Action? syntaxPrepared)
+    internal ResourceEditSession(ZbdDocument document, CancellationToken token, Action? syntaxPrepared,
+        long maximumRetainedBytes = EditRetentionBudget.MaximumRetainedBytes, long maximumConstructionBytes = EditRetentionBudget.MaximumConstructionBytes)
     {
+        EditRetentionBudget.Limit(maximumRetainedBytes, EditRetentionBudget.MaximumRetainedBytes);
+        EditRetentionBudget.Limit(maximumConstructionBytes, EditRetentionBudget.MaximumConstructionBytes);
+        this.maximumRetainedBytes = maximumRetainedBytes; this.maximumConstructionBytes = maximumConstructionBytes;
         token.ThrowIfCancellationRequested();
         if (document.Probe.Family is not (FormatFamily.Archive or FormatFamily.Zrd) || document.Diagnostics.Any(d => d.Severity == "Error")) throw new InvalidDataException("An intact ZAR archive or standalone ZRD is required.");
         source = document; TargetPath = document.Path; TargetStamp = document.Stamp;
         // A text source keeps the nodes of its syntax, so edits can be written back as changes of the text.
-        if (IsSourceText) syntax = Sources.ZrdTextSyntax.Parse(document.Bytes.Span, token);
+        if (IsSourceText)
+        {
+            EditRetentionBudget.Construction(b => EditRetentionBudget.Document(b, document, token), maximumConstructionBytes);
+            syntax = Sources.ZrdTextSyntax.Parse(document.Bytes.Span, token);
+        }
         syntaxPrepared?.Invoke();
         token.ThrowIfCancellationRequested();
         var standalone = IsArchive ? null : syntax?.Root ?? (document.Assets.SingleOrDefault()?.Content as ZrdNode ?? ZrdDecoder.Read(document.Bytes, token));
@@ -56,6 +65,7 @@ public sealed class ResourceEditSession
             members.Add(new(Guid.NewGuid(), a.Index, a.Name, IsSourceText ? compiled : document.Slice(a.Offset, a.Length), IsArchive ? document.Slice(document.ArchiveDirectoryOffset!.Value + a.Index * 148L, 148) : ReadOnlyMemory<byte>.Empty, standalone ?? a.Content as ZrdNode, a.Metadata["typed_decode_limited"]?.GetValue<bool>() == true));
         }
         Current = saved = new(members.ToArray(), document, Hash(document.Bytes, token));
+        _ = Retention(Current, token);
     }
     public ResourceMember Member(Guid id) => Current.Members.SingleOrDefault(m => m.Id == id) ?? throw new InvalidDataException("The archive member no longer exists.");
     /// <summary>Resolve identities for the exact decoded snapshot, including a load overtaken by an edit or Undo/Redo.</summary>
@@ -66,11 +76,12 @@ public sealed class ResourceEditSession
         var before = Current;
         return Task.Run(() =>
         {
+            Construction(before, token, 256L * (mesh.Positions.LongLength + mesh.Normals.LongLength + mesh.Uvs.LongLength + mesh.Triangles.LongLength));
             var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
             if (index < 0) throw new InvalidDataException("The mech member no longer exists.");
             byte[] bytes = ModelReplacementWriter.ReplaceMechMember(before.Document, index, localModel, mesh, material, token);
             list[index] = list[index] with { Data = bytes, Tree = null };
-            var after = Build(list, token);
+            var after = Build(before, list, token);
             if (after.Document.Assets[index].Content is not MechAssembly assembly || !after.Document.Scene!.Models[assembly.FirstModel + localModel].Vertices.SequenceEqual(mesh.Positions))
                 throw new InvalidDataException("Mech replacement failed shared-reader verification.");
             for (int i = 0; i < list.Count; i++) if (i != index && !after.Document.Slice(after.Document.Assets[i].Offset, after.Document.Assets[i].Length).Span.SequenceEqual(before.Members[i].Data.Span))
@@ -83,12 +94,13 @@ public sealed class ResourceEditSession
         var before = Current;
         return Task.Run(() =>
         {
+            Construction(before, token);
             var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
             if (index < 0) throw new InvalidDataException("The motion member no longer exists.");
             var clip = MotionClip.Read(list[index].Data, token).Edit(action, part, frame, value, loopTime);
             byte[] bytes = clip.Write(token); _ = MotionClip.Read(bytes, token);
             list[index] = list[index] with { Data = bytes, Tree = null };
-            var after = Build(list, token);
+            var after = Build(before, list, token);
             // The archive-wide decoded sample budget must not silently demote the edited clip to a raw member.
             if (after.Document.Assets[index].Content is not MotionClip)
                 throw new InvalidDataException($"The edited archive would exceed the supported {MotionClip.MaximumArchiveSamples:N0} decoded motion samples.");
@@ -116,10 +128,23 @@ public sealed class ResourceEditSession
         {
             if (string.IsNullOrWhiteSpace(path)) throw new InvalidDataException("Choose an input file.");
             await using FileStream input = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            imported = await ReadArchiveImportAsync(input, action == "add" ? name : before.Members[selected].Name, maximumTextBytes, token);
+            string memberName = action == "add" ? name : before.Members[selected].Name;
+            imported = await ReadArchiveImportAsync(input, memberName, maximumTextBytes, token, (probe, prefix, length) =>
+            {
+                // ArchiveReader also recognizes renamed binary ZRD and motion members. Use the registry's
+                // structural ZRD classification independently of the name, without treating arbitrary text as ZRD.
+                var binary = FormatRegistry.Probe(prefix.Span, [], length, ".zrd");
+                bool typed = probe.Family == FormatFamily.Zrd ||
+                    binary.Family == FormatFamily.Zrd && binary.Description != FormatRegistry.SourceZrdDescription;
+                bool mech = before.Document.Scene != null;
+                // WAV validation owns cue wrappers, not decoded PCM; opaque members only own raw copies.
+                // Keep the larger expansion allowance for typed data and library geometry.
+                Construction(before, token, (typed || mech ? 256L : 8L) * length);
+            });
         }
         return await Task.Run(() =>
         {
+            Construction(before, token);
             var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
             if (action is not ("add" or "add_zrd") && index < 0) throw new InvalidDataException("The archive member no longer exists.");
             if (action is "add" or "add_zrd" or "rename") ValidateName(name);
@@ -174,12 +199,13 @@ public sealed class ResourceEditSession
                     list[action == "add" ? list.Count - 1 : index] = item with { Tree = tree.Duplicate() }; // Imported offsets are not original archive ranges.
                 if (probe.Family == FormatFamily.Wave || Path.GetExtension(item.Name).Equals(".wav", StringComparison.OrdinalIgnoreCase)) _ = WaveDecoder.Read(item.Data, token);
             }
-            return new PreparedResourceEdit(before, Build(list, token));
+            return new PreparedResourceEdit(before, Build(before, list, token));
         }, token);
     }
 
     /// <summary>Use the registry's complete probe through the held input before allocating a source-text payload.</summary>
-    internal static async Task<byte[]> ReadArchiveImportAsync(Stream input, string memberName, int maximumTextBytes, CancellationToken token)
+    internal static async Task<byte[]> ReadArchiveImportAsync(Stream input, string memberName, int maximumTextBytes, CancellationToken token,
+        Action<FormatProbe, ReadOnlyMemory<byte>, long>? admit = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maximumTextBytes);
         if (maximumTextBytes > Sources.SourceProject.MaximumSourceTextBytes) throw new ArgumentOutOfRangeException(nameof(maximumTextBytes));
@@ -195,6 +221,7 @@ public sealed class ResourceEditSession
         var probe = FormatRegistry.Probe(prefix, trailer, length, Path.GetExtension(memberName));
         long maximum = probe.Description == FormatRegistry.SourceZrdDescription ? maximumTextBytes : FormatRegistry.MaximumDocumentBytes;
         if (length > maximum) throw new InvalidDataException($"Archive source text exceeds its {maximum:N0}-byte limit; simplify the resource before importing it.");
+        if (admit != null) await Task.Run(() => admit(probe, prefix, length), token);
         if (input.Length != length) throw new IOException("The archive input changed while it was classified; try again.");
         input.Position = 0;
         return await Sources.SourceRead.AllAsync(input, memberName, maximum, token);
@@ -204,6 +231,7 @@ public sealed class ResourceEditSession
         var before = Current;
         return Task.Run(() =>
         {
+            Construction(before, token, 1024L + 8L * value.Length);
             var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
             if (index < 0) throw new InvalidDataException("The archive member no longer exists.");
             var root = Tree(list[index], token); var selected = root.Find(node) ?? throw new InvalidDataException("The ZRD node no longer exists.");
@@ -233,7 +261,7 @@ public sealed class ResourceEditSession
             }
             var bytes = ZrdWriter.Write(root, token); _ = ZrdDecoder.Read(bytes, token);
             list[index] = list[index] with { Data = bytes, Tree = root };
-            return new PreparedResourceEdit(before, Build(list, token));
+            return new PreparedResourceEdit(before, Build(before, list, token));
         }, token);
     }
     public static ZrdNode? FindParent(ZrdNode root, Guid id) => root.Children.Any(c => c.Id == id) ? root : root.Children.Select(c => FindParent(c, id)).FirstOrDefault(n => n != null);
@@ -242,16 +270,22 @@ public sealed class ResourceEditSession
         var before = Current;
         return Task.Run(() =>
         {
+            Construction(before, token, 1024L + 8L * ((edit.Value?.Length ?? 0) + (long)(edit.Kind?.Length ?? 0)));
             var list = before.Members.ToList(); int index = list.FindIndex(m => m.Id == member);
             if (index < 0) throw new InvalidDataException("The valve resource no longer exists.");
             var item = list[index]; var root = MissionAiValves.Edit(item.Name, Tree(item, token), edit, token);
             byte[] bytes = ZrdWriter.Write(root, token); _ = ZrdDecoder.Read(bytes, token);
             list[index] = item with { Data = bytes, Tree = root };
-            return new PreparedResourceEdit(before, Build(list, token));
+            return new PreparedResourceEdit(before, Build(before, list, token));
         }, token);
     }
-    private ResourceSnapshot Build(IReadOnlyList<ResourceMember> members, CancellationToken token)
+    private ResourceSnapshot Build(ResourceSnapshot before, IReadOnlyList<ResourceMember> members, CancellationToken token)
     {
+        // Renaming/replacing a metadata member can activate mech decoding of previously opaque members.
+        // Match MechLibraryReader's exact dialect gate before constructing the new archive/scene. Count
+        // every member occurrence: unlike ZRD payloads, mech assemblies do not share decoded alias ranges.
+        if (IsArchive && before.Document.Scene == null && ActivatesMechLibrary(members, token))
+            Construction(before, token, 256L * members.Sum(m => (long)m.Data.Length));
         byte[] bytes = IsArchive ? ArchiveWriter.Write(source, members, token)
             : IsSourceText ? Sources.ZrdTextSyntax.Encode(LosslessText(members.Single().Tree ?? ZrdDecoder.Read(members.Single().Data, token), token)) : members.Single().Data.ToArray();
         var document = FormatRegistry.Default.OpenBytes(source.Path, bytes, source.Stamp, token);
@@ -262,20 +296,63 @@ public sealed class ResourceEditSession
             var retained = member.Tree ?? (trees.TryGetValue((member.Id, member.Data), out var cached) ? cached : document.Assets[index].Content as ZrdNode);
             return member with { TypedDecodeLimited = limited, Tree = limited ? null : retained };
         }).ToArray();
-        return new(checkedMembers, document, Hash(bytes, token));
+        var result = new ResourceSnapshot(checkedMembers, document, Hash(bytes, token));
+        _ = Retention(result, token);
+        return result;
+    }
+    private static bool ActivatesMechLibrary(IReadOnlyList<ResourceMember> members, CancellationToken token)
+    {
+        int versions = 0, formats = 0, materials = 0;
+        bool version27 = false, format1 = false;
+        foreach (var member in members)
+        {
+            token.ThrowIfCancellationRequested();
+            if (member.Name == "version" && member.Data.Length == 4)
+            { versions++; version27 = BinaryPrimitives.ReadUInt32LittleEndian(member.Data.Span) == 27; }
+            if (member.Name == "format" && member.Data.Length == 4)
+            { formats++; format1 = BinaryPrimitives.ReadUInt32LittleEndian(member.Data.Span) == 1; }
+            if (member.Name == "materials") materials++;
+        }
+        return versions == 1 && formats == 1 && materials == 1 && version27 && format1;
     }
     public void Accept(PreparedResourceEdit edit)
     {
         if (saving || !ReferenceEquals(edit.Before, Current)) throw new InvalidOperationException("The resource changed while preparing the edit.");
         if (edit.After.Hash == Current.Hash) return;
-        BeforeEdit?.Invoke(); undo.Add(Current); Trim(undo); redo.Clear(); Current = edit.After; PruneTrees(); Changed?.Invoke();
+        var budget = Retention(edit.After, CancellationToken.None);
+        // Keep the immediate previous state: an accepted edit always remains undoable.
+        EditRetentionBudget.Resource(budget, Current, CancellationToken.None);
+        int keep = EditRetentionBudget.KeepNewest(undo, budget, (b, snapshot) => EditRetentionBudget.Resource(b, snapshot, CancellationToken.None));
+        BeforeEdit?.Invoke();
+        if (undo.Count > keep) undo.RemoveRange(0, undo.Count - keep);
+        undo.Add(Current); TrimRaw(undo); redo.Clear(); Current = edit.After; PruneTrees(); Changed?.Invoke();
     }
+    private RetainedDocumentBudget Retention(ResourceSnapshot next, CancellationToken token)
+    {
+        RetainedDocumentBudget budget = new(maximumRetainedBytes);
+        try
+        {
+            EditRetentionBudget.Document(budget, source, token);
+            if (syntax != null) { budget.Tree(syntax.Root, token); budget.Reserve(8L * source.Bytes.Length, token); }
+            EditRetentionBudget.Resource(budget, saved, token);
+            EditRetentionBudget.Resource(budget, next, token);
+            return budget;
+        }
+        catch (InvalidDataException) { throw EditRetentionBudget.Refusal(); }
+    }
+    private void Construction(ResourceSnapshot before, CancellationToken token, long added = 0)
+        => EditRetentionBudget.Construction(b =>
+        {
+            EditRetentionBudget.Document(b, source, token);
+            EditRetentionBudget.Resource(b, before, token);
+            foreach (var tree in trees.Values) b.Tree(tree, token);
+        }, maximumConstructionBytes, added);
     private void PruneTrees()
     {
         var retained = undo.Concat(redo).Append(Current).Append(saved).SelectMany(s => s.Members).Where(m => m.Tree == null).Select(m => (m.Id, m.Data)).ToHashSet();
         foreach (var key in trees.Keys) if (!retained.Contains(key)) trees.TryRemove(key, out _);
     }
-    private static void Trim(List<ResourceSnapshot> history)
+    private static void TrimRaw(List<ResourceSnapshot> history)
     {
         long bytes = history.Sum(s => (long)s.Document.Bytes.Length);
         while (history.Count > 1 && (history.Count > 128 || bytes > 256L * 1024 * 1024)) { bytes -= history[0].Document.Bytes.Length; history.RemoveAt(0); }
@@ -285,7 +362,7 @@ public sealed class ResourceEditSession
         if (saving) throw new InvalidOperationException("A resource save is in progress.");
         var from = forward ? redo : undo; var to = forward ? undo : redo;
         if (from.Count == 0) return;
-        BeforeEdit?.Invoke(); to.Add(Current); Trim(to); Current = from[^1]; from.RemoveAt(from.Count - 1); PruneTrees(); Changed?.Invoke();
+        BeforeEdit?.Invoke(); to.Add(Current); TrimRaw(to); Current = from[^1]; from.RemoveAt(from.Count - 1); PruneTrees(); Changed?.Invoke();
     }
     public async Task<string> SaveAsync(string? destination = null, CancellationToken token = default)
     {

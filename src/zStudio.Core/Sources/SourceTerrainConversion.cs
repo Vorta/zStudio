@@ -15,6 +15,7 @@ public sealed record TerrainConversionKept(string Node, string Reason);
 /// <summary>A planned surface: its id, node attributes and the database roots (glTF node indices, in root order) it merges.</summary>
 public sealed record TerrainConversionSurface(string Id, uint Flags, int Zone, IReadOnlyList<int> Nodes)
 {
+    internal int Run { get; init; }
     /// <summary>The pieces' model values (lighting, scrolling), which the surface's mesh carries.</summary>
     public JsonObject? ModelValues { get; init; }
     /// <summary>The pieces' Object3D appearance, including inactive alpha/color values and retained flags.</summary>
@@ -24,11 +25,24 @@ public sealed record TerrainConversionSurface(string Id, uint Flags, int Zone, I
 public sealed record TerrainConversionPlan(string Database, string Surfaces, string Recipe, IReadOnlyList<TerrainConversionSurface> Groups, IReadOnlyList<TerrainConversionKept> Kept)
 {
     public int Converted => Groups.Sum(g => g.Nodes.Count);
+    /// <summary>Ordinary recipes for uninterrupted sibling runs, in database encounter order.</summary>
+    public IReadOnlyList<string> Recipes => Groups.Select(g => RecipeForRun(g.Run)).Distinct(StringComparer.Ordinal).ToArray();
+    internal string RecipeForRun(int run)
+    {
+        if (run == 0) return Recipe;
+        int folder = Recipe.LastIndexOf('/') + 1;
+        string name = Recipe[folder..];
+        // Import retains only the first twelve ASCII label characters. Put the distinguishing run before
+        // the basename, with a leading letter different even case-insensitively from the first recipe's label.
+        char first = name.FirstOrDefault(c => char.IsAsciiLetterOrDigit(c) || c == '_');
+        char prefix = first is 't' or 'T' or '\0' ? 'u' : 't';
+        return Recipe[..folder] + prefix + (run + 1).ToString("D3", System.Globalization.CultureInfo.InvariantCulture) + "_" + name;
+    }
 }
 
 /// <summary>
 /// Convert to editable terrain: the mission database's untransformed mesh pieces become surfaces of a terrain recipe.
-/// Pieces whose node attributes match merge into one surface, unless they overlap in plan view (the altitude probe
+/// Adjacent pieces whose node attributes match merge into one surface, unless they overlap in plan view (the altitude probe
 /// takes the first polygon of a node, so stacked sheets stay separate surfaces). Each surface keeps its pieces'
 /// polygons, UVs, normals and materials (with their polygon zones and soils) exactly, together with their Object3D
 /// appearance; the recipe gives it the pieces' exact node flags and zone. Pieces inside the database's groups (which the build deletes) count too; the parts
@@ -264,7 +278,7 @@ public static partial class SourceTerrainConversion
         TerrainConversionSerializationBudget.Limits limits, CancellationToken token)
     {
         var (root, doc) = Read(workspace, database, token);
-        ConversionZones.Read(workspace, database, root, doc, token)?.ApplyPlanningValues(token);
+        ConversionZones.Read(workspace, database, root, doc, token)?.ApplyPlanningValues(doc, token);
         TerrainConversionGeometry geometry = new(token);
         long patternWork = 0;
         Regex? MatchingPattern(string name)
@@ -283,7 +297,6 @@ public static partial class SourceTerrainConversion
         string folder = database[..database.LastIndexOf('/')];
         string surfaces = $"{folder}/{stem}_terrain.gltf", recipe = $"{folder}/{stem}_terrain{TerrainRecipe.Extension}", buffer = $"{folder}/{stem}_terrain.bin";
         if (workspace.Exists(surfaces, token) || workspace.Exists(recipe, token) || workspace.Exists(buffer, token)) throw new InvalidDataException($"{surfaces}, {buffer} or {recipe} already exists; the database was converted before.");
-        var json = (JsonArray)root["nodes"]!;
         List<TerrainConversionKept> kept = []; HashSet<string> shared = new(StringComparer.Ordinal);
         // Many pieces may share one mesh (a valid file may hold 200,000 nodes using one), and its model values may be large:
         // what a mesh decides is worked out once per mesh, and its values are written out once, as a small number naming them
@@ -292,10 +305,12 @@ public static partial class SourceTerrainConversion
         Dictionary<string, int> valueNumbers = new(StringComparer.Ordinal); List<string> valueTexts = [];
         Dictionary<string, int> appearanceNumbers = new(StringComparer.Ordinal) { [""] = 0 };
         List<JsonObject?> appearances = [null];
-        Dictionary<(uint Flags, int Zone, int Values, int Appearance), List<GltfNode>> groups = [];
+        List<((uint Flags, int Zone, int Values, int Appearance) Key, int Run, List<GltfNode> Nodes, HashSet<TerrainConversionGeometry.Sheet> Areas)> groups = [];
+        int run = -1; bool continuing = false;
         foreach (var (node, inherited) in Members(doc.Roots, 0xFF))
         {
             token.ThrowIfCancellationRequested();
+            if (node == null) { continuing = false; continue; }
             var extras = node.Extras?[WorldGltf.Key] as JsonObject;
             // A piece without a zone of its own takes its group's, as the importer gives it.
             int zone = Zone(extras, inherited);
@@ -316,7 +331,7 @@ public static partial class SourceTerrainConversion
                 : MatchingPattern(name) is { } pattern ? $"matched by the wildcard {pattern}"
                 : extras?["zoneWord"] is JsonValue word && word.ToString() is var w && zone is var z && !w.Equals($"0x{(uint)z:X}", StringComparison.OrdinalIgnoreCase) && !w.Equals($"0x{(uint)z:X8}", StringComparison.OrdinalIgnoreCase) ? "has a zone word beyond its zone"
                 : null;
-            if (reason != null) { kept.Add(new(name, reason)); continue; }
+            if (reason != null) { kept.Add(new(name, reason)); continuing = false; continue; }
             if (mesh!.ValuesNumber is not int number)
             {
                 string text = mesh.Values?.ToJsonString() ?? "";
@@ -332,59 +347,68 @@ public static partial class SourceTerrainConversion
                 appearances.Add(appearance);
             }
             var key = (Flags(extras), zone, number, appearanceNumber);
-            if (!groups.TryGetValue(key, out var list)) groups[key] = list = [];
-            list.Add(node);
-        }
-        if (groups.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need at least {groups.Count} surfaces (different flags, zones, appearance or model values), more than a recipe's {TerrainRecipe.MaximumSurfaces}.");
-        // Within a group, pieces that overlap in plan view go to different surfaces (first fit, in root order).
-        List<TerrainConversionSurface> result = [];
-        foreach (var ((flags, zone, number, appearanceNumber), nodes) in groups.OrderBy(g => g.Key.Zone).ThenBy(g => g.Key.Flags).ThenBy(g => valueTexts[g.Key.Values], StringComparer.Ordinal).ThenBy(g => g.Key.Appearance))
-        {
-            string values = valueTexts[number];
-            List<(List<GltfNode> Members, HashSet<TerrainConversionGeometry.Sheet> Areas)> layers = [];
-            foreach (var node in nodes)
+            if (!continuing) { run++; continuing = true; }
+            var area = mesh.Area ??= geometry.Read(node.Mesh!);
+            // Only the immediately preceding surface can absorb this piece. Reusing an earlier surface would
+            // move its polygons ahead of an intervening sheet, attribute group, or retained object.
+            if (groups.Count > 0 && groups[^1].Run == run && groups[^1].Key == key
+                && !groups[^1].Areas.Any(other => geometry.Overlaps(other, area)))
+            { groups[^1].Nodes.Add(node); groups[^1].Areas.Add(area); }
+            else
             {
-                token.ThrowIfCancellationRequested();
-                // A mesh's plan-view area is the same for every piece using it (pieces are untransformed).
-                var mesh = facts[node.Mesh!];
-                var area = mesh.Area ??= geometry.Read(node.Mesh!);
-                var layer = layers.FirstOrDefault(l => !l.Areas.Any(other => geometry.Overlaps(other, area)));
-                if (layer.Members == null && result.Count + layers.Count >= TerrainRecipe.MaximumSurfaces)
-                    throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, appearance, model values, or stacked sheets).");
-                if (layer.Members == null) layers.Add(([node], new(ReferenceEqualityComparer.Instance) { area }));
-                else { layer.Members.Add(node); layer.Areas.Add(area); }
+                if (groups.Count >= TerrainRecipe.MaximumSurfaces)
+                    throw new InvalidDataException($"The pieces need more than {TerrainRecipe.MaximumSurfaces} ordered terrain surfaces. Convert a smaller database.");
+                groups.Add((key, run, [node], new(ReferenceEqualityComparer.Instance) { area }));
             }
-            if (result.Count + layers.Count > TerrainRecipe.MaximumSurfaces) throw new InvalidDataException($"The pieces would need more than a recipe's {TerrainRecipe.MaximumSurfaces} surfaces (different flags, zones, appearance, model values, or stacked sheets).");
+        }
+        var totals = groups.GroupBy(g => g.Key).ToDictionary(g => g.Key, g => g.Count());
+        Dictionary<(uint Flags, int Zone, int Values, int Appearance), int> occurrences = [];
+        Dictionary<int, (string Suffix, JsonObject? Values)> writtenValues = [];
+        List<TerrainConversionSurface> result = [];
+        foreach (var group in groups)
+        {
+            var (flags, zone, number, appearanceNumber) = group.Key;
             // Pieces with model values of their own (an unlit or scrolling surface) are a surface of their own, named by a short hash of the values.
-            string model = values.Length == 0 ? "" : "_m" + SourceProject.Sha256(Encoding.UTF8.GetBytes(values))[..6];
-            // Read back once for the group: its stacked sheets carry the same values, which applying the plan copies into each surface.
-            JsonObject? modelValues = values.Length == 0 ? null : JsonNode.Parse(values) as JsonObject;
-            for (int k = 0; k < layers.Count; k++)
-                result.Add(new($"z{(zone == 0xFF ? "any" : zone.ToString(System.Globalization.CultureInfo.InvariantCulture))}_{flags:x8}{model}" + (appearanceNumber == 0 ? "" : $"_a{appearanceNumber}") + (layers.Count > 1 ? $"_{k + 1}" : ""), flags, zone, [.. layers[k].Members.Select(n => n.Index)])
-                { ModelValues = modelValues, Appearance = appearances[appearanceNumber] });
+            // Repeated, separated runs reuse this parsed metadata before expanded output admission.
+            if (!writtenValues.TryGetValue(number, out var written))
+            {
+                string values = valueTexts[number];
+                writtenValues[number] = written = (values.Length == 0 ? "" : "_m" + SourceProject.Sha256(Encoding.UTF8.GetBytes(values))[..6],
+                    values.Length == 0 ? null : JsonNode.Parse(values) as JsonObject);
+            }
+            int occurrence = occurrences[group.Key] = occurrences.GetValueOrDefault(group.Key) + 1;
+            result.Add(new($"z{(zone == 0xFF ? "any" : zone.ToString(System.Globalization.CultureInfo.InvariantCulture))}_{flags:x8}{written.Suffix}" + (appearanceNumber == 0 ? "" : $"_a{appearanceNumber}") + (totals[group.Key] > 1 ? $"_{occurrence}" : ""), flags, zone, [.. group.Nodes.Select(n => n.Index)])
+            { ModelValues = written.Values, Appearance = appearances[appearanceNumber], Run = group.Run });
         }
         TerrainConversionPlan plan = new(database, surfaces, recipe, result, kept);
+        foreach (string output in plan.Recipes)
+            if (workspace.Exists(output, token)) throw new InvalidDataException($"{output} already exists; choose an unconverted database.");
         TerrainConversionSerializationBudget.Check(plan, doc.AllNodes().Where(n => n.Index >= 0).ToDictionary(n => n.Index), limits, token);
         return plan;
 
         // The database's objects: its roots and, in their place, what its groups hold (a part's reference holds the
         // database's own records; the part's objects are in its file), with the zone each inherits (the roots' 0xFF).
-        IEnumerable<(GltfNode Node, int Zone)> Members(IEnumerable<GltfNode> nodes, int inherited)
+        IEnumerable<(GltfNode? Node, int Zone)> Members(IEnumerable<GltfNode> nodes, int inherited)
         {
             foreach (var node in nodes)
             {
                 if (!WorldGltf.IsGroup(node, database)) { yield return (node, inherited); continue; }
+                yield return (null, inherited); // A new parent is a new run, even when adjacent leaves match.
                 var extras = node.Extras?[WorldGltf.Key] as JsonObject;
                 // A group several parents share is written once per parent and imported from its first copy alone: its
                 // pieces would be converted once per copy, and the copies would no longer agree.
                 if (extras?["instance"] != null) { if (shared.Add(extras["instance"]!.ToJsonString())) kept.Add(new(WorldGltf.EngineName(node), "a group several parents share")); continue; }
-                if (extras?["ref"] != null || extras?[WorldGltf.ZoneReference] != null) kept.Add(new(WorldGltf.EngineName(node), "a part of the mission database in a file of its own"));
+                if (extras?["ref"] != null || extras?[WorldGltf.ZoneReference] != null)
+                { kept.Add(new(WorldGltf.EngineName(node), "a part of the mission database in a file of its own")); continue; }
+                if (!WorldGltf.IsTransparentTerrainGroup(node, database))
+                { kept.Add(new(WorldGltf.EngineName(node), "a database group with geometry, transform or appearance")); continue; }
                 foreach (var member in Members(node.Children, Zone(extras, inherited))) yield return member;
+                yield return (null, inherited);
             }
         }
     }
 
-    /// <summary>Applies a plan as one change: the surfaces file, the recipe, and the database without the pieces and with the marker in the first piece's place.</summary>
+    /// <summary>Applies the shared surfaces and ordinary recipes as one change, with each marker at its run's original position.</summary>
     public static SourceTransaction Apply(SourceWorkspace workspace, TerrainConversionPlan plan, CancellationToken token = default)
         => Apply(workspace, plan, TerrainConversionSerializationBudget.Limits.Default, token);
 
@@ -413,31 +437,76 @@ public static partial class SourceTerrainConversion
         _ = GltfDocument.Read(json, uri => uri == binary ? bin
             : throw new InvalidDataException($"{plan.Surfaces}: unexpected buffer {JsonData.ShownText(uri)}."), token);
         string folder = plan.Surfaces[..plan.Surfaces.LastIndexOf('/')];
-        // The recipe: each surface keeps its pieces' exact node flags and zone.
-        TerrainRecipe recipe = new(TerrainRecipe.CurrentCompiler,
-            [.. plan.Groups.Select(g => new TerrainSurface(g.Id, plan.Surfaces[(folder.Length + 1)..], g.Id, new() { Flags = g.Flags & WorldGltf.CarriedFlags, NodeZone = g.Zone == 0xFF ? TerrainAttributes.AnyZone : g.Zone }))],
-            TerrainAttributes.None, []);
-        // The database: the pieces leave; the marker stands among the roots where the first of them (or its group) stood.
+        // Each uninterrupted sibling run gets a normal recipe: adding or renaming its surfaces later needs no
+        // hidden selector in the database. All recipes share the one generated surfaces model and zone profile.
+        List<(string, byte[]?)> changes = [(plan.Surfaces, json), ($"{folder}/{binary}", bin)];
+        Dictionary<int, int> nodeRuns = [];
+        foreach (var group in plan.Groups)
+            foreach (int index in group.Nodes)
+                if (!nodeRuns.TryAdd(index, group.Run)) throw new InvalidDataException("The conversion plan repeats a piece.");
+        foreach (var run in plan.Groups.GroupBy(g => g.Run))
+        {
+            token.ThrowIfCancellationRequested();
+            string path = plan.RecipeForRun(run.Key);
+            if (workspace.Exists(path, token)) throw new InvalidDataException($"{path} already exists; plan the conversion again.");
+            TerrainRecipe recipe = new(TerrainRecipe.CurrentCompiler,
+                [.. run.Select(g => new TerrainSurface(g.Id, SourceTerrain.RelativePath(path, plan.Surfaces), g.Id,
+                    new() { Flags = g.Flags & WorldGltf.CarriedFlags, NodeZone = g.Zone == 0xFF ? TerrainAttributes.AnyZone : g.Zone }))],
+                TerrainAttributes.None, []);
+            changes.Add((path, TerrainRecipe.Parse(recipe.Write(), path).Write()));
+        }
+        // Rewrite each adjacency list once before removal renumbers it. A marker replaces exactly its original
+        // contiguous run; retained roots and group children keep their relative encounter positions.
         var nodes = (JsonArray)root["nodes"]!;
         var scenes = (JsonArray)root["scenes"]!;
         int sceneIndex = GltfInteger.OptionalInt32(root["scene"], "scene") ?? 0;
-        var sceneRoots = (JsonArray)scenes[sceneIndex]!["nodes"]!;
-        var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
-        bool Holds(GltfNode node) => converted.Contains(node.Index) || node.Children.Any(Holds);
-        int place = sceneRoots.Select(n => GltfInteger.Int32(n)).TakeWhile(n => !(byIndex.TryGetValue(n, out var node) && Holds(node))).Count();
-        GltfNodeEdits.Remove(root, converted, token);
-        string stem = Path.GetFileName(plan.Recipe)[..^TerrainRecipe.Extension.Length];
-        nodes.Add(new JsonObject { ["name"] = stem, ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = SourceTerrain.RelativePath(plan.Database, plan.Recipe) } } });
-        // Removal renumbers the scene's list into a new array.
-        ((JsonArray)((JsonArray)root["scenes"]!)[sceneIndex]!["nodes"]!).Insert(place, nodes.Count - 1);
+        HashSet<int> placed = []; List<int> encountered = [];
+        Rewrite((JsonObject)scenes[sceneIndex]!, "nodes", doc.Roots, true);
+        if (!encountered.SequenceEqual(plan.Groups.SelectMany(g => g.Nodes)))
+            throw new InvalidDataException("The conversion plan no longer follows the database's piece order. Plan the conversion again.");
+        GltfNodeEdits.Remove(root, nodeRuns.Keys.ToHashSet(), token);
         byte[] database = GltfJson.Write(root, indented: false, token);
+        if (database.Length > SourceTerrain.MaximumDatabaseJsonBytes)
+            throw new InvalidDataException("The converted database exceeds its editable JSON limit. Convert a smaller database.");
         var updated = WorldAssembler.ReadModel(database, plan.Database, (path, remaining) => workspace.Read(path, token, ProjectReadLimits.Bytes(remaining))
             ?? throw new InvalidDataException($"{plan.Database}: buffer {JsonData.ShownText(path)} is unavailable."), token);
-        List<(string, byte[]?)> changes = [(plan.Surfaces, json), ($"{folder}/{binary}", bin), (plan.Recipe, TerrainRecipe.Parse(recipe.Write(), plan.Recipe).Write()), (plan.Database, database)];
+        changes.Add((plan.Database, database));
         if (zones != null) changes.Add(zones.Update(root, updated, plan.Surfaces, surfaces, plan.Groups, byIndex, token));
         return workspace.Apply($"Convert {Path.GetFileName(plan.Database)} to editable terrain",
             changes, token)
             ?? throw new InvalidDataException("The conversion changed nothing.");
+
+        void Rewrite(JsonObject owner, string property, IReadOnlyList<GltfNode> siblings, bool allowed)
+        {
+            JsonArray rewritten = []; int? previousRun = null;
+            foreach (var node in siblings)
+            {
+                token.ThrowIfCancellationRequested();
+                if (nodeRuns.TryGetValue(node.Index, out int run))
+                {
+                    if (!allowed) throw new InvalidDataException("Terrain pieces must be roots or children of transparent database groups.");
+                    encountered.Add(node.Index);
+                    if (previousRun != run)
+                    {
+                        if (!placed.Add(run)) throw new InvalidDataException("A conversion recipe crosses a retained piece or group. Plan the conversion again.");
+                        string path = plan.RecipeForRun(run), stem = Path.GetFileName(path)[..^TerrainRecipe.Extension.Length];
+                        // Markers never become game nodes, but pass the shared source-name validator. The full
+                        // recipe identity stays in the URI when a long/non-Latin-1 basename needs a display name.
+                        if (stem.Length > 35 || stem.Any(c => c == 0 || c > 255)) stem = $"terrain_{run + 1}";
+                        rewritten.Add(nodes.Count);
+                        nodes.Add(new JsonObject { ["name"] = stem, ["extras"] = new JsonObject { [WorldGltf.Key] = new JsonObject { ["terrain"] = SourceTerrain.RelativePath(plan.Database, path) } } });
+                    }
+                    previousRun = run;
+                }
+                else
+                {
+                    previousRun = null; rewritten.Add(node.Index);
+                    if (node.Children.Count > 0)
+                        Rewrite((JsonObject)nodes[node.Index]!, "children", node.Children, allowed && WorldGltf.IsTransparentTerrainGroup(node, plan.Database));
+                }
+            }
+            owner[property] = rewritten;
+        }
     }
 
     private static (JsonObject Root, GltfDocument Doc) Read(SourceWorkspace workspace, string database, CancellationToken token)

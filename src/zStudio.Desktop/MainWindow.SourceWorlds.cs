@@ -26,6 +26,8 @@ public partial class MainWindow
     private SourceWorkspace? sourceWorkspace;
     internal Action<CancellationToken>? SourceChangesReading { get; set; }
     internal Action<string, CancellationToken>? SourceProjectReading { get; set; }
+    internal Func<string, CancellationToken, Task<IReadOnlyList<string>>> ReadSourceWorldMissionsAsync { get; set; } =
+        static (root, token) => Task.Run(() => SourceWorlds.Missions(root, token), token);
 
     private void RequireSourceRead(string root, long generation, CancellationToken token)
     {
@@ -107,12 +109,23 @@ public partial class MainWindow
     private async Task<DocumentModel> OpenSourceWorldAsync(string mission, CancellationToken token)
     {
         string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
+        long workspace = ViewModel.WorkspaceGeneration;
+        var capturedProject = sourceWorkspace;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken, shutdownToken);
+        token = cancellation.Token;
+        token.ThrowIfCancellationRequested();
         mission = mission.Trim().ToLowerInvariant();
         IReadOnlyList<string> missions;
-        try { missions = await Task.Run(() => SourceWorlds.Missions(root, token), token); }
+        try { missions = await ReadSourceWorldMissionsAsync(root, token); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
-        token.ThrowIfCancellationRequested();
+        // A same-path reopen is a different workspace too. Check before activating an existing document or
+        // acquiring the source workspace, not only after building against whichever root is current then.
+        RequireSourceRead(root, workspace, token);
+        // Another first opening may establish the shared project while this scan runs. Only an already captured
+        // workspace has an identity to preserve; root/generation still reject a same-path reopen in either case.
+        if (capturedProject != null && !ReferenceEquals(sourceWorkspace, capturedProject))
+            throw new StudioCommandException("context_changed", "The source workspace changed while its worlds were being read.");
         if (!missions.Contains(mission, StringComparer.OrdinalIgnoreCase))
             throw new StudioCommandException("invalid_argument", missions.Count == 0 ? "This project builds no worlds (it needs gamegen/mN.gs scripts and glTF models)." : $"This project builds no {mission} world. Worlds: {string.Join(", ", missions)}.");
         if (OpenSourceWorld(root, mission) is { } open)
@@ -122,7 +135,6 @@ public partial class MainWindow
             return open;
         }
         RequireNoDrafts();
-        long workspace = ViewModel.WorkspaceGeneration;
         var project = SourceWorkspaceFor(root);
         // Until the world's document exists, the opening holds the workspace: closing another document must not release it.
         sourceWorldsOpening++;
@@ -135,7 +147,8 @@ public partial class MainWindow
         try
         {
             var built = await BuildSourceWorldAsync(session, token);
-            if (ViewModel.WorkspaceGeneration != workspace || SourceProjectRoot != root) throw new StudioCommandException("context_changed", "The workspace changed while the world was building.");
+            RequireSourceRead(root, workspace, token);
+            if (!ReferenceEquals(sourceWorkspace, project)) throw new StudioCommandException("context_changed", "The source workspace changed while the world was building.");
             if (OpenSourceWorld(root, mission) is { } other)
             {
                 session.Dispose(); session.DeleteBuild(built.Build.Folder); ViewModel.SelectedDocument = other; CommitRunningJob();
@@ -157,7 +170,8 @@ public partial class MainWindow
             if (doc == null) session.Dispose();
             else if (!ViewModel.Documents.Contains(doc)) doc.Dispose();
             // The status showed the build's progress.
-            ViewModel.Status = Bounded($"The {mission} world did not open: {ex.Message}");
+            if (ViewModel.WorkspaceGeneration == workspace && SourceProjectRoot == root && !shutdownToken.IsCancellationRequested)
+                ViewModel.Status = Bounded($"The {mission} world did not open: {ex.Message}");
             throw;
         }
         finally { sourceWorldsOpening--; ReleaseUnusedSourceWorkspace(); }
@@ -391,6 +405,7 @@ public partial class MainWindow
         pendingSourceView = view == null ? null : (replacement, view);
         ViewModel.ReplaceDocument(current, replacement);
         CommitRunningJob();
+        if (directSourcePublication.Value is { } publication) publication.Document = replacement;
         bool stillShown = await CompleteSourceWorldPresentationAsync(replacement);
         // The edit's notes, and the lookups by name it left finding other nodes (reported, not refused: Problems lists them).
         int changed = built.LookupChanges.Count;
@@ -481,6 +496,11 @@ public partial class MainWindow
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed.");
         RequireSourceWorldIdle(session);
         RequireNoDrafts(doc, committing: true, committingCard, committingZones);
+        // Properties callbacks use the GUI helper with no explicit token. When invoked by a direct command,
+        // its request must still cancel preparation before any edit is accepted.
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, directSourcePublication.Value?.Token ?? default,
+            doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
+        cancellation.Token.ThrowIfCancellationRequested();
         string? draftToken = committingCard?.DraftToken;
         string? zoneToken = committingZones?.Token;
         long revision = session.Workspace.Revision;
@@ -488,7 +508,6 @@ public partial class MainWindow
         if (operation != null) throw new StudioCommandException("busy", "An export, validation or source operation is already running.");
         var prepared = session.Workspace.BeginPreparedEdit();
         using var verification = new PreparedSourceVerification();
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         session.Building = cancellation;
         operation = cancellation; CancelOperationItem.IsEnabled = true;
         SetSourceRebuilding(session, true);
@@ -510,6 +529,7 @@ public partial class MainWindow
             if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed while the edit was prepared.");
         }
         catch (SourceFileChangedException ex) { throw new StudioCommandException("external_change", ex.Message); }
+        catch (SourceModelBuildException ex) { throw new StudioCommandException("build_failed", ex.Message); }
         catch (InvalidDataException ex) { throw new StudioCommandException("invalid_argument", ex.Message); }
         catch (NotSupportedException ex) { throw new StudioCommandException("unsupported", ex.Message); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
@@ -755,7 +775,13 @@ public partial class MainWindow
     {
         if (ViewModel.SelectedDocument is not { SourceWorld: { } session } doc) throw new StudioCommandException("unsupported", "Open a mission world of the source project first (Tools → Open mission world).");
         RequireSourceWorldIdle(session);
-        var models = await Task.Run(() => SourceWorlds.Models(session.Root));
+        long generation = ViewModel.WorkspaceGeneration, revision = session.Workspace.Revision;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ViewModel.WorkspaceToken, shutdownToken);
+        var models = await Task.Run(() => SourceWorlds.Models(session.Workspace, cancellation.Token), cancellation.Token);
+        RequireSourceRead(session.Root, generation, cancellation.Token);
+        if (session.Owner != doc || !ViewModel.Documents.Contains(doc) || session.Workspace.Revision != revision)
+            throw new StudioCommandException("context_changed", "The source world changed during model discovery; reopen Add model for its current revision.");
+        RequireSourceWorldIdle(session);
         HashSet<string> names = new(doc.PreviewDocument.Scene?.Nodes.Select(n => n.Name) ?? [], StringComparer.Ordinal);
         Vector3 position = Vector3.Zero;
         if (shownDocument == doc && scene != null && HasPublishedStaticScene)
@@ -763,7 +789,7 @@ public partial class MainWindow
         var overlay = session.Workspace.Overlay();
         SourceModelDialog dialog = new(this, session.Mission, models, names, position,
             (root, token) => Task.Run(() => SourceWorlds.DefinitionsFor(session.Root, session.Mission, root, overlay, token), token),
-            addition => { try { SourceWorlds.Validate(session.Root, addition); return null; } catch (Exception ex) when (ex is InvalidDataException or IOException) { return ex.Message; } });
+            addition => { try { SourceWorlds.ValidateTokens(addition); return null; } catch (Exception ex) when (ex is InvalidDataException or IOException) { return ex.Message; } });
         if (dialog.ShowDialog() != true || dialog.Result is not { } result) return;
         // A closed world reports stale_document rather than dropping the choice silently.
         await AddSourceModelAsync(session.Owner ?? doc, result, CancellationToken.None);
@@ -824,18 +850,22 @@ public partial class MainWindow
         RegisterJob(r, "source_world_open", "Open (or activate) a mission world of the open source project as its build script assembles it from the project's glTF models, textures, resources and animation definitions, including the project's unsaved edits. The world is built privately, as the export builds it, into the project's zstudio/cache/worlds folder (zStudio's derived data, which builds never read and which is removed when the world closes), and shown in Whole world. Edit it with zstudio_source_world_add_model, the placement commands (pickup_lock, pickup_move, scene_card), undo_redo and save_document, which change only the project's sources; every open world of the project shares one edit history and one save. Build problems are listed in problems.",
             [P("mission", "string", "Mission folder, for example m1 (see zstudio_source_status: outputs of family world).", true)], true,
             async (a, token) => { var doc = await OpenSourceWorldAsync(Text(a, "mission"), token); return Result(new { document = DocumentState(doc) }); });
-        Register(r, "source_world_models", "List the glTF models of the open source project that a world script can load (every .gltf/.glb under data with a loadable name), paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.", false, [.. PageParameters], async (a, token) =>
+        Register(r, "source_world_models", "List physical glTF models and map-owned logical aliases of the open source project, including pending edits, paged and filtered by path. Large paths shorten the page without shortening paths; follow nextOffset. A project replacement during inspection returns context_changed; retry for the current project.", false, [.. PageParameters], async (a, token) =>
         {
             string root = SourceProjectRoot ?? throw new StudioCommandException("no_project", "Open a source project (a folder with data and gamegen) first.");
             long generation = ViewModel.WorkspaceGeneration;
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token, ViewModel.WorkspaceToken, shutdownToken);
             token = cancellation.Token;
             var reading = SourceProjectReading;
+            var workspace = SourceWorkspaceFor(root);
+            long revision = workspace.Revision;
             IReadOnlyList<SourceModelChoice> models;
-            try { models = await Task.Run(() => { reading?.Invoke("source_world_models", token); return SourceWorlds.Models(root, token); }, token); }
+            try { models = await Task.Run(() => { reading?.Invoke("source_world_models", token); return SourceWorlds.Models(workspace, token); }, token); }
             catch (OperationCanceledException) { RequireSourceRead(root, generation, token); throw; }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { throw new StudioCommandException("io_failed", ex.Message); }
             RequireSourceRead(root, generation, token);
+            if (sourceWorkspace != workspace || workspace.Revision != revision)
+                throw new StudioCommandException("context_changed", "The source project changed during model discovery; retry for the current revision.");
             // Keep usable path identities whole; large paths shorten the page, not the paths, before JSON projection.
             return Page(models, a, m => m.Path, m => new { path = m.Path, folder = m.Folder, name = m.Name }, maximumRowBytes: m => 128 + 6L * (m.Path.Length + m.Folder.Length + m.Name.Length));
         });
@@ -858,7 +888,7 @@ public partial class MainWindow
             if (world.Workspace.ContentRevision != revision) throw new StudioCommandException("context_changed", "The source workspace changed during definition discovery; try again.");
             return SourceDefinitionPage(name, files, a);
         });
-        RegisterJob(r, "source_world_add_model", "Add a project model to a source world as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (an animation bound to a node, attachment or effect this world lacks), returns build_failed and is taken back, as is one canceled before the replacement document is published to the workspace. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths.",
+        RegisterJob(r, "source_world_add_model", "Add a physical model or logical alias to a source world. A path already bound in the receiving mission uses that mission's geometry, references and zones; otherwise a unique donor closure is imported, and conflicting dependencies refuse the addition. Add it as one undoable change of the project's workspace: its folder's SetModelDirectory and a LoadGameGen line go before the line of gamegen/mN.gs that writes the world, with Object3DTranslate/Object3DRotate and AddChild under the world when placed. Without position the model is an unplaced root that resources such as aiv.zrd place copies of by name. Definition files are appended to data/mN/zrdr/anim.zad, keeping its comments and layout. The world rebuilds and the result is the replacement document; a change the world cannot be built with, or that makes another mission file fail or makes the game reject one (an animation bound to a node, attachment or effect this world lacks), returns build_failed and is taken back, as is one canceled before the replacement document is published to the workspace. Once published, the edit is accepted: the operation waits for its own preview transition, but later cancellation, navigation or preview failure does not retract it. Preview failures are reported in Problems. A stale world returns stale_document until reload_document. While a world of the project rebuilds, its other edits, undo_redo, save_document and reload_document return busy. Nothing is written until save_document. Completion definitionFiles previews keep at most 64 paths of 512 characters with definitionFileCount and definitionFilesTruncated; inputs and editing retain complete paths.",
             [DocumentParameter, RevisionParameter, P("model", "string", "Project path of the glTF model, as zstudio_source_world_models lists it (for example data/m2/models/bft/ltank.gltf).", true),
              P("name", "string", "Node name: 1–31 letters, digits, '_', '-' or '.'. Resources and animations find the model by it. A placed model's name must not also name a node inside the model, which AddChild would attach instead (build_failed).", true),
              new("position", "object", "Optional world position; omit for an unplaced root.", Properties: [P("x", "number", "World X.", true), P("y", "number", "World Y.", true), P("z", "number", "World Z.", true)]),
@@ -870,7 +900,7 @@ public partial class MainWindow
                 Vector3? position = a["position"] is JsonObject p ? new(Coordinate(p, "x"), Coordinate(p, "y"), Coordinate(p, "z")) : null;
                 float heading = a["heading"] == null ? 0 : Coordinate(a, "heading");
                 SourceModelAddition model = new(Text(a, "model").Replace('\\', '/'), Text(a, "name"), position, heading);
-                try { SourceWorlds.Validate(world.Root, model); }
+                try { SourceWorlds.ValidateTokens(model); }
                 catch (Exception ex) when (ex is InvalidDataException or IOException) { throw new StudioCommandException("invalid_argument", ex.Message); }
                 IReadOnlyList<string> files;
                 if (a["definitionFiles"] is JsonArray list)

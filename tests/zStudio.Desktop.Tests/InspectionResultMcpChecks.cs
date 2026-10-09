@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Recoil.Zbd.Core;
+using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Mcp;
@@ -82,6 +83,33 @@ internal static class InspectionResultMcpChecks
             await using var pipe = new NamedPipeClientStream(".", host.Instance.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             await pipe.ConnectAsync(token);
             await using var client = await McpClient.CreateAsync(new StreamClientTransport(pipe, pipe), cancellationToken: token);
+            // Reuse the actual long-path inventory: even these small files must page before full identities
+            // expand during JSON escaping. Every recognized file remains reachable exactly once.
+            var expectedFiles = main.ViewModel.Files.ToArray();
+            foreach (int limit in new[] { 1, 200 })
+            {
+                List<string> seen = []; int? offset = 0;
+                do
+                {
+                    var page = await Call("files", Args(offset.Value, limit));
+                    Assert.Equal(expectedFiles.Length, page["total"]!.GetValue<int>());
+                    var items = page["items"]!.AsArray();
+                    if (limit == 200 && offset == 0) Assert.InRange(items.Count, 1, expectedFiles.Length - 1);
+                    foreach (var item in items)
+                    {
+                        var expected = expectedFiles[seen.Count];
+                        Assert.Equal(expected.Path, item!["Path"]!.GetValue<string>());
+                        Assert.Equal(expected.RelativePath, item["RelativePath"]!.GetValue<string>());
+                        Assert.Equal(expected.Name, item["Name"]!.GetValue<string>());
+                        Assert.Equal(expected.Probe.Description, item["Probe"]!["Description"]!.GetValue<string>());
+                        Assert.Equal(expected.Detail, item["Detail"]!.GetValue<string>());
+                        seen.Add(expected.Path);
+                    }
+                    offset = page["nextOffset"]?.GetValue<int>();
+                    if (seen.Count < expectedFiles.Length) Assert.Equal(seen.Count, offset);
+                } while (offset != null);
+                Assert.Equal(expectedFiles.Select(f => f.Path), seen);
+            }
             foreach (int? limit in new int?[] { 1, null, 200 })
             {
                 await AllPages("pickups", "items", "nextOffset", "total", count, limit,
@@ -107,6 +135,96 @@ internal static class InspectionResultMcpChecks
                 var empty = name == "pickups" ? await Job(name, Args(count + 1, 200)) : await Call(name, Args(count + 1, 200));
                 Assert.Empty(empty[name == "preview_state" ? "texturePacks" : "items"]!.AsArray());
             }
+            // Reuse the real escaped path to exercise source-bearing diagnostic pages as well. File is
+            // present both directly and in computed Details; result paging must account for both.
+            main.ViewModel.Problems.Clear();
+            for (int i = 0; i < count; i++) main.ViewModel.AddProblem("Archive member range is invalid.", file: archivePath, assetIndex: i);
+            var problem = Assert.Single((await Call("problems", new() { ["limit"] = 1 }))["items"]!.AsArray())!;
+            Assert.Equal(archivePath, problem["File"]!.GetValue<string>());
+            await AllPages("problems", "items", "nextOffset", "total", count, 200,
+                row => { Assert.Equal(archivePath, row["File"]!.GetValue<string>()); Assert.StartsWith(archivePath, row["Details"]!.GetValue<string>()); return row["AssetIndex"]!.GetValue<int>(); });
+            // These retained source identities are synthetic: no extra deep filesystem is needed.
+            // The same full archive path belongs to distinct member/node occurrences, never to a label.
+            string aiArchive = Path.Combine(temporary, string.Join(Path.DirectorySeparatorChar,
+                Enumerable.Repeat(new string('界', 100), 60)), "networks.zbd");
+            var aiNetworks = Enumerable.Range(0, count).Select(i => new AiNetwork($"network{i}", aiArchive, i, "net_01.zrd", "network", "type", 1,
+                [new AiNode($"node{i}", i, 0, default, i, [])], [])).ToArray();
+            var aiGraph = new AiNetworkSnapshot("escaped-paths", aiNetworks)
+            {
+                ValveSources = Enumerable.Range(0, count).Select(i => new AiValveSource(aiArchive, i, "net_01.zrd", A(), ReadOnlyMemory<byte>.Empty)).ToArray()
+            };
+            typeof(SceneViewport).GetProperty(nameof(SceneViewport.AiNetworks))!.SetValue(viewport, aiGraph);
+            try
+            {
+                foreach (string name in new[] { "ai_networks", "ai_nodes", "ai_valve_selection" })
+                {
+                    var single = await AiPage(name, 0, 1);
+                    Assert.Equal(count, single["total"]!.GetValue<int>());
+                    Assert.Equal(1, single["nextOffset"]!.GetValue<int>());
+                    Assert.Equal(aiArchive, Assert.Single(single["items"]!.AsArray())![name == "ai_nodes" ? "source_archive" : "Archive"]!.GetValue<string>());
+                    List<int> seen = []; int? offset = 0;
+                    do
+                    {
+                        var page = await AiPage(name, offset.Value, 200);
+                        Assert.Equal(count, page["total"]!.GetValue<int>());
+                        var items = page["items"]!.AsArray();
+                        Assert.NotEmpty(items);
+                        if (offset == 0) Assert.InRange(items.Count, 1, count - 1);
+                        foreach (var item in items)
+                        {
+                            Assert.Equal(aiArchive, item![name == "ai_nodes" ? "source_archive" : "Archive"]!.GetValue<string>());
+                            Assert.Equal("net_01.zrd", item[name == "ai_nodes" ? "source_member" : "Member"]!.GetValue<string>());
+                            seen.Add(item[name == "ai_nodes" ? "node_index" : "MemberIndex"]!.GetValue<int>());
+                        }
+                        offset = page["nextOffset"]?.GetValue<int>();
+                        if (seen.Count < count) Assert.Equal(seen.Count, offset);
+                    } while (offset != null);
+                    Assert.Equal(Enumerable.Range(0, count), seen);
+                }
+                async Task<JsonNode> AiPage(string name, int offset, int limit)
+                {
+                    var args = Args(offset, limit); args["preview"] = preview; args["snapshot"] = aiGraph.Id;
+                    if (name == "ai_networks") args.Remove("snapshot");
+                    if (name == "ai_valve_selection") { args["action"] = "sources"; return await Job(name, args); }
+                    return await Call(name, args);
+                }
+            }
+            finally { typeof(SceneViewport).GetProperty(nameof(SceneViewport.AiNetworks))!.SetValue(viewport, AiNetworkSnapshot.Empty); }
+            // The animation runtime scene must use the same bounded projection as static scene_nodes,
+            // even for one world node with nested cell metadata. A small fixture crosses the projection
+            // limit without constructing the multi-megabyte source that originally defeated limit=1.
+            JsonArray cells = new(Enumerable.Range(0, 96).Select(i => (JsonNode?)new JsonObject { ["index"] = i, ["label"] = "<&>\"", ["nodes"] = new JsonArray() }).ToArray());
+            world.Scene.Nodes[0] = world.Scene.Nodes[0] with { Class = "world" };
+            world.Scene.Nodes[0].Metadata["cells"] = cells;
+            string originalMetadata = world.Scene.Nodes[0].Metadata.ToJsonString();
+            var package = new AnimationPackage { Prefix = new byte[72], Tail = [] };
+            package.Entries.Add(new(new byte[308], 0, 0));
+            using var animationDocument = new DocumentModel(new ZbdDocument("animation", new(0, DateTime.MinValue), new(FormatFamily.Animation, 28, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty) { Animations = package });
+            using (var editor = new AnimationEditor(animationDocument, 0, resolver, token))
+            {
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                typeof(AnimationEditor).GetField("context", flags)!.SetValue(editor, new AnimationPreviewContext { Package = animationDocument.AnimationEdits!.Package, World = world });
+                typeof(AnimationEditor).GetField("frame", flags)!.SetValue(editor, new AnimationFrame(0, [], [], [], [], null, null, default, default, [], [], []));
+                editor.SetOperationDiagnostics(main.ViewModel.Problems);
+                Set("animation", editor);
+                try
+                {
+                    var single = await Call("animation_runtime", new() { ["section"] = "scene", ["limit"] = 1 });
+                    var first = Assert.Single(single["items"]!.AsArray())!;
+                    Assert.Equal(0, first["Index"]!.GetValue<int>());
+                    Assert.Equal("pickup0", first["Name"]!.GetValue<string>());
+                    Assert.True(first["Metadata"]!["inspection_truncated"]!.GetValue<bool>());
+                    Assert.True(first["Metadata"]!.ToJsonString().Length < 16_384);
+                    await AllPages("animation_runtime", "items", "nextOffset", "total", count, 200,
+                        row => { int index = row["Index"]!.GetValue<int>(); Assert.Equal($"pickup{index}", row["Name"]!.GetValue<string>()); return index; });
+                    var runtimeProblems = await Call("animation_runtime", new() { ["section"] = "problems", ["limit"] = 200 });
+                    Assert.NotNull(runtimeProblems["nextOffset"]);
+                    Assert.All(runtimeProblems["items"]!.AsArray(), row => Assert.Equal(archivePath, row!["FileProblem"]!["File"]!.GetValue<string>()));
+                    Assert.Equal(originalMetadata, world.Scene.Nodes[0].Metadata.ToJsonString());
+                    Assert.Equal(96, cells.Count); // Complete metadata is still present for explicit export.
+                }
+                finally { Set("animation", null); }
+            }
             Assert.False(doc.IsDirty); Assert.False(edits.CanUndo);
             Assert.Equal(worldBytes, await File.ReadAllBytesAsync(worldPath, token));
 
@@ -121,16 +239,20 @@ internal static class InspectionResultMcpChecks
                 List<int> seen = []; int? offset = 0;
                 do
                 {
-                    var page = name == "pickups" ? await Job(name, Args(offset.Value, limit)) : await Call(name, Args(offset.Value, limit));
+                    var arguments = Args(offset.Value, limit);
+                    if (name == "animation_runtime") arguments["section"] = "scene";
+                    var page = name == "pickups" ? await Job(name, arguments) : await Call(name, arguments);
                     Assert.Equal(expected, page[total]!.GetValue<int>());
+                    if ((name is "animation_runtime" or "problems") && offset == 0) Assert.InRange(page[items]!.AsArray().Count, 1, expected - 1);
                     seen.AddRange(page[items]!.AsArray().Select(r => identity(r!)));
                     offset = page[next]?.GetValue<int>();
+                    if (name == "animation_runtime" && seen.Count < expected) Assert.NotNull(offset);
                 } while (offset != null);
                 Assert.Equal(Enumerable.Range(0, expected), seen);
             }
             async Task<JsonNode> Call(string name, JsonObject args)
             {
-                if (name is "preview_state" or "scene_nodes") args["preview"] = preview;
+                if (name is "preview_state" or "scene_nodes" or "animation_runtime") args["preview"] = preview;
                 if (name == "pickups") args["document"] = doc.SessionId.ToString();
                 var response = await client.CallToolAsync("zstudio_" + name, args.ToDictionary(p => p.Key, p => (object?)p.Value), cancellationToken: token);
                 string text = response.Content.OfType<TextContentBlock>().Single().Text;

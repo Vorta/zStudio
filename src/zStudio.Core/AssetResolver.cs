@@ -4,10 +4,18 @@ using Recoil.Zbd.Core.Formats;
 namespace Recoil.Zbd.Core;
 
 public sealed record ResolvedTexture(ZbdDocument Document, AssetRecord Asset, bool Ambiguous);
-public sealed class AssetResolver(string root) : IDisposable
+public sealed class AssetResolver : IDisposable
 {
+    internal const long MaximumCachedBytes = 512L * 1024 * 1024;
+    private readonly long maximumCachedBytes;
+    public AssetResolver(string root) : this(root, MaximumCachedBytes) { }
+    internal AssetResolver(string root, long maximumCachedBytes)
+    {
+        if (maximumCachedBytes < 0 || maximumCachedBytes > MaximumCachedBytes) throw new ArgumentOutOfRangeException(nameof(maximumCachedBytes));
+        Root = Path.GetFullPath(root); this.maximumCachedBytes = maximumCachedBytes;
+    }
     public ResourceEditOwnership EditOwnership { get; } = new();
-    public string Root { get; } = Path.GetFullPath(root);
+    public string Root { get; }
     private readonly Dictionary<string, string> missions = new(StringComparer.OrdinalIgnoreCase);
     public string? SelectedMission(string worldPath) { lock (missions) return missions.GetValueOrDefault(Path.GetDirectoryName(Path.GetFullPath(worldPath))!); }
     public void SelectMission(string worldPath, string archive) => TrySelectMission(worldPath, archive, null, false);
@@ -90,7 +98,7 @@ public sealed class AssetResolver(string root) : IDisposable
         return m.Success && int.TryParse(m.Groups[2].Value, out int n) ? (m.Groups[1].Value.StartsWith('r') ? 1000 : 2000) + Math.Min(n, 999) : name.Contains("image", StringComparison.OrdinalIgnoreCase) ? -100 : 0;
     }
     public Task<ZbdDocument> OpenCachedAsync(string path, CancellationToken token) => OpenCachedAsync(path, FormatRegistry.MaximumDocumentBytes, token);
-    internal async Task<ZbdDocument> OpenCachedAsync(string path, long maximumBytes, CancellationToken token, TextureLookupOperation? lookup = null)
+    internal async Task<ZbdDocument> OpenCachedAsync(string path, long maximumBytes, CancellationToken token, AssetReadBudget? budget = null)
     {
         if (maximumBytes < 0 || maximumBytes > FormatRegistry.MaximumDocumentBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         token.ThrowIfCancellationRequested();
@@ -99,15 +107,28 @@ public sealed class AssetResolver(string root) : IDisposable
         try
         {
             if (cache.TryGetValue(path, out var found) && found.Document.Stamp == FileStamp.Read(path)) { var retained = Admitted(found.Document); cache[path] = (retained, ++clock); return retained; }
-            if (lookup != null) maximumBytes = Math.Min(maximumBytes, lookup.AdmitColdRead(FileStamp.Read(path).Length));
-            var doc = await FormatRegistry.Default.OpenAsync(path, maximumBytes, token).ConfigureAwait(false); cache[path] = (doc, ++clock);
-            while (cache.Count > 4) cache.Remove(cache.MinBy(p => p.Value.Used).Key);
+            cache.Remove(path); found = default;
+            long bytes = FileStamp.Read(path).Length;
+            if (bytes > maximumBytes)
+                throw new InvalidDataException($"{JsonData.ShownText(path)} exceeds {maximumBytes:N0} bytes (remaining read allowance).");
+            if (bytes > maximumCachedBytes)
+                throw new InvalidDataException($"{JsonData.ShownText(path)} exceeds {maximumCachedBytes:N0} bytes (shared cache allowance).");
+            budget?.Document(path, bytes);
+            budget?.ColdRead(bytes);
+            // Evict before opening: retaining four maximum-size documents while allocating a fifth
+            // is not bounded by a document-count limit. The gate also serializes concurrent opens.
+            while (cache.Count > 0 && (cache.Count >= 4 || cache.Values.Sum(p => (long)p.Document.Bytes.Length) > maximumCachedBytes - bytes))
+                cache.Remove(cache.MinBy(p => p.Value.Used).Key);
+            // SourceRead checks its held handle's length against this bound before allocating. Growth
+            // after the stamp read cannot exceed the space reserved above; no transient fifth buffer.
+            var doc = await FormatRegistry.Default.OpenAsync(path, bytes, token).ConfigureAwait(false); cache[path] = (doc, ++clock);
             return doc;
         }
         finally { gate.Release(); }
         ZbdDocument Admitted(ZbdDocument document)
         {
             if (document.Bytes.Length > maximumBytes) throw new InvalidDataException("The texture pack exceeds the remaining edit buffer budget.");
+            budget?.Document(path, document.Bytes.Length);
             return document;
         }
     }

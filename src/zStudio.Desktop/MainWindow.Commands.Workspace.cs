@@ -51,7 +51,7 @@ public partial class MainWindow
 
     private void RegisterWorkspaceCommands(StudioCommands r)
     {
-        RegisterJob(r, "open_root", "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first.",
+        RegisterJob(r, "open_root", "Open and index a ZBD root or source project in the visible workspace. Dirty documents must be explicitly saved or closed first. indexComplete and indexNotice disclose partial asset indexing; Files and direct opening remain available when its retention limit is reached.",
             [P("path", "string", "Absolute ZBD root or source project directory.", true),
              P("project", "boolean", "Require an initialized source project (a folder with data and gamegen), as the welcome screen's source project Open does; any other folder is refused with not_project. Default false.")], false, async (a, token) =>
         {
@@ -63,17 +63,22 @@ public partial class MainWindow
             long workspaceGeneration = ViewModel.WorkspaceGeneration + 1;
             await ViewModel.OpenRootAsync(path, token, RequireRootPublication);
             if (ViewModel.WorkspaceGeneration != workspaceGeneration || !ViewModel.RootPath.Equals(path,StringComparison.OrdinalIgnoreCase)) throw new StudioCommandException("context_changed","Workspace was replaced during indexing.");
-            UpdateRecent(); return Result(new { ViewModel.RootPath, ViewModel.Status, files = ViewModel.Files.Count });
+            UpdateRecent(); return IndexCompleteness(Result(new { ViewModel.RootPath, ViewModel.Status, files = ViewModel.Files.Count }));
         });
-        Register(r, "files", "List recognized files in the current root.", false, PageParameters, a => Page(ViewModel.Files.Where(f => f.RelativePath.Contains(Text(a, "query"), StringComparison.OrdinalIgnoreCase)), a));
-        Register(r, "search", "Search indexed assets without altering GUI selection; names are not identities.", false, PageParameters, a => Page(ViewModel.SearchIndex(Text(a, "query")), a));
-        Register(r, "related", "List related indexed assets for an explicit asset, retaining source identities.", false, [.. AssetParameters, .. PageParameters], a =>
+        Register(r, "files", "List recognized files in the current root. Pages may contain fewer rows than limit to preserve complete file identities within the response budget; follow nextOffset.", false, PageParameters,
+            a => Page(ViewModel.Files.Where(f => f.RelativePath.Contains(Text(a, "query"), StringComparison.OrdinalIgnoreCase)), a,
+                // Name is no longer than Path; Detail repeats Probe.Description. Charge both computed fields
+                // before serialization invokes their getters, including worst-case JSON escaping.
+                maximumRowBytes: f => 512 + 2 * InspectionResultBudget.Text(f.Path) + InspectionResultBudget.Text(f.RelativePath) + 2 * InspectionResultBudget.Text(f.Probe.Description)));
+        Register(r, "search", "Search indexed assets without altering GUI selection; names are not identities. indexComplete and indexNotice disclose unfinished or limited indexing; total counts only indexed matches. Indexing retains at most 250,000 assets and 8,388,608 name characters. Files and direct opening remain available when indexing stops.", false, PageParameters,
+            (a, token) => Task.FromResult(IndexCompleteness(Page(ViewModel.SearchIndex(Text(a, "query"), token), a, maximumRowBytes: x => 256 + 12L * (x.Name.Length + (long)x.File.Length)))));
+        Register(r, "related", "List related indexed assets for an explicit asset, retaining source identities. truncated includes incomplete indexing; indexComplete and indexNotice disclose that state independently of page totals.", false, [.. AssetParameters, .. PageParameters], a =>
         {
             var d = TargetDocument(a); var related = FindRelated(TargetAsset(d, a), d);
             var page = Page(related.Items, a, matches: (x, query) => x.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || x.File.Contains(query, StringComparison.OrdinalIgnoreCase),
-                maximumRowBytes: x => 256 + 6L * (x.Name.Length + 2L * x.File.Length));
+                maximumRowBytes: x => 256 + 12L * (x.Name.Length + (long)x.File.Length));
             page.Data.AsObject()["truncated"] = related.Truncated;
-            return page;
+            return IndexCompleteness(page);
         });
         Register(r, "asset_filter", "Set the Assets list query and kind filter without changing the selected record.", true,
             [DocumentParameter, P("query", "string", "Name filter."), P("kind", "string", "Asset kind or All types.")], a =>
@@ -110,7 +115,7 @@ public partial class MainWindow
             if (EmptyPreview.Visibility == System.Windows.Visibility.Visible) throw new StudioCommandException("preview_unavailable",EmptyPreview.Text);
             return Result(new { document = DocumentState(doc), asset = asset.Id, ViewModel.Status });
         });
-        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews 32 parts with 128-character names; motion_records pages tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
+        Register(r, "inspect_asset", "Read original asset metadata/content and a separately frozen edited snapshot at one revision. ZRD/script inspection bounds nodes, instructions and strings. Model/world/sound lists preview 32 records; nested metadata has node/depth/text budgets with properties_truncated. Motion metadata previews up to 32 parts with 128-character names within a shared 4,096-part allowance per archive; motion_records pages all tracks. Animation inspection previews 4 records per reference table, 4 puffers and 16 sequence summaries; sequence Properties previews 8 events, event/tail raw previews use 256 bytes, and keyframe streams are omitted. Totals/truncation flags disclose omissions; animation_records/references/property_fields inspect individual records. JSON export retains complete data. Closed or changed documents reject stale results.", false, AssetParameters, async (a, token) =>
         {
             var doc = TargetDocument(a); var asset = TargetAsset(doc, a);
             return await InspectAssetAsync(doc, asset, token);
@@ -223,8 +228,15 @@ public partial class MainWindow
             return Result(await ExportAssetsAsync(d, assets, FullPath(a, "destination"), Flag(a, "jsonOnly"), Text(a, "texturePack") is { Length: > 0 } pack ? pack : null, Int(a, "lod"), token));
         });
         RegisterJob(r, "validate", "Validate the source archive on disk, not pending edits. Returns structured diagnostics.", [DocumentParameter], true, async (a, token) => Result(await ValidateDocumentSourceAsync(TargetDocument(a), token)));
-        Register(r, "problems", "List file/operation problems with original severity and source context.", false, PageParameters, a => Page(ViewModel.Problems, a, p => p.Message + " " + p.File + " " + p.Severity + " " + p.Category));
+        Register(r, "problems", "List file/operation problems with original severity and complete source context. Long or escaped rows shorten pages; follow nextOffset.", false, PageParameters, a => Page(ViewModel.Problems, a, p => p.Message + " " + p.File + " " + p.Severity + " " + p.Category, maximumRowBytes: InspectionResultBudget.Problem));
         RegisterOperationCommands(r);
+    }
+
+    private StudioResult IndexCompleteness(StudioResult result)
+    {
+        result.Data.AsObject()["indexComplete"] = ViewModel.SearchIndexComplete;
+        result.Data.AsObject()["indexNotice"] = ViewModel.SearchIndexNotice;
+        return result;
     }
     private void RequireRootPublication()
     {

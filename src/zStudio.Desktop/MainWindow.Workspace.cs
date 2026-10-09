@@ -52,7 +52,7 @@ public partial class MainWindow
             // The brush paints the shown source world only; another root ends it.
             if (args.PropertyName == nameof(MainViewModel.RootPath)) terrainBrush = null;
             if (args.PropertyName is nameof(MainViewModel.RootPath) or nameof(MainViewModel.SelectedDocument)) ApplyTerrainBrush(scene);
-            if (args.PropertyName == nameof(MainViewModel.GlobalQuery)) UpdateSearchHint();
+            if (args.PropertyName is nameof(MainViewModel.GlobalQuery) or nameof(MainViewModel.SearchIndexComplete) or nameof(MainViewModel.SearchIndexNotice)) UpdateSearchHint();
         };
         // An interrupted save of a source project is reported, and resolved only on the user's decision.
         ViewModel.RootPublished += () => { if (SourceProjectRoot is { } project) _ = CheckSourceRecoveryAsync(project); };

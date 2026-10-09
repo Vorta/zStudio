@@ -169,18 +169,93 @@ public sealed class AnimationEffectCycleBudgetTests
             root.Children.Add(leaf); leaf.Parents.Add(root); world.Nodes.AddRange([root, leaf]);
             byte[] bytes = GameZWriter.Write(world, Token);
             string worldPath = Path.Combine(directory, "gamez.zbd"); File.WriteAllBytes(worldPath, bytes);
+            byte[] aliases = ZrdWriter.Write(ZrdText.Parse("( ( alias missing.wav ) ( alias one.wav LOOPED ) )", Token), Token);
             byte[] resource = ResourceEditingTests.Archive(("effects.zrd", ZrdWriter.Write(ZrdText.Parse(
-                "( ( fxroot NAME ( first ) MAPS ( first ) ) ( fxroot NAME ( last ) MAPS ( last0 last1 ) SPEED ( 2 ) LOOPING ( ON ) ) )", Token), Token)));
+                "( ( fxroot NAME ( first ) MAPS ( first ) ) ( fxroot NAME ( last ) MAPS ( last0 last1 ) SPEED ( 2 ) LOOPING ( ON ) ) )", Token), Token)),
+                ("net_01.zrd", ZrdWriter.Write(ZrdText.Parse("( )", Token), Token)), ("sounds.zrd", aliases), ("sounds.zrd", aliases));
+            // Two directory members reference the exact same sound-definition payload.
+            int table = resource.Length - 8 - 4 * 148;
+            resource.AsSpan(table + 2 * 148, 8).CopyTo(resource.AsSpan(table + 3 * 148, 8));
             string resourcePath = Path.Combine(directory, "resources.zbd"); File.WriteAllBytes(resourcePath, resource);
+            byte[] sounds = ResourceEditingTests.Archive(("one.wav", SourceFixture.Tone(new(8000, 8, 1), 2, null)));
+            string soundPath = Path.Combine(directory, "sounds.zbd"); File.WriteAllBytes(soundPath, sounds);
+            var scriptPackage = FormatRegistry.Default.OpenBytes("scripts.zbd", ContentFixture.Scripts(), token: Token).Scripts!;
+            var scriptEntry = scriptPackage.Entries[0] with { Name = "unused.gw", Instructions =
+                [new(Guid.NewGuid(), [new string('x', 1024)], ReadOnlyMemory<byte>.Empty, null)] };
+            byte[] scripts = PreparedScriptWriter.Write(scriptPackage with { Entries = [scriptEntry] }, Token);
+            string scriptPath = Path.Combine(directory, "scripts.zbd"); File.WriteAllBytes(scriptPath, scripts);
             byte[] prefix = new byte[72]; BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616);
             BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(4), 28);
             AnimationPackage package = new() { Prefix = prefix, Tail = [] };
             using AssetResolver resolver = new(directory);
-            var context = await AnimationPreviewContext.LoadAsync(package, Path.Combine(directory, "anim.zbd"), resolver, worldPath, Token);
+            long totalBytes = bytes.Length + resource.Length + sounds.Length + scripts.Length;
+            var allowance = new PreviewResourceBudget(totalBytes);
+            var context = await AnimationPreviewContext.LoadWithResourcesAsync(package, Path.Combine(directory, "anim.zbd"), resolver, allowance, worldPath, Token);
             Assert.Equal(2, context.Effects.Count);
             var cycle = Assert.Single(context.MaterialCycles).Value;
             Assert.Equal(["last0", "last1"], cycle.Textures); Assert.Equal(2, cycle.Speed); Assert.True(cycle.Loop);
+            Assert.Equal("one.wav", context.Sounds["alias"].FileName); Assert.True(context.Sounds["alias"].Loop);
+            Assert.Equal(2, context.Sounds.Count); // Raw filename plus the first alias whose WAV actually exists.
+            Assert.Equal("net_01.zrd", Assert.Single(context.Mission!.AiNetworks.Networks).Member);
+            // The same raw archives feed mission and audio phases. Exact admission succeeds without
+            // counting/reopening them twice; neither warm snapshots nor a cached mission bypass refusal.
+            var published = new[] { worldPath, resourcePath, soundPath, scriptPath }.Select(path =>
+                FormatRegistry.Default.OpenBytes(path, File.ReadAllBytes(path), token: Token)).ToArray();
+            resolver.SetWorkspaceSnapshots(Guid.NewGuid(), published);
+            var rawRefusal = new PreviewResourceBudget(bytes.Length + resource.Length + sounds.Length - 1);
+            await Assert.ThrowsAsync<InvalidDataException>(() => AnimationPreviewContext.LoadWithResourcesAsync(package,
+                Path.Combine(directory, "anim.zbd"), resolver, rawRefusal, worldPath, Token));
+            Assert.True(rawRefusal.Exhausted);
+            // Tiny documents fit individually, but owned asset and document metadata must share admission.
+            var first = new ZbdDocument("first.zbd", new(0, DateTime.MinValue),
+                new(FormatFamily.Archive, null, Recognition.Supported, "fixture"), ReadOnlyMemory<byte>.Empty);
+            var second = new ZbdDocument("second.zbd", first.Stamp, first.Probe, ReadOnlyMemory<byte>.Empty);
+            first.Add(AssetKind.Raw, 0, "metadata", 0, 0).Metadata["rows"] =
+                new JsonArray(Enumerable.Range(0, 32).Select(i => (JsonNode)JsonValue.Create(i)!).ToArray());
+            second.Metadata["rows"] = new JsonArray(Enumerable.Range(0, 32).Select(i => (JsonNode)JsonValue.Create(i)!).ToArray());
+            new PreviewResourceBudget(0, 10 * 1024).Retain(second, Token);
+            var metadataRefusal = new PreviewResourceBudget(0, 10 * 1024);
+            metadataRefusal.Retain(first, Token);
+            Assert.Throws<InvalidDataException>(() => metadataRefusal.Retain(second, Token));
+            Assert.True(metadataRefusal.Exhausted);
+            // An intact entry remains retained when a later malformed entry prevents a complete package.
+            var longEntry = scriptEntry with { Instructions =
+                [new(Guid.NewGuid(), [new string('x', 4096)], ReadOnlyMemory<byte>.Empty, null)] };
+            byte[] partialBytes = PreparedScriptWriter.Write(scriptPackage with { Entries =
+                [longEntry, scriptEntry with { Name = "broken.gw" }] }, Token);
+            int brokenOffset = BinaryPrimitives.ReadInt32LittleEndian(partialBytes.AsSpan(12 + 128 + 124));
+            BinaryPrimitives.WriteUInt32LittleEndian(partialBytes.AsSpan(brokenOffset + 4), uint.MaxValue);
+            var partial = FormatRegistry.Default.OpenBytes("partial.zbd", partialBytes, token: Token);
+            Assert.Null(partial.Scripts); Assert.IsType<ScriptContent>(Assert.Single(partial.Assets).Content);
+            var scriptRefusal = new PreviewResourceBudget(partialBytes.Length, 12 * 1024);
+            Assert.Throws<InvalidDataException>(() => scriptRefusal.Retain(partial, Token));
+            Assert.True(scriptRefusal.Exhausted);
+            var retry = await AnimationPreviewContext.LoadWithResourcesAsync(package, Path.Combine(directory, "anim.zbd"), resolver,
+                new PreviewResourceBudget(totalBytes), worldPath, Token);
+            Assert.Equal(2, retry.Effects.Count); Assert.Equal(2, retry.Sounds.Count);
+            Assert.Equal("one.wav", retry.Sounds["alias"].FileName); Assert.True(retry.Sounds["alias"].Loop);
             Assert.Equal(bytes, File.ReadAllBytes(worldPath)); Assert.Equal(resource, File.ReadAllBytes(resourcePath));
+            Assert.Equal(sounds, File.ReadAllBytes(soundPath)); Assert.Equal(scripts, File.ReadAllBytes(scriptPath));
+            // Selected layout resources project JSON even when their rows have no known actor. Their
+            // retained typed graphs fit this allowance, but the four additional projections do not.
+            byte[] ignored = ZrdWriter.Write(ZrdText.Parse("( ignored ( " + string.Join(' ', Enumerable.Repeat("1", 256)) + " ) )", Token), Token);
+            List<ZbdDocument> selected = [];
+            foreach (string name in new[] { "aiv", "vehicle", "startanims", "ai" })
+            {
+                string path = Path.Combine(directory, name + ".zbd");
+                byte[] content = ResourceEditingTests.Archive((name + ".zrd", ignored));
+                File.WriteAllBytes(path, content);
+                selected.Add(FormatRegistry.Default.OpenBytes(path, content, token: Token));
+            }
+            resolver.SetWorkspaceSnapshots(Guid.NewGuid(), selected);
+            var projectionRefusal = new PreviewResourceBudget(maximumDecodedBytes: 512 * 1024);
+            foreach (var document in published.Concat(selected)) projectionRefusal.Retain(document, Token);
+            var selectedWorld = published.Single(d => d.Path == worldPath);
+            Assert.Contains("decoded-content", (await Assert.ThrowsAsync<InvalidDataException>(() =>
+                MissionSceneLoader.LoadWithResourcesAsync(selectedWorld, resolver, projectionRefusal, package, Token))).Message);
+            Assert.True(projectionRefusal.Exhausted);
+            var selectedRetry = await MissionSceneLoader.LoadAsync(selectedWorld, resolver, package, Token);
+            Assert.Empty(selectedRetry.Actors);
         }
         finally { Directory.Delete(directory, true); }
     }

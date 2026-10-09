@@ -63,6 +63,7 @@ The map zone source split is an editor/build representation, not a newly discove
   3. The load's root.
   4. The records in order, a node and then its children. A reference's content is copied from its cache after the node of the next record is made. A reference that has records of its own is copied at once, before them. When a reference is the file's last record, an end node is made for the copy and freed after it. A copy expands instances along every edge, so a cached file's identical unnamed subtrees (alike in their names, models and transforms all the way down) are one definition again (1999 m1 `rktpad.flt`'s `r_blst1`…`6` and `smkring.flt`'s `s1`…`s8`).
   5. A cached file's own caches are freed when its load ends; the caches of the outermost load are freed when it ends, in the order they were made, each as `DestroyNodeRecursive` frees it (a shared node with its last parent).
+  - Slot allocation is separate from world-member encounter order. Flattening database groups preserves their authored child order, including a referenced part before the following record; sorting those members by allocation order incorrectly moves the following record ahead of the delayed part copy. The shipped area lists distinguish these orders in 1999 m3 (`dish_1`, `dish_q4` before `fog_switch_03`) and m5 (the final part's objects before `g426`) [D]. Preserve the loader's slot allocation and the database's member traversal independently; neither requires extra order metadata.
   - The root and first records take the slots the caches' own loads freed and nothing took again, last freed first, before fresh slots: 1999 m13's database begins on the slots `walldes1.flt` and `walldes2.flt`'s caches freed inside its last part's load, m5's on its last caches' slots although no record lies below its root, m2's on slots several caches left.
   - A copy shows which records a file had, but not always where its groups closed: a group's last objects may have followed it. The cache frees them in the order its groups held them, which settles it (1999 m1, m4, m13).
   - Two later loads of one file under one name cannot be told apart in the world; the database's caches decide which made which nodes (1999 and 1998 m1 `rfpg_mzl.flt`).
@@ -160,7 +161,7 @@ The map zone source split is an editor/build representation, not a newly discove
   - **Single-player vehicle clones:** nodes only, sharing the model.
   - **Pickups:** nodes, plus a model per node that has one.
   - **Effect instances and network vehicles:** nodes, models and materials.
-  - **Light, sound, animate, sequence, switch and world nodes:** never copied. Under a LOD, one failed child aborts the copy and leaks the nodes already made.
+  - **Light, sound, animate, sequence, switch and world nodes:** never copied. `CopyObject3DNode` (0x452100 [B], `zClass/cls_util.c`) skips a child when `CopyNodeDispatch` returns null and continues copying its other children. Camera and LOD copying instead abort on a null child and leak the nodes already made. Studio rolls back a refused preview clone rather than reproducing that leak.
 - **Consumers.**
   - **At load:**
     - vehicle clones: 25–35 nodes each, 4,342 nodes for m6's 143 [D];

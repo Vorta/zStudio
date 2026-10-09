@@ -169,10 +169,11 @@ public partial class MainWindow
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed since the conversion was planned; read zstudio_state for its current document.");
         if (session.Workspace.ContentRevision != revision) throw new StudioCommandException("context_changed", TerrainPlanChanged);
         var converted = plan.Groups.SelectMany(g => g.Nodes).ToHashSet();
+        var recipes = plan.Recipes.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var before = SourceWorldNodes(doc, p => p.Database && string.Equals(p.ModelFile, plan.Database, StringComparison.OrdinalIgnoreCase) && converted.Contains(p.ModelNode));
         var grid = SourceWorldModel(doc).World.Nodes.FirstOrDefault(n => n.Class == Recoil.Zbd.Core.Worlds.WorldNodeClass.World);
         var next = await PrepareSourceWorldEditAsync(doc, "Converting to editable terrain", (w, ct) => SourceTerrainConversion.Apply(w, plan, ct), token);
-        var after = SourceWorldNodes(next, p => string.Equals(p.Terrain, plan.Recipe, StringComparison.OrdinalIgnoreCase));
+        var after = SourceWorldNodes(next, p => p.Terrain != null && recipes.Contains(p.Terrain));
         // The conversion is applied and shown; comparing it is a report. Cancelling the request stops the comparison
         // (no report) without turning the applied conversion into a failure.
         TerrainProbeReport report;
@@ -200,7 +201,10 @@ public partial class MainWindow
         var reasons = plan.Kept.GroupBy(k => k.Reason).OrderByDescending(g => g.Count()).ToArray();
         string kept = string.Join("\n", reasons.Take(32).Select(g => $"  {g.Count()} {Bounded(g.Key, 256)}")) + (reasons.Length > 32 ? $"\n  … ({reasons.Length} distinct reasons)" : "");
         if (plan.Converted == 0) { System.Windows.MessageBox.Show(this, $"No piece of {plan.Database} can become terrain:\n{kept}", "Convert to editable terrain"); return; }
-        if (System.Windows.MessageBox.Show(this, $"{plan.Converted} pieces of {plan.Database} become {plan.Groups.Count} terrain surfaces in {plan.Surfaces}, painted by {plan.Recipe}.\n\nKept as objects:\n{kept}\n\nThe pieces are rebuilt along the grid's cell lines; their polygons, materials, zones, soils and flags stay. Convert?",
+        var recipePaths = plan.Recipes;
+        string recipes = string.Join("\n", recipePaths.Take(32).Select(path => "  " + Bounded(path, 256)))
+            + (recipePaths.Count > 32 ? $"\n  … ({recipePaths.Count} recipes; all appear in Files after conversion)" : "");
+        if (System.Windows.MessageBox.Show(this, $"{plan.Converted} pieces of {plan.Database} become {plan.Groups.Count} terrain surfaces in {plan.Surfaces}, painted by {recipePaths.Count} terrain recipes in encounter order:\n{recipes}\n\nKept as objects:\n{kept}\n\nThe pieces are rebuilt along the grid's cell lines; their polygons, materials, zones, soils and flags stay. Convert?",
             "Convert to editable terrain", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.Yes) return;
         if (!doc.IsDisposed && doc.SourceWorld?.Workspace.ContentRevision != planned.Revision) { ViewModel.Status = TerrainPlanChanged; return; }
         var (next, _, compared) = await ConvertTerrainAsync(doc, 8, CancellationToken.None, planned);
@@ -220,18 +224,21 @@ public partial class MainWindow
     });
 
     /// <summary>Properties of a terrain: the recipe a piece came from, with the brush for its regions.</summary>
-    private async Task<bool> ShowTerrainPropertiesAsync(DocumentModel doc, string recipe, string? surface, string? piece, string? region)
+    private async Task<bool> ShowTerrainPropertiesAsync(DocumentModel doc, string recipe, string? surface, string? piece, string? region, CancellationToken token = default)
     {
         if (doc.IsDisposed) return false;
         var workspace = SourceWorldOf(doc).Workspace;
         long request = ++propertyRequest, revision = workspace.ContentRevision;
-        using var reading = CancellationTokenSource.CreateLinkedTokenSource(doc.Lifetime.Token, shutdownToken);
+        using var reading = CancellationTokenSource.CreateLinkedTokenSource(token, doc.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
         TerrainRecipe parsed;
         try { parsed = await Task.Run(() => ReadRecipe(workspace, recipe, reading.Token), reading.Token); }
         catch (OperationCanceledException) when (doc.IsDisposed || request != propertyRequest) { return false; }
         if (doc.IsDisposed || request != propertyRequest) return false;
         if (workspace.ContentRevision != revision) throw new StudioCommandException("revision_conflict", "The recipe changed while loading Properties; open it again.");
         if (propertiesWindow?.HasPendingDrafts == true) throw new StudioCommandException("pending_drafts", "Properties input changed while loading; resolve it before retargeting.");
+        // Parsing may finish after its last cancellation check. Stop before changing the pinned window;
+        // once it has been published, its lifetime belongs to the document, not this request.
+        reading.Token.ThrowIfCancellationRequested();
         return PresentTerrainProperties(doc, recipe, parsed, surface, piece, region);
     }
     private bool PresentTerrainProperties(DocumentModel doc, string recipe, TerrainRecipe parsed, string? surface, string? piece, string? region)
@@ -265,6 +272,14 @@ public partial class MainWindow
     /// <summary>Turns the viewport brush on (painting or erasing one region) or off.</summary>
     private void SetTerrainBrush(TerrainBrushState? brush)
     {
+        if (brush != null)
+        {
+            // Changing tools must not discard selected zone targets or a stroke in progress.
+            // An empty zone draft can remain pinned, but it must stop consuming terrain input.
+            if (HasZoneDraft) throw new StudioCommandException("pending_drafts", "Apply or cancel the map zone draft before painting terrain.");
+            if (scene?.IsZonePainting == true) throw new StudioCommandException("busy", "Finish or cancel the zone stroke before painting terrain.");
+            if (scene?.ZonePaintActive == true) scene.ZonePaintActive = false;
+        }
         terrainBrush = brush;
         ApplyTerrainBrush(scene);
         ViewModel.Status = brush == null ? "Terrain brush off." : $"{(brush.Add ? "Painting" : "Erasing")} {brush.Region}: drag over the terrain.";
@@ -534,18 +549,24 @@ public partial class MainWindow
                 }
                 return Result(new { document = DocumentState(next) });
             });
-        RegisterJob(r, "source_terrain_convert", "Convert to editable terrain: the open source world's mission database pieces (untransformed mesh roots no script, resource or animation names, except landmarks) become surfaces of a new terrain recipe beside the database, grouped by node flags and zone with plan-view overlaps kept apart, as one undoable change. Without apply, only report the plan: surfaces, pieces and the objects kept with reasons. With apply, convert, rebuild, and compare the altitude probe over the converted area before and after (heights, polygon zones, soils, node flags and zones) on a grid of the given spacing. The probe reports complete=false and a limitation if its index or polygon work budget is exceeded; the conversion remains applied.",
+        RegisterJob(r, "source_terrain_convert", "Convert to editable terrain: the open source world's mission database pieces (untransformed mesh roots no script, resource or animation names, except landmarks) become surfaces of new terrain recipes beside the database, preserving encounter order around retained objects, as one undoable change. Without apply, report the plan: surfaces, pieces, a bounded recipes summary of full paths with total/omitted counts, and the objects kept with reasons. plan.recipe is the first recipe. With apply, convert, rebuild, and compare the altitude probe over all converted recipes before and after (heights, polygon zones, soils, node flags and zones) on a grid of the given spacing. The returned recipeListing identifies the replacement document for the read-only source_terrain inventory; follow that tool's nextOffset to inspect every recipe without applying again. The probe reports complete=false and a limitation if its index or polygon work budget is exceeded; the conversion remains applied.",
             [DocumentParameter, RevisionParameter, P("apply", "boolean", "Convert (default false: only report the plan)."),
              new("spacing", "number", "Probe sample spacing in world units for the comparison (default 8, 1–256).")], true,
             async (a, token) =>
             {
                 var d = TargetDocument(a, true);
-                object Plan(TerrainConversionPlan plan) => new
+                object Plan(TerrainConversionPlan plan)
                 {
-                    database = plan.Database, surfacesFile = plan.Surfaces, recipe = plan.Recipe, converted = plan.Converted,
-                    surfaces = plan.Groups.Take(256).Select(g => new { id = g.Id, flags = $"0x{g.Flags:X8}", zone = g.Zone, pieces = g.Nodes.Count }).ToArray(), surfaceCount = plan.Groups.Count,
-                    kept = plan.Kept.Take(256).Select(k => new { node = Bounded(k.Node, 128), reason = Bounded(k.Reason, 512), reasonTruncated = k.Reason.Length > 512 }).ToArray(), keptCount = plan.Kept.Count
-                };
+                    var recipes = plan.Recipes;
+                    var recipePage = Page(recipes, new JsonObject { ["limit"] = 64 }, maximumRowBytes: path => 32 + 6L * path.Length).Data;
+                    return new
+                    {
+                        database = plan.Database, surfacesFile = plan.Surfaces, recipe = plan.Recipe, converted = plan.Converted,
+                        recipes = new { total = recipes.Count, items = recipePage["items"], omitted = recipes.Count - recipePage["items"]!.AsArray().Count },
+                        surfaces = plan.Groups.Take(256).Select(g => new { id = g.Id, flags = $"0x{g.Flags:X8}", zone = g.Zone, pieces = g.Nodes.Count }).ToArray(), surfaceCount = plan.Groups.Count,
+                        kept = plan.Kept.Take(256).Select(k => new { node = Bounded(k.Node, 128), reason = Bounded(k.Reason, 512), reasonTruncated = k.Reason.Length > 512 }).ToArray(), keptCount = plan.Kept.Count
+                    };
+                }
                 if (!Flag(a, "apply")) return Result(new { plan = Plan((await PlanTerrainConversionAsync(d, token)).Plan) });
                 double spacing = a["spacing"] is JsonValue sv && sv.TryGetValue(out double sd) ? sd : 8;
                 if (!(spacing >= 1 && spacing <= 256)) throw new StudioCommandException("invalid_argument", "spacing is 1–256.");
@@ -555,6 +576,7 @@ public partial class MainWindow
                 return Result(new
                 {
                     document = DocumentState(next), plan = Plan(done),
+                    recipeListing = new { tool = "zstudio_source_terrain", document = next.SessionId, offset = 0 },
                     probe = report == null ? null : new { complete = report.Complete, limitation = report.Limitation, samples = report.Samples, spacing = report.Spacing, hits = report.Hits, mismatches = report.Mismatches, heightOnly = report.HeightOnly, maximumHeightDifference = report.MaximumHeightDifference, revealed = report.Revealed, examples = report.Examples.Select(x => Bounded(x, 1024)).ToArray() }
                 });
             });

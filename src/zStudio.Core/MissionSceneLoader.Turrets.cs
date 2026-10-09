@@ -18,23 +18,15 @@ public static partial class MissionSceneLoader
         if (turrets == null) return;
         if (context == null) { notes.Add($"Mission turrets: animation data is unavailable; stored turret states are retained."); return; }
         var work = bindings!;
+        // Observe any prior same-count edit once at this phase boundary. Individual resets below
+        // change only poses/flags; rebuilding the loaded-world name map per turret multiplies work.
+        work.Invalidate();
         string defaultName = FirstString(definitions.FirstOrDefault(p => p.Name == "DESTROY_ANIM").Value);
-        Dictionary<string, AnimationEntry>? entries = null;
         AnimationEntry? Entry(string name)
         {
             work.Reserve(1L + name.Length);
             if (name.Length == 0) return null; // The reserved empty entry is never a reset.
-            if (entries == null)
-            {
-                Dictionary<string, AnimationEntry> indexed = new(StringComparer.Ordinal);
-                foreach (var entry in context.Package.Entries)
-                {
-                    work.Reserve(128); // Fixed-width name decode, hash and retained first-entry row.
-                    indexed.TryAdd(entry.Name, entry);
-                }
-                entries = indexed;
-            }
-            return entries.GetValueOrDefault(name);
+            return work.EntryLookup().Find(name, token);
         }
         var defaultEntry = Entry(defaultName);
         foreach (var (pattern, definition) in Records(turrets))
@@ -82,7 +74,7 @@ public static partial class MissionSceneLoader
                 try
                 {
                     List<string> resetDiagnostics = [];
-                    positioned.UnionWith(AnimationPlayer.ApplyInitialization(context, [(reset, true, turret.Index)], resetDiagnostics, token, work));
+                    positioned.UnionWith(AnimationPlayer.ApplyInitialization(context, [(reset, true, turret.Index)], resetDiagnostics, token, work, reuseTopology: true));
                     foreach (string diagnostic in resetDiagnostics)
                         notes.Add($"Mission turret #{turret.Index} '{turret.Name}' ({reset.Name}): {new BoundedDiagnostics.PreparedMessage(diagnostic)}");
                     turret.Metadata["preview_turret_pattern"] = pattern;

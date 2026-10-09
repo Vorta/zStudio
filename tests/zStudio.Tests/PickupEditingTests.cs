@@ -4,12 +4,55 @@ using System.Numerics;
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Sources;
 using Xunit;
 
 namespace Recoil.Zbd.Tests;
 
 public sealed partial class AnimationTests
 {
+    [Fact]
+    public async Task PickupLoadAdmitsAllBorrowedArchivesBeforePublishingTheCoordinateStore()
+    {
+        // Must-have: this load also runs before MCP pickup pagination, without a mission preview.
+        // A small allowance exposes the retained-archive regression without large allocations.
+        await WithMissionArchiveAsync(new() {
+            ["aiv.zrd"] = Zrd(Arr(Str("animated_01"), Spawn(1, 2, 3, 0))),
+            ["unrelated.zrd"] = ZrdWriter.Write(ZrdText.Parse("( " + string.Join(' ', Enumerable.Repeat("1", 256)) + " )",
+                TestContext.Current.CancellationToken), TestContext.Current.CancellationToken)
+        }, async (world, resolver) =>
+        {
+            var token = TestContext.Current.CancellationToken;
+            string folder = Path.GetDirectoryName(world.Path)!;
+            string first = Path.Combine(folder, "resources.zbd"), second = Path.Combine(folder, "second.zbd");
+            byte[] bytes = await File.ReadAllBytesAsync(first, token);
+            await File.WriteAllBytesAsync(second, bytes, token);
+            var warm = await resolver.OpenCachedAsync(first, token);
+            var snapshot = FormatRegistry.Default.OpenBytes(second, bytes, token: token);
+            resolver.SetWorkspaceSnapshots(Guid.NewGuid(), [snapshot]);
+            var denied = new AssetReadBudget(2L * bytes.Length - 1, maximumColdBytes: 0);
+            await Assert.ThrowsAsync<InvalidDataException>(() => PickupPlacementEditSession.LoadAsync(world.Path, resolver, denied, token));
+            Assert.True(denied.Exhausted);
+            Assert.Same(warm, await resolver.OpenCachedAsync(first, token));
+            Assert.True(resolver.IsWorkspaceSnapshot(snapshot));
+            // Each unrelated typed tree fits alone; retaining both complete editable archives does not.
+            // Use a wide margin, not an exact estimate calibrated from a separately parsed document.
+            new PreviewResourceBudget(2L * bytes.Length, 96 * 1024).Retain(warm, token);
+            new PreviewResourceBudget(2L * bytes.Length, 96 * 1024).Retain(snapshot, token);
+            var decodedDenied = new PreviewResourceBudget(new AssetReadBudget(2L * bytes.Length, maximumColdBytes: 0), 96 * 1024);
+            Assert.Contains("decoded-content", (await Assert.ThrowsAsync<InvalidDataException>(() =>
+                PickupPlacementEditSession.LoadWithResourcesAsync(world.Path, resolver, decodedDenied, token))).Message);
+            Assert.True(decodedDenied.Exhausted);
+            var loaded = await PickupPlacementEditSession.LoadAsync(world.Path, resolver, new AssetReadBudget(2L * bytes.Length, maximumColdBytes: 0), token);
+            Assert.Equal(2, loaded.ArchivePaths.Count);
+            Assert.Equal(2, loaded.OtherCoordinates.Count);
+            Assert.Equal(2, loaded.OtherCoordinates.Select(r => r.Source.ArchivePath).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+            Assert.Single(loaded.OtherCoordinates, r => r.Difficulties.Count == 3);
+            Assert.Single(loaded.OtherCoordinates, r => r.Difficulties.Count == 0);
+            Assert.False(loaded.IsDirty); Assert.False(loaded.CanUndo);
+        });
+    }
+
     [Fact]
     public async Task PickupMoveLinksAllDifficultiesAndChangesOnlyCoordinateBytes()
     {

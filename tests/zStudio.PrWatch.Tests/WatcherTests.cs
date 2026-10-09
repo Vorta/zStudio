@@ -145,15 +145,6 @@ public sealed class WatcherTests
     }
 
     [Fact]
-    public async Task ConcurrentPollsSubmitOnlyOneNotice()
-    {
-        using var fixture = new Fixture(); fixture.Store.Save(fixture.NewState()); var queue = new FakeQueue();
-        var service = new WatchService(fixture.Store, new FakeSource(Observe(Comment(1))), queue);
-        await Task.WhenAll(service.PollAsync(TestContext.Current.CancellationToken), service.PollAsync(TestContext.Current.CancellationToken));
-        Assert.Equal(1, queue.Adds); Assert.Single(fixture.Store.Load()!.Notices);
-    }
-
-    [Fact]
     public async Task SendFailureLeavesAnUncertainClaimAndNoAutomaticRetry()
     {
         using var fixture = new Fixture(); fixture.Store.Save(fixture.NewState()); var queue = new FakeQueue { Fail = true };

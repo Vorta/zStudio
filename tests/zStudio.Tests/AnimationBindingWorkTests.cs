@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Animation;
 using Recoil.Zbd.Core.Formats;
+using Recoil.Zbd.Core.Sources;
 using Recoil.Zbd.Core.Worlds;
 using Xunit;
 
@@ -11,6 +12,92 @@ namespace Recoil.Zbd.Tests;
 public sealed class AnimationBindingWorkTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public void CopiedChildrenShareLifetimeAdmissionWithCheckpointsAndResetReleasesIt()
+    {
+        // Each20-node activation fits the ordinary binding work allowance. Repeated activations must
+        // still stop before retained private poses/reset copies/checkpoints exceed a small live limit.
+        var context = Context(20, 2, 1);
+        var parent = context.Package.Entries[1]; var child = context.Package.Entries[2];
+        child.SetInt(148, 0x8000);
+        var wait = AnimationCatalog.Create(11); wait.SetInt(16, 0); wait.SetFloat(140, 1);
+        var launch = AnimationCatalog.Create(24); launch.SetText(12, child.Name, 20); launch.SetShort(48, 2); launch.SetShort(50, -1);
+        var loop = AnimationCatalog.Create(30); loop.SetInt(12, 1); loop.SetInt(16, 65535);
+        AnimationSequence emitter = new(new byte[64]); emitter.Name = "emitter"; emitter.Events.AddRange([wait, launch, loop]); parent.Sequences.Add(emitter);
+        AnimationSequence lingering = new(new byte[64]); lingering.Name = "lingering";
+        var delay = AnimationCatalog.Create(11); delay.SetInt(16, 0); delay.SetFloat(140, 3600); lingering.Events.Add(delay); child.Sequences.Add(lingering);
+        byte[] original = AnimationWriter.Write(context.Package, Token);
+        const long limit = 128 * 1024;
+        long otherState = 0;
+        AnimationPlayer player = new(context, 1, 1, false, Token, limit, () => otherState);
+        long initial = player.RetainedStateBytes;
+        var accepted = player.AdvanceTo(1.5, token: Token);
+        Assert.Equal(2, player.RetainedInstanceCount);
+        Assert.True(player.RetainedCheckpointCount > 1);
+        player.AdvanceTo(.5, true, Token);
+        var replayed = player.AdvanceTo(1.5, true, Token);
+        Assert.Equal(accepted.Sequences, replayed.Sequences);
+        player.Reset(Token);
+        Assert.Equal(initial, player.RetainedStateBytes);
+        var reset = player.Frame(Token);
+        // The same owner can temporarily lend the remaining allowance to a duration/reset snapshot.
+        // A replacement must refuse before discarding the accepted zero state, then retry after release.
+        otherState = limit - initial;
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => player.Reset(Token));
+        Assert.Equal(0, player.Time);
+        Assert.Equal(reset.Sequences, player.Frame(Token).Sequences);
+        otherState = 0;
+        player.Reset(Token);
+        Assert.Equal(accepted.Sequences, player.AdvanceTo(1.5, true, Token).Sequences);
+        var refused = player.AdvanceTo(20, token: Token);
+        Assert.Contains(refused.Diagnostics, text => text.Contains("retained node/event allowance", StringComparison.Ordinal));
+        Assert.Contains(refused.Sequences, state => state.State == "Unavailable");
+        Assert.InRange(player.RetainedInstanceCount, 2, 15);
+        Assert.InRange(player.RetainedStateBytes, initial, limit);
+        double time = player.Time;
+        Assert.False(player.MeasureDuration(Token).IsFinite);
+        Assert.Equal(time, player.Time);
+        player = new(context, 1, 1, false, Token, limit);
+        Assert.Equal(initial, player.RetainedStateBytes);
+        Assert.Equal(accepted.Sequences, player.AdvanceTo(1.5, true, Token).Sequences);
+        Assert.Equal(original, AnimationWriter.Write(context.Package, Token));
+        using var canceled = CancellationTokenSource.CreateLinkedTokenSource(Token); canceled.Cancel();
+        Assert.ThrowsAny<OperationCanceledException>(() => player.AdvanceTo(.5, true, canceled.Token));
+        Assert.Equal(1.5, player.Time, 6);
+        Assert.Equal(accepted.Sequences, player.AdvanceTo(1.5, true, Token).Sequences);
+
+        // Supported fanout: many first-start admissions must not rescan all other live sequences.
+        // A small case exposes quadratic accounting through deterministic visits, without a stress run.
+        var fanout = Context(2, 2, 1); fanout.Package.Entries[2].SetInt(148, 0x8000);
+        AnimationSequence burst = new(new byte[64]);
+        for (int i = 0; i < 8; i++) burst.Events.Add(launch.Clone(Token));
+        fanout.Package.Entries[1].Sequences.Add(burst);
+        for (int i = 0; i < 32; i++)
+        {
+            AnimationSequence parallel = new(new byte[64]); parallel.Events.Add(delay.Clone(Token));
+            fanout.Package.Entries[2].Sequences.Add(parallel);
+        }
+        fanout = new() { World = fanout.World, Package = AnimationPackage.Read(AnimationWriter.Write(fanout.Package, Token), Token) };
+        // Only the shared root's render pose needs these unbound ancestors; private child roots use
+        // their baked world pose. Each newly discovered parent must debit bytes without a full scan.
+        int firstAncestor = fanout.Scene.Nodes.Count, lastAncestor = firstAncestor + 15;
+        fanout.Scene.Models.Add(new(0, [System.Numerics.Vector3.Zero], [], [], [], new()));
+        fanout.Scene.Nodes[1] = fanout.Scene.Nodes[1] with { ModelIndex = 0, Parents = [lastAncestor] };
+        fanout.Scene.Nodes[0] = fanout.Scene.Nodes[0] with { Children = [firstAncestor] };
+        for (int i = firstAncestor; i <= lastAncestor; i++)
+            fanout.Scene.Nodes.Add(Node(i, "ancestor" + i, [i == lastAncestor ? 1 : i + 1]) with { Parents = [i == firstAncestor ? 0 : i - 1] });
+        var many = new AnimationPlayer(fanout, 1, 1, false, Token);
+        long ancestorVisits = many.RetainedAccountingSequenceVisits;
+        var first = many.Step(Token);
+        Assert.Equal(9, first.Nodes.Count);
+        Assert.InRange(many.RetainedAccountingSequenceVisits - ancestorVisits, 0, 2048);
+        Assert.Equal(9, many.RetainedInstanceCount);
+        long visits = many.RetainedAccountingSequenceVisits;
+        var started = many.Step(Token);
+        Assert.Equal(256, started.Sequences.Count(s => s.State == "Running"));
+        Assert.InRange(many.RetainedAccountingSequenceVisits - visits, 0, 2 * 256);
+    }
 
     [Fact]
     public void ReaderBackedRepeatedReferencesReuseTheSameColdSubtreeAndCallback()
@@ -38,6 +125,23 @@ public sealed class AnimationBindingWorkTests
         var retry = Context(6, 3, 12);
         Assert.Empty(AnimationPlayer.ApplyInitialization(retry, true, [], [], Token));
         _ = new AnimationPlayer(retry, 1, 1, false, Token).Frame(TestContext.Current.CancellationToken);
+
+        // A stable turret phase must reuse the loaded-world lookup while still charging each reset.
+        // Sixteen tiny turrets beside unrelated nodes/entries fit; repeated whole-map rebuilds do not.
+        var turrets = Context(256, 512, 1);
+        int firstTurret = turrets.Scene.Nodes.Count;
+        for (int i = 0; i < 16; i++)
+            turrets.Scene.Nodes.Add(Node(firstTurret + i, $"turret{i:00}", []) with { Parents = [0] });
+        var ai = ZrdText.Parse("( DESTROY_ANIM ( entry1 ) TURRET ( \"turret**\" ( ) ) )", Token).ToJson(Token);
+        AnimationBindingOperation turretWork = new(turrets, Token, 300_000);
+        MissionSceneLoader.InitializeTurrets(turrets.Scene, turrets, ai, [], [], Token, turretWork);
+        Assert.All(turrets.Scene.Nodes.Skip(firstTurret), n => Assert.Equal("entry1", n.Metadata.Text("preview_turret_reset")));
+        // A separate frontier must discard both indexes after same-count scene and package edits.
+        turrets.Scene.Nodes[1] = turrets.Scene.Nodes[1] with { Name = "renamed" };
+        turrets.Package.Entries[1].SetText(0, "renamedEntry");
+        List<string> notes = [];
+        AnimationPlayer.ApplyInitialization(turrets, false, ["renamedEntry"], notes, Token, turretWork);
+        Assert.Contains(notes, n => n.Contains("unresolved root for renamedEntry", StringComparison.Ordinal));
     }
 
     [Fact]

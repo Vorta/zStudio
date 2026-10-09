@@ -68,9 +68,15 @@ public sealed partial class PickupPlacementEditSession
     public static string? ReadOnlyWorld(FormatProbe probe) => probe is { Family: FormatFamily.GameZ, Version: 13 }
         ? "This is a 1998 demo world (GameZ version 13), which opens read-only: its placements can be inspected, not edited." : null;
 
-    public static async Task<PickupPlacementEditSession> LoadAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
+    public static Task<PickupPlacementEditSession> LoadAsync(string worldPath, AssetResolver resolver, CancellationToken token = default)
+        => LoadAsync(worldPath, resolver, new AssetReadBudget(), token);
+    internal static Task<PickupPlacementEditSession> LoadAsync(string worldPath, AssetResolver resolver, AssetReadBudget reads, CancellationToken token)
+        => LoadWithResourcesAsync(worldPath, resolver, new PreviewResourceBudget(reads), token);
+    internal static async Task<PickupPlacementEditSession> LoadWithResourcesAsync(string worldPath, AssetResolver resolver, PreviewResourceBudget resourcesBudget, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        resourcesBudget.Check(token);
+        long revision = resolver.SnapshotRevision;
         Dictionary<string, (ZbdDocument Archive, AssetRecord Asset)> found = new(StringComparer.OrdinalIgnoreCase);
         List<(ZbdDocument Archive, AssetRecord Asset)> coordinateResources = [];
         PreviewNotes notes = new();
@@ -85,12 +91,14 @@ public sealed partial class PickupPlacementEditSession
             try
             {
                 if (FormatRegistry.Probe(file).Family != FormatFamily.Archive) continue;
-                var archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false);
+                var archive = await resourcesBudget.OpenAsync(file, resolver, token).ConfigureAwait(false);
                 if (resolver.IsWorkspaceSnapshot(archive)) snapshots.Add(archive);
                 coordinateResources.AddRange(archive.Assets.Where(a => IsCoordinateResource(a.Name)).Select(a => (archive, a)));
                 foreach (var asset in archive.Assets.Where(a => IsPickupResource(a.Name) || IsCoordinateResource(a.Name))) found.TryAdd(asset.Name, (archive, asset));
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            // A missing/damaged file remains a diagnostic. Capacity exhaustion cannot publish a
+            // partial store: it could hide a difficulty counterpart or an independently owned actor.
+            catch (Exception ex) when (!resourcesBudget.Exhausted && (ex is IOException or UnauthorizedAccessException or InvalidDataException))
             { notes.Add($"Pickup editing: {Path.GetFileName(file)}: {ex.Message}"); }
         }
         List<PickupPlacementResource> resources = [];
@@ -101,7 +109,7 @@ public sealed partial class PickupPlacementEditSession
             if (found.TryGetValue(effective, out var resource)) resources.Add(new(difficulty, resource.Archive, resource.Asset));
             else notes.Add($"{difficulty}: pickup resource unavailable.");
         }
-        return await Task.Run(() =>
+        var loaded = await Task.Run(() =>
         {
             var result = Create(resources, notes, token);
             result.ReadOnlyReason = ReadOnlyWorld(probe);
@@ -109,6 +117,10 @@ public sealed partial class PickupPlacementEditSession
             foreach (var archive in result.archives.Values) archive.FromSnapshot = snapshots.Contains(archive.Original);
             return result;
         }, token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        if (resolver.SnapshotRevision != revision)
+            throw new InvalidDataException("Mission coordinate sources changed while loading; retry with the current workspace.");
+        return loaded;
     }
     private static bool IsPickupResource(string name) => name.ToLowerInvariant() is "puppies.zrd" or "puppies_easy.zrd" or "puppies_hard.zrd";
 

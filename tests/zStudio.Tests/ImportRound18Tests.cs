@@ -119,16 +119,27 @@ public sealed class ImportRound18Tests
     [InlineData("WriteTextureSetMap fire1 rock.png")]
     [InlineData("WriteTextureSetMap rock.png")]
     [InlineData("WriteTextureSetMapExtra fire1 \"sub/rock.png\"")]
+    [InlineData("WriteTextureSetMap fire1 %mask%")]
     public async Task DamageMaskUsesTheFinalArgumentAndStaysUnpaletted(string command)
     {
         using var fixture = new SourceWorldFixture();
         fixture.Write("data/m1/textures/fire1.png", File.ReadAllBytes(fixture.Path("data/m1/textures/rock.png")));
-        fixture.Write("gamegen/support/masks.gw", command + "\n");
+        fixture.Write("data/m1/textures/runtime.png", File.ReadAllBytes(fixture.Path("data/m1/textures/rock.png")));
+        fixture.Write("gamegen/support/masks.gw", "ifdef enabled\n" + command + "\nendif\nifdef disabled\nWriteTextureSetMap fire1.png\nendif\n");
+        fixture.Write("gamegen/support/unused.gw", "WriteTextureSetMap fire1.png\n");
+        string world = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
+        // Execute the source after writing the world; Quit still stops the following registration.
+        fixture.Write("gamegen/m1.gs", world.Replace("Quit", "set enabled TRUE\nset leak TRUE\nset mask sub/rock.png\nset maskScript support/masks.gw\nsource %maskScript%\nQuit\nWriteTextureSetMap fire1.png", StringComparison.Ordinal));
+        fixture.Write("gamegen/m1_zbd.gs", "ifdef leak\nWriteTextureSetMap fire1.png\nendif\nset runtimeMask sub/runtime.png\nsource support/runtime-masks.gw\n");
+        fixture.Write("gamegen/support/runtime-masks.gw", "WriteTextureSetMap fire1 %runtimeMask%\n");
         string destination = Path.Combine(fixture.Root, "export");
-        await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/texture2.zbd"], token: Token);
+        await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/texture2.zbd", "m2/texture2.zbd"], token: Token);
         var pack = FormatRegistry.Default.OpenBytes("texture2.zbd", File.ReadAllBytes(Path.Combine(destination, "m1/texture2.zbd")), token: Token);
         var mask = Assert.Single(pack.Assets, a => a.Name == "rock");
         Assert.Contains("RGB565", mask.Summary);
+        Assert.Contains("RGB565", Assert.Single(pack.Assets, a => a.Name == "runtime").Summary);
         Assert.Contains("Paletted", Assert.Single(pack.Assets, a => a.Name == "fire1").Summary);
+        var other = FormatRegistry.Default.OpenBytes("texture2.zbd", File.ReadAllBytes(Path.Combine(destination, "m2/texture2.zbd")), token: Token);
+        Assert.Contains("Paletted", Assert.Single(other.Assets, a => a.Name == "rock").Summary);
     }
 }

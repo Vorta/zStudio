@@ -31,6 +31,8 @@ internal sealed class MissionPlacementBudget
     }
     internal void Name(string name) => Take(1L + name.Length);
     internal void TextCopy(long characters) { Take(characters); Retain(32L + 2L * characters); }
+    internal void Storage(long bytes) => Retain(bytes);
+    internal void JsonCopy(JsonNode? node) => Json(node, 0);
     internal string SourceIdentity(string value, bool fullPath = false)
     {
         Name(value);

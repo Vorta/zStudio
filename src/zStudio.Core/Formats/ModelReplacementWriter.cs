@@ -165,7 +165,16 @@ public static partial class ModelReplacementWriter
     }
     private static bool IsWorld(GameScene scene, int index) => index >= 0 && index < scene.Nodes.Count && scene.Nodes[index].Class == "world";
     private static (Vector3 Min, Vector3 Max) ReadBox(byte[] bytes, int offset) => (ReadVector(bytes, offset), ReadVector(bytes, offset + 12));
-    private static void WriteBox(byte[] bytes, int offset, (Vector3 Min, Vector3 Max) box) { Vector(bytes, offset, box.Min); Vector(bytes, offset + 12, box.Max); }
+    private static void WriteBox(byte[] bytes, int offset, (Vector3 Min, Vector3 Max) box)
+    {
+        RequireFiniteBounds(box.Min); RequireFiniteBounds(box.Max);
+        Vector(bytes, offset, box.Min); Vector(bytes, offset + 12, box.Max);
+    }
+    private static void RequireFiniteBounds(Vector3 point)
+    {
+        if (!float.IsFinite(point.X) || !float.IsFinite(point.Y) || !float.IsFinite(point.Z))
+            throw new InvalidDataException("The replacement produces nonfinite node bounds. Reduce the model coordinates or the existing node transforms before replacing it.");
+    }
     private static (Vector3 Min, Vector3 Max) Union((Vector3 Min, Vector3 Max) a, (Vector3 Min, Vector3 Max) b) => (Vector3.Min(a.Min, b.Min), Vector3.Max(a.Max, b.Max));
     private static bool Contains((Vector3 Min, Vector3 Max) outer, (Vector3 Min, Vector3 Max) inner) =>
         outer.Min.X <= inner.Min.X && outer.Min.Y <= inner.Min.Y && outer.Min.Z <= inner.Min.Z && outer.Max.X >= inner.Max.X && outer.Max.Y >= inner.Max.Y && outer.Max.Z >= inner.Max.Z;
@@ -175,6 +184,9 @@ public static partial class ModelReplacementWriter
         for (int corner = 0; corner < 8; corner++)
         {
             var p = Vector3.Transform(new((corner & 1) == 0 ? box.Min.X : box.Max.X, (corner & 2) == 0 ? box.Min.Y : box.Max.Y, (corner & 4) == 0 ? box.Min.Z : box.Max.Z), matrix);
+            // Finite authored operands can overflow when combined. Check each corner
+            // before Min/Max can hide a NaN and before any ancestor box is written.
+            RequireFiniteBounds(p);
             min = Vector3.Min(min, p); max = Vector3.Max(max, p);
         }
         return (min, max);

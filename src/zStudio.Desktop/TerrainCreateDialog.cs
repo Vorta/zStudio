@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Terrain;
 
 namespace Recoil.Zbd.Desktop;
@@ -61,7 +62,7 @@ internal sealed class TerrainCreateDialog : Window
         list.Children.Clear();
         foreach (string node in matches.Skip(page * PageSize).Take(PageSize))
         {
-            CheckBox box = new() { Content = new TextBlock { Text = node }, Tag = node, IsChecked = chosen.Contains(node), Margin = new(0, 2, 0, 2) };
+            CheckBox box = new() { Content = new TextBlock { Text = JsonData.ShownText(node, 128), TextTrimming = TextTrimming.CharacterEllipsis }, Tag = node, IsChecked = chosen.Contains(node), Margin = new(0, 2, 0, 2) };
             box.Checked += (_, _) =>
             {
                 if (chosen.Count >= TerrainRecipe.MaximumSurfaces && !chosen.Contains(node))

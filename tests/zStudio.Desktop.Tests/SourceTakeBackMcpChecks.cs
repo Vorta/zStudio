@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using Recoil.Zbd.Automation;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Mcp;
 using Recoil.Zbd.Tests;
@@ -87,6 +88,77 @@ internal static class SourceTakeBackMcpChecks
             await AcceptedPresentation(cancel: false, supersede: true, fail: false);
             await AcceptedPresentation(cancel: false, supersede: false, fail: true);
             main.DiscoverTexturePacksAsync = discover;
+            // The direct command route has no operation ID/Committed job. It shares the same accepted replacement
+            // and delayed presentation, and must return that replacement after a late request cancellation too.
+            var directBefore = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            var directArgs = new JsonObject { ["document"] = Id(directBefore), ["revision"] = directBefore.Revision, ["action"] = "undo" };
+            int directUndo = workspace.UndoCount;
+            using (var canceled = new CancellationTokenSource())
+            {
+                canceled.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => main.Commands.ExecuteAsync("zstudio_undo_redo", directArgs, canceled.Token));
+                Assert.Same(directBefore, main.ViewModel.SelectedDocument); Assert.Equal(directUndo, workspace.UndoCount);
+            }
+            TaskCompletionSource directEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<string[]> directRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            main.DiscoverTexturePacksAsync = (_, _, _) => { directEntered.TrySetResult(); return directRelease.Task; };
+            using (var request = CancellationTokenSource.CreateLinkedTokenSource(token))
+            try
+            {
+                var command = main.Commands.ExecuteAsync("zstudio_undo_redo", directArgs, request.Token);
+                await directEntered.Task.WaitAsync(token);
+                var published = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+                Assert.True(directBefore.IsDisposed); Assert.NotSame(directBefore, published);
+                Assert.Equal(directUndo - 1, workspace.UndoCount);
+                request.Cancel(); directRelease.SetResult([]);
+                var completed = await command.WaitAsync(token);
+                Assert.Equal(Id(published), completed.Data["id"]!.GetValue<string>());
+                Assert.Same(published, main.ViewModel.Documents.Single(d => d.SourceWorld != null));
+                Assert.Equal(directUndo - 1, workspace.UndoCount); Assert.True(workspace.CanRedo);
+            }
+            finally { main.DiscoverTexturePacksAsync = discover; directRelease.TrySetResult([]); }
+            // A Properties callback passes None to the GUI edit helper. The direct request must nevertheless
+            // cancel its shared preparation before accepting source bytes/history, leaving the draft available.
+            var draftDocument = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+            Assert.True(await (Task<bool>)typeof(MainWindow).GetMethod("ShowSourceObjectPropertiesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(main, [draftDocument, Node(draftDocument, "post"), CancellationToken.None])!);
+            var draftWindow = main.OpenPropertiesWindow!;
+            await main.Dispatcher.InvokeAsync(() => draftWindow.UpdateLayout(), System.Windows.Threading.DispatcherPriority.Loaded);
+            var draftFields = draftWindow.SourceFields!;
+            var position = Descendants(draftFields).OfType<TextBox>().Single(t => System.Windows.Automation.AutomationProperties.GetName(t) == "Position X");
+            position.Text = "19";
+            Assert.True(draftFields.HasPendingDrafts);
+            long draftRevision = workspace.ContentRevision;
+            int draftUndo = workspace.UndoCount;
+            TaskCompletionSource draftEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var release = new SemaphoreSlim(0))
+            using (var request = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                CancellationToken preparationToken = default;
+                var preparing = main.SourceEditPreparing;
+                main.SourceEditPreparing = ct =>
+                {
+                    preparationToken = ct; draftEntered.TrySetResult();
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(20), token));
+                };
+                try
+                {
+                    var resolving = main.Commands.ExecuteAsync("zstudio_resolve_drafts", new()
+                    {
+                        ["document"] = Id(draftDocument), ["target"] = "properties", ["token"] = draftFields.DraftToken, ["action"] = "apply"
+                    }, request.Token);
+                    await draftEntered.Task.WaitAsync(token);
+                    request.Cancel(); Assert.True(preparationToken.IsCancellationRequested); release.Release();
+                    // FieldDraft keeps a canceled commit as a failed draft rather than accepting its baseline.
+                    Assert.Equal("invalid_draft", (await Assert.ThrowsAsync<StudioCommandException>(() => resolving)).Code);
+                    Assert.Same(draftDocument, main.ViewModel.SelectedDocument); Assert.False(draftDocument.IsDisposed);
+                    Assert.Equal(draftRevision, workspace.ContentRevision); Assert.Equal(draftUndo, workspace.UndoCount);
+                    Assert.Same(draftWindow, main.OpenPropertiesWindow); Assert.True(draftFields.HasPendingDrafts);
+                }
+                finally { release.Release(); main.SourceEditPreparing = preparing; }
+            }
+            draftFields.ResolveAutomationDrafts(draftFields.DraftToken, apply: false);
+            draftWindow.Dismiss();
             var reloadBefore = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
             var reloaded = Document(await Job("reload_document", new() { ["document"] = Id(reloadBefore), ["revision"] = reloadBefore.Revision }));
             Assert.True(reloadBefore.IsDisposed); Assert.False(reloaded.IsDisposed);
@@ -180,6 +252,14 @@ internal static class SourceTakeBackMcpChecks
             }
             DocumentModel Document(JsonNode state) => main.ViewModel.Documents.Single(d => d.SessionId.ToString() == (state["document"]?["id"] ?? state["id"])!.GetValue<string>());
             static string Id(DocumentModel d) => d.SessionId.ToString();
+            static IEnumerable<System.Windows.DependencyObject> Descendants(System.Windows.DependencyObject root)
+            {
+                for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+                {
+                    var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i); yield return child;
+                    foreach (var nested in Descendants(child)) yield return nested;
+                }
+            }
             async Task<JsonNode> Call(string name, Dictionary<string, object?> arguments, bool error = false)
             {
                 var result = await client.CallToolAsync("zstudio_" + name, arguments, cancellationToken: token);

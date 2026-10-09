@@ -178,11 +178,11 @@ public static class SourceZoneEdits
         internal bool Exists { get; } = exists;
         internal Dictionary<string, SourceMapZoneAsset> Assets { get; } = new(StringComparer.OrdinalIgnoreCase);
         internal List<SourceZoneTarget> Targets { get; } = [];
-        internal Dictionary<(string Asset, SourceZoneTargetKind Kind, int Index), List<int>> Scopes { get; } = [];
+        internal Dictionary<string, Dictionary<(SourceZoneTargetKind Kind, int Index), List<int>>> Scopes { get; } = new(StringComparer.OrdinalIgnoreCase);
         internal SortedSet<int> Affected { get; } = [];
         internal bool SharedInstance { get; set; }
         internal bool Shared => SharedInstance || Targets.Any(t => Scope(t).Count > 1);
-        internal List<int> Scope(SourceZoneTarget target) => Scopes[(target.Asset.ToUpperInvariant(), target.Kind, target.Index)];
+        internal List<int> Scope(SourceZoneTarget target) => Scopes[target.Asset][(target.Kind, target.Index)];
     }
 
     private static Context Prepare(SourceWorkspace workspace, SourceWorldBuild build, IReadOnlyList<SourceZoneSelection> selections, CancellationToken token)
@@ -242,17 +242,20 @@ public static class SourceZoneEdits
             }
             if (targets.Add(target)) context.Targets.Add(target);
         }
-        foreach (var target in context.Targets) context.Scopes.TryAdd((target.Asset.ToUpperInvariant(), target.Kind, target.Index), []);
+        foreach (var target in context.Targets)
+        {
+            if (!context.Scopes.TryGetValue(target.Asset, out var scopes)) context.Scopes.Add(target.Asset, scopes = []);
+            scopes.TryAdd((target.Kind, target.Index), []);
+        }
         foreach (var (scene, origin) in build.Provenance)
         {
             token.ThrowIfCancellationRequested();
             if (origin.Terrain != null) continue;
             string? logical = origin.LogicalModelFile ?? origin.LogicalLoadedFile;
-            if (logical == null || !context.Assets.ContainsKey(logical)) continue;
-            string key = logical.ToUpperInvariant();
+            if (logical == null || !context.Scopes.TryGetValue(logical, out var scopes)) continue;
             void Add(SourceZoneTargetKind kind, int index)
             {
-                if (context.Scopes.TryGetValue((key, kind, index), out var uses))
+                if (scopes.TryGetValue((kind, index), out var uses))
                 {
                     uses.Add(scene); context.Affected.Add(scene);
                     // One engine node can be placed below several parents. Slot count alone

@@ -28,6 +28,27 @@ public sealed class ResourceEditingTests
         Assert.Equal(id, edits.SnapshotFor(duplicate.Document)!.Members[1].Id);
         Assert.Null(edits.SnapshotFor(duplicate.Document)!.Members[1].SourceIndex);
         Assert.Equal(bytes, source.Bytes.ToArray());
+
+        // Tiny raw snapshots must still evict decoded history. Each edit owns a verified reader tree
+        // as well as its authored tree; shared saved/source roots must not be charged on every undo entry.
+        var values = ZrdNode.Create(ZrdKind.Array) with { Children = Enumerable.Range(0, 64).Select(i => ZrdNode.Create(ZrdKind.Int, i.ToString(System.Globalization.CultureInfo.InvariantCulture))).ToArray() };
+        var valueDocument = FormatRegistry.Default.OpenBytes("values.zrd", ZrdWriter.Write(values, token), token: token);
+        var bounded = new ResourceEditSession(valueDocument, token, null, maximumRetainedBytes: 256 * 1024, maximumConstructionBytes: 2 * 1024 * 1024);
+        var valueMember = bounded.Current.Members[0]; Guid scalar = bounded.Tree(valueMember, token).Children[0].Id;
+        ResourceSnapshot? early = null;
+        for (int i = 1; i <= 24; i++)
+        {
+            bounded.Accept(await bounded.PrepareZrdAsync(valueMember.Id, scalar, "set", value: i.ToString(System.Globalization.CultureInfo.InvariantCulture), token: token));
+            if (i == 1) early = bounded.Current;
+        }
+        Assert.Null(bounded.SnapshotFor(early!.Document)); Assert.True(bounded.CanUndo);
+        var beforeRefusal = bounded.Current;
+        var refusal = await Assert.ThrowsAsync<InvalidDataException>(() => bounded.PrepareZrdAsync(valueMember.Id, scalar, "type", ZrdKind.String,
+            "\"" + new string('x', 262144) + "\"", token: token));
+        Assert.Contains("allowance", refusal.Message); Assert.Same(beforeRefusal, bounded.Current); Assert.True(bounded.CanUndo);
+        bounded.Accept(await bounded.PrepareZrdAsync(valueMember.Id, scalar, "set", value: "25", token: token));
+        bounded.UndoRedo(false); Assert.Same(beforeRefusal, bounded.Current);
+        bounded.UndoRedo(true); Assert.Equal(scalar, bounded.Tree(bounded.Member(valueMember.Id), token).Children[0].Id);
     }
 
     [Fact]
@@ -233,6 +254,13 @@ public sealed class ResourceEditingTests
             await Assert.ThrowsAsync<InvalidDataException>(() => edits.PrepareArchiveAsync("replace", zrd.Id, path: input, token: token));
             await File.WriteAllBytesAsync(input, ZrdWriter.Write(ZrdNode.Create(ZrdKind.Int, "9"), token), token);
             edits.Accept(await edits.PrepareArchiveAsync("replace", zrd.Id, path: input, token: token)); Assert.Equal(-1, edits.Tree(edits.Member(zrd.Id), token).SourceOffset);
+            // Ordinary opaque payloads do not expand into typed trees. A five-MiB replacement must
+            // remain supported even though applying the ZRD expansion estimate to it would exceed 1 GiB.
+            byte[] opaque = new byte[5 * 1024 * 1024]; opaque[0] = 99; opaque[^1] = 77;
+            await File.WriteAllBytesAsync(input, opaque, token);
+            edits.Accept(await edits.PrepareArchiveAsync("replace", first.Id, path: input, token: token));
+            Assert.True(opaque.AsSpan().SequenceEqual(edits.Member(first.Id).Data.Span));
+            edits.UndoRedo(false); Assert.Equal(first.Data.ToArray(), edits.Member(first.Id).Data.ToArray());
             await File.WriteAllBytesAsync(input, [7], token); edits.Accept(await edits.PrepareArchiveAsync("replace", first.Id, path: input, token: token)); Assert.Equal(new byte[] {7}, edits.Member(first.Id).Data.ToArray());
             edits.UndoRedo(false); Assert.Equal(first.Data.ToArray(), edits.Member(first.Id).Data.ToArray());
             edits.Accept(await edits.PrepareArchiveAsync("delete", first.Id, token: token)); edits.Accept(await edits.PrepareArchiveAsync("delete", zrd.Id, token: token)); Assert.Empty(edits.Current.Document.Assets);

@@ -106,7 +106,7 @@ public sealed class WorldComparison
     /// <summary>Every difference of the tree, flattened (at most the limit given, of <see cref="DifferenceCount"/>).</summary>
     public required List<WorldDifference> Differences { get; init; }
     /// <summary>How many differences the tree has, listed or not.</summary>
-    public int DifferenceCount { get; init; }
+    public long DifferenceCount { get; init; }
     /// <summary>Names more than one node has in either world, with the node lookups by each name find.</summary>
     public required IReadOnlyList<WorldNameBinding> Bindings { get; init; }
     /// <summary>Merged tree nodes by status (a node shared by several parents counts once per place).</summary>
@@ -144,7 +144,8 @@ public sealed class WorldComparison
 /// nodes it names), grid cell and model are compared, along with the world, its lights and the texture directory entries and variant links. A model
 /// compares every value it keeps: display mode and flags, scrolling, morph factor, point entries (lens flares), bounds and
 /// polygons, whose corners carry their positions, UVs, normals and morph deltas and whose materials all their fields. Node
-/// slots, stored pointers, runtime counters and child order do not matter; polygon order is reported separately. <see cref="CompareTree"/> also
+/// slots, stored pointers and runtime counters do not matter. Child and cell encounter order is retained: equal-height
+/// ground/zone probes select their first candidate. Polygon order is reported separately. <see cref="CompareTree"/> also
 /// reports the slots and which repeated names lookups would bind elsewhere.
 /// </summary>
 public static class WorldComparer
@@ -183,7 +184,7 @@ public static class WorldComparer
         // A pair's own differences, worked out once however many places share it; described while a pair lists fewer than
         // MaximumNodeDifferences and the comparison fewer than MaximumDescribedText characters, counted always.
         Dictionary<(WorldNode, WorldNode, bool), (int Count, (string, string, string)[] Described)> owns = [];
-        int made = 0, found = 0, unshown = MaximumTreeNodes; bool truncated = false, pairingTruncated = false;
+        int made = 0, unshown = MaximumTreeNodes; long found = 0; bool truncated = false, pairingTruncated = false;
         void Place(WorldComparisonNode node, (int Count, (string, string, string)[] Described) own)
         {
             node.DifferenceCount = own.Count; node.Described = own.Described; found += own.Count;
@@ -572,8 +573,8 @@ public static class WorldComparer
         /// <summary>
         /// Whether two nodes themselves are the same as a comparison sees them, in the order it lists what differs: class;
         /// flags, zone and grid cell (a world member's); the transform, or the class data with the nodes it names (stored
-        /// pointers, slots and runtime counters skipped); the model's retained values; the number of children. The primary
-        /// world root's distinct members are compared through the tree/areas, with repeated overflow occurrences checked separately.
+        /// pointers, slots and runtime counters skipped); the model's retained values; the child encounter sequence. The primary
+        /// world root's distinct members are compared through the tree/areas, with overflow occurrences and order checked separately.
         /// With <paramref name="found"/>, every difference is added to it; without, the first ends the check.
         /// </summary>
         public bool OwnSame(WorldNode a, WorldNode b, bool worldChild, bool root, Found? found)
@@ -604,7 +605,7 @@ public static class WorldComparer
             // A model shared by many nodes is compared once.
             else if (a.Model != null && b.Model != null)
                 foreach (var (field, x, y) in ModelDifferences(a.Model, b.Model, found == null)) if (Differs(field, x, y)) return false;
-            if (!root && (a.Children.Count != b.Children.Count || found != null && !MembersSame(a.Children, b.Children))
+            if (!root && (a.Children.Count != b.Children.Count || found != null && !ReferencesSame(a.Children, b.Children))
                 && Differs("children", ReferenceList(a.Children, true), ReferenceList(b.Children, false))) return false;
             // Class data last: a world's many cells must not crowd out the fields above.
             return (a.Class == WorldNodeClass.Object3D || ClassDataSame()) && same;
@@ -625,11 +626,17 @@ public static class WorldComparer
                         if (!ReferenceSame(x, y) && Differs(field, ReferenceLabel(x, true), ReferenceLabel(y, false))) return false;
                 if (a.Class == WorldNodeClass.Light && !ReferencesSame(a.AttachedWorlds, b.AttachedWorlds) && Differs("light.worlds", ReferenceList(a.AttachedWorlds, true), ReferenceList(b.AttachedWorlds, false))) return false;
                 if (a.Class != WorldNodeClass.World) return true;
-                // The tree already compares distinct members, and the areas below compare cell membership. Only
-                // additional overflow visits disappear from those views: compare them by established node identity.
-                // This does not duplicate area differences or turn one child also in an area into an extra visit.
-                if (found != null && !MembersSame(OverflowRepeats(a), OverflowRepeats(b))
+                // The tree compares distinct members, but cannot represent every overflow visit: a member may also
+                // remain in an area when its overflow edge disappears. Preserve repeated visits and matched members'
+                // full overflow sequence independently of their area membership.
+                bool repeatedOverflowDiffers = found != null && !MembersSame(OverflowRepeats(a), OverflowRepeats(b));
+                if (repeatedOverflowDiffers
                     && Differs("world.overflowOccurrences", ReferenceList(a.Children, true), ReferenceList(b.Children, false))) return false;
+                // Wholly unmatched members already have tree count/extra differences; don't report their loss twice.
+                // A nested world's children use the ordinary children comparison above; do not report them twice.
+                if (root && found != null && !repeatedOverflowDiffers && !MatchedOverflowSame()
+                    && Differs(MembersSame(a.Children, b.Children) ? "world.overflowOrder" : "world.overflowOccurrences",
+                        ReferenceList(a.Children, true), ReferenceList(b.Children, false))) return false;
                 if (!ReferencesSame(a.WorldLights, b.WorldLights) && Differs("world.lights", ReferenceList(a.WorldLights, true), ReferenceList(b.WorldLights, false))) return false;
                 if (!ReferencesSame(a.WorldSounds, b.WorldSounds) && Differs("world.sounds", ReferenceList(a.WorldSounds, true), ReferenceList(b.WorldSounds, false))) return false;
                 if (a.Areas.Count != b.Areas.Count) return !Differs("world.areas", a.Areas.Count, b.Areas.Count);
@@ -638,7 +645,8 @@ public static class WorldComparer
                     // Every area is compared; only the differences listed are described.
                     Token.ThrowIfCancellationRequested();
                     var x = a.Areas[i].Nodes; var y = b.Areas[i].Nodes;
-                    if (!MembersSame(x, y) && Differs($"world.area{i}", ReferenceList(x, true), ReferenceList(y, false))) return false;
+                    if ((found == null ? x.Count != y.Count : !ReferencesSame(x, y))
+                        && Differs($"world.area{i}", ReferenceList(x, true), ReferenceList(y, false))) return false;
                 }
                 return true;
             }
@@ -646,7 +654,38 @@ public static class WorldComparer
             string ReferenceLabel(WorldNode? node, bool expected) => node == null ? "(none)" : !RepeatedNames.Contains(node.Name) ? node.Name : $"{node.Name} [slot {(expected ? ExpectedSlots : ActualSlots)?.GetValueOrDefault(node, -1) ?? -1}]";
             Listed ReferenceList(List<WorldNode> nodes, bool expected) => new(nodes.Select(n => ReferenceLabel(n, expected)));
             bool ReferenceSame(WorldNode? x, WorldNode? y) => x == null ? y == null : y != null && ReferenceEquals(MatchReference(x), y);
-            bool ReferencesSame(List<WorldNode> x, List<WorldNode> y) => x.Count == y.Count && x.Where((node, i) => !ReferenceSame(node, y[i])).Any() == false;
+            bool ReferencesSame(List<WorldNode> x, List<WorldNode> y)
+            {
+                if (x.Count != y.Count) return false;
+                for (int i = 0; i < x.Count; i++)
+                {
+                    Token.ThrowIfCancellationRequested();
+                    if (!ReferenceSame(x[i], y[i])) return false;
+                }
+                return true;
+            }
+            bool MatchedOverflowSame()
+            {
+                if (Counterparts is not { } pairs) return ReferencesSame(a.Children, b.Children);
+                HashSet<WorldNode> matchedActual = new(ReferenceEqualityComparer.Instance);
+                foreach (var node in pairs.Values) { Token.ThrowIfCancellationRequested(); matchedActual.Add(node); }
+                int next = 0;
+                foreach (var node in a.Children)
+                {
+                    Token.ThrowIfCancellationRequested();
+                    if (!pairs.TryGetValue(node, out var mapped)) continue;
+                    SkipUnmatched();
+                    if (next == b.Children.Count || !ReferenceEquals(mapped, b.Children[next++])) return false;
+                }
+                SkipUnmatched();
+                return next == b.Children.Count;
+
+                void SkipUnmatched()
+                {
+                    while (next < b.Children.Count && !matchedActual.Contains(b.Children[next]))
+                    { Token.ThrowIfCancellationRequested(); next++; }
+                }
+            }
             bool MembersSame(List<WorldNode> x, List<WorldNode> y)
             {
                 if (x.Count != y.Count) return false;
@@ -738,7 +777,7 @@ public static class WorldComparer
             return signatures[(node, depth)] = hash;
         }
 
-        /// <summary>The node's contents all the way down, rounded transforms included, its children in any order.</summary>
+        /// <summary>A pairing hint from the node's contents and ordered child subtrees, including rounded transforms.</summary>
         public ulong Identity(WorldNode root)
         {
             if (identities.TryGetValue(root, out ulong known)) return known;
@@ -755,7 +794,7 @@ public static class WorldComparer
                     continue;
                 }
                 ulong children = 0;
-                foreach (var child in node.Children) children += Mix(0, identities.GetValueOrDefault(child));
+                foreach (var child in node.Children) children = Mix(children, identities.GetValueOrDefault(child));
                 identities[node] = Mix(Mix(Own(node), children), (ulong)node.Children.Count);
                 open.Remove(node);
             }
@@ -869,7 +908,7 @@ public static class WorldComparer
             interchangeable[(x, y, depth)] = same;
             return same;
         }
-        /// <summary>The children as multisets: each of x's takes an unused one of y's indistinguishable from it, those of its structure and position first.</summary>
+        /// <summary>Semantic copies retain child and cell encounter order, independently of their serialized slots.</summary>
         private bool ChildrenSame(WorldNode x, WorldNode y, int depth)
         {
             if (!ChildrenSame(x.Children, y.Children, depth)) return false;
@@ -886,36 +925,12 @@ public static class WorldComparer
         private bool ChildrenSame(List<WorldNode> x, List<WorldNode> y, int depth)
         {
             if (x.Count != y.Count) return false;
-            if (x.Count == 0) return true;
-            bool[] used = new bool[y.Count];
-            Dictionary<(string, ulong, Vector3), List<int>> placed = [];
-            Dictionary<string, List<int>> named = new(StringComparer.Ordinal);
-            (string, ulong, Vector3) Key(WorldNode node) => (node.Name, Structure(node), Round(At(node)));
-            for (int j = 0; j < y.Count; j++)
+            for (int i = 0; i < x.Count; i++)
             {
-                var child = y[j];
-                if (!placed.TryGetValue(Key(child), out var list)) placed[Key(child)] = list = []; list.Add(j);
-                if (!named.TryGetValue(child.Name, out list)) named[child.Name] = list = []; list.Add(j);
-            }
-            foreach (var child in x)
-            {
-                int found = placed.TryGetValue(Key(child), out var list) ? Take(list, child) : -1;
-                if (found < 0 && named.TryGetValue(child.Name, out list)) found = Take(list, child);
-                if (found < 0) return false;
-                used[found] = true;
+                token.ThrowIfCancellationRequested();
+                if (!Interchangeable(x[i], y[i], depth + 1)) return false;
             }
             return true;
-            // The first unused candidate indistinguishable from child; candidates taken meanwhile leave the list.
-            int Take(List<int> list, WorldNode child)
-            {
-                for (int k = 0; k < list.Count; k++)
-                {
-                    int j = list[k];
-                    if (used[j]) { list[k--] = list[^1]; list.RemoveAt(list.Count - 1); continue; }
-                    if (Interchangeable(child, y[j], depth + 1)) return j;
-                }
-                return -1;
-            }
         }
     }
 

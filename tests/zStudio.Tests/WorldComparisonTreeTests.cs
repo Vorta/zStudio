@@ -4,7 +4,7 @@ using Xunit;
 
 namespace Recoil.Zbd.Tests;
 
-/// <summary>Two worlds compared as one merged tree: matched by parent-child structure, not by node order or slots.</summary>
+/// <summary>Two worlds compared as one merged tree: matched by parent-child structure, independently of serialized slots.</summary>
 public sealed class WorldComparisonTreeTests
 {
     private static WorldNode Node(string name, params WorldNode[] children)
@@ -46,7 +46,8 @@ public sealed class WorldComparisonTreeTests
         var comparison = WorldComparer.CompareTree(retail, rebuilt, token: TestContext.Current.CancellationToken);
 
         var world = comparison.Roots[0];
-        Assert.Equal(("world1", WorldComparisonStatus.Same), (world.Name, world.Status));
+        Assert.Equal(("world1", WorldComparisonStatus.Changed), (world.Name, world.Status));
+        Assert.Equal("world.overflowOrder", Assert.Single(world.Differences).Field);
         // Children follow the retail order whatever the rebuilt one; each pair knows both nodes and slots.
         Assert.Equal(["crate", "gate", "lamp"], world.Children.Select(c => c.Name));
         var crate = world.Children[0];

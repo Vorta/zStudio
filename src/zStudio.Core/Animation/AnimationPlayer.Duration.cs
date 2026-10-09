@@ -23,12 +23,21 @@ public sealed partial class AnimationPlayer
     /// </summary>
     public AnimationDuration MeasureDuration(CancellationToken token = default)
     {
-        var probe = new AnimationPlayer(context, entryIndex, Seed, resetPhase, token)
+        AnimationPlayer probe;
+        try
         {
-            ConditionOverride = ConditionOverride, EffectLevel = EffectLevel,
-            ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, PreviewHeight = PreviewHeight, measuringDuration = true
-        };
-        return probe.MeasureCore(token);
+            probe = new AnimationPlayer(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
+                () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0))
+            {
+                ConditionOverride = ConditionOverride, EffectLevel = EffectLevel,
+                ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, PreviewHeight = PreviewHeight, measuringDuration = true
+            };
+        }
+        catch (StateLimitException)
+        { return Result(Math.Max(5, Time), AnimationDurationKind.AnalysisLimit, "Duration analysis reached the retained animation-state allowance. This is an adjustable preview range."); }
+        try { return probe.MeasureCore(token); }
+        catch (StateLimitException)
+        { return Result(Math.Max(5, probe.Time), AnimationDurationKind.AnalysisLimit, "Duration analysis reached the retained animation-state allowance. This is an adjustable preview range."); }
     }
 
     private AnimationDuration MeasureCore(CancellationToken token)

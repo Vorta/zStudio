@@ -1066,26 +1066,6 @@ public static class SourceObjectEdits
         if (names.Count == 0) return null;
         HashSet<(string, int)> own = [.. TransformCommands.Where(origin.Writers.ContainsKey).Select(c => (origin.Writers[c].Script.ToLowerInvariant(), origin.Writers[c].Line))];
 
-        // Follow every reference edge: an intermediate file need not name the edited leaf, and JSON may escape names.
-        Dictionary<string, bool> holds = new(StringComparer.OrdinalIgnoreCase);
-        bool Holds(string path, int depth)
-        {
-            if (path.Equals(file, StringComparison.OrdinalIgnoreCase)) return true;
-            if (holds.TryGetValue(path, out bool known)) return known;
-            holds[path] = false;
-            bool found = false;
-            if (depth < GltfDocument.MaximumDepth && (path.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".glb", StringComparison.OrdinalIgnoreCase)) && Read(path) is { } bytes
-                && Parse(bytes)?["nodes"] is JsonArray nodes)
-                foreach (var n in nodes)
-                {
-                    if (((n as JsonObject)?["extras"] as JsonObject)?[WorldGltf.Key] is not JsonObject engine || engine["ref"] is not JsonValue reference || !reference.TryGetValue(out string? uri)) continue;
-                    string next;
-                    try { next = WorldAssembler.Relative(path, uri); } catch (InvalidDataException) { continue; }
-                    if (Holds(next, depth + 1)) { found = true; break; }
-                }
-            return holds[path] = found;
-        }
-
         inspection.ReserveWork(inspection.Worlds().Count);
         var worlds = inspection.Worlds().Order(StringComparer.OrdinalIgnoreCase);
         foreach (string world in worlds)
@@ -1101,6 +1081,30 @@ public static class SourceObjectEdits
 
         (SourceInstruction Instruction, bool Certain)? Trace(string world)
         {
+            var bindings = inspection.MissionModels(Path.GetFileNameWithoutExtension(world).ToLowerInvariant());
+            // Logical identity is mission-scoped; two maps may bind the same spelling to different geometry.
+            Dictionary<string, bool> holds = new(StringComparer.OrdinalIgnoreCase);
+            bool Exists(string path)
+            {
+                inspection.ReserveWork(path.Length + 1L);
+                return bindings.Exists(path, inspection.ModelExists);
+            }
+            bool Holds(string path, int depth)
+            {
+                inspection.ReserveWork(path.Length + 1L);
+                if (!Exists(path)) return false;
+                string geometry = bindings.Geometry(path);
+                if (geometry.Equals(file, StringComparison.OrdinalIgnoreCase)) return true;
+                if (holds.TryGetValue(path, out bool known)) return known;
+                holds[path] = false;
+                if (depth >= GltfDocument.MaximumDepth) throw new IOException("The other mission's model references are too deep to inspect safely.");
+                if (Read(geometry) is not { } bytes) return false;
+                inspection.ReserveWork(bytes.LongLength);
+                var document = GltfDocument.ReadHierarchy(bytes, token);
+                foreach (string next in bindings.Dependencies(path, document, inspection.ReserveWork))
+                    if (Holds(next, depth + 1)) return holds[path] = true;
+                return false;
+            }
             Dictionary<string, string> variables = new(StringComparer.Ordinal);
             ScriptConditions conditions = new();
             List<string> directories = [];
@@ -1113,7 +1117,7 @@ public static class SourceObjectEdits
                 if (loadHolds.TryGetValue(load, out bool known)) return known;
                 var (name, folders) = loads[load];
                 string leafName = Path.GetFileName(name.Replace('\\', '/')), stem = Path.GetFileNameWithoutExtension(leafName), extension = Path.GetExtension(leafName).ToLowerInvariant();
-                string? path = folders.SelectMany(d => (extension is ".gltf" or ".glb" ? [extension] : new[] { ".gltf", ".glb" }).Select(e => $"{d}/{stem}{e}")).FirstOrDefault(p => Read(p) != null);
+                string? path = folders.SelectMany(d => (extension is ".gltf" or ".glb" ? [extension] : new[] { ".gltf", ".glb" }).Select(e => $"{d}/{stem}{e}")).FirstOrDefault(Exists);
                 return loadHolds[load] = path != null && Holds(path, 0);
             }
             Dictionary<string, int> roots = new(StringComparer.Ordinal);
@@ -1191,7 +1195,9 @@ public static class SourceObjectEdits
             {
                 var json = GltfDocument.ContainerJson(bytes, token, out _);
                 inspection.ReserveWork(json.Length);
-                return JsonNode.Parse(json, documentOptions: new() { MaxDepth = 64 });
+                var parsed = JsonElement.Parse(json, new JsonDocumentOptions { MaxDepth = 64 });
+                GltfDocument.Bound(parsed, GltfDocument.MaximumMetadataBytes, token);
+                return JsonObject.Create(parsed);
             }
             catch (JsonException) { return null; }
         }
@@ -1231,10 +1237,16 @@ public static class SourceObjectEdits
     private static IEnumerable<WorldNode> WithCopies(SourceObjectTarget target, IEnumerable<WorldNode> nodes)
     {
         var list = nodes.ToList();
-        HashSet<(string, int)> parts = [.. list.Select(n => target.Provenance.TryGetValue(n, out var p) && p.Part && p.ModelFile != null ? (p.ModelFile.ToLowerInvariant(), p.ModelNode) : default)
-            .Where(k => k.Item1 != null)];
+        Dictionary<string, HashSet<int>> parts = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in list)
+            if (target.Provenance.TryGetValue(node, out var origin) && origin.Part && origin.ModelFile is { } file)
+            {
+                if (!parts.TryGetValue(file, out var indices)) parts.Add(file, indices = []);
+                indices.Add(origin.ModelNode);
+            }
         if (parts.Count == 0) return list;
-        return list.Concat(target.Provenance.Where(kv => kv.Value.Part && kv.Value.ModelFile != null && parts.Contains((kv.Value.ModelFile.ToLowerInvariant(), kv.Value.ModelNode))).Select(kv => kv.Key))
+        return list.Concat(target.Provenance.Where(kv => kv.Value.Part && kv.Value.ModelFile != null
+            && parts.TryGetValue(kv.Value.ModelFile, out var indices) && indices.Contains(kv.Value.ModelNode)).Select(kv => kv.Key))
             .Distinct(ReferenceEqualityComparer.Instance).Cast<WorldNode>();
     }
     private static IEnumerable<WorldNode> Ancestors(WorldNode node)

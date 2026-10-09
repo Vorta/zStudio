@@ -272,33 +272,54 @@ public static partial class SourceBuilder
         /// </summary>
         internal (int Width, int Height, TextureTransparency Transparency)? Texture(string relative) => textures.TryGetValue(relative, out var found) ? found : null;
         internal void Remember(string relative, int width, int height, TextureTransparency transparency) => textures[relative] = (width, height, transparency);
-        private HashSet<string>? damageMasks;
-        /// <summary>Textures the scripts register as damage-mark masks (WriteTextureSetMap), read once per run.</summary>
-        internal HashSet<string> DamageMasks(CancellationToken token, long maximumSourceBytes = 64L * 1024 * 1024,
+        private readonly Dictionary<string, HashSet<string>> damageMasks = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, IReadOnlyList<IReadOnlyList<string>>> damageScripts = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ScriptTraceBudget damageWork = new();
+        private long damageSourceBytes, damageTokens, damageLines;
+        /// <summary>Executed damage-mask registrations for one mission; source and execution allowances are shared by the export.</summary>
+        internal HashSet<string> DamageMasks(string mission, CancellationToken token, long maximumSourceBytes = 64L * 1024 * 1024,
             long maximumTokens = GameGenScriptText.MaximumTokens, long maximumLines = GameGenScriptText.MaximumLines)
         {
             token.ThrowIfCancellationRequested();
-            if (damageMasks != null) return damageMasks;
+            if (damageMasks.TryGetValue(mission, out var known)) return known;
             HashSet<string> masks = new(StringComparer.OrdinalIgnoreCase);
-            long remaining = maximumSourceBytes, tokens = maximumTokens, lines = maximumLines;
-            foreach (string script in SourceProject.Files(root, SourceProject.GameGenFolder, n => n.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || n.EndsWith(".gw", StringComparison.OrdinalIgnoreCase), Added, token, Inventory))
+            // Build and runtime load scripts are separate interpreter entries, with independent macro state.
+            // Each follows only its executed sources, including registrations after GameZWriteZBDFile.
+            foreach (string entry in new[] { WorldScript(mission), WorldLookups.LoadScript(mission) })
             {
-                byte[] bytes = Read(script, token, ProjectReadLimits.Text(remaining));
-                remaining -= bytes.LongLength;
-                string text = GameGenScriptText.Decode(bytes, token);
-                lines -= SourceTextScan.Count(text, '\n', text.Length, token) + (text.Length == 0 || text[^1] != '\n' ? 1 : 0);
-                if (lines < 0 || (tokens -= GameGenScriptText.CountTokens(text, token)) < 0)
-                    throw new InvalidDataException("Damage-mask discovery exceeds its aggregate script line or token allowance. Reduce the scripts before retrying.");
-                foreach (var line in GameGenScriptText.TokenizeCancellable(text, token))
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (line.Count > 1 && ScriptCommands.Core(line[0]) == "WriteTextureSetMap") masks.Add(Path.GetFileNameWithoutExtension(line[^1]));
-                }
+                if (Exists(entry)) ScriptTrace.Visit(Script, entry[(SourceProject.GameGenFolder.Length + 1)..], Executed,
+                    token, stopAtWorldWrite: false, budget: damageWork);
             }
             token.ThrowIfCancellationRequested();
-            damageMasks = masks;
-            token.ThrowIfCancellationRequested();
+            damageMasks.Add(mission, masks);
             return masks;
+
+            IReadOnlyList<IReadOnlyList<string>> Script(string name)
+            {
+                damageWork.Operands.Inspect(name, token, 2);
+                string script = SourceProject.GameGenFolder + "/" + name.Replace('\\', '/');
+                if (damageScripts.TryGetValue(script, out var cached)) return cached;
+                // A missing executed source is not an empty mask set. Read retains the snapshot's dependency checks.
+                if (damageSourceBytes > maximumSourceBytes)
+                    throw new InvalidDataException("Damage-mask discovery exceeds its aggregate script byte allowance. Reduce the scripts before retrying.");
+                byte[] bytes = Read(script, token, ProjectReadLimits.Text(maximumSourceBytes - damageSourceBytes));
+                string text = GameGenScriptText.Decode(bytes, token);
+                long lines = SourceTextScan.Count(text, '\n', text.Length, token) + (text.Length == 0 || text[^1] != '\n' ? 1 : 0);
+                long tokens = GameGenScriptText.CountTokens(text, token);
+                if (lines > maximumLines - damageLines || tokens > maximumTokens - damageTokens)
+                    throw new InvalidDataException("Damage-mask discovery exceeds its aggregate script line or token allowance. Reduce the scripts before retrying.");
+                var parsed = GameGenScriptText.TokenizeCancellable(text, token);
+                damageSourceBytes += bytes.LongLength; damageLines += lines; damageTokens += tokens;
+                damageScripts.Add(script, parsed);
+                return parsed;
+            }
+            void Executed(TracedInstruction instruction)
+            {
+                if (instruction.Command != "WriteTextureSetMap" || instruction.Args.Count == 0) return;
+                string operand = instruction.Args[^1];
+                damageWork.Operands.Inspect(operand, token, 3); // Normalize, extract the basename and hash before retaining it.
+                masks.Add(Path.GetFileNameWithoutExtension(operand.Replace('\\', '/')));
+            }
         }
         /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>
         internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<WorldNode> LoadedRoots)
@@ -928,11 +949,12 @@ public static partial class SourceBuilder
         List<PackSource> textures = [];
         var (inputs, addressing, warnings) = PackInputs(plan, snapshot, token);
         CheckCount(plan.Path, inputs.Count);
+        var masks = snapshot.DamageMasks(plan.Path.Split('/')[0], token);
         foreach (var (input, name) in inputs)
         {
             string folder = Path.GetDirectoryName(input)!.Replace('\\', '/');
             bool vehicle = folder.EndsWith("/bft", StringComparison.OrdinalIgnoreCase) || folder.Equals(TextureSources.MultiBftTextures, StringComparison.OrdinalIgnoreCase);
-            textures.Add(Source(input, name, addressing.GetValueOrDefault(name), vehicle || snapshot.DamageMasks(token).Contains(name), snapshot, token));
+            textures.Add(Source(input, name, addressing.GetValueOrDefault(name), vehicle || masks.Contains(name), snapshot, token));
         }
         var built = TexturePackBuilder.BuildFromSources(textures, variant, token);
         // The automatic pack was named from its folders' PNG headers. Counted as every pack's budget is, its textures (with

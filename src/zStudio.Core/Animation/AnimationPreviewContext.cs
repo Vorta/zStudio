@@ -106,6 +106,11 @@ public sealed partial class AnimationPreviewContext
     }
     /// <param name="exactMission">An explicitly requested MW3 reader; loading fails rather than falling back when it is unavailable.</param>
     public static async Task<AnimationPreviewContext> LoadAsync(AnimationPackage package, string animationPath, AssetResolver resolver, string? worldPath = null, CancellationToken token = default, MissionDifficulty difficulty = MissionDifficulty.Medium, string? exactMission = null)
+        => await LoadWithResourcesAsync(package, animationPath, resolver, new PreviewResourceBudget(), worldPath, token, difficulty, exactMission).ConfigureAwait(false);
+
+    internal static async Task<AnimationPreviewContext> LoadWithResourcesAsync(AnimationPackage package, string animationPath, AssetResolver resolver,
+        PreviewResourceBudget resources, string? worldPath = null, CancellationToken token = default,
+        MissionDifficulty difficulty = MissionDifficulty.Medium, string? exactMission = null)
     {
         var frozen = new AnimationPackage { Prefix = package.Prefix, Tail = package.Tail };
         frozen.Entries.AddRange(package.Entries.Select(e => e.Clone())); frozen.Diagnostics.AddRange(package.Diagnostics); package = frozen;
@@ -120,23 +125,25 @@ public sealed partial class AnimationPreviewContext
             return probe.Family == FormatFamily.GameZ && Matches(probe.Version);
         });
         if (worldPath == null) throw new InvalidDataException("Select the matching mission GameZ file to bind this animation.");
-        var world = await resolver.OpenCachedAsync(worldPath, token).ConfigureAwait(false);
+        var world = await resources.OpenAsync(worldPath, resolver, token).ConfigureAwait(false);
         if (world.Scene == null) throw new InvalidDataException("The selected file has no GameZ scene.");
         if (!Matches(world.Probe.Version))
             throw new InvalidDataException("The animation and world formats belong to different games. Choose the matching world.");
         var context = new AnimationPreviewContext { Package = package, World = world };
-        context.Mission = await MissionSceneLoader.LoadAsync(world, resolver, package, token, difficulty, exactMission, exactMission != null).ConfigureAwait(false);
+        context.Mission = await MissionSceneLoader.LoadWithResourcesAsync(world, resolver, resources, package, token, difficulty, exactMission, exactMission != null).ConfigureAwait(false);
         context.Diagnostics.AddRange(context.Mission.Diagnostics);
         // The loaded mission is exact here: another reader must not silently supply its resources.
-        var files = world.Game == GameVariant.MechWarrior3 ? (await MissionSceneLoader.Mw3ResourcesAsync(world.Path, resolver, context.Mission.Layout.MissionArchive, true, token).ConfigureAwait(false)).Files :
+        var files = world.Game == GameVariant.MechWarrior3 ? (await MissionSceneLoader.Mw3ResourcesAsync(world.Path, resolver, context.Mission.Layout.MissionArchive, true, token, resources).ConfigureAwait(false)).Files :
             MissionSceneLoader.ResourceFiles(world.Path, resolver, token, inventory, sort: false);
         List<(string Name, string File, bool Loop)> aliases = []; List<ZbdDocument> soundArchives = [];
+        HashSet<ZrdNode> soundTrees = new(ReferenceEqualityComparer.Instance), effectTrees = new(ReferenceEqualityComparer.Instance);
+        Dictionary<string, int>? effectNames = null;
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested(); if (FormatRegistry.Probe(file).Family != FormatFamily.Archive) continue;
             ZbdDocument archive;
-            try { archive = await resolver.OpenCachedAsync(file, token).ConfigureAwait(false); }
-            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+            try { archive = await resources.OpenAsync(file, resolver, token).ConfigureAwait(false); }
+            catch (Exception ex) when (!resources.Exhausted && (ex is InvalidDataException or IOException or UnauthorizedAccessException))
             { context.Diagnostics.Add($"Animation resources {Path.GetFileName(file)}: {ex.Message}"); continue; }
             if (archive.Assets.Any(a => a.Kind == AssetKind.Sound)) soundArchives.Add(archive);
             foreach (var asset in archive.Assets.Where(a => a.Kind == AssetKind.Zrd && (a.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase) || a.Name.Equals("sounds.zrd", StringComparison.OrdinalIgnoreCase))))
@@ -144,7 +151,11 @@ public sealed partial class AnimationPreviewContext
                 bool effects = asset.Name.Equals("effects.zrd", StringComparison.OrdinalIgnoreCase);
                 if (effects && world.Game == GameVariant.MechWarrior3) continue;
                 var tree = asset.Content as ZrdNode ?? ZrdDecoder.Read(archive.Slice(asset.Offset, asset.Length), token);
-                if (effects) context.ReadEffects(tree, token);
+                // Exact payload aliases repeat the same definitions. Interpret once per role; do not dedup
+                // alias names, because a missing WAV must still permit a later successful alias of that name.
+                if (!(effects ? effectTrees : soundTrees).Add(tree)) continue;
+                resources.Interpret(tree, token);
+                if (effects) context.ReadEffects(tree, token, ref effectNames, resources);
                 else aliases.AddRange(ReadSoundAliases(tree, token));
             }
         }
@@ -152,7 +163,8 @@ public sealed partial class AnimationPreviewContext
         Dictionary<string, (ReadOnlyMemory<byte> Bytes, long Quality)> waves = new(StringComparer.OrdinalIgnoreCase);
         foreach (var archive in soundArchives) foreach (var asset in archive.Assets.Where(a => a.Kind == AssetKind.Sound))
         {
-            token.ThrowIfCancellationRequested(); var bytes = archive.Slice(asset.Offset, asset.Length);
+            resources.Member(asset.Length, token); // Includes aliased WAVs with expensive cue/chunk tables.
+            var bytes = archive.Slice(asset.Offset, asset.Length);
             try
             {
                 var info = WaveDecoder.Read(bytes); long quality = (long)info.SampleRate * info.BitsPerSample * info.Channels;
@@ -164,13 +176,23 @@ public sealed partial class AnimationPreviewContext
         foreach (var alias in aliases)
         {
             if (context.Sounds.ContainsKey(alias.Name)) continue;
-            if (waves.TryGetValue(alias.File, out var wave)) context.Sounds[alias.Name] = new(alias.Name, alias.File, alias.Loop, wave.Bytes);
+            if (waves.TryGetValue(alias.File, out var wave))
+            {
+                resources.Member(wave.Bytes.Length, token); // AnimationSound validates duration for each constructed alias.
+                context.Sounds[alias.Name] = new(alias.Name, alias.File, alias.Loop, wave.Bytes);
+            }
         }
-        foreach (var (name, wave) in waves) context.Sounds.TryAdd(Path.GetFileNameWithoutExtension(name), new(name, name, false, wave.Bytes));
+        foreach (var (name, wave) in waves)
+        {
+            string key = Path.GetFileNameWithoutExtension(name);
+            if (context.Sounds.ContainsKey(key)) continue;
+            resources.Member(wave.Bytes.Length, token);
+            context.Sounds.Add(key, new(name, name, false, wave.Bytes));
+        }
         context.BindMaterialCycles();
         if (world.Game != GameVariant.MechWarrior3)
         {
-            await context.LoadScriptCyclesAsync(files, resolver, token).ConfigureAwait(false);
+            await context.LoadScriptCyclesAsync(files, resolver, resources, token).ConfigureAwait(false);
             context.BindEffectCycles(token);
         }
         return context;
@@ -181,6 +203,10 @@ public sealed partial class AnimationPreviewContext
     internal void ReadEffects(ZrdNode tree, CancellationToken token)
     {
         Dictionary<string, int>? named = null;
+        ReadEffects(tree, token, ref named, null);
+    }
+    private void ReadEffects(ZrdNode tree, CancellationToken token, ref Dictionary<string, int>? named, PreviewResourceBudget? resources)
+    {
         foreach (var array in Arrays(tree))
         {
             token.ThrowIfCancellationRequested();
@@ -193,7 +219,19 @@ public sealed partial class AnimationPreviewContext
             string[] textures = maps.Select(Text).Where(s => s.Length > 0).ToArray();
             float speed = float.TryParse(Text(Value(array, "SPEED")), NumberStyles.Float, CultureInfo.InvariantCulture, out float f) && float.IsFinite(f) ? f : 15;
             // zeff_init FindByTypeAndName: highest live slot, shared by every effect lookup.
-            named ??= World.Scene!.Nodes.Where(n => n.Class != "none").GroupBy(n => n.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Last().Index, StringComparer.Ordinal);
+            if (named == null)
+            {
+                // One original-world index across this load's distinct effects resources. Mission clones
+                // must not alter highest-live-slot binding; mutable direct callers build a fresh index.
+                named = new(StringComparer.Ordinal);
+                foreach (var node in World.Scene!.Nodes)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (node.Class == "none") continue;
+                    resources?.LookupEntry(node.Name, token);
+                    named[node.Name] = node.Index;
+                }
+            }
             Effects.Add(name, new(name, model, named.GetValueOrDefault(model, -1), textures, speed, Text(Value(array, "LOOPING")) == "ON"));
             effectMaps += textures.Length;
         }

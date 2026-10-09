@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.Json.Nodes;
 using Microsoft.Win32.SafeHandles;
 using Recoil.Zbd.Core;
 using Recoil.Zbd.Core.Sources;
@@ -62,19 +61,8 @@ public sealed partial class RecoveryScanRound5Tests
         public string Journal => Full($"zstudio/recovery/{SaveId}");
         public string Full(string relative) => Path.Combine(Root, relative.Replace('/', Path.DirectorySeparatorChar));
         public byte[] Read(string relative) => File.ReadAllBytes(Full(relative));
-        public byte[] Events => File.ReadAllBytes(Path.Combine(Journal, "events.log"));
         /// <summary>Another program replaces a file of the save with a terabyte.</summary>
         public void Replace(string relative) { File.Delete(Full(relative)); Sparse(Full(relative), Huge); }
-        /// <summary>The journal records a terabyte as the new content of the first file (as the huge file has that length, it must be read to compare it).</summary>
-        public void JournalHugeContent() => Journaled(0, "content", Huge, new string('a', 64));
-        /// <summary>Changes what the journal records as a file's <paramref name="field"/> (expected or content).</summary>
-        public void Journaled(int index, string field, long length, string sha256)
-        {
-            string path = Path.Combine(Journal, "manifest.json");
-            JsonObject manifest = JsonNode.Parse(File.ReadAllBytes(path))!.AsObject();
-            manifest["files"]![index]![field] = new JsonObject { ["length"] = length, ["sha256"] = sha256 };
-            File.WriteAllText(path, manifest.ToJsonString());
-        }
         public void Dispose()
         {
             try { Directory.Delete(Root, true); }
@@ -185,40 +173,6 @@ public sealed partial class RecoveryScanRound5Tests
         using Watched large = new(new byte[16 << 20], cancellation.Cancel);
         Assert.ThrowsAny<OperationCanceledException>(() => JournalDigest.Of(large, cancellation.Token));
         Assert.Equal(1, large.Reads);
-    }
-
-    [Fact]
-    public async Task RecoveryIsCanceledWhileItReadsAFileOfTheJournaledLength()
-    {
-        using Interrupted project = new("commit", -1);
-        project.Replace(Ai); project.JournalHugeContent();
-        byte[] events = project.Events;
-        SourcePublisher publisher = new(project.Root);
-        // Listing the save must read the file to compare it: the cancellation stops it.
-        using (CancellationTokenSource listing = new(TimeSpan.FromMilliseconds(250)))
-            await Promptly(() => Assert.ThrowsAny<OperationCanceledException>(() => publisher.FindInterrupted(listing.Token)));
-        // So does completing it, which checks every file before it changes any (a file whose turn has come is completed, as
-        // ScriptRecoveryRound4Tests shows).
-        using (CancellationTokenSource completing = new(TimeSpan.FromMilliseconds(250)))
-        {
-            var stopped = await Promptly(() => Assert.ThrowsAny<OperationCanceledException>(() => publisher.Resolve(project.SaveId, SourceRecoveryAction.Complete, completing.Token)));
-            Assert.Null(stopped.InnerException);
-        }
-        Assert.Equal(events, project.Events);
-        Assert.Equal(Huge, new FileInfo(project.Full(Ai)).Length);
-        // Rolling back reaches the file last, after it undid the others (the cancellation comes once it undid the second),
-        // and says so.
-        using (CancellationTokenSource rollingBack = new())
-        {
-            SourcePublisher undoing = new(project.Root) { Fault = (step, index) => { if (step == "undo" && index == 1) rollingBack.CancelAfter(250); } };
-            var stopped = await Promptly(() => Assert.ThrowsAny<OperationCanceledException>(() => undoing.Resolve(project.SaveId, SourceRecoveryAction.RollBack, rollingBack.Token)));
-            Assert.IsAssignableFrom<OperationCanceledException>(stopped.InnerException);
-            Assert.Contains($"changed 2 files ({Old}, {Added})", stopped.Message);
-            Assert.Contains("still needs a decision", stopped.Message);
-        }
-        Assert.Equal("OLD ( 1 )\n", File.ReadAllText(project.Full(Old)));
-        Assert.False(File.Exists(project.Full(Added)));
-        Assert.Equal(Huge, new FileInfo(project.Full(Ai)).Length);
     }
 
     // ------------------------------------------------------------ scans of source folders

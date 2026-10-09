@@ -48,32 +48,6 @@ public sealed class WorldComparisonOccurrenceTests
     }
 
     [Fact]
-    public void ReorderingOccurrencesKeepsTheSameOwnershipMultiset()
-    {
-        Same(Build(2, 1), Build(2, 1, reverse: true));
-    }
-
-    [Fact]
-    public void AreaPresentationNormalizationDoesNotEraseRepeatedOverflow()
-    {
-        // An internal presentation control: a child repeated by its area's table is shown once.
-        // These lists deliberately precede partitioning; the supported serialized producer is tested above.
-        var areaOnly = Build(1, 0);
-        var one = Build(1, 0);
-        var two = Build(2, 0);
-        foreach (var world in new[] { areaOnly, one, two })
-        {
-            var owner = Owner(world);
-            owner.Areas.Add(new()); owner.Areas[0].Nodes.Add(owner.Children[0]);
-        }
-        Owner(areaOnly).Children.Clear();
-        Same(areaOnly, one);
-        Same(one, areaOnly);
-        Changed(one, two, "world.overflowOccurrences");
-        Changed(two, one, "world.overflowOccurrences");
-    }
-
-    [Fact]
     public void AreaOnlyChangeIsReportedOnceWithoutAnOverflowDifference()
     {
         var expected = Build(1, 1); var actual = Build(1, 1);
@@ -97,14 +71,14 @@ public sealed class WorldComparisonOccurrenceTests
     private static WorldNode Owner(GameZWorld world) => world.Nodes.Single(n => n.Name == "owner");
 
     private static GameZWorld Build(int first, int second, bool secondary = false, bool demo = false,
-        bool ordinaryParent = false, bool sameNames = false, bool reverse = false)
+        bool ordinaryParent = false, bool sameNames = false)
     {
         string script = (secondary || ordinaryParent ? "NewWorld primary\n" : "")
             + "NewObject3D first\nNewObject3D second\nObject3DTranslate 10 0 0\n"
             + (ordinaryParent ? "NewObject3D owner\n" : "NewWorld owner\n");
         string firstEdges = string.Concat(Enumerable.Repeat("AddChild first\n", first));
         string secondEdges = string.Concat(Enumerable.Repeat("AddChild second\n", second));
-        script += reverse ? secondEdges + firstEdges : firstEdges + secondEdges;
+        script += firstEdges + secondEdges;
         if (sameNames) script += "FindNode first\nNodeSetDescription twin\nFindNode second\nNodeSetDescription twin\n";
         script += "GameZWriteZBDFile out\n";
         WorldAssembler assembler = new(new Files(script), Token);

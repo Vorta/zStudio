@@ -48,13 +48,13 @@ public sealed class WorldComparisonRootFieldsTests
     }
 
     [Fact]
-    public void RootRuntimePointersAndDuplicateAreaMembershipStayNormalized()
+    public void RootRuntimePointersDoNotChangeEqualMembership()
     {
         GameZWorld before = new(), after = new();
         WorldNode a = new("world", WorldNodeClass.World), b = new("world", WorldNodeClass.World);
         WorldNode ac = new("child", WorldNodeClass.Object3D), bc = new("child", WorldNodeClass.Object3D);
         before.Nodes.AddRange([a, ac]); after.Nodes.AddRange([b, bc]);
-        a.Children.Add(ac); ac.Parents.Add(a); bc.Parents.Add(b);
+        a.Children.Add(ac); b.Children.Add(bc); ac.Parents.Add(a); bc.Parents.Add(b);
         a.Areas.Add(new()); a.Areas[0].Nodes.Add(ac);
         b.Areas.Add(new()); b.Areas[0].Nodes.Add(bc);
         b.SetPayloadInt(4, 1234);

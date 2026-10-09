@@ -123,8 +123,8 @@ internal sealed class WorldCompareView
         var node = row.Source; var a = node.Expected; var b = node.Actual;
         List<WorldCompareDetail> details = [];
         HashSet<string> fields = [.. node.Differences.Select(d => d.Field)];
-        // A property differs as the comparison found it: by its fields, not by how the values read. Slots and the order of
-        // parents and children are shown but never differences in themselves.
+        // Highlights follow the compared fields. Slot numbers are display-only; parent names are compared
+        // without ordering, while child encounter order is part of the semantic comparison.
         void Add(string field, string? retail, string? rebuilt, params string[] differenceFields) =>
             details.Add(new(field, retail ?? "—", rebuilt ?? "—", a != null && b != null && differenceFields.Any(fields.Contains)));
         Add("Slot", RetailSlot(node)?.ToString(CultureInfo.InvariantCulture), RebuiltSlot(node)?.ToString(CultureInfo.InvariantCulture));

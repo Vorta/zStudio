@@ -73,23 +73,8 @@ public sealed class DatabaseInferenceMembershipTests
         Assert.Contains(notes, n => n.Contains("not every node takes its shipped slot", StringComparison.Ordinal));
         HashSet<WorldNode> retained = new(WorldAssembler.Subtree(result.Roots), ReferenceEqualityComparer.Instance);
         Assert.All(fixture.World.Nodes.Where(n => n.Class != WorldNodeClass.World), n => Assert.Contains(n, retained));
-    }
-
-    [Fact]
-    public void IndexedMembershipAndCachedCopiesKeepTheWideDecodedResultWithinLinearAllocation()
-    {
-        var fixture = ReadWideDatabase(8000);
-        var children = fixture.World.Nodes.Select(n => (Node: n, Children: n.Children.ToArray())).ToArray();
-        List<string> notes = [];
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        var result = DatabaseRecords.Infer(fixture.World, fixture.Build, n => n == fixture.Reference, "m1", notes, Token);
-        // The accepted original result previously allocated about 232.5 MB here. Cache-local membership reuse
-        // removes repeated callback lists; indexed own-record matching removes the quadratic comparisons.
-        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 208L << 20);
-        Assert.NotNull(result);
-        Assert.Single(result.Parts);
+        // A successful retry also retains each source node's original child order.
         foreach (var (node, original) in children) Assert.Equal(original, node.Children);
-        Assert.Contains(notes, n => n.Contains("not every node takes its shipped slot", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -39,6 +39,68 @@ public sealed class TerrainProbeTieTests
         var unchanged = TerrainProbe.Compare(Slots(before), Slots(before).Reverse().ToArray(), 2, Token, Root(before));
         Assert.True(unchanged.Complete);
         Assert.Equal(0, unchanged.Mismatches);
+
+        // The shared GUI/MCP world comparison must also retain that semantic order, rather than only matching members.
+        AssertOrderChanged(before, after, "world.overflowOrder");
+        var slotsOnly = Read(false);
+        slotsOnly.Nodes.Reverse(1, slotsOnly.Nodes.Count - 1);
+        slotsOnly = Reread(slotsOnly);
+        Assert.Equal(0, WorldComparer.CompareTree(before, slotsOnly, token: Token).DifferenceCount);
+        Assert.True(WorldComparer.Interchangeable(Root(before), Root(slotsOnly), token: Token));
+
+        // The same two reader-backed surfaces can be encountered through a cell or a subtree, not just overflow.
+        foreach (bool cell in new[] { true, false })
+        {
+            var first = Arrange(Read(false), cell); var reversed = Arrange(Read(true), cell);
+            AssertOrderChanged(first, reversed, cell ? "world.area0" : "children");
+        }
+
+        // A cell can keep the same node in the merged tree after its overflow visit is removed. Outside that cell,
+        // only the overflow edge reaches the part of the quad extending beyond the grid.
+        var withOverflow = Overflow(true); var cellOnly = Overflow(false);
+        Assert.Single(ZoneProbe.Probe(Root(withOverflow), 12, 1, ZoneSet.Cleared, token: Token).Hits);
+        Assert.Empty(ZoneProbe.Probe(Root(cellOnly), 12, 1, ZoneSet.Cleared, token: Token).Hits);
+        Assert.Contains(WorldComparer.CompareTree(withOverflow, cellOnly, token: Token).Differences, d => d.Field == "world.overflowOccurrences");
+        Assert.Contains(WorldComparer.CompareTree(cellOnly, withOverflow, token: Token).Differences, d => d.Field == "world.overflowOccurrences");
+
+        static GameZWorld Overflow(bool include)
+        {
+            var world = Arrange(Read(false), true); var root = Root(world); var node = root.Areas[0].Nodes[0];
+            var model = node.Model!;
+            for (int i = 0; i < model.Vertices.Count; i++)
+            { var p = model.Vertices[i]; model.Vertices[i] = new(p.X * 2, p.Y, p.Z); }
+            node.CachedBounds = new(new(0, 0, 0), new(16, 0, 8));
+            if (include) root.Children.Add(node);
+            return Reread(world);
+        }
+
+        static GameZWorld Arrange(GameZWorld world, bool cell)
+        {
+            var root = Root(world); var children = root.Children.ToArray(); root.Children.Clear();
+            if (cell)
+            {
+                root.SetPayloadFloat(0x38, 8); root.SetPayloadFloat(0x3C, 8); root.SetPayloadFloat(0x40, -8); root.SetPayloadFloat(0x44, 8);
+                WorldUpdate.SetPartition(root, 8, -8);
+                root.Areas[0].Nodes.AddRange(children);
+                foreach (var child in children) { child.GridColumn = 0; child.GridRow = 0; }
+            }
+            else
+            {
+                WorldNode group = new("group", WorldNodeClass.Object3D) { Flags = 0x11C, CachedBounds = children[0].CachedBounds };
+                group.SetPayloadInt(0, 0x28); group.Parents.Add(root); root.Children.Add(group); world.Nodes.Add(group);
+                foreach (var child in children) { child.Parents.Clear(); child.Parents.Add(group); group.Children.Add(child); }
+            }
+            return Reread(world);
+        }
+        static void AssertOrderChanged(GameZWorld first, GameZWorld reversed, string field)
+        {
+            Assert.Equal(3u, Selected(Root(first)).Node.Zone);
+            Assert.Equal(4u, Selected(Root(reversed)).Node.Zone);
+            var comparison = WorldComparer.CompareTree(first, reversed, token: Token);
+            Assert.Contains(comparison.Differences, d => d.Field == field);
+            // Semantic-copy grouping must not erase the same change when two roots share names and geometry.
+            Assert.False(WorldComparer.Interchangeable(Root(first), Root(reversed), token: Token));
+        }
     }
 
     [Theory]
@@ -160,6 +222,11 @@ public sealed class TerrainProbeTieTests
             var node = world.Nodes[cell + 1]; root.Children.Remove(node); root.Areas[0].Nodes.Add(node);
             node.GridColumn = 0; node.GridRow = 0;
         }
+        return Reread(world);
+    }
+
+    private static GameZWorld Reread(GameZWorld world)
+    {
         var document = FormatRegistry.Default.OpenBytes("terrain.zbd", GameZWriter.Write(world, Token), token: Token);
         Assert.Empty(document.Diagnostics);
         return GameZWorldReader.FromDocument(document, Token);

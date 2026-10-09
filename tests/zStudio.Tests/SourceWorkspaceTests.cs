@@ -139,6 +139,29 @@ public sealed class SourceWorkspaceTests : IDisposable
         Write("gamegen/m1.gs", "external newer script\n");
         Assert.Throws<SourceFileChangedException>(() => edit.Workspace.Apply("Edit", [("gamegen/m1.gs", Bytes("Quit\n"))], Token));
         Assert.False(w.IsDirty); Assert.Empty(w.History);
+
+        // A multi-file replacement must admit its old content before retaining it, atomically even
+        // without a prepared fork. Tiny limits cover the former multi-GiB old-buffer failure.
+        const string a = "data/m1/a.bin", b = "data/m1/b.bin", c = "data/m1/c.bin";
+        foreach (string path in new[] { a, b, c }) Write(path, new string('x', 32));
+        SourceWorkspace bounded = new(root, null, 70);
+        byte[] replacement = [1, 2, 3, 4];
+        Assert.Throws<InvalidDataException>(() => bounded.Apply("Too many old files", [(a, replacement), (b, replacement), (c, replacement)], Token));
+        Assert.Empty(bounded.History); Assert.False(bounded.IsDirty); Assert.Equal(0, bounded.Revision);
+        Write(a, new string('y', 32));
+        Assert.Empty(bounded.ExternalChanges(Token)); // Failed Apply did not publish its partial baselines.
+        var retry = bounded.BeginPreparedEdit();
+        retry.Workspace.Apply("Two files", [(a, replacement), (b, replacement)], Token);
+        Assert.Empty(bounded.History);
+        bounded.AcceptPreparedEdit(retry, Token);
+        // 64 before bytes + one shared 4-byte replacement, counted once across paths/history/fork.
+        Assert.Same(bounded.Read(a, Token), bounded.Read(b, Token));
+        var next = bounded.BeginPreparedEdit();
+        Assert.Throws<InvalidDataException>(() => next.Workspace.Apply("More retained content", [(a, new byte[4])], Token));
+        Assert.Single(bounded.History); Assert.Same(replacement, bounded.Read(a, Token));
+        bounded.Undo();
+        Assert.Equal(new string('y', 32), Text(bounded.Read(a, Token)));
+        Assert.Equal(new string('x', 32), Text(bounded.Read(b, Token)));
     }
 
     [Fact]

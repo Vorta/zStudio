@@ -88,15 +88,19 @@ public sealed class ProjectInputAdmissionTests
     public void DamageMaskDiscoverySharesInputAndParserAllowancesAcrossScripts(string limit)
     {
         using SourceWorldFixture fixture = new();
-        fixture.Write("gamegen/m1.gs", "# first\nWriteTextureSetMap first.tif\n");
-        fixture.Write("gamegen/m2.gs", "# second\nWriteTextureSetMap second.tif\n");
+        fixture.Write("gamegen/m1.gs", "# first\nWriteTextureSetMap first.tif\nsource support/masks.gw\n");
+        fixture.Write("gamegen/support/masks.gw", "# second\nWriteTextureSetMap second.tif\n");
+        fixture.Write("gamegen/m2.gs", "WriteTextureSetMap other.tif\n");
         SourceBuilder.Snapshot snapshot = new(fixture.Project);
-        Assert.Throws<InvalidDataException>(() => snapshot.DamageMasks(Token,
-            maximumSourceBytes: limit == "bytes" ? 50 : 1024,
-            maximumTokens: limit == "tokens" ? 3 : 100,
+        Assert.Throws<InvalidDataException>(() => snapshot.DamageMasks("m1", Token,
+            maximumSourceBytes: limit == "bytes" ? 70 : 1024,
+            maximumTokens: limit == "tokens" ? 5 : 100,
             maximumLines: limit == "lines" ? 3 : 100));
-        Assert.Equal(["first", "second"], snapshot.DamageMasks(Token, 1024, 100, 100).Order(StringComparer.Ordinal));
-        Assert.Equal("# first\nWriteTextureSetMap first.tif\n", File.ReadAllText(fixture.Path("gamegen/m1.gs")));
+        Assert.Equal(["first", "second"], snapshot.DamageMasks("m1", Token, 1024, 100, 100).Order(StringComparer.Ordinal));
+        // A different mission has its own mask identities but shares the already admitted source allowance.
+        Assert.Throws<InvalidDataException>(() => snapshot.DamageMasks("m2", Token, maximumSourceBytes: 100));
+        Assert.Equal(["other"], snapshot.DamageMasks("m2", Token, 1024, 100, 100));
+        Assert.Equal("# first\nWriteTextureSetMap first.tif\nsource support/masks.gw\n", File.ReadAllText(fixture.Path("gamegen/m1.gs")));
     }
 
     [Fact]

@@ -46,7 +46,7 @@ public sealed class ImportRound19Tests
     }
 
     [Fact]
-    public void AreaMembershipRetainsMultiplicityButNotListOrder()
+    public void AreaMembershipRetainsMultiplicityAndOrder()
     {
         GameZWorld Make(bool changed)
         {
@@ -54,7 +54,7 @@ public sealed class ImportRound19Tests
             root.Children.AddRange([a,b]); a.Parents.Add(root); b.Parents.Add(root); WorldArea area = new(); area.Nodes.AddRange(changed ? [a,b,b] : [b,a,a]); root.Areas.Add(area); w.Nodes.AddRange([root,a,b]); return w;
         }
         var a = Make(false); var b = Make(false); b.Nodes[0].Areas[0].Nodes.Reverse();
-        Assert.Equal(0,WorldComparer.CompareTree(a,b,token:Token).DifferenceCount);
+        Assert.Equal("world.area0", Assert.Single(WorldComparer.CompareTree(a,b,token:Token).Differences).Field);
         Assert.Contains(WorldComparer.CompareTree(a,Make(true),token:Token).Differences,d=>d.Field=="world.area0");
     }
 

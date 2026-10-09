@@ -6,11 +6,13 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using Recoil.Zbd.Automation;
 using Recoil.Zbd.Core.Sources;
 using Recoil.Zbd.Core.Terrain;
 using Recoil.Zbd.Core.Worlds;
 using Recoil.Zbd.Desktop;
 using Recoil.Zbd.Mcp;
+using Recoil.Zbd.Rendering;
 using Recoil.Zbd.Tests;
 using Xunit;
 
@@ -170,8 +172,48 @@ internal static class SourceTerrainMcpChecks
                 return SourceTerrain.Read(w, path, t);
             };
             await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
-            // Closing the pinned window while another read is held must prevent the late result from reopening it.
+            // Both semantic entry points must leave the pinned editor intact when their request is canceled
+            // after recipe parsing. The tree command is also the GUI scene-row Properties path.
             var reader = main.TerrainRecipeReader;
+            var pinned = main.OpenPropertiesWindow!;
+            var pinnedFields = pinned.SourceFields;
+            long propertiesRevision = workspace.ContentRevision;
+            foreach (string command in new[] { "scene_properties", "scene_tree" })
+            {
+                JsonObject arguments = new() { ["preview"] = preview, ["node"] = piece };
+                if (command == "scene_properties") arguments["open"] = true;
+                else
+                {
+                    var tree = await Call("scene_tree", new() { ["document"] = Id(doc) });
+                    arguments["document"] = Id(doc); arguments["action"] = "properties";
+                    arguments["context"] = tree["context"]!.GetValue<string>();
+                }
+                using var request = CancellationTokenSource.CreateLinkedTokenSource(token);
+                TaskCompletionSource prepared = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var release = new SemaphoreSlim(0);
+                main.TerrainRecipeReader = (w, path, t) =>
+                {
+                    var parsed = reader(w, path, t);
+                    prepared.TrySetResult();
+                    // A parser may return after its last token check; publication still has to reject cancellation.
+                    Assert.True(release.Wait(TimeSpan.FromSeconds(20), token));
+                    return parsed;
+                };
+                var loading = main.Commands.ExecuteAsync("zstudio_" + command, arguments, request.Token);
+                try
+                {
+                    await prepared.Task.WaitAsync(token);
+                    request.Cancel(); release.Release();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => { await loading; });
+                    Assert.Same(pinned, main.OpenPropertiesWindow);
+                    Assert.Same(pinnedFields, pinned.SourceFields);
+                    Assert.Same(doc, pinned.Document);
+                    Assert.Equal(propertiesRevision, workspace.ContentRevision);
+                    Assert.False(doc.Lifetime.IsCancellationRequested);
+                }
+                finally { release.Release(); main.TerrainRecipeReader = reader; }
+            }
+            // Closing the pinned window while another read is held must prevent the late result from reopening it.
             TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
             using (var proceed = new SemaphoreSlim(0))
             {
@@ -182,7 +224,7 @@ internal static class SourceTerrainMcpChecks
                     Assert.True(proceed.Wait(TimeSpan.FromSeconds(20), t));
                     return reader(w, path, t);
                 };
-                var pending = (Task<bool>)typeof(MainWindow).GetMethod("ShowTerrainPropertiesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [doc, Recipe, null, null, null])!;
+                var pending = (Task<bool>)typeof(MainWindow).GetMethod("ShowTerrainPropertiesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [doc, Recipe, null, null, null, CancellationToken.None])!;
                 try
                 {
                     await entered.Task.WaitAsync(token);
@@ -221,11 +263,56 @@ internal static class SourceTerrainMcpChecks
             Assert.False(body.IsEnabled);
             busy.SetValue(main, false); block.Invoke(main, []);
             Assert.True(body.IsEnabled);
+            // Switching between the two explicit brushes must transfer input ownership. An empty zone
+            // draft may retarget to terrain Properties; selected targets still require Apply or Cancel.
+            doc.PickupsLocked = false;
+            var view = (SceneViewport)typeof(MainWindow).GetField("scene", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+            var brush = typeof(MainWindow).GetField("terrainBrush", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var zone = await ZoneAction("begin");
+            string zoneToken = zone["draft"]!["draftToken"]!.GetValue<string>();
+            zone = await ZoneAction("paint", zoneToken);
+            Assert.True(zone["draft"]!["painting"]!.GetValue<bool>());
+            Assert.False(view.TerrainBrushActive);
+            Assert.Throws<InvalidOperationException>(() => view.TerrainBrushActive = true);
+            Assert.True(view.ZonePaintActive); Assert.False(view.TerrainBrushActive);
+            await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
+            fields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
+            var eraseAction = JsonSerializer.SerializeToNode(fields.DescribeAutomationFields())!["actions"]!.AsArray()
+                .Single(x => x!["Label"]!.GetValue<string>() == "Erase in viewport")!["Id"]!.GetValue<string>();
+            await fields.InvokeAutomationActionAsync(eraseAction);
+            Assert.True(view.TerrainBrushActive); Assert.False(view.ZonePaintActive);
+            var stoppedZone = (await Call("source_zones", new() { ["document"] = Id(doc) }))["draft"]!;
+            Assert.Equal(zoneToken, stoppedZone["draftToken"]!.GetValue<string>());
+            Assert.False(stoppedZone["painting"]!.GetValue<bool>());
+            zone = await ZoneAction("paint", zoneToken);
+            Assert.True(view.ZonePaintActive); Assert.False(view.TerrainBrushActive); Assert.Null(brush.GetValue(main));
+            int zoneNode = doc.SourceBuild!.Provenance.Single(p => p.Value.ModelNodeName == "flat_a").Key;
+            zone = await ZoneAction("add", zoneToken, new[] { new { node = zoneNode, polygon = 0 } });
+            var pendingZone = zone["draft"]!.DeepClone();
+            try
+            {
+                var setBrush = typeof(MainWindow).GetMethod("SetTerrainBrush", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var refusal = Assert.Throws<TargetInvocationException>(() => setBrush.Invoke(main, [new TerrainBrushState(Recipe, "road", false, 8)]));
+                Assert.Equal("pending_drafts", Assert.IsType<StudioCommandException>(refusal.InnerException).Code);
+                Assert.True(view.ZonePaintActive); Assert.False(view.TerrainBrushActive); Assert.Null(brush.GetValue(main));
+                Assert.True(JsonNode.DeepEquals(pendingZone, (await Call("source_zones", new() { ["document"] = Id(doc) }))["draft"]));
+            }
+            finally { await ZoneAction("cancel", pendingZone["draftToken"]!.GetValue<string>()); }
+            await Call("scene_properties", new() { ["preview"] = preview, ["node"] = piece, ["open"] = true });
+            fields = Assert.IsType<TerrainPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
+
+            Task<JsonNode> ZoneAction(string action, string? draftToken = null, object? targets = null)
+            {
+                Dictionary<string, object?> args = new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = action };
+                if (draftToken != null) args["draftToken"] = draftToken;
+                if (targets != null) args["targets"] = targets;
+                return Job("source_zone_draft", args);
+            }
             var automation = JsonSerializer.SerializeToNode(fields.DescribeAutomationFields())!;
             string erase = automation["actions"]!.AsArray().Single(x => x!["Label"]!.GetValue<string>() == "Erase in viewport")!["Id"]!.GetValue<string>();
             await fields.InvokeAutomationActionAsync(erase);
-            var brush = typeof(MainWindow).GetField("terrainBrush", BindingFlags.Instance | BindingFlags.NonPublic)!;
             Assert.False(((TerrainBrushState)brush.GetValue(main)!).Add);
+            Assert.True(view.TerrainBrushActive); Assert.False(view.ZonePaintActive);
             var paint = (Task)typeof(MainWindow).GetMethod("PaintStrokeAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(main, [new List<Vector3> { new(240, 0, 250), new(260, 0, 250) }])!;
             await paint;
             var erased = SourceTerrain.Read(workspace, Recipe);
@@ -311,11 +398,20 @@ internal static class SourceTerrainMcpChecks
             var plan = await Job("source_terrain_convert", new() { ["document"] = Id(doc), ["revision"] = doc.Revision });
             Assert.Equal(3, plan["plan"]!["converted"]!.GetValue<int>());
             Assert.Equal(2, plan["plan"]!["keptCount"]!.GetValue<int>());
+            var plannedRecipes = plan["plan"]!["recipes"]!["items"]!.AsArray().Select(p => p!.GetValue<string>()).ToArray();
+            Assert.NotEmpty(plannedRecipes);
+            Assert.Equal(plan["plan"]!["recipe"]!.GetValue<string>(), plannedRecipes[0]);
+            Assert.Equal(plannedRecipes.Length, plan["plan"]!["recipes"]!["total"]!.GetValue<int>());
             var converted = await Job("source_terrain_convert", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["apply"] = true, ["spacing"] = 2 });
             Assert.Equal(0, converted["probe"]!["mismatches"]!.GetValue<int>());
             Assert.True(converted["probe"]!["hits"]!.GetValue<int>() > 500);
             doc = Document(converted["document"]!);
-            Assert.Contains("data/m1/models/m1_terrain.terrain.json", workspace.DirtyFiles);
+            Assert.Equal(Id(doc), converted["recipeListing"]!["document"]!.GetValue<string>());
+            Assert.Equal("zstudio_source_terrain", converted["recipeListing"]!["tool"]!.GetValue<string>());
+            Assert.All(plannedRecipes, recipe => Assert.Contains(recipe, workspace.DirtyFiles));
+            Assert.All(plannedRecipes, recipe => Assert.Contains(doc.SourceBuild!.Provenance.Values, p => p.Terrain == recipe));
+            var recipeInventory = await Call("source_terrain", new() { ["document"] = converted["recipeListing"]!["document"]!.GetValue<string>() });
+            Assert.All(plannedRecipes, recipe => Assert.Contains(recipeInventory["recipes"]!.AsArray(), row => row!["path"]!.GetValue<string>() == recipe));
             doc = Document(await Call("undo_redo", new() { ["document"] = Id(doc), ["revision"] = doc.Revision, ["action"] = "undo" }));
             Assert.False(workspace.IsDirty);
             await Call("close_document", new() { ["document"] = Id(doc), ["revision"] = doc.Revision });

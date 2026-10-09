@@ -522,7 +522,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// <summary>
     /// LoadGameGen file name: an object3d root named <paramref name="name"/> holding the file's scene. After
     /// GameGenSetWorld the next load is the mission database: its objects (its scene roots, or below its groups, also in
-    /// the parts its groups reference) also become world children, in the order they were made, so they survive when the
+    /// the parts its groups reference) also become world children, in source traversal order, so they survive when the
     /// script deletes the root with the groups. OpenFlight names resolve
     /// to .gltf files in the model directories. Nodes take slots in the order the original loader created them (see
     /// <see cref="OriginalLoader"/>).
@@ -583,7 +583,7 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
                 bool part = parts.Contains(file);
                 origin.Database = database && (part || string.Equals(file, documentPath, StringComparison.OrdinalIgnoreCase));
                 origin.Part = database && part;
-                string? uri = ZoneReference(file, zoneNode) ?? ((source.Extras?[WorldGltf.Key] as System.Text.Json.Nodes.JsonObject)?["ref"] is System.Text.Json.Nodes.JsonValue text && text.TryGetValue(out string? value) ? value : null);
+                string? uri = SourceMissionModels.EffectiveReference(source.Extras, ZoneReference(file, zoneNode));
                 if (uri != null) referenceText[node] = uri;
                 if (origin.Database && WorldGltf.IsGroup(source, file)) { groups.Add(node); if (uri != null) parts.Add(Relative(file, uri)); }
             },
@@ -650,10 +650,9 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
         foreach (var node in nodes) { root.Children.Add(node); node.Parents.Add(root); }
         if (pendingWorld != null)
         {
-            // Objects join the world as they were made, also those copied from the database's parts after a later record.
-            Dictionary<WorldNode, int> made = new(ReferenceEqualityComparer.Instance);
-            for (int i = 0; i < World.Nodes.Count; i++) made[World.Nodes[i]] = i;
-            foreach (var member in Members(nodes, new(ReferenceEqualityComparer.Instance)).OrderBy(m => made.GetValueOrDefault(m, int.MaxValue)))
+            // Attachment follows source traversal, not allocation: a delayed part copy allocates its next record
+            // first, but the part's objects still precede that record in the world's encounter order.
+            foreach (var member in Members(nodes, new(ReferenceEqualityComparer.Instance)))
             { member.Parents.Add(pendingWorld); pendingWorld.Children.Add(member); }
         }
         // FindNode and AddChild take the newest node with a name, and the file's own nodes are newer than the root.

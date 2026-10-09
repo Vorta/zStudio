@@ -25,6 +25,12 @@ public sealed partial class SceneViewport
     private CancellationToken animationToken;
     private readonly Dictionary<long, AnimatedMesh[]> animatedMeshes = [];
     private readonly Dictionary<int, IReadOnlyList<MeshPart>> animationGeometry = [];
+    private GeometryReservation? animationGeometryReservation, animationMeshReservation;
+    private long animationGeometryBytes, animationMeshBytes;
+    private readonly Dictionary<int, long> animationGeometryScratch = [];
+    private readonly Dictionary<int, long> animationGeometryCopies = [];
+    private readonly Dictionary<int, int> animationPossibleParts = [];
+    private readonly Dictionary<long, (int Node, int Model, float Morph)> animationPoses = [];
     private readonly Dictionary<string, AnimationTextureSlot> animationTextureSlots = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AnimationTextureSlot> animationTextureReferences = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<IReadOnlyList<string>, Dictionary<string, AnimationTextureSlot?>> animationTextureCycles = new(ReferenceEqualityComparer.Instance);
@@ -40,6 +46,11 @@ public sealed partial class SceneViewport
     private Vector3 levelMin, levelMax;
     private AnimationFrame? animationFrame;
     private bool updatingAnimation, animationEffectLighting = true;
+    // One unit per pose/polygon visit or material-part/light visit. This is
+    // recomputed per submission, not consumed across playback or camera motion.
+    internal long MaximumAnimationLightingWork { get; set; } = 1_000_000;
+    internal long AnimationLightingWork { get; private set; }
+    internal long AnimationLightVisits { get; private set; }
     private SortingGroupModel3D? animationGroup;
     private OITRenderType previousTransparency;
     public int AnimationMeshCount => animatedMeshes.Values.Sum(m => m.Length);
@@ -47,6 +58,8 @@ public sealed partial class SceneViewport
     public async Task ShowAnimationAsync(AnimationPreviewContext context, AnimationFrame frame, AssetResolver resolver, bool includeLevel, CancellationToken token, int lod = 0, bool showHorizon = true, CancellationToken? previewLifetime = null)
     {
         int expectedGeneration = generation + 1;
+        try
+        {
         if (includeLevel)
             await ShowAsync(context.World, context.World.Assets.First(a => a.Kind == AssetKind.World), resolver, null, lod, token, showHorizon, context.Mission);
         else { Clear(); AttachEffects(); QueueRenderSize(); }
@@ -69,20 +82,78 @@ public sealed partial class SceneViewport
         token.ThrowIfCancellationRequested(); if (generation != expectedGeneration) return; UpdateAnimationFrame(frame);
         animationToken = previewLifetime ?? token;
         if (includeLevel) FrameAll(); else FrameAnimation(frame);
+        }
+        catch
+        {
+            if (generation == expectedGeneration) Clear();
+            throw;
+        }
     }
 
     public void UpdateAnimationFrame(AnimationFrame frame, bool followCamera = false, bool effectLighting = true)
     {
         if (animationContext == null || animationToken.IsCancellationRequested || updatingAnimation) return;
+        // Preflight the complete next frame before removing the previous one or
+        // allocating per-pose material/geometry/native objects. Repeated frames
+        // recompute simultaneous retention, rather than spending a lifetime quota.
+        long renderUnits = staticRenderUnits;
+        ReserveRenderUnits(ref renderUnits, frame.Nodes.Count, MaximumRenderUnits);
+        long lightingWork = AdmitAnimationLighting(frame, effectLighting);
+        long nextGeometry = 0, scratch = 0;
+        animationGeometryReservation ??= new(this);
+        animationMeshReservation ??= new(this);
+        foreach (var pose in frame.Nodes)
+        {
+            animationToken.ThrowIfCancellationRequested();
+            if (pose.Model < 0 || pose.Model >= animationContext.Scene.Models.Count) continue;
+            if (!animationGeometry.TryGetValue(pose.Model, out var parts))
+            {
+                var source = animationContext.Scene.Models[pose.Model];
+                long buildBytes = GeometryBuildBytes(source, animationToken, out long copyUpperBound);
+                animationGeometryReservation.Resize(checked(animationGeometryBytes + buildBytes));
+                try
+                {
+                    parts = GeometryBuilder.Build(source, token: animationToken);
+                    int possibleParts = source.Polygons.Where(p => p.Vertices.Length >= 3).Select(p => p.MaterialIndex).Distinct().Count();
+                    animationGeometry.Add(pose.Model, parts);
+                    animationGeometryBytes = checked(animationGeometryBytes + parts.Sum(GeometryPartBytes));
+                    animationGeometryScratch.Add(pose.Model, checked(buildBytes + 12L * source.Vertices.LongLength));
+                    // A degenerate base polygon can become nondegenerate after a
+                    // morph. Admit the source's maximum topology, not only base parts.
+                    animationGeometryCopies.Add(pose.Model, source.Morphs.Length == source.Vertices.Length
+                        ? copyUpperBound : parts.Sum(GeometryCopyBytes));
+                    animationPossibleParts.Add(pose.Model, source.Morphs.Length == source.Vertices.Length ? possibleParts : parts.Count);
+                }
+                finally { animationGeometryReservation.Resize(animationGeometryBytes); }
+            }
+            ReserveRenderUnits(ref renderUnits, 2L * animationPossibleParts[pose.Model], MaximumRenderUnits);
+            // Helix constructors copy every collection. Every pose keeps private
+            // geometry: morphs and per-pose fog/alpha tint must not modify siblings.
+            // Each retained mesh also owns its unclamped pre-fog RGBA. Camera
+            // refresh must not repeat the frame's material-part/light product.
+            long copies = checked(animationGeometryCopies[pose.Model] + 16L * animationPossibleParts[pose.Model]);
+            nextGeometry = checked(nextGeometry + copies);
+            long colors = parts.Select(p => 32L * p.Colors.LongLength).DefaultIfEmpty().Max();
+            var model = animationContext.Scene.Models[pose.Model];
+            long replacement = model.Morphs.Length == model.Vertices.Length
+                ? checked(animationGeometryScratch[pose.Model] + 2 * copies) : colors;
+            scratch = Math.Max(scratch, replacement);
+        }
+        // Expired identities leave before new ones are attached. Existing models
+        // retain the same bounded topology across morph changes. A single reusable
+        // scratch allowance covers old+new geometry during each sequential swap.
+        animationMeshReservation.Resize(checked(Math.Max(animationMeshBytes, nextGeometry) + scratch));
         updatingAnimation = true; animationFrame = frame; animationEffectLighting = effectLighting; ++inspectionSerial;
+        AnimationLightingWork = lightingWork; AnimationLightVisits = 0;
         try
         {
         var scene = animationContext.Scene; var poses = frame.Nodes.ToDictionary(p => p.Id);
         foreach (long expired in animatedMeshes.Where(pair => !poses.TryGetValue(pair.Key, out var pose) ||
-            pair.Value.Any(item => !inspectionMeshes.TryGetValue(item.Mesh, out var meta) || meta.Node != pose.SourceNode || meta.Model != pose.Model)).Select(pair => pair.Key).ToArray())
+            !animationPoses.TryGetValue(pair.Key, out var prior) || prior.Node != pose.SourceNode || prior.Model != pose.Model).Select(pair => pair.Key).ToArray())
         {
-            foreach (var item in animatedMeshes[expired]) { inspectionMeshes.Remove(item.Mesh); animationGroup?.Children.Remove(item.Mesh); item.Mesh.Dispose(); }
+            foreach (var item in animatedMeshes[expired]) { inspectionMeshes.Remove(item.Mesh); inspectionPolygons.Remove(item.Mesh); animationGroup?.Children.Remove(item.Mesh); item.Mesh.Dispose(); }
             animatedMeshes.Remove(expired);
+            animationPoses.Remove(expired);
         }
         // Shared world poses replace their baseline instance. Owned animation
         // copies and effect cards must not erase the source actor behind them.
@@ -98,44 +169,52 @@ public sealed partial class SceneViewport
         sceneMin = levelMin; sceneMax = levelMax;
         foreach (var pose in frame.Nodes)
         {
+            animationToken.ThrowIfCancellationRequested();
             if (pose.Model < 0 || pose.Model >= scene.Models.Count) continue;
-            if (!animatedMeshes.TryGetValue(pose.Id, out var items))
-            {
-                if (!animationGeometry.TryGetValue(pose.Model, out var parts)) animationGeometry[pose.Model] = parts = GeometryBuilder.Build(scene.Models[pose.Model], token: animationToken);
-                items = parts.Select(part =>
-                {
-                    bool horizon = IsHorizon(pose.SourceNode);
-                    var material = PreviewMaterials.Create(horizon, part.Colors.Length != 0); material.EnableUnLit = true;
-                    material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
-                    var mesh = new MeshGeometryModel3D { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, IsThrowingShadow = false, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
-                    RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
-                    inspectionPolygons[mesh] = part.VertexPolygons;
-                    int source = pose.SourceNode; mesh.MouseDown3D += (_, e) =>
-                    {
-                        if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: System.Windows.Input.MouseButtonEventArgs { ChangedButton: System.Windows.Input.MouseButton.Left } })
-                        { SelectFramingNode(source); NodeSelected?.Invoke(source); }
-                    };
-                    animationGroup!.Children.Add(mesh);
-                    return new AnimatedMesh(mesh, material, part);
-                }).ToArray();
-                animatedMeshes[pose.Id] = items;
-            }
-            IReadOnlyList<MeshPart>? morphed = null;
             var model = scene.Models[pose.Model];
-            if (model.Morphs.Length == model.Vertices.Length && items.Any(i => i.Morph != pose.Morph))
-                morphed = GeometryBuilder.Build(model with { Vertices = model.Vertices.Select((v, i) => v + model.Morphs[i] * pose.Morph).ToArray() }, token: animationToken);
+            animatedMeshes.TryGetValue(pose.Id, out var items);
+            bool morphChanged = model.Morphs.Length == model.Vertices.Length &&
+                (!animationPoses.TryGetValue(pose.Id, out var previousPose) || previousPose.Morph != pose.Morph);
+            if (items == null || morphChanged)
+            {
+                // Morphing can create/remove a material part, including a pose with
+                // no currently nondegenerate polygons. Reconcile the complete current
+                // parts, preserving identities of surviving material meshes.
+                var parts = model.Morphs.Length == model.Vertices.Length && pose.Morph != 0
+                    ? GeometryBuilder.Build(model with { Vertices = model.Vertices.Select((v, i) => v + model.Morphs[i] * pose.Morph).ToArray() }, token: animationToken)
+                    : animationGeometry[pose.Model];
+                var remaining = (items ?? []).ToDictionary(item => item.Part.MaterialIndex);
+                List<AnimatedMesh> next = new(parts.Count), created = [];
+                try
+                {
+                    foreach (var part in parts)
+                    {
+                        if (remaining.Remove(part.MaterialIndex, out var item))
+                        {
+                            item.Mesh.Geometry = Mesh(part); item.Part = part; item.VertexTint = null;
+                            inspectionPolygons[item.Mesh] = part.VertexPolygons;
+                        }
+                        else { item = CreateAnimationMesh(pose, part); created.Add(item); }
+                        next.Add(item);
+                    }
+                    items = next.ToArray();
+                }
+                catch
+                {
+                    foreach (var item in created) RemoveAnimationMesh(item);
+                    throw;
+                }
+                foreach (var item in remaining.Values) RemoveAnimationMesh(item);
+                animatedMeshes[pose.Id] = items;
+                animationPoses[pose.Id] = (pose.SourceNode, pose.Model, pose.Morph);
+            }
             foreach (var item in items)
             {
+                animationToken.ThrowIfCancellationRequested();
                 bool horizon = IsHorizon(pose.SourceNode);
                 item.Mesh.Visibility = pose.Visible && pose.Opacity > 0 && (!horizon || horizonEnabled) ? Visibility.Visible : Visibility.Collapsed;
                 var transform = CameraFacingTransform(pose, model);
                 item.Mesh.Transform = new MatrixTransform3D(ToWpf(HorizonTransform(pose.SourceNode, transform)));
-                if (morphed != null)
-                {
-                    var part = morphed.FirstOrDefault(p => p.MaterialIndex == item.Part.MaterialIndex);
-                    if (part != null) { item.Mesh.Geometry = Mesh(part); item.VertexTint = null; }
-                    item.Morph = pose.Morph;
-                }
                 JsonMaterial(scene, item.Part.MaterialIndex, out var color, out int textureIndex);
                 string? textureName;
                 AnimationTextureSlot? textureSlot;
@@ -175,7 +254,8 @@ public sealed partial class SceneViewport
                 }
                 item.Material.DiffuseMap = diffuseMap;
                 float alpha = pose.Opacity * color.Alpha;
-                SetAnimationColor(item, AnimationColor(pose, color, frame, effectLighting));
+                item.LitColor = AnimationLitColor(pose, color, frame, effectLighting);
+                SetAnimationColor(item, AnimationFogColor(pose, item.LitColor, frame, effectLighting));
                 item.Mesh.IsTransparent = !horizon && (alphaTexture || alpha < 1);
                 if (!horizon && pose.Visible && item.Mesh.Geometry?.Positions is { } positions) IncludeBounds(positions, transform);
             }
@@ -191,8 +271,46 @@ public sealed partial class SceneViewport
             orbitPivot = null; navigationReferenceDistance = null;
         }
         if (!preparingCamera) viewport.InvalidateRender();
+        animationMeshBytes = nextGeometry;
+        animationMeshReservation.Resize(checked(nextGeometry + scratch));
+        }
+        catch
+        {
+            // An unexpected upload failure may leave some new objects attached.
+            // Keep their allowance until Clear or a successful replacement removes them.
+            animationMeshBytes = Math.Max(animationMeshBytes, nextGeometry);
+            throw;
         }
         finally { updatingAnimation = false; }
+    }
+    private AnimatedMesh CreateAnimationMesh(AnimationNodePose pose, MeshPart part)
+    {
+        bool horizon = IsHorizon(pose.SourceNode);
+        var material = PreviewMaterials.Create(horizon, part.Colors.Length != 0); material.EnableUnLit = true;
+        material.VertexColorBlendingFactor = part.Colors.Length == 0 ? 0 : 1;
+        var mesh = new MeshGeometryModel3D { Geometry = Mesh(part), Material = material, CullMode = CullMode.None, IsThrowingShadow = false, RenderOrder = horizon ? 0 : 1, IsDepthClipEnabled = !horizon };
+        try
+        {
+            RegisterInspectionMesh(mesh, part.MaterialIndex, pose.Id, pose.SourceNode, pose.Model);
+            inspectionPolygons[mesh] = part.VertexPolygons;
+            int source = pose.SourceNode; mesh.MouseDown3D += (_, e) =>
+            {
+                if (!IsPickupDragging && e is MouseDown3DEventArgs { OriginalInputEventArgs: System.Windows.Input.MouseButtonEventArgs { ChangedButton: System.Windows.Input.MouseButton.Left } })
+                { SelectFramingNode(source); NodeSelected?.Invoke(source); }
+            };
+            animationGroup!.Children.Add(mesh);
+            return new(mesh, material, part);
+        }
+        catch
+        {
+            inspectionMeshes.Remove(mesh); inspectionPolygons.Remove(mesh); animationGroup?.Children.Remove(mesh); mesh.Dispose();
+            throw;
+        }
+    }
+    private void RemoveAnimationMesh(AnimatedMesh item)
+    {
+        inspectionMeshes.Remove(item.Mesh); inspectionPolygons.Remove(item.Mesh);
+        animationGroup?.Children.Remove(item.Mesh); item.Mesh.Dispose();
     }
     private Matrix4x4 CameraFacingTransform(AnimationNodePose pose, GameModel model)
     {
@@ -211,15 +329,69 @@ public sealed partial class SceneViewport
         }
         return transform;
     }
-    private Color4 AnimationColor(AnimationNodePose pose, Color4 color, AnimationFrame frame, bool effectLighting)
+    private long AdmitAnimationLighting(AnimationFrame frame, bool effectLighting)
+    {
+        long work = 0;
+        Take(frame.Nodes.Count);
+        // Count each source model once, including material parts that a morph
+        // can open. This small scratch is admitted before collection growth and
+        // released before geometry construction; nothing escapes the preflight.
+        using GeometryReservation storage = new(this);
+        Dictionary<int, int> parts = [];
+        long polygons = 0;
+        foreach (var pose in frame.Nodes)
+        {
+            animationToken.ThrowIfCancellationRequested();
+            if (pose.Model < 0 || pose.Model >= animationContext!.Scene.Models.Count) continue;
+            if (!parts.TryGetValue(pose.Model, out int count))
+            {
+                var model = animationContext.Scene.Models[pose.Model];
+                Take(model.Polygons.LongLength);
+                polygons += model.Polygons.LongLength;
+                storage.Resize(checked(128L * (parts.Count + 1L + polygons)));
+                // A fresh set keeps one large model followed by many small ones
+                // linear; clearing a retained large hash table per model would
+                // multiply work by its former capacity. Reserve all sets' storage.
+                HashSet<int> materials = [];
+                foreach (var polygon in model.Polygons)
+                {
+                    animationToken.ThrowIfCancellationRequested();
+                    if (polygon.Vertices.Length >= 3) materials.Add(polygon.MaterialIndex);
+                }
+                parts.Add(pose.Model, count = materials.Count);
+            }
+            // Inactive lights still cost eligibility checks. Preserve authored
+            // order and exact arithmetic for every admitted contribution.
+            Take(count * (1L + (effectLighting ? frame.Lights.Count : 0)));
+        }
+        return work;
+
+        void Take(long units)
+        {
+            animationToken.ThrowIfCancellationRequested();
+            if (units < 0 || units > MaximumAnimationLightingWork - work)
+                throw new RenderLimitException($"The animation preview exceeds its {MaximumAnimationLightingWork:N0}-unit lighting work allowance per frame; reduce simultaneous material parts or lights.");
+            work += units;
+        }
+    }
+    private Color4 AnimationLitColor(AnimationNodePose pose, Color4 color, AnimationFrame frame, bool effectLighting)
     {
         Vector3 rgb = new(color.Red, color.Green, color.Blue);
         if (effectLighting)
-            foreach (var light in frame.Lights.Where(l => l.Active && l.Range > 0))
+            foreach (var light in frame.Lights)
             {
+                animationToken.ThrowIfCancellationRequested(); AnimationLightVisits++;
+                if (!light.Active || !(light.Range > 0)) continue;
                 float falloff = Math.Clamp(1 - Vector3.Distance(pose.Transform.Translation, light.Position) / light.Range, 0, 1);
                 rgb = Vector3.Lerp(rgb, Vector3.Max(rgb * .65f, light.Color), Math.Clamp(light.Intensity * falloff, 0, 1));
             }
+        // Do not clamp before fog: out-of-range authored colors previously
+        // blended with fog first, then clamped at the material boundary.
+        return new(rgb.X, rgb.Y, rgb.Z, pose.Opacity * color.Alpha);
+    }
+    private Color4 AnimationFogColor(AnimationNodePose pose, Color4 lit, AnimationFrame frame, bool effectLighting)
+    {
+        Vector3 rgb = new(lit.Red, lit.Green, lit.Blue);
         if (effectLighting && frame.Fog is { Enabled: true } fog && viewport.Camera is ProjectionCamera camera)
         {
             var p = camera.Position;
@@ -227,7 +399,7 @@ public sealed partial class SceneViewport
             rgb = Vector3.Lerp(rgb, fog.Color, Math.Clamp((distance - fog.Start) / Math.Max(.001f, fog.End - fog.Start), 0, 1));
         }
         rgb = Vector3.Clamp(rgb, Vector3.Zero, Vector3.One);
-        return new(rgb.X, rgb.Y, rgb.Z, pose.Opacity * color.Alpha);
+        return new(rgb.X, rgb.Y, rgb.Z, lit.Alpha);
     }
     private static void SetAnimationColor(AnimatedMesh item, Color4 color)
     {
@@ -241,17 +413,21 @@ public sealed partial class SceneViewport
     }
     private void RefreshAnimationCamera(bool updateHitTests = false)
     {
-        if (animationFrame is not { } frame || animationContext == null || updatingAnimation) return;
+        if (animationFrame is not { } frame || animationContext == null || updatingAnimation || animationToken.IsCancellationRequested) return;
         var scene = animationContext.Scene;
         // Camera motion changes only facade orientation and fog. It must not
         // rebuild poses, replace instances, morph geometry or sample textures.
         foreach (var pose in frame.Nodes)
         {
+            // Camera and hit-test callbacks must quietly stop when their
+            // preview lifetime ends, rather than throw into WPF rendering.
+            if (animationToken.IsCancellationRequested) return;
             if (!animatedMeshes.TryGetValue(pose.Id, out var items)) continue;
             var model = scene.Models[pose.Model];
             bool facade = pose.Texture != null || model.Metadata.Int("model_type") == 1;
             foreach (var item in items)
             {
+                if (animationToken.IsCancellationRequested) return;
                 if (facade)
                 {
                     item.Mesh.Transform = new MatrixTransform3D(ToWpf(HorizonTransform(pose.SourceNode, CameraFacingTransform(pose, model))));
@@ -259,8 +435,7 @@ public sealed partial class SceneViewport
                 }
                 if (animationEffectLighting && frame.Fog is { Enabled: true })
                 {
-                    JsonMaterial(scene, item.Part.MaterialIndex, out var color, out _);
-                    SetAnimationColor(item, AnimationColor(pose, color, frame, true));
+                    SetAnimationColor(item, AnimationFogColor(pose, item.LitColor, frame, true));
                 }
             }
         }
@@ -359,9 +534,13 @@ public sealed partial class SceneViewport
         foreach (var items in animatedMeshes.Values) foreach (var item in items) item.Mesh.Dispose();
         if (animationGroup != null) { animationGroup.Children.Clear(); animationGroup.Dispose(); animationGroup = null; viewport.OITRenderMode = previousTransparency; }
         animatedMeshes.Clear(); animationGeometry.Clear(); animationTextureSlots.Clear(); replacedNodes.Clear(); animationContext = null; animationResolver = null; animationFrame = null;
+        animationGeometryScratch.Clear(); animationGeometryCopies.Clear(); animationPossibleParts.Clear(); animationPoses.Clear(); animationGeometryBytes = animationMeshBytes = 0;
+        animationGeometryReservation?.Dispose(); animationGeometryReservation = null;
+        animationMeshReservation?.Dispose(); animationMeshReservation = null;
         animationTextureModels.Clear(); animationTextureReferences.Clear(); animationTextureCycles.Clear(); animationTextureNameUnits = 0; animationTextureLookupUnits = 0;
         animationBaseTextures.Clear();
         animationTextureCycleMembers = animationTextureCycleMemberVisits = 0; animationTextureLimitReported = false; animationTextureNotices = 0;
+        AnimationLightingWork = AnimationLightVisits = 0;
     }
     private sealed class AnimationTextureSlot
     {
@@ -373,8 +552,8 @@ public sealed partial class SceneViewport
     {
         public MeshGeometryModel3D Mesh { get; } = mesh;
         public DiffuseMaterial Material { get; } = material;
-        public MeshPart Part { get; } = part;
-        public float Morph { get; set; }
+        public MeshPart Part { get; set; } = part;
         public Color4? VertexTint { get; set; }
+        public Color4 LitColor { get; set; }
     }
 }

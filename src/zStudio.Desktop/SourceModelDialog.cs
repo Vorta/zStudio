@@ -57,7 +57,7 @@ internal sealed class SourceModelDialog : Window
         placed.Content = new TextBlock { Text = "Placed in the world at", TextWrapping = TextWrapping.Wrap };
 
         StackPanel panel = new() { Margin = new(14) };
-        panel.Children.Add(new TextBlock { Text = $"Load a model from any folder of the project into the {mission} world. Exports of {mission} then include its geometry, materials and textures.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 10) });
+        panel.Children.Add(new TextBlock { Text = $"Load a model from any folder of the project into the {mission} world. Physical models and logical aliases are listed. A path already bound in {mission} uses this map's geometry and zones; other paths import their donor bindings, refusing conflicts. Exports include the model's geometry, materials and textures.", TextWrapping = TextWrapping.Wrap, Margin = new(0, 0, 0, 10) });
         panel.Children.Add(filter);
         // Rows are data, so only the visible ones get controls; paths are literal text, not access-key labels.
         FrameworkElementFactory row = new(typeof(TextBlock));

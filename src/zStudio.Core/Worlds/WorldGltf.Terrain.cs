@@ -117,8 +117,9 @@ public static partial class WorldGltf
                 var source = materials[polygon.Material];
                 var material = polygon.Soil is { } soil && soil != source.Material.Soil ? SoilVariant(context, source.Material, soil) : source.Material;
                 bool textured = material.Texture != null;
-                builder.Add(new([.. polygon.Corners.Select(c => c.Position)], textured ? [.. polygon.Corners.Select(c => c.Uv)] : [],
-                    source.Normals ? [.. polygon.Corners.Select(c => c.Normal)] : [], [], material, polygon.Priority ?? source.Priority, source.BackFace, polygon.ZoneWord));
+                if (!builder.Add(new([.. polygon.Corners.Select(c => c.Position)], textured ? [.. polygon.Corners.Select(c => c.Uv)] : [],
+                    source.Normals ? [.. polygon.Corners.Select(c => c.Normal)] : [], [], material, polygon.Priority ?? source.Priority, source.BackFace, polygon.ZoneWord)))
+                    throw new InvalidDataException($"{recipePath}: terrain piece {piece.Name} contains a polygon the model builder cannot retain; reduce the surface detail or repair its geometry before retrying.");
             }
             node.Model = builder.Finish();
             var (modelValues, morph, modelPath, nodeValues) = models[piece.Surface];

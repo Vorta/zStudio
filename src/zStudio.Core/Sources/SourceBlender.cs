@@ -520,6 +520,7 @@ public static partial class SourceBlender
         UngroupTransforms(document, root, chosen.Relative);
 
         List<(string, byte[])> changes = []; List<string> notes = [];
+        HashSet<string> changedTextures = new(StringComparer.OrdinalIgnoreCase);
         string model = checkout.Model, modelFolder = Path.GetDirectoryName(model)!.Replace('\\', '/');
         // Buffers: one per model, named as the project names it (further buffers with a dot, which reconstruction never uses).
         var buffers = root["buffers"] as JsonArray ?? [];
@@ -569,10 +570,7 @@ public static partial class SourceBlender
             // Only what Blender changed: a checked-out texture it wrote back as it was stays as the project has it now.
             string inputCopy = Path.Combine(checkout.Folder, "input", "textures", name);
             if (original.ContainsKey(name) && File.Exists(inputCopy) && SourceProject.FileEquals(inputCopy, png, token)) continue;
-            byte[]? existing = workspace.Read(project, token);
-            if (existing != null && existing.AsSpan().SequenceEqual(png)) continue;
-            notes.Add(existing == null ? $"New texture {project}." : $"Texture {project} changes for every model that uses it.");
-            changes.Add((project, png));
+            changes.Add((project, png)); changedTextures.Add(project);
         }
         // Node names find animations and placements; report the ones the export no longer has.
         var checkedOut = Parse(workspace.Read(model, token, GltfDocument.MaximumJsonBytes) ?? throw new InvalidDataException($"{model} no longer exists."), model, token);
@@ -601,12 +599,17 @@ public static partial class SourceBlender
         changes.Insert(0, (model, updatedJson));
         // What the update replaces must be as the checkout (or an earlier update from it) left it.
         var accepted = checkout.Files.Concat(checkout.Applied).GroupBy(f => f.Project, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Select(f => f.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
+        var currentHashes = workspace.ReadEditHashes(changes.Select(change => change.Item1), token);
+        // Compare existing textures by digest, not by allocating their old payloads. A byte-identical
+        // texture is not a replacement/conflict, including when it was not in the original checkout.
+        changes.RemoveAll(change => changedTextures.Contains(change.Item1) && currentHashes[change.Item1] == SourceProject.Sha256(change.Item2));
         Dictionary<string, string?> expected = new(StringComparer.OrdinalIgnoreCase);
         List<string> conflicts = [];
         foreach (var (relative, _) in changes)
         {
-            string? current = workspace.Read(relative, token) is { } bytes ? SourceProject.Sha256(bytes) : null;
+            string? current = currentHashes[relative];
             expected[relative] = current;
+            if (changedTextures.Contains(relative)) notes.Add(current == null ? $"New texture {relative}." : $"Texture {relative} changes for every model that uses it.");
             // A missing former input is a change too: restoring an externally deleted buffer/texture requires the
             // same decision as replacing modified content. Only an absent file never recorded by this checkout is new.
             if (accepted.TryGetValue(relative, out var states) ? current == null || !states.Contains(current) : current != null)

@@ -211,10 +211,12 @@ public sealed partial class SceneViewport
         { float radius = AiScale(node.Node.Position, 5.5); min = node.Node.Position - new Vector3(radius); max = node.Node.Position + new Vector3(radius); }
         foreach (var (mesh, items) in visiblePlacements)
         {
-            if (!mesh.IsRendering || mesh.Visibility != Visibility.Visible || !mesh.IsDepthClipEnabled || mesh.Geometry?.Positions is not { Count: > 0 } vertices) continue;
+            if (!mesh.IsRendering || mesh.Visibility != Visibility.Visible || !mesh.IsDepthClipEnabled ||
+                mesh.Geometry is not HelixToolkit.SharpDX.MeshGeometry3D geometry ||
+                !staticMeshBounds.TryGetValue(geometry, out var local) || !Finite(local.Min) || !Finite(local.Max)) continue;
             var matching = items.Where(p => selectedNodes.Contains(p.NodeIndex)).ToArray();
             if (matching.Length == 0) continue;
-            Vector3 localMin = vertices.Aggregate(Vector3.Min), localMax = vertices.Aggregate(Vector3.Max);
+            var (localMin, localMax) = local;
             foreach (var p in matching) for (int c = 0; c < 8; c++)
             {
                 Vector3 v = Vector3.Transform(new((c & 1) == 0 ? localMin.X : localMax.X, (c & 2) == 0 ? localMin.Y : localMax.Y, (c & 4) == 0 ? localMin.Z : localMax.Z), p.Transform);

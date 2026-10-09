@@ -236,6 +236,24 @@ public sealed class SourceBlenderTests
         string again = Export(checkout, "again", g => Rename(g, "ground3"));
         Apply(workspace, SourceBlender.PlanUpdate(workspace, checkout, again, token: Token));
         Assert.Contains("ground3", Encoding.UTF8.GetString(workspace.Read(Model, Token)!));
+
+        // Force consents to conflicts, not unbounded old destination reads. Admit the actual held
+        // lengths across model+buffer before hashing; the incoming export is still tiny and valid.
+        string buffer = Path.ChangeExtension(Model, ".bin");
+        string bufferPath = SourceProject.Resolve(fixture.Project, buffer);
+        byte[] originalBuffer = File.ReadAllBytes(bufferPath);
+        long oldBytes = new FileInfo(SourceProject.Resolve(fixture.Project, Model)).Length + originalBuffer.Length;
+        SourceWorkspace bounded = new(fixture.Project, null, oldBytes);
+        string smallExport = Export(checkout, "bounded", g => Rename(g, "ground4"));
+        File.WriteAllBytes(bufferPath, [.. originalBuffer, (byte)0]);
+        Assert.Contains("retained-content allowance", Assert.Throws<InvalidDataException>(() =>
+            SourceBlender.PlanUpdate(bounded, checkout, smallExport, force: true, token: Token)).Message);
+        Assert.Empty(bounded.History); Assert.False(bounded.IsDirty);
+        File.WriteAllBytes(bufferPath, originalBuffer);
+        var acceptedForce = SourceBlender.PlanUpdate(bounded, checkout, smallExport, force: true, token: Token);
+        SourceWorkspace ordinary = new(fixture.Project);
+        Apply(ordinary, acceptedForce); ordinary.Undo();
+        Assert.Equal(originalBuffer, ordinary.Read(buffer, Token));
     }
 
     [Fact]

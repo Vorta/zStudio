@@ -102,6 +102,9 @@ internal static class OriginalLoader
     /// </summary>
     public static void Load(WorldNode root, IEnumerable<WorldNode> records, IReadOnlyList<WorldNode> cached, Hooks hooks)
     {
+        // Inference may have changed links since the binary reader checked them. Validate the retained graph
+        // before callbacks or recursive replay; records can be a stateful slot-driven iterator, so do not read it early.
+        WorldUpdate.CheckHierarchy(cached, hooks.Token);
         List<WorldNode> caches = [];
         HashSet<string> files = new(StringComparer.OrdinalIgnoreCase);
         // One count for the outermost load and every cache inside it.
@@ -235,6 +238,7 @@ internal static class OriginalLoader
     internal static WorldNode Mirror(string name, IReadOnlyList<WorldNode> content, Dictionary<WorldNode, WorldNode> original, Func<WorldNode, IReadOnlyList<WorldNode>> contentOf,
         CancellationToken token = default, MirrorBudget? mirrored = null)
     {
+        WorldUpdate.CheckHierarchy(content, token);
         mirrored ??= MirrorBudget.PerLoad();
         Dictionary<WorldNode, WorldNode> mirror = new(ReferenceEqualityComparer.Instance);
         Dictionary<int, WorldNode> definitions = [];
@@ -284,9 +288,10 @@ internal static class OriginalLoader
     }
 
     /// <summary>The engine's DestroyNodeRecursive on a graph no one else holds: children in order, each freed once its last parent lets it go.</summary>
-    private static void Destroy(WorldNode root, Hooks hooks) => Destroy(root, hooks.Free);
-    internal static void Destroy(WorldNode root, Action<WorldNode> free)
+    private static void Destroy(WorldNode root, Hooks hooks) => Destroy(root, hooks.Free, hooks.Token);
+    internal static void Destroy(WorldNode root, Action<WorldNode> free, CancellationToken token = default)
     {
+        WorldUpdate.CheckHierarchy([root], token);
         Dictionary<WorldNode, int> parents = new(ReferenceEqualityComparer.Instance);
         HashSet<WorldNode> visited = new(ReferenceEqualityComparer.Instance);
         void Count(WorldNode node) { if (!visited.Add(node)) return; foreach (var child in node.Children) { parents[child] = parents.GetValueOrDefault(child) + 1; Count(child); } }

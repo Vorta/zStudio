@@ -141,6 +141,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Canceled when the workspace root is replaced; long operations owned by a workspace link to it.</summary>
     internal CancellationToken WorkspaceToken => workspace.Token;
     private readonly List<SearchHit> index = [];
+    internal const int MaximumIndexedAssets = 250_000;
+    internal const long MaximumIndexedNameCharacters = 8L * 1024 * 1024;
+    // Tests may narrow admission without constructing an enormous root. Production always uses these defaults.
+    internal int SearchIndexRowLimit { get; set; } = MaximumIndexedAssets;
+    internal long SearchIndexNameLimit { get; set; } = MaximumIndexedNameCharacters;
+    [ObservableProperty] private bool searchIndexComplete;
+    [ObservableProperty] private string searchIndexNotice = "";
     [ObservableProperty] private string rootPath = "Open a ZBD folder to start exploring";
     [ObservableProperty] private string status = "Ready";
     [ObservableProperty] private bool isBusy;
@@ -213,6 +220,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             try { if (Path.GetFullPath(map).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) && File.Exists(map)) Resolver.SelectMission(map, mission); }
             catch (Exception ex) when (ex is ArgumentException or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException) { }
         Files = []; Folders.Clear(); fileNodes.Clear(); otherOpenFiles = null; Diagnostics.Clear(); Problems.Clear(); SearchResults.Clear(); index.Clear();
+        SearchIndexComplete = false; SearchIndexNotice = "Asset names are still being indexed; search and related results are incomplete.";
         RootPath = root; HasRoot = true; IsBusy = true; WorkspaceNavigationGeneration = navigationGeneration; Status = "Scanning files…";
         RootPublished?.Invoke();
         Settings.LastRoot = root; Settings.RecentRoots.RemoveAll(p => p.Equals(root, StringComparison.OrdinalIgnoreCase)); Settings.RecentRoots.Insert(0, root); Settings.RecentRoots = Settings.RecentRoots.Take(8).ToList();
@@ -225,7 +233,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Status = $"{Files.Count:N0} files · {Files.Count(f => f.Path.EndsWith(".zbd", StringComparison.OrdinalIgnoreCase)):N0} ZBDs · indexing names…";
             await IndexAsync(scanned.Files, token);
         }
-        catch (OperationCanceledException) { if (WorkspaceGeneration == committedWorkspace) Status = "Scan canceled"; cancellationToken.ThrowIfCancellationRequested(); }
+        catch (OperationCanceledException)
+        {
+            if (WorkspaceGeneration == committedWorkspace)
+            {
+                SearchIndexNotice = "Asset indexing was canceled; search and related results are incomplete. Files and direct opening remain available.";
+                RefreshSearch(); Status = "Scan canceled";
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             if (WorkspaceGeneration != committedWorkspace)
@@ -236,20 +252,39 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
     private async Task IndexAsync(List<FileEntry> files, CancellationToken token)
     {
-        int completed = 0; int warnings = 0;
+        int completed = 0; int warnings = 0; long nameCharacters = 0;
+        bool limited = false, failed = false;
+        int rowLimit = Math.Clamp(SearchIndexRowLimit, 0, MaximumIndexedAssets);
+        long nameLimit = Math.Clamp(SearchIndexNameLimit, 0, MaximumIndexedNameCharacters);
         foreach (var file in files.Where(f => f.Probe.Recognition == Recognition.Supported))
         {
             token.ThrowIfCancellationRequested();
             try
             {
                 var doc = await Task.Run(() => FormatRegistry.Default.OpenAsync(file.Path, token), token).WaitAsync(token);
-                token.ThrowIfCancellationRequested(); index.AddRange(doc.Assets.Select(a => new SearchHit(file.Path, a.Kind, a.Index, a.Name)));
+                token.ThrowIfCancellationRequested();
+                foreach (var asset in doc.Assets)
+                {
+                    token.ThrowIfCancellationRequested();
+                    // Paths are shared with the bounded Files inventory. Bound both row overhead and names retained
+                    // across documents before constructing a hit or growing the list; keep every admitted identity whole.
+                    if (index.Count >= rowLimit || asset.Name.Length > nameLimit - nameCharacters)
+                    { limited = true; break; }
+                    nameCharacters += asset.Name.Length;
+                    index.Add(new(file.Path, asset.Kind, asset.Index, asset.Name));
+                }
+                failed |= doc.Diagnostics.Any(d => d.Severity == "Error");
                 foreach (var diagnostic in doc.Diagnostics) { warnings++; if (Diagnostics.Count < 500) AddProblem(diagnostic.Message, diagnostic.Severity, file.Path, diagnostic.AssetIndex, diagnostic.Offset); }
                 Status = $"Indexed {++completed} containers · {index.Count:N0} assets";
+                if (limited) break;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { token.ThrowIfCancellationRequested(); AddProblem(ex.Message, "Error", file.Path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { token.ThrowIfCancellationRequested(); failed = true; AddProblem(ex.Message, "Error", file.Path); }
         }
-        token.ThrowIfCancellationRequested(); RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics";
+        token.ThrowIfCancellationRequested();
+        SearchIndexComplete = !limited && !failed;
+        SearchIndexNotice = limited ? "Asset indexing stopped at its row or name-text limit; search and related results are incomplete. Open a smaller folder to index more. Files and direct opening remain available."
+            : failed ? "Some files could not be fully indexed; search and related results are incomplete. See Problems. Files and direct opening remain available." : "";
+        RefreshSearch(); Status = $"{Files.Count:N0} files · {index.Count:N0} indexed assets · {warnings} reader diagnostics" + (SearchIndexComplete ? "" : " · search index incomplete");
     }
     public async Task<DocumentModel?> OpenFileAsync(string path, CancellationToken cancellationToken = default, Action? beforePublish = null, bool activate = true)
     {
@@ -363,12 +398,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void RefreshSearch()
     {
         SearchIsLimited = false; SearchResults.Clear(); string query = GlobalQuery.Trim(); if (query.Length < 2) return;
-        var matches = index.Where(h => h.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || h.Location.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(501).ToArray();
+        var matches = SearchIndex(query).Take(501).ToArray();
         SearchIsLimited = matches.Length > 500;
         foreach (var hit in matches.Take(500)) SearchResults.Add(hit);
     }
     internal sealed record RelatedMatches(IReadOnlyList<SearchHit> Items, bool Truncated);
-    internal RelatedMatches Related(IEnumerable<string> names, string context) => MatchRelated(names, index, context);
+    internal RelatedMatches Related(IEnumerable<string> names, string context)
+    {
+        var result = MatchRelated(names, index, context);
+        return SearchIndexComplete ? result : result with { Truncated = true };
+    }
     /// <summary>One index scan, preserving reference order and index order within each name, with bounded input and retained matches.</summary>
     internal static RelatedMatches MatchRelated(IEnumerable<string> names, IEnumerable<SearchHit> source, string context,
         int maximumNames = 65_536, int maximumEntries = 1_000_000, long maximumNameCharacters = 4 * 1024 * 1024, long maximumIndexCharacters = 64 * 1024 * 1024)
@@ -402,7 +441,26 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         return new(kept.Select(p => p.Hit).ToArray(), truncated);
     }
-    internal IEnumerable<SearchHit> SearchIndex(string query) => index.Where(h => h.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || h.Location.Contains(query, StringComparison.OrdinalIgnoreCase));
+    internal IEnumerable<SearchHit> SearchIndex(string query, CancellationToken token = default)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(workspace.Token, token);
+        foreach (var hit in MatchSearch(index, query, cancellation.Token)) yield return hit;
+    }
+    /// <summary>Match the displayed location once per indexed file, retaining only its boolean result.
+    /// IndexAsync shares FileEntry.Path across that file's hits; reference keys avoid hashing a long path per member.</summary>
+    internal static IEnumerable<SearchHit> MatchSearch(IEnumerable<SearchHit> source, string query, CancellationToken token = default)
+    {
+        Dictionary<string, bool>? locations = null;
+        foreach (var hit in source)
+        {
+            token.ThrowIfCancellationRequested();
+            if (hit.Name.Contains(query, StringComparison.OrdinalIgnoreCase)) { yield return hit; continue; }
+            locations ??= new(ReferenceEqualityComparer.Instance);
+            if (!locations.TryGetValue(hit.File, out bool matches))
+                locations.Add(hit.File, matches = hit.Location.Contains(query, StringComparison.OrdinalIgnoreCase));
+            if (matches) yield return hit;
+        }
+    }
     internal void CloseResolved(DocumentModel doc) => RemoveDocument(doc);
     public void Dispose()
     {

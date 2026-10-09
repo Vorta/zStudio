@@ -86,8 +86,9 @@ public partial class MainWindow
         var next = await PrepareSourceWorldEditAsync(doc, $"Updating {Path.GetFileName(checkout.Model)} from Blender", (workspace, ct) =>
         {
             // The plan was made off the UI thread; nothing may have changed those files since.
+            var current = workspace.ReadEditHashes(plan.Expected.Keys, ct);
             foreach (var (relative, sha) in plan.Expected)
-                if ((workspace.Read(relative, ct) is { } bytes ? SourceProject.Sha256(bytes) : null) != sha)
+                if (current[relative] != sha)
                     throw new InvalidDataException($"{relative} changed while the update was prepared; update again.");
             if (workspace.Apply(plan.Label, plan.Changes.Select(c => (c.Relative, (byte[]?)c.Content)), ct) is not { } t) return null;
             written = [.. t.Files.Select(f => f.Relative)];

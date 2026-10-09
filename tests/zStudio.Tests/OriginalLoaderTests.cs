@@ -75,4 +75,24 @@ public sealed class OriginalLoaderTests
             "+root", "+part.flt", "+c", "+lamp.flt", "+", "+y", "-",
             "-c", "-part.flt", "-y", "-lamp.flt"], events);
     }
+
+    [Fact]
+    public void CyclicInferredContentIsRefusedBeforeLoaderCallbacksOrMirrorPublication()
+    {
+        var child = Node("child"); var unnamed = Node("", child);
+        child.Children.Add(child); child.Parents.Add(child);
+        var reference = Node("part.flt", unnamed);
+        List<WorldNode> touched = [];
+        var hooks = new OriginalLoader.Hooks
+        {
+            Allocate = touched.Add, Free = touched.Add, Content = n => n == reference ? [unnamed] : [],
+            File = n => n.Name, Token = TestContext.Current.CancellationToken,
+        };
+        Assert.Throws<InvalidDataException>(() => OriginalLoader.Load(Node("root"), [reference], [reference], hooks));
+        Dictionary<WorldNode, WorldNode> original = new(ReferenceEqualityComparer.Instance);
+        Assert.Throws<InvalidDataException>(() => OriginalLoader.Mirror("part.flt", [unnamed], original, _ => [], hooks.Token));
+        Assert.Throws<InvalidDataException>(() => OriginalLoader.Destroy(reference, touched.Add, hooks.Token));
+        Assert.Empty(touched); Assert.Empty(original);
+        Assert.Same(child, Assert.Single(child.Children));
+    }
 }

@@ -352,11 +352,7 @@ public sealed class GltfDocument
         if (parsed.ValueKind != JsonValueKind.Object) throw new InvalidDataException("glTF JSON must be an object.");
         Bound(parsed, limits.MetadataBytes, token);
         JsonObject root = JsonObject.Create(parsed)!;
-        var scenes = root["scenes"] as JsonArray ?? [];
-        bool selectedScene = root.TryGetPropertyValue("scene", out var chosenScene);
-        if (!selectedScene && scenes.Count > 1)
-            throw new InvalidDataException("The glTF has multiple scenes but no default scene; select an explicit default scene before importing.");
-        int sceneIndex = selectedScene ? Reference(chosenScene, scenes.Count, "scene") : 0;
+        int sceneIndex = SelectedScene(root, numeric); // Refuse ambiguous scenes before geometry allocation.
         if (!parsed.TryGetProperty("asset", out var asset) || asset.ValueKind != JsonValueKind.Object
             || !asset.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.String || !version.ValueEquals("2.0"))
             throw new InvalidDataException("The glTF asset.version must be '2.0'; other or malformed versions are not supported.");
@@ -721,14 +717,11 @@ public sealed class GltfDocument
             }
             meshes.Add(mesh);
         }
+        GltfDocument doc = ReadHierarchy(root, numeric, token, out var nodes, sceneIndex);
         JsonArray jsonNodes = root["nodes"] as JsonArray ?? [];
-        var nodes = jsonNodes.Select((n, i) => new GltfNode { Name = n?["name"]?.GetValue<string>() ?? "", Index = i, Extras = Extras(n) }).ToArray();
-        // Node hierarchies are trees (glTF requires it): a node under two parents, or listed twice by one, would be walked
-        // once for each path to it, which doubles with every level, so each node has one parent at most.
-        bool[] parented = new bool[nodes.Length];
         for (int i = 0; i < jsonNodes.Count; i++)
         {
-            var n = jsonNodes[i] as JsonObject ?? throw new InvalidDataException($"glTF node {i} is not an object."); var node = nodes[i];
+            var n = (JsonObject)jsonNodes[i]!; var node = nodes[i];
             if (n["mesh"] is { } mesh) node.Mesh = meshes[Reference(mesh, meshes.Count, "mesh")];
             if (n["weights"] is { } weights)
             {
@@ -737,6 +730,40 @@ public sealed class GltfDocument
                     throw new InvalidDataException($"glTF node {i} needs one finite weight per morph target of its mesh.");
                 node.Weights.AddRange(values);
             }
+            node.Matrix = LocalTransform(n, i, numeric);
+        }
+        return doc;
+    }
+
+    /// <summary>The same selected hierarchy as a full read, without resolving or decoding geometry buffers.</summary>
+    internal static GltfDocument ReadHierarchy(ReadOnlySpan<byte> bytes, CancellationToken token)
+    {
+        try
+        {
+            var json = ContainerJson(bytes, token, out _);
+            JsonElement parsed = JsonElement.Parse(json, new JsonDocumentOptions { MaxDepth = 64 });
+            Bound(parsed, MaximumMetadataBytes, token);
+            return ReadHierarchy(JsonObject.Create(parsed)!, new GltfInteger.NumericWork(GltfInteger.NumericWork.DefaultMaximum, token), token, out _);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or ArgumentException or OverflowException
+            or NullReferenceException or IndexOutOfRangeException or KeyNotFoundException or InvalidCastException)
+        { throw new InvalidDataException($"The glTF hierarchy is malformed: {ex.Message}", ex); }
+    }
+
+    private static GltfDocument ReadHierarchy(JsonObject root, GltfInteger.NumericWork numeric, CancellationToken token, out GltfNode[] nodes, int? selectedScene = null)
+    {
+        int Reference(JsonNode? value, int count, string list) => GltfDocument.Reference(value, count, list, numeric);
+        var scenes = root["scenes"] as JsonArray ?? [];
+        int sceneIndex = selectedScene ?? SelectedScene(root, numeric);
+        JsonArray jsonNodes = root["nodes"] as JsonArray ?? [];
+        nodes = jsonNodes.Select((n, i) => new GltfNode { Name = n?["name"]?.GetValue<string>() ?? "", Index = i, Extras = Extras(n) }).ToArray();
+        // Node hierarchies are trees (glTF requires it): a node under two parents, or listed twice by one, would be walked
+        // once for each path to it, which doubles with every level, so each node has one parent at most.
+        bool[] parented = new bool[nodes.Length];
+        for (int i = 0; i < jsonNodes.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var n = jsonNodes[i] as JsonObject ?? throw new InvalidDataException($"glTF node {i} is not an object."); var node = nodes[i];
             foreach (var c in n["children"] as JsonArray ?? [])
             {
                 int child = GltfInteger.Int32(c, "child", numeric); if (child < 0 || child >= nodes.Length || child == i) throw new InvalidDataException("A glTF node has an invalid child.");
@@ -744,7 +771,6 @@ public sealed class GltfDocument
                 parented[child] = true;
                 node.Children.Add(nodes[child]);
             }
-            node.Matrix = LocalTransform(n, i, numeric);
         }
         GltfDocument doc = new() { Generator = root["asset"]?["generator"]?.GetValue<string>() ?? "" };
         if (scenes.Count > 0)
@@ -789,6 +815,15 @@ public sealed class GltfDocument
             }
         }
         return doc;
+    }
+
+    private static int SelectedScene(JsonObject root, GltfInteger.NumericWork numeric)
+    {
+        var scenes = root["scenes"] as JsonArray ?? [];
+        bool selected = root.TryGetPropertyValue("scene", out var chosen);
+        if (!selected && scenes.Count > 1)
+            throw new InvalidDataException("The glTF has multiple scenes but no default scene; select an explicit default scene before importing.");
+        return selected ? Reference(chosen, scenes.Count, "scene", numeric) : 0;
     }
 
     /// <summary>
@@ -990,36 +1025,39 @@ public sealed class GltfDocument
     /// <summary>
     /// A node's local transform as glTF states it, in System.Numerics' row-vector convention: its <c>matrix</c> (16 numbers,
     /// column-major), or its <c>translation</c> (3 numbers), <c>rotation</c> (a quaternion, 4) and <c>scale</c> (3) as
-    /// scale · rotation · translation; null when it states none (identity). A property of another shape, a value that is not
-    /// a finite number, or a matrix beside translation, rotation or scale (glTF allows one or the other) is refused rather
+    /// scale · rotation · translation; null when all four properties are absent (identity). A null or wrong-shaped property,
+    /// a nonfinite value, or a matrix beside translation, rotation or scale (glTF allows one or the other) is refused rather
     /// than read as identity. <paramref name="index"/> (the node's index, when known) names it in the message.
     /// </summary>
     public static Matrix4x4? LocalTransform(JsonObject node, int index = -1) => LocalTransform(node, index, null);
     private static Matrix4x4? LocalTransform(JsonObject node, int index, GltfInteger.NumericWork? numeric)
     {
-        JsonNode? matrix = node["matrix"], translation = node["translation"], rotation = node["rotation"], scale = node["scale"];
-        if (matrix != null)
+        bool hasMatrix = node.TryGetPropertyValue("matrix", out var matrix);
+        bool hasTranslation = node.TryGetPropertyValue("translation", out var translation);
+        bool hasRotation = node.TryGetPropertyValue("rotation", out var rotation);
+        bool hasScale = node.TryGetPropertyValue("scale", out var scale);
+        if (hasMatrix)
         {
-            if (translation != null || rotation != null || scale != null) throw Malformed("has both a matrix and translation, rotation or scale; glTF allows one or the other");
+            if (hasTranslation || hasRotation || hasScale) throw Malformed("has both a matrix and translation, rotation or scale; glTF allows one or the other");
             float[] m = Numbers(matrix, 16, "matrix");
             if (m[3] != 0 || m[7] != 0 || m[11] != 0 || m[15] != 1)
                 throw Malformed("has a non-affine matrix; its homogeneous terms must be [0, 0, 0, 1]");
             return new(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
         }
-        if (translation == null && rotation == null && scale == null) return null;
-        Vector3 t = translation == null ? Vector3.Zero : new(Numbers(translation, 3, "translation"));
+        if (!hasTranslation && !hasRotation && !hasScale) return null;
+        Vector3 t = hasTranslation ? new(Numbers(translation, 3, "translation")) : Vector3.Zero;
         Quaternion r = Quaternion.Identity;
-        if (rotation != null)
+        if (hasRotation)
         {
             float[] q = Numbers(rotation, 4, "rotation");
             double squared = q.Sum(v => (double)v * v);
             if (Math.Abs(squared - 1) > 1e-5) throw Malformed("has a rotation that is not a unit quaternion");
             r = Quaternion.Normalize(new(q[0], q[1], q[2], q[3]));
         }
-        Vector3 s = scale == null ? Vector3.One : new(Numbers(scale, 3, "scale"));
+        Vector3 s = hasScale ? new(Numbers(scale, 3, "scale")) : Vector3.One;
         return Matrix4x4.CreateScale(s) * Matrix4x4.CreateFromQuaternion(r) * Matrix4x4.CreateTranslation(t);
 
-        float[] Numbers(JsonNode value, int count, string property)
+        float[] Numbers(JsonNode? value, int count, string property)
         {
             if (value is not JsonArray array || array.Count != count)
                 throw Malformed($"has a {property} that is {(value is JsonArray other ? $"a list of {other.Count:N0} values" : "not a list")}; glTF needs {count} numbers");

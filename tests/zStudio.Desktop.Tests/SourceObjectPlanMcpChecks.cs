@@ -1,3 +1,4 @@
+using System.IO;
 using System.IO.Pipes;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Client;
@@ -21,6 +22,15 @@ internal static class SourceObjectPlanMcpChecks
     {
         using var fixture = new SourceWorldFixture();
         fixture.WritePartDatabase();
+        // The two spellings still name one physical source; retain its full long identity.
+        string part = new string('p', 180) + ".gltf";
+        fixture.Write("data/m1/models/" + part, File.ReadAllBytes(fixture.Path("data/m1/models/m1_01.gltf")));
+        var database = JsonNode.Parse(File.ReadAllBytes(fixture.Path("data/m1/models/m1.gltf")))!;
+        var references = database["nodes"]!.AsArray().Select(n => n?["extras"]?["recoil"] as JsonObject)
+            .Where(e => e?["ref"]?.GetValue<string>() == "m1_01.gltf").ToArray();
+        Assert.Equal(2, references.Length);
+        references[0]!["ref"] = part; references[1]!["ref"] = part.ToUpperInvariant();
+        fixture.Write("data/m1/models/m1.gltf", database.ToJsonString());
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90)); var token = deadline.Token;
         var main = new MainWindow { Left = -12000, ShowInTaskbar = false }; main.Show();
         try
@@ -58,6 +68,28 @@ internal static class SourceObjectPlanMcpChecks
                 Assert.Equal("crate", crate.Name);
                 Assert.Equal(key, Key(doc, slots[crate]));
             }
+
+            // Exercise the actual warm parent callback, including same-copy preference. This small
+            // fixture must not format each occurrence's full source/lineage path on every lookup.
+            int followed = Nodes(doc, "post").Single(p => Key(doc, p) == keys[1]);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 128; i++) _ = named.Invoke(main, [doc, "crate", (int?)followed]);
+            Assert.True(GC.GetAllocatedBytesForCurrentThread() - before < 128 * 1024, "Parent lookup copied source identities repeatedly.");
+
+            // Properties' actual generated field callback rebuilds the source world. Its selection
+            // must follow the same occurrence using the new snapshot's identity index.
+            var show = typeof(MainWindow).GetMethod("ShowSourceObjectPropertiesAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            Assert.True(await (Task<bool>)show.Invoke(main, [doc, followed, token])!);
+            var fields = Assert.IsType<SourceObjectPropertiesEditor>(main.OpenPropertiesWindow!.SourceFields);
+            var described = System.Text.Json.JsonSerializer.SerializeToNode(fields.DescribeAutomationFields())!;
+            string position = described["fields"]!.AsArray().Single(f => f!["Label"]!.GetValue<string>() == "Position")!["Id"]!.GetValue<string>();
+            await fields.WriteAutomationFieldAsync(position, "0, 0, 4");
+            doc = main.OpenPropertiesWindow!.Document!;
+            var changed = Assert.IsType<SourceObjectPropertiesEditor>(main.OpenPropertiesWindow.SourceFields);
+            Assert.Equal("post", changed.State.Name);
+            Assert.Equal(keys[1], Key(doc, changed.State.Node));
+            Assert.NotNull(changed.State.Transform);
+            Assert.Equal(4f, changed.State.Transform.Value.Position.Z);
 
             // The world, which a script made, has no command for ClipTo (0x20000); a node of a glTF file carries every flag.
             int world = doc.PreviewDocument.Scene!.Nodes.First(n => n.Name == "world" && doc.SourceBuild!.Provenance.ContainsKey(n.Index)).Index;
