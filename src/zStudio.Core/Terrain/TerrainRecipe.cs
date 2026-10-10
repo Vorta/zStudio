@@ -346,7 +346,8 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
     private static TerrainRecipe Read(JsonElement root, string source)
     {
         if (root.ValueKind != JsonValueKind.Object) throw Error("is not a JSON object");
-        if (Get(root, "format") is not { ValueKind: JsonValueKind.String } format || !format.ValueEquals(Format)) throw Error($"format must be \"{Format}\"");
+        if (Get(root, "format") is not { ValueKind: JsonValueKind.String } format) throw Error("needs format as text");
+        if (!format.ValueEquals(Format)) throw Error($"format must be \"{Format}\"");
         if (Int(Get(root, "version"), "version") != Version) throw Error($"only version {Version} is known");
         int compiler = Int(Get(root, "compiler"), "compiler");
         if (compiler != CurrentCompiler) throw Error($"was written for splitting rules {compiler}; this zStudio has rules {CurrentCompiler}");
@@ -415,7 +416,8 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
         {
             string? text = Text(node, what, 32);
             if (text is not { Length: > 0 } || !text.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
-                throw Error($"{what} {(text == null ? "" : $"\"{JsonData.ShownText(text)}\" ")}must be 1–32 letters, digits, _ or -");
+                // An over-long name is shown as written, bounded, without decoding it.
+                throw Error($"{what} \"{(text == null ? JsonData.Shown(JsonValue.Create(node!.Value), asText: true) : JsonData.ShownText(text))}\" must be 1–32 letters, digits, _ or -");
             return text;
         }
         string Path(JsonElement? node, string what)
