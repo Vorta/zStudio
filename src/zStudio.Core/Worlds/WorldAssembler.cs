@@ -174,9 +174,20 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     /// </summary>
     private void Late(string command, string[] args)
     {
-        if (ScriptTexture(command, args) is { } texture) ScriptTextures.Add(TextureStem(texture));
+        if (ScriptTexture(command, args) is { } texture)
+        {
+            string name = TextureStem(texture);
+            // The game adds these to the texture directory after the world's entries, so together they may not hold a pair it
+            // chains as numbered mipmaps, with or without pack records (Formats.TexturePackBuilder.NumberedMip).
+            if (Formats.TexturePackBuilder.NumberedMip(name) is { } mip && DirectoryName(mip) is { } chained) throw Formats.TexturePackBuilder.NumberedMipConflict(name, chained);
+            if (Formats.TexturePackBuilder.NumberedMipOf(name) is { } first && DirectoryName(first) is { } chaining) throw Formats.TexturePackBuilder.NumberedMipConflict(chaining, name);
+            ScriptTextures.Add(name);
+        }
         if (command is "FindNode" or "FindSubNode" or "CycleTextureSetOn" or "CycleTextureSetMap") (cycles ??= new(World, Lookups, token)).Run(command, args);
     }
+    /// <summary>The spelling of a texture name (ignoring case) in the world's directory or the scripts' registrations, if either holds it.</summary>
+    private string? DirectoryName(string name) =>
+        ScriptTextures.TryGetValue(name, out string? registered) ? registered : World.Textures.FirstOrDefault(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.Name;
     private TextureCycleReader? cycles;
     /// <summary>The texture cycles the scripts set up after writing the world, with the materials they are shown on.</summary>
     internal IReadOnlyList<CycledTextures> TextureCycles => cycles?.Cycles ?? [];
