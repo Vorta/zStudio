@@ -147,13 +147,12 @@ public sealed record TerrainAttributes
         int seen = 0;
         foreach (var property in element.EnumerateObject())
         {
+            // Comparing or decoding a name that is not Unicode throws InvalidOperationException.
+            var raw = JsonMarshal.GetRawUtf8PropertyName(property);
+            if (!JsonData.IsUnicodeText(raw)) throw new InvalidDataException($"{what} has an attribute name that {JsonData.NotUnicode}.");
             int index = -1;
             for (int i = 0; i < Keys.Length; i++) if (property.NameEquals(Keys[i])) { index = i; break; }
-            if (index < 0)
-            {
-                var raw = JsonMarshal.GetRawUtf8PropertyName(property);
-                throw Unknown(what, raw.Length > 6 * JsonData.ShownCharacters ? "…" : JsonData.ShownText(property.Name));
-            }
+            if (index < 0) throw Unknown(what, raw.Length > 6 * JsonData.ShownCharacters ? "…" : JsonData.ShownText(property.Name));
             if ((seen & (1 << index)) != 0) throw new InvalidDataException($"{what} gives {Keys[index]} twice in one object.");
             seen |= 1 << index;
             AdmitValue(Keys[index], property.Value, what);
@@ -173,8 +172,10 @@ public sealed record TerrainAttributes
             int limit = StringLimit(key);
             if (limit == 0) throw Shape(what, key);
             // Bound the escaped form before GetString; decoded lengths are checked before node materialization.
-            if (JsonMarshal.GetRawUtf8Value(value).Length > 6L * limit + 2 || value.GetString()!.Length > limit)
-                throw Representation(what, key);
+            var raw = JsonMarshal.GetRawUtf8Value(value);
+            if (raw.Length > 6L * limit + 2) throw Representation(what, key);
+            if (!JsonData.IsUnicodeText(raw[1..^1])) throw new InvalidDataException($"{what} {key} {JsonData.NotUnicode}.");
+            if (value.GetString()!.Length > limit) throw Representation(what, key);
             return;
         }
         if (key is "nodeZone" or "soil" or "priority") { AdmitNumber(value, what, key); return; }
@@ -328,8 +329,9 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
 
     /// <summary>
     /// Reads and validates a recipe; problems name <paramref name="source"/>. The JSON is measured before anything is built
-    /// from it (<see cref="MaximumTokens"/>, <see cref="MaximumUnknownTokens"/>, a recipe key given twice), and then only what a
-    /// recipe uses is read: a list longer than its limit is refused before any of its entries is read.
+    /// from it (<see cref="MaximumTokens"/>, <see cref="MaximumUnknownTokens"/>, a recipe key given twice, text that is not
+    /// Unicode), and then only what a recipe uses is read: a list longer than its limit is refused before any of its entries
+    /// is read, and a name longer than its limit before it is decoded. Every problem is an <see cref="InvalidDataException"/>.
     /// </summary>
     public static TerrainRecipe Parse(ReadOnlySpan<byte> json, string source)
     {
@@ -344,7 +346,7 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
     private static TerrainRecipe Read(JsonElement root, string source)
     {
         if (root.ValueKind != JsonValueKind.Object) throw Error("is not a JSON object");
-        if (Text(Get(root, "format"), "format") != Format) throw Error($"format must be \"{Format}\"");
+        if (Get(root, "format") is not { ValueKind: JsonValueKind.String } format || !format.ValueEquals(Format)) throw Error($"format must be \"{Format}\"");
         if (Int(Get(root, "version"), "version") != Version) throw Error($"only version {Version} is known");
         int compiler = Int(Get(root, "compiler"), "compiler");
         if (compiler != CurrentCompiler) throw Error($"was written for splitting rules {compiler}; this zStudio has rules {CurrentCompiler}");
@@ -356,8 +358,8 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
             if (s.ValueKind != JsonValueKind.Object) throw Error("has a surface that is not an object");
             string id = Name(Get(s, "id"), "surface id");
             if (!ids.Add(id)) throw Error($"lists surface {id} twice");
-            string model = Path(Get(s, "model"), $"surface {id} model"), node = Text(Get(s, "node"), $"surface {id} node");
-            if (node.Length is 0 or > 128) throw Error($"surface {id} has an invalid node name");
+            string model = Path(Get(s, "model"), $"surface {id} model");
+            if (Text(Get(s, "node"), $"surface {id} node", 128) is not { Length: > 0 } node) throw Error($"surface {id} has an invalid node name");
             if (surfaces.Any(x => x.Model.Equals(model, StringComparison.OrdinalIgnoreCase) && x.Node == node)) throw Error($"uses node {node} of {model} for two surfaces");
             surfaces.Add(new(id, model, node, Attributes(Get(s, "defaults"), $"surface {id} defaults")) { UnknownKeys = Unknown(s, SurfaceKeys) });
         }
@@ -370,16 +372,16 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
             foreach (var r in regionList.EnumerateArray())
             {
                 if (r.ValueKind != JsonValueKind.Object) throw Error("has a region that is not an object");
-                string name = Text(Get(r, "name"), "region name");
-                if (name.Length is 0 or > 128) throw Error("has a region without a name, or with one over 128 characters");
+                if (Text(Get(r, "name"), "region name", 128) is not { Length: > 0 } name) throw Error("has a region without a name, or with one over 128 characters");
                 List<string> on = []; HashSet<string> listed = new(StringComparer.Ordinal);
                 if (Get(r, "surfaces") is { } list)
                 {
                     if (list.ValueKind != JsonValueKind.Array) throw Error($"region {name} surfaces must be a list");
                     foreach (var id in list.EnumerateArray())
                     {
-                        string surface = Text(id, $"region {name} surface");
-                        if (!ids.Contains(surface)) throw Error($"region {name} names unknown surface {JsonData.ShownText(surface)}");
+                        // Surface ids are at most 32 characters.
+                        string? surface = Text(id, $"region {name} surface", 32);
+                        if (surface == null || !ids.Contains(surface)) throw Error($"region {name} names unknown surface {(surface == null ? "(longer than any surface id)" : JsonData.ShownText(surface))}");
                         if (listed.Add(surface)) on.Add(surface);
                     }
                 }
@@ -394,7 +396,15 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
         InvalidDataException Error(string message) => new($"{source} {message}.");
         // A key that is absent or null.
         static JsonElement? Get(JsonElement o, string key) => o.TryGetProperty(key, out var value) && value.ValueKind != JsonValueKind.Null ? value : null;
-        string Text(JsonElement? node, string what) => node is { ValueKind: JsonValueKind.String } v ? v.GetString()! : throw Error($"needs {what} as text");
+        // The text of a string of at most limit characters, or null for a longer one: one whose JSON spelling is longer than
+        // six bytes (a \u escape) a character is not decoded. Measure has refused text that is not Unicode.
+        string? Text(JsonElement? node, string what, int limit)
+        {
+            if (node is not { ValueKind: JsonValueKind.String } v) throw Error($"needs {what} as text");
+            if (JsonMarshal.GetRawUtf8Value(v).Length > 6L * limit + 2) return null;
+            string text = v.GetString()!;
+            return text.Length <= limit ? text : null;
+        }
         int Int(JsonElement? node, string what) => node is { ValueKind: JsonValueKind.Number } v && v.TryGetInt32(out int i) ? i : throw Error($"needs {what} as a whole number");
         float Real(JsonElement? node, string what)
         {
@@ -403,14 +413,14 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
         }
         string Name(JsonElement? node, string what)
         {
-            string text = Text(node, what);
-            if (text.Length is 0 or > 32 || !text.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-')) throw Error($"{what} \"{JsonData.ShownText(text)}\" must be 1–32 letters, digits, _ or -");
+            string? text = Text(node, what, 32);
+            if (text is not { Length: > 0 } || !text.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-'))
+                throw Error($"{what} {(text == null ? "" : $"\"{JsonData.ShownText(text)}\" ")}must be 1–32 letters, digits, _ or -");
             return text;
         }
         string Path(JsonElement? node, string what)
         {
-            string text = Text(node, what);
-            if (text.Length is 0 or > 260) throw Error($"{what} must be a relative file path of at most 260 characters");
+            if (Text(node, what, 260) is not { Length: > 0 } text) throw Error($"{what} must be a relative file path of at most 260 characters");
             text = text.Replace('\\', '/');
             // Relative to the recipe: leading ".." steps, then plain names (the project boundary is checked where it is read).
             var parts = text.Split('/').SkipWhile(p => p == "..").ToArray();
@@ -422,7 +432,7 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
         TerrainShape Shape(JsonElement o, string region, ref long total)
         {
             if (o.ValueKind != JsonValueKind.Object) throw Error($"region {region} shape must be an object");
-            if (Get(o, "plane") is { } plane && (plane.ValueKind != JsonValueKind.String || plane.GetString() != "xz")) throw Error($"region {region} shape plane must be \"xz\" (plan view)");
+            if (Get(o, "plane") is { } plane && (plane.ValueKind != JsonValueKind.String || !plane.ValueEquals("xz"))) throw Error($"region {region} shape plane must be \"xz\" (plan view)");
             float? min = Get(o, "minY") is { } low ? Real(low, $"region {region} minY") : null, max = Get(o, "maxY") is { } high ? Real(high, $"region {region} maxY") : null;
             if (min > max) throw Error($"region {region} minY is above maxY");
             // An empty list covers nothing (everything was erased).
@@ -481,9 +491,9 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
     };
 
     /// <summary>
-    /// Refuses a recipe whose JSON is invalid or deeper than <see cref="MaximumDepth"/>, holds more than <see cref="MaximumTokens"/>
-    /// tokens or more than <see cref="MaximumUnknownTokens"/> under keys a recipe does not have, or gives a key of a recipe's
-    /// object twice, reading it once without building anything from it.
+    /// Refuses a recipe whose JSON is invalid or deeper than <see cref="MaximumDepth"/>, holds a key or string that is not
+    /// Unicode text, more than <see cref="MaximumTokens"/> tokens or more than <see cref="MaximumUnknownTokens"/> under keys a
+    /// recipe does not have, or gives a key of a recipe's object twice, reading it once without building anything from it.
     /// </summary>
     private static void Measure(ReadOnlySpan<byte> json, string source)
     {
@@ -494,12 +504,20 @@ public sealed record TerrainRecipe(int Compiler, IReadOnlyList<TerrainSurface> S
         Span<int> given = stackalloc int[MaximumDepth + 1];
         int depth = 0, tokens = 0, unknown = 0;
         Part keyed = Part.Value;
+        ReadOnlySpan<byte> lastKey = default;
         try
         {
             while (reader.Read())
             {
                 if (++tokens > MaximumTokens) throw new InvalidDataException($"{source} holds more than {MaximumTokens:N0} JSON tokens, more than a recipe at every limit holds.");
                 var token = reader.TokenType;
+                // Text that is not Unicode is valid JSON, but comparing or decoding it, here or when the recipe is read, throws
+                // InvalidOperationException: every key and string is refused before that, whether a recipe reads it or not.
+                if (token is JsonTokenType.PropertyName or JsonTokenType.String)
+                {
+                    JsonData.RequireUnicodeText(reader, lastKey, source);
+                    if (token == JsonTokenType.PropertyName) lastKey = reader.ValueSpan;
+                }
                 if (token is JsonTokenType.EndObject or JsonTokenType.EndArray)
                 {
                     if (parts[--depth] == Part.Unknown) Unknown();

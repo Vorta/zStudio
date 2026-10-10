@@ -915,7 +915,11 @@ public sealed class GltfDocument
     /// <summary>An entry's extras when they are an object (anything else is not extras), copied so the parsed text is not held.</summary>
     private static JsonObject? Extras(JsonNode? entry) => entry?["extras"] is JsonObject extras ? (JsonObject)extras.DeepClone() : null;
 
-    /// <summary>Shared pre-DOM guard for the importer and source JSON editors, including unknown properties.</summary>
+    /// <summary>
+    /// Shared pre-DOM guard for the importer and source JSON editors, including unknown properties. It also refuses a key
+    /// or string that is not Unicode text (<see cref="JsonData.IsUnicodeText"/>): System.Text.Json parses it, but decoding
+    /// or comparing it throws InvalidOperationException, also later, where extras are read or lazily parsed nodes edited.
+    /// </summary>
     internal static void ValidateJsonText(ReadOnlySpan<byte> json, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -923,10 +927,16 @@ public sealed class GltfDocument
             throw new InvalidDataException("glTF JSON exceeds 32 MiB. Remove unused metadata/extras and put large inline buffers in external .bin files or a GLB BIN chunk.");
         Utf8JsonReader scan = new(json, new JsonReaderOptions { MaxDepth = 64 });
         int tokens = 0;
+        ReadOnlySpan<byte> key = default;
         while (scan.Read())
         {
             if ((++tokens & 1023) == 0) token.ThrowIfCancellationRequested();
             if (tokens > 4_000_000) throw new InvalidDataException("glTF JSON holds more than 4,000,000 tokens. Split the model or remove unused metadata.");
+            if (scan.TokenType is JsonTokenType.PropertyName or JsonTokenType.String)
+            {
+                JsonData.RequireUnicodeText(scan, key, "glTF JSON");
+                if (scan.TokenType == JsonTokenType.PropertyName) key = scan.ValueSpan;
+            }
         }
     }
 

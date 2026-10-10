@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Gltf;
+using Recoil.Zbd.Core.Terrain;
 using Recoil.Zbd.Core.Worlds;
 using Xunit;
 
@@ -236,10 +237,37 @@ public sealed class WorldGltfTests
     [InlineData("""{"recoil":{"class":"lod","lod":[1, null, 3]}}""")]
     [InlineData("""{"recoil":{"class":"lod","lod":[1.5]}}""")]
     [InlineData("""{"recoil":{"name":["a"]}}""")]
+    // Valid JSON whose text is not Unicode (an unpaired surrogate escape), which System.Text.Json decodes only lazily.
+    [InlineData("""{"recoil":{"class":"\ud800"}}""")]
+    [InlineData("""{"recoil":{"\udc00x":1}}""")]
     public void MalformedEngineValuesAreRefusedAsInvalidData(string extras)
     {
         string json = $$"""{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"x","extras":{{extras}}}]}""";
         Assert.Throws<InvalidDataException>(() => Import(json, new(), out _));
+    }
+
+    [Theory]
+    // Valid JSON whose text is not Unicode, an unpaired UTF-16 surrogate escape or (~) a byte that is not UTF-8, wherever a
+    // terrain recipe holds text: names, paths, unknown keys and their values, and attributes, also through the patch reader.
+    [InlineData(false, """{"format":"recoil-terrain","version":1,"compiler":1,"surfaces":[{"id":"g","model":"g.gltf","node":"G"}],"regions":[{"name":"\ud800"}]}""", "after key \"name\"")]
+    [InlineData(false, """{"format":"recoil-terrain","version":1,"compiler":1,"surfaces":[{"id":"g","model":"g.gltf","node":"\udc00x"}]}""", "after key \"node\"")]
+    [InlineData(false, """{"format":"recoil-terrain","version":1,"compiler":1,"surfaces":[{"id":"g","model":"\ud800.gltf","node":"G"}]}""", "after key \"model\"")]
+    [InlineData(false, """{"format":"recoil-terrain","\ud800":1,"version":1,"compiler":1,"surfaces":[{"id":"g","model":"g.gltf","node":"G"}]}""", "a key at byte 27")]
+    [InlineData(false, """{"format":"recoil-terrain","version":1,"compiler":1,"surfaces":[{"id":"g","model":"g.gltf","node":"G"}],"note":"\udc00"}""", "after key \"note\"")]
+    [InlineData(false, """{"format":"recoil-terrain","version":1,"compiler":1,"surfaces":[{"id":"g","model":"g.gltf","node":"G"}],"regions":[{"name":"r","set":{"craters":"\ud800"}}]}""", "after key \"craters\"")]
+    [InlineData(false, """{"format":"recoil-terrain","version":1,"compiler":1,"surfaces":[{"id":"g","model":"g.gltf","node":"G"}],"regions":[{"name":"~"}]}""", "after key \"name\"")]
+    [InlineData(true, """{"craters":"\ud800"}""", "the set craters is not valid Unicode")]
+    [InlineData(true, """{"\udc00x":true}""", "the set has an attribute name that is not valid Unicode")]
+    public void RecipeTextThatIsNotUnicodeIsRefusedAsMalformed(bool patch, string json, string where)
+    {
+        byte[] bytes = [.. Encoding.UTF8.GetBytes(json).Select(b => b == (byte)'~' ? (byte)0xFF : b)];
+        var refused = Assert.Throws<InvalidDataException>(() =>
+        {
+            if (patch) TerrainAttributes.FromJson(JsonNode.Parse(bytes), "the set");
+            else TerrainRecipe.Parse(bytes, "ground.terrain.json");
+        });
+        Assert.Contains(where, refused.Message);
+        Assert.Contains("not valid Unicode", refused.Message);
     }
 
     [Fact]
