@@ -105,6 +105,27 @@ public sealed partial class AnimationTests
         Assert.Equal(end.Sequences, resumed.Sequences); Assert.Equal(end.Diagnostics, resumed.Diagnostics);
     }
     [Fact]
+    public void TickRefusedPartWayIsReplayedRatherThanContinued()
+    {
+        // Cleanup admission is refused after the motion ended but before the effect aged in that tick. The player must
+        // not show or continue that partial tick; the next seek replays it and matches an unrefused run.
+        var package = Fixture(); var entry = package.Entries[0]; entry.SetFloat(164, 0);
+        entry.References[5].Add(new(new byte[36])); var spark = new AnimationRecord(new byte[36]); spark.SetText(0, "spark"); entry.References[5].Add(spark);
+        var effect = AnimationCatalog.Create(3); effect.SetShort(12, 1);
+        var motion = AnimationCatalog.Create(11); motion.SetInt(12, 1); motion.SetInt(16, 1); motion.SetVector(44, new(3, 0, 0)); motion.SetVector(56, new(6, 0, 0)); motion.SetFloat(140, .5f);
+        entry.Sequences[0].Events.AddRange([effect, motion]);
+        AnimationPreviewContext Sparks() { var context = Context(package); context.Effects.Add("spark", new("spark", "animated", 0, [], 1, false)); return context; }
+        var expected = new AnimationPlayer(Sparks(), 0).EvaluateForTest(.7);
+        bool refuse = true; AnimationPlayer? player = null;
+        player = new(Sparks(), 0, 1, false, TestContext.Current.CancellationToken, AnimationPlayer.MaximumRetainedStateBytes,
+            () => refuse && player?.Time > .4 ? AnimationPlayer.MaximumRetainedStateBytes : 0);
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => player.EvaluateForTest(.7));
+        Assert.Throws<IOException>(() => player.Frame(TestContext.Current.CancellationToken));
+        refuse = false;
+        var resumed = player.EvaluateForTest(.7);
+        Assert.Equal(expected.Nodes, resumed.Nodes); Assert.Equal(expected.Trace, resumed.Trace); Assert.Equal(expected.Sequences, resumed.Sequences);
+    }
+    [Fact]
     public void WaitingSequenceReleaseAndStopUseVerifiedStateValues()
     {
         var package = Fixture(); var entry = package.Entries[0]; var waiting = entry.Sequences[0]; waiting.ResetMode = 3;

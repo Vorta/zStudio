@@ -131,30 +131,49 @@ public sealed partial class AnimationPlayer
         InvalidateRetainedState();
         resetInitialized = true;
     }
-    public AnimationFrame Step(CancellationToken token = default) { token.ThrowIfCancellationRequested(); cues.Clear(); Tick(token); return Frame(token); }
+    public AnimationFrame Step(CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        // After an interrupted tick, the step reaches that tick again from the last complete one.
+        long target = interrupted ? ticks : ticks + 1;
+        if (interrupted) Rewind(ticks - 1, token);
+        cues.Clear();
+        while (ticks < target) Tick(token);
+        return Frame(token);
+    }
     public AnimationFrame AdvanceTo(double seconds, bool seeking = false, CancellationToken token = default)
     {
         if (!double.IsFinite(seconds) || seconds < 0 || seconds > 3600) throw new InvalidDataException("Preview time must be between zero and one hour.");
         token.ThrowIfCancellationRequested();
         long target = (long)Math.Floor(seconds / StepSeconds + 1e-7);
-        if (target < ticks)
-        {
-            var closest = checkpoints.LastOrDefault(p => p.Key <= target);
-            if (closest.Value == null) Reset(token); else Restore(closest.Value, token);
-        }
+        if (target < ticks || interrupted) Rewind(interrupted ? Math.Min(target, ticks - 1) : target, token);
         cues.Clear();
         while (ticks < target) { token.ThrowIfCancellationRequested(); Tick(token); }
         if (seeking) cues.Clear();
         return Frame(token);
     }
+    /// <summary>
+    /// A tick an allowance refused part-way: it applied only some of its changes, so no frame or tick continues from it.
+    /// The next seek, step or playback replays from a checkpoint before it; a reset or restore replaces it.
+    /// </summary>
+    private bool interrupted;
+    private const string InterruptedRefusal = "The preview stopped inside a refused animation step. Seek or play to replay it from an earlier point.";
+    /// <summary>The latest checkpoint at or before <paramref name="target"/>, else the reset state; either replaces the whole runtime state.</summary>
+    private void Rewind(long target, CancellationToken token)
+    {
+        var closest = checkpoints.LastOrDefault(p => p.Key <= target);
+        if (closest.Value == null) Reset(token); else Restore(closest.Value, token);
+    }
     private void Tick(CancellationToken token)
     {
         // Cancellation is observed only between ticks. Events, child activations and their lookups change the
         // runtime state as a tick proceeds, and a reused player must stay at a state an uninterrupted run reaches.
-        // The dispatch limit and the binding allowance bound one tick's work instead.
+        // The dispatch limit and the binding allowance bound one tick's work instead; a refusal that escapes them
+        // marks the tick interrupted.
         token.ThrowIfCancellationRequested();
         using var binding = BeginBinding(CancellationToken.None);
         ReleaseReplacedSequences();
+        interrupted = true;
         ticks++; dispatchBudget = 10000; screenColor = screenWave = Vector4.Zero;
         foreach (var instance in instances.ToArray())
         {
@@ -191,6 +210,7 @@ public sealed partial class AnimationPlayer
         // Keep completed root geometry as the final pose, but release nested instances.
         if (instances.RemoveAll(i => i.Finished && i.Id != 1 && !instances.Any(p => p.Children.Values.Contains(i.Id))) > 0)
             InvalidateRetainedState();
+        interrupted = false;
         // The tick is complete; canceling its optional checkpoint only leaves a later seek to replay from an earlier one.
         if (!measuringDuration && ticks % 60 == 0) SaveCheckpoint(token);
     }
@@ -371,6 +391,7 @@ public sealed partial class AnimationPlayer
     public AnimationFrame Frame(CancellationToken token) => Frame(token, Worlds.LookupWorkBudget.MaximumUnits);
     internal AnimationFrame Frame(CancellationToken token, long maximumWork, Action<long>? reserved = null)
     {
+        if (interrupted) throw new IOException(InterruptedRefusal);
         AnimationBindingOperation frameBindings = new(context, token, maximumWork, reserved);
         frameBindings.Reserve(1);
         var ancestry = BeginFrameAncestry(frameBindings);
@@ -527,7 +548,7 @@ public sealed partial class AnimationPlayer
         token.ThrowIfCancellationRequested();
         ticks = c.Ticks; nextId = c.NextId; randomIndex = c.RandomIndex; instances = restored; sharedNodes = shared; effects = restoredEffects;
         trace = restoredTrace; notes = restoredNotes; traceOrdinal = c.TraceOrdinal; traceDropped = c.TraceDropped; previewIssues = restoredIssues; lights = restoredLights; activeSounds = restoredSounds; screenColor = c.Color; screenWave = c.Wave; fog = c.Fog;
-        retiredSequences.Clear(); InvalidateRetainedState();
+        retiredSequences.Clear(); InvalidateRetainedState(); interrupted = false;
     }
 }
 

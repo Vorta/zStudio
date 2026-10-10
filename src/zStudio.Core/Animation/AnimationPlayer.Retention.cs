@@ -84,7 +84,7 @@ public sealed partial class AnimationPlayer
         replacement.randomTable.CopyTo(randomTable, 0);
         screenColor = replacement.screenColor; screenWave = replacement.screenWave; fog = replacement.fog;
         measuredEnd = replacement.measuredEnd; unavailableDuration = replacement.unavailableDuration;
-        retiredSequences.Clear();
+        retiredSequences.Clear(); interrupted = false;
         foreach (var instance in instances)
             foreach (var sequence in instance.Sequences) sequence.WorkChanged = AdjustRetainedWork;
         InvalidateRetainedState();
