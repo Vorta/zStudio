@@ -123,14 +123,14 @@ internal sealed class WorldCompareView
         var node = row.Source; var a = node.Expected; var b = node.Actual;
         List<WorldCompareDetail> details = [];
         HashSet<string> fields = [.. node.Differences.Select(d => d.Field)];
-        // Highlights follow the compared fields. Slot numbers are display-only; parent names are compared
-        // without ordering, while child encounter order is part of the semantic comparison.
+        // Highlights follow the compared fields, so only a changed row has them. Slot numbers are display-only; parents
+        // differ where the node stands for separate nodes in the other world (its counterparts), and child encounter order
+        // is part of the semantic comparison.
         void Add(string field, string? retail, string? rebuilt, params string[] differenceFields) =>
             details.Add(new(field, retail ?? "—", rebuilt ?? "—", a != null && b != null && differenceFields.Any(fields.Contains)));
         Add("Slot", RetailSlot(node)?.ToString(CultureInfo.InvariantCulture), RebuiltSlot(node)?.ToString(CultureInfo.InvariantCulture));
         Add("Class", a?.Class.ToString(), b?.Class.ToString(), "class");
-        string? retailParents = a == null ? null : Names(a.Parents), rebuiltParents = b == null ? null : Names(b.Parents);
-        details.Add(new("Parents", retailParents ?? "—", rebuiltParents ?? "—", a != null && b != null && !a.Parents.Select(p => p.Name).Order(StringComparer.Ordinal).SequenceEqual(b.Parents.Select(p => p.Name).Order(StringComparer.Ordinal))));
+        Add("Parents", a == null ? null : Names(a.Parents), b == null ? null : Names(b.Parents), "counterparts");
         Add("Children", a == null ? null : Names(a.Children), b == null ? null : Names(b.Children), "children");
         Add("Flags", a == null ? null : $"0x{a.Flags:X8}", b == null ? null : $"0x{b.Flags:X8}", "flags.carried", "flags.derived");
         Add("Zone", a == null ? null : (a.Zone & 0xFF).ToString(CultureInfo.InvariantCulture), b == null ? null : (b.Zone & 0xFF).ToString(CultureInfo.InvariantCulture), "zone");

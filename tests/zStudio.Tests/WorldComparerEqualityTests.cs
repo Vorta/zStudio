@@ -6,8 +6,9 @@ using Xunit;
 namespace Recoil.Zbd.Tests;
 
 /// <summary>
-/// What Compare worlds counts as the same: every value a model keeps that the game uses (not only its counts), and for
-/// copies of a name, the same fields a comparison reports rather than the raw class data with its stored pointers.
+/// What Compare worlds counts as the same: every value a model keeps that the game uses (not only its counts), for
+/// copies of a name, the same fields a comparison reports rather than the raw class data with its stored pointers, and
+/// never one node standing for two.
 /// </summary>
 public sealed class WorldComparerEqualityTests
 {
@@ -267,5 +268,61 @@ public sealed class WorldComparerEqualityTests
         var (moved, _, _) = Lamps(false, lamp => { lamp.AttachedWorlds.Clear(); lamp.AttachedWorlds.Add(new("world2", WorldNodeClass.World)); });
         var worlds = Assert.Single(WorldComparer.CompareTree(lamps, moved, token: Token).Differences);
         Assert.Equal(("light.worlds", "world1", "world2"), (worlds.Field, worlds.Expected, worlds.Actual));
+    }
+
+    /// <summary>
+    /// world1 holding p1 and p2, each holding an object x: with <paramref name="shared"/> one x both hold, otherwise a copy
+    /// each; with <paramref name="oneParent"/>, p1 alone holds both (the shared x listed twice).
+    /// </summary>
+    private static GameZWorld Places(bool shared, bool oneParent = false)
+    {
+        GameZWorld world = new();
+        WorldNode Add(WorldNode node) { world.Nodes.Add(node); return node; }
+        WorldNode Object(string name) { WorldNode node = new(name, WorldNodeClass.Object3D) { Flags = WorldGltf.DefaultCarried }; node.SetPayloadInt(0, 0x28); return Add(node); }
+        static void Link(WorldNode parent, WorldNode child) { parent.Children.Add(child); child.Parents.Add(parent); }
+        var root = Add(new("world1", WorldNodeClass.World));
+        var p1 = Object("p1"); Link(root, p1);
+        var p2 = p1;
+        if (!oneParent) { p2 = Object("p2"); Link(root, p2); }
+        var x = Object("x"); Link(p1, x);
+        Link(p2, shared ? x : Object("x"));
+        return world;
+    }
+
+    [Fact]
+    public void OneNodeWhereTheOtherWorldHasTwoIsNotTheSame()
+    {
+        // Separate copies against one shared node, the reverse, and two copies in one parent against one node listed twice:
+        // whichever world shares, both places of the node differ in their counterparts and the parent of the second in its
+        // children, so counts agree with the rows.
+        foreach (bool oneParent in new[] { false, true })
+            foreach (bool retailShares in new[] { false, true })
+            {
+                var comparison = WorldComparer.CompareTree(Places(retailShares, oneParent), Places(!retailShares, oneParent), token: Token);
+                var world = Assert.Single(comparison.Roots);
+                var places = world.Children.SelectMany(p => p.Children).ToList();
+                Assert.Equal(2, places.Count);
+                // Each of the two nodes has a place of its own, against the one node.
+                Assert.NotSame(retailShares ? places[0].Actual : places[0].Expected, retailShares ? places[1].Actual : places[1].Expected);
+                foreach (var place in places)
+                {
+                    Assert.Equal(WorldComparisonStatus.Changed, place.Status);
+                    var counterparts = Assert.Single(place.Differences);
+                    Assert.Equal("counterparts", counterparts.Field);
+                    // The separate copies on one side, the one node on the other.
+                    Assert.Equal((retailShares ? 1 : 2, retailShares ? 2 : 1), (counterparts.Expected.Split(',').Length, counterparts.Actual.Split(',').Length));
+                }
+                var second = world.Children[^1];
+                Assert.Equal(WorldComparisonStatus.Changed, second.Status);
+                Assert.Equal("children", Assert.Single(second.Differences).Field);
+                Assert.Equal(new[] { $"{second.Path} children", $"{places[0].Path} counterparts", $"{places[1].Path} counterparts" }.Order(StringComparer.Ordinal),
+                    comparison.Differences.Select(d => $"{d.Path} {d.Field}").Order(StringComparer.Ordinal));
+                Assert.Equal(3, comparison.DifferenceCount);
+                Assert.Equal((oneParent ? 1 : 2, 3, 0, 0), (comparison.Counts[WorldComparisonStatus.Same], comparison.Counts[WorldComparisonStatus.Changed],
+                    comparison.Counts[WorldComparisonStatus.OnlyExpected], comparison.Counts[WorldComparisonStatus.OnlyActual]));
+            }
+        // Each world against itself is the same.
+        foreach (bool shared in new[] { false, true })
+            Assert.Empty(WorldComparer.CompareTree(Places(shared), Places(shared), token: Token).Differences);
     }
 }
