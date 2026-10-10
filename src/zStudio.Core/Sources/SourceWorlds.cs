@@ -25,8 +25,13 @@ public sealed record SourceWorldBuild(string Mission, string Folder, string Worl
 {
     /// <summary>Every project file the build read or looked for, from the pending content or the disk.</summary>
     public IReadOnlyCollection<string> Dependencies { get; init; } = [];
-    /// <summary>Disk files absent when the build searched for them; their appearance makes the preview stale.</summary>
+    /// <summary>Disk files and search folders absent when the build searched for them; their appearance makes the preview stale.</summary>
     public IReadOnlyList<string> MissingInputs { get; init; } = [];
+    /// <summary>The search folders among <see cref="MissingInputs"/>: a pending file added below one makes the preview stale too.</summary>
+    public IReadOnlyList<string> MissingFolders { get; init; } = [];
+    /// <summary>Whether one of <paramref name="files"/> lies below a search folder the build found missing, putting it on the search paths.</summary>
+    public bool AddsToMissingFolder(IEnumerable<string> files) => MissingFolders.Count > 0 && files.Any(file => MissingFolders.Any(folder =>
+        file.Length > folder.Length && file[folder.Length] == '/' && file.StartsWith(folder, StringComparison.OrdinalIgnoreCase)));
     /// <summary>Content identities of disk inputs actually read; length/timestamp equality alone is insufficient.</summary>
     public IReadOnlyDictionary<string, string> InputHashes { get; init; } = new Dictionary<string, string>();
     /// <summary>Every lookup by name the mission makes as the game loads it, with the node it finds in this build.</summary>
@@ -500,7 +505,7 @@ public static partial class SourceWorlds
             {
                 var built = await Task.Run(() => SourceBuilder.Build(root, output, snapshot, token), token).ConfigureAwait(false);
                 if (output.Family == "animations") animations = built.Package;
-                if (output.Family == "world" && additions != null) CheckAdditions(snapshot.World(mission, token).LoadedRoots, additions);
+                if (output.Family == "world" && additions != null) { var world = snapshot.World(mission, token); CheckAdditions(world.LoadedRoots, additions, world.Provenance); }
                 var check = FormatRegistry.Default.OpenBytes(output.Path, built.Bytes, token: token);
                 if (check.Diagnostics.FirstOrDefault(d => d.Severity == "Error") is { } error) throw new InvalidDataException("The built file does not reopen: " + error.Message);
                 string path = SourceProject.Resolve(destination, output.Path);
@@ -551,7 +556,7 @@ public static partial class SourceWorlds
             CheckPreviewPlanUnchanged(root, mission, snapshot, selected, token);
             snapshot.CheckUnchanged(token);
         }, token).ConfigureAwait(false);
-        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), MissingInputs = snapshot.Missing(), InputHashes = snapshot.Hashes(), Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
+        return new(mission, destination, SourceProject.Resolve(destination, $"{mission}/gamez.zbd"), results, snapshot.Stamps()) { Dependencies = snapshot.Dependencies(), MissingInputs = snapshot.Missing(), MissingFolders = snapshot.MissingFolders(), InputHashes = snapshot.Hashes(), Lookups = lookups, Provenance = provenance, Freed = freed, Executions = assembled.Executions, WriteInstruction = assembled.WriteInstruction };
     }
 
     /// <summary>
@@ -626,11 +631,13 @@ public static partial class SourceWorlds
 
     /// <summary>
     /// Checks that the script loaded <paramref name="additions"/> as the last models before it wrote the world (their
-    /// lines stand right before <c>GameZWriteZBDFile</c>) and that each placed one is a child of the world. AddChild
-    /// attaches the newest node with the name, so a model with a node of its own named like it would put that node in
-    /// the world instead of the placed root.
+    /// lines stand right before <c>GameZWriteZBDFile</c>), each from its own file, and that each placed one is a child of
+    /// the world. Its <c>SetModelDirectory</c> moves no folder the scripts listed before (see <see cref="DirectorySearchList"/>),
+    /// so a folder searched earlier can hold another file of the name. AddChild attaches the newest node with the name, so a
+    /// model with a node of its own named like it would put that node in the world instead of the placed root.
     /// </summary>
-    internal static void CheckAdditions(IReadOnlyList<WorldNode> loadedRoots, IReadOnlyList<SourceModelAddition> additions)
+    internal static void CheckAdditions(IReadOnlyList<WorldNode> loadedRoots, IReadOnlyList<SourceModelAddition> additions,
+        IReadOnlyDictionary<WorldNode, WorldNodeProvenance>? provenance = null)
     {
         for (int i = 0; i < additions.Count; i++)
         {
@@ -638,6 +645,14 @@ public static partial class SourceWorlds
             var root = at >= 0 ? loadedRoots[at] : null;
             if (root == null || root.Name != addition.Name)
                 throw new InvalidDataException($"The script does not run the lines that load {addition.Name} before it writes the world.");
+            if (provenance != null)
+            {
+                string model = addition.Model.Replace('\\', '/');
+                string? loaded = provenance.TryGetValue(root, out var origin) ? origin.LogicalLoadedFile : null;
+                if (loaded == null) throw new InvalidDataException($"The script's LoadGameGen of {Path.GetFileName(model)} for {addition.Name} finds no model in the folders it searches.");
+                if (!loaded.Equals(model, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"{addition.Name} would load {loaded}, not {model}: the mission searches {Path.GetDirectoryName(loaded)!.Replace('\\', '/')} before {Path.GetDirectoryName(model)!.Replace('\\', '/')}, and a folder its scripts already list keeps its place. Rename the model to a name no folder searched before it holds.");
+            }
             if (addition.Position == null || root.Parents.Any(p => p.Class == WorldNodeClass.World)) continue;
             throw new InvalidDataException(Holds(root, addition.Name)
                 ? $"{Path.GetFileName(addition.Model)} has a node of its own named {addition.Name}, so AddChild {addition.Name} would put that node in the world instead of the placed model; choose another name."

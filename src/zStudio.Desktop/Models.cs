@@ -94,6 +94,7 @@ public sealed partial class DocumentModel : ObservableObject, IDisposable
         if (SourceWorld is not { } world || SourceBuild is not { } build) return false;
         var changed = world.Workspace.ChangedSince(SourceRevision);
         if (changed.Count > 0 && build.Dependencies.Any(changed.Contains)) return true;
+        if (changed.Count > 0 && build.AddsToMissingFolder(changed)) return true;
         if (world.Workspace.ExternalChanges(token, verifyContent, build.Dependencies).Count > 0) return true;
         if (build.MissingInputs.Any(relative => System.IO.Path.Exists(Recoil.Zbd.Core.Sources.SourceProject.Resolve(world.Root, relative)))) return true;
         foreach (var (relative, stamp) in build.Inputs)
