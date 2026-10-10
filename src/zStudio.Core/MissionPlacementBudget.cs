@@ -9,7 +9,8 @@ namespace Recoil.Zbd.Core;
 /// placements add (vehicle and pickup copies, their identities and labels, startup lists), which repeated records
 /// can multiply. The copy of the world's own nodes is measured apart (<see cref="Original"/>): it is the size of the
 /// source scene, which the reader (at most 65,536 nodes) and a preview load's resource allowance have already
-/// admitted, so every accepted world builds its starting scene.
+/// admitted, so every accepted world builds its starting scene; the animations' binding allowance grows with the
+/// world's nodes for the same reason (<see cref="Animation.AnimationBindingOperation.Allowance(int)"/>).
 /// </summary>
 internal sealed class MissionPlacementBudget
 {
@@ -188,6 +189,8 @@ internal sealed class MissionPlacementState(GameScene scene, int originalCount, 
     internal int Live(string name) { budget.Name(name); return live.GetValueOrDefault(name, -1); }
     internal (int Root, int Count) Template(string name) { budget.Name(name); return templates.GetValueOrDefault(name, (-1, 0)); }
     internal bool UseName(string name) { budget.Name(name); return usedNames.Add(name); }
+    /// <summary>Give back a name <see cref="UseName"/> took for a copy the game destroyed.</summary>
+    internal void ReleaseName(string name) { budget.Name(name); usedNames.Remove(name); }
     internal void Actor(int root) { budget.Take(); actorRoots.Add(root); }
     internal bool HasActor(int root) { budget.Take(); return actorRoots.Contains(root); }
     internal IReadOnlyList<int> Children(GameNode node) => changed && node.Index == worldRoot ? children : node.Children;

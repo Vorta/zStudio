@@ -237,7 +237,7 @@ public static partial class MissionSceneLoader
     internal static MissionSceneContext BuildWithBudget(ZbdDocument world, MissionPlacementBudget budget, AnimationPackage? package, JsonNode? aiv, JsonNode? vehicles, JsonNode? starts,
         IEnumerable<string>? initialDiagnostics = null, CancellationToken token = default, MissionLayoutSelection? selection = null,
         JsonNode? ai = null, JsonNode? pickups = null, MissionResourceSource? pickupSource = null, MissionResourceSource? aivSource = null,
-        long maximumBindingWork = AnimationBindingOperation.MaximumUnits)
+        long? maximumBindingWork = null)
     {
         selection ??= MissionLayoutSelection.For(MissionDifficulty.Medium);
         token.ThrowIfCancellationRequested();
@@ -252,6 +252,7 @@ public static partial class MissionSceneLoader
         HashSet<int> positioned = [];
         var previewWorld = new ZbdDocument(world.Path, world.Stamp, world.Probe, world.Bytes) { Scene = scene };
         AnimationPreviewContext? context = package == null ? null : new() { Package = package, World = previewWorld, LoadedNodeCount = original.Nodes.Count };
+        // One allowance for every phase, scaled with the world's own nodes (AnimationBindingOperation.Allowance) like the copy above.
         AnimationBindingOperation? bindings = context == null ? null : new(context, token, maximumBindingWork);
         HashSet<string> vehicleNames = new(StringComparer.Ordinal);
         foreach (var record in Records(vehicles)) { budget.Name(record.Name); vehicleNames.Add(record.Name); }
@@ -310,18 +311,19 @@ public static partial class MissionSceneLoader
             }
         PlacePickups(scene, sources, actors, positioned, worldRoot, world.Path, original.Nodes.Count, pickups,
             pickupSource ?? new(world.Path, -1, selection.PickupResource), selection, CloneTree, placementNotes, token, placement, budget);
-        // Startup initialization traverses the scene, so publish the one accumulated adjacency before it runs.
+        // Startup initialization traverses the scene, so publish the one accumulated adjacency before it runs. Placements
+        // add copies, rename templates and change the world's children, the only phase that changes names or edges: the
+        // startup frontier builds its indexes again, and the dormant scan keeps them, as the turrets kept the load's.
         placement.PublishChildren();
         if (context != null) Initialize(false);
         HashSet<int> dormant = [];
         if (context != null)
         {
-            // Startup and placement may have changed topology without changing its count. Dormant references
-            // belong to this same preparation allowance, including entries that skipped initialization entirely.
-            bindings!.Invalidate();
+            // Startup changed only poses and flags, so its indexes stand. Dormant references belong to this same
+            // preparation allowance, including entries that skipped initialization entirely.
             foreach (var entry in package!.Entries)
             {
-                bindings.Reserve(1);
+                bindings!.Reserve(1);
                 foreach (var ev in entry.Sequences.SelectMany(s => s.Events))
                 {
                     bindings.Reserve(1);
@@ -376,7 +378,9 @@ public static partial class MissionSceneLoader
             catch (InvalidDataException ex) { notes.Add($"Mission initialization is incomplete: {ex.Message}"); }
         }
 
-        int CloneTree(int template, string name)
+        // keep: whether the game keeps the copy. CreateObjectInstance (0x41dab0) destroys a pickup's copy that has no bvol
+        // (DestroyNodeRecursive, which frees all of an unattached copy); the copy is then removed and -1 returned.
+        int CloneTree(int template, string name, Func<int, bool>? keep = null)
         {
             // A later placement can copy the newest live descendant of an earlier clone. Only nodes made
             // by this copy are out of bounds; original source ordinals continue through the sources map.
@@ -441,6 +445,9 @@ public static partial class MissionSceneLoader
             {
                 int root = Copy(template, 0);
                 if (root < 0) throw new InvalidDataException("The game makes no copy of this template.");
+                // Before any edge, name or index publishes the copy. (A template returned itself stays in the world.)
+                if (root >= before && keep?.Invoke(root) == false)
+                { scene.Nodes.RemoveRange(before, scene.Nodes.Count - before); sources.RemoveRange(before, sources.Count - before); return -1; }
                 foreach (var (id, list) in parents)
                 {
                     budget.Take(list.Count + (id < before ? scene.Nodes[id].Parents.Length : 0L));

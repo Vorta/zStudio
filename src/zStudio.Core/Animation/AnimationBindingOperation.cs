@@ -1,17 +1,35 @@
+using Recoil.Zbd.Core.Formats;
 using Recoil.Zbd.Core.Worlds;
 
 namespace Recoil.Zbd.Core.Animation;
 
 /// <summary>One preparation/frontier's bounded, immutable-topology name and subtree queries.</summary>
+/// <param name="maximum">The allowance; by default the scene's (<see cref="Allowance(AnimationPreviewContext)"/>).</param>
 /// <param name="shared">Indexes an owner keeps for later operations (a player's playback ticks); by default this operation's own.</param>
 internal sealed class AnimationBindingOperation(AnimationPreviewContext context, CancellationToken token,
-    long maximum = AnimationBindingOperation.MaximumUnits, Action<long>? reserved = null, AnimationBindingOperation.Indexes? shared = null)
+    long? maximum = null, Action<long>? reserved = null, AnimationBindingOperation.Indexes? shared = null)
 {
-    // Original m6 needs about64.64 Mi aggregate binding units after shared-index reuse.
-    // This scoped headroom does not change generic graph or explicit frame traversal allowances.
+    /// <summary>The allowance of a scene of up to 16,384 nodes. Original m6 (4,955 nodes) starts in about 20 Mi.</summary>
     internal const long MaximumUnits = 96L * 1024 * 1024;
-    private readonly LookupWorkBudget work = new(maximum, token, ceiling: MaximumUnits);
+    /// <summary>
+    /// A larger scene's allowance per node. Binding grows with the scene, not only with the animations: the name and subtree
+    /// indexes hold every node, and every animation bound at the world root (m6's five load cleanups, m1's start) takes all of
+    /// its nodes. Up to the 65,536 nodes a GameZ world holds (zStudio's builds allow that many), so it still bounds animations
+    /// that bind large subtrees over and over.
+    /// </summary>
+    internal const long UnitsPerNode = MaximumUnits / 16384;
+    internal const long MaximumScaledUnits = UnitsPerNode * GameZLayouts.MaximumTableEntries;
+    internal static long Allowance(int nodes) => Math.Max(MaximumUnits, UnitsPerNode * Math.Clamp(nodes, 0, GameZLayouts.MaximumTableEntries));
+    internal static long Allowance(AnimationPreviewContext context) => Allowance(SceneNodes(context));
+    private static int SceneNodes(AnimationPreviewContext context) => (context.Mission?.Scene ?? context.World.Scene)?.Nodes.Count ?? 0;
+    private readonly int sceneNodes = SceneNodes(context);
+    private readonly long allowance = maximum ?? Allowance(context);
+    private readonly LookupWorkBudget work = new(maximum ?? Allowance(context), token, ceiling: MaximumScaledUnits);
     private readonly Indexes cache = shared ?? new();
+    // What a refusal names: the instances bound, their roots' nodes, the largest of them, and the work of the indexes.
+    private long boundNodes, indexWork;
+    private int instances, largestNodes, largestRoot;
+    private AnimationEntry? largest;
     internal long Used => work.UsedUnits;
     internal bool Exhausted => work.Exhausted;
 
@@ -39,7 +57,24 @@ internal sealed class AnimationBindingOperation(AnimationPreviewContext context,
         reserved?.Invoke(Used);
         token.ThrowIfCancellationRequested();
     }
-    private static IOException Refused(Exception ex) => new("Animation binding exceeds its aggregate work or retained lookup allowance. Simplify repeated roots/references or initialize fewer actors.", ex);
+    /// <summary>Charge the work that built indexes kept from earlier operations (<see cref="Indexes.Retained"/>).</summary>
+    internal void ReserveRetained() { Reserve(1 + cache.Retained); indexWork += cache.Retained; }
+    /// <summary>An animation instance bound at <paramref name="root"/>, whose <paramref name="count"/> nodes it takes.</summary>
+    internal void Bound(AnimationEntry entry, int root, int count)
+    {
+        instances++; boundNodes += count;
+        if (largest != null && count <= largestNodes) return;
+        largest = entry; largestRoot = root; largestNodes = count;
+    }
+    private IOException Refused(Exception ex)
+    {
+        var scene = context.Scene;
+        string root = largestRoot >= 0 && largestRoot < scene.Nodes.Count ? JsonData.ShownText(scene.Nodes[largestRoot].Name, 64) : $"#{largestRoot}";
+        string bound = largest == null ? "no animation instance was bound yet" :
+            $"{instances:N0} animation instances were bound at roots holding {boundNodes:N0} nodes (the largest, {JsonData.ShownText(largest.Name, 64)} at {root}, holds {largestNodes:N0})";
+        return new($"Animation binding needs more than its {allowance:N0} units of work for this {sceneNodes:N0}-node scene: {bound}, and its name and subtree indexes took {indexWork:N0}. " +
+            "Bind fewer animations at large subtrees such as the world root, or simplify repeated roots and references.", ex);
+    }
     internal void Refresh()
     {
         Reserve(1);
@@ -54,7 +89,7 @@ internal sealed class AnimationBindingOperation(AnimationPreviewContext context,
         cache.Positions = null; cache.Entries = null; cache.Retained = 0;
     }
     /// <summary>Keep the work that built a complete index entry; a canceled or refused build leaves none.</summary>
-    private void Retain(long start) => cache.Retained += Used - start;
+    private void Retain(long start) { cache.Retained += Used - start; indexWork += Used - start; }
     internal AnimationEntryLookup EntryLookup()
     {
         Refresh();
@@ -82,7 +117,7 @@ internal sealed class AnimationBindingOperation(AnimationPreviewContext context,
             {
                 Reserve(8L * context.Package.Entries.Count);
                 cache.Positions = NameLookups.RootPositions(context.Package.Entries, name => Named(name, context.LoadedLimit).Count);
-                cache.Retained += 8L * context.Package.Entries.Count;
+                cache.Retained += 8L * context.Package.Entries.Count; indexWork += 8L * context.Package.Entries.Count;
             }
             var positions = cache.Positions;
             int position = entry.Index >= 0 && entry.Index < positions.Length && context.Package.Entries[entry.Index].RootName == entry.RootName ? positions[entry.Index] : -1;

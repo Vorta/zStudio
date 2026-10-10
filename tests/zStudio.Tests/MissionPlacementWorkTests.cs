@@ -109,25 +109,39 @@ public sealed class MissionPlacementWorkTests
     }
 
     [Fact]
-    public void FailedPickupCloneConsumesItsNameBeforeTheNextRecord()
+    public void FailedPickupCopiesUseTheirNamesUnlessTheGameDestroysThem()
     {
+        // A copy the preview refuses keeps its name. A copy the game destroys for want of a bvol (CreateObjectInstance
+        // 0x41dab0) does not advance nameSuffixMax, so the next record takes its name again.
         var world = PickupWorld(); var scene = world.Scene!;
         var budget = new MissionPlacementBudget(Token); var state = new MissionPlacementState(scene, 4, 3, budget); state.Initialize();
         List<int> sources = [0, 1, 2, 3]; List<MissionActor> actors = []; List<string> attempted = []; List<string> notes = [];
-        MissionSceneLoader.PlacePickups(scene, sources, actors, [], 3, world.Path, 4, PickupRows(2),
+        MissionSceneLoader.PlacePickups(scene, sources, actors, [], 3, world.Path, 4, PickupRows(3),
             new(world.Path, 7, "puppies.zrd"), MissionLayoutSelection.For(MissionDifficulty.Medium), Clone,
             new BoundedDiagnostics(notes), Token, state, budget);
-        Assert.Equal(new[] { "pu00100", "pu00101" }, attempted);
+        Assert.Equal(new[] { "pu00100", "pu00101", "pu00101" }, attempted);
         var accepted = Assert.Single(actors); Assert.Equal("pu00101", accepted.Name);
-        Assert.Equal(1, accepted.Pickup!.Source.RecordIndex);
+        Assert.Equal(2, accepted.Pickup!.Source.RecordIndex);
         Assert.Contains(notes, n => n.Contains("fixture clone refusal", StringComparison.Ordinal));
+        Assert.Contains(notes, n => n.Contains("#1", StringComparison.Ordinal) && n.Contains("destroys this copy", StringComparison.Ordinal));
+        // The real copy: a bvol LOD holding only a light yields no copy (CopyLodNode), so the copy the game destroys
+        // leaves neither the scene nor the world's children holding it.
+        var lod = World(Node(0, "pu001", children: [1]), Node(1, "bvol", "lod", parents: [0], children: [2]),
+            Node(2, "lamp", "light", parents: [1]), Node(3, "world", "world"));
+        var result = MissionSceneLoader.BuildWithBudget(lod, new MissionPlacementBudget(Token), null, null, null, null, token: Token, pickups: PickupRows(2));
+        Assert.Empty(result.Actors); Assert.Equal(4, result.Scene.Nodes.Count); Assert.Equal(4, result.SourceNodes.Count);
+        Assert.Empty(result.Scene.Nodes[3].Children);
+        Assert.Equal(2, result.Diagnostics.Count(d => d.Contains("destroys this copy", StringComparison.Ordinal)));
 
-        int Clone(int template, string name)
+        int Clone(int template, string name, Func<int, bool>? keep)
         {
             Assert.Equal(1, template); attempted.Add(name);
             if (attempted.Count == 1) throw new InvalidDataException("fixture clone refusal");
-            scene.Nodes.Add(Node(4, name, children: [5])); scene.Nodes.Add(Node(5, "bvol", parents: [4]));
-            sources.Add(1); sources.Add(2); state.Cloned(4); return 4;
+            // The second copy's bvol yielded no copy (a LOD holding a light, say), as CloneTree reports it.
+            scene.Nodes.Add(Node(4, name, children: attempted.Count == 2 ? [] : [5])); sources.Add(1);
+            if (attempted.Count == 3) { scene.Nodes.Add(Node(5, "bvol", parents: [4])); sources.Add(2); }
+            if (keep?.Invoke(4) == false) { scene.Nodes.RemoveAt(4); sources.RemoveAt(4); return -1; }
+            state.Cloned(4); return 4;
         }
     }
 
@@ -173,14 +187,37 @@ public sealed class MissionPlacementWorkTests
     {
         // The world's own copy is the scene the reader and the preview load admitted (here more nodes than the shipped
         // 16,000-node pool); only what placements add counts against the allowance, which still refuses repetition.
-        const int count = 20000; const long allowance = 64 * 1024;
-        var world = World([.. Enumerable.Range(0, count).Select(i => Node(i, i == 0 ? "tank" : "part")), Node(count, "world", "world")]);
+        // Its animations bind as its size requires: like m6's, five load cleanups at the world root take all its nodes,
+        // then a startup animation there too, more work than the 96 Mi a world of up to 16,384 nodes is allowed.
+        const int count = 30000; const long allowance = 64 * 1024;
+        var world = World([.. Enumerable.Range(0, count).Select(i => Node(i, i == 0 ? "tank" : i <= 5 ? $"mark{i}" : "part", parents: [count])),
+            Node(count, "world", "world", children: [.. Enumerable.Range(0, count)])]);
+        new PreviewResourceBudget().Retain(world, Token); // A preview load admits it.
+        AnimationPackage package = new() { Prefix = new byte[72], Tail = [] }; package.Entries.Add(Entry(0, "", ""));
+        for (int i = 1; i <= 5; i++) { var cleanup = Entry(i, $"cleanup{i}", $"mark{i}"); cleanup.SetInt(148, 0x20); cleanup.Primary.Events.Add(Move(i)); package.Entries.Add(cleanup); }
+        var start = Entry(6, "start", "part"); start.Sequences[0].Events.Add(Move(6)); package.Entries.Add(start);
         var budget = new MissionPlacementBudget(Token, maximumCloneBytes: allowance);
-        var result = Build(world, budget, Actors(1));
-        Assert.Equal(count + 1, Assert.Single(result.Actors).Root); Assert.Equal(count + 2, result.Scene.Nodes.Count);
+        var result = MissionSceneLoader.BuildWithBudget(world, budget, package, Actors(1), Vehicles("tank"), Arr(Str("NEW_GAME_START"), Str("start")), token: Token);
+        Assert.Equal(count + 1, Assert.Single(result.Actors, a => a.Name == "tank_01").Root); Assert.Equal(count + 2, result.Scene.Nodes.Count);
+        Assert.All(Enumerable.Range(1, 6), i => Assert.Equal(10 * i, SceneBuilder.LocalTransform(result.Scene.Nodes[i]).M41)); // mark1-5, the first part.
+        Assert.DoesNotContain(result.Diagnostics, d => d.StartsWith("Mission initialization", StringComparison.Ordinal));
         Assert.InRange(budget.CloneBytes, 1, allowance);
+        // A small world's allowance refuses it, naming what took the work.
+        var refused = Assert.Throws<IOException>(() => MissionSceneLoader.BuildWithBudget(world, new MissionPlacementBudget(Token), package,
+            null, null, null, token: Token, maximumBindingWork: AnimationBindingOperation.MaximumUnits));
+        Assert.Contains("animation instances were bound at roots holding", refused.Message);
+        Assert.Contains("(the largest, cleanup1 at world, holds 30,001)", refused.Message);
         var error = Assert.Throws<InvalidDataException>(() => Build(world, new MissionPlacementBudget(Token, maximumCloneBytes: allowance), Actors(100)));
         Assert.Contains("placements copy more than 65,536 bytes", error.Message);
+
+        // An entry at the world root whose event 7 moves its named node (reference 1) at once.
+        static AnimationEntry Entry(int index, string name, string target)
+        {
+            var entry = new AnimationEntry(new byte[308], index, 0); entry.SetText(0, name); entry.SetText(32, "world"); entry.SetFloat(164, -1);
+            entry.References[1].Add(new(new byte[40])); var reference = new AnimationRecord(new byte[40]); reference.SetText(0, target, 36); entry.References[1].Add(reference);
+            entry.Sequences.Add(new(new byte[64]) { Name = "motion" }); return entry;
+        }
+        static AnimationEvent Move(int i) { var move = AnimationCatalog.Create(7); move.SetShort(28, 1); move.SetVector(16, new(10 * i, 0, 0)); return move; }
     }
 
     [Fact]
@@ -379,6 +416,8 @@ public sealed partial class AnimationTests
         startup.References[1][1].SetText(0, "target", 36);
         var position = AnimationCatalog.Create(7); position.SetShort(28, 1); position.SetVector(16, new(77, 0, 0));
         startup.Sequences[0].Events.Add(position); context.Package.Entries.Add(startup);
+        // A load cleanup at the world root indexes its subtree before the placement attaches the template there.
+        var cleanup = MissionEntry(2, "cleanup", "world"); cleanup.SetInt(148, 0x20); context.Package.Entries.Add(cleanup);
         byte[] original = Pack(context.Package);
         var mission = MissionSceneLoader.Build(context.World, context.Package,
             Arr(Str("animated"), Spawn(1, 2, 3, 0)), Arr(Str("animated"), Arr()),

@@ -5,7 +5,8 @@ internal sealed class LookupWorkBudget(long maximum = LookupWorkBudget.MaximumUn
     long ceiling = LookupWorkBudget.MaximumUnits)
 {
     internal const long MaximumUnits = 64L * 1024 * 1024;
-    private const long MaximumCeiling = 96L * 1024 * 1024;
+    // Animation binding's allowance for the largest world (AnimationBindingOperation.Allowance); other callers keep their own.
+    private const long MaximumCeiling = 384L * 1024 * 1024;
     private readonly long limit = ValidateLimit(maximum, ceiling);
     private static long ValidateLimit(long maximum, long ceiling)
     {

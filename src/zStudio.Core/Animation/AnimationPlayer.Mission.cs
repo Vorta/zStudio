@@ -60,7 +60,9 @@ public sealed partial class AnimationPlayer
         AnimationBindingOperation? operation = null, HashSet<(int Entry, int Root)>? running = null, Vector3? player = null)
     {
         operation ??= new(context, token);
-        // Selection and the player belong to this same frontier. Invalidate before creating either lookup.
+        // Selection and the player belong to this same frontier. Invalidate before creating either lookup: the mission's
+        // placements, which change names and edges, come just before its startup frontier. The phases after a frontier
+        // (the turrets after the load, the dormant scan after startup) change only poses and flags, and keep its indexes.
         operation.Invalidate();
         AnimationEntryLookup lookup = operation.EntryLookup();
         HashSet<int> positioned = [];
@@ -133,7 +135,7 @@ public sealed partial class AnimationPlayer
         operation ??= new(context, token);
         operation.Reserve(1);
         // Another preparation phase may have changed same-count edges. The selector above and the
-        // turret phase explicitly share lookups after their own boundary invalidation.
+        // turret phase share lookups, which the selector's frontier boundary invalidated.
         if (!reuseTopology) operation.Invalidate();
         var player = new AnimationPlayer(context, operation);
         foreach (var (entry, primary, boundRoot) in entries)

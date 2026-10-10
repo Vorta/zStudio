@@ -19,7 +19,7 @@ public static partial class MissionSceneLoader
 
     internal static void PlacePickups(GameScene scene, List<int> sources, List<MissionActor> actors, HashSet<int> positioned,
         int worldRoot, string worldPath, int originalNodeCount, JsonNode? tree, MissionResourceSource resource, MissionLayoutSelection layout,
-        Func<int, string, int> cloneTree, BoundedDiagnostics diagnostics, CancellationToken token, MissionPlacementState placement, MissionPlacementBudget budget)
+        Func<int, string, Func<int, bool>?, int> cloneTree, BoundedDiagnostics diagnostics, CancellationToken token, MissionPlacementState placement, MissionPlacementBudget budget)
     {
         int[] suffixes = new int[40];
         string? originalArchive = null; MissionResourceSource? normalizedSource = null;
@@ -64,9 +64,16 @@ public static partial class MissionSceneLoader
                 var scale = new Vector3(template.Data["scale"].Float("x", 1), template.Data["scale"].Float("y", 1), template.Data["scale"].Float("z", 1));
                 var matrix = Matrix4x4.CreateScale(scale) * Matrix4x4.CreateFromQuaternion(AnimationMath.FromEuler(rotation)) * Matrix4x4.CreateTranslation(position);
                 if (!float.IsFinite(matrix.GetDeterminant())) throw new InvalidDataException("Nonfinite pickup template scale/rotation.");
-                string instanceName;
+                string instanceName; int suffix = suffixes[type.Index];
                 do { budget.Name(type.TemplateName); instanceName = type.TemplateName + (suffixes[type.Index]++).ToString("D2", CultureInfo.InvariantCulture); } while (!placement.UseName(instanceName));
-                int root = cloneTree(template.Index, instanceName);
+                int root = cloneTree(template.Index, instanceName, copy => FindBvol(copy) >= 0);
+                if (root < 0)
+                {
+                    // CreateObjectInstance (0x41dab0) destroys a copy in which AssignBvolGroupAndId (0x41db60) finds no bvol, and
+                    // only that finding advances nameSuffixMax: the next placement takes this name again.
+                    suffixes[type.Index] = suffix; placement.ReleaseName(instanceName);
+                    throw new InvalidDataException("The game destroys this copy: its bvol child yields no copy.");
+                }
                 SetPose(scene, root, matrix); HideBvol(root);
                 // CreateSpawnDefAndLink (0x41d920) adds the copy to the scene; a template that the copy returned itself
                 // (CopyNodeDispatch, flag 0x04000000) keeps its own parents beside it.
@@ -82,12 +89,12 @@ public static partial class MissionSceneLoader
             catch (InvalidDataException ex) when (!budget.Exhausted) { diagnostics.Add($"Mission pickup {resource.ResourceName} #{index} in {resource.ArchivePath}: {ex.Message}"); }
         }
 
-        int RequireBvol(int root)
+        int FindBvol(int root)
         {
             budget.Take(scene.Nodes[root].Children.Length);
-            int child = scene.Nodes[root].Children.FirstOrDefault(c => c >= 0 && c < scene.Nodes.Count && scene.Nodes[c].Name == "bvol", -1);
-            return child >= 0 ? child : throw new InvalidDataException("Missing required bvol child.");
+            return scene.Nodes[root].Children.FirstOrDefault(c => c >= 0 && c < scene.Nodes.Count && scene.Nodes[c].Name == "bvol", -1);
         }
+        int RequireBvol(int root) => FindBvol(root) is >= 0 and int child ? child : throw new InvalidDataException("Missing required bvol child.");
         void HideBvol(int root)
         {
             int bvol = RequireBvol(root);

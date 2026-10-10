@@ -106,9 +106,9 @@ public sealed partial class AnimationPlayer
         var previous = bindingOperation;
         // Kept indexes count against every operation that uses them, so a tick still fits its allowance;
         // past half of it they are rebuilt rather than grown without bound.
-        if (bindingIndexes.Retained > AnimationBindingOperation.MaximumUnits / 2) bindingIndexes = new();
+        if (bindingIndexes.Retained > AnimationBindingOperation.Allowance(context) / 2) bindingIndexes = new();
         AnimationBindingOperation next = new(context, token, shared: bindingIndexes);
-        next.Reserve(1 + bindingIndexes.Retained);
+        next.ReserveRetained();
         bindingOperation = next;
         return new BindingScope(() => bindingOperation = previous);
     }
@@ -284,6 +284,7 @@ public sealed partial class AnimationPlayer
         if (context.RebindDisables(entry, root, binding, operation))
             AddNote($"{entry.Name}: the game disables this animation bound at {context.Scene.Nodes[root].Name}, which lacks its attach node {entry.AttachName}; the preview runs it there.", "Support", "Information");
         var descendants = operation.Descendants(root, context.Scene.Nodes.Count);
+        operation.Bound(entry, root, descendants.Count);
         operation.Reserve(40L * descendants.Count);
         var sourceNodes = descendants.ToHashSet();
         for (int r = 1; r < entry.References[1].Count; r++)

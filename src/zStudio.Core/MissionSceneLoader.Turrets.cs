@@ -17,10 +17,10 @@ public static partial class MissionSceneLoader
         var turrets = definitions.FirstOrDefault(p => p.Name == "TURRET").Value;
         if (turrets == null) return;
         if (context == null) { notes.Add($"Mission turrets: animation data is unavailable; stored turret states are retained."); return; }
+        // The load frontier before this phase changed only poses and flags, so the turrets keep its name and subtree indexes
+        // rather than build them again for the whole world; a caller that changed names or edges in between invalidates them.
+        // Individual resets below change only poses/flags too.
         var work = bindings!;
-        // Observe any prior same-count edit once at this phase boundary. Individual resets below
-        // change only poses/flags; rebuilding the loaded-world name map per turret multiplies work.
-        work.Invalidate();
         string defaultName = FirstString(definitions.FirstOrDefault(p => p.Name == "DESTROY_ANIM").Value);
         AnimationEntry? Entry(string name)
         {
