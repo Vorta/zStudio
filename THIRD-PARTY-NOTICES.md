@@ -4,6 +4,7 @@ zStudio uses the following NuGet dependencies. Package versions are pinned in lo
 
 | Package | Version | License |
 | --- | --- | --- |
+| Clipper2 | 2.0.0 | [BSL-1.0](licenses/Clipper2.txt) |
 | CommunityToolkit.Common | 8.3.2 | [MIT](licenses/CommunityToolkit.Common.txt) |
 | CommunityToolkit.Diagnostics | 8.3.2 | [MIT](licenses/CommunityToolkit.Diagnostics.txt) |
 | CommunityToolkit.Mvvm | 8.4.2 | [MIT](licenses/CommunityToolkit.Mvvm.txt) |

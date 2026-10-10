@@ -70,10 +70,14 @@ public sealed class WindowClosingTests
                     await SourceRecoveryMcpChecks.Run();
                     await SourceProjectReadMcpChecks.Run();
                     await SourceSaveMcpChecks.Run();
+                    await SourceModelDialogChecks.Run();
                     await SourceTakeBackMcpChecks.Run();
                     await SourcePreviewChangeMcpChecks.Run();
                     Volatile.Write(ref phase, "terrain, map zones and world editing");
+                    await SourceTerrainMcpChecks.Run();
                     await SourceZoneMcpChecks.Run();
+                    await SourceTerrainReferenceCapacityChecks.Run();
+                    await SourceRound30PlanningChecks.Run();
                     await WorldCompareMcpChecks.Run();
                     await WorldCompareBoundsChecks.Run();
                     await WorldCompareBudgetChecks.Run();

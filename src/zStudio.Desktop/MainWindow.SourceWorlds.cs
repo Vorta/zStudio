@@ -217,6 +217,7 @@ public partial class MainWindow
         if (rebuilding) sourceRebuild ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
         else { var done = sourceRebuild; sourceRebuild = null; done?.TrySetResult(); }
         UpdateDocumentCommands();
+        ApplyTerrainBrush(scene);
     }
     /// <summary>
     /// Completes when no world of the project rebuilds (after a scene-card edit, undo, stroke, Properties or MCP edit) and no
@@ -498,7 +499,7 @@ public partial class MainWindow
     private async Task<DocumentModel> PrepareSourceWorldEditAsync(DocumentModel doc, string action, Func<SourceWorkspace, CancellationToken, SourceTransaction?> prepare,
         CancellationToken token, IReadOnlyList<SourceModelAddition>? additions = null, bool fromBuild = true, Func<ScriptLineChanges?>? verifyTargets = null, IReadOnlyList<string>? notes = null, SceneInspectionCard? committingCard = null, ZoneDraft? committingZones = null)
     {
-        var session = doc.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.");
+        var session = SourceWorldOf(doc);
         if (doc.IsDisposed || session.Owner != doc) throw new StudioCommandException("stale_document", "The world was rebuilt or closed.");
         RequireSourceWorldIdle(session);
         RequireNoDrafts(doc, committing: true, committingCard, committingZones);

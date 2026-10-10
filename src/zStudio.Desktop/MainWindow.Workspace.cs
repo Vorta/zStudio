@@ -49,7 +49,10 @@ public partial class MainWindow
             if (args.PropertyName is nameof(MainViewModel.RootPath) or nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) UpdateDocumentCommands();
             if (args.PropertyName is nameof(MainViewModel.HasRoot) or nameof(MainViewModel.SelectedDocument)) ArrangeWorkspace();
             if (args.PropertyName == nameof(MainViewModel.RootPath) && ViewModel.SelectedDocument == null) SelectNavigatorSection(0);
-            if (args.PropertyName == nameof(MainViewModel.GlobalQuery)) UpdateSearchHint();
+            // The brush paints the shown source world only; another root ends it.
+            if (args.PropertyName == nameof(MainViewModel.RootPath)) terrainBrush = null;
+            if (args.PropertyName is nameof(MainViewModel.RootPath) or nameof(MainViewModel.SelectedDocument)) ApplyTerrainBrush(scene);
+            if (args.PropertyName is nameof(MainViewModel.GlobalQuery) or nameof(MainViewModel.SearchIndexComplete) or nameof(MainViewModel.SearchIndexNotice)) UpdateSearchHint();
         };
         // An interrupted save of a source project is reported, and resolved only on the user's decision. A root an MCP request
         // opened is not followed by a dialog (it would hold the workspace from that client): Problems lists the saves, and
