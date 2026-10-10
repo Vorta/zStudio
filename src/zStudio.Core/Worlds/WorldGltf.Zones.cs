@@ -34,7 +34,7 @@ public static partial class WorldGltf
     /// </summary>
     public static WorldZoneExport ExportZoned(IReadOnlyList<WorldNode> roots, uint parentZone, ExportContext context, WorldNode? loadRoot = null)
     {
-        if (context.Zones != null || context.Meshes.Count != 0 || context.Materials.Count != 0)
+        if (context.Zones != null || context.Meshes.Count != 0 || context.TurnedMeshes.Count != 0 || context.Materials.Count != 0)
             throw new InvalidOperationException("A neutral geometry export needs a fresh export context.");
         ZoneExportState state = new(); context.Zones = state;
         var document = Export(roots, parentZone, context, loadRoot);

@@ -50,11 +50,19 @@ public static partial class WorldGltf
         public Func<WorldNode, bool> Group { get; init; } = _ => false;
         /// <summary>Clear the runtime state of point entries (elapsed time, packed state, heap words, flare runtime values) to compare content.</summary>
         public bool Canonical { get; init; }
+        /// <summary>
+        /// Whether the roots lie under a mirroring transform where their file is read: a referenced file's content under a
+        /// reference whose path, through the files that hold it, mirrors. Import reads a referenced file with its reference's
+        /// handedness (see <see cref="TurnedOver{T}"/>); a file a script loads starts unmirrored.
+        /// </summary>
+        public bool Mirrored { get; init; }
         public CancellationToken Token { get; init; }
         internal ZoneExportState? Zones { get; set; }
         private PolygonWorkBudget? polygonWork;
         internal PolygonWorkBudget PolygonWork => polygonWork ??= new(Token);
         internal Dictionary<WorldModel, GltfMesh> Meshes { get; } = new(ReferenceEqualityComparer.Instance);
+        /// <summary>The meshes of models placed under a mirroring transform, whose polygons are written turned over.</summary>
+        internal Dictionary<WorldModel, GltfMesh> TurnedMeshes { get; } = new(ReferenceEqualityComparer.Instance);
         internal Dictionary<SurfaceKey, GltfMaterial> Materials { get; } = [];
         internal HashSet<string> MaterialNames { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, int> NextMaterialSuffix { get; } = new(StringComparer.Ordinal);
@@ -75,30 +83,37 @@ public static partial class WorldGltf
         // Count how often each node is reached: a node under several parents is written under each (glTF nodes have
         // one parent) and marked so that import joins the copies again.
         Dictionary<WorldNode, int> reached = new(ReferenceEqualityComparer.Instance); HashSet<WorldNode> path = new(ReferenceEqualityComparer.Instance);
+        // The handedness each node with polygons is drawn with, from the first place it is reached.
+        Dictionary<WorldNode, bool> facing = new(ReferenceEqualityComparer.Instance);
         ExportJsonBudget jsonBudget = new(roots.Count);
         int visits = 0;
-        void Count(WorldNode node, bool identity = true)
+        void Count(WorldNode node, bool mirrored, bool identity = true)
         {
             if (++visits > MaximumExportedNodes) throw new InvalidDataException($"The model hierarchy expands to more than {MaximumExportedNodes} nodes.");
             if (!path.Add(node)) throw new InvalidDataException($"Node {node.Name} is its own ancestor.");
             if (path.Count > GltfDocument.MaximumDepth) throw new InvalidDataException($"The exported glTF hierarchy is deeper than {GltfDocument.MaximumDepth} levels.");
+            mirrored ^= Mirrors(node);
             // A small GameZ DAG can expand to hundreds of thousands of glTF copies. Charge the emitted metadata
             // at every occurrence before ExportNode builds any of those nodes or clones their engine extras.
-            jsonBudget.Add(node, context);
+            jsonBudget.Add(node, context, mirrored);
+            // One node's polygons face one way. Under parents of both handednesses the game shows one placement inside
+            // out, which the file cannot: import reads a shared node once, from its first copy, and refuses the rest.
+            if (node.Model is { Polygons.Count: > 0 } && !facing.TryAdd(node, mirrored) && facing[node] != mirrored)
+                throw new InvalidDataException($"Node {JsonData.ShownText(node.Name)} lies both under a mirroring transform (a negative scale) and under one that does not mirror. The game draws one node's polygons facing one way, so one of its placements shows inside out, and a glTF file cannot show one node both ways. Give the mirrored placement a node of its own, or remove the mirroring.");
             int seen = reached.GetValueOrDefault(node);
             if (identity) reached[node] = seen + 1;
             // The writer expands descendants on EVERY occurrence, so its preflight must count that same expansion.
             // Instance markers describe original graph edges, not the inherited copies below a shared ancestor.
-            foreach (var child in OwnChildren(node, context)) Count(child, identity && seen == 0);
+            foreach (var child in OwnChildren(node, context)) Count(child, mirrored, identity && seen == 0);
             path.Remove(node);
         }
-        foreach (var root in roots) Count(root);
+        foreach (var root in roots) Count(root, context.Mirrored);
         ExportState state = new()
         {
             Duplicates = new(reached.Keys.GroupBy(n => n.Name, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key), StringComparer.Ordinal),
             Shared = new(reached.Where(r => r.Value > 1).Select(r => r.Key), ReferenceEqualityComparer.Instance),
         };
-        foreach (var root in roots) doc.Roots.Add(ExportNode(root, parentZone, context, state));
+        foreach (var root in roots) doc.Roots.Add(ExportNode(root, parentZone, context, state, context.Mirrored));
         return doc;
     }
     /// <summary>The largest hierarchy an export writes, counting every copy of a shared node.</summary>
@@ -111,9 +126,10 @@ public static partial class WorldGltf
     private sealed class ExportJsonBudget(int roots)
     {
         private long bytes = 512L + 20L * roots;
-        private readonly HashSet<WorldModel> models = new(ReferenceEqualityComparer.Instance);
+        // A model placed both mirrored and not is written as two meshes (see ExportMesh).
+        private readonly HashSet<(WorldModel Model, bool Mirrored)> models = [];
         private readonly HashSet<SurfaceKey> materials = [];
-        internal void Add(WorldNode node, ExportContext context)
+        internal void Add(WorldNode node, ExportContext context, bool mirrored)
         {
             // Includes every optional engine scalar, duplicate name/instance mark, enclosing properties/indentation,
             // six-byte JSON escaping, and the largest six-digit node indices accepted by the writer.
@@ -126,7 +142,7 @@ public static partial class WorldGltf
             // safely covers models whose polygons all disappear as degenerate and therefore become point-only.
             Charge(256L + 400L * model.Points.Count);
             foreach (var point in model.Points) Charge(256L * point.Vertices.Length);
-            if (!models.Add(model)) return;
+            if (!models.Add((model, mirrored))) return;
             SurfaceKey? previous = null;
             foreach (var polygon in model.Polygons)
             {
@@ -160,8 +176,10 @@ public static partial class WorldGltf
         public Dictionary<WorldNode, int> Instances { get; } = new(ReferenceEqualityComparer.Instance);
     }
 
-    private static GltfNode ExportNode(WorldNode node, uint parentZone, ExportContext context, ExportState state)
+    /// <param name="mirrored">Whether the node's parent lies under a mirroring transform.</param>
+    private static GltfNode ExportNode(WorldNode node, uint parentZone, ExportContext context, ExportState state, bool mirrored)
     {
+        mirrored ^= Mirrors(node);
         if (node.Class is not (WorldNodeClass.Object3D or WorldNodeClass.Lod))
             throw new InvalidDataException($"Node {node.Name} is a {node.Class} node; model files hold object3d and lod nodes.");
         GltfNode result = new() { Name = node.Name };
@@ -210,7 +228,7 @@ public static partial class WorldGltf
         {
             // A glTF mesh needs a primitive and editors drop one without (Blender omits it), so a model without polygons
             // (a lens flare's points) keeps its values with each node that uses it.
-            var mesh = ExportMesh(node.Model, context);
+            var mesh = ExportMesh(node.Model, context, mirrored);
             if (mesh.Primitives.Count > 0) result.Mesh = mesh;
             else extras["model"] = mesh.Extras?[Key]?.DeepClone() ?? new JsonObject();
         }
@@ -220,7 +238,7 @@ public static partial class WorldGltf
             if (context.Zones is { } zones) { extras[ZoneReference] = true; zones.References.Add(result, uri); }
             else extras["ref"] = uri;
         }
-        foreach (var child in OwnChildren(node, context)) result.Children.Add(ExportNode(child, zone, context, state));
+        foreach (var child in OwnChildren(node, context)) result.Children.Add(ExportNode(child, zone, context, state, mirrored));
         if (extras.Count > 0) result.Extras = new() { [Key] = extras };
         return result;
     }
@@ -237,10 +255,15 @@ public static partial class WorldGltf
         return context.ReferenceChildren[node] = members == null ? [] : node.Children.Where(child => !members.Contains(child)).ToArray();
     }
 
-    private static GltfMesh ExportMesh(WorldModel model, ExportContext context)
+    /// <param name="mirrored">
+    /// Whether the model is placed under a mirroring transform: its polygons are written turned over (<see cref="TurnedOver{T}"/>),
+    /// so the file shows the side the game draws, and a model placed both ways is written as two meshes.
+    /// </param>
+    private static GltfMesh ExportMesh(WorldModel model, ExportContext context, bool mirrored)
     {
-        if (context.Meshes.TryGetValue(model, out var existing)) return existing;
-        GltfMesh mesh = new() { Name = $"model{context.Meshes.Count}" };
+        var meshes = mirrored ? context.TurnedMeshes : context.Meshes;
+        if (meshes.TryGetValue(model, out var existing)) return existing;
+        GltfMesh mesh = new() { Name = $"model{context.Meshes.Count + context.TurnedMeshes.Count}" };
         List<uint>? zoneWords = context.Zones == null ? null : [];
         GltfPrimitive? primitive = null; SurfaceKey? key = null;
         Dictionary<(int V, int N, float U, float W), int> corners = [];
@@ -250,8 +273,10 @@ public static partial class WorldGltf
         foreach (var polygon in model.Polygons)
         {
             if (polygon.Material == null) continue;
+            int[] vertices = polygon.Vertices, normals = polygon.Normals; Vector2[] uvs = polygon.Uvs;
+            if (mirrored) { vertices = TurnedOver(vertices); normals = TurnedOver(normals); uvs = TurnedOver(uvs); }
             // Zero-area triangles (a repeated corner in a few shipped polygons) draw nothing and are not written.
-            var points = polygon.Vertices.Select(v => model.Vertices[v]).ToArray();
+            var points = vertices.Select(v => model.Vertices[v]).ToArray();
             var triangles = Triangulate(points).Where(t => !ModelBuilder.Straight(points[t.Item1], points[t.Item2], points[t.Item3])).ToList();
             if (triangles.Count == 0) continue;
             bool fan = triangles.Count == points.Length - 2 && triangles.Select((t, k) => t == (0, k + 1, k + 2)).All(x => x);
@@ -264,19 +289,19 @@ public static partial class WorldGltf
                 if (model.Morphs.Count > 0) primitive.Targets.Add([]);
                 groups.Add((primitive, polygon.Material.Texture != null, []));
             }
-            int[] index = new int[polygon.Vertices.Length];
+            int[] index = new int[vertices.Length];
             // Every corner is written, including one only a skipped triangle used, so a corner list can name it.
             for (int i = 0; i < points.Length; i++)
             {
-                var uv = polygon.Uvs.Length > 0 ? polygon.Uvs[i] : Vector2.Zero;
-                var corner = (polygon.Vertices[i], polygon.Normals.Length > 0 ? polygon.Normals[i] : -1, uv.X, uv.Y);
+                var uv = uvs.Length > 0 ? uvs[i] : Vector2.Zero;
+                var corner = (vertices[i], normals.Length > 0 ? normals[i] : -1, uv.X, uv.Y);
                 if (!corners.TryGetValue(corner, out index[i]))
                 {
                     index[i] = corners[corner] = primitive.Positions.Count;
-                    primitive.Positions.Add(model.Vertices[polygon.Vertices[i]]);
-                    if (polygon.Normals.Length > 0) primitive.Normals.Add(model.Normals[polygon.Normals[i]]);
-                    if (polygon.Uvs.Length > 0) primitive.TexCoords.Add(uv);
-                    if (model.Morphs.Count > 0) primitive.Targets[0].Add(polygon.Vertices[i] < model.Morphs.Count ? model.Morphs[polygon.Vertices[i]] : Vector3.Zero);
+                    primitive.Positions.Add(model.Vertices[vertices[i]]);
+                    if (normals.Length > 0) primitive.Normals.Add(model.Normals[normals[i]]);
+                    if (uvs.Length > 0) primitive.TexCoords.Add(uv);
+                    if (model.Morphs.Count > 0) primitive.Targets[0].Add(vertices[i] < model.Morphs.Count ? model.Morphs[vertices[i]] : Vector3.Zero);
                 }
             }
             foreach (var (a, b, c) in triangles) primitive.Indices.AddRange([index[a], index[b], index[c]]);
@@ -299,7 +324,7 @@ public static partial class WorldGltf
                 ["vertices"] = new JsonArray(p.Vertices.Select(v => (JsonNode)new JsonArray(v.X, v.Y, v.Z)).ToArray()),
             }).ToArray());
         if (extras.Count > 0) mesh.Extras = new() { [Key] = extras };
-        context.Meshes[model] = mesh;
+        meshes[model] = mesh;
         if (zoneWords != null) context.Zones!.Meshes.Add(mesh, zoneWords);
         return mesh;
     }
@@ -367,6 +392,31 @@ public static partial class WorldGltf
         context.Materials[key] = material;
         return material;
     }
+
+    /// <summary>
+    /// A polygon's corners (or their UVs or normals) turned over: the same cycle the other way round, its first corner kept
+    /// first. Under a node whose global transform mirrors (a negative determinant, such as Blender's Mirror), glTF takes the
+    /// clockwise side of a triangle as its front, but the engine has no handedness check: it culls, and its probes take a
+    /// polygon as upward, by the winding of the transformed corners (the terrain build does the same). A polygon the file
+    /// shows facing up therefore reaches the game turned over. The engine fans a polygon from its first corner and takes
+    /// its plane from the first three, so the first corner stays first: the fan draws the triangles the file shows, and the
+    /// first three corners are one of them. Turning twice gives the corners back, so export and import undo each other.
+    /// </summary>
+    internal static T[] TurnedOver<T>(T[] corners)
+    {
+        if (corners.Length < 3) return corners;
+        var turned = new T[corners.Length];
+        turned[0] = corners[0];
+        for (int i = 1; i < corners.Length; i++) turned[i] = corners[^i];
+        return turned;
+    }
+    /// <summary>Whether a transform mirrors: the basis the engine applies (the upper 3×3) has a negative determinant.</summary>
+    internal static bool Mirrors(Matrix4x4 m) =>
+        (double)m.M11 * ((double)m.M22 * m.M33 - (double)m.M23 * m.M32)
+        - (double)m.M12 * ((double)m.M21 * m.M33 - (double)m.M23 * m.M31)
+        + (double)m.M13 * ((double)m.M21 * m.M32 - (double)m.M22 * m.M31) < 0;
+    /// <summary>Whether a node's own transform, as the engine applies it, mirrors.</summary>
+    private static bool Mirrors(WorldNode node) => WorldUpdate.LocalMatrix(node) is { } matrix && Mirrors(matrix);
 
     /// <summary>Triangles of a polygon: a fan from the first corner when it is convex, ear clipping otherwise.</summary>
     public static IEnumerable<(int, int, int)> Triangulate(IReadOnlyList<Vector3> points)
@@ -476,10 +526,11 @@ public static partial class WorldGltf
         /// <summary>Each texture's clamp word (1 clamps U, 2 clamps V) from the first sampler that uses it; the pack stores it.</summary>
         public Dictionary<string, int> TextureAddressing { get; } = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>
-        /// Models by the reading of their file (see <see cref="Reading"/>) and mesh, and point-only models by the reading
-        /// and node; readings compare ignoring case, as the loader's caches do.
+        /// Models by the reading of their file (see <see cref="Reading"/>) and mesh, then by morph weight and whether the
+        /// mesh is placed under a mirroring transform (its polygons turned over), and point-only models by the reading and
+        /// node; readings compare ignoring case, as the loader's caches do.
         /// </summary>
-        internal Dictionary<(string Reading, GltfMesh Mesh), Dictionary<float, WorldModel>> Models { get; } = new(ReadingComparer<GltfMesh>.Instance);
+        internal Dictionary<(string Reading, GltfMesh Mesh), Dictionary<(float Weight, bool Mirrored), WorldModel>> Models { get; } = new(ReadingComparer<GltfMesh>.Instance);
         internal Dictionary<WorldModel, IReadOnlyList<int>> SourcePolygons { get; } = new(ReferenceEqualityComparer.Instance);
         internal Dictionary<(string Reading, GltfNode Node), WorldModel> ValueModels { get; } = new(ReadingComparer<GltfNode>.Instance);
         internal Dictionary<(string Path, GltfDocument Doc), bool> Loading { get; } = [];
@@ -518,7 +569,7 @@ public static partial class WorldGltf
 
     /// <summary>Engine nodes for a document's scene roots, loaded from <paramref name="path"/> under a parent with <paramref name="parentZone"/>.</summary>
     /// <remarks>Malformed engine values are reported as <see cref="InvalidDataException"/>.</remarks>
-    public static List<WorldNode> Import(GltfDocument doc, string path, uint parentZone, ImportContext context) => Import(doc, path, path, parentZone, context, 0);
+    public static List<WorldNode> Import(GltfDocument doc, string path, uint parentZone, ImportContext context) => Import(doc, path, path, parentZone, context, 0, false);
 
     /// <summary>Shared build/Blender preflight: refuse model semantics GameZ cannot represent before accepting sources.</summary>
     internal static void ValidateSupported(GltfDocument doc, string path, ImportContext? context = null)
@@ -553,6 +604,61 @@ public static partial class WorldGltf
                         throw new InvalidDataException($"{path}: texture {JsonData.ShownText(name)} is sampled with different edge modes; use one mode per texture or give the images distinct names.");
                 }
             }
+        }
+        CheckInstanceHandedness(doc, path, context?.Token ?? default);
+    }
+
+    /// <summary>
+    /// Refuses a shared node (<c>extras.recoil.instance</c>) whose copies lie under parents of both handednesses while it, or a
+    /// node below it, has a mesh or a reference: its copies are one engine node, whose polygons face one way (see
+    /// <see cref="TurnedOver{T}"/>), so the game would show one placement inside out. The copies' handedness is compared within
+    /// the file, which decides it wherever the file is read; a referenced file's polygons are not known here, so a reference counts.
+    /// </summary>
+    private static void CheckInstanceHandedness(GltfDocument doc, string path, CancellationToken token)
+    {
+        Dictionary<long, (GltfNode Node, bool Mirrored)> firsts = [];
+        Dictionary<GltfNode, bool>? surfaces = null;
+        Stack<(GltfNode Node, bool Mirrored)> pending = new();
+        for (int i = doc.Roots.Count - 1; i >= 0; i--) pending.Push((doc.Roots[i], false));
+        while (pending.TryPop(out var item))
+        {
+            token.ThrowIfCancellationRequested();
+            var (node, mirrored) = item;
+            // Import reads a shared node from its first copy in the file's order and passes the later copies over.
+            if ((node.Extras?[Key] as JsonObject)?["instance"] is { } marker && GltfInteger.TryInt64(marker, out long mark))
+            {
+                if (firsts.TryGetValue(mark, out var first))
+                {
+                    if (first.Mirrored != mirrored && HasSurfaces(first.Node))
+                        throw new InvalidDataException($"{path}: shared node {JsonData.ShownText(EngineName(node))} (instance {mark}) lies both under a mirroring transform (a negative scale) and under one that does not mirror. Its copies are one engine node, whose polygons face one way, so the game would show one placement inside out. Remove the instance custom property (recoil → instance) from the copies under the mirroring transform to make them nodes of their own, or remove the mirroring.");
+                    continue;
+                }
+                firsts.Add(mark, (node, mirrored));
+            }
+            if (node.Matrix is { } matrix && Mirrors(matrix)) mirrored = !mirrored;
+            for (int i = node.Children.Count - 1; i >= 0; i--) pending.Push((node.Children[i], mirrored));
+        }
+
+        // Whether a node or one below it has a mesh or a reference, each node decided once (after its children).
+        bool HasSurfaces(GltfNode top)
+        {
+            var known = surfaces ??= new(ReferenceEqualityComparer.Instance);
+            Stack<(GltfNode Node, bool ChildrenDone)> stack = new([(top, false)]);
+            while (stack.TryPop(out var entry))
+            {
+                token.ThrowIfCancellationRequested();
+                if (known.ContainsKey(entry.Node)) continue;
+                if (!entry.ChildrenDone)
+                {
+                    stack.Push((entry.Node, true));
+                    foreach (var child in entry.Node.Children) stack.Push((child, false));
+                    continue;
+                }
+                var values = entry.Node.Extras?[Key] as JsonObject;
+                known[entry.Node] = entry.Node.Mesh is { Primitives.Count: > 0 } || values?["ref"] != null || values?[ZoneReference] != null
+                    || entry.Node.Children.Any(child => known[child]);
+            }
+            return known[top];
         }
     }
 
@@ -592,19 +698,23 @@ public static partial class WorldGltf
     /// Refuses a model with a mesh the build would refuse at the vertex limit (<see cref="VertexLimit"/>), before it enters
     /// the project (a Blender export): each mesh's polygons are formed and added as <see cref="ImportMesh"/> does. Merging
     /// never adds vertices, so a mesh of at most <see cref="ModelBuilder.MaximumVertices"/> glTF vertices needs no building.
+    /// A mesh is built as each handedness the file places it with does (see <see cref="TurnedOver{T}"/>).
     /// </summary>
     internal static void CheckVertexLimits(GltfDocument doc, string path, CancellationToken token)
     {
         PolygonWorkBudget work = new(token);
-        HashSet<GltfMesh> meshes = [];
-        foreach (var node in doc.AllNodes())
+        HashSet<(GltfMesh, bool)> meshes = [];
+        void Check(GltfNode node, bool mirrored)
         {
             token.ThrowIfCancellationRequested();
-            if (node.Mesh is { } mesh && meshes.Add(mesh)) CheckVertexLimit(mesh, EngineName(node), path, work);
+            if (node.Matrix is { } matrix && Mirrors(matrix)) mirrored = !mirrored;
+            if (node.Mesh is { } mesh && meshes.Add((mesh, mirrored))) CheckVertexLimit(mesh, EngineName(node), path, work, mirrored);
+            foreach (var child in node.Children) Check(child, mirrored);
         }
+        foreach (var root in doc.Roots) Check(root, false);
     }
 
-    private static void CheckVertexLimit(GltfMesh mesh, string node, string path, PolygonWorkBudget work)
+    private static void CheckVertexLimit(GltfMesh mesh, string node, string path, PolygonWorkBudget work, bool mirrored)
     {
         if (mesh.Primitives.Sum(p => (long)p.Positions.Count) <= ModelBuilder.MaximumVertices) return;
         ModelBuilder builder = new() { RefusesOverflow = true };
@@ -614,9 +724,10 @@ public static partial class WorldGltf
         {
             bool textured = primitive.Material is { } material && (material.ImageUri != null || material.Extras?[Key]?["texture"] != null);
             var targets = primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0] : null;
-            foreach (var corners in Polygons(primitive, textured, work))
+            foreach (var listed in Polygons(primitive, textured, work))
             {
                 if ((++polygons & 1023) == 0) work.CheckCancellation();
+                var corners = mirrored ? TurnedOver(listed) : listed;
                 int overflowed = builder.Overflowed;
                 builder.Add(new([.. corners.Select(i => primitive.Positions[i])], [], [],
                     targets != null ? [.. corners.Select(i => primitive.Positions[i] + targets[i])] : [], plain));
@@ -685,7 +796,8 @@ public static partial class WorldGltf
     private static string Reading(string holder, string uri) => holder + "\u001F" + uri;
 
     /// <param name="reading">This reading of the file (see <see cref="ImportContext"/>): its models are its own.</param>
-    private static List<WorldNode> Import(GltfDocument doc, string path, string reading, uint parentZone, ImportContext context, int depth)
+    /// <param name="mirrored">Whether the file's roots lie under a mirroring transform: a reference's, through the files that hold it.</param>
+    private static List<WorldNode> Import(GltfDocument doc, string path, string reading, uint parentZone, ImportContext context, int depth, bool mirrored)
     {
         if (!context.Validated.Contains(doc))
         {
@@ -709,7 +821,7 @@ public static partial class WorldGltf
                     if (depth > 0) throw new InvalidDataException($"{path}: the terrain recipe {JsonData.Shown(recipe, asText: true)} must be a root of the mission database, not of a referenced file.");
                     roots.AddRange(ImportTerrain(Text(recipe, "terrain", path), path, context));
                 }
-                else roots.Add(ImportNode(root, path, reading, parentZone, context, instances, depth, zones: zones,
+                else roots.Add(ImportNode(root, path, reading, parentZone, context, instances, depth, mirrored, zones: zones,
                     terrainGroups: depth == 0 && context.Grid != null));
             }
             return roots;
@@ -720,10 +832,11 @@ public static partial class WorldGltf
     }
 
     /// <summary>
-    /// <paramref name="depth"/> counts levels across external references, which continue the hierarchy; <paramref name="place"/>
-    /// is the node's place in a shared node of its file, if it is inside one.
+    /// <paramref name="depth"/> counts levels across external references, which continue the hierarchy, and so does
+    /// <paramref name="mirrored"/>, whether the node's parent lies under a mirroring transform (see <see cref="TurnedOver{T}"/>);
+    /// <paramref name="place"/> is the node's place in a shared node of its file, if it is inside one.
     /// </summary>
-    private static WorldNode ImportNode(GltfNode source, string path, string reading, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth, InstancePlace? place = null, BoundZones? zones = null, bool terrainGroups = false)
+    private static WorldNode ImportNode(GltfNode source, string path, string reading, uint parentZone, ImportContext context, Dictionary<int, WorldNode> instances, int depth, bool mirrored, InstancePlace? place = null, BoundZones? zones = null, bool terrainGroups = false)
     {
         if (depth >= GltfDocument.MaximumDepth) throw new InvalidDataException($"{path}: the node hierarchy, with its external references, is deeper than {GltfDocument.MaximumDepth} levels.");
         context.Token.ThrowIfCancellationRequested();
@@ -733,6 +846,7 @@ public static partial class WorldGltf
         long? mark = extras?["instance"] is { } marker ? Integer(marker, "instance", path) : null;
         if (mark is < 1 or > int.MaxValue) throw new InvalidDataException($"{path}: node {JsonData.ShownText(source.Name)} has an invalid instance number.");
         int? instance = (int?)mark;
+        // Copies under parents of both handednesses, which one node cannot draw, were refused with the file (ValidateSupported).
         if (instance is { } shared && instances.TryGetValue(shared, out var existing)) return existing;
         // References can repeat a file any number of times; a world holds a bounded number of nodes.
         if (++context.Created + context.World.Nodes.Count > GameZWorld.MaximumNodeCapacity)
@@ -772,8 +886,9 @@ public static partial class WorldGltf
             node.SetPayloadFloat(0x24, 1); node.SetPayloadFloat(0x28, 1); node.SetPayloadFloat(0x2C, 1);
             for (int i = 0; i < 12; i++) node.SetPayloadFloat(0x30 + i * 4, rows[i]);
             ApplyAppearance(node, extras, path);
+            if (Mirrors(matrix)) mirrored = !mirrored;
         }
-        if (source.Mesh != null) node.Model = ImportMesh(source.Mesh, name, path, reading, context, source.Weights.Count > 0 ? source.Weights[0] : null, zones);
+        if (source.Mesh != null) node.Model = ImportMesh(source.Mesh, name, path, reading, context, source.Weights.Count > 0 ? source.Weights[0] : null, mirrored, zones);
         else if (extras?["model"] is { } values) node.Model = ImportValues(values as JsonObject ?? throw new InvalidDataException($"{path}: node {JsonData.ShownText(name)} has an invalid model record."), source, path, reading, context);
         // The ordered lists carry engine semantics; membership uses reference identity so a wide parent does not
         // scan all earlier children for every append. References and authored children share this one index.
@@ -786,7 +901,7 @@ public static partial class WorldGltf
         {
             var (doc, referencedPath) = context.Reference(uri, path);
             context.referencing.Add(node);
-            try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1)) Link(child); }
+            try { foreach (var child in Import(doc, referencedPath, Reading(reading, uri), zone, context, depth + 1, mirrored)) Link(child); }
             finally { context.referencing.RemoveAt(context.referencing.Count - 1); }
         }
         // Inside a shared node each child's place is its name and how many earlier siblings have it (see InstancePlace).
@@ -808,7 +923,7 @@ public static partial class WorldGltf
                 int occurrence = named.GetValueOrDefault(childName); named[childName] = occurrence + 1;
                 at = new(place!.Number, place, i, childName, occurrence);
             }
-            Link(ImportNode(source.Children[i], path, reading, zone, context, instances, depth + 1, at, zones, terrainChildren));
+            Link(ImportNode(source.Children[i], path, reading, zone, context, instances, depth + 1, mirrored, at, zones, terrainChildren));
         }
         return node;
         void Link(WorldNode child)
@@ -848,12 +963,13 @@ public static partial class WorldGltf
         }
     }
 
-    private static WorldModel ImportMesh(GltfMesh mesh, string node, string path, string reading, ImportContext context, float? nodeWeight, BoundZones? zones = null)
+    /// <param name="mirrored">Whether the mesh is placed under a mirroring transform: its polygons are turned over (<see cref="TurnedOver{T}"/>), into a model of their own.</param>
+    private static WorldModel ImportMesh(GltfMesh mesh, string node, string path, string reading, ImportContext context, float? nodeWeight, bool mirrored, BoundZones? zones = null)
     {
         // Import's document preflight has already validated each mesh once, including meshes shared by many nodes.
         float weight = nodeWeight ?? (mesh.Extras?[Key]?["morphFactor"] is { } factor ? Real(factor, "morphFactor", path) : mesh.Weights.Count > 0 ? mesh.Weights[0] : 0);
         if (!float.IsFinite(weight)) throw new InvalidDataException($"{path}: mesh {JsonData.ShownText(mesh.Name)} has a non-finite morph weight.");
-        if (context.Models.TryGetValue((reading, mesh), out var variants) && variants.TryGetValue(weight, out var existing)) return existing;
+        if (context.Models.TryGetValue((reading, mesh), out var variants) && variants.TryGetValue((weight, mirrored), out var existing)) return existing;
         // A polygon past the vertex limit refuses the mesh: the build never leaves part of a model out.
         ModelBuilder builder = new() { Diagnostics = context.Diagnostics.WithContext(path, "mesh", mesh.Name), RefusesOverflow = true };
         var model = builder.Model;
@@ -870,9 +986,11 @@ public static partial class WorldGltf
             bool textured = material.Texture != null, normals = storesNormals != false && primitive.Normals.Count == primitive.Positions.Count;
             var targets = primitive.Targets.Count > 0 && primitive.Targets[0].Count == primitive.Positions.Count ? primitive.Targets[0] : null;
             int added = 0;
-            foreach (var corners in zones == null ? Polygons(primitive, textured, context.PolygonWork) : zones.Polygons[primitive])
+            foreach (var listed in zones == null ? Polygons(primitive, textured, context.PolygonWork) : zones.Polygons[primitive])
             {
                 if ((++added & 1023) == 0) context.Token.ThrowIfCancellationRequested();
+                // UVs, normals and morph targets are taken by corner, so they stay with their turned corners.
+                var corners = mirrored ? TurnedOver(listed) : listed;
                 Vector3[] points = corners.Select(i => primitive.Positions[i]).ToArray();
                 PolygonInput input = new(points,
                     textured ? corners.Select(i => primitive.TexCoords[i]).ToArray() : [],
@@ -891,7 +1009,7 @@ public static partial class WorldGltf
         context.SourcePolygons.Add(model, sourcePolygons.ToArray());
         context.AddModel(model);
         if (variants == null) context.Models[(reading, mesh)] = variants = [];
-        variants[weight] = model;
+        variants[(weight, mirrored)] = model;
         return model;
     }
 

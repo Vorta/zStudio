@@ -94,6 +94,65 @@ public sealed class WorldGltfTests
     }
 
     [Fact]
+    public void MirroredPlacementsFaceAsGltfShowsThem()
+    {
+        // Blender's Mirror writes scale −1 (rotation [1,0,0,0], scale [-1,-1,-1]: x mirrored). glTF turns front faces over
+        // under a negative determinant, but the engine culls and probes by the winding of the transformed corners, so a
+        // floor the file shows facing up must reach the game turned over. The same mesh also lies unmirrored.
+        Vector3[] positions = [new(0, 0, 0), new(0, 0, 1), new(1, 0, 1), new(1, 0, 0)];
+        static Vector3 Normal(Vector3 p) => Vector3.Normalize(new(p.X - 0.5f, 2, p.Z - 0.5f));
+        float[] data = [.. positions.SelectMany(p => new[] { p.X, p.Y, p.Z }), .. positions.Select(Normal).SelectMany(n => new[] { n.X, n.Y, n.Z }), .. positions.SelectMany(p => new[] { p.X, p.Z })];
+        string json = $$"""
+        {"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0,2]}],
+         "nodes":[{"name":"mirror","rotation":[1,0,0,0],"scale":[-1,-1,-1],"children":[1]},{"name":"floor","mesh":0},{"name":"plain","translation":[2,0,0],"mesh":0}],
+         "meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],
+         "materials":[{"name":"rock","pbrMetallicRoughness":{"metallicFactor":0,"baseColorTexture":{"index":0} } }],
+         "textures":[{"source":0}],"images":[{"uri":"rock.png"}],
+         "accessors":[{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3"},{"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"},
+                      {"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"},{"bufferView":3,"componentType":5121,"count":6,"type":"SCALAR"}],
+         "bufferViews":[{"buffer":0,"byteLength":48},{"buffer":0,"byteOffset":48,"byteLength":48},{"buffer":0,"byteOffset":96,"byteLength":32},{"buffer":0,"byteOffset":128,"byteLength":6}],
+         "buffers":[{"byteLength":134,"uri":"{{DataUri(data, [0, 1, 2, 0, 2, 3])}}"}]}
+        """;
+        // The engine's altitude probe takes a polygon only with an upward winding of its transformed corners.
+        static int Hits(WorldNode node, float x)
+        {
+            GameZWorld world = new(); WorldNode top = new("world", WorldNodeClass.World); world.Nodes.Add(top);
+            void Add(WorldNode n) { world.Nodes.Add(n); foreach (var child in n.Children) Add(child); }
+            Add(node); WorldUpdate.RebuildBounds(world, Token);
+            top.Children.Add(node); node.Parents.Add(top);
+            try { return ZoneProbe.Probe(top, x, 0.5f, ZoneSet.Cleared, token: Token).Hits.Count; }
+            finally { top.Children.Remove(node); node.Parents.Remove(top); }
+        }
+        // Each corner keeps its own UV and normal, which follow its position.
+        static List<(Vector3, Vector2, Vector3)> Corners(WorldModel model) =>
+            [.. model.Polygons.SelectMany(p => p.Vertices.Select((v, i) => (model.Vertices[v], p.Uvs[i], model.Normals[p.Normals[i]])))];
+        void Check(List<WorldNode> roots)
+        {
+            Assert.Equal(1, Hits(roots[0], -0.5f)); Assert.Equal(1, Hits(roots[1], 2.5f));
+            WorldModel mirrored = roots[0].Children.Single().Model!, plain = roots[1].Model!;
+            Assert.NotSame(mirrored, plain);
+            Assert.Equal(4, Assert.Single(mirrored.Polygons).Vertices.Length);
+            Assert.All(Corners(mirrored).Concat(Corners(plain)), c => Assert.Equal((new Vector2(c.Item1.X, c.Item1.Z), Normal(c.Item1)), (c.Item2, c.Item3)));
+            // The first corner stays first: the engine fans from it, drawing the triangles the file shows.
+            Assert.Equal(positions[0], mirrored.Vertices[mirrored.Polygons[0].Vertices[0]]);
+        }
+        var imported = Import(json, new(), out _);
+        Check(imported);
+
+        // Export turns them over again: glTF viewers show the floor facing up, as the game does, and import gives it back.
+        var exported = WorldGltf.Export(imported, 0xFF, new() { Texture = t => ($"{t.Name}.png", 0) });
+        var primitive = exported.Roots[0].Children.Single().Mesh!.Primitives.Single();
+        var triangle = primitive.Indices.Take(3).Select(i => primitive.Positions[i]).ToArray();
+        Assert.True(Vector3.Cross(triangle[1] - triangle[0], triangle[2] - triangle[0]).Y > 0);
+        var (written, bin) = exported.Write("floor.bin", Token);
+        var again = WorldGltf.Import(GltfDocument.Read(written, _ => bin, Token), "floor.gltf", 0xFF, Context(new()));
+        Check(again);
+        Assert.Equal(Corners(imported[0].Children[0].Model!), Corners(again[0].Children[0].Model!));
+        Assert.Equal(imported[0].Children[0].Model!.Polygons[0].Vertices, again[0].Children[0].Model!.Polygons[0].Vertices);
+        Assert.Equal(WorldUpdate.LocalMatrix(imported[0]), WorldUpdate.LocalMatrix(again[0]));
+    }
+
+    [Fact]
     public void MalformedFilesAreRefused()
     {
         Assert.Throws<InvalidDataException>(() => GltfDocument.Read("""{"asset":{"version":"1.0"}}"""u8, _ => [], Token));
