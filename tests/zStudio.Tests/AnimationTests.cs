@@ -126,6 +126,29 @@ public sealed partial class AnimationTests
         Assert.Equal(expected.Nodes, resumed.Nodes); Assert.Equal(expected.Trace, resumed.Trace); Assert.Equal(expected.Sequences, resumed.Sequences);
     }
     [Fact]
+    public void PlayerRefusedAtItsStateAllowanceRecoversLikeANewPlayer()
+    {
+        // Only the reset state fits: the motion is refused admission, and the cleanup that follows escapes the tick at the
+        // allowance. That partial state must not count against its own replacement, so seeking, stepping and resetting
+        // give a new player's outcomes with the same allowance.
+        var package = Fixture(); var entry = package.Entries[0]; entry.SetFloat(164, 0);
+        var motion = AnimationCatalog.Create(11); motion.SetInt(12, 1); motion.SetInt(16, 1); motion.SetVector(56, new(6, 0, 0)); motion.SetFloat(140, .5f);
+        entry.Sequences[0].Events.Add(motion);
+        var context = Context(package); var token = TestContext.Current.CancellationToken;
+        long allowance = new AnimationPlayer(context, 0).RetainedStateBytes + 200; // the reset state, its snapshot and clone scratch
+        AnimationPlayer Limited() => new(context, 0, 1, false, token, allowance);
+        var fresh = Limited(); var start = fresh.Frame(token);
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => fresh.EvaluateForTest(.5));
+        var player = Limited();
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => player.EvaluateForTest(.5));
+        var rewound = player.EvaluateForTest(0, true);
+        Assert.Equal(start.Nodes, rewound.Nodes); Assert.Equal(start.Sequences, rewound.Sequences); Assert.Equal(start.Diagnostics, rewound.Diagnostics);
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => player.Step(token));
+        player.Reset(token);
+        Assert.Equal(start.Nodes, player.Frame(token).Nodes);
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => player.EvaluateForTest(.5));
+    }
+    [Fact]
     public void WaitingSequenceReleaseAndStopUseVerifiedStateValues()
     {
         var package = Fixture(); var entry = package.Entries[0]; var waiting = entry.Sequences[0]; waiting.ResetMode = 3;

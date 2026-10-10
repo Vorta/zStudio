@@ -162,7 +162,12 @@ public sealed partial class AnimationPlayer
     private void Rewind(long target, CancellationToken token)
     {
         var closest = checkpoints.LastOrDefault(p => p.Key <= target);
-        if (closest.Value == null) Reset(token); else Restore(closest.Value, token);
+        if (closest.Value == null) { Reset(token); return; }
+        // A restore stages its copy beside the state it replaces. When the allowance cannot hold both, a reset (which
+        // keeps only the zero snapshot, and rebuilds a refused tick's state as a new player's) replaces it instead,
+        // and the caller replays from there.
+        try { Restore(closest.Value, token); }
+        catch (StateLimitException) { Reset(token); }
     }
     private void Tick(CancellationToken token)
     {

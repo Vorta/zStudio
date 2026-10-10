@@ -71,8 +71,20 @@ public sealed partial class AnimationPlayer
         // Optional replay caches can retire, but the accepted live state and zero snapshot remain
         // owned until the complete replacement is ready. Its constructor admits that overlap.
         while (checkpoints.Count > 1) RemoveCheckpoint(checkpoints.Keys.First(k => k != 0));
-        AnimationPlayer replacement = new(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
-            () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0));
+        AnimationPlayer replacement;
+        try
+        {
+            replacement = new(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
+                () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0));
+        }
+        catch (StateLimitException) when (interrupted)
+        {
+            // A refused tick's partial state is not one to keep, and at the allowance it would count against its own
+            // replacement. Release it so the reset is admitted exactly as a new player's; until that completes the
+            // player stays interrupted, and the next seek, step or playback resets again. An accepted state is kept.
+            ReleaseState();
+            replacement = new(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes, otherRetainedState);
+        }
         token.ThrowIfCancellationRequested();
         instances = replacement.instances; sharedNodes = replacement.sharedNodes;
         effects = replacement.effects; trace = replacement.trace; notes = replacement.notes;
@@ -89,6 +101,13 @@ public sealed partial class AnimationPlayer
             foreach (var sequence in instance.Sequences) sequence.WorkChanged = AdjustRetainedWork;
         InvalidateRetainedState();
         cues.Clear();
+    }
+    /// <summary>Drops the runtime state and every checkpoint; frames are refused and the next advance resets.</summary>
+    private void ReleaseState()
+    {
+        interrupted = true;
+        instances = []; sharedNodes = []; effects = []; checkpoints = []; retiredSequences.Clear();
+        InvalidateRetainedState();
     }
     private static long MapBytes(int count) => 128L + MapEntryBytes * count;
     private static long WorkBytes(AnimationEvent? work) => work == null ? 0 : 256L + 16L * work.Bytes.LongLength;
