@@ -73,7 +73,7 @@ public partial class MainWindow
     { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc); }
     private async void SaveCurrentAsClick(object sender, RoutedEventArgs e)
     { if (ViewModel.SelectedDocument is { } doc) await SaveCurrentAsync(doc, true); }
-    private Task<bool> SaveCurrentAsync(DocumentModel document, bool saveAs = false) => document.ContentEdits != null ? SaveContentDocumentAsync(document, saveAs) : document.ResourceEdits != null ? SaveResourceDocumentAsync(document, saveAs) : document.ModelEdits?.IsDirty == true || saveAs && document.ModelEdits?.HasModelImports == true
+    private Task<bool> SaveCurrentAsync(DocumentModel document, bool saveAs = false) => document.SourceWorld != null ? SaveSourceWorldDocumentAsync(document) : document.ContentEdits != null ? SaveContentDocumentAsync(document, saveAs) : document.ResourceEdits != null ? SaveResourceDocumentAsync(document, saveAs) : document.ModelEdits?.IsDirty == true || saveAs && document.ModelEdits?.HasModelImports == true
         ? SaveModelDocumentAsync(document, saveAs) : document.PickupEdits is { } coordinates && (coordinates.Records.Count > 0 || coordinates.OtherCoordinates.Count > 0)
         ? SavePickupsAsync(document, saveAs) : SaveAnimationAsync(document);
     private void BackupOnSaveChanged(object sender, RoutedEventArgs e)

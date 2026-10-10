@@ -1,5 +1,7 @@
 # ZAR archive and ZRD editing
 
+Opening and reloading prepare resource syntax, compiled trees and baseline hashes on a cancellable worker before publishing the document. Cancellation, navigation changes or preparation failures retain the previously accepted document. GUI and MCP use this same preparation and publication path.
+
 ZAR containers and typed ZRD resources now have shared GUI/MCP editors. These are the first two priorities toward a complete ZBD editor. They do not make every other ZBD format editable.
 
 Resource editing uses the same [compiled-history admission limits](texture-script-editing.md) as texture and prepared-script editing: 1 GiB of estimated retained raw/decoded content and a separate 1 GiB construction allowance. Successful edits can trim the oldest undo entries; refusal preserves the accepted document and its history. Source and saved baselines remain counted even when their former undo entries have been retired.

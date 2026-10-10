@@ -28,6 +28,9 @@ public partial class MainWindow
     }
     private bool ResolveInspectionDrafts(DocumentModel? doc = null)
         => !HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || inspectionDraft!.ResolvePending();
+    /// <summary>Like <see cref="ResolveInspectionDrafts"/>, but a Yes that applies a source world's draft completes with that apply (its rebuild).</summary>
+    private async Task<bool> ResolveInspectionDraftsAsync(DocumentModel? doc = null)
+        => !HasInspectionDraft || doc != null && inspectionDraft!.DraftDocument != doc || await inspectionDraft!.ResolvePendingAsync();
 
     private MissionPickupSource? InspectionSource(SceneViewport viewport, SceneInspection inspection)
     {
@@ -133,12 +136,14 @@ public partial class MainWindow
         bool locked = known && shownDocument!.PickupsLocked;
         info["Editable"] = known && !locked;
         info["Rotation axes"] = known ? edits!.RotationKind(source!) switch { PlacementRotationKind.EulerRadians => "XYZ", PlacementRotationKind.HeadingDegrees => "Y", _ => "None" } : "None";
-        info["Editing"] = locked ? "Unlock editing to select and edit objects" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";
+        info["Editing"] = edits?.ReadOnlyReason is { } readOnly ? readOnly : locked ? "Unlock editing to select and edit objects" : known ? "Edit position and supported rotation; confirm together as one undo step" : "Read-only inspection";
         info["Document revision"] = shownDocument?.Revision;
         return info;
     }
     private void BeginInspectionEdit(SceneInspectionCard card)
     {
+        // A draft started now would count as unfinished input when the rebuild finishes, taking its edit back.
+        if (shownDocument?.SourceWorld != null && sourceWorkspaceBusy) throw new StudioCommandException("busy", "The world is rebuilding after an edit; edit placements when it is shown.");
         if (scene != null && shownDocument?.PickupsLocked == true) throw new StudioCommandException("locked", "Unlock editing first.");
         if (card != CurrentInspectionCard || scene == null || shownDocument is not { IsDisposed: false } doc || card.Selection is not { } selection)
             throw new StudioCommandException("not_ready", "Select a mission placement first.");
@@ -153,18 +158,34 @@ public partial class MainWindow
         if (edits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed. Reload or preserve your existing edits with Save As.");
         inspectionDraft = card; card.StartDraft(doc, source, edits.Position(source));
     }
-    private void ApplyInspectionEdit(SceneInspectionCard card)
+    private Task? ApplyInspectionEdit(SceneInspectionCard card)
+    {
+        // The edit keeps this draft until its preparation succeeds: its failure is reported, but its draft is not asked about.
+        if (ApplyInspectionEditCore(card) is { } rebuilding) return sourceWorldWork = ReportUi(() => rebuilding);
+        return null;
+    }
+    /// <summary>Accepts the card's draft as one edit; in a source world the edit changes the sources and returns the rebuild that shows it.</summary>
+    private Task<DocumentModel>? ApplyInspectionEditCore(SceneInspectionCard card, CancellationToken token = default)
     {
         if (scene?.IsPickupDragging == true) throw new StudioCommandException("busy", "Finish or cancel the active transform drag before confirming.");
         var doc = card.DraftDocument;
         if (!card.HasDraft || doc == null || doc.IsDisposed || doc != shownDocument || card != CurrentInspectionCard || card.Selection?.Target != card.DraftTarget)
             throw new StudioCommandException("stale_record", "The draft's document or selected instance is no longer available.");
         if (doc.Revision != card.DraftRevision) throw new StudioCommandException("revision_conflict", "The document changed. Discard this draft and start again.");
-        var edits = doc.PickupEdits!;
+        // Another document's edit may have dropped the clean session until the map shows its reloaded placements.
+        var edits = doc.PickupEdits ?? throw new StudioCommandException("not_ready", "The map's placements are reloading. Apply again when the map is shown.");
         if (doc.PickupsLocked) throw new StudioCommandException("locked", "Coordinate editing is locked.");
         if (edits.HasExternalChanges()) throw new StudioCommandException("external_change", "An owning archive changed outside zStudio.");
+        if (doc.SourceWorld != null)
+        {
+            if (doc.SourceWorld.IsRebuilding || sourceWorkspaceBusy) throw new StudioCommandException("busy", "The world is rebuilding after another edit; apply when it is shown.");
+            var source = card.DraftSource!; var transform = card.DraftTransform();
+            // Keep this exact draft until worker preparation and its source/ownership checks succeed.
+            return MoveSourcePlacementAsync(doc, source, transform, token, card);
+        }
         edits.TransformTo(card.DraftSource!, card.DraftTransform());
         card.CancelDraft(); UpdateDocumentCommands();
+        return null;
     }
 
     private void RegisterInspectionCommands(StudioCommands commands)
@@ -196,7 +217,7 @@ public partial class MainWindow
                 P("document", "string", "Owning document ID for edits."), new("revision", "integer", "Expected document revision for edits.", Minimum: 0, Maximum: long.MaxValue),
                 P("token", "string", "Current draft lifetime and input token. Reopening a draft creates a new token."), new("position", "array", "Three coordinate input strings for set; maximum 64 characters each; permits temporary incomplete drafts.", Items: new("", "string", "Coordinate input."), MinItems: 3, MaxItems: 3),
                 new("rotationDegrees", "array", "Pickup XYZ Euler input strings in degrees; maximum 64 characters each.", Items: new("", "string", "Angle input."), MinItems: 3, MaxItems: 3),
-                new("headingDegrees", "string", "Vehicle Y heading input in degrees; maximum 64 characters."), P("transformMode", "string", "Draft handle mode; rotate requires supported axes.", false, "move", "rotate")], a =>
+                new("headingDegrees", "string", "Vehicle Y heading input in degrees; maximum 64 characters."), P("transformMode", "string", "Draft handle mode; rotate requires supported axes.", false, "move", "rotate")], async (a, token) =>
         {
             var viewport = TargetViewport(a); var card = viewport.InspectionContent as SceneInspectionCard ?? throw new StudioCommandException("not_ready", "Inspection card unavailable.");
             string action = Text(a, "action");
@@ -228,7 +249,14 @@ public partial class MainWindow
                     card.RequireDraft(Text(a, "token"));
                     if (action == "set") card.SetDraft(Text(a, "token"), (a["position"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(),
                         (a["rotationDegrees"] as JsonArray)?.Select(p => p!.GetValue<string>()).ToArray(), a["headingDegrees"]?.GetValue<string>(), a["transformMode"]?.GetValue<string>());
-                    else if (action == "apply") ApplyInspectionEdit(card);
+                    else if (action == "apply")
+                    {
+                        if (ApplyInspectionEditCore(card, token) is { } rebuilding)
+                        {
+                            var next = await rebuilding;
+                            return Result(new { selected = (string?)null, draft = (object?)null, revision = (long?)next.Revision, document = DocumentState(next) });
+                        }
+                    }
                     else card.CancelDraft();
                 }
             }

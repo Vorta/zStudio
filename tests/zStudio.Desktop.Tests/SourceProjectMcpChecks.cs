@@ -36,7 +36,7 @@ internal static class SourceProjectMcpChecks
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(main.ViewModel.RootPath!));
             var reopened = await Job("open_root", new() { ["path"] = Path.Combine(fixture.Root, "initialized"), ["project"] = true });
             Assert.Equal(Path.GetFullPath(Path.Combine(fixture.Root, "initialized")), Path.GetFullPath(reopened["RootPath"]!.GetValue<string>()));
-            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Export all ZBD files…", "Export ZBD file", "Check source project", "Build profile", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
+            Assert.Equal(["MCP integration…", "Compare worlds…", "-", "Export all ZBD files…", "Export ZBD file", "Check source project", "Resolve interrupted save…", "Build profile", "Open mission world", "Add model to world…", "-", "Validate source file on disk", "Reload current file", "Cancel export or validation"], ToolsMenu(main));
             // Project preflight also precedes navigation: a slow folder check must not replace a newer clean root.
             // Cover both a pending VM root and another project preflight that has not reached the VM yet.
             foreach (bool projectPreflight in new[] { false, true })
@@ -112,8 +112,16 @@ internal static class SourceProjectMcpChecks
             Assert.True(File.Exists(Path.Combine(reconstructedElsewhere, "data", "m1", "zrdr", "ai.zrd")));
             Assert.Equal(Path.GetFullPath(newerRoot), Path.GetFullPath(main.ViewModel.RootPath));
 
+            // A cancel once the project is the root stops only its indexing: the operation completes with the project open.
+            void CancelAtPublication()
+            {
+                main.ViewModel.RootPublished -= CancelAtPublication;
+                var running = typeof(MainWindow).GetField("runningJob", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(main)!;
+                ((CancellationTokenSource)running.GetType().GetProperty("Cancellation")!.GetValue(running)!).Cancel();
+            }
+            main.ViewModel.RootPublished += CancelAtPublication;
             var built = await Job("source_reconstruct", new() { ["source"] = fixture.Corpus, ["destination"] = fixture.Project });
-            Assert.True(built["opened"]!.GetValue<bool>());
+            Assert.True(built["opened"]!.GetValue<bool>()); Assert.False(built["indexComplete"]!.GetValue<bool>());
             Assert.Equal(1, built["families"]!["scripts"]!.GetValue<int>()); Assert.Equal(3, built["families"]!["sounds"]!.GetValue<int>());
             Assert.Equal("other.bin", built["notReconstructed"]![0]!.GetValue<string>()); Assert.Equal(1, built["noteCount"]!.GetValue<int>());
             Assert.Equal(Path.GetFullPath(fixture.Project), Path.GetFullPath(main.ViewModel.RootPath!));
@@ -252,6 +260,14 @@ internal static class SourceProjectMcpChecks
                 Assert.True(warningCount >= 70); Assert.True(warning["outputs"]![0]!["warningsTruncated"]!.GetValue<bool>());
                 string omission = $"Showing 64 of {warningCount} warnings; {warningCount - 64} more not shown.";
                 Assert.Contains(main.ViewModel.Problems, p => p.File == worldFixture.Project && p.Message.Contains(omission, StringComparison.Ordinal));
+                await Job("source_world_open", new() { ["mission"] = "m1" });
+                var world = main.ViewModel.Documents.Single(d => d.SourceWorld != null);
+                int buildWarnings = world.SourceBuild!.Outputs.Single(o => o.Path == "m1/gamez.zbd").Warnings.Count;
+                Assert.True(buildWarnings >= 70);
+                string buildOmission = $"Showing 64 of {buildWarnings} warnings; {buildWarnings - 64} more not shown.";
+                Assert.Contains(main.ViewModel.Problems, p => p.File == script && p.Message.Contains(buildOmission, StringComparison.Ordinal));
+                var problems = await Call("problems", new() { ["query"] = "more not shown" });
+                Assert.Contains(problems["items"]!.AsArray(), p => p!["File"]!.GetValue<string>() == script && p["Message"]!.GetValue<string>().Contains(buildOmission, StringComparison.Ordinal));
                 await Job("open_root", new() { ["path"] = elsewhere });
             }
             // Hold a newer GUI navigation before publication: WorkspaceGeneration is unchanged while the

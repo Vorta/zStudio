@@ -56,6 +56,13 @@ public partial class MainWindow
     internal async Task<bool> ResolvePropertiesDraftsAsync(DocumentModel? doc = null) => ResolveInspectionDrafts(doc) && (propertiesWindow == null || doc != null && propertiesWindow.Document != doc || await propertiesWindow.ResolvePendingDraftsAsync());
     private void UndoDocument(DocumentModel doc, bool redo)
     {
+        doc = LiveDocument(doc);
+        if (doc.SourceWorld is { } world)
+        {
+            if (world.IsRebuilding || sourceWorkspaceBusy) ViewModel.Status = "A world of this source project is still rebuilding; undo and redo are available when it is shown.";
+            else if (redo ? world.Workspace.CanRedo : world.Workspace.CanUndo) sourceWorldWork = RunUi(() => UndoSourceWorldAsync(doc, redo, CancellationToken.None));
+            return;
+        }
         if (doc.ContentEdits != null) { contentWork = UndoContentAsync(doc, redo); return; }
         if (doc.ResourceEdits != null) { resourceWork = UndoResourcesAsync(doc, redo); return; }
         if (doc.IsDisposed || !ResolvePropertiesDrafts(doc) || shownDocument == doc && animation?.ResolvePendingDrafts() == false) return;
