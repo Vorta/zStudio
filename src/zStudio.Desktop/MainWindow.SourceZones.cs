@@ -80,7 +80,7 @@ public partial class MainWindow
     }
     private async Task OpenZoneEditorAsync(DocumentModel document, CancellationToken token, bool automation = false)
     {
-        var session = (document.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world."));
+        var session = SourceWorldOf(document);
         // A draft started while a world of the project rebuilds after an edit would be an unresolved draft when the rebuilt
         // world replaces this one, and that edit would be taken back: zone editing waits, as scene-card and Properties input do.
         RequireSourceWorldIdle(session);
@@ -135,8 +135,11 @@ public partial class MainWindow
         bool on = !scene.ZonePaintActive;
         if (on)
         {
-            if (scene.IsFlyActive || scene.IsPickupDragging)
+            if (scene.IsFlyActive || scene.IsPickupDragging || scene.IsTerrainStroking)
                 throw new StudioCommandException("busy", "Finish the active navigation or editing gesture before painting zones.");
+            // Clear the retained terrain tool as well as its renderer flag, so preview refreshes
+            // cannot reactivate it underneath the zone tool. Its recipe and edits stay intact.
+            SetTerrainBrush(null);
         }
         scene.ZonePaintFaces = draft.Faces; scene.ZonePaintActive = on;
         scene.ZoneStrokeCompleted -= ZoneStrokeCompleted; scene.ZoneStrokeCompleted += ZoneStrokeCompleted;
@@ -234,7 +237,7 @@ public partial class MainWindow
     private async Task<DocumentModel> NameZoneAsync(DocumentModel document, byte id, string label, CancellationToken token)
     {
         RequireNoDrafts(document, committing: true);
-        string mission = (document.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.")).Mission;
+        string mission = SourceWorldOf(document).Mission;
         var next = await PrepareSourceWorldEditAsync(document, "Naming map zone", (workspace, ct) =>
         {
             var plan = SourceZoneEdits.PlanLabel(workspace, mission, id, label, ct);
@@ -264,7 +267,7 @@ public partial class MainWindow
         Register(registry, "source_zones", "Inspect the map zone catalog and pinned draft. Zone assignments live in data/mN/meta/zones.json; model geometry is shared. Optional exact targets return a bounded profile/scope page.", false,
             [DocumentParameter, ZoneTargetsParameter(), new("offset", "integer", "Target page offset.", Minimum: 0, Maximum: int.MaxValue)], async (args, token) =>
             {
-                var document = TargetDocument(args); var session = (document.SourceWorld ?? throw new StudioCommandException("unsupported", "This document is not a source world.")); long revision = session.Workspace.ContentRevision;
+                var document = TargetDocument(args); var session = SourceWorldOf(document); long revision = session.Workspace.ContentRevision;
                 var targets = ParseZoneTargets(args); var build = document.SourceBuild!;
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, document.Lifetime.Token, ViewModel.WorkspaceToken, shutdownToken);
                 var values = await Task.Run(() => (SourceZoneEdits.Catalog(session.Workspace, session.Mission, linked.Token),
