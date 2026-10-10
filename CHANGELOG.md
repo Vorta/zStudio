@@ -13,7 +13,6 @@ Version numbers follow `MAJOR.MINOR.PATCH`; the 0.x series is under active devel
 
 - Text `.zrd` sources keep their comments and layout when edited in the ZRD editor.
 - A Zones highlight in Whole world colours each surface by its node zone (`scene_options` highlight `zones`).
-- A sequence named more than once compiles with its last `NAME`, as the original compiler did.
 - The 1998 demo worlds' placements open read-only (`pickup_lock` refuses to unlock them).
 - Animation previews bind names as the engine does for loaded, copied and rebound entries: lookups made as the mission loads see only the world file's nodes, an entry's own lights and sounds come first, a copy looks its attachment up inside its new node, and script commands match case-sensitively as the retail interpreter does (`Quit` only exactly). AI vehicles are looked up among every live node.
 - Compare worlds stays bounded on shared hierarchies, many copies and long lists, pairs copies by contents and then position, and says when a comparison was cut short (`truncated`, `pairingTruncated`); `world_compare_tree` no longer waits behind running operations.
