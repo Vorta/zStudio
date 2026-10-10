@@ -19,7 +19,7 @@ Review counterexamples guide investigation; they are not a requirement to commit
 
 ## Corpus-gated tests
 
-Tests that need game data return early unless their variable is set, so `dotnet test --solution zStudio.slnx -c Release` runs without any. The retail datasets are never written: tests work in temporary folders.
+Tests that need game data return early unless their variable is set, so `dotnet test --solution zStudio.slnx -c Release` runs without any. The retail datasets are never written: tests work in temporary folders, and the protected `zbd_1998`/`zbd_1999` folders (git-ignored, beside the solution) are refused as project or export destinations.
 
 | Variable | Value | Enables |
 | --- | --- | --- |

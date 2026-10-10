@@ -104,6 +104,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public Func<DocumentModel, Task<bool>>? ConfirmDiscardAsync { get; set; }
     internal Action<bool>? ValidateNavigationPublication { get; set; }
     private CancellationTokenSource workspace = new();
+    /// <summary>Canceled when the workspace root is replaced; long operations owned by a workspace link to it.</summary>
+    internal CancellationToken WorkspaceToken => workspace.Token;
     private readonly List<SearchHit> index = [];
     [ObservableProperty] private string rootPath = "Open a ZBD folder to start exploring";
     [ObservableProperty] private string status = "Ready";
