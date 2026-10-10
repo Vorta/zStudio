@@ -8,8 +8,9 @@ namespace Recoil.Zbd.Tests;
 
 /// <summary>
 /// Source workspaces and their saves: a project that is a link or lies below one is never edited or saved, a file another
-/// program replaces right after a save is reported rather than paired with the saved bytes, and an interrupted save's
-/// journal with many new files in many folders is checked without comparing every folder with every file.
+/// program replaces right after a save is reported rather than paired with the saved bytes, an interrupted save's
+/// journal with many new files in many folders is checked without comparing every folder with every file, and a journal
+/// whose manifest text cannot be decoded is reported as unreadable.
 /// </summary>
 public sealed class WorkspaceSaveReviewFixTests : IDisposable
 {
@@ -203,5 +204,30 @@ public sealed class WorkspaceSaveReviewFixTests : IDisposable
             if (accepted) Assert.Single(new SourcePublisher(root).FindInterrupted(Token));
             else Assert.Contains($"it lists the folder {listed}, which holds none of its new files", Assert.Throws<SourceRecoveryRequiredException>(() => new SourcePublisher(root).FindInterrupted(Token)).Message);
         }
+    }
+
+    [Fact]
+    public void AManifestWithUndecodableTextIsAJournalThatCannotBeRead()
+    {
+        string root = NewProject(Path.Combine(folder, "project")), path = Interrupted(root), id = Path.GetFileName(Path.GetDirectoryName(path))!;
+        // An escaped unpaired surrogate is no text at all: comparing it with a known key must not fail the save itself.
+        string text = File.ReadAllText(path);
+        File.WriteAllText(path, "{\"\\ud800\":0," + text[(text.IndexOf('{') + 1)..]);
+        byte[] damaged = File.ReadAllBytes(path);
+        SourcePublisher publisher = new(root);
+        foreach (Action reading in new Action[]
+        {
+            () => publisher.Publish([new(Script, Text("load m1\n"), Text("load m2\n"))], "blocked", Token),
+            () => publisher.FindInterrupted(Token),
+            () => publisher.Resolve(id, SourceRecoveryAction.Abandon, Token),
+        })
+        {
+            var refused = Assert.Throws<SourceRecoveryRequiredException>(reading);
+            Assert.Equal(id, refused.SaveId);
+            Assert.Contains($"{SourcePublisher.RecoveryFolder}/{id} cannot be read", refused.Message);
+        }
+        // Like any other unreadable journal, it blocks saving and keeps its history for the user to recover from.
+        Assert.Equal(damaged, File.ReadAllBytes(path));
+        Assert.Equal(Text("load m1\n"), File.ReadAllBytes(At(root, Script)));
     }
 }

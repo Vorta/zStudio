@@ -24,7 +24,8 @@ public sealed partial class SourcePublisher
 
     // This checks allocation admission, not recovery semantics. The existing serializer still enforces required
     // constructor fields, numeric/date types and nullable annotations; ValidateManifest checks all full identities,
-    // changes and folder ownership. No authored string is shortened or substituted.
+    // changes and folder ownership. No authored string is shortened or substituted. Keys and strings that cannot be decoded
+    // are refused as malformed JSON, like any other damaged manifest, before anything decodes them.
     private ref struct ManifestAdmission
     {
         private Utf8JsonReader reader;
@@ -89,6 +90,9 @@ public sealed partial class SourcePublisher
             // Even a fully escaped known name uses at most six bytes per character. Bound comparison's own
             // possible unescape workspace before asking it to compare an arbitrary damaged key.
             if (reader.ValueSpan.Length > 6 * "description".Length) throw new JsonException("The save manifest contains an unknown property.");
+            // Comparing an escaped key decodes it, and the reader throws InvalidOperationException for an unpaired
+            // surrogate. Undecodable text is a malformed manifest, so refuse it as one before the comparison.
+            Text(long.MaxValue, "");
             if (kind == Kind.Manifest)
             {
                 if (reader.ValueTextEquals("format"u8)) return Field.Number;
@@ -143,18 +147,24 @@ public sealed partial class SourcePublisher
         private (long Characters, long Slashes) String(long maximum, string refusal)
         {
             Require(JsonTokenType.String);
+            return Text(maximum, refusal);
+        }
+
+        /// <summary>The decoded length of the current key or string; text that cannot be decoded (invalid UTF-8 or an unpaired surrogate) is a malformed manifest.</summary>
+        private (long Characters, long Slashes) Text(long maximum, string refusal)
+        {
             ReadOnlySpan<byte> raw = reader.ValueSpan;
-            long characters = 0, slashes = 0;
+            long characters = 0, slashes = 0; bool high = false;
             for (int i = 0; i < raw.Length;)
             {
                 if ((i & 4095) < 6) token.ThrowIfCancellationRequested();
-                int value = raw[i++];
+                int value = raw[i++]; bool escaped = false;
                 if (value == '\\')
                 {
                     value = raw[i++];
                     if (value == 'u')
                     {
-                        value = 0;
+                        value = 0; escaped = true;
                         for (int end = i + 4; i < end; i++)
                             value = value * 16 + (raw[i] <= '9' ? raw[i] - '0' : (raw[i] | 32) - 'a' + 10);
                     }
@@ -166,9 +176,13 @@ public sealed partial class SourcePublisher
                     i += consumed - 1; value = rune.Value; characters += rune.Utf16SequenceLength;
                 }
                 else characters++;
+                // An escaped high surrogate must be followed directly by an escaped low one, and a low one only follows a high one.
+                if (high != (escaped && char.IsLowSurrogate((char)value))) throw Shape();
+                high = escaped && char.IsHighSurrogate((char)value);
                 if (value == '/') slashes++;
                 if (characters > maximum) throw new InvalidDataException(refusal);
             }
+            if (high) throw Shape();
             return (characters, slashes);
         }
 
