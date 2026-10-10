@@ -78,7 +78,11 @@ public sealed class MechWarrior3Tests
             var first = mission.Actors[0]; Assert.True(edits.MoveTo(first.CoordinateSource!, new(30, 2, 3)));
             var positions = edits.TankPreviewPositions(mission);
             Assert.Equal(new Vector3(30, 2, 3), positions[first.Root]); Assert.Equal(new Vector3(20, 2, 3), positions[mission.Actors[1].Root]);
+            // A refresh with unchanged inputs (now naming the adopted reader) reuses the layout; a rebuilt one maps every actor.
+            Assert.Same(mission, await MissionSceneLoader.LoadAsync(world, resolver, token: token));
+            MissionSceneLoader.Invalidate(world);
             var again = await MissionSceneLoader.LoadAsync(world, resolver, token: token);
+            Assert.NotSame(mission, again);
             Assert.All(mission.Actors, a => Assert.Equal(a.Root, again.RemapNodeFrom(mission, a.Root)));
             Assert.Equal(Matrix4x4.Identity, SceneBuilder.LocalTransform(scene.Nodes[actorIndex])); Assert.Equal(new[] { actorIndex }, scene.Nodes[nested ? 1 : 0].Children);
             Assert.Equal(source, await File.ReadAllBytesAsync(reader, token));
@@ -108,15 +112,27 @@ public sealed class MechWarrior3Tests
         var world = await FormatRegistry.Default.OpenAsync(Path.Combine(root, "c1", "gamez.zbd"), token);
         var model = world.Scene!.Models.First(m => m.Morphs.Length == 0 && m.Metadata.Int("light_count") == 0 && m.Vertices.Length >= 3 && world.Scene.Nodes.Any(n => n.ModelIndex == m.Index));
         var mesh = new ImportedMesh(model.Vertices.Take(3).ToArray(), [Vector3.UnitY, Vector3.UnitY, Vector3.UnitY], [Vector2.Zero, Vector2.UnitX, Vector2.UnitY], [0,1,2]);
-        byte[] bytes = ModelReplacementWriter.Replace(world, new Dictionary<int, ImportedMesh> { [model.Index] = mesh }, "mw3_edit_test", token);
-        var changed = FormatRegistry.Default.OpenBytes(world.Path, bytes, token: token);
-        Assert.DoesNotContain(changed.Diagnostics, d => d.Severity == "Error"); Assert.Equal(mesh.Positions, changed.Scene!.Models[model.Index].Vertices);
-        Assert.Equal(world.Scene.Textures.Count + 1, changed.Scene.Textures.Count); Assert.Equal("mw3_edit_test", changed.Scene.Textures[^1].Text("name"));
-        foreach (var original in world.Assets.Where(a => a.Kind is AssetKind.Model or AssetKind.TextureReference && !(a.Kind == AssetKind.Model && a.Index == model.Index)))
+        string output = Path.Combine(Path.GetTempPath(), "zstudio-mw3-model-save-" + Guid.NewGuid().ToString("N"));
+        try
         {
-            var copy = changed.Assets.Single(a => a.Kind == original.Kind && a.Index == original.Index);
-            Assert.Equal(world.Slice(original.Offset, original.Length).ToArray(), changed.Slice(copy.Offset, copy.Length).ToArray());
+            using AssetResolver resolver = new(root);
+            var edits = new ModelEditSession(world);
+            var batch = new ModelImportBatch(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(world.Bytes.Span)),
+                "mw3_edit_test", new(8, 8, Enumerable.Repeat((byte)255, 8 * 8 * 4).ToArray()), new Dictionary<int, ImportedMesh> { [model.Index] = mesh });
+            var prepared = await edits.PrepareAsync(batch, resolver, token);
+            var changed = prepared.World;
+            Assert.DoesNotContain(changed.Diagnostics, d => d.Severity == "Error"); Assert.Equal(mesh.Positions, changed.Scene!.Models[model.Index].Vertices);
+            Assert.Equal(world.Scene.Textures.Count + 1, changed.Scene.Textures.Count); Assert.Equal("mw3_edit_test", changed.Scene.Textures[^1].Text("name"));
+            foreach (var original in world.Assets.Where(a => a.Kind is AssetKind.Model or AssetKind.TextureReference && !(a.Kind == AssetKind.Model && a.Index == model.Index)))
+            {
+                var copy = changed.Assets.Single(a => a.Kind == original.Kind && a.Index == original.Index);
+                Assert.Equal(world.Slice(original.Offset, original.Length).ToArray(), changed.Slice(copy.Offset, copy.Length).ToArray());
+            }
+            edits.Accept(prepared);
+            var saved = await edits.SaveAsync(output, token);
+            Assert.Empty(saved.Errors); Assert.Equal(prepared.Textures.Count + 1, saved.SavedPaths.Count); Assert.False(edits.IsDirty);
         }
+        finally { if (Directory.Exists(output)) Directory.Delete(output, true); }
     }
     [Fact]
     public void MotionRoundTripEditingAndLoopSamplingRetainClosingSample()

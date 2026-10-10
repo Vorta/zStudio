@@ -145,12 +145,45 @@ internal static class MissionSelectionChecks
         try
         {
             Assert.False((bool)typeof(MainWindow).GetProperty("HasPublishedStaticScene", flags)!.GetValue(main)!);
-            await (Task)typeof(MainWindow).GetMethod("SelectMissionAsync", flags)!.Invoke(main, [fixture.ReaderPath, true, token])!;
+            Exception? firstSharpDxFailure = null, nativeFailure = null;
+            void CaptureNativeFailure(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs args)
+            {
+                if (args.Exception is SharpDX.SharpDXException)
+                    Interlocked.CompareExchange(ref firstSharpDxFailure, args.Exception, null);
+                if (args.Exception.HResult == unchecked((int)0x8007000E))
+                    Interlocked.CompareExchange(ref nativeFailure, args.Exception, null);
+            }
+            AppDomain.CurrentDomain.FirstChanceException += CaptureNativeFailure;
+            try
+            {
+                await (Task)typeof(MainWindow).GetMethod("SelectMissionAsync", flags)!.Invoke(main, [fixture.ReaderPath, true, token])!;
+            }
+            catch (StudioCommandException ex) when (ex.Code == "preview_failed")
+            {
+                // ShowAsset reports its underlying failure to the GUI before the
+                // mission command rejects publication. Retain both pieces of evidence.
+                var failedScene = (SceneViewport?)typeof(MainWindow).GetField("scene", flags)!.GetValue(main);
+                var host = (ContentControl)main.FindName("SceneHost");
+                string diagnostics = string.Join("\n", main.ViewModel.Diagnostics.Take(16).Select(Clip));
+                throw new InvalidOperationException(
+                    $"Mission retry failed ({ex.Code}). Status: {Clip(main.ViewModel.Status)}\n" +
+                    $"Preview: {Clip(((TextBlock)main.FindName("EmptyPreview")).Text)}\n" +
+                    $"Diagnostics ({main.ViewModel.Diagnostics.Count}; first 16):\n{diagnostics}\n" +
+                    $"Work area: {SystemParameters.WorkArea}; window: {main.ActualWidth}x{main.ActualHeight}; " +
+                    $"scene host: {host.ActualWidth}x{host.ActualHeight}, {host.Visibility}; " +
+                    $"scene present: {failedScene != null}; displayed reader: {Clip(failedScene?.Mission?.Layout.MissionArchive)}; " +
+                    $"published: {typeof(MainWindow).GetProperty("HasPublishedStaticScene", flags)!.GetValue(main)}; " +
+                    $"request canceled: {token.IsCancellationRequested}\n" +
+                    $"First SharpDX exception: {Volatile.Read(ref firstSharpDxFailure)?.ToString() ?? "<not observed>"}\n" +
+                    $"First 0x8007000E exception: {Volatile.Read(ref nativeFailure)?.ToString() ?? "<not observed>"}", ex);
+            }
+            finally { AppDomain.CurrentDomain.FirstChanceException -= CaptureNativeFailure; }
             var current = (SceneViewport?)typeof(MainWindow).GetField("scene", flags)!.GetValue(main);
             Assert.Equal(fixture.ReaderPath, current?.Mission?.Layout.MissionArchive, ignoreCase: true);
             Assert.True((bool)typeof(MainWindow).GetProperty("HasPublishedStaticScene", flags)!.GetValue(main)!);
         }
         finally { main.Close(); }
+        static string Clip(string? text) => text == null ? "<null>" : text.Length <= 2048 ? text : text[..2048] + "…";
     }
 
     /// <summary>A remembered reader deleted between sessions is still seeded when the root opens, so the fallback is reported and replaces it.</summary>

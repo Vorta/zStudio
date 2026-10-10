@@ -46,6 +46,33 @@ public sealed partial class AnimationTests
         session.Redo(); session.MarkSaved(); Assert.False(session.IsDirty);
         Assert.Equal("renamed", Parse(Pack(package)).Entries[0].Sequences[0].Name);
         Assert.Throws<InvalidDataException>(() => session.DeleteSequence(0, sequence.Id));
+
+        // A scalar edit must not retain an unlimited number of copies of an untouched opaque event.
+        var opaquePackage = Fixture();
+        var opaque = new AnimationEvent(new byte[16 * 1024]); opaque.Bytes[0] = 255; opaque.Bytes[^1] = 0xA7;
+        opaquePackage.Entries[0].Sequences[0].Events.Add(opaque);
+        opaquePackage = Parse(Pack(opaquePackage));
+        byte[] preserved = (byte[])opaquePackage.Entries[0].Sequences[0].Events[0].Bytes.Clone();
+        AnimationEditSession bounded = new(opaquePackage, 256 * 1024, 1024 * 1024);
+        for (int i = 0; i < 24; i++) bounded.Apply(0, "Reset delay", e => e.SetFloat(164, i));
+        var accepted = opaquePackage.Entries[0];
+        Assert.Throws<InvalidDataException>(() => bounded.Apply(0, "Invalid compound edit", e =>
+        { e.SetFloat(164, 100); throw new InvalidDataException("Invalid second field."); }));
+        Assert.Same(accepted, opaquePackage.Entries[0]);
+        bounded.Undo(); Assert.Equal(22, opaquePackage.Entries[0].F32(164));
+        var prior = opaquePackage.Entries[0]; string? redo = bounded.RedoDescription;
+        Assert.Throws<InvalidDataException>(() => bounded.Apply(0, "Oversized replacement", e =>
+            e.Sequences[0].Events.Add(new AnimationEvent(new byte[256 * 1024]))));
+        Assert.Same(prior, opaquePackage.Entries[0]); Assert.Equal(redo, bounded.RedoDescription);
+        bounded.Redo(); Assert.Same(accepted, opaquePackage.Entries[0]);
+        bounded.Apply(0, "Retry", e => e.SetFloat(164, 24));
+        Assert.Equal(preserved, Parse(Pack(opaquePackage)).Entries[0].Sequences[0].Events[0].Bytes);
+        int undoCount = 0; while (bounded.CanUndo) { bounded.Undo(); undoCount++; }
+        Assert.InRange(undoCount, 1, 23);
+        AnimationEditSession noScratch = new(opaquePackage, 256 * 1024, 1);
+        bool invoked = false;
+        Assert.Throws<InvalidDataException>(() => noScratch.Apply(0, "Refused before clone", _ => invoked = true));
+        Assert.False(invoked); Assert.False(noScratch.CanUndo);
     }
     [Fact]
     public void MalformedEventPayloadIsPreservedAndNotEditable()
@@ -65,6 +92,61 @@ public sealed partial class AnimationTests
         var frame = player.EvaluateForTest(.75); Assert.InRange(frame.Nodes[0].Transform.M41, 4.49f, 4.51f); Assert.True(frame.Nodes[0].Visible);
         Assert.True(player.EvaluateForTest(1.4).Nodes[0].Visible); var end = player.EvaluateForTest(1.6); Assert.False(end.Nodes[0].Visible);
         player.EvaluateForTest(.2, true); var replay = player.EvaluateForTest(1.6, true); Assert.Equal(end.Nodes, replay.Nodes); Assert.Equal(end.Trace, replay.Trace);
+        // A seek canceled inside a tick (here while the hide event is admitted) stops at a tick boundary that an
+        // uncanceled run reaches, so resuming the same player gives the same pose, dispatches and sequence states.
+        using var canceled = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        AnimationPlayer? interrupted = null;
+        interrupted = new(Context(package), 0, 1, false, TestContext.Current.CancellationToken, AnimationPlayer.MaximumRetainedStateBytes,
+            () => { if (interrupted?.Time > 1.4) canceled.Cancel(); return 0; });
+        Assert.ThrowsAny<OperationCanceledException>(() => interrupted.AdvanceTo(1.6, true, canceled.Token));
+        Assert.InRange(interrupted.Time, 1.4, 1.59);
+        var resumed = interrupted.EvaluateForTest(1.6, true);
+        Assert.Equal(end.Nodes, resumed.Nodes); Assert.Equal(end.Trace, resumed.Trace);
+        Assert.Equal(end.Sequences, resumed.Sequences); Assert.Equal(end.Diagnostics, resumed.Diagnostics);
+    }
+    [Fact]
+    public void TickRefusedPartWayIsReplayedRatherThanContinued()
+    {
+        // Cleanup admission is refused after the motion ended but before the effect aged in that tick. The player must
+        // not show or continue that partial tick; the next seek replays it and matches an unrefused run.
+        var package = Fixture(); var entry = package.Entries[0]; entry.SetFloat(164, 0);
+        entry.References[5].Add(new(new byte[36])); var spark = new AnimationRecord(new byte[36]); spark.SetText(0, "spark"); entry.References[5].Add(spark);
+        var effect = AnimationCatalog.Create(3); effect.SetShort(12, 1);
+        var motion = AnimationCatalog.Create(11); motion.SetInt(12, 1); motion.SetInt(16, 1); motion.SetVector(44, new(3, 0, 0)); motion.SetVector(56, new(6, 0, 0)); motion.SetFloat(140, .5f);
+        entry.Sequences[0].Events.AddRange([effect, motion]);
+        AnimationPreviewContext Sparks() { var context = Context(package); context.Effects.Add("spark", new("spark", "animated", 0, [], 1, false)); return context; }
+        var expected = new AnimationPlayer(Sparks(), 0).EvaluateForTest(.7);
+        bool refuse = true; AnimationPlayer? player = null;
+        player = new(Sparks(), 0, 1, false, TestContext.Current.CancellationToken, AnimationPlayer.MaximumRetainedStateBytes,
+            () => refuse && player?.Time > .4 ? AnimationPlayer.MaximumRetainedStateBytes : 0);
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => player.EvaluateForTest(.7));
+        Assert.Throws<IOException>(() => player.Frame(TestContext.Current.CancellationToken));
+        refuse = false;
+        var resumed = player.EvaluateForTest(.7);
+        Assert.Equal(expected.Nodes, resumed.Nodes); Assert.Equal(expected.Trace, resumed.Trace); Assert.Equal(expected.Sequences, resumed.Sequences);
+    }
+    [Fact]
+    public void PlayerRefusedAtItsStateAllowanceRecoversLikeANewPlayer()
+    {
+        // Only the reset state fits: the motion is refused admission, and the cleanup that follows escapes the tick at the
+        // allowance. That partial state must not count against its own replacement, so seeking, stepping and resetting
+        // give a new player's outcomes with the same allowance.
+        var package = Fixture(); var entry = package.Entries[0]; entry.SetFloat(164, 0);
+        var motion = AnimationCatalog.Create(11); motion.SetInt(12, 1); motion.SetInt(16, 1); motion.SetVector(56, new(6, 0, 0)); motion.SetFloat(140, .5f);
+        entry.Sequences[0].Events.Add(motion);
+        var context = Context(package); var token = TestContext.Current.CancellationToken;
+        long allowance = new AnimationPlayer(context, 0).RetainedStateBytes + 200; // the reset state, its snapshot and clone scratch
+        AnimationPlayer Limited() => new(context, 0, 1, false, token, allowance);
+        var fresh = Limited(); var start = fresh.Frame(token);
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => fresh.EvaluateForTest(.5));
+        var player = Limited();
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => player.EvaluateForTest(.5));
+        var rewound = player.EvaluateForTest(0, true);
+        Assert.Equal(start.Nodes, rewound.Nodes); Assert.Equal(start.Sequences, rewound.Sequences); Assert.Equal(start.Diagnostics, rewound.Diagnostics);
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => player.Step(token));
+        player.Reset(token);
+        Assert.Equal(start.Nodes, player.Frame(token).Nodes);
+        Assert.Throws<AnimationPlayer.StateLimitException>(() => player.EvaluateForTest(.5));
     }
     [Fact]
     public void WaitingSequenceReleaseAndStopUseVerifiedStateValues()
@@ -107,7 +189,23 @@ public sealed partial class AnimationTests
             string root = Path.Combine(temporary, "source"), path = Path.Combine(temporary, "edited.zbd"); Directory.CreateDirectory(root);
             string source = Path.Combine(root, "anim.zbd"); byte[] bytes = Pack(Fixture()); await File.WriteAllBytesAsync(source, bytes, TestContext.Current.CancellationToken);
             await Assert.ThrowsAsync<IOException>(() => AnimationWriter.SaveAsAsync(Fixture(), source, source, root, TestContext.Current.CancellationToken));
-            await AnimationWriter.SaveAsAsync(Fixture(), path, source, root, TestContext.Current.CancellationToken); Assert.Equal(bytes, await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
+            await AnimationWriter.SaveAsAsync(Fixture(), path, source, root, 256 * 1024, TestContext.Current.CancellationToken); Assert.Equal(bytes, await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
+            // A tiny edited entry can retain a much larger, valid unknown package tail. Save must
+            // admit the whole write/read/write overlap before creating a destination or changing undo.
+            byte[] original = [.. bytes, .. new byte[64 * 1024]]; original[^1] = 0xA7;
+            await File.WriteAllBytesAsync(source, original, TestContext.Current.CancellationToken);
+            var package = Parse(original); AnimationEditSession session = new(package);
+            session.Apply(0, "Reset delay", e => e.SetFloat(164, 3));
+            var accepted = package.Entries[0]; string? undo = session.UndoDescription;
+            string boundedPath = Path.Combine(temporary, "new-folder", "edited.zbd");
+            await Assert.ThrowsAsync<InvalidDataException>(() => AnimationWriter.SaveAsAsync(package, boundedPath, source, root,
+                256 * 1024, TestContext.Current.CancellationToken));
+            Assert.False(Directory.Exists(Path.GetDirectoryName(boundedPath))); Assert.Same(accepted, package.Entries[0]);
+            Assert.True(session.IsDirty); Assert.Equal(undo, session.UndoDescription);
+            session.Undo(); Assert.Equal(original, Pack(package)); session.Redo();
+            await AnimationWriter.SaveAsAsync(package, boundedPath, source, root, TestContext.Current.CancellationToken);
+            Assert.Equal(Pack(package), await File.ReadAllBytesAsync(boundedPath, TestContext.Current.CancellationToken));
+            Assert.Equal(original, await File.ReadAllBytesAsync(source, TestContext.Current.CancellationToken));
         }
         finally { Directory.Delete(temporary, true); }
     }

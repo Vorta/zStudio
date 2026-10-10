@@ -71,27 +71,23 @@ public partial class MainWindow
         ScheduleSceneTreeReveal();
     }
 
-    private static Func<int, SceneTreeIdentity> TreeIdentities(GameScene data, MissionSceneContext? mission, PickupPlacementEditSession? edits)
+    internal static Func<int, SceneTreeIdentity> TreeIdentities(GameScene data, MissionSceneContext? mission, PickupPlacementEditSession? edits)
     {
         if (mission == null) return i => new("source:" + i, i, null);
-        Dictionary<int, MissionActor?> actors = [];
-        foreach (var actor in mission.Actors)
-        {
-            Stack<int> pending = new([actor.Root]); HashSet<int> seen = [];
-            while (pending.TryPop(out int node))
-            {
-                if (node < 0 || node >= data.Nodes.Count || !seen.Add(node)) continue;
-                if (!actors.TryAdd(node, actor)) actors[node] = null; // Ambiguous provenance cannot retain selection.
-                foreach (int child in SceneBuilder.Children(data.Nodes[node])) pending.Push(child);
-            }
-        }
+        // Mission publication prepares ownership once. Other preview scenes use the same bounded
+        // propagation against their own topology, never one descendant walk per actor occurrence.
+        var actors = mission.PrepareActorIndex(data);
         string ambiguous = Guid.NewGuid().ToString("N");
-        Dictionary<MissionPickupSource, string> sources = [];
+        SceneTreeProvenance provenance = new(edits?.SourceComparer);
+        Dictionary<MissionPickupSource, string> sources = new(edits?.SourceComparer ?? ReferenceEqualityComparer.Instance);
+        var actorCounts = mission.Actors.GroupBy(a => (a.SourceRoot, a.Name)).ToDictionary(g => g.Key, g => g.Count());
+        Dictionary<MissionActor, string> actorKeys = new(ReferenceEqualityComparer.Instance);
         return index =>
         {
-            int sourceNode = index < mission.SourceNodes.Count ? mission.SourceNodes[index] : index;
-            if (!actors.TryGetValue(index, out var actor)) return new("source:" + sourceNode, sourceNode, null);
-            if (actor == null) return new(ambiguous + ":" + index, sourceNode, "Ambiguous mission instance");
+            int sourceNode = index >= 0 && index < mission.SourceNodes.Count ? mission.SourceNodes[index] : index;
+            if (actors.IsAmbiguous(index)) return new(ambiguous + ":" + index, sourceNode, "Ambiguous mission instance");
+            var actor = actors.At(index);
+            if (actor == null) return new("source:" + sourceNode, sourceNode, null);
             var source = actor.Pickup?.Source ?? actor.CoordinateSource;
             string identity;
             if (source != null)
@@ -99,13 +95,13 @@ public partial class MainWindow
                 if (!sources.TryGetValue(source, out identity!))
                 {
                     var matches = edits != null && (edits.Find(source) != null || edits.Coordinate(source) != null) ? edits.Scope(source).Sources : [source];
-                    identity = string.Join("|", matches.Select(s => $"{s.ArchivePath}:{s.AssetIndex}:{s.RecordIndex}").Order(StringComparer.Ordinal));
+                    identity = provenance.Scope(matches);
                     sources[source] = identity;
                 }
             }
-            else identity = mission.Actors.Count(a => a.SourceRoot == actor.SourceRoot && a.Name == actor.Name) == 1
-                ? "actor:" + actor.SourceRoot + ":" + actor.Name : ambiguous + ":" + index;
-            return new(identity + ":source:" + sourceNode, sourceNode, actor.Name + " · " + actor.PlacementSource);
+            else if (actorCounts[(actor.SourceRoot, actor.Name)] != 1) identity = ambiguous + ":" + index;
+            else if (!actorKeys.TryGetValue(actor, out identity!)) actorKeys[actor] = identity = provenance.Actor(actor.SourceRoot, actor.Name);
+            return new(identity + ":source:" + sourceNode, sourceNode, actor.PlacementSource, actor.Name);
         };
     }
 

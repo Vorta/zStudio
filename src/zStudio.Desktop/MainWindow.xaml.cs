@@ -113,7 +113,7 @@ public partial class MainWindow : Window
     }
     private async void OpenFileClick(object sender, RoutedEventArgs e)
     {
-        OpenFileDialog dialog = new() { Filter = "Recoil assets|*.zbd;*.zrd;*.wav|All files|*.*" };
+        OpenFileDialog dialog = new() { Filter = "Recoil assets|*.zbd;*.zrd;*.zad;*.wav|All files|*.*" };
         if (dialog.ShowDialog(this) == true) await RunUi(() => OpenFilesAsync([dialog.FileName]));
     }
     internal async Task OpenFilesAsync(IReadOnlyList<string> paths, bool forceRoot = false)

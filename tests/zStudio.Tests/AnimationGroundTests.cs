@@ -18,7 +18,7 @@ public sealed partial class AnimationTests
         var grounded = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true };
         for (int i = 0; i < 180; i++) AssertGrounded(context, grounded.Step(TestContext.Current.CancellationToken));
         Assert.True(grounded.IsComplete);
-        Assert.InRange(grounded.Frame().Nodes[0].Transform.M42, .999f, 1.001f);
+        Assert.InRange(grounded.Frame(TestContext.Current.CancellationToken).Nodes[0].Transform.M42, .999f, 1.001f);
         var falling = new AnimationPlayer(context, 0).EvaluateForTest(3);
         Assert.True(falling.Nodes[0].Transform.M42 < -10);
         Assert.Equal(source, Pack(context.Package));
@@ -34,7 +34,7 @@ public sealed partial class AnimationTests
         motion.SetVector(172, new(.1f, .2f, .3f)); motion.SetFloat(28, .5f);
         var player = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true };
         for (int i = 0; i < 180; i++) AssertGrounded(context, player.Step(TestContext.Current.CancellationToken));
-        var pose = player.Frame().Nodes[0];
+        var pose = player.Frame(TestContext.Current.CancellationToken).Nodes[0];
         Assert.True(pose.Morph > 0); Assert.InRange(pose.Transform.M42, 0, 6);
     }
 
@@ -87,11 +87,11 @@ public sealed partial class AnimationTests
         var before = player.EvaluateForTest(.5); var bytes = Pack(context.Package);
         var duration = player.MeasureDuration(TestContext.Current.CancellationToken);
         Assert.True(duration.IsFinite); Assert.InRange(duration.Seconds, .5, 3);
-        Assert.Equal(.5, player.Time); Assert.Equal(before.Nodes, player.Frame().Nodes); Assert.Equal(bytes, Pack(context.Package));
+        Assert.Equal(.5, player.Time); Assert.Equal(before.Nodes, player.Frame(TestContext.Current.CancellationToken).Nodes); Assert.Equal(bytes, Pack(context.Package));
         Assert.Equal(AnimationDurationKind.OpenEnded, new AnimationPlayer(context, 0).MeasureDuration(TestContext.Current.CancellationToken).Kind);
         var end = player.EvaluateForTest(3); player.EvaluateForTest(1.1, true);
         var replay = player.EvaluateForTest(3, true); Assert.Equal(end.Nodes, replay.Nodes); Assert.Equal(end.Sequences, replay.Sequences);
-        player.Reset(); Assert.Equal(end.Nodes, player.EvaluateForTest(3).Nodes);
+        player.Reset(TestContext.Current.CancellationToken); Assert.Equal(end.Nodes, player.EvaluateForTest(3).Nodes);
     }
 
     [Theory]
@@ -109,8 +109,8 @@ public sealed partial class AnimationTests
         var reference = new AnimationRecord(new byte[40]); reference.SetText(0, "piece", 36); context.Package.Entries[0].References[1].Add(reference); motion.SetInt(16, 2);
         var player = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true, PreviewHeight = height };
         for (int i = 0; i < 240; i++) AssertGrounded(context, player.Step(TestContext.Current.CancellationToken));
-        var end = player.Frame(); player.LodLevel = 10;
-        Assert.Equal(end.Nodes.Select(n => n.Transform), player.Frame().Nodes.Select(n => n.Transform));
+        var end = player.Frame(TestContext.Current.CancellationToken); player.LodLevel = 10;
+        Assert.Equal(end.Nodes.Select(n => n.Transform), player.Frame(TestContext.Current.CancellationToken).Nodes.Select(n => n.Transform));
         var alternate = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true, LodLevel = 10, PreviewHeight = height };
         Assert.Equal(end.Nodes.Select(n => n.Transform), alternate.EvaluateForTest(4).Nodes.Select(n => n.Transform));
     }
@@ -125,7 +125,7 @@ public sealed partial class AnimationTests
         var player = new AnimationPlayer(context, 0) { GroundPlaneEnabled = true };
         for (int i = 0; i < 150; i++) { var f = player.Step(TestContext.Current.CancellationToken); AssertGrounded(context, f); Assert.Empty(f.Sounds); }
         Assert.True(player.IsComplete);
-        var end = player.Frame(); player.EvaluateForTest(1, true); Assert.Equal(end.Nodes, player.EvaluateForTest(2.5, true).Nodes);
+        var end = player.Frame(TestContext.Current.CancellationToken); player.EvaluateForTest(1, true); Assert.Equal(end.Nodes, player.EvaluateForTest(2.5, true).Nodes);
     }
 
     [Fact]
@@ -146,8 +146,8 @@ public sealed partial class AnimationTests
             AssertGrounded(context, a); AssertGrounded(context, b);
             Assert.Equal(a.Nodes.Select(n => n.Transform), b.Nodes.Select(n => n.Transform));
         }
-        Assert.Equal(2, high.Frame().Nodes.Single(n => n.Visible).SourceNode);
-        Assert.Equal(4, low.Frame().Nodes.Single(n => n.Visible).SourceNode);
+        Assert.Equal(2, high.Frame(TestContext.Current.CancellationToken).Nodes.Single(n => n.Visible).SourceNode);
+        Assert.Equal(4, low.Frame(TestContext.Current.CancellationToken).Nodes.Single(n => n.Visible).SourceNode);
     }
 
     [Fact]

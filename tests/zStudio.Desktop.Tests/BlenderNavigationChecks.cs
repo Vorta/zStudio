@@ -354,6 +354,7 @@ internal static class BlenderNavigationChecks
         var geometry = new MeshGeometry3D { Positions = new Vector3Collection([new(-1, -1, 0), new(1, -1, 0), new(0, 1, 0)]), Indices = new IntCollection([0, 1, 2]) };
         var mesh = new MeshGeometryModel3D { Geometry = geometry, Instances = [Matrix4x4.CreateTranslation(10, 0, 0), Matrix4x4.CreateTranslation(100, 0, 0)] };
         ((List<MeshGeometryModel3D>)typeof(SceneViewport).GetField("meshes", Fields)!.GetValue(scene)!).Add(mesh);
+        ((Dictionary<MeshGeometry3D, (Vector3 Min, Vector3 Max)>)typeof(SceneViewport).GetField("staticMeshBounds", Fields)!.GetValue(scene)!).Add(geometry, (new(-1, -1, 0), new(1, 1, 0)));
         ScenePlacement[] placements = [new(1, 0, "child", mesh.Instances[0]), new(2, 0, "other", mesh.Instances[1])];
         foreach (string field in new[] { "placements", "visiblePlacements" })
             ((Dictionary<MeshGeometryModel3D, ScenePlacement[]>)typeof(SceneViewport).GetField(field, Fields)!.GetValue(scene)!).Add(mesh, placements);

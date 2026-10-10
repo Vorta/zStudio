@@ -86,7 +86,7 @@ public sealed partial class PickupPlacementEditSession
         bool mw3 = probe is { Family: FormatFamily.GameZ, Version: 27 };
         // Load the coordinate store once for every reader in this map. Preview selection
         // filters by archive identity; changing mission must never discard accepted history.
-        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver); HashSet<ZbdDocument> snapshots = new(ReferenceEqualityComparer.Instance);
+        var files = MissionSceneLoader.ResourceFiles(worldPath, resolver, token); HashSet<ZbdDocument> snapshots = new(ReferenceEqualityComparer.Instance);
         foreach (string file in files)
         {
             token.ThrowIfCancellationRequested();

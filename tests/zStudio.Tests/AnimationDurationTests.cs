@@ -19,7 +19,7 @@ public sealed partial class AnimationTests
         var before = player.EvaluateForTest(.1);
         var duration = player.MeasureDuration(TestContext.Current.CancellationToken);
         Assert.Equal(AnimationDurationKind.Finite, duration.Kind); Assert.Equal(frames, duration.Frames);
-        Assert.Equal(before.Time, player.Time); Assert.Equal(before.Nodes, player.Frame().Nodes);
+        Assert.Equal(before.Time, player.Time); Assert.Equal(before.Nodes, player.Frame(TestContext.Current.CancellationToken).Nodes);
         Assert.Equal(source, Pack(package));
     }
 
@@ -85,9 +85,13 @@ public sealed partial class AnimationTests
     public void SnapshotProtectsDurationFromLaterEditsAndAnalysisHonorsCancellation()
     {
         var package = Fixture(); var motion = AnimationCatalog.Create(11); motion.SetInt(16, 1); package.Entries[0].Sequences[0].Events.Add(motion);
-        var snapshot = Context(package).Snapshot(); motion.SetFloat(140, 12);
+        var context = Context(package);
+        // Another program's limit while the mission was prepared is inherited as a note, not this program's limit.
+        context.Diagnostics.Add("Mission initialization: Preview instance limit reached (256). A looping emitter may be producing too many children.");
+        var snapshot = context.Snapshot(); motion.SetFloat(140, 12);
         var player = new AnimationPlayer(snapshot, 0);
-        Assert.Equal(60, player.MeasureDuration(TestContext.Current.CancellationToken).Frames);
+        var duration = player.MeasureDuration(TestContext.Current.CancellationToken);
+        Assert.Equal(AnimationDurationKind.Finite, duration.Kind); Assert.Equal(60, duration.Frames);
         using var cancel = new CancellationTokenSource(); cancel.Cancel();
         Assert.Throws<OperationCanceledException>(() => player.MeasureDuration(cancel.Token));
     }

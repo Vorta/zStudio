@@ -23,12 +23,21 @@ public sealed partial class AnimationPlayer
     /// </summary>
     public AnimationDuration MeasureDuration(CancellationToken token = default)
     {
-        var probe = new AnimationPlayer(context, entryIndex, Seed, resetPhase)
+        AnimationPlayer probe;
+        try
         {
-            ConditionOverride = ConditionOverride, EffectLevel = EffectLevel,
-            ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, PreviewHeight = PreviewHeight, measuringDuration = true
-        };
-        return probe.MeasureCore(token);
+            probe = new AnimationPlayer(context, entryIndex, Seed, resetPhase, token, maximumRetainedStateBytes,
+                () => RetainedStateBytes + (otherRetainedState?.Invoke() ?? 0))
+            {
+                ConditionOverride = ConditionOverride, EffectLevel = EffectLevel,
+                ReferencePosition = ReferencePosition, ActivationStart = ActivationStart, GroundPlaneEnabled = GroundPlaneEnabled, PreviewHeight = PreviewHeight, measuringDuration = true
+            };
+        }
+        catch (StateLimitException)
+        { return Result(Math.Max(5, Time), AnimationDurationKind.AnalysisLimit, "Duration analysis reached the retained animation-state allowance. This is an adjustable preview range."); }
+        try { return probe.MeasureCore(token); }
+        catch (StateLimitException)
+        { return Result(Math.Max(5, probe.Time), AnimationDurationKind.AnalysisLimit, "Duration analysis reached the retained animation-state allowance. This is an adjustable preview range."); }
     }
 
     private AnimationDuration MeasureCore(CancellationToken token)
@@ -44,7 +53,9 @@ public sealed partial class AnimationPlayer
             foreach (var cue in activeSounds.Values.Where(c => !c.Persistent))
                 tailsEnd = Math.Max(tailsEnd, cue.StartedAt + context.Sounds[cue.Name].Duration);
             foreach (var effect in effects) tailsEnd = Math.Max(tailsEnd, Time + Math.Max(0, 1 - effect.Age));
-            bool unavailable = unavailableDuration || instances.Any(i => i.Sequences.Any(s => s.State == 4)) || notes.Any(n => n.Contains("instance limit", StringComparison.OrdinalIgnoreCase));
+            // Only this analysis's own refusals count: notes also hold the context's inherited diagnostics,
+            // such as a limit another program reached while the mission scene was prepared.
+            bool unavailable = unavailableDuration || instances.Any(i => i.Sequences.Any(s => s.State == 4));
             if (IsComplete && activeSounds.Count == 0)
             {
                 double end = Math.Max(measuredEnd, tailsEnd);
