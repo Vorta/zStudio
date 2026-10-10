@@ -480,7 +480,8 @@ public static partial class SourceBuilder
             {
                 if (instruction.Command != "WriteTextureSetMap" || WorldAssembler.ScriptTexture(instruction.Command, instruction.Args) is not { } operand) return;
                 damageWork.Operands.Inspect(operand, token, 3); // Normalize, extract the basename and hash before retaining it.
-                masks.Add(Path.GetFileNameWithoutExtension(operand.Replace('\\', '/')));
+                // Named as the engine names a script's texture (up to its first dot), as the world's build does.
+                masks.Add(WorldAssembler.TextureName(operand));
             }
         }
         /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>

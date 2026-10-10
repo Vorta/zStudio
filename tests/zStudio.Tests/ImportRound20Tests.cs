@@ -82,12 +82,13 @@ public sealed class ImportRound20Tests
     }
 
     [Fact]
-    public void HorizonLookupUsesObjectClassAndRemovedBindingsAreCleared()
+    public void HorizonLookupTakesTheNewestNodeOfAnyClassAndRemovedBindingsAreCleared()
     {
+        // FindByTypeAndName(6, …): the list of every node, newest first.
         var source = "NewWorld world\nNewObject3D sky\nNewWorld sky\nNewCamera camera\nCameraSetHorizon sky\nCameraSetHorizonXZ sky\n";
         var world = new WorldAssembler(new Files(source+"GameZWriteZBDFile gamez.zbd"),Token).Assemble("test.gs");
         var camera = world.Nodes.Single(n=>n.Name=="camera");
-        Assert.Equal(WorldNodeClass.Object3D,camera.CameraHorizon!.Class); Assert.Same(camera.CameraHorizon,camera.CameraHorizonXZ);
+        Assert.Equal(WorldNodeClass.World,camera.CameraHorizon!.Class); Assert.Same(camera.CameraHorizon,camera.CameraHorizonXZ);
         var deleted = new WorldAssembler(new Files("NewWorld world\nNewObject3D sky\nNewCamera camera\nCameraSetHorizonXZ sky\nDeleteTree sky\nGameZWriteZBDFile gamez.zbd"),Token).Assemble("test.gs");
         Assert.Null(deleted.Nodes.Single(n=>n.Name=="camera").CameraHorizonXZ);
     }

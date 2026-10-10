@@ -118,14 +118,15 @@ public sealed class ImportRound18Tests
     [Theory]
     [InlineData("WriteTextureSetMap rock.png fire1")]
     [InlineData("WriteTextureSetMap rock.png")]
-    [InlineData("WriteTextureSetMapExtra \"sub/rock.png\" fire1")]
+    [InlineData("WriteTextureSetMapExtra rock.mask.png fire1")]
     [InlineData("WriteTextureSetMap %mask% fire1")]
     public async Task DamageMaskUsesTheFirstArgumentAndStaysUnpaletted(string command)
     {
         using var fixture = new SourceWorldFixture();
         // Software packs keep direct colour as the shipped ones do by rule: damage masks and the horizon's sky; a vehicle
         // folder's texture (m2's camouflage) is paletted, as the shipped packs keep all but a few hand-picked ones. The game's
-        // interpreter registers the mask from the command's first operand and ignores the rest (fire1 stays paletted).
+        // interpreter registers the mask from the command's first operand, named up to its first dot, and ignores the rest
+        // (fire1 stays paletted).
         fixture.WriteHorizon();
         fixture.Write("data/m1/textures/fire1.png", File.ReadAllBytes(fixture.Path("data/m1/textures/rock.png")));
         fixture.Write("data/m1/textures/runtime.png", File.ReadAllBytes(fixture.Path("data/m1/textures/rock.png")));
@@ -133,8 +134,8 @@ public sealed class ImportRound18Tests
         fixture.Write("gamegen/support/unused.gw", "WriteTextureSetMap fire1.png\n");
         string world = File.ReadAllText(fixture.Path("gamegen/m1.gs"));
         // Execute the source after writing the world; Quit still stops the following registration.
-        fixture.Write("gamegen/m1.gs", world.Replace("Quit", "set enabled TRUE\nset leak TRUE\nset mask sub/rock.png\nset maskScript support/masks.gw\nsource %maskScript%\nQuit\nWriteTextureSetMap fire1.png", StringComparison.Ordinal));
-        fixture.Write("gamegen/m1_zbd.gs", "ifdef leak\nWriteTextureSetMap fire1.png\nendif\nset runtimeMask sub/runtime.png\nsource support/runtime-masks.gw\n");
+        fixture.Write("gamegen/m1.gs", world.Replace("Quit", "set enabled TRUE\nset leak TRUE\nset mask rock.png\nset maskScript support/masks.gw\nsource %maskScript%\nQuit\nWriteTextureSetMap fire1.png", StringComparison.Ordinal));
+        fixture.Write("gamegen/m1_zbd.gs", "ifdef leak\nWriteTextureSetMap fire1.png\nendif\nset runtimeMask runtime.png\nsource support/runtime-masks.gw\n");
         fixture.Write("gamegen/support/runtime-masks.gw", "WriteTextureSetMap %runtimeMask% fire1\n");
         string destination = Path.Combine(fixture.Root, "export");
         await SourceBuilder.ExportAsync(fixture.Project, destination, ["m1/texture2.zbd", "m2/texture2.zbd"], token: Token);
